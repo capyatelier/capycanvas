@@ -108,12 +108,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     ) -> Result<ManagerPrompt, StoreError> {
         use ManagerAction as A;
         let source = match action {
-            A::EditAsWorkspace(id)
-            | A::Rename(id)
+            A::Rename(id)
             | A::Duplicate(id)
-            | A::SaveAsTemplate(id)
             | A::Reset(id)
-            | A::UpdateFromCurrent(id)
             | A::Delete(id)
             | A::UpdateToolbar(id) => Some(self.presentation_entity(id).await?),
             _ => None,
@@ -135,18 +132,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     "Reset Brushes",
                 );
                 p.destructive = true;
-                p
-            }
-            A::EditAsWorkspace(_) => {
-                let mut choices = vec![ManagerChoice {
-                    id: String::new(),
-                    label: "Current layout".into(),
-                }];
-                choices.extend(self.choices_for(ItemKind::Template));
-                let selected = source.as_ref().map(|s| s.id.clone());
-                let mut p=ManagerPrompt::confirm("New Workspace","Choose a name and starting layout. Starting from a saved layout uses default tool settings.","Create and Switch")
-                    .choices("Start with",choices,selected);
-                p.name = Some("New Workspace".into());
                 p
             }
             A::Rename(_) => {
@@ -178,16 +163,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 p.name = Some(format!("{} Copy", s.metadata.name));
                 p
             }
-            A::SaveAsTemplate(_) => {
-                let mut p = ManagerPrompt::confirm(
-                    "Save Layout",
-                    "Capture panels, toolbars, and their customizations. Brush settings and colors are excluded. This does not change the current workspace’s original reset target.",
-                    "Save Layout",
-                );
-                p.name = Some(format!("{} Layout", source.as_ref().unwrap().metadata.name));
-                p.description = Some(String::new());
-                p
-            }
             A::SaveToolbar(panel) => {
                 let current = self
                     .current()
@@ -209,13 +184,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             }
             A::Reset(_) => {
                 let p = reset_prompt(source.as_ref().unwrap())?;
-                ManagerPrompt::confirm(p.title, p.message, p.confirm)
-            }
-            A::UpdateFromCurrent(_) => {
-                let current = self
-                    .current()
-                    .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
-                let p = update_prompt(source.as_ref().unwrap(), &current);
                 ManagerPrompt::confirm(p.title, p.message, p.confirm)
             }
             A::Delete(id) => {

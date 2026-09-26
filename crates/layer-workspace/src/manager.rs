@@ -269,12 +269,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let StoreResponse::List(items) = self.store.execute(StoreRequest::List).await? else {
             return Err(StoreError::invalid("Unexpected workspace list reply."));
         };
-        // Retain the old Default record for existing references, without listing
-        // it in the workspace catalog. New installs have no saved-layout library.
-        self.state.borrow_mut().items = items
-            .into_iter()
-            .filter(|i| !(i.id == DEFAULT_TEMPLATE_ID && i.metadata.builtin))
-            .collect();
+        self.state.borrow_mut().items = items;
         Ok(())
     }
     pub async fn load(&self, id: &str) -> Result<StoredEntity> {
@@ -480,26 +475,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let mut batch = CommitBatch::prepare(self.owner.clone(), Vec::new())?;
         batch.bindings.push((key.into(), Some(id)));
         self.publish(batch).await.map(|_| ())
-    }
-    fn workspace_from_template(&self, template: &Entity, name: &str, now: u64) -> Result<Entity> {
-        let ItemContent::Reusable { current, .. } = &template.content else {
-            return Err(StoreError::invalid("Choose a saved layout."));
-        };
-        let ReusableContent::Layout { layout } = &current.content else {
-            return Err(StoreError::invalid("Choose a saved layout."));
-        };
-        Ok(Entity::workspace(
-            name,
-            WorkspaceCapture::from_template(layout).map_err(StoreError::invalid)?,
-            layout.as_ref().clone(),
-            Some(TemplateOrigin {
-                id: template.id.clone(),
-                version: current.id.clone(),
-                name: template.metadata.name.clone(),
-                timestamp_ms: current.timestamp_ms,
-            }),
-            now,
-        ))
     }
     pub(crate) async fn create_and_bind(
         &self,
@@ -767,24 +742,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn create_workspace(
         &self,
         name: &str,
-        template: Option<&str>,
         duplicate: bool,
         now: u64,
     ) -> Result<StoredEntity> {
         validate_name(name.trim())?;
         self.flush().await?;
-        let entity = if let Some(id) = template {
-            self.workspace_from_template(&self.load(id).await?.entity, name, now)?
-        } else if let Some(current) = self.current() {
+        let entity = if let Some(current) = self.current() {
             let capture = current.capture()?;
-            let ItemContent::Workspace {
-                baseline, origin, ..
-            } = current.content
-            else {
+            let ItemContent::Workspace { baseline, .. } = current.content else {
                 unreachable!()
             };
             if duplicate {
-                Entity::workspace(name, capture, *baseline, origin, now)
+                Entity::workspace(name, capture, *baseline, now)
             } else {
                 let baseline = capture.history.layout().clone();
                 Entity::workspace(
@@ -794,7 +763,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         working: capture.working,
                     },
                     baseline,
-                    None,
                     now,
                 )
             }
@@ -810,32 +778,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             },
         )
         .await
-    }
-    pub async fn save_template(&self, name: &str, description: &str, now: u64) -> Result<String> {
-        self.flush().await?;
-        let current = self
-            .current()
-            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
-        let entity = Entity::reusable(
-            name,
-            description,
-            ReusableContent::Layout {
-                layout: Box::new(current.capture()?.history.layout().clone()),
-            },
-            now,
-        );
-        let id = entity.id.clone();
-        self.publish(CommitBatch::prepare(
-            self.owner.clone(),
-            vec![Mutation::Create {
-                entity,
-                claim: false,
-                name_policy: NamePolicy::Exact,
-            }],
-        )?)
-        .await?;
-        self.refresh().await?;
-        Ok(id)
     }
     pub async fn rename(&self, id: &str, name: &str, description: &str, now: u64) -> Result<()> {
         self.flush().await?;
@@ -896,14 +838,12 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         name: &str,
         now: u64,
     ) -> Result<StoredEntity> {
-        let (baseline, origin) = match self.current().map(|e| e.content) {
-            Some(ItemContent::Workspace {
-                baseline, origin, ..
-            }) => (*baseline, origin),
-            _ => (capture.history.layout().clone(), None),
+        let baseline = match self.current().map(|e| e.content) {
+            Some(ItemContent::Workspace { baseline, .. }) => *baseline,
+            _ => capture.history.layout().clone(),
         };
         self.create_and_bind(
-            Entity::workspace(name, capture, baseline, origin, now),
+            Entity::workspace(name, capture, baseline, now),
             NamePolicy::Unique,
         )
         .await

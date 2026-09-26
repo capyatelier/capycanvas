@@ -35,7 +35,6 @@ fn browser_claims_of_closed_documents_are_released_without_waiting_for_the_lease
         "Browser lock",
         layer_ui::WorkspaceCapture::from_template(&layout).unwrap(),
         layout,
-        None,
         1000,
     );
     let id = entity.id.clone();
@@ -96,7 +95,6 @@ fn browser_leases_still_expire_and_fence_stale_writers() {
         "Browser lease",
         layer_ui::WorkspaceCapture::from_template(&layout).unwrap(),
         layout,
-        None,
         1000,
     );
     let id = entity.id.clone();
@@ -190,14 +188,12 @@ fn browser_transactions_match_sqlite_contract() {
         "Drawing",
         capture.clone(),
         capture.history.layout().clone(),
-        None,
         1000,
     );
     let second = Entity::workspace(
         "Painting",
         capture.clone(),
         capture.history.layout().clone(),
-        None,
         1000,
     );
     let create = |entity: Entity, claim| Mutation::Create {
@@ -391,7 +387,6 @@ fn browser_transactions_match_sqlite_contract() {
         "Should roll back",
         capture.clone(),
         capture.history.layout().clone(),
-        None,
         1000,
     );
     let batch = CommitBatch::prepare(
@@ -462,7 +457,6 @@ fn browser_transactions_match_sqlite_contract() {
         "Sketching",
         capture.clone(),
         capture.history.layout().clone(),
-        None,
         32002,
     );
     let mut pinned =
@@ -532,7 +526,6 @@ fn browser_preserves_newer_schemas_and_exact_large_counters() {
         "Drawing",
         capture.clone(),
         capture.history.layout().clone(),
-        None,
         1,
     );
     let id = entity.id.clone();
@@ -584,7 +577,6 @@ fn browser_schema_two_upgrade_preserves_existing_records_and_defaults_switcher()
         "Existing workspace",
         layer_ui::WorkspaceCapture::from_template(&layout).unwrap(),
         layout,
-        None,
         1000,
     );
     let batch = CommitBatch::prepare(

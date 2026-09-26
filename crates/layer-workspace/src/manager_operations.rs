@@ -1,32 +1,6 @@
 use super::*;
 
 impl<S: WorkspaceStore> WorkspaceManager<S> {
-    pub async fn create_from_library_version(
-        &self,
-        id: &str,
-        version: &str,
-        name: &str,
-        now: u64,
-    ) -> Result<StoredEntity> {
-        self.flush().await?;
-        let mut template = self.load(id).await?.entity;
-        let ItemContent::Reusable { current, previous } = &mut template.content else {
-            return Err(StoreError::invalid("Choose a saved layout."));
-        };
-        let selected = std::iter::once(&*current)
-            .chain(previous.iter())
-            .find(|v| v.id == version)
-            .cloned()
-            .ok_or_else(|| {
-                StoreError::invalid("This saved layout version is no longer available.")
-            })?;
-        *current = selected;
-        self.create_and_bind(
-            self.workspace_from_template(&template, name, now)?,
-            NamePolicy::Unique,
-        )
-        .await
-    }
     pub async fn create_from_workspace(
         &self,
         id: &str,
@@ -54,14 +28,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     ) -> Result<StoredEntity> {
         self.flush().await?;
         let capture = source.capture()?;
-        let ItemContent::Workspace {
-            baseline, origin, ..
-        } = source.content
-        else {
+        let ItemContent::Workspace { baseline, .. } = source.content else {
             unreachable!()
         };
         let entity = if duplicate {
-            Entity::workspace(name, capture, *baseline, origin, now)
+            Entity::workspace(name, capture, *baseline, now)
         } else {
             let baseline = capture.history.layout().clone();
             Entity::workspace(
@@ -71,7 +42,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     working: capture.working,
                 },
                 baseline,
-                None,
                 now,
             )
         };
@@ -84,41 +54,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             },
         )
         .await
-    }
-    pub async fn save_template_from(
-        &self,
-        id: &str,
-        name: &str,
-        description: &str,
-        now: u64,
-    ) -> Result<String> {
-        self.flush().await?;
-        let source = if self.active_id().as_deref() == Some(id) {
-            self.current().unwrap()
-        } else {
-            let source = self.claim(id).await?;
-            self.release(&source).await;
-            source.entity
-        };
-        self.save_template_snapshot(source, name, description, now)
-            .await
-    }
-    pub async fn save_template_snapshot(
-        &self,
-        source: Entity,
-        name: &str,
-        description: &str,
-        now: u64,
-    ) -> Result<String> {
-        let entity = Entity::reusable(
-            name,
-            description,
-            ReusableContent::Layout {
-                layout: Box::new(source.capture()?.history.layout().clone()),
-            },
-            now,
-        );
-        self.save_reusable(entity, NamePolicy::Exact).await
     }
     pub(crate) async fn save_reusable(&self, entity: Entity, policy: NamePolicy) -> Result<String> {
         let id = entity.id.clone();
@@ -162,7 +97,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn duplicate_reusable(&self, id: &str, name: &str, now: u64) -> Result<String> {
         let mut entity = self.load(id).await?.entity;
         if entity.metadata.kind == ItemKind::Workspace {
-            return Err(StoreError::invalid("Choose a saved layout or toolbar."));
+            return Err(StoreError::invalid("Choose a saved toolbar."));
         }
         entity.id = new_id();
         entity.metadata.builtin = false;
@@ -183,7 +118,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let stored = self.claim(id).await?;
         let result: Result<()> = async {
             let ItemContent::Reusable { current, previous } = &stored.entity.content else {
-                return Err(StoreError::invalid("Choose a saved layout or toolbar."));
+                return Err(StoreError::invalid("Choose a saved toolbar."));
             };
             if current.content.kind() != content.kind() {
                 return Err(StoreError::invalid(
@@ -219,7 +154,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn restore_reusable_version(&self, id: &str, version: &str, now: u64) -> Result<()> {
         let stored = self.load(id).await?;
         let ItemContent::Reusable { current, previous } = &stored.entity.content else {
-            return Err(StoreError::invalid("Choose a saved layout or toolbar."));
+            return Err(StoreError::invalid("Choose a saved toolbar."));
         };
         let selected = std::iter::once(current)
             .chain(previous)
@@ -227,32 +162,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .ok_or_else(|| StoreError::invalid("This previous version is no longer retained."))?;
         self.update_reusable(id, selected.content.clone(), now)
             .await
-    }
-    /// Apply a saved layout to the active workspace without changing its identity,
-    /// starting layout, or latest working values. The replacement is undoable.
-    pub async fn apply_template(&self, template_id: &str, now: u64) -> Result<StoredEntity> {
-        self.flush().await?;
-        let source = self.load(template_id).await?.entity;
-        if source.metadata.deleted_at_ms.is_some() {
-            return Err(StoreError::invalid("This saved layout was deleted."));
-        }
-        let ItemContent::Reusable { current, .. } = source.content else {
-            return Err(StoreError::invalid("Choose a saved layout."));
-        };
-        let ReusableContent::Layout { layout } = current.content else {
-            return Err(StoreError::invalid("Choose a saved layout."));
-        };
-        let id = self
-            .active_id()
-            .ok_or_else(|| StoreError::invalid("Open a workspace first."))?;
-        let stored = self.claim(&id).await?;
-        self.publish_layout(
-            &stored,
-            &layout,
-            &format!("Loaded “{}” layout", source.metadata.name),
-            now,
-        )
-        .await
     }
     async fn publish_layout(
         &self,
@@ -353,7 +262,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 working: capture.working,
             },
             baseline,
-            None,
             now,
         );
         self.create_and_bind(entity, NamePolicy::Unique).await

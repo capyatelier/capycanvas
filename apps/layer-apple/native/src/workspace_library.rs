@@ -441,9 +441,7 @@ impl CapyWorkspaceLibrary {
                     let ItemContent::Reusable { current, .. } = entity.content else {
                         return Err(StoreError::invalid("Choose a saved toolbar."));
                     };
-                    let ReusableContent::Toolbar { definition } = current.content else {
-                        return Err(StoreError::invalid("Choose a saved toolbar."));
-                    };
+                    let ReusableContent::Toolbar { definition } = current.content;
                     definition
                 } else {
                     ToolbarDefinition {
@@ -605,7 +603,7 @@ impl CapyWorkspaceLibrary {
                 } else if let Some(capture) = capture {
                     capture.validate().map_err(StoreError::invalid)?;
                     let baseline = capture.history.layout().clone();
-                    Entity::workspace("Recovered Workspace", capture, baseline, None, 0)
+                    Entity::workspace("Recovered Workspace", capture, baseline, 0)
                 } else {
                     return Err(StoreError::invalid("No workspace is active."));
                 };
@@ -656,10 +654,7 @@ impl CapyWorkspaceLibrary {
                 self.prepare(incoming)
             }),
             Operation::New { name } => run!({
-                let incoming = self
-                    .manager
-                    .create_workspace(&name, None, false, now)
-                    .await?;
+                let incoming = self.manager.create_workspace(&name, false, now).await?;
                 self.prepare(incoming)
             }),
             Operation::Duplicate { id, name } => run!({

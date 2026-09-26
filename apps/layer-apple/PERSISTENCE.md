@@ -37,14 +37,13 @@ or suspending the scene cancels a pending preview.
 The workspace browser initially selects the current workspace; filtering clears
 selection and preview. Late or rapid selection replies cannot revive a dismissed
 preview. Separate Save/Load Layout UI and Apple bridge operations have been
-removed. Existing shared template records remain preserved for core migration.
+removed.
 
 Externally opened `.capyworkspace` and `.capytoolbar` files use coordinated reads
-on the file queue and shared Rust import validation. Apple no longer registers
-the removed `.capytemplate` format. The compact workspace screens follow the
-shared design without storage administration, package pickers/exporters, trash
-or metadata/version-management controls; their obsolete routing and presentation
-state are removed. Layout History keeps the existing preview/Cancel/Restore flow.
+on the file queue and shared Rust import validation. The compact workspace
+screens follow the shared design without storage administration, package
+pickers/exporters, trash or metadata/version-management controls; their obsolete
+routing and presentation state are removed. Layout History keeps the existing preview/Cancel/Restore flow.
 The lower-level storage service retains consistent SQLite backup and package
 serialization, with direct integration coverage.
 

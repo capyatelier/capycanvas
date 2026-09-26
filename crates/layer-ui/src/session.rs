@@ -5498,12 +5498,6 @@ mod tests {
                 .tooltip
                 .contains("Restore Starting Layout")
         );
-        assert!(workspaces.sections.iter().flatten().all(|item| !matches!(
-            item.action,
-            Some(UiAction::WorkspaceManager {
-                command: WorkspaceCommand::SaveAsTemplate | WorkspaceCommand::ManageTemplates
-            })
-        )));
         assert_eq!(menu.sections[2].len(), 2);
         let toolbars = &menu.sections[2][1];
         assert_eq!(toolbars.label, "Quick Access Toolbars");

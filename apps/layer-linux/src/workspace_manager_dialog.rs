@@ -211,10 +211,6 @@ impl ManagerUi {
         ));
     }
     pub fn show(&self, w: &Rc<Workspace>, page: ManagerPage) {
-        // The shared enum still includes layouts while its core API is retired.
-        if page == ManagerPage::Templates {
-            return;
-        }
         self.stop_preview();
         self.presented.set(true);
         *self.selected.borrow_mut() = None;
@@ -251,7 +247,6 @@ impl ManagerUi {
             ManagerPage::Workspaces => {
                 "Workspaces save your tool settings and layout for different tasks."
             }
-            ManagerPage::Templates => unreachable!(),
             ManagerPage::ThisWorkspace => "Arrange the toolbars in this workspace.",
             ManagerPage::ToolbarLibrary => "Save toolbars to reuse in any workspace.",
         });

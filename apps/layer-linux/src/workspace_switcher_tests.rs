@@ -410,7 +410,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
     let create = |name: &str| {
         glib::MainContext::default().block_on(async {
             let incoming = manager
-                .create_workspace(name, None, false, now_ms())
+                .create_workspace(name, false, now_ms())
                 .await
                 .unwrap();
             w.workspaces.adopt(&w, Ok(incoming)).await;
@@ -916,7 +916,6 @@ fn native_workspace_switcher_input() {
             },
             original.clone(),
             original.history.layout().clone(),
-            None,
             20_000,
         );
         if index == 0 {

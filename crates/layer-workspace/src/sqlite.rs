@@ -352,7 +352,6 @@ impl SqliteStore {
                                 Ok((r.get(0)?, r.get(1)?))
                             })?;
                         let kind = match kind.as_str() {
-                            "template" => ItemKind::Template,
                             "toolbar" => ItemKind::Toolbar,
                             _ => ItemKind::Workspace,
                         };
@@ -809,11 +808,6 @@ fn apply_write(
     }
     let row = header(connection, &write.id)?;
     check_owner(&row, owner, write.fence, now)?;
-    if row.builtin && row.kind != "workspace" {
-        return Err(StoreError::invalid(
-            "Load this included layout into a workspace to customize it.",
-        ));
-    }
     if (write.metadata.is_some() && write.expected.metadata != row.generations.metadata)
         || (write.content_json.is_some() && write.expected.layout != row.generations.layout)
         || (write.working_json.is_some() && write.expected.working != row.generations.working)

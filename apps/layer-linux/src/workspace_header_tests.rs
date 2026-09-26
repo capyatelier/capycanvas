@@ -2334,12 +2334,7 @@ fn native_header_compact_switcher_input() {
     let manager = d.w.workspaces.manager.as_ref().unwrap().clone();
     glib::MainContext::default().block_on(async {
         let wide = manager
-            .create_workspace(
-                "Wide workspace",
-                None,
-                false,
-                crate::workspace::manager::now_ms(),
-            )
+            .create_workspace("Wide workspace", false, crate::workspace::manager::now_ms())
             .await
             .unwrap();
         let id = wide.entity.id.clone();

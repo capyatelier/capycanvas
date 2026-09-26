@@ -16,10 +16,7 @@ and its review are historical background; their larger UI is superseded.
 
 Use the exact shared captions in
 [`workspace_manager_ui.rs`](../../crates/layer-ui/src/workspace_manager_ui.rs) and
-the GTK reference. The older `Template` storage/package APIs remain readable for
-compatibility; they are not product features or a reason to add layout-library UI.
-Legacy `ManageTemplates`, `SaveAsTemplate`, and layout manager actions have no UI
-routes and should not be exposed in other hosts.
+the GTK reference. Templates, `ManageTemplates` and `SaveAsTemplate` no longer exist.
 
 See [default workspaces](default-workspaces.md) for Painter, Illustrator,
 Photographer, their configurable header switcher, and the research behind their controls.

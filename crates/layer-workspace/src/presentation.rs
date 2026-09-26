@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ManagerPage {
     Workspaces,
-    Templates,
     ThisWorkspace,
     ToolbarLibrary,
 }
@@ -14,7 +13,6 @@ impl ManagerPage {
     pub fn label(self) -> &'static str {
         match self {
             Self::Workspaces => "Workspaces",
-            Self::Templates => "Saved Layouts",
             Self::ThisWorkspace => "This Workspace",
             Self::ToolbarLibrary => "Saved Toolbars",
         }
@@ -29,15 +27,11 @@ pub enum ManagerAction {
     RecoverInterrupted,
     Switch(String),
     SwitchToWindow(String),
-    UseTemplate(String),
-    EditAsWorkspace(String),
     Rename(String),
     Duplicate(String),
-    SaveAsTemplate(String),
     Reset(String),
     ResetBrushes,
     History(String),
-    UpdateFromCurrent(String),
     Delete(String),
     AddToolbar(String),
     UpdateToolbar(String),
@@ -57,15 +51,11 @@ impl ManagerAction {
             Self::RecoverInterrupted => "Recover Interrupted Changes…",
             Self::Switch(_) => "Switch",
             Self::SwitchToWindow(_) => "Switch to Window",
-            Self::UseTemplate(_) => "Load Layout",
-            Self::EditAsWorkspace(_) => "Edit as Workspace…",
             Self::Rename(_) | Self::RenameToolbar(_) => "Rename…",
             Self::Duplicate(_) | Self::DuplicateToolbar(_) => "Duplicate…",
-            Self::SaveAsTemplate(_) => "Save Layout…",
             Self::ResetBrushes => "Reset All Brushes…",
             Self::Reset(_) => "Restore Starting Layout…",
             Self::History(_) => "Layout History…",
-            Self::UpdateFromCurrent(_) => "Replace with Current Layout…",
             Self::Delete(_) => "Delete…",
             Self::AddToolbar(_) => "Add to Workspace",
             Self::UpdateToolbar(_) => "Update from Workspace…",
@@ -207,7 +197,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     && i.metadata.kind
                         == match page {
                             ManagerPage::Workspaces => ItemKind::Workspace,
-                            ManagerPage::Templates => ItemKind::Template,
                             _ => ItemKind::Toolbar,
                         }
             })
@@ -243,7 +232,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .collect()
     }
     /// Compact managers can show every row's actions without loading retained
-    /// history or template contents. Details use the same availability policy.
+    /// history or toolbar contents. Details use the same availability policy.
     pub fn summary_actions(&self, item: &ItemSummary, idle: bool, now: u64) -> Vec<ManagerButton> {
         self.metadata_actions(&item.id, &item.metadata, item.claim.as_ref(), idle, now)
     }
@@ -257,7 +246,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     ) -> Vec<ManagerButton> {
         let current = self.active_id().as_ref() == Some(id);
         let elsewhere = claim.is_some_and(|c| c.owner != self.owner && c.expires_at_ms > now);
-        let available = !elsewhere && !metadata.read_only();
+        let available = !elsewhere;
         let mut actions = Vec::new();
         let mut add =
             |action, enabled, primary| actions.push(ManagerButton::new(action, enabled, primary));
@@ -282,17 +271,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         false,
                     );
                 }
-                ItemKind::Template | ItemKind::Toolbar => {
-                    if metadata.kind == ItemKind::Template {
-                        add(ManagerAction::UseTemplate(id.clone()), idle, true);
-                    } else {
-                        add(ManagerAction::AddToolbar(id.clone()), idle, true);
-                        add(
-                            ManagerAction::UpdateToolbar(id.clone()),
-                            available && idle,
-                            false,
-                        );
-                    }
+                ItemKind::Toolbar => {
+                    add(ManagerAction::AddToolbar(id.clone()), idle, true);
+                    add(
+                        ManagerAction::UpdateToolbar(id.clone()),
+                        available && idle,
+                        false,
+                    );
                     if available {
                         add(ManagerAction::Rename(id.clone()), true, false);
                         add(ManagerAction::Delete(id.clone()), true, false);
@@ -309,10 +294,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let entity = &stored.entity;
         let preview = match &entity.content {
             ItemContent::Workspace { history, .. } => Some(history.layout().clone()),
-            ItemContent::Reusable { current, .. } => match &current.content {
-                ReusableContent::Layout { layout } => Some(layout.as_ref().clone()),
-                _ => None,
-            },
+            ItemContent::Reusable { .. } => None,
         };
         let mut description = entity.metadata.description.clone();
         if entity.metadata.builtin {
@@ -370,14 +352,4 @@ pub fn reset_prompt(entity: &Entity) -> Result<WorkspacePrompt, StoreError> {
         ),
         confirm: "Restore",
     })
-}
-pub fn update_prompt(target: &Entity, source: &Entity) -> WorkspacePrompt {
-    WorkspacePrompt {
-        title: "Replace Saved Layout".into(),
-        message: format!(
-            "Replace the saved layout in “{}” with the layout from “{}”?",
-            target.metadata.name, source.metadata.name
-        ),
-        confirm: "Replace Layout",
-    }
 }

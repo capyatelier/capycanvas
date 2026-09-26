@@ -64,7 +64,6 @@ fn workspace(name: &str) -> Entity {
         name,
         WorkspaceCapture::from_template(&layout).unwrap(),
         layout,
-        None,
         1_000_000,
     )
 }

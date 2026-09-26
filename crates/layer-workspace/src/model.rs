@@ -10,8 +10,6 @@ pub const TRASH_LIFETIME_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 pub const OWNER_LEASE_MS: u64 = 30_000;
 pub const OWNER_RENEW_MS: u64 = 10_000;
 pub const MAX_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
-/// Retained for older saved-layout references; new installs only seed workspaces.
-pub const DEFAULT_TEMPLATE_ID: &str = "builtin:default";
 /// Stable identities: included names are system-owned; workspace content is editable.
 pub const DEFAULT_WORKSPACES: [(&str, layer_ui::WorkspacePreset); 3] = [
     (
@@ -118,21 +116,18 @@ impl From<serde_json::Error> for StoreError {
 #[serde(rename_all = "snake_case")]
 pub enum ItemKind {
     Workspace,
-    Template,
     Toolbar,
 }
 impl ItemKind {
     pub fn key(self) -> &'static str {
         match self {
             Self::Workspace => "workspace",
-            Self::Template => "template",
             Self::Toolbar => "toolbar",
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             Self::Workspace => "Workspace",
-            Self::Template => "Layout",
             Self::Toolbar => "Toolbar",
         }
     }
@@ -152,8 +147,7 @@ pub struct Metadata {
     pub kind: ItemKind,
     pub name: String,
     pub description: String,
-    /// Included items cannot be deleted. Included layouts/toolbars are also
-    /// read-only; included workspaces can be renamed and edited normally.
+    /// Included workspaces cannot be renamed or deleted; their content is editable.
     pub builtin: bool,
     #[serde(with = "counter")]
     pub created_at_ms: u64,
@@ -205,11 +199,6 @@ impl Metadata {
                 "Item metadata exceeds supported limits.",
             ));
         }
-        if self.read_only() {
-            return Err(StoreError::invalid(
-                "Load this included layout into a workspace to customize it.",
-            ));
-        }
         if name.trim() == self.name && description == self.description {
             return Ok(());
         }
@@ -224,18 +213,6 @@ impl Metadata {
         self.modified_at_ms = now;
         self.validate()
     }
-
-    pub fn read_only(&self) -> bool {
-        self.builtin && self.kind != ItemKind::Workspace
-    }
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TemplateOrigin {
-    pub id: String,
-    pub version: String,
-    pub name: String,
-    pub timestamp_ms: u64,
 }
 
 /// A library toolbar deliberately has no panel/group identity or screen position.
@@ -295,19 +272,16 @@ impl ToolbarDefinition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ReusableContent {
-    Layout { layout: Box<DockLayout> },
     Toolbar { definition: ToolbarDefinition },
 }
 impl ReusableContent {
     pub fn kind(&self) -> ItemKind {
         match self {
-            Self::Layout { .. } => ItemKind::Template,
             Self::Toolbar { .. } => ItemKind::Toolbar,
         }
     }
     pub fn validate(&self) -> Result<(), StoreError> {
         match self {
-            Self::Layout { layout } => validate_stored_layout(layout),
             Self::Toolbar { definition } => definition.validate(),
         }
     }
@@ -328,7 +302,6 @@ pub enum ItemContent {
     Workspace {
         history: LayoutHistory,
         baseline: Box<DockLayout>,
-        origin: Option<TemplateOrigin>,
     },
     Reusable {
         current: ReusableVersion,
@@ -344,9 +317,7 @@ impl ItemContent {
     }
     pub fn validate(&self) -> Result<(), StoreError> {
         match self {
-            Self::Workspace {
-                history, baseline, ..
-            } => {
+            Self::Workspace { history, baseline } => {
                 history.validate().map_err(StoreError::invalid)?;
                 validate_stored_layout(baseline)
             }
@@ -399,7 +370,6 @@ impl Entity {
                 working: preset.working_state(),
             },
             layout,
-            None,
             now,
         );
         entity.id = id.into();
@@ -410,7 +380,6 @@ impl Entity {
         name: &str,
         mut capture: WorkspaceCapture,
         baseline: DockLayout,
-        origin: Option<TemplateOrigin>,
         now: u64,
     ) -> Self {
         for revision in capture
@@ -427,7 +396,6 @@ impl Entity {
             content: ItemContent::Workspace {
                 history: capture.history,
                 baseline: Box::new(baseline),
-                origin,
             },
             working: Some(capture.working),
         }
@@ -486,7 +454,7 @@ impl Entity {
             self.capture()?.validate().map_err(StoreError::invalid)?;
         } else if self.working.is_some() {
             return Err(StoreError::invalid(
-                "Saved layouts and toolbars cannot contain workspace tool settings.",
+                "Saved toolbars cannot contain workspace tool settings.",
             ));
         }
         Ok(())

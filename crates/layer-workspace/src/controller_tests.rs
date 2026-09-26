@@ -61,7 +61,7 @@ impl Fixture {
         let mut host = layer_host::NativeHost::new(Platform::Web).unwrap();
         let capture = host.session.capture_workspace().unwrap();
         let baseline = capture.history.layout().clone();
-        let entity = Entity::workspace("My Workspace", capture, baseline, None, 1000);
+        let entity = Entity::workspace("My Workspace", capture, baseline, 1000);
         let batch = CommitBatch::prepare(
             Owner::fresh(),
             vec![Mutation::Create {
@@ -419,7 +419,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
             assert!(history.undo());
             let mut database: serde_json::Value = serde_json::from_str(&f.backend.database.borrow().encoded().unwrap()).unwrap();
             database["items"][id]["entity"]["content"] = serde_json::to_value(ItemContent::Workspace {
-                history, baseline: Box::new(old.clone()), origin: None,
+                history, baseline: Box::new(old.clone()),
             }).unwrap();
             *f.backend.database.borrow_mut() = BrowserDatabase::decode(&database.to_string()).unwrap();
             f.input(serde_json::json!({"type":"switch", "id":id}));

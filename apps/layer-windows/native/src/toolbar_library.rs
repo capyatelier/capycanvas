@@ -134,9 +134,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                     let ItemContent::Reusable { current, .. } = stored.entity.content else {
                         return Err(StoreError::invalid("Choose a saved toolbar."));
                     };
-                    let ReusableContent::Toolbar { mut definition } = current.content else {
-                        return Err(StoreError::invalid("Choose a saved toolbar."));
-                    };
+                    let ReusableContent::Toolbar { mut definition } = current.content;
                     definition.name = stored.entity.metadata.name;
                     definition
                 } else {

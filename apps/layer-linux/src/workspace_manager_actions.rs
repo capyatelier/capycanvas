@@ -41,9 +41,6 @@ impl NativeWorkspaces {
                 self.ui.show(w, ManagerPage::Workspaces);
                 return Ok(());
             }
-            WorkspaceCommand::ManageTemplates | WorkspaceCommand::SaveAsTemplate => {
-                return Err("Use workspaces to save and load your setup.".into());
-            }
             WorkspaceCommand::ManageToolbars => {
                 self.ui.show(w, ManagerPage::ThisWorkspace);
                 return Ok(());
@@ -209,15 +206,6 @@ impl NativeWorkspaces {
             }
             A::New | A::Duplicate(_) | A::Rename(_) | A::SaveToolbar(_) => {
                 self.named(w, action).await?;
-            }
-            // These shared variants remain until the core layout-library API is retired.
-            A::UseTemplate(_)
-            | A::EditAsWorkspace(_)
-            | A::SaveAsTemplate(_)
-            | A::UpdateFromCurrent(_) => {
-                return Err(StoreError::invalid(
-                    "Use workspaces to save and load your setup.",
-                ));
             }
             A::Reset(id) => {
                 let stored = self.selected(&id).await?;
@@ -478,7 +466,7 @@ impl NativeWorkspaces {
             let _operation = self.begin_operation(w).await?;
             let outcome: Result<Option<StoredEntity>> = match &action {
                 A::New => manager
-                    .create_workspace(&name, None, false, now_ms())
+                    .create_workspace(&name, false, now_ms())
                     .await
                     .map(Some),
                 A::Duplicate(id)
@@ -558,9 +546,7 @@ impl NativeWorkspaces {
         let ItemContent::Reusable { current, .. } = stored.entity.content else {
             return Err(StoreError::invalid("Choose a saved toolbar."));
         };
-        let ReusableContent::Toolbar { mut definition } = current.content else {
-            return Err(StoreError::invalid("Choose a saved toolbar."));
-        };
+        let ReusableContent::Toolbar { mut definition } = current.content;
         if let Some(name) = name {
             definition.name = name.into();
         }

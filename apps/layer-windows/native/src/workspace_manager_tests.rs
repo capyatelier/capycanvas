@@ -498,27 +498,6 @@ fn reset_brushes_confirms_once_preserves_other_state_and_retries_the_accepted_ca
 }
 
 #[test]
-fn obsolete_layout_library_commands_have_no_native_dialog_route() {
-    let mut f = Fixture::new();
-    f.ready();
-    for command in [Command::ManageTemplates, Command::SaveAsTemplate] {
-        open(&mut f, command);
-        assert!(view(&f).is_null());
-        assert!(
-            f.service
-                .status
-                .error
-                .as_deref()
-                .unwrap()
-                .contains("Use workspaces")
-        );
-    }
-    f.service.status.error = None;
-    f.close();
-    f.dispose();
-}
-
-#[test]
 fn close_drains_a_confirmed_create_queued_behind_autosave_and_a_submitted_rename() {
     for rename in [false, true] {
         let mut f = Fixture::new();

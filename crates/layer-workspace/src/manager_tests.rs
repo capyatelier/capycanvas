@@ -376,7 +376,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
         for (id, preset) in DEFAULT_WORKSPACES {
             let workspace = m.load(id).await.unwrap();
             assert_eq!(workspace.entity.metadata.name, preset.name());
-            assert!(workspace.entity.metadata.builtin && !workspace.entity.metadata.read_only());
+            assert!(workspace.entity.metadata.builtin);
             assert_eq!(
                 workspace.entity.capture().unwrap().history.layout(),
                 &preset.layout(Platform::Gtk)
@@ -484,81 +484,6 @@ fn included_workspace_history_restores_layout_but_respects_active_owners() {
         assert!(restored.entity.metadata.builtin);
         assert!(m.rename(&id, "Renamed", "", 5_000).await.is_err());
         assert!(m.delete_item(&id, None, 5_000).await.is_err());
-    });
-}
-
-#[test]
-fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
-    pollster::block_on(async {
-        let directory = std::env::temp_dir().join(format!("capy-presets-upgrade-{}", new_id()));
-        let worker = StoreWorker::shared(&directory).unwrap();
-        let owner = Owner::fresh();
-        let mut layout = DockLayout::for_platform(Platform::Gtk);
-        layout.bands[0].extent += 80.;
-        let user = Entity::workspace(
-            "Sketch",
-            WorkspaceCapture::from_template(&layout).unwrap(),
-            layout.clone(),
-            None,
-            500,
-        );
-        let user_id = user.id.clone();
-        let mut legacy = Entity::reusable(
-            "Default",
-            "The standard editor layout.",
-            ReusableContent::Layout {
-                layout: Box::new(DockLayout::for_platform(Platform::Gtk)),
-            },
-            400,
-        );
-        legacy.id = DEFAULT_TEMPLATE_ID.into();
-        legacy.metadata.builtin = true;
-        worker
-            .execute(StoreRequest::Commit {
-                batch: CommitBatch::prepare(
-                    owner,
-                    vec![
-                        Mutation::Create {
-                            entity: user,
-                            claim: false,
-                            name_policy: NamePolicy::Exact,
-                        },
-                        Mutation::Create {
-                            entity: legacy.clone(),
-                            claim: false,
-                            name_policy: NamePolicy::Exact,
-                        },
-                    ],
-                )
-                .unwrap(),
-            })
-            .await
-            .unwrap();
-        let manager = WorkspaceManager::new(worker, Platform::Gtk);
-        let incoming = manager.initialize(1_000).await.unwrap();
-        assert_eq!(incoming.entity.id, user_id);
-        assert_eq!(incoming.entity.metadata.name, "Sketch");
-        assert_eq!(incoming.entity.capture().unwrap().history.layout(), &layout);
-        assert_eq!(manager.items().len(), 4);
-        assert_eq!(manager.rows(ManagerPage::Workspaces, "", 1_000).len(), 4);
-        assert_eq!(
-            manager.load(DEFAULT_TEMPLATE_ID).await.unwrap().entity,
-            legacy
-        );
-        assert_eq!(
-            manager
-                .load(DEFAULT_WORKSPACES[0].0)
-                .await
-                .unwrap()
-                .entity
-                .metadata
-                .name,
-            "Sketch (2)"
-        );
-        manager.activate(incoming);
-        manager.close().await.unwrap();
-        drop(manager);
-        std::fs::remove_dir_all(directory).unwrap();
     });
 }
 
@@ -724,7 +649,7 @@ fn failed_named_creation_retries_its_identity_and_keeps_later_outgoing_edits() {
         m.store.lose_reply.set(true);
         m.store.block_receipts.set(true);
         assert!(
-            m.create_workspace("Pending Creation", None, false, 2_000)
+            m.create_workspace("Pending Creation", false, 2_000)
                 .await
                 .is_err()
         );
@@ -759,7 +684,7 @@ fn failed_named_creation_retries_its_identity_and_keeps_later_outgoing_edits() {
         assert!(!m.current().unwrap().working.unwrap().zen_mode);
         m.store.fail.set(true);
         assert!(
-            m.save_template("Pending Template", "", 4_000)
+            m.save_toolbar(layer_ui::Panel::Toolbar, "Pending Toolbar", 4_000)
                 .await
                 .is_err()
         );
@@ -769,7 +694,7 @@ fn failed_named_creation_retries_its_identity_and_keeps_later_outgoing_edits() {
         assert_eq!(
             m.items()
                 .iter()
-                .filter(|i| i.metadata.name == "Pending Template")
+                .filter(|i| i.metadata.name == "Pending Toolbar")
                 .count(),
             1
         );
@@ -784,7 +709,7 @@ fn immediate_receipt_recovery_prevents_duplicate_named_actions() {
         let before = m.items().len();
         m.store.lose_reply.set(true);
         let incoming = m
-            .create_workspace("Accepted Once", None, false, 2_000)
+            .create_workspace("Accepted Once", false, 2_000)
             .await
             .unwrap();
         assert_eq!(incoming.entity.metadata.name, "Accepted Once");
@@ -804,7 +729,7 @@ fn interrupted_publication_recovers_after_reopen_and_cancels_delayed_delivery_at
         let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
         sql.execute_batch("CREATE TRIGGER interrupt_creation BEFORE INSERT ON items WHEN NEW.name='Interrupted Copy' BEGIN SELECT RAISE(ABORT,'interrupted publication'); END;").unwrap();
         assert!(
-            m.create_workspace("Interrupted Copy", None, true, 3_000)
+            m.create_workspace("Interrupted Copy", true, 3_000)
                 .await
                 .is_err()
         );
@@ -879,123 +804,11 @@ fn interrupted_publication_recovers_after_reopen_and_cancels_delayed_delivery_at
 }
 
 #[test]
-fn workspace_template_replaces_current_layout_without_creating_a_workspace() {
-    pollster::block_on(async {
-        let f = Fixture::new();
-        let m = &f.manager;
-        let original = m.current().unwrap();
-        let template = m.save_template("Inking", "", 2_000).await.unwrap();
-        let saved_template = m.load(&template).await.unwrap().entity;
-        let mut capture = original.capture().unwrap();
-        let mut changed = capture.history.layout().clone();
-        changed.bands[0].extent += 80.;
-        capture.history.append(&changed, "Resized Tools toolbar");
-        capture.working.zen_mode = true;
-        capture
-            .working
-            .tools
-            .set_override(capture.working.preset, "size", 87.)
-            .unwrap();
-        m.observe(capture.clone(), 3_000);
-        m.flush().await.unwrap();
-        let count = m.items().len();
-        let before = m.current().unwrap();
-        let applied = m.apply_template(&template, 4_000).await.unwrap();
-        assert_eq!(applied.entity.id, original.id);
-        assert_eq!(applied.entity.metadata, before.metadata);
-        let after = applied.entity.capture().unwrap();
-        assert_eq!(after.working, capture.working);
-        assert_eq!(
-            after.history.layout(),
-            original.capture().unwrap().history.layout()
-        );
-        assert_eq!(after.history.generation, capture.history.generation + 1);
-        assert_eq!(
-            after.history.revisions.len(),
-            capture.history.revisions.len() + 1
-        );
-        assert_eq!(
-            after.history.revisions[&after.history.current].description,
-            "Loaded “Inking” layout"
-        );
-        if let (
-            ItemContent::Workspace {
-                baseline: a,
-                origin: ao,
-                ..
-            },
-            ItemContent::Workspace {
-                baseline: b,
-                origin: bo,
-                ..
-            },
-        ) = (&before.content, &applied.entity.content)
-        {
-            assert_eq!(a, b);
-            assert_eq!(ao, bo);
-        } else {
-            panic!("Expected workspaces");
-        }
-        assert_eq!(m.load(&original.id).await.unwrap().entity, applied.entity);
-        m.activate(applied);
-        m.refresh().await.unwrap();
-        assert_eq!(m.items().len(), count);
-        assert_eq!(m.load(&template).await.unwrap().entity, saved_template);
-        let mut undo = after.history.clone();
-        assert!(undo.undo());
-        assert_eq!(undo.layout(), &changed);
-        assert!(undo.redo());
-        assert_eq!(undo.layout(), after.history.layout());
-        let same = m.apply_template(&template, 5_000).await.unwrap();
-        assert_eq!(same.entity.capture().unwrap().history, after.history);
-    });
-}
-
-#[test]
-fn applying_a_workspace_template_preserves_layout_on_failure_and_retries_once() {
-    pollster::block_on(async {
-        let f = Fixture::new();
-        let m = &f.manager;
-        let template = m.save_template("Inking", "", 2_000).await.unwrap();
-        let deleted = m.save_template("Removed", "", 2_001).await.unwrap();
-        m.delete_item(&deleted, None, 2_002).await.unwrap();
-        let mut capture = m.current().unwrap().capture().unwrap();
-        let mut changed = capture.history.layout().clone();
-        changed.bands[0].extent += 80.;
-        capture.history.append(&changed, "Resized Tools toolbar");
-        m.observe(capture.clone(), 3_000);
-        m.flush().await.unwrap();
-        let before = m.current().unwrap();
-        assert!(m.apply_template(&deleted, 3_001).await.is_err());
-        assert_eq!(m.current().unwrap(), before);
-        m.store.fail.set(true);
-        assert!(m.apply_template(&template, 4_000).await.is_err());
-        assert_eq!(m.current().unwrap(), before);
-        assert_eq!(m.load(&before.id).await.unwrap().entity, before);
-        m.store.fail.set(false);
-        let applied = m.retry_failed_operation().await.unwrap().unwrap();
-        assert_eq!(
-            applied.entity.capture().unwrap().history.generation,
-            capture.history.generation + 1
-        );
-        assert_eq!(applied.entity.id, before.id);
-        assert!(m.retry_failed_operation().await.unwrap().is_none());
-    });
-}
-
-#[test]
 fn manager_recovery_library_and_backup_round_trip() {
     pollster::block_on(async {
         let f = Fixture::new();
         let m = &f.manager;
-        let template = m
-            .save_template("Illustration", "Original", 2_000)
-            .await
-            .unwrap();
-        let painting = m
-            .create_workspace("Painting", Some(&template), false, 3_000)
-            .await
-            .unwrap();
+        let painting = m.create_workspace("Painting", false, 3_000).await.unwrap();
         m.activate(painting.clone());
         let original = painting.entity.capture().unwrap().history.layout().clone();
         let mut capture = painting.entity.capture().unwrap();
@@ -1009,18 +822,6 @@ fn manager_recovery_library_and_backup_round_trip() {
             .set_override(capture.working.preset, "size", 87.)
             .unwrap();
         m.observe(capture.clone(), 4_000);
-        m.update_reusable(
-            &template,
-            ReusableContent::Layout {
-                layout: Box::new(changed.clone()),
-            },
-            5_000,
-        )
-        .await
-        .unwrap();
-        m.rename(&template, "New Illustration", "Changed", 6_000)
-            .await
-            .unwrap();
         let details = m
             .inspect_details(&m.current_record().unwrap(), true, 6_000)
             .await;
@@ -1032,7 +833,6 @@ fn manager_recovery_library_and_backup_round_trip() {
                 .collect::<Vec<_>>(),
             vec!["Current workspace", "Rename…", "Delete…"]
         );
-        m.delete_item(&template, None, 7_000).await.unwrap();
         let reset = m
             .change_layout(&painting.entity.id, None, 8_000)
             .await
@@ -1068,28 +868,6 @@ fn manager_recovery_library_and_backup_round_trip() {
         };
         assert_eq!(baseline.as_ref(), &original);
         m.release(&restored).await;
-        m.restore_deleted(&template, 11_000).await.unwrap();
-        let template_record = m.load(&template).await.unwrap();
-        assert!(template_record.entity.metadata.deleted_at_ms.is_none());
-        assert_eq!(
-            template_record.entity.metadata.previous[0].name,
-            "Illustration"
-        );
-        let ItemContent::Reusable { previous, .. } = &template_record.entity.content else {
-            panic!()
-        };
-        assert_eq!(previous.len(), 1);
-        m.restore_reusable_version(&template, &previous[0].id, 12_000)
-            .await
-            .unwrap();
-        let template_bytes = export_package(&m.load(&template).await.unwrap().entity).unwrap();
-        let imported_template =
-            import_package(&template_bytes, PackageKind::Template, 13_000).unwrap();
-        assert!(imported_template.working.is_none());
-        assert!(
-            matches!(imported_template.content,ItemContent::Reusable {ref previous,..} if previous.is_empty())
-        );
-        assert!(import_package(&template_bytes, PackageKind::WorkspaceBackup, 13_000).is_err());
         let toolbar_panel = original
             .panels
             .iter()
@@ -1181,7 +959,7 @@ fn package_validation_and_failed_publication_never_expose_partial_imports() {
 }
 
 #[test]
-fn template_creation_duplication_switching_and_original_baselines_are_independent() {
+fn duplication_switching_and_original_baselines_are_independent() {
     pollster::block_on(async {
         let f = Fixture::new();
         let m = &f.manager;
@@ -1198,22 +976,13 @@ fn template_creation_duplication_switching_and_original_baselines_are_independen
             .set_override(capture.working.preset, "size", 91.)
             .unwrap();
         m.observe(capture.clone(), 2_000);
-        let template_id = m
-            .save_template("Illustration", "Layout only", 3_000)
-            .await
-            .unwrap();
-        let template = m.load(&template_id).await.unwrap();
-        assert!(template.entity.working.is_none());
-        let duplicate = m
-            .create_workspace("Experiment", None, true, 4_000)
-            .await
-            .unwrap();
+        let duplicate = m.create_workspace("Experiment", true, 4_000).await.unwrap();
         assert_eq!(
             duplicate.entity.capture().unwrap().history.revisions.len(),
             2
         );
         assert_eq!(duplicate.entity.capture().unwrap().working, capture.working);
-        let ItemContent::Workspace { baseline, .. } = duplicate.entity.content else {
+        let ItemContent::Workspace { baseline, .. } = &duplicate.entity.content else {
             unreachable!()
         };
         let ItemContent::Workspace {
@@ -1222,17 +991,8 @@ fn template_creation_duplication_switching_and_original_baselines_are_independen
         else {
             unreachable!()
         };
-        assert_eq!(baseline, original);
-        let fresh = m
-            .create_workspace("Inking", Some(&template_id), false, 5_000)
-            .await
-            .unwrap();
-        let fresh_capture = fresh.entity.capture().unwrap();
-        assert_eq!(fresh_capture.history.layout(), &layout);
-        assert_eq!(fresh_capture.history.revisions.len(), 1);
-        assert!(!fresh_capture.working.zen_mode);
-        assert!(fresh_capture.working.tools.overrides.is_empty());
-        let outgoing = m.activate(fresh).unwrap();
+        assert_eq!(baseline, &original);
+        let outgoing = m.activate(duplicate).unwrap();
         m.release(&outgoing).await;
         let original = m.prepare_switch(&initial.id, 6_000).await.unwrap();
         assert_eq!(original.entity.capture().unwrap().working, capture.working);
@@ -1250,10 +1010,7 @@ fn failed_outgoing_save_prevents_switch_and_retains_accepted_edits_for_retry() {
         let f = Fixture::new();
         let m = &f.manager;
         let source = m.current().unwrap();
-        let target = m
-            .create_workspace("Inking", None, false, 2_000)
-            .await
-            .unwrap();
+        let target = m.create_workspace("Inking", false, 2_000).await.unwrap();
         m.release(&target).await;
         let mut working = source.working.unwrap();
         working.zen_mode = true;

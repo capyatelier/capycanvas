@@ -662,11 +662,6 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     ) -> Result<()> {
         let (page, operation) = match command {
             WorkspaceCommand::Manage => (Page::Workspaces, None),
-            WorkspaceCommand::ManageTemplates | WorkspaceCommand::SaveAsTemplate => {
-                return Err(StoreError::invalid(
-                    "Use workspaces to save and load your setup.",
-                ));
-            }
             WorkspaceCommand::LayoutHistory => (Page::History, None),
             WorkspaceCommand::New => (Page::Prompt, Some(Mutation::Create)),
             WorkspaceCommand::ResetBrushes => (Page::Prompt, Some(Mutation::ResetBrushes)),
@@ -945,11 +940,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                             Mutation::Switch(id) => {
                                 Some(manager.prepare_switch(&id, wall_ms).await?)
                             }
-                            Mutation::Create => Some(
-                                manager
-                                    .create_workspace(&name, None, false, wall_ms)
-                                    .await?,
-                            ),
+                            Mutation::Create => {
+                                Some(manager.create_workspace(&name, false, wall_ms).await?)
+                            }
                             Mutation::History(revision) => Some(
                                 manager
                                     .change_layout(

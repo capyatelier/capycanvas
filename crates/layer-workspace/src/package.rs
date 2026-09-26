@@ -6,28 +6,24 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "snake_case")]
 pub enum PackageKind {
     WorkspaceBackup,
-    Template,
     Toolbar,
 }
 impl PackageKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::WorkspaceBackup => "Workspace Backup",
-            Self::Template => "Layout",
             Self::Toolbar => "Saved Toolbar",
         }
     }
     pub fn extension(self) -> &'static str {
         match self {
             Self::WorkspaceBackup => "capyworkspace",
-            Self::Template => "capytemplate",
             Self::Toolbar => "capytoolbar",
         }
     }
     pub fn for_entity(entity: &Entity) -> Self {
         match entity.metadata.kind {
             ItemKind::Workspace => Self::WorkspaceBackup,
-            ItemKind::Template => Self::Template,
             ItemKind::Toolbar => Self::Toolbar,
         }
     }
@@ -118,9 +114,7 @@ pub fn import_package(bytes: &[u8], expected: PackageKind, now: u64) -> Result<E
         ));
     }
     match &mut content {
-        ItemContent::Workspace {
-            history, origin, ..
-        } => {
+        ItemContent::Workspace { history, .. } => {
             let mapping: BTreeMap<_, _> = history
                 .revisions
                 .keys()
@@ -138,10 +132,6 @@ pub fn import_package(bytes: &[u8], expected: PackageKind, now: u64) -> Result<E
                 })
                 .collect();
             history.generation = 0;
-            if let Some(origin) = origin {
-                origin.id = new_id();
-                origin.version = new_id();
-            }
         }
         ItemContent::Reusable { current, previous } => {
             if !previous.is_empty() {

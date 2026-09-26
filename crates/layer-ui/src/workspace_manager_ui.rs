@@ -7,9 +7,6 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkspaceCommand {
     Manage,
-    // Legacy variants remain decodable while hosts update; neither has menu UI.
-    ManageTemplates,
-    SaveAsTemplate,
     New,
     ResetBrushes,
     ResetLayout,

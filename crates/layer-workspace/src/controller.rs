@@ -676,7 +676,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         self.task = Some(Task::new(async move {
                             Ok(match form.kind.as_str() {
                                 "new" => Outcome::adopt(
-                                    m.create_workspace(&name, None, false, now).await?,
+                                    m.create_workspace(&name, false, now).await?,
                                 ),
                                 "rename" => {
                                     let id = form

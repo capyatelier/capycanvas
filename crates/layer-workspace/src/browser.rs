@@ -349,7 +349,6 @@ impl BrowserDatabase {
                             id: id.clone(),
                             metadata: metadata.unwrap_or_else(|_| {
                                 let kind = match s.entity["metadata"]["kind"].as_str() {
-                                    Some("template") => ItemKind::Template,
                                     Some("toolbar") => ItemKind::Toolbar,
                                     _ => ItemKind::Workspace,
                                 };
@@ -614,9 +613,6 @@ impl BrowserDatabase {
             } else {
                 let mut s = self.item(&w.id)?;
                 check_owner(&s, &batch.owner, w.fence, now)?;
-                if s.entity.metadata.builtin && s.entity.metadata.kind != ItemKind::Workspace {
-                    return Err(StoreError::invalid("Included layouts cannot be modified."));
-                }
                 if w.metadata.is_some() && w.expected.metadata != s.generations.metadata
                     || w.content_json.is_some() && w.expected.layout != s.generations.layout
                     || w.working_json.is_some() && w.expected.working != s.generations.working

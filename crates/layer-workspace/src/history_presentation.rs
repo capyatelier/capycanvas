@@ -129,7 +129,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             }
             ManagerHistoryMode::Versions => {
                 let ItemContent::Reusable { current, previous } = &entity.content else {
-                    return Err(StoreError::invalid("Choose a template or saved toolbar."));
+                    return Err(StoreError::invalid("Choose a saved toolbar."));
                 };
                 for revision in std::iter::once(current).chain(previous) {
                     entries.push((
@@ -209,12 +209,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .unwrap();
                 view.description = revision.description.clone();
                 can_restore &= selected != current.id;
-                if let ReusableContent::Layout { layout } = &revision.content {
-                    view.preview = Some(layout.as_ref().clone());
-                    idle
-                } else {
-                    false
-                }
+                false
             }
             ManagerHistoryMode::Metadata => {
                 let revision = entity
