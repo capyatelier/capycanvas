@@ -317,9 +317,9 @@ try {
    [CapyRowPointer]::Down($device,$x,$y);[CapyRowPointer]::Move($x+25,$y-15)
    Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -ne $dialBefore} 'Dial drag did not preview'
    if($device -eq 'mouse'){[CapyRowPointer]::Key([uint32]$review.Id,0x1B);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}
-   Wait-Until {$m=Model;!$m.state.sdr_appearance_preview -and (($m.windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialBefore)} 'Dial cancellation did not restore the recipe'
+   Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialBefore} 'Dial cancellation did not restore the recipe'
    [CapyRowPointer]::Down($device,$x,$y);[CapyRowPointer]::Move($x+25,$y-15);[CapyRowPointer]::Up()
-   Wait-Until {$m=Model;!$m.state.sdr_appearance_preview -and (($m.windows_proof_form.rendition|ConvertTo-Json -Compress) -ne $dialBefore)} 'Dial release did not commit'
+   Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -ne $dialBefore} 'Dial release did not commit'
   } finally {[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($dpi)|Out-Null}
   $settled=@{value=''};Wait-Until {$now=(Model).windows_proof_form.rendition|ConvertTo-Json -Compress;$same=$now -eq $settled.value;$settled.value=$now;Start-Sleep -Milliseconds 150;$same} 'Dial commit did not settle'
   $dialAfter=$settled.value

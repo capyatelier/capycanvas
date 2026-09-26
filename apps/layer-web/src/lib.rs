@@ -605,7 +605,6 @@ impl WebApp {
             soft_proof,
             preview_sdr,
             hdr_display_available,
-            sdr_appearance_preview,
             gamut_warning,
             revision,
             fullscreen,
@@ -656,7 +655,6 @@ impl WebApp {
         field!(soft_proof);
         field!(preview_sdr);
         field!(hdr_display_available);
-        field!(sdr_appearance_preview);
         field!(gamut_warning);
         field!(revision);
         field!(fullscreen);

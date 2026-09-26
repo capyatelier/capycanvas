@@ -59,7 +59,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.preview_sdr = mode == ProofMode::Sdr;
         self.state.soft_proof = mode == ProofMode::Print;
         if mode != ProofMode::Print { self.state.gamut_warning = false; }
-        self.state.sdr_appearance_preview = None;
         self.refresh_commands();
         Ok(self.changed(regions::COMMANDS | regions::BRUSH, true))
     }
@@ -102,18 +101,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
     }
     pub fn effective_sdr_rendition(&self) -> layer_core::color::hdr::SdrRendition {
-        self.state.sdr_appearance_preview.unwrap_or(self.engine.document().sdr_rendition)
-    }
-    pub fn preview_sdr_appearance(&mut self, recipe: Option<layer_core::color::hdr::SdrRendition>) -> Result<UiChange, String> {
-        if let Some(recipe) = recipe {
-            self.require_document_idle()?;
-            if !self.engine.document().color.depth.is_float() { return Err("SDR appearance requires HDR artwork".into()); }
-            recipe.validate().map_err(str::to_string)?;
-        }
-        self.state.sdr_appearance_preview = recipe;
-        self.refresh_document();
-        self.refresh_commands();
-        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
+        self.engine.document().sdr_rendition
     }
     pub fn set_hdr_display_available(&mut self, available: bool) -> bool {
         if self.state.hdr_display_available == available { return false; }
@@ -121,25 +109,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_commands();
         self.changed(regions::COMMANDS, true);
         true
-    }
-
-    /// A nonmodal proof panel can compare the master without losing its local
-    /// draft. The host owns that draft; only an enabled preview reaches viewing.
-    pub fn set_sdr_view(&mut self, recipe: Option<layer_core::color::hdr::SdrRendition>, enabled: bool) -> Result<UiChange, String> {
-        self.require_document_idle()?;
-        if !self.engine.document().color.depth.is_float() { return Err("SDR appearance requires HDR artwork".into()); }
-        if let Some(recipe) = recipe { recipe.validate().map_err(str::to_string)?; }
-        self.state.sdr_appearance_preview = if enabled { recipe } else { None };
-        self.state.preview_sdr = enabled;
-        if enabled {
-            self.state.soft_proof = false;
-            self.state.gamut_warning = false;
-            self.proof_setup_pending = false;
-            self.last_proof_mode = Some(ProofMode::Sdr);
-        }
-        self.refresh_document();
-        self.refresh_commands();
-        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
     }
 
     pub fn set_sdr_rendition(&mut self, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange,String> {
@@ -163,7 +132,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.state.soft_proof {
             self.last_proof_mode = Some(ProofMode::Print);
             self.state.preview_sdr = false;
-            self.state.sdr_appearance_preview = None;
         }
         if !self.state.soft_proof { self.state.gamut_warning = false; }
         self.refresh_document();

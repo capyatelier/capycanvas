@@ -889,7 +889,6 @@ pub struct UiState {
     pub soft_proof: bool,
     pub preview_sdr: bool,
     pub hdr_display_available: bool,
-    pub sdr_appearance_preview: Option<layer_core::color::hdr::SdrRendition>,
     pub gamut_warning: bool,
     pub revision: u64,
     /// Observed native/browser window state; never stored in workspace preferences.

@@ -2075,7 +2075,7 @@ impl Workspace {
                     let rendition = hdr.then(|| g.session.effective_sdr_rendition());
                     let proof = g.session.state().soft_proof || g.session.state().gamut_warning;
                     self.hdr_status.set_visible(hdr && !proof && g.session.state().workspace.layout.canvas_info.visible);
-                    let preview = g.session.state().preview_sdr || g.session.state().sdr_appearance_preview.is_some();
+                    let preview = g.session.state().preview_sdr;
                     let headroom = g.session.renderer_mut().display_headroom;
                     if g.session.set_hdr_display_available(headroom > 1.) { change.regions |= regions::COMMANDS | regions::BRUSH; }
                     self.hdr_status.set_label(if preview && headroom > 1. { "SDR preview" } else if headroom > 1. { "HDR" } else { "Showing SDR" });

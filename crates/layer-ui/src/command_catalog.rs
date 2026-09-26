@@ -1014,9 +1014,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 "Requires a high dynamic range drawing"
             }
             C::PreviewSdr if !self.state.hdr_display_available => "Requires a high dynamic range display",
-            C::PreviewSdr if self.state.sdr_appearance_preview.is_some() => {
-                "Close the SDR appearance preview first"
-            }
             C::PreviewSdr => "Turn off soft proofing and the gamut warning first",
             C::GamutWarning => "Set up soft proofing first",
             C::ResetLayout if self.managed_workspace.is_some() => "The layout already matches its starting state",

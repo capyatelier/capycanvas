@@ -252,7 +252,6 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     invoke(&photo,CommandId::Undo);ready(&photo);
     appearance_exposure(&window,-2.);
     assert_eq!(project(&photo).document.sdr_rendition.exposure,-2.);
-    assert!(state(&photo).sdr_appearance_preview.is_none());
     let mode=find_named(photo.proof_panel.root.upcast_ref(),"proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap();
     let saved=project(&photo).document.sdr_rendition;
     mode.set_active_name(Some("off"));pump(50);assert!(!state(&photo).preview_sdr);
