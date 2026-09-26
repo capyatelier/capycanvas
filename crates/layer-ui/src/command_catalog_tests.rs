@@ -179,6 +179,15 @@ fn catalog_invocation_rechecks_current_layer_and_preserves_history() {
         .is_err()
     );
     search_action(&mut s, CommandSearchAction::Close);
+    let revision = s.state.revision;
+    for action in [
+        CommandSearchAction::Query { text: "late".into() },
+        CommandSearchAction::Execute { id: "command.fit_canvas".into(), value: None },
+    ] {
+        assert_eq!(s.dispatch(UiAction::CommandSearch { action }).unwrap().regions, 0, "late actions after closing are ignored");
+    }
+    assert!(s.state.command_search.is_none());
+    assert_eq!(s.state.revision, revision);
 }
 
 #[test]

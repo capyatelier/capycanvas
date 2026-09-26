@@ -1264,9 +1264,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.command_search.entries.clear();
             return Ok(self.changed(regions::COMMAND_SEARCH, false));
         }
-        if self.command_search.epoch != self.state.document_file.epoch
-            || self.state.command_search.is_none()
-        {
+        if self.state.command_search.is_none() {
+            return Ok(self.changed(0, false));
+        }
+        if self.command_search.epoch != self.state.document_file.epoch {
             return Err("This command search belongs to a previous drawing".into());
         }
         match action {

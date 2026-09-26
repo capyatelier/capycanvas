@@ -199,7 +199,16 @@ class AndroidCommandSearchTest {
         waitFor("menu opens search") { tagged("command-search")?.second?.config?.getOrNull(SemanticsProperties.Focused) == true }
         query("brush size"); pressKey(KeyEvent.KEYCODE_ENTER)
         waitFor("parameter step") { tagged("command-search")?.second?.config?.getOrNull(SemanticsProperties.ContentDescription)?.any { it.startsWith("Brush size") } == true }
-        pressKey(KeyEvent.KEYCODE_ESCAPE)
+        for (attempt in 0 until 2) {
+            pressKey(KeyEvent.KEYCODE_ESCAPE)
+            val until = SystemClock.uptimeMillis() + 1_000
+            var back = false
+            while (!back && SystemClock.uptimeMillis() < until) {
+                main { back = search()?.objectOrNull("parameter") == null }
+                if (!back) SystemClock.sleep(16)
+            }
+            if (back) break
+        }
         waitFor("back to query") { search()?.objectOrNull("parameter") == null && search()?.optString("query") == "brush size" }
         closeWithEscape("menu search closed")
         pressKey(KeyEvent.KEYCODE_P, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON)
