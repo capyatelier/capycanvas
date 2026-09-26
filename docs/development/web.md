@@ -165,6 +165,16 @@ Sketch drawer, a float, both themes and measured automatic tab names. Set
 the test imports its own exports. `device.test.mjs --palettes` runs the same
 scenario on a tablet; it edits the built-in workspaces of its dedicated origin.
 
+Other focused `node apps/layer-web/test.mjs --headless` modes:
+
+- `--adjustments`: filter catalog, GPU previews, properties and live telemetry.
+- `--drawer-switch`: first-click toolbar drawer switching and outside dismissal.
+- `--layers`: layer thumbnails, references, row selection, masks and docking.
+- `--ui-speed`: incremental Wasm state and Settings updates match full state.
+- `--settings-audit`: run `bash tools/performance/workspace-motion.sh gtk
+  --native-test=native_settings_typography` first; it compares every Settings
+  page with the GTK allocations and font sizes in `artifacts/ui/settings-audit`.
+
 For clipped workspace drags and content-aware release, run
 `bash tools/performance/workspace-motion.sh web --workspace-rendering` on Linux,
 or `node apps/layer-web/test.mjs --headless --workspace-rendering` against the

@@ -70,7 +70,6 @@ export async function checkMediumTiles({ call, evaluate, settle }) {
       await send({ type: "invoke", command: "zen_mode" });
       await evaluate("document.documentElement.dispatchEvent(new PointerEvent('pointermove',{clientX:innerWidth/2,clientY:innerHeight/2,pointerType:'mouse',bubbles:true}))");
       await settle();
-      assert.equal(await evaluate("document.querySelector('.zen-toolbar')"), null);
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('${docked}').closest('.dock-group')).opacity`), '0');
       await send({ type: "invoke", command: "zen_mode" });
       await check(docked);

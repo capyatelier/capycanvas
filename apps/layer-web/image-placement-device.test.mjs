@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {measurePlacedPhotos} from './image-placement-motion.test.mjs';
+import {measurePlacedPhotos,placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
 
 // Tablet Chrome cannot select desktop paths. Fetch the original encoded files
 // from the test server, then use the normal picker/document request controller.
@@ -16,8 +16,7 @@ export async function checkDeviceImagePlacement({call,evaluate,settle}) {
   const invoke=async command=>{await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);await settle();};
   const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   const placed=()=>wait('layerApp.state().commands.find(c=>c.id==="placement_original_size").enabled');
-  const sourceIdentity=m=>m.tiled_sources.images.map(image=>({...image,tiles:image.tiles.map(t=>{const {offset,...blob}=m.blobs[t.blob];return {...t,blob};})}));
-  const save=async()=>{await invoke('save_document_as');await idle();return evaluate(`(()=>{const b=placementTest.saved;return JSON.parse(new TextDecoder().decode(b.slice(52,52+Number(new DataView(b.buffer,b.byteOffset).getBigUint64(12,true)))));})()`);};
+  const save=placementSave({evaluate,invoke,idle});
   const press=async id=>{
     const p=await evaluate(`(()=>{const b=document.querySelector('.image-placement-controls [data-command=${id}]'),r=b.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:92,...p}]});
@@ -57,7 +56,7 @@ export async function checkDeviceImagePlacement({call,evaluate,settle}) {
       }
       return result;
     };
-    await measurePlacedPhotos({call,evaluate,settle,invoke,save,sourceIdentity,baseline,loadingMs,hardware,readMemory});
+    await measurePlacedPhotos({call,evaluate,settle,invoke,save,baseline,loadingMs,hardware,readMemory});
     console.log('Tablet Chrome original-file batch placement, touch controls, fit, history, reopen, Original Size and clipped photo motion passed');
   } finally {await evaluate('window.showOpenFilePicker=placementTest.open;window.showSaveFilePicker=placementTest.save;delete window.placementTest');}
 }

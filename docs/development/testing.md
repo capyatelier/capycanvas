@@ -91,7 +91,8 @@ need a real Wayland session and GPU; they are not headless model tests.
 For the web launcher and packager:
 
 ```bash
-node --test apps/layer-web/run.test.mjs apps/layer-web/package.test.mjs
+node --test apps/layer-web/run.test.mjs apps/layer-web/package.test.mjs \
+  apps/layer-web/frame.test.mjs apps/layer-web/pointer.test.mjs apps/layer-web/workspace-client.test.mjs
 ```
 
 The [web packaging reference](web-packaging.md#preview-and-test) lists real-browser

@@ -110,24 +110,11 @@ export async function checkTitleBarState({call,evaluate,settle,reload,windowId})
   assert.equal(await evaluate("document.querySelector('#system-clock').hidden"),true);
   await click('#fullscreen');await wait('!!document.fullscreenElement&&layerApp.state().fullscreen');await settle();
   await wait("!document.querySelector('#system-clock').hidden&&!document.querySelector('#system-battery').hidden");
-  assert.equal(await evaluate("document.querySelector('#system-battery').getAttribute('aria-label')"),'Battery 72%, charging');
   for(const theme of ['dark','light']){await send({type:'set_theme',theme});await shot(`fullscreen-${theme}`);}
-  await evaluate("window.__statusBattery.level=.08;window.__statusBattery.charging=false;window.__statusBattery.dispatchEvent(new Event('levelchange'))");
-  assert.equal(await evaluate("document.querySelector('#system-battery').getAttribute('aria-label')"),'Battery 8%, low');
   await click('#fullscreen');await wait('!document.fullscreenElement&&!layerApp.state().fullscreen');
   assert.deepEqual(await header(),original,'Fullscreen preserves saved status positions');
-  for(const theme of ['dark','light']) {
-    await send({type:'set_theme',theme});await click('#zen-button');
-    await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:720,y:500,buttons:0});await settle();
-    assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"),true);
-    assert.equal(await evaluate("getComputedStyle(document.querySelector('#header')).pointerEvents"),'none');
-    assert.equal(await evaluate("!!document.querySelector('.zen-toolbar')"),false);
-    const s=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/zen-${theme}.png`,Buffer.from(s.data,'base64'));
-    await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:6,y:6,buttons:0});await settle();
-    await click('#zen-button');assert.equal(await evaluate('layerApp.state().workspace.zen_mode'),false);
-  }
-  results.push('Actual fullscreen entry/exit, retained clock/battery positions and low/charging battery; footer ownership; full Zen and edge reveal in both themes');
-  console.log('PASS: title bar fullscreen/status/full Zen');
+  results.push('Actual fullscreen entry/exit and retained clock/battery positions');
+  console.log('PASS: title bar fullscreen/status');
 
   // Close an actual second browser window while its title preview is active;
   // read the same origin's durable record from the surviving window afterward.

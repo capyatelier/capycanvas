@@ -8,10 +8,12 @@ const summary=values=>{
   const v=values.slice().sort((a,b)=>a-b),p=q=>v[Math.round((v.length-1)*q)];
   return {count:v.length,p50:p(.5),p95:p(.95),max:v.at(-1)};
 };
+export const sourceIdentity=m=>m.tiled_sources.images.map(image=>({...image,tiles:image.tiles.map(t=>{const {offset,...blob}=m.blobs[t.blob];return {...t,blob};})}));
+export const placementSave=({evaluate,invoke,idle})=>async()=>{await invoke('save_document_as');await idle();return evaluate(`(()=>{const b=placementTest.saved;return JSON.parse(new TextDecoder().decode(b.slice(52,52+Number(new DataView(b.buffer,b.byteOffset).getBigUint64(12,true)))));})()`);};
 
 // Hardware WebGPU execution and host frame timings. CDP supplies real browser
 // pointer input; these numbers do not claim physical pen-to-photon latency.
-export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,sourceIdentity,baseline,loadingMs,hardware,readMemory}) {
+export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,baseline,loadingMs,hardware,readMemory}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/image-placement/web-motion';await mkdir(directory,{recursive:true});
   const report={...hardware??{cpu:cpus()[0]?.model,gpu:(await call('SystemInfo.getInfo',{},null)).gpu.devices},loading_ms:loadingMs,runs:[]};
   const sources=sourceIdentity(baseline),layers=baseline.document.layers.slice(0,sources.length);

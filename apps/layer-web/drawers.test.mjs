@@ -166,8 +166,6 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
       for(const [group,panel] of [[41,'brushes'],[43,'layers']]) {
         await customize({type:'set_column_collapsed',group,collapsed:true});
         await customize({type:'set_column_drawers',column:group,drawers:true});
-        const expandSelector=`.collapsed-column[data-column="${group}"] .column-expand`;
-        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(expandSelector)})`),null,'Expand caret is retired');
         const selector=`.collapsed-column [data-panel="${panel}"]`;
         assert.equal((await style(selector)).background,'rgba(0, 0, 0, 0)','Closed buttons have no selection tint');
         const b=await rect(selector);

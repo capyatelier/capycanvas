@@ -19,6 +19,7 @@ import {checkTitleBarFeedback} from "./title-bar-feedback.test.mjs";
 import {checkIcons} from "./icons.test.mjs";
 import {checkWorkspaceStore} from "./workspace-store.test.mjs";
 import {checkLongPressDragging} from "./long-press-drag.test.mjs";
+import {checkLayerHolding} from "./layer-hold.test.mjs";
 import {checkWorkspaceResize} from "./workspace-resize.test.mjs";
 import {checkDeviceImagePlacement} from "./image-placement-device.test.mjs";
 import {checkPenRendering} from "./pen-rendering.test.mjs";
@@ -93,7 +94,7 @@ try {
   }
   if (process.argv.includes('--editor'))
     assert.equal(await evaluate("document.querySelectorAll('dialog[open]').length"),0,'Start with a clean fixture without recovery or other dialogs');
-  if (['--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--medium-tiles','--color-panel'].some(flag=>process.argv.includes(flag))) {
+  if (['--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--layer-hold','--medium-tiles','--color-panel'].some(flag=>process.argv.includes(flag))) {
     const original=(await workspaceIdle()).id;
     const capture=await evaluate('layerApp.app.workspace_capture()');
     const theme=await evaluate('layerApp.state().settings.theme ?? null');
@@ -178,6 +179,9 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--long-press-drag")) {
     await checkLongPressDragging({call,evaluate,settle});
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--layer-hold")) {
+    await checkLayerHolding({call,evaluate,settle});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--drawer-drag")) {
     await checkDrawerDragging({call,evaluate,settle});

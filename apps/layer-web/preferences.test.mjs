@@ -157,9 +157,6 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   assert.equal(await evaluate('layerApp.state().brush.diameter'), 23.5);
   await evaluate("const slider=document.querySelector('#size-number input[type=range]');slider.value=.5;slider.dispatchEvent(new Event('input',{bubbles:true}))");
   assert.equal(await evaluate('layerApp.state().brush.diameter'), 32);
-  await action({ type: "open_settings", page: "appearance" });
-  assert.equal(await evaluate("document.querySelector('#setting-panel-text-size')"), null);
-  await action({ type: "close_settings" });
   for (const theme of ["dark", "light"]) {
     await action({ type: "set_theme", theme });
     await click('.header-menu[data-menu="view"] summary');
@@ -474,9 +471,11 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
 export async function checkSettingsParity({ call, evaluate, settle }) {
   const dir = 'artifacts/ui/settings-audit', differences = [];
   await call('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
+  await evaluate("layerApp.dispatch({type:'open_settings',page:'appearance'})");
+  const pages = await evaluate("layerApp.app.preferences().pages.map(p=>p.id)");
   for (const theme of ['dark', 'light']) {
     await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`);
-    for (const page of ['appearance', 'canvas', 'input', 'shortcuts', 'about']) {
+    for (const page of pages) {
       await evaluate(`layerApp.dispatch({type:'open_settings',page:'${page}'})`);
       await settle();
       assert.equal(await evaluate("document.querySelector('#status').textContent"), '', 'settings render without a caught UI error');

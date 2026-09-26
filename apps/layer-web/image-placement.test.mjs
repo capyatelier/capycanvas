@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {measurePlacedPhotos} from './image-placement-motion.test.mjs';
+import {measurePlacedPhotos,placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
 
 // Real browser file-input/drop transport, shared placement and native archives.
 // LAYER_PHOTO_FILES optionally selects camera originals (JSON array of paths).
@@ -40,11 +40,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await wait('layerApp.state().commands.find(c=>c.id==="import_image").enabled');
     for(const type of ['dragEnter','dragOver','drop'])await call('Input.dispatchDragEvent',{type,...p,data:{items:[],files,dragOperationsMask:1}});
   };
-  const save=async()=>{
-    await invoke('save_document_as');await idle();
-    return evaluate(`(()=>{const b=placementTest.saved;return JSON.parse(new TextDecoder().decode(b.slice(52,52+Number(new DataView(b.buffer,b.byteOffset).getBigUint64(12,true)))));})()`);
-  };
-  const sourceIdentity=m=>m.tiled_sources.images.map(image=>({...image,tiles:image.tiles.map(t=>{const {offset,...blob}=m.blobs[t.blob];return {...t,blob};})}));
+  const save=placementSave({evaluate,invoke,idle});
   let files;
   try {
     await call('Page.setInterceptFileChooserDialog',{enabled:true});
@@ -159,7 +155,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await idle();await wait('layerApp.app.brush_ready()');
       const started=Date.now();await importFiles(files);await click('.image-placement-controls [data-command=apply_transform]');
       const loadingMs=Date.now()-started,baseline=await save();
-      await measurePlacedPhotos({call,evaluate,settle,invoke,save,sourceIdentity,baseline,loadingMs});
+      await measurePlacedPhotos({call,evaluate,settle,invoke,save,baseline,loadingMs});
     }
     console.log('Image placement: Open, batches, clipboard, fit, Apply/Cancel, one-step history, exact sources after reopen, Original Size, malformed/stale/cancelled requests, canvas/group/locked drops and compact controls passed');
   } finally {

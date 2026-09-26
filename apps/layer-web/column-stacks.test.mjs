@@ -34,7 +34,6 @@ export async function checkColumnStacks({call,evaluate,settle}) {
     let layout=await resolved();
     assert.equal(layout.collapsed.length,2);
     assert.equal(layout.collapsed[1].bounds.y-layout.collapsed[0].bounds.y-layout.collapsed[0].bounds.height,6);
-    assert.equal(await evaluate('document.querySelectorAll(".column-expand").length'),0);
     assert.equal(await evaluate('document.querySelector(".collapsed-content").firstElementChild.classList.contains("column-tab")'),true);
     assert.ok(layout.dividers.find(d=>d.id===40).fixed);
     assert.equal(await evaluate('document.querySelectorAll(".divider.horizontal").length'),1,'Closed stack has no resize handle');

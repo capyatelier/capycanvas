@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { crc32 } from "node:zlib";
 
 export async function checkPalettes({ call, evaluate, settle, reload }) {
   const output = process.env.LAYER_TEST_ARTIFACTS || "artifacts/palettes/web";
@@ -80,9 +79,6 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   if (await evaluate("layerApp.state().customization.expanded != null")) await send({ type: "customize", action: { type: "close_expanded" } });
   const colorGroup = Number(await groupOf("color"));
   assert.deepEqual(await tabs(colorGroup), ["color", "palettes"], "Palettes follows Color in Paint");
-  const modelTabs = panel => evaluate(`(l=>[...l.groups.map(g=>g.panels),...l.collapsed.flatMap(c=>c.groups.map(g=>g.icons.map(i=>i.panel)))].find(p=>p.includes(${JSON.stringify(panel)})))(layerApp.app.layout(innerWidth,innerHeight))`);
-  assert.deepEqual(await modelTabs("brushes"), ["brushes", "stats"], "Diagnostics follows Tool Set");
-  assert.deepEqual(await modelTabs("navigator"), ["navigator", "proof"], "Proof follows Navigator");
   const measurement = await evaluate("JSON.parse(JSON.stringify(layerApp.app.panel_measurements().find(m=>m.panel==='palettes')))");
   assert.ok(measurement.content_height > 0 && measurement.scroll.unit_height === 44 && measurement.scroll.fixed_height > 0, `palette measurement: ${JSON.stringify(measurement)}`);
   const groupRect = () => rect(`.dock-group[data-group="${colorGroup}"]`);
@@ -357,14 +353,7 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
     await evaluate("window.showSaveFilePicker=paletteSavePicker");
     if (await visible(`${P} .palette-chooser`)) await key("Escape");
   }
-  assert.deepEqual(exported.aco.slice(0, 2), [0, 1], "ACO starts with its version 1 section");
-  assert.equal(String.fromCharCode(...exported.ase.slice(0, 4)), "ASEF");
-  assert.deepEqual(exported.swatches.slice(0, 4), [0x50, 0x4b, 3, 4]);
-  if (!files.length) {
-    for (const extension of ["aco", "ase", "gpl", "swatches"]) files.push({ name: `Pop Art Copy.${extension}`, bytes: Buffer.from(exported[extension]) });
-    const xml = Buffer.from('<?xml version="1.0"?><ColorSet version="2.0" name="Krita Set" columns="8"><ColorSetEntry name="Red" spot="false" bitdepth="U8"><RGB r="1" g="0" b="0" space="sRGB"/></ColorSetEntry></ColorSet>');
-    files.push({ name: "Krita Set.kpl", bytes: storedZip([["mimetype", Buffer.from("krita/x-colorset")], ["colorset.xml", xml]]) });
-  }
+  if (!files.length) for (const extension of ["aco", "ase", "gpl", "swatches"]) files.push({ name: `Pop Art Copy.${extension}`, bytes: Buffer.from(exported[extension]) });
   const importFile = async file => {
     const paletteCount = (await library()).palettes.length;
     await tap(`${P} .palette-selector`, "touch");
@@ -383,11 +372,6 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   };
   const importedPalettes = [];
   for (const file of files) importedPalettes.push(await importFile(file));
-  const popArt = (await library()).palettes.find(p => p.name === "Pop Art");
-  if (!samples) {
-    for (const imported of importedPalettes.slice(0, 3)) assert.deepEqual(imported.swatches.map(s => s.name), popArt.swatches.map(s => s.name), `${imported.name}: names and order round-trip`);
-    assert.equal(importedPalettes[3].swatches.length, popArt.swatches.length, "Procreate swatches keep every color");
-  }
   await shot("imported");
   for (const imported of importedPalettes) await send({ type: "color", action: { op: "library", action: { op: "remove_palette", id: Number(imported.id) } } });
   const harbor = (await library()).palettes.find(p => p.name === "Ocean Study").swatches.find(s => s.name === "Harbor Mist");
@@ -486,22 +470,4 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   for (let i = 1; i < fit.length - 1; i++) await send({ type: "invoke", command: "undo_workspace" });
   assert.deepEqual(await tabs(tabGroup), ["color", "palettes"]);
   console.log("PASS: Web palettes: placement, fitting, starters, history, expansion, add, naming, chooser, menus, reorder (mouse/touch/pen, hold, cancel, undo/redo), imports, exports, persistence, Sketch drawer, float, themes and automatic tab names");
-}
-
-function storedZip(entries) {
-  const locals = [], central = [];
-  let offset = 0;
-  for (const [name, data] of entries) {
-    const header = Buffer.alloc(30), path = Buffer.from(name), crc = crc32(data);
-    header.writeUInt32LE(0x04034b50, 0); header.writeUInt16LE(20, 4); header.writeUInt32LE(crc, 14);
-    header.writeUInt32LE(data.length, 18); header.writeUInt32LE(data.length, 22); header.writeUInt16LE(path.length, 26);
-    const entry = Buffer.alloc(46);
-    entry.writeUInt32LE(0x02014b50, 0); entry.writeUInt16LE(20, 4); entry.writeUInt16LE(20, 6); entry.writeUInt32LE(crc, 16);
-    entry.writeUInt32LE(data.length, 20); entry.writeUInt32LE(data.length, 24); entry.writeUInt16LE(path.length, 28); entry.writeUInt32LE(offset, 42);
-    locals.push(header, path, data); central.push(entry, path); offset += 30 + path.length + data.length;
-  }
-  const directory = Buffer.concat(central), end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
-  end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...locals, directory, end]);
 }

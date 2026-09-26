@@ -103,27 +103,7 @@ export async function checkLongPressDragging({call, evaluate, settle}) {
       }
       await clean();
     }
-    await send({type:"restore_workspace",workspace:fixture});
-    for (let i=0;i<2;i++) await send({type:"layer",action:{op:"new",group:false,clipped:false}});
-    const order = () => evaluate("layerApp.state().layers.map(l=>String(l.id))");
-    const beforeLayers = await order();
-    pen = false;
-    for (const cancel of [true,false]) {
-      const rows = await evaluate("[...document.querySelectorAll('#layer-rows .layer-row')].map(n=>n.dataset.layer)");
-      const source = `#layer-rows .layer-row[data-layer="${rows[0]}"] .layer-grip`;
-      await press(center(await rect(source)));
-      await evaluate("new Promise(r=>setTimeout(r,650))");
-      assert.equal(await menu(),true,"Layer grip hold opens its menu");
-      const target = await rect(`#layer-rows .layer-row[data-layer="${rows[1]}"]`);
-      await move({x:target.x+target.width*.5,y:target.y+target.height-3});
-      assert.equal(await menu(),false,"Layer grip movement closes its menu");
-      assert.equal(await evaluate("document.querySelectorAll('.layer-drag-preview').length"),1);
-      if (cancel) { await call("Input.dispatchTouchEvent",{type:"touchCancel",touchPoints:[]});held=false;await wait();assert.deepEqual(await order(),beforeLayers); }
-      else { await release();assert.notDeepEqual(await order(),beforeLayers);await send({type:"invoke",command:"undo"});assert.deepEqual(await order(),beforeLayers); }
-      assert.equal(await evaluate("document.querySelectorAll('.layer-drag-preview').length"),0);
-    }
-    for (let i=0;i<2;i++) await send({type:"invoke",command:"undo"});
-    console.log("PASS: long-press menu release/action, tab reorder, tear-off, docked/floating groups, drawers, toolbar grips, tools, layer grips, cancellation, undo, and native pen context events");
+    console.log("PASS: long-press menu release/action, tab reorder, tear-off, docked/floating groups, drawers, toolbar grips, tools, cancellation, undo, and native pen context events");
   } finally {
     if (held) await release();
     await evaluate("document.querySelector('.panel-context-menu').hidePopover()");

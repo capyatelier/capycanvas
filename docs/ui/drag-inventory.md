@@ -204,8 +204,11 @@ Remaining implementation work is on Apple and Windows; see the
   and layer hold suites retain menu/scroll coverage. Physical pen testing remains.
 - Web: [`drag-pickup.test.mjs`](../../apps/layer-web/drag-pickup.test.mjs) checks
   browser-delivered mouse/touch/pen contacts, including automatic holds and early
-  rejection. Existing hold suites cover menus and native touch scrolling.
-  Physical stylus hardware testing remains.
+  rejection. Existing hold suites cover menus and native touch scrolling:
+  `test.mjs --layer-hold` (Layers row holds) and `--long-press-drag` (panel,
+  tab, drawer and toolbar holds), both also in `device.test.mjs` for tablets.
+  `test.mjs --drag-cursors` covers tab sliding, tear-off, cursors, cancellation
+  and capture loss. Physical stylus hardware testing remains.
 - Android: [`AndroidInteractionTest.kt`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidInteractionTest.kt)
   delivers native mouse/touch/pen MotionEvents on the tablet. It covers early
   rejection, toolbar/divider/drawer/collapsed-icon holds, immediate grips/tabs,

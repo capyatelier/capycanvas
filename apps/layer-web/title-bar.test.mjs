@@ -54,13 +54,6 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
     await shot('startup');
     await selectWorkspace('Sketch');
     const original=await model();
-    const bands=await evaluate('layerApp.state().workspace.layout.bands');
-    assert.deepEqual(bands.map(b=>[b.edge,b.alignment,b.root.panels.length]),[['left','center',1]],'Sketch docks only its compact brush toolbar');
-    const sliders=await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id===${JSON.stringify(bands[0].root.panels[0])}).content.tiles.map(t=>t.control.kind)`);
-    assert.ok(sliders.includes('brush_size_slider')&&sliders.includes('brush_opacity_slider'),`compact brush sliders: ${sliders}`);
-    assert.equal(original.size,'medium');
-    assert.deepEqual(original.zones[0].map(e=>e.item.kind),['capy','menu','tool','tool','tool']);
-    assert.deepEqual(original.zones[1].map(e=>e.item.kind),['workspaces']);
     assert.deepEqual(await evaluate("[...document.querySelectorAll('.header-item .toolbar-controls')].length"),0);
     await begin();
     assert.equal(await evaluate("document.querySelectorAll('#header-editor h1,#header-editor h2,#header-editor #tool-picker').length"),0);

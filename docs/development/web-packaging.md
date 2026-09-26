@@ -88,7 +88,8 @@ proportions as the favicon. See [BRANDING.md](../../BRANDING.md) for its terms.
 python3 -m http.server 4174 --bind 127.0.0.1 --directory dist/capycanvas
 
 # Unit tests: launcher, packaging, cache boundaries and failure handling.
-node --test apps/layer-web/run.test.mjs apps/layer-web/package.test.mjs
+node --test apps/layer-web/run.test.mjs apps/layer-web/package.test.mjs \
+  apps/layer-web/frame.test.mjs apps/layer-web/pointer.test.mjs apps/layer-web/workspace-client.test.mjs
 
 # Actual Chrome + WebGPU + service workers; starts its own local test server.
 node apps/layer-web/test.mjs --package

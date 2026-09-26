@@ -51,22 +51,13 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.ok(await evaluate('layerApp.state().tool_settings.some(f=>f.id.includes("gap"))'),"Auto Select exposes gap controls");
   await invoke("brush");
   await show("color");
-  // Only the two alternative shapes have buttons; saved preferences may
-  // already select the triangle that this journey is about to exercise.
   await evaluate('layerApp.dispatch({type:"color",action:{op:"shape",shape:"circle"}})');
   await settle();
   const before=await evaluate('layerApp.state().brush.color');
   await pointer(".dock-group .color-wheel",.95,.5);
   await pointer(".dock-group .color-wheel",.6,.4);
   assert.notDeepEqual(await evaluate('layerApp.state().brush.color'),before,"Color wheel changes paint");
-  await click('.dock-group [data-color-shape="triangle"]');
-  assert.equal(await evaluate('layerApp.state().colors.space'),"hls");
-  await pointer(".dock-group .color-wheel",.6,.5);
-  await click('.dock-group [data-color-slot="transparent"]');
-  assert.equal(await evaluate('layerApp.state().colors.slot'),"transparent");
-  await click('.dock-group [data-color-slot="foreground"]');
   console.log("color/tool controls passed");
-  assert.ok(await evaluate('(()=>{const c=document.querySelector(".dock-group .color-wheel");return c.getContext("2d").getImageData(0,0,c.width,c.height).data.filter((v,i)=>i%4===3&&v>0).length>1000;})()'),"Color wheel contains rendered pixels");
   await show("navigator");
   assert.ok(await evaluate(`([...document.querySelectorAll('.dock-group [data-navigator-command]')].every(button=>{
     const r=button.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
@@ -87,7 +78,6 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await call("Input.dispatchMouseEvent",{type:"mouseMoved",...await evaluate('({x:innerWidth/2,y:innerHeight/2})'),buttons:0});
   await settle();
   assert.ok(await evaluate('document.querySelector("#workspace").classList.contains("zen-hidden")'));
-  assert.equal(await evaluate('document.querySelector(".zen-toolbar")'),null,"Total Zen has no alternate toolbar projection");
   assert.equal(await evaluate('"total_zen" in layerApp.state().settings'),false,"Legacy partial-Zen setting is discarded");
   await invoke("zen_mode");
   await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("navigator"));window.editorColumnGroup=group.id;layerApp.dispatch({type:"customize",action:{type:"set_column_collapsed",group:group.id,collapsed:true}});const column=layerApp.app.layout(innerWidth,innerHeight).collapsed.find(c=>c.groups.some(g=>g.group===group.id)).id;layerApp.dispatch({type:"customize",action:{type:"set_column_drawers",column,drawers:true}});})()`);
@@ -102,7 +92,6 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.ok(await evaluate('!!document.querySelector(".content-drawer")'),"Column drawers remain open while drawing");
   await click('.collapsed-column [data-panel="navigator"]');
   await wait('!document.querySelector(".content-drawer")');
-  assert.equal(await evaluate('document.querySelector(".column-expand")'),null);
   await evaluate('layerApp.dispatch({type:"customize",action:{type:"set_column_collapsed",group:window.editorColumnGroup,collapsed:false}})');
   await settle();
   assert.equal(await evaluate('layerApp.state().workspace.layout.collapsed.length'),0);

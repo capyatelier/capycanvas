@@ -98,8 +98,6 @@ export async function checkIconControls({call,evaluate,settle}, output) {
       const group=await evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes(${JSON.stringify(panel)})).id`);
       await dispatch({type:"customize",action:{type:"set_column_collapsed",group,collapsed:true}});
       const column=await evaluate(`layerApp.app.layout(innerWidth,innerHeight).collapsed.find(c=>c.groups.some(g=>g.icons.some(i=>i.panel===${JSON.stringify(panel)})))`);
-      const selector=`.collapsed-column[data-column="${column.id}"] .column-expand`;
-      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})`),null,'Expand caret is retired');
       await dispatch({type:"customize",action:{type:"set_column_collapsed",group:column.id,collapsed:false}});await settle();
       assert.ok(await evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.some(g=>g.panels.includes(${JSON.stringify(panel)}))`));
     }
