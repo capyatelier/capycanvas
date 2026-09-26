@@ -1149,18 +1149,6 @@ pub extern "system" fn Java_art_capycanvas_Native_colorWheelHit(
     string(&mut env, result)
 }
 
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_colorPanelLayout(
-    mut env: JNIEnv,
-    _: JClass,
-    size: jfloat,
-) -> jstring {
-    let result = layer_ui::ColorPanelLayout::new(size)
-        .ok_or_else(|| "Invalid color panel size".to_owned())
-        .and_then(|layout| serde_json::to_string(&layout).map_err(error));
-    string(&mut env, result)
-}
-
 fn color_shape(env: &mut JNIEnv, shape: &JString) -> Result<layer_ui::ColorShape, String> {
     match read(env, shape)?.as_str() {
         "circle" => Ok(layer_ui::ColorShape::Circle),
@@ -1168,23 +1156,6 @@ fn color_shape(env: &mut JNIEnv, shape: &JString) -> Result<layer_ui::ColorShape
         "triangle" => Ok(layer_ui::ColorShape::Triangle),
         _ => Err("Invalid color wheel shape".into()),
     }
-}
-
-/// Inspect profile bytes off the render owner; names never define identity.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_inspectProfile(
-    mut env: JNIEnv, _: JClass, value: jni::objects::JByteArray,
-) -> jstring {
-    let result = (|| {
-        if env.get_array_length(&value).map_err(error)? as usize > layer_color::MAX_ICC_BYTES {
-            return Err("ICC profile exceeds 16 MiB".into());
-        }
-        let profile = layer_core::color::ColorProfile::Icc(env.convert_byte_array(value).map_err(error)?.into());
-        let channels = layer_color::profile_channels(&profile)?;
-        let name = layer_color::profile_description(&profile)?;
-        serde_json::to_string(&layer_ui::ExportProfile { profile, channels, name }).map_err(error)
-    })();
-    string(&mut env, result)
 }
 
 /// Stateless color conversion/drafts; no render-owner handle is accessed.

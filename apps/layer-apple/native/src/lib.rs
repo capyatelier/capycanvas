@@ -182,17 +182,6 @@ fn color_shape(shape: u32) -> Option<layer_ui::ColorShape> {
         _ => None,
     }
 }
-/// Shared geometry, fetched only when the panel allocation changes.
-#[unsafe(no_mangle)]
-pub extern "C" fn capy_apple_color_layout(size: f32) -> *mut c_char {
-    catch_unwind(|| {
-        let layout = layer_ui::ColorPanelLayout::new(size)?;
-        CString::new(serde_json::to_string(&layout).ok()?).ok().map(CString::into_raw)
-    })
-    .ok()
-    .flatten()
-    .unwrap_or(std::ptr::null_mut())
-}
 /// Shared dial hit testing: 0 misses, 1 center, 2 brightness, 3 color.
 #[unsafe(no_mangle)]
 pub extern "C" fn capy_apple_parameter_hit(x:f32,y:f32,size:f32,hdr:bool)->u32 {

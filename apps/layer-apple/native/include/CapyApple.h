@@ -69,7 +69,6 @@ char *capy_export_presets(int32_t input_fd, int32_t output_fd, const char *reque
 char *capy_project_details(const CapyProjectTask *task); /* owned JSON; worker only */
 typedef struct { uint32_t width, height; const uint8_t *pixels; size_t count; } CapyProjectPreview;
 /* Worker only; borrowed straight Display P3 RGBA8 until the next mutation/free. */
-int32_t capy_project_preview(const CapyProjectTask *task, bool after, CapyProjectPreview *output);
 int32_t capy_project_preview_at(const CapyProjectTask *task, uint32_t index, CapyProjectPreview *output);
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_project_recover(CapyApple *app, const CapyProjectTask *task);
@@ -92,13 +91,10 @@ char *capy_apple_toolbar_ui(const char *json);
 /* Stateless shared wheel hit test in local logical coordinates. Shape: 0 circle,
    1 square, 2 triangle. Result: 0 miss/invalid, 1 hue ring, 2 field. */
 uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t shape);
-/* Shared logical panel layout. Owned JSON, NULL for invalid input.
-   Cache by size; release with capy_apple_string_free. */
 // operation: 0 = generate and map; 1 = generate base; 2 = map retained base in place.
 bool capy_apple_hdr_field(uint32_t side, const char *request, float *pixels, size_t count, uint32_t operation);
 uint32_t capy_apple_parameter_hit(float x, float y, float size, bool hdr);
 bool capy_apple_proof_texture(uint32_t edge, uint8_t *bytes, size_t count);
-char *capy_apple_color_layout(float size);
 /* Stateless cached field or hue guide: square, straight Display P3 RGBA8.
    Caller owns side*side*4 writable bytes. Returns 1 on success, 0 invalid.
    No session access or retained pointers; safe on the UI thread. */

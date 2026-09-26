@@ -81,12 +81,7 @@ pub struct CapyProjectPreview {
 /// # Safety
 /// Worker only, after successful preparation. Borrowed pixels remain readable
 /// until the next mutating job call/free; copy them before returning to the UI.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_project_preview(task: *const CapyProjectTask, after: bool, output: *mut CapyProjectPreview) -> i32 {
-    unsafe { capy_project_preview_at(task, u32::from(after), output) }
-}
-/// # Safety
-/// Same worker ownership as capy_project_preview; index 2 is the encoded SDR base.
+/// Index 0 is before, 1 after and 2 the encoded SDR base.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_project_preview_at(task: *const CapyProjectTask, index: u32, output: *mut CapyProjectPreview) -> i32 {
     let (Some(task), Some(output)) = (unsafe { task.as_ref() }, unsafe { output.as_mut() }) else { return -1; };

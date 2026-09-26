@@ -1,7 +1,5 @@
 //! Stateless native color presentation. CPU pixels never touch a canvas host.
-use layer_ui::{
-    ColorAction, ColorPanelLayout, ColorShape, ColorState, ColorWheelGeometry, ColorWheelPart,
-};
+use layer_ui::{ColorShape, ColorState, ColorWheelGeometry, ColorWheelPart};
 use std::ffi::{CString, c_char};
 
 /// Stateless shared numeric parsing and display projection. No document host is accessed.
@@ -78,25 +76,6 @@ fn json(value: impl serde::Serialize) -> *mut c_char {
         .ok()
         .and_then(|text| CString::new(text).ok())
         .map_or(std::ptr::null_mut(), CString::into_raw)
-}
-
-/// Return shared logical bounds; free a nonnull result with capy_string_free.
-#[unsafe(no_mangle)]
-pub extern "C" fn capy_color_layout(size: f32) -> *mut c_char {
-    ColorPanelLayout::new(size).map_or(std::ptr::null_mut(), json)
-}
-
-/// Return projection-specific display hue stops; free with capy_string_free.
-#[unsafe(no_mangle)]
-pub extern "C" fn capy_color_hue_stops(projection: u32) -> *mut c_char {
-    let Some(shape) = shape(projection) else {
-        return std::ptr::null_mut();
-    };
-    let mut color = ColorState::default();
-    if color.apply(ColorAction::Shape { shape }).is_err() {
-        return std::ptr::null_mut();
-    }
-    json(color.wheel_hue_stops())
 }
 
 /// Shared SDR projection of the active HDR picker, including its EV and recipe.
