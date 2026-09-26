@@ -1,110 +1,11 @@
 import XCTest
 
-final class EditorLaunchTests: XCTestCase {
-    override func setUpWithError() throws { continueAfterFailure = false }
-
-    @MainActor func testNativeDrawingTabs() throws {
-        try checkNativeDrawingTabs(in: editorCaptureApplication())
-    }
-
-    @MainActor func testNativeHDRColor() throws {
-        try checkNativeHDRColor(in: editorCaptureApplication())
-    }
-
-    @MainActor func testNativeDocumentColor() throws {
-        try checkNativeDocumentColor(in: editorCaptureApplication())
-    }
-
-    @MainActor func testEditorKeyboardFocus() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkEditorKeyboardFocus(in: editorCaptureApplication())
-    }
-    @MainActor func testNumericTextHistory() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkNumericTextHistory(in: editorCaptureApplication())
-    }
-    @MainActor func testNumericSettingsDone() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkNumericSettingsDone(in: editorCaptureApplication())
-    }
-    @MainActor func testSettingsNumericReset() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkSettingsNumericReset(in: editorCaptureApplication())
-    }
-    @MainActor func testSettingsTextState() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkSettingsTextState(in: editorCaptureApplication(), keyboardSelection: false)
-    }
+extension EditorLaunchTests {
     @MainActor func testSettingsTextSelectionShortcut() {
-        XCUIDevice.shared.orientation = .landscapeLeft
         checkSettingsTextState(in: editorCaptureApplication())
-    }
-    @MainActor func testSettingsChoicePresentation() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkSettingsChoicePresentation(in: editorCaptureApplication())
-    }
-    @MainActor func testSettingsDropdowns() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkSettingsControls(in: editorCaptureApplication())
-    }
-
-    @MainActor func testBlendAndLiquify() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkBlendAndLiquify(in: editorCaptureApplication())
-    }
-
-    @MainActor func testPaintingBrushes() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkPaintingBrushes(in: editorCaptureApplication())
-    }
-
-    @MainActor func testMaskTransforms() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkMaskTransforms(in: editorCaptureApplication())
-    }
-
-    @MainActor func testMaskActionsAndHistory() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkMaskActionsAndHistory(in: editorCaptureApplication())
-    }
-
-    @MainActor func testLayerContentActionsAndHistory() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkLayerContentActionsAndHistory(in: editorCaptureApplication())
-    }
-
-    @MainActor func testGroupArtworkWorkflow() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkGroupArtworkWorkflow(in: editorCaptureApplication())
-    }
-
-    @MainActor func testMoveAndTransformCancellation() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkMoveAndTransformCancellation(in: editorCaptureApplication())
-    }
-
-    @MainActor func testTransformFieldRetainsScroll() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkTransformFieldRetainsScroll(in: editorCaptureApplication())
-    }
-
-    @MainActor func testTransformRotationAndHandles() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkTransformRotationAndHandles(in: editorCaptureApplication())
-    }
-
-    @MainActor func testLassoControls() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkLassoControls(in: editorCaptureApplication())
-    }
-
-    @MainActor func testHandAndEyedropper() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkHandAndEyedropper(in: editorCaptureApplication())
     }
 
     @MainActor func testTwoFingerCanvasNavigation() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorCaptureApplication()
         // XCTest's pinch-out begins near opposite corners of the element's
         // full bounds. Hide panels through ordinary workspace customization so
@@ -174,60 +75,9 @@ final class EditorLaunchTests: XCTestCase {
         attachEditor(in: app, name: "two-finger-fit-restored")
     }
 
-    @MainActor func testRegionSelectionAndFill() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkRegionSelectionAndFill(in: editorCaptureApplication())
-    }
-
-    @MainActor func testToolbarComponents() { checkToolbarComponents(in: editorCaptureApplication()) }
-    @MainActor func testColorPicker() { checkColorPicker(in: editorCaptureApplication()) }
-    @MainActor func testTonalSelection() { checkTonalSelection(in: editorCaptureApplication()) }
-    @MainActor func testPalettes() { checkPalettes(in: editorCaptureApplication()) }
-    @MainActor func testStrokeRecording() { checkStrokeRecording(in: editorCaptureApplication()) }
-    @MainActor func testPanelTransparency() { checkPanelTransparency(in: editorCaptureApplication()) }
-    @MainActor func testZenPreferences() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkZenPreferences(in: editorCaptureApplication())
-    }
-
-    @MainActor func testSelectionMasks() { checkSelectionMasks(in: editorCaptureApplication()) }
-
-    @MainActor func testSelectionInversion() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkSelectionInversion(in: editorCaptureApplication())
-    }
-
     @MainActor func testNativeWorkspaceContextAction() { checkNativeWorkspaceContextAction() }
 
-    @MainActor func testRulerWorkflow() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkRulerWorkflow(in: editorCaptureApplication())
-    }
-
-    @MainActor func testFiguresAndGradients() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkFiguresAndGradients(in: editorCaptureApplication())
-    }
-
-    @MainActor func testAboutAndApplicationMenus() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkAboutAndApplicationMenus(in: editorCaptureApplication())
-    }
-
-    @MainActor func testApplicationLinkHandoff() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkApplicationLinkHandoff(in: editorCaptureApplication())
-    }
-
-    @MainActor func testSelectionAndTransform() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkSelectionAndTransform(in: editorCaptureApplication())
-    }
-
-    @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
-
     @MainActor func testLayerGripAndChildActions() {
-        XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorTestApplication()
         app.launch()
         let add = app.buttons["layer-New layer"]
@@ -260,7 +110,6 @@ final class EditorLaunchTests: XCTestCase {
     }
 
     @MainActor func testLayerMenuDragUpward() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorTestApplication()
         app.launchEnvironment["CAPY_ROW_MENU_PROBE"] = "1"
         app.launchEnvironment["CAPY_LAYER_INPUT_PROBE"] = "1"
@@ -295,7 +144,6 @@ final class EditorLaunchTests: XCTestCase {
     }
 
     @MainActor func testLayerListScrolling() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorTestApplication()
         app.launchEnvironment["CAPY_LAYER_INPUT_PROBE"] = "1"
         let actions = (0..<22).map { _ in ["type": "layer", "action": ["op": "new", "group": false, "clipped": false]] as [String: Any] }
@@ -340,7 +188,6 @@ final class EditorLaunchTests: XCTestCase {
     }
 
     @MainActor func testLayerContextMenuAnchors() {
-        XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorCaptureApplication()
         app.launch()
         XCTAssertTrue(app.buttons["layer-New layer"].waitForExistence(timeout: 20))
@@ -365,33 +212,7 @@ final class EditorLaunchTests: XCTestCase {
         capture.name = name; capture.lifetime = .keepAlways; add(capture)
     }
 
-    @MainActor func testWorkspaceSwitcher() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkWorkspaceSwitcher(in: editorTestApplication())
-    }
-
-    @MainActor func testWorkspaceLibraryHistory() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkWorkspaceLibraryHistory(in: editorTestApplication())
-    }
-
-    @MainActor func testDrawerDragAndDock() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkDrawerDragAndDock(in: editorTestApplication())
-    }
-
-    @MainActor func testToolbarStylesAndActions() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkToolbarStylesAndActions(in: editorTestApplication())
-    }
-
-    @MainActor func testTitleBarCustomization() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkTitleBarCustomization(in: editorTestApplication())
-    }
-
     @MainActor func testCanvasContactKeepsWindow() {
-        XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorCaptureApplication()
         app.launch()
         workspaceActivate(app.buttons["workspace-switch-builtin:workspace:painter"])
@@ -404,238 +225,7 @@ final class EditorLaunchTests: XCTestCase {
         XCTAssertEqual(app.frame, before, "A canvas contact must not move or resize the OS window")
     }
 
-    @MainActor func testTitleBarToolDrawers() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkTitleBarToolDrawers(in: editorCaptureApplication())
-    }
-
-    @MainActor func testColumnStacks() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkColumnStacks(in: editorTestApplication())
-    }
-
-    @MainActor func testColumnStacksDark() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkColumnStacks(in: editorTestApplication(), theme: "dark")
-    }
-
-    @MainActor func testRendererRecovery() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkRendererRecovery(in: editorTestApplication())
-    }
-
-    @MainActor func testPaintDefaultColumns() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkDefaultWorkspaceColumns(in: editorTestApplication())
-    }
-
-    @MainActor func testPhotoDefaultColumns() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkDefaultWorkspaceColumns(in: editorTestApplication(), photo: true)
-    }
-
-    @MainActor func testTitleBarSystemStatus() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkTitleBarSystemStatus(in: editorTestApplication())
-    }
-
-    @MainActor func testIndependentEditorWindows() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkIndependentEditorWindows(in: editorTestApplication())
-    }
-
-    @MainActor func testArtworkRecoveryAfterRestart() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkArtworkRecoveryAfterRestart(in: editorTestApplication())
-    }
-
-
-
-    @MainActor func testZenHidesChromeAndTabRestoresIt() {
-        let app = editorTestApplication()
-        XCUIDevice.shared.orientation = .landscapeLeft
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"zen_mode"}]"#
-        app.launch()
-        let canvas = app.otherElements["canvas"]
-        XCTAssertTrue(canvas.waitForExistence(timeout: 30))
-        XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForNonExistence(timeout: 5))
-        XCTAssertFalse(editorDocumentTitle(in: app).exists)
-        XCTAssertTrue(app.descendants(matching: .any)["zen-button"].firstMatch.waitForExistence(timeout: 5),
-            "Zen keeps the standalone Capy by default")
-        app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
-        XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 10))
-        XCTAssertTrue(editorDocumentTitle(in: app).exists)
-        XCTAssertTrue(app.buttons["zen-button"].exists)
-        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
-    }
-
-    @MainActor func testCollapsedColumnsDrawersAndZen() throws {
-        let app = editorTestApplication()
-        #if os(iOS)
-        XCUIDevice.shared.orientation = .landscapeLeft
-        #else
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        #endif
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":6},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":6,"collapsed":true}}]"#
-        app.launch()
-        checkCollapsedColumnsDrawersAndZen(in: app)
-    }
-
-    @MainActor func testToolbarCustomization() throws {
-        let app = editorTestApplication()
-        #if os(iOS)
-        XCUIDevice.shared.orientation = .landscapeLeft
-        #else
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        #endif
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"new_toolbar"}]"#
-        app.launch()
-        checkToolbarCustomization(in: app)
-    }
-
-    @MainActor func testLayerConfiguration() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkLayerConfiguration(in: editorTestApplication())
-    }
-
-    @MainActor func testPanelConfigurationAndLiveDrag() throws {
-        let app = editorTestApplication()
-        #if os(iOS)
-        XCUIDevice.shared.orientation = .landscapeLeft
-        #else
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        #endif
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"show_all_controls","panel":"sizes"}}]"#
-        app.launch()
-        checkPanelConfigurationAndLiveDrag(in: app)
-    }
-
-    @MainActor func testNavigatorAndDiagnostics() throws {
-        let app = editorTestApplication()
-        #if os(iOS)
-        XCUIDevice.shared.orientation = .landscapeLeft
-        #else
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        #endif
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
-        app.launch()
-        checkNavigatorAndDiagnostics(in: app)
-    }
-
-    @MainActor func testFilterArtworkAndHistory() throws {
-        let app = editorCaptureApplication()
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkFilterArtworkAndHistory(in: app)
-    }
-
-    @MainActor func testFilterSearchPreviewAndProperties() throws {
-        let app = editorTestApplication()
-        XCUIDevice.shared.orientation = .landscapeLeft
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"set_panel_visible","panel":"adjustments","visible":true}}]"#
-        app.launch()
-        checkFilterSearchPreviewAndProperties(in: app)
-    }
-
-    @MainActor func testShortcutConflictAndEditorEffect() throws {
-        let app = editorTestApplication()
-        #if os(iOS)
-        XCUIDevice.shared.orientation = .landscapeLeft
-        #else
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        #endif
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"invoke","command":"keyboard_shortcuts"}]"#
-        app.launch()
-        checkShortcutConflictAndEditorEffect(in: app)
-    }
-
-    @MainActor func testNativeSDRCreationAndColorEditing() throws {
-        let app = editorTestApplication()
-        XCUIDevice.shared.orientation = .landscapeLeft
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}},{"type":"color","action":{"op":"definition","color":{"space":"ProPhoto","rgba":[0.12345678,0.23456789,0.34567891,0.654321]}}},{"type":"invoke","command":"new_document"}]"#
-        app.launch()
-        checkNativeSDRCreationAndColorEditing(in: app)
-    }
-
-    @MainActor func testNewDrawingAndExportCancellation() throws {
-        let app = editorTestApplication()
-        XCUIDevice.shared.orientation = .landscapeLeft
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"invoke","command":"new_document"}]"#
-        app.launch()
-        checkNewDrawingAndExportCancellation(in: app)
-    }
-
-    @MainActor func testSettingsAndWorkspaceRestart() throws {
-        let app = editorTestApplication()
-        XCUIDevice.shared.orientation = .landscapeLeft
-        checkSettingsAndWorkspaceRestart(in: app)
-    }
-
-    @MainActor func testColorControls() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let app = editorCaptureApplication()
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"preferences","action":{"type":"edit","id":"theme","value":1}},{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}},{"type":"set_color","rgba":[1,0,0,1]}]"#
-        app.launchEnvironment["CAPY_COLOR_PROBE"] = "1"
-        app.launch()
-        checkColorControls(in: app) { mode, wheel, state in
-            attachColorFixture(name: "ipad-color-" + mode, state: state,
-                screenshot: XCUIScreen.main.screenshot(), viewport: app.frame, wheel: wheel)
-        }
-    }
-
-    @MainActor func testCompleteEditorCapture() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let app = editorCaptureApplication()
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
-        app.launch()
-        capturePaintEditor(in: app)
-    }
-
-    @MainActor func testCompleteEditorDarkCapture() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let app = editorCaptureApplication()
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"}]"#
-        app.launch()
-        capturePaintEditor(in: app, theme: "dark")
-        for _ in 0..<4 { workspaceActivate(app.buttons["navigator-zoom_in"]) }
-        capturePaintEditor(in: app, scenario: "paint-canvas-under-header", theme: "dark")
-    }
-
-    @MainActor func testBlendChoices() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let app = editorCaptureApplication()
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
-        app.launch()
-        checkBlendChoices(in: app)
-    }
-
-    @MainActor func testInlineLayerOpacity() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let app = editorCaptureApplication()
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
-        app.launch()
-        checkInlineLayerOpacity(in: app)
-    }
-
-    @MainActor func testEditorControlLayout() {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let app = editorCaptureApplication()
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
-        app.launch()
-        checkEditorControlLayout(in: app)
-    }
-
-    @MainActor func testNumericToolControls() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let app = editorCaptureApplication()
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
-        app.launch()
-        checkNumericToolControls(in: app)
-        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        shot.name = "ipad-tool-controls"; shot.lifetime = .keepAlways; add(shot)
-    }
-
     @MainActor func testMetalLaunchAndEditorCapture() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorTestApplication()
         app.launch()
         let canvas = app.otherElements["canvas"]
@@ -658,10 +248,8 @@ final class EditorLaunchTests: XCTestCase {
         let layers = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         layers.name = "ipad-layer-added"; layers.lifetime = .keepAlways; add(layers)
     }
-}
 
-// Opt-in native provider acceptance; each run owns a new UUID-named folder.
-extension EditorLaunchTests {
+    // Opt-in native provider acceptance; each run owns a new UUID-named folder.
     @MainActor private func nativeFilesTestFolder() throws -> String {
         guard let token = ProcessInfo.processInfo.environment["CAPY_FILE_TEST_TOKEN"] else {
             throw XCTSkip("Native Files acceptance requires an isolated CAPY_FILE_TEST_TOKEN")
@@ -673,7 +261,6 @@ extension EditorLaunchTests {
     @MainActor func testNativeFilesProjectRoundTrip() throws {
         let folder = try nativeFilesTestFolder()
         let app = editorTestApplication()
-        XCUIDevice.shared.orientation = .landscapeLeft
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"add_layer"},{"type":"set_color","rgba":[0.1,0.3,0.9,1]}]"#
         func capture(_ name: String) {
             let tree = XCTAttachment(string: app.debugDescription)
@@ -778,7 +365,6 @@ extension EditorLaunchTests {
     @MainActor func testNativeFilesProjectRoundTripCleanup() throws {
         let folder = try nativeFilesTestFolder()
         let files = XCUIApplication(bundleIdentifier: "com.apple.DocumentsApp")
-        XCUIDevice.shared.orientation = .landscapeLeft
         files.activate()
         workspaceActivate(files.cells["DOC.sidebar.item.On My iPad"])
         let cell = files.cells[folder + ", Folder"]
