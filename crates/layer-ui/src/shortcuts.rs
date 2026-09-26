@@ -359,6 +359,7 @@ impl CommandId {
             Self::TransformRotateLeft => "command.TransformRotateLeft",
             Self::TransformRotateRight => "command.TransformRotateRight",
             Self::ResetTransform => "command.ResetTransform",
+            Self::RemoveSelectionPoint => "command.RemoveSelectionPoint",
         }.into()
     }
 }

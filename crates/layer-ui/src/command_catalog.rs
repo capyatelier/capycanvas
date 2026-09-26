@@ -406,6 +406,7 @@ fn action_description(action: &UiAction) -> &'static str {
             TransformFlipHorizontal | TransformFlipVertical => "Mirror the content being transformed, about the centre of its box.",
             TransformRotateLeft | TransformRotateRight => "Turn the content being transformed by a quarter turn.",
             ResetTransform => "Undo every change made in this transform, keeping it open.",
+            RemoveSelectionPoint => "Remove the most recent point of a polygon selection in progress.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -903,7 +904,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::SaveDocument | C::SaveDocumentAs => self.require_raster_snapshot(),
             C::CloseDocument => self.require_document_snapshot_idle(),
             C::ResetLayout if self.managed_workspace.is_some() => self.require_workspace_idle(),
-            C::CompleteSelection | C::CancelSelection | C::GamutWarning | C::UndoWorkspace | C::RedoWorkspace => Ok(()),
+            C::CompleteSelection | C::CancelSelection | C::RemoveSelectionPoint | C::GamutWarning | C::UndoWorkspace | C::RedoWorkspace => Ok(()),
             _ => self.require_idle(),
         };
         if let Err(reason) = gate {
@@ -997,6 +998,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             C::CompleteSelection => "Place at least three points first",
             C::CancelSelection => "No selection path to cancel",
+            C::RemoveSelectionPoint => "Place a polygon point first",
             C::SelectionVisible | C::SelectionEditing | C::SelectionReference => "Choose a selection tool first",
             C::ZoomIn => "Already at the maximum zoom",
             C::ZoomOut => "Already at the minimum zoom",

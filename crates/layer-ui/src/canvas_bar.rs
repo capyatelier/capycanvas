@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum CanvasBarKind {
     Placement,
     Transform,
+    Polygon,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +71,9 @@ pub(crate) fn short_label(command: CommandId) -> &'static str {
         CommandId::TransformRotateLeft => "−90°",
         CommandId::TransformRotateRight => "+90°",
         CommandId::ResetTransform => "Reset",
+        CommandId::RemoveSelectionPoint => "Remove Point",
+        CommandId::CompleteSelection => "Finish",
+        CommandId::CancelSelection => "Cancel",
         _ => command.label(),
     }
 }
@@ -95,12 +99,25 @@ struct Plan {
     label: Option<String>,
     items: Vec<(CommandId, bool)>,
     completion: Vec<CommandId>,
+    placement: Option<CanvasBarPlacement>,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
     fn canvas_bar_plan(&self) -> Option<Plan> {
-        if !self.state.platform.canvas_bar() || !self.operation.active() {
+        if !self.state.platform.canvas_bar() {
             return None;
+        }
+        if !self.operation.active() {
+            let polygon = self.layer_interaction.tool
+                == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon })
+                && !self.layer_interaction.path.is_empty();
+            return polygon.then(|| Plan {
+                kind: CanvasBarKind::Polygon,
+                label: None,
+                items: vec![(CommandId::RemoveSelectionPoint, false)],
+                completion: vec![CommandId::CancelSelection, CommandId::CompleteSelection],
+                placement: Some(CanvasBarPlacement::BottomEdge),
+            });
         }
         let transform_items = vec![
             (CommandId::TransformAspect, true),
@@ -120,6 +137,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 label: (count > 1).then(|| format!("{count} images")),
                 items,
                 completion,
+                placement: None,
             });
         }
         Some(Plan {
@@ -127,12 +145,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             label: None,
             items: transform_items,
             completion,
+            placement: None,
         })
     }
 
     fn canvas_bar_anchor(&self, kind: CanvasBarKind) -> Option<[f32; 4]> {
         match kind {
             CanvasBarKind::Placement | CanvasBarKind::Transform => self.transform_document_bounds(),
+            CanvasBarKind::Polygon => None,
         }
     }
 
@@ -168,7 +188,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             flags: commands()
                 .map(|id| {
                     let (enabled, selected) = self.command_flags(id);
-                    let steady = previous_flags.iter().find(|f| f.0 == id).filter(|_| !idle);
+                    let steady = previous_flags
+                        .iter()
+                        .find(|f| f.0 == id)
+                        .filter(|_| !idle && !id.follows_construction());
                     (id, steady.map_or(enabled, |f| f.1), selected)
                 })
                 .collect(),
@@ -199,10 +222,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             label: plan.label,
             items: plan.items.iter().map(|&(id, checkable)| item(id, checkable)).collect(),
             completion: plan.completion.iter().map(|&id| item(id, false)).collect(),
-            placement: if preference.visible {
-                preference.placement
-            } else {
-                CanvasBarPlacement::BottomEdge
+            placement: match plan.placement {
+                Some(placement) => placement,
+                None if preference.visible => preference.placement,
+                None => CanvasBarPlacement::BottomEdge,
             },
             anchor: key.anchor,
         });
@@ -357,6 +380,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 points.extend(self.transform_hull()?);
                 points
             }
+            CanvasBarKind::Polygon => return None,
         };
         let reach = crate::session::rulers::HIT_DISTANCE;
         let [mut min, mut max] = [[f32::INFINITY; 2], [f32::NEG_INFINITY; 2]];

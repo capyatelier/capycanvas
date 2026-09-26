@@ -204,3 +204,59 @@ fn native_canvas_bar_input() {
     native.events(json!([{"point": center(&w, &cancel)}, {"down": true}, {"down": false}]));
     until(|| !transforming(&w), "Cancel from the completion-only bar");
 }
+
+fn canvas_point(w: &Workspace, document: [f32; 2]) -> [f32; 2] {
+    let m = state(w).camera.document_to_surface();
+    let scale = w.area.scale_factor() as f32;
+    let p = gtk::graphene::Point::new(
+        (m[0] * document[0] + m[2] * document[1] + m[4]) / scale,
+        (m[1] * document[0] + m[3] * document[1] + m[5]) / scale,
+    );
+    let p = w.area.compute_point(&w.window, &p).unwrap();
+    [p.x(), p.y()]
+}
+
+#[test]
+#[ignore = "isolated compositor, GPU and native mouse delivery"]
+fn native_canvas_bar_polygon_input() {
+    let app = native_test_app("art.capycanvas.CanvasBarPolygon");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::FitCanvas,
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::PolygonSelect,
+    });
+    pump(200);
+    let mut native = Native::start();
+    let click = |native: &mut Native, point: [f32; 2]| {
+        native.events(json!([{"point": point}, {"down": true}, {"wait_ms": 30}, {"down": false}]));
+    };
+    for p in [[600., 400.], [1200., 400.], [1200., 900.]] {
+        click(&mut native, canvas_point(&w, p));
+    }
+    until(|| w.canvas_bar.root.is_mapped(), "the polygon bar appears");
+    let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
+    let area = w.area.compute_bounds(&w.window).unwrap();
+    assert!(
+        bar.y() + bar.height() > area.y() + area.height() - 80.,
+        "the polygon bar sits at the bottom edge"
+    );
+    let remove = bar_widget(&w, "canvas-bar-RemoveSelectionPoint");
+    native.events(json!([{"point": center(&w, &remove)}, {"down": true}, {"down": false}]));
+    until(|| w.gpu.borrow().as_ref().unwrap().session.state().canvas_bar.as_ref().is_some_and(|b| {
+        b.completion.iter().any(|i| matches!(&i.option, ToolOption::Action { state, .. } if state.id == CommandId::CompleteSelection && !state.enabled))
+    }), "removing a point disables Finish");
+    click(&mut native, canvas_point(&w, [700., 950.]));
+    let finish = bar_widget(&w, "canvas-bar-CompleteSelection");
+    until(|| finish.is_sensitive(), "Finish is available with three points");
+    native.events(json!([{"point": center(&w, &finish)}, {"down": true}, {"down": false}]));
+    until(
+        || w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.is_some(),
+        "Finish creates the selection",
+    );
+    until(|| !w.canvas_bar.root.is_visible(), "the polygon bar retires");
+}

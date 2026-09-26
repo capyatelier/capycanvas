@@ -1239,7 +1239,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (released_chrome_pin && self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
-        reply.canvas_bar_hidden = self.canvas_bar_contact();
+        reply.canvas_bar_hidden = self.canvas_bar_contact()
+            && self.state.canvas_bar.as_ref().is_none_or(|b| b.placement == CanvasBarPlacement::NearObject);
         reply.keep_zen_button = self.interaction.hidden && self.state.settings.zen_show_capy;
         reply.pan_cursor = self.interaction.pan_key.is_some()
             || self.layer_interaction.tool == LayerCanvasTool::Hand;
@@ -2033,6 +2034,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ApplyTonalSelection | CommandId::CancelTonalSelection | CommandId::TonalDetails | CommandId::TonalSaveBand | CommandId::TonalInvert | CommandId::TonalLowerOpen | CommandId::TonalUpperOpen | CommandId::TonalLinkFalloff | CommandId::TonalRemoveBand | CommandId::TonalNewBand => false,
             CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
             CommandId::CancelSelection => !self.layer_interaction.path.is_empty(),
+            CommandId::RemoveSelectionPoint => {
+                self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon })
+                    && !self.layer_interaction.path.is_empty()
+            }
             CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference => {
                 idle && self.layer_interaction.tool.selection_tool().is_some()
             }
@@ -4113,6 +4118,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.refresh_tools();
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
+            CommandId::RemoveSelectionPoint => {
+                self.remove_polygon_point();
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
             CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect
             | CommandId::SelectionAntialias | CommandId::SelectionConstrainAngles => {
                 self.region_tools.cancel();
@@ -4604,7 +4613,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             } else if tool.geometric() {
                 &[CommandId::SelectionFixedRatio, CommandId::SelectionFixedSize, CommandId::SelectionFromCenter]
             } else if tool == SelectionTool::Polygon {
-                &[CommandId::SelectionConstrainAngles, CommandId::CompleteSelection, CommandId::CancelSelection]
+                &[CommandId::SelectionConstrainAngles, CommandId::RemoveSelectionPoint, CommandId::CompleteSelection, CommandId::CancelSelection]
             } else if matches!(tool, SelectionTool::Color | SelectionTool::Wand) {
                 &[CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference]
             } else { &[] };
@@ -4791,7 +4800,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 // editor. Keep the published availability until it finishes;
                 // selection, icons and labels still follow live state. This is
                 // presentation only: command()/dispatch retain the stroke lock.
-                let enabled = if !canvas_idle {
+                let enabled = if !canvas_idle && !id.follows_construction() {
                     previous.enabled
                         && id.available_on(self.state.platform)
                         && !self.state.document_file.close_ready

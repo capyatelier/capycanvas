@@ -434,6 +434,7 @@ pub fn ui_catalog() -> UiCatalog {
             "animation",
             "undo",
             "redo",
+            "back",
             "plus",
             "minus",
             "up",
@@ -660,6 +661,7 @@ pub enum CommandId {
     TransformRotateLeft,
     TransformRotateRight,
     ResetTransform,
+    RemoveSelectionPoint,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -677,7 +679,8 @@ impl CommandId {
             | Self::TransformFlipVertical
             | Self::TransformRotateLeft
             | Self::TransformRotateRight
-            | Self::ResetTransform => platform.canvas_bar(),
+            | Self::ResetTransform
+            | Self::RemoveSelectionPoint => platform.canvas_bar(),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
             Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
@@ -737,6 +740,10 @@ impl CommandId {
             Self::NewWindow => platform.native_windows(),
             _ => true,
         }
+    }
+    /// Polygon construction spans several contacts; these follow it live.
+    pub fn follows_construction(self) -> bool {
+        matches!(self, Self::CompleteSelection | Self::CancelSelection | Self::RemoveSelectionPoint)
     }
     /// Retained on/off commands can be presented as checkable menu items.
     pub fn is_toggle(self) -> bool {
@@ -876,13 +883,14 @@ impl CommandId {
             Self::TransformRotateLeft => "rotate-left",
             Self::TransformRotateRight => "rotate-right",
             Self::ResetTransform => "reset",
+            Self::RemoveSelectionPoint => "back",
             Self::KeyboardShortcuts => "keyboard",
             Self::About => "info",
             Self::Website => "website",
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 132] = [
+    pub const ALL: [Self; 133] = [
         Self::SearchCommands,
         Self::DrawingBrush,
         Self::Sculpt,
@@ -1017,6 +1025,7 @@ impl CommandId {
         Self::TransformRotateLeft,
         Self::TransformRotateRight,
         Self::ResetTransform,
+        Self::RemoveSelectionPoint,
     ];
     pub const TOOLS: [Self; 25] = [
         Self::DrawingBrush,
@@ -1184,6 +1193,7 @@ impl CommandId {
             Self::TransformRotateLeft => "Rotate 90° left",
             Self::TransformRotateRight => "Rotate 90° right",
             Self::ResetTransform => "Reset transform",
+            Self::RemoveSelectionPoint => "Remove last point",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
             Self::Website => ApplicationLink::Website.label(),

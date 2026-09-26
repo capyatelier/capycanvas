@@ -1078,6 +1078,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::TransformRotateLeft => "Turn the transform box a quarter turn counterclockwise",
                 CommandId::TransformRotateRight => "Turn the transform box a quarter turn clockwise",
                 CommandId::ResetTransform => "Return the transform box to where it started",
+                CommandId::RemoveSelectionPoint => "Remove the polygon point placed last (Backspace)",
                 CommandId::NewDocument => "Create a drawing",
                 CommandId::OpenDocument => "Open an editable drawing",
                 CommandId::SaveDocument => "Save the current drawing",

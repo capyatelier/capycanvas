@@ -474,6 +474,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.layer_interaction.changed = true;
         Ok(())
     }
+    pub(super) fn remove_polygon_point(&mut self) {
+        self.layer_interaction.path.pop();
+        if self.layer_interaction.path.is_empty() {
+            self.selection_tools.cancel();
+        }
+        self.layer_interaction.changed = true;
+        self.refresh_tools();
+    }
     pub(super) fn selection_key(&mut self, key: &str) -> Result<bool, String> {
         if self.layer_interaction.tool
             != (LayerCanvasTool::Selection {
@@ -489,13 +497,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.finish_polygon_selection()?;
                 }
             }
-            "backspace" | "delete" => {
-                self.layer_interaction.path.pop();
-                if self.layer_interaction.path.is_empty() {
-                    self.selection_tools.cancel();
-                }
-                self.layer_interaction.changed = true;
-            }
+            "backspace" | "delete" => self.remove_polygon_point(),
             _ => return Ok(false),
         }
         self.refresh_tools();

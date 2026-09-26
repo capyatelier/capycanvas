@@ -162,6 +162,48 @@ mod selection_tools_checks {
         assert!(s.layer_interaction.path.is_empty());
     }
     #[test]
+    fn polygon_bar_finishes_removes_and_cancels_without_a_keyboard() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::PolygonSelect);
+        assert!(s.state.canvas_bar.is_none());
+        click(&mut s, [20., 20.]);
+        let published = |s: &UiSession<Recorder>, id: CommandId| s.state.commands.iter().find(|c| c.id == id).unwrap().enabled;
+        let items = |s: &UiSession<Recorder>| {
+            let bar = s.state.canvas_bar.as_ref().expect("polygon bar");
+            bar.items.iter().chain(&bar.completion).filter_map(|i| match &i.option {
+                ToolOption::Action { state, .. } => Some((state.id, state.enabled)),
+                _ => None,
+            }).collect::<Vec<_>>()
+        };
+        let bar = s.state.canvas_bar.clone().unwrap();
+        assert_eq!(bar.context.kind, CanvasBarKind::Polygon);
+        assert_eq!(bar.placement, CanvasBarPlacement::BottomEdge);
+        assert_eq!(items(&s), [
+            (CommandId::RemoveSelectionPoint, true),
+            (CommandId::CancelSelection, true),
+            (CommandId::CompleteSelection, false),
+        ]);
+        click(&mut s, [150., 20.]);
+        click(&mut s, [150., 160.]);
+        assert!(items(&s).contains(&(CommandId::CompleteSelection, true)), "construction commands follow the path live");
+        assert!(published(&s, CommandId::CompleteSelection), "Tool Options shows Finish once three points exist");
+        let edit = |command| UiAction::CanvasBarEdit { context: bar.context, action: Box::new(UiAction::Invoke { command }) };
+        s.dispatch(edit(CommandId::RemoveSelectionPoint)).unwrap();
+        assert_eq!(s.layer_interaction.path.len(), 2);
+        assert!(!published(&s, CommandId::CompleteSelection));
+        click(&mut s, [120., 140.]);
+        s.dispatch(edit(CommandId::CompleteSelection)).unwrap();
+        s.frame(2, 2).unwrap();
+        assert_eq!(s.engine.document().selection.as_ref().unwrap().contours()[0].len(), 3);
+        assert!(s.state.canvas_bar.is_none() || s.state.canvas_bar.as_ref().unwrap().context.kind != CanvasBarKind::Polygon);
+        click(&mut s, [40., 40.]);
+        let next = s.state.canvas_bar.clone().unwrap();
+        assert!(s.dispatch(edit(CommandId::CancelSelection)).is_err(), "the finished polygon's bar is stale");
+        s.dispatch(UiAction::CanvasBarEdit { context: next.context, action: Box::new(UiAction::Invoke { command: CommandId::CancelSelection }) }).unwrap();
+        assert!(s.layer_interaction.path.is_empty());
+    }
+    #[test]
     fn global_color_selection_uses_sources_and_rejects_stale_results() {
         let mut s = session();
         s.set_platform(Platform::Gtk);

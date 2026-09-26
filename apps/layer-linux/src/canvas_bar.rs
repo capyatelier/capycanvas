@@ -236,7 +236,12 @@ impl CanvasBar {
 
     /// The camera moved: hide now and reappear at the new place once it settles.
     pub fn defer(&self, workspace: &Rc<Workspace>) {
-        if self.view.borrow().is_some() {
+        if self
+            .view
+            .borrow()
+            .as_ref()
+            .is_some_and(|v| v.placement == layer_ui::CanvasBarPlacement::NearObject)
+        {
             self.suppress(workspace, true);
             self.suppress(workspace, false);
         }
@@ -271,7 +276,9 @@ fn build(
             button.set_widget_name(&format!("canvas-bar-{:?}", state.id));
             button.set_focus_on_click(false);
             button.set_can_focus(false);
-            if completion && state.id == layer_ui::CommandId::ApplyTransform {
+            if completion
+                && matches!(state.id, layer_ui::CommandId::ApplyTransform | layer_ui::CommandId::CompleteSelection)
+            {
                 button.add_css_class("suggested-action");
             } else {
                 button.add_css_class("flat");
