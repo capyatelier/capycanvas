@@ -106,7 +106,8 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
             }
             Triple(fittedWidth.dp,fitted,natural.number("height"))
         }
-        SideEffect {onHeight(naturalHeight,layout.number("height"))}
+        val density = LocalDensity.current.density
+        SideEffect {onHeight(naturalHeight,(layout.number("height")*density).roundToInt()/density)}
         CompositionLocalProvider(LocalViewConfiguration provides compactConfig) {
             Box(Modifier.width(side).height(layout.number("height").dp).testTag("color-panel")) {
                 if(hdr)ColorIntensityArc(view,layout,Modifier.matchParentSize(),::color)

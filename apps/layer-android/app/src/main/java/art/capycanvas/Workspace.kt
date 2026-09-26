@@ -215,22 +215,24 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val state = snapshot?.getJSONObject("state")
     val expanded = state?.getJSONObject("customization")?.opt("expanded")?.takeIf { it != JSONObject.NULL } as? String
     var shownPanel by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(expanded, snapshot?.getJSONObject("layout")?.toString(), dock.configurationHeight) {
-        val panel = expanded ?: shownPanel
-        if (panel != null) {
-            shownPanel = panel
-            val from = dock.expansion
-            val start = withFrameNanos { it }
-            val duration = host.catalog.optLong("panel_expansion_ms", 200) * 1_000_000f
-            do {
-                val progress = ((withFrameNanos { it } - start) / duration).coerceIn(0f, 1f)
-                dock.expansion = host.awaitQuery(obj("type" to "expansion", "panel" to panel,
-                    "heights" to JSONArray(listOf(0f, dock.configurationHeight)), "progress" to progress,
-                    "from" to from, "closing" to (expanded == null)))
-                dock.refresh()
-            } while (progress < 1f)
-            if (expanded == null) { dock.expansion = null; shownPanel = null; dock.refresh() }
+    LaunchedEffect(expanded) {
+        val panel = expanded ?: shownPanel ?: return@LaunchedEffect
+        shownPanel = panel
+        val from = dock.expansion
+        suspend fun place(progress: Float) {
+            dock.expansion = host.awaitQuery(obj("type" to "expansion", "panel" to panel,
+                "heights" to JSONArray(listOf(0f, dock.configurationHeight)), "progress" to progress,
+                "from" to from, "closing" to (expanded == null)))
+            dock.refresh()
         }
+        val start = withFrameNanos { it }
+        val duration = host.catalog.optLong("panel_expansion_ms", 200) * 1_000_000f
+        do {
+            val progress = ((withFrameNanos { it } - start) / duration).coerceIn(0f, 1f)
+            place(progress)
+        } while (progress < 1f)
+        if (expanded == null) { dock.expansion = null; shownPanel = null; dock.refresh() }
+        else snapshotFlow { host.snapshot?.optJSONObject("layout")?.toString() to dock.configurationHeight }.collect { place(1f) }
     }
     BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
     BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("workspace").headerGestures(header).workspaceGestures(dock)

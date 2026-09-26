@@ -655,6 +655,38 @@ class AndroidTitleBarTest {
         action(obj("type" to "invoke", "command" to "close_document"))
     }
 
+    @Test fun colorExpansionClosesPromptlyWithoutRemeasuringTheWheel() {
+        waitFor("filter library", 60_000) { !state().getJSONObject("filter_load").optBoolean("pending") }
+        send(obj("type" to "switch", "id" to "builtin:workspace:illustrator"))
+        send(obj("type" to "form", "kind" to "reset"))
+        waitFor("starting layout confirmation") { node("workspace-submit") != null }
+        tap("workspace-submit")
+        waitFor("docked Color panel") { node("panel-body-color") != null && node("color-wheel") != null }
+        SystemClock.sleep(1000)
+        fun measured() = snapshot().array("panel_measurements").objects().first { it.getString("panel") == "color" }.number("content_height")
+        val docked = bounds("group-10")
+        val natural = measured()
+        repeat(2) { round ->
+            action(obj("type" to "select_panel_tab", "group" to 10, "panel" to "color"))
+            waitFor("expanded Color $round") {
+                state().getJSONObject("customization").optString("expanded") == "color" && (node("group-10")?.second?.boundsInRoot?.width ?: 0f) > docked.width + 100f
+            }
+            SystemClock.sleep(400)
+            val start = SystemClock.uptimeMillis()
+            instrumentation.runOnMainSync { host.customize(obj("type" to "close_expanded")) }
+            waitFor("collapsed Color $round", 3_000) {
+                node("group-10")?.second?.boundsInRoot?.let { r ->
+                    kotlin.math.abs(r.top - docked.top) < 1f && kotlin.math.abs(r.width - docked.width) < 1f && kotlin.math.abs(r.height - docked.height) < 1f
+                } == true
+            }
+            val elapsed = SystemClock.uptimeMillis() - start
+            assertTrue("Collapse follows its own motion, not a remeasurement loop: $elapsed ms", elapsed < 800)
+            SystemClock.sleep(500)
+            assertEquals("Fitting the wheel in motion keeps its reported natural height", natural, measured(), 0f)
+            assertEquals(docked, bounds("group-10"))
+        }
+    }
+
     @Test fun sketchDefaultsDrawersFeedbackStatusAndWorkspaceSwitch() {
         tool = MotionEvent.TOOL_TYPE_MOUSE
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))

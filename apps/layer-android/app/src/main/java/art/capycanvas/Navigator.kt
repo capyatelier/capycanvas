@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 /** GPU overview and shared camera geometry; Compose only displays and routes input. */
 @Composable internal fun NavigatorPanel(host: CanvasHost, availableHeight: Dp = 268.dp, onHeight: (natural: Float, displayed: Float) -> Unit = { _, _ -> }) {
@@ -43,7 +44,7 @@ import org.json.JSONObject
     }
     val natural = geometry?.let { (viewport.width / density * it.number("overview_aspect")).dp } ?: 220.dp
     val overviewHeight = (availableHeight - 48.dp).coerceIn(minOf(64.dp, natural), natural)
-    SideEffect { onHeight(natural.value, overviewHeight.value) }
+    SideEffect { onHeight(natural.value, (overviewHeight.value * density).roundToInt() / density) }
     Column {
         Canvas(Modifier.fillMaxWidth().height(overviewHeight).testTag("navigator-overview").background(colors.surround)
             .onSizeChanged { viewport = it }
