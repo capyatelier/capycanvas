@@ -16,7 +16,8 @@ fn picker_dropdown(d: &mut Driver, name: &str, label: &str, touch: bool) {
     );
     if touch {
         let p = d.point(&widget);
-        d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+        d.input
+            .perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
     } else {
         d.click(&widget);
     }
@@ -25,7 +26,8 @@ fn picker_dropdown(d: &mut Driver, name: &str, label: &str, touch: bool) {
     assert!(item.native().is_some_and(|n| n.is::<gtk::Popover>()));
     if touch {
         let p = d.point(&item);
-        d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+        d.input
+            .perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
     } else {
         d.click(&item);
     }
@@ -44,12 +46,12 @@ fn picker_artwork(d: &mut Driver) {
     pump(500);
     let a = [690., 450.];
     let b = [920., 500.];
-    d.perform(serde_json::json!([{"point":a,"down":true},{"point":[750,460]},{"point":[830,480]},{"point":b},{"down":false}]));
+    d.input.perform(serde_json::json!([{"point":a,"down":true},{"point":[750,460]},{"point":[830,480]},{"point":b},{"down":false}]));
     pump(400);
     d.w.dispatch(UiAction::SetColor {
         rgba: [0.93, 0.30, 0.19, 1.],
     });
-    d.perform(serde_json::json!([{"point":[735,510],"down":true},{"point":[790,500]},{"point":[850,510]},{"point":[905,540]},{"down":false}]));
+    d.input.perform(serde_json::json!([{"point":[735,510],"down":true},{"point":[790,500]},{"point":[850,510]},{"point":[905,540]},{"down":false}]));
     pump(300);
 }
 
@@ -85,10 +87,10 @@ fn native_color_picker_input() {
     });
     let original = state(&d.w).colors.clone();
     let previous = state(&d.w).layer_tools.tool;
-    d.perform(serde_json::json!([{ "key": 0xffe9, "down": true }]));
+    d.input.perform(serde_json::json!([{ "key": 0xffe9, "down": true }]));
     pump(200);
     assert!(state(&d.w).layer_tools.tool.picks_color(), "Alt samples while held");
-    d.perform(serde_json::json!([{ "key": 0xffe9, "down": false }]));
+    d.input.perform(serde_json::json!([{ "key": 0xffe9, "down": false }]));
     pump(200);
     assert_eq!(state(&d.w).layer_tools.tool, previous);
     assert_eq!(state(&d.w).colors, original);
@@ -105,7 +107,7 @@ fn native_color_picker_input() {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         d.click_name(&button);
         assert!(state(&d.w).layer_tools.tool.picks_color());
-        d.perform(serde_json::json!([{"point":[820,479]}]));
+        d.input.perform(serde_json::json!([{"point":[820,479]}]));
         pump(300);
         assert!(state(&d.w).color_picker.preview.is_some());
         assert_eq!(state(&d.w).colors, original);
@@ -119,13 +121,13 @@ fn native_color_picker_input() {
                 .is_some()
         );
         d.capture_canvas(&format!("color-picker-glass-{theme:?}.png"));
-        d.key(0xff1b);
+        d.input.key(0xff1b);
         assert_eq!(state(&d.w).layer_tools.tool, previous);
         assert_eq!(state(&d.w).colors, original);
         assert!(state(&d.w).color_picker.preview.is_none());
         // Sketch opens only settings. Native popup clicks must retain the drawer.
         let p = d.point(&d.named(&button));
-        d.perform(serde_json::json!([{"point":p,"down":true},{"down":false},{"wait_ms":70},{"down":true},{"down":false}]));
+        d.input.perform(serde_json::json!([{"point":p,"down":true},{"down":false},{"wait_ms":70},{"down":true},{"down":false}]));
         assert!(state(&d.w).customization.drawer.is_some());
         assert_eq!(
             state(&d.w)
@@ -140,7 +142,8 @@ fn native_color_picker_input() {
         assert!(d.named("color-picker-source").is_mapped());
         assert!(d.named(&button).has_css_class("drawer-open"));
         assert!(d.named(&button).has_css_class("drawer-origin-right"));
-        d.perform(serde_json::json!([{"point":[1100,30],"down":true},{"down":false}]));
+        d.input
+            .perform(serde_json::json!([{"point":[1100,30],"down":true},{"down":false}]));
         assert!(state(&d.w).customization.drawer.is_some());
         d.capture_canvas(&format!("color-picker-drawer-{theme:?}.png"));
         let source = d
@@ -154,7 +157,8 @@ fn native_color_picker_input() {
             theme == Theme::Dark,
         );
         assert_eq!(source.selected(), 1);
-        d.perform(serde_json::json!([{"point":[810,479]},{"point":[820,479]}]));
+        d.input
+            .perform(serde_json::json!([{"point":[810,479]},{"point":[820,479]}]));
         assert!(
             state(&d.w).layer_tools.tool.picks_color(),
             "source selection preserves temporary picking"
@@ -179,7 +183,8 @@ fn native_color_picker_input() {
         assert_eq!(source.selected(), 0);
         assert!(state(&d.w).customization.drawer.is_some());
         assert_eq!(d.named("color-picker-source"), source);
-        d.perform(serde_json::json!([{"point":[810,479]},{"point":[820,479]}]));
+        d.input
+            .perform(serde_json::json!([{"point":[810,479]},{"point":[820,479]}]));
         assert!(
             !d.w.gpu
                 .borrow()
@@ -199,7 +204,7 @@ fn native_color_picker_input() {
         );
         assert_eq!(state(&d.w).color_picker.sample_width, 101);
         assert_eq!(d.named("color-picker-size"), size);
-        d.key(0xff1b);
+        d.input.key(0xff1b);
         // Escape restores the tool; close any remaining options drawer.
         d.w.dispatch(UiAction::Customize {
             action: CustomizationAction::CloseExpanded,
@@ -209,8 +214,8 @@ fn native_color_picker_input() {
     }
     d.w.dispatch(UiAction::SetColorSampleSize { width: 1 });
     // I temporarily enters picking, native mouse press commits and consumes Up.
-    d.key('i' as u32);
-    d.perform(serde_json::json!([{"point":[820,479]},{"down":true},{"down":false}]));
+    d.input.key('i' as u32);
+    d.input.click([820., 479.]);
     pump(300);
     assert_eq!(state(&d.w).layer_tools.tool, previous);
     assert_ne!(state(&d.w).colors, original);
@@ -260,7 +265,7 @@ fn native_color_picker_input() {
         let button = d.named(&category);
         assert!(find_named(&button, "layer-eyedropper-symbolic").is_some());
         let p = d.point(&button);
-        d.perform(serde_json::json!([{"point":p,"down":true},{"down":false},{"wait_ms":70},{"down":true},{"down":false}]));
+        d.input.perform(serde_json::json!([{"point":p,"down":true},{"down":false},{"wait_ms":70},{"down":true},{"down":false}]));
         assert_eq!(
             state(&d.w)
                 .customization
@@ -277,7 +282,7 @@ fn native_color_picker_input() {
             layer_ui::ColorPickerStyle::Eyedropper
         );
         picker_dropdown(&mut d, "color-picker-source", "Selected layer", false);
-        d.perform(serde_json::json!([{"point":[820,479]}]));
+        d.input.perform(serde_json::json!([{"point":[820,479]}]));
         assert!(
             d.w.gpu
                 .borrow()
@@ -295,7 +300,7 @@ fn native_color_picker_input() {
             layer_ui::ColorPickerStyle::Glass
         );
         picker_dropdown(&mut d, "color-picker-source", "Visible color", false);
-        d.key(0xff1b);
+        d.input.key(0xff1b);
         assert!(state(&d.w).customization.drawer.is_none());
     }
     d.w.dispatch(UiAction::RestoreWorkspace {
@@ -303,14 +308,17 @@ fn native_color_picker_input() {
     });
     pump(500);
     // Pen contact and dragging continue previewing; only release commits.
-    d.key('i' as u32);
-    d.perform(serde_json::json!([{"pen":"move","point":[860,520]}]));
+    d.input.key('i' as u32);
+    d.input
+        .perform(serde_json::json!([{"pen":"move","point":[860,520]}]));
     assert!(state(&d.w).color_picker.preview.is_some());
     let pen_before = state(&d.w).colors.clone();
-    d.perform(serde_json::json!([{"pen":"down","point":[860,520]}]));
+    d.input
+        .perform(serde_json::json!([{"pen":"down","point":[860,520]}]));
     assert!(state(&d.w).layer_tools.tool.picks_color());
     assert_eq!(state(&d.w).colors, pen_before);
-    d.perform(serde_json::json!([{"pen":"move","point":[780,440]}]));
+    d.input
+        .perform(serde_json::json!([{"pen":"move","point":[780,440]}]));
     assert_eq!(state(&d.w).colors, pen_before);
     assert!(
         d.w.gpu
@@ -321,7 +329,8 @@ fn native_color_picker_input() {
             .color_picker_overlay()
             .is_some()
     );
-    d.perform(serde_json::json!([{"pen":"up"},{"pen":"leave"}]));
+    d.input
+        .perform(serde_json::json!([{"pen":"up"},{"pen":"leave"}]));
     assert_ne!(state(&d.w).colors, pen_before);
     assert_eq!(state(&d.w).layer_tools.tool, previous);
     assert_eq!(
@@ -337,11 +346,12 @@ fn native_color_picker_input() {
     );
     // A touch tap cancels button entry, whereas a touch hold picks on release.
     let before = state(&d.w).colors.clone();
-    d.key('i' as u32);
-    d.perform(serde_json::json!([{"touch":"down","point":[820,479]},{"touch":"up"}]));
+    d.input.key('i' as u32);
+    d.input
+        .perform(serde_json::json!([{"touch":"down","point":[820,479]},{"touch":"up"}]));
     assert_eq!(state(&d.w).colors, before);
     assert_eq!(state(&d.w).layer_tools.tool, previous);
-    d.perform(serde_json::json!([{"touch":"down","point":[820,529]},{"wait_ms":700},{"touch":"move","point":[860,530]}]));
+    d.input.perform(serde_json::json!([{"touch":"down","point":[820,529]},{"wait_ms":700},{"touch":"move","point":[860,530]}]));
     let ring =
         d.w.gpu
             .borrow()
@@ -355,7 +365,8 @@ fn native_color_picker_input() {
     assert_eq!(state(&d.w).colors, before);
     d.capture_canvas("color-picker-touch.png");
     let camera = state(&d.w).camera;
-    d.perform(serde_json::json!([{"touch":"down","slot":1,"point":[1000,600]}]));
+    d.input
+        .perform(serde_json::json!([{"touch":"down","slot":1,"point":[1000,600]}]));
     assert!(state(&d.w).color_picker.layer);
     assert!(
         d.w.gpu
@@ -368,11 +379,11 @@ fn native_color_picker_input() {
             .layer
     );
     d.capture_canvas("color-picker-touch-layer.png");
-    d.perform(
+    d.input.perform(
         serde_json::json!([{"touch":"move","slot":1,"point":[900,580]},{"touch":"up","slot":1}]),
     );
     assert_eq!(state(&d.w).camera, camera);
-    d.perform(serde_json::json!([{"touch":"up"}]));
+    d.input.perform(serde_json::json!([{"touch":"up"}]));
     assert_eq!(state(&d.w).layer_tools.tool, previous);
     assert_eq!(
         d.w.gpu
@@ -386,9 +397,9 @@ fn native_color_picker_input() {
         revision
     );
     // Moving before the native hold prevents picker activation.
-    d.perform(serde_json::json!([{"touch":"down","point":[650,400]},{"touch":"move","point":[720,400]},{"wait_ms":700}]));
+    d.input.perform(serde_json::json!([{"touch":"down","point":[650,400]},{"touch":"move","point":[720,400]},{"wait_ms":700}]));
     assert!(!state(&d.w).layer_tools.tool.picks_color());
-    d.perform(serde_json::json!([{"touch":"up"}]));
+    d.input.perform(serde_json::json!([{"touch":"up"}]));
     // A resting palm predates a toolbar press. Neither its pending hold nor
     // its eventual release may acquire picker ownership or survive as a
     // navigation contact. Exercise real mouse and tablet toolbar activation.
@@ -398,7 +409,7 @@ fn native_color_picker_input() {
             else { serde_json::json!({"point":tile,"down":true}) };
         let release = if pen { serde_json::json!({"pen":"up"}) }
             else { serde_json::json!({"down":false}) };
-        d.perform(serde_json::json!([
+        d.input.perform(serde_json::json!([
             {"touch":"down","point":[650,400]}, press, release, {"wait_ms":700},
             {"pen":"move","point":[820,479]}
         ]));
@@ -406,17 +417,17 @@ fn native_color_picker_input() {
         let ring = d.w.gpu.borrow().as_ref().unwrap().session.color_picker_overlay().unwrap();
         let scale = d.w.area.scale_factor() as f32;
         assert_eq!(ring.sample, [820. * scale, 479. * scale], "old hold must not own the picker");
-        d.perform(serde_json::json!([{"touch":"up"},{"pen":"leave"}]));
-        d.key('i' as u32);
+        d.input.perform(serde_json::json!([{"touch":"up"},{"pen":"leave"}]));
+        d.input.key('i' as u32);
         let camera = state(&d.w).camera;
         for _ in 0..2 {
-            d.perform(serde_json::json!([
+            d.input.perform(serde_json::json!([
                 {"touch":"down","point":[850,600]},
                 {"touch":"move","point":[920,650]}, {"touch":"up"}
             ]));
             assert_eq!(state(&d.w).camera, camera, "released palm must not become a ghost finger");
         }
-        d.perform(serde_json::json!([
+        d.input.perform(serde_json::json!([
             {"touch":"down","point":[650,400]},
             {"touch":"down","slot":1,"point":[850,400]},
             {"touch":"move","slot":1,"point":[920,470]},
@@ -440,8 +451,8 @@ fn native_color_picker_input() {
         .downcast::<crate::tool_panels::ColorWheel>()
         .unwrap();
     let committed = state(&d.w).colors.clone();
-    d.key('i' as u32);
-    d.perform(serde_json::json!([{"point":[820,479]}]));
+    d.input.key('i' as u32);
+    d.input.perform(serde_json::json!([{"point":[820,479]}]));
     assert_eq!(*wheel.imp().color.borrow(), *state(&d.w).preview_colors());
     assert_eq!(state(&d.w).colors, committed);
     d.capture_canvas("color-picker-wheel-preview.png");
@@ -459,7 +470,7 @@ fn native_color_picker_input() {
     let events: Vec<_> = (0..60)
         .map(|i| serde_json::json!({"point":[740 + i * 2,480]}))
         .collect();
-    d.perform(serde_json::Value::Array(events));
+    d.input.perform(serde_json::Value::Array(events));
     {
         let timings = stats.lock().unwrap();
         let mut cpu = timings.frame_handler_cpu.clone();
@@ -474,24 +485,23 @@ fn native_color_picker_input() {
         let report = serde_json::json!({"owner_frame_ms_p50":cpu[cpu.len()/2], "owner_frame_ms_p95":cpu[cpu.len()*95/100],
             "worker_cpu_ms_p50":worker[worker.len()/2], "worker_cpu_ms_p95":worker[worker.len()*95/100], "frames":worker.len()});
         eprintln!("Picker hover timing: {report}");
-        std::fs::write(d.dir.join("color-picker-timing.json"), report.to_string()).unwrap();
+        std::fs::write(
+            d.input.dir.join("color-picker-timing.json"),
+            report.to_string(),
+        )
+        .unwrap();
     }
-    d.key(0xff1b);
+    d.input.key(0xff1b);
     assert_eq!(*wheel.imp().color.borrow(), committed);
     // The new button retains the application-wide hold-before-reorder rule.
     for kind in ["mouse", "touch", "pen"] {
         let before = state(&d.w).workspace.layout;
         let point = d.point(&d.named(&button));
         let moved = [point[0] + 120., point[1]];
-        let contact = |phase: &str, p: [f32; 2]| match kind {
-            "touch" => serde_json::json!({"touch":phase,"point":p}),
-            "pen" => serde_json::json!({"pen":phase,"point":p}),
-            _ if phase == "move" => serde_json::json!({"point":p}),
-            _ => serde_json::json!({"point":p,"down":phase == "down"}),
-        };
-        d.perform(serde_json::json!([
-            contact("down", point),
-            contact("move", moved)
+        let event = |phase: &str, p: [f32; 2]| contact(kind, phase, p);
+        d.input.perform(serde_json::json!([
+            event("down", point),
+            event("move", moved)
         ]));
         assert!(
             !d.w.workspace_drag
@@ -500,10 +510,10 @@ fn native_color_picker_input() {
                 .is_some_and(|v| v.started),
             "unheld {kind}"
         );
-        d.perform(serde_json::json!([contact("up", moved)]));
+        d.input.perform(serde_json::json!([event("up", moved)]));
         assert_eq!(state(&d.w).workspace.layout, before);
-        d.perform(
-            serde_json::json!([contact("down", point),{"wait_ms":700},contact("move", moved)]),
+        d.input.perform(
+            serde_json::json!([event("down", point),{"wait_ms":700},event("move", moved)]),
         );
         assert!(
             d.w.workspace_drag
@@ -512,16 +522,16 @@ fn native_color_picker_input() {
                 .is_some_and(|v| v.started),
             "held {kind}"
         );
-        d.key(0xff1b);
-        d.perform(serde_json::json!([contact("up", moved)]));
+        d.input.key(0xff1b);
+        d.input.perform(serde_json::json!([event("up", moved)]));
         if kind == "pen" {
-            d.perform(serde_json::json!([{"pen":"leave"}]));
+            d.input.perform(serde_json::json!([{"pen":"leave"}]));
         }
         assert_eq!(state(&d.w).workspace.layout, before);
         assert!(!state(&d.w).layer_tools.tool.picks_color());
     }
     // Focus moving to another toplevel still cancels temporary picking.
-    d.key('i' as u32);
+    d.input.key('i' as u32);
     assert!(state(&d.w).layer_tools.tool.picks_color());
     let other = gtk::Window::builder()
         .title("Picker focus check")
@@ -622,8 +632,8 @@ fn native_color_picker_preview_pacing() {
             .unwrap()
             .downcast::<crate::tool_panels::ColorWheel>()
             .unwrap();
-        d.key('i' as u32);
-        d.perform(serde_json::json!([{"point":[750,445]}]));
+        d.input.key('i' as u32);
+        d.input.perform(serde_json::json!([{"point":[750,445]}]));
         *stats.lock().unwrap() = Default::default();
         wheel.imp().field_render_ms.borrow_mut().clear();
         wheel.imp().snapshot_ms.borrow_mut().clear();
@@ -638,7 +648,7 @@ fn native_color_picker_preview_pacing() {
             })
             .collect();
         let started = Instant::now();
-        d.perform(serde_json::Value::Array(events));
+        d.input.perform(serde_json::Value::Array(events));
         let elapsed = started.elapsed().as_secs_f64();
         let samples = stats.lock().unwrap();
         let mut presented: Vec<_> = samples
@@ -675,7 +685,7 @@ fn native_color_picker_preview_pacing() {
             );
         }
         assert_eq!(state(&d.w).colors, committed);
-        d.key(0xff1b);
+        d.input.key(0xff1b);
         if placement != "closed" {
             assert_eq!(*wheel.imp().color.borrow(), committed);
             assert_eq!(
@@ -703,7 +713,7 @@ fn native_color_picker_preview_pacing() {
     assert!(!d.w.hdr_status.is_visible());
     assert!(!d.w.view_info.is_visible());
     crate::snapshot(&d.w)
-        .save_to_png(d.dir.join("color-picker-footer-hidden.png"))
+        .save_to_png(d.input.dir.join("color-picker-footer-hidden.png"))
         .unwrap();
     d.w.dispatch(UiAction::SetColor {
         rgba: [0.4, 0.3, 0.8, 1.],
@@ -715,11 +725,11 @@ fn native_color_picker_preview_pacing() {
     d.click(checkbox.upcast_ref());
     assert!(d.w.hdr_status.is_visible());
     crate::snapshot(&d.w)
-        .save_to_png(d.dir.join("color-picker-footer-visible.png"))
+        .save_to_png(d.input.dir.join("color-picker-footer-visible.png"))
         .unwrap();
     d.click_name("header-edit-done");
     std::fs::write(
-        d.dir.join("color-picker-preview-timing.json"),
+        d.input.dir.join("color-picker-preview-timing.json"),
         serde_json::to_string_pretty(&reports).unwrap(),
     )
     .unwrap();

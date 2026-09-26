@@ -4,10 +4,10 @@ use super::*;
 #[test]
 #[ignore = "isolated native-input.js --workspace-drop-sizes"]
 fn native_workspace_drop_sizes() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let mut input = RemoteInput::new();
     let captures = std::env::var("LAYER_TEST_ARTIFACTS")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| dir.join("captures"));
+        .unwrap_or_else(|_| input.dir.join("captures"));
     std::fs::create_dir_all(&captures).unwrap();
     let app = native_test_app("art.capycanvas.DropSizes");
     let w = fixture_workspace(&app);
@@ -15,21 +15,7 @@ fn native_workspace_drop_sizes() {
     w.window.present();
     pump(1600);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let mut step = 0;
-    let mut perform = |events: serde_json::Value| {
-        let file = dir.join(format!("step-{step}.json"));
-        let temporary = file.with_extension("tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(temporary, file).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native input timed out");
-            pump(5);
-        }
-        step += 1;
-        pump(100);
-    };
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    input.ready();
     pump(500);
     let mut reports = Vec::new();
     for count in [2, 60] {
@@ -141,20 +127,11 @@ fn native_workspace_drop_sizes() {
                     };
                     let b = handle.compute_bounds(&w.surface).unwrap();
                     let start = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
-                    let event = |phase: &str, p: [f32; 2]| {
-                        if touch {
-                            serde_json::json!({"touch": phase, "point": p})
-                        } else {
-                            match phase {
-                                "down" => serde_json::json!({"point": p, "down": true}),
-                                "up" => serde_json::json!({"down": false}),
-                                _ => serde_json::json!({"point": p}),
-                            }
-                        }
-                    };
-                    perform(serde_json::json!([event("down", start)]));
+                    let device = if touch { "touch" } else { "mouse" };
+                    let event = |phase: &str, p: [f32; 2]| contact(device, phase, p);
+                    input.perform(serde_json::json!([event("down", start)]));
                     let center = [850., 450.];
-                    perform(serde_json::json!([event("move", center)]));
+                    input.perform(serde_json::json!([event("move", center)]));
                     let moving = || {
                         w.gpu
                             .borrow()
@@ -183,10 +160,10 @@ fn native_workspace_drop_sizes() {
                             bottom - room + offset
                         },
                     ];
-                    perform(serde_json::json!([event("move", end)]));
+                    input.perform(serde_json::json!([event("move", end)]));
                     assert_eq!(moving().bounds.height, preview.bounds.height);
                     assert!(w.drop_hint.borrow().is_none());
-                    perform(serde_json::json!([event("up", end)]));
+                    input.perform(serde_json::json!([event("up", end)]));
                     pump(150);
                     let placed = w
                         .resolved()
@@ -279,7 +256,7 @@ fn native_workspace_drop_sizes() {
         serde_json::to_vec_pretty(&reports).unwrap(),
     )
     .unwrap();
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.close();
     pump(100);
 }

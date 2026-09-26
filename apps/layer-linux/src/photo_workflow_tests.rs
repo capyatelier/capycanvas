@@ -139,9 +139,9 @@ fn measured_events(
         .map(|p| p[1])
         .max();
     *stats.lock().unwrap() = Default::default();
-    let step = driver.step;
+    let step = driver.input.step;
     let start = Instant::now();
-    driver.events(events);
+    driver.input.perform(events);
     ready(w);
     let drain = Instant::now();
     until(
@@ -164,7 +164,7 @@ fn measured_events(
     report["elapsed_ms"] = json!(start.elapsed().as_secs_f64() * 1000.);
     report["stroke_completion_wait_ms"] = json!(drain_ms);
     report["input_trace"] =
-        read(&driver.dir.join(format!("trace-{step}.json"))).unwrap_or(Value::Null);
+        read(&driver.input.dir.join(format!("trace-{step}.json"))).unwrap_or(Value::Null);
     report["process_memory"] = resident_memory();
     report
 }
@@ -655,6 +655,6 @@ fn native_large_photo_placement_workflow() {
         "native large-photo workflow report: {}",
         output.join("workflow.json").display()
     );
-    std::fs::write(driver.dir.join("finished"), b"finished").unwrap();
+    driver.input.finish();
     photo_document.window.destroy();
 }

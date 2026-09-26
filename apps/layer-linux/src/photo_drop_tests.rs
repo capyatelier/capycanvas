@@ -96,15 +96,14 @@ fn native_photo_file_drag_source() {
 }
 
 struct FileDrag {
-    dir: PathBuf,
+    input: RemoteInput,
     child: std::process::Child,
-    step: usize,
     begins: u64,
     start: [f32; 2],
 }
 impl Drop for FileDrag {
     fn drop(&mut self) {
-        let _ = std::fs::write(self.dir.join("source-stop"), b"stop");
+        let _ = std::fs::write(self.input.dir.join("source-stop"), b"stop");
         // Reap this test's own child even during an assertion failure.
         pump(100);
         let _ = self.child.kill();
@@ -113,13 +112,13 @@ impl Drop for FileDrag {
 }
 impl FileDrag {
     fn stop_source(&mut self) {
-        std::fs::write(self.dir.join("source-stop"), b"stop").unwrap();
+        std::fs::write(self.input.dir.join("source-stop"), b"stop").unwrap();
         until(|| self.child.try_wait().unwrap().is_some(), "source shutdown");
         pump(200);
     }
     fn start(w: &Workspace) -> Self {
-        let dir = PathBuf::from(std::env::var_os("LAYER_NATIVE_INPUT_DIR").unwrap());
-        std::fs::write(dir.join("ready"), b"ready").unwrap();
+        let input = RemoteInput::new().settle_ms(150).timeout_secs(15);
+        input.ready();
         pump(500);
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .arg(format!(
@@ -131,26 +130,28 @@ impl FileDrag {
             .spawn()
             .unwrap();
         let mut driver = Self {
-            dir,
+            input,
             child,
-            step: 0,
             begins: 0,
             start: [0.; 2],
         };
         until(
-            || read(&driver.dir.join("source-window.json")).is_some_and(|v| v["active"] == true),
+            || {
+                read(&driver.input.dir.join("source-window.json"))
+                    .is_some_and(|v| v["active"] == true)
+            },
             "source activation",
         );
         // Mutter's standard Super+Left tiles the source to the left half of the
         // private display. The maximized editor stays visible on the right.
-        driver.events(json!([
+        driver.input.perform(json!([
             {"key": 0xffeb, "down": true}, {"key": 0xff51, "down": true},
             {"key": 0xff51, "down": false}, {"key": 0xffeb, "down": false}
         ]));
         let width = w.window.width();
         until(
             || {
-                read(&driver.dir.join("source-window.json"))
+                read(&driver.input.dir.join("source-window.json"))
                     .is_some_and(|v| v["width"].as_i64() == Some(i64::from(width / 2)))
             },
             "source must tile left",
@@ -158,31 +159,25 @@ impl FileDrag {
         driver.start = [width as f32 * 0.25, w.window.height() as f32 * 0.5];
         driver
     }
-    fn events(&mut self, events: Value) {
-        publish(&self.dir.join(format!("step-{}.json", self.step)), &events);
-        until(
-            || self.dir.join(format!("done-{}", self.step)).exists(),
-            "native input acknowledgement",
-        );
-        self.step += 1;
-        pump(150);
-    }
     fn hover(&mut self, paths: &[PathBuf], point: [f32; 2], touch: bool) {
-        publish(&self.dir.join("source-files.json"), &json!(paths));
-        if read(&self.dir.join("source-window.json")).unwrap()["active"] != true {
-            self.events(json!([
+        publish(&self.input.dir.join("source-files.json"), &json!(paths));
+        if read(&self.input.dir.join("source-window.json")).unwrap()["active"] != true {
+            self.input.perform(json!([
                 {"key": 0xffe9, "down": true}, {"key": 0xff09, "down": true},
                 {"key": 0xff09, "down": false}, {"key": 0xffe9, "down": false}
             ]));
         }
         until(
-            || read(&self.dir.join("source-window.json")).is_some_and(|v| v["active"] == true),
+            || {
+                read(&self.input.dir.join("source-window.json"))
+                    .is_some_and(|v| v["active"] == true)
+            },
             "source focus",
         );
         let slop = gtk::Settings::default().unwrap().gtk_dnd_drag_threshold() as f32;
         let pickup = [self.start[0] + slop * 3., self.start[1]];
         let armed = [pickup[0] + slop * 3., pickup[1]];
-        self.events(if touch {
+        self.input.perform(if touch {
             json!([
                 {"touch": "down", "point": self.start}, {"wait_ms": 80},
                 {"touch": "move", "point": pickup}, {"wait_ms": 80},
@@ -196,23 +191,24 @@ impl FileDrag {
         });
         self.begins += 1;
         until(
-            || read(&self.dir.join("source-begin.json")).is_some_and(|v| v["count"] == self.begins),
+            || {
+                read(&self.input.dir.join("source-begin.json"))
+                    .is_some_and(|v| v["count"] == self.begins)
+            },
             "native source pickup before crossing windows",
         );
-        let begun = read(&self.dir.join("source-begin.json")).unwrap();
+        let begun = read(&self.input.dir.join("source-begin.json")).unwrap();
         assert_eq!(begun["count"], self.begins);
         assert_eq!(begun["device"], if touch { "Touchscreen" } else { "Mouse" });
         let approach = [point[0] - 4., point[1]];
-        self.events(if touch {
-            json!([
-                {"touch": "move", "point": approach}, {"touch": "move", "point": point}
-            ])
-        } else {
-            json!([{"point": approach}, {"point": point}])
-        });
+        let device = if touch { "touch" } else { "mouse" };
+        self.input.perform(json!([
+            contact(device, "move", approach),
+            contact(device, "move", point)
+        ]));
     }
     fn release(&mut self, touch: bool) {
-        self.events(if touch {
+        self.input.perform(if touch {
             json!([{"touch": "up"}])
         } else {
             json!([{"down": false}])
@@ -230,7 +226,7 @@ impl FileDrag {
             bounds.x() + bounds.width() * 0.5,
             bounds.y() + bounds.height() * 0.5,
         ];
-        self.events(json!([{"point": point}, {"down": true}, {"down": false}]));
+        self.input.click(point);
         if name != "canvas-bar-PlacementOriginalSize" {
             until(
                 || !w.canvas_bar.root.is_visible(),
@@ -263,7 +259,7 @@ fn native_multiple_photo_import_chooser() {
     let mut driver = FileDrag::start(&w);
     driver.stop_source();
     w.window.present();
-    let directory = driver.dir.join("chooser-photos");
+    let directory = driver.input.dir.join("chooser-photos");
     std::fs::create_dir(&directory).unwrap();
     let source = super::place_source::source();
     let paths = [directory.join("First photo.png"), directory.join("Second photo.png")];
@@ -281,7 +277,7 @@ fn native_multiple_photo_import_chooser() {
         assert!(list.grab_focus());
         // Select and accept through Mutter's virtual keyboard and Wayland.
         // No callback supplies a synthetic list of selected files to the app.
-        driver.events(json!([
+        driver.input.perform(json!([
             {"key": 0xffe3, "down": true}, {"key": 0x61, "down": true},
             {"key": 0x61, "down": false}, {"key": 0xffe3, "down": false}
         ]));
@@ -289,7 +285,7 @@ fn native_multiple_photo_import_chooser() {
         let selected: Vec<_> = chooser.files().iter::<gtk::gio::File>()
             .map(|file| file.unwrap().path().unwrap()).collect();
         assert_eq!(selected, paths);
-        driver.events(json!([{"key": 0xff0d, "down": true}, {"key": 0xff0d, "down": false}]));
+        driver.input.perform(json!([{"key": 0xff0d, "down": true}, {"key": 0xff0d, "down": false}]));
         until(|| !chooser.is_visible(), "native Return accepts the chooser");
         finish(&w);
         ready(&w);
@@ -314,7 +310,7 @@ fn native_multiple_photo_import_chooser() {
         assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().layers, before);
     }
     println!("native chooser multiple selection: ordered retained sources, Cancel, Apply, save/reopen and one Undo passed");
-    std::fs::write(driver.dir.join("finished"), b"finished").unwrap();
+    driver.input.finish();
     w.window.destroy();
 }
 
@@ -727,7 +723,7 @@ fn native_photo_file_drops() {
     println!(
         "native external batches: malformed second file, Cancel, stale target, mixed-batch feedback and project Open passed"
     );
-    std::fs::write(driver.dir.join("finished"), b"finished").unwrap();
+    driver.input.finish();
     drop(driver);
     w.window.destroy();
 }

@@ -4,7 +4,6 @@ use super::*;
 #[test]
 #[ignore = "isolated 120 Hz Mutter and native-input.js --workspace-motion"]
 fn native_workspace_motion_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.WorkspaceMotion");
     let w = fixture_workspace(&app);
     w.window.maximize();
@@ -15,26 +14,8 @@ fn native_workspace_motion_input() {
     // Explicitly restore the fixed tab fixture below. A fresh workspace store
     // can finish loading the shipped preset after the realize callback.
     let original = layer_ui::WorkspaceState::default();
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    let mut perform = |events: serde_json::Value| {
-        std::fs::write(
-            dir.join(format!("step-{step}.json.tmp")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        std::fs::rename(
-            dir.join(format!("step-{step}.json.tmp")),
-            dir.join(format!("step-{step}.json")),
-        )
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native motion timed out");
-            pump(2);
-        }
-        step += 1;
-    };
+    let mut input = RemoteInput::new().settle_ms(0).timeout_secs(10);
+    input.ready();
     let saved = || serde_json::to_value(state(&w).workspace).unwrap();
     let mut reports = Vec::new();
     for touch in [false, true] {
@@ -126,26 +107,17 @@ fn native_workspace_motion_input() {
             } else {
                 [start[0] - 28., start[1]]
             };
-            let event = |phase: &str, p: [f32; 2]| {
-                if touch {
-                    serde_json::json!({"touch": phase, "point": p})
-                } else {
-                    match phase {
-                        "down" => serde_json::json!({"point": p, "down": true}),
-                        "up" => serde_json::json!({"down": false}),
-                        _ => serde_json::json!({"point": p}),
-                    }
-                }
-            };
-            perform(serde_json::json!([event("down", start)]));
+            let device = if touch { "touch" } else { "mouse" };
+            let event = |phase: &str, p: [f32; 2]| contact(device, phase, p);
+            input.perform(serde_json::json!([event("down", start)]));
             pump(35);
             if scenario == "tab" {
-                perform(serde_json::json!([event(
+                input.perform(serde_json::json!([event(
                     "move",
                     [start[0] - 14., start[1]]
                 )]));
             }
-            perform(serde_json::json!([event("move", origin)]));
+            input.perform(serde_json::json!([event("move", origin)]));
             pump(350);
             assert!(
                 w.workspace_drag
@@ -209,7 +181,7 @@ fn native_workspace_motion_input() {
             if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
                 events.insert(events.len() / 2, serde_json::json!({"capture": format!("{touch}-{scenario}")}));
             }
-            perform(serde_json::to_value(events).unwrap());
+            input.perform(serde_json::to_value(events).unwrap());
             pump(50);
             clock.disconnect(after);
             let canvas = {
@@ -313,13 +285,13 @@ fn native_workspace_motion_input() {
                     .find(|h| h.group == group && h.index == 0)
                     .unwrap()
                     .bounds;
-                perform(serde_json::json!([event(
+                input.perform(serde_json::json!([event(
                     "move",
                     [first.x + first.width * 0.25, start[1]]
                 )]));
                 pump(50);
             }
-            perform(serde_json::json!([event("up", origin)]));
+            input.perform(serde_json::json!([event("up", origin)]));
             pump(250);
             let after = saved();
             assert_ne!(after, before, "drop changes layout");
@@ -345,7 +317,7 @@ fn native_workspace_motion_input() {
         serde_json::to_vec_pretty(&reports).unwrap(),
     )
     .unwrap();
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.close();
     pump(100);
 }

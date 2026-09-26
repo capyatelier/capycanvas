@@ -21,7 +21,6 @@ fn switch(w: &Rc<Workspace>, id: u64) {
 fn native_canvas_background_during_startup_and_tab_switch() {
     use std::sync::atomic::Ordering;
     let app = native_test_app("art.capycanvas.OpaqueCanvas");
-    let directory = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let captures = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_CAPTURE_DIR").unwrap());
     // A real window behind the editor makes transparency observable in the
     // compositor capture. WidgetPaintable snapshots cannot exercise this bug.
@@ -40,25 +39,10 @@ fn native_canvas_background_during_startup_and_tab_switch() {
     behind.maximize();
     behind.present();
     pump(400);
-    std::fs::write(directory.join("ready"), "ready").unwrap();
-    let mut step = 0;
+    let mut input = RemoteInput::new().settle_ms(0).timeout_secs(30);
+    input.ready();
     let mut capture = |name: &str, expected: [u8; 3]| {
-        let path = directory.join(format!("step-{step}.json"));
-        let temp = path.with_extension("tmp");
-        std::fs::write(
-            &temp,
-            serde_json::to_vec(&serde_json::json!([
-                {"wait_ms":250}, {"capture":name}
-            ]))
-            .unwrap(),
-        )
-        .unwrap();
-        std::fs::rename(temp, path).unwrap();
-        until(
-            || directory.join(format!("done-{step}")).exists(),
-            "compositor capture",
-        );
-        step += 1;
+        input.perform(serde_json::json!([{"wait_ms":250}, {"capture":name}]));
         let mut reader =
             png::Decoder::new(std::fs::File::open(captures.join(format!("{name}.png"))).unwrap())
                 .read_info()
@@ -222,7 +206,7 @@ fn native_canvas_background_during_startup_and_tab_switch() {
     w.window.destroy();
     capture("closed", [255, 0, 255]);
     behind.destroy();
-    std::fs::write(directory.join("finished"), "done").unwrap();
+    input.finish();
 }
 
 #[test]
@@ -522,26 +506,13 @@ fn native_document_tab_input() {
     w.window.present();
     new_photo::ready(&w);
     pump(250);
-    let directory = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
-    std::fs::write(directory.join("ready"), "ready").unwrap();
+    let mut input = RemoteInput::new().settle_ms(180).timeout_secs(30);
+    input.ready();
     pump(500);
-    let mut step = 0;
-    let mut perform = |events: serde_json::Value| {
-        let path = directory.join(format!("step-{step}.json"));
-        let temp = path.with_extension("tmp");
-        std::fs::write(&temp, serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(temp, path).unwrap();
-        until(
-            || directory.join(format!("done-{step}")).exists(),
-            "native input acknowledgement",
-        );
-        step += 1;
-        pump(180);
-    };
     // A single drawing restores the native draggable/double-clickable caption.
     let title = find_named(w.window.upcast_ref(), "single-document-title").unwrap();
     let b = title.compute_bounds(&w.window).unwrap();
-    perform(
+    input.perform(
         serde_json::json!([{"point":[b.x()+b.width()/2., b.y()+b.height()/2.]},
         {"down":true},{"down":false},{"down":true},{"wait_ms":250},{"down":false}]),
     );
@@ -575,6 +546,7 @@ fn native_document_tab_input() {
         [b.x() + b.width() * fraction, b.y() + b.height() / 2.]
     };
     for touch in [false, true] {
+        let device = if touch { "touch" } else { "mouse" };
         assert_eq!(
             w.documents.root.visible_child_name().as_deref(),
             Some("tabs")
@@ -582,11 +554,10 @@ fn native_document_tab_input() {
         let from = point(1, 0.3);
         let to = point(3, 0.8);
 
-        perform(if touch {
-            serde_json::json!([{"touch":"down", "point":from}, {"touch":"move", "point":[from[0]+60.,from[1]]}])
-        } else {
-            serde_json::json!([{"point":from}, {"down":true}, {"point":[from[0]+60.,from[1]]}])
-        });
+        input.perform(serde_json::json!([
+            contact(device, "down", from),
+            contact(device, "move", [from[0] + 60., from[1]])
+        ]));
         assert!(
             w.documents.drag_active(),
             "native tab drag started without hold, touch={touch}"
@@ -606,21 +577,17 @@ fn native_document_tab_input() {
             [0., 0., 0.],
             "neighbors wait for halfway, touch={touch}"
         );
-        perform(if touch {
-            serde_json::json!([{"touch":"move", "point":[from[0]+pitch*0.9,from[1]]}])
-        } else {
-            serde_json::json!([{"point":[from[0]+pitch*0.9,from[1]]}])
-        });
+        let halfway = [from[0] + pitch * 0.9, from[1]];
+        input.perform(serde_json::json!([contact(device, "move", halfway)]));
         assert_eq!(
             w.documents.slide().unwrap().1,
             [0., -pitch, 0.],
             "first neighbor slides, touch={touch}"
         );
-        perform(if touch {
-            serde_json::json!([{"touch":"move", "point":to}, {"touch":"move", "point":[to[0]-2.,to[1]]}])
-        } else {
-            serde_json::json!([{"point":to}, {"point":[to[0]-2.,to[1]]}])
-        });
+        input.perform(serde_json::json!([
+            contact(device, "move", to),
+            contact(device, "move", [to[0] - 2., to[1]])
+        ]));
         let (held, offsets) = w.documents.slide().unwrap();
         assert_eq!(
             offsets,
@@ -636,11 +603,7 @@ fn native_document_tab_input() {
             crate::capture(&w, "/tmp/capy-document-tabs-slide.png");
         }
         let away = [to[0], to[1] + first.height() * 2.];
-        perform(if touch {
-            serde_json::json!([{"touch":"move", "point":away}])
-        } else {
-            serde_json::json!([{"point":away}])
-        });
+        input.perform(serde_json::json!([contact(device, "move", away)]));
         let (held, offsets) = w.documents.slide().unwrap();
         assert_eq!(
             offsets,
@@ -648,21 +611,16 @@ fn native_document_tab_input() {
             "leaving the strip detaches, touch={touch}"
         );
         assert_eq!(held, first.x());
-        perform(if touch {
-            serde_json::json!([{"touch":"move", "point":to}, {"touch":"move", "point":[to[0]-2.,to[1]]}])
-        } else {
-            serde_json::json!([{"point":to}, {"point":[to[0]-2.,to[1]]}])
-        });
+        input.perform(serde_json::json!([
+            contact(device, "move", to),
+            contact(device, "move", [to[0] - 2., to[1]])
+        ]));
         assert_eq!(
             w.documents.slide().unwrap().1,
             [0., -pitch, -pitch],
             "returning reattaches, touch={touch}"
         );
-        perform(if touch {
-            serde_json::json!([{"touch":"up"}])
-        } else {
-            serde_json::json!([{"down":false}])
-        });
+        input.perform(serde_json::json!([contact(device, "up", to)]));
         assert_eq!(
             w.documents.model.borrow().order(),
             &[2, 3, 1],
@@ -676,11 +634,13 @@ fn native_document_tab_input() {
         assert!(w.documents.model.borrow().can_redo());
         let from = point(1, 0.3);
         let to = point(3, 0.8);
-        perform(if touch {
-            serde_json::json!([{"touch":"down", "point":from}, {"touch":"move", "point":to}, {"key":0xff1b,"down":true}, {"key":0xff1b,"down":false}, {"touch":"up"}])
-        } else {
-            serde_json::json!([{"point":from}, {"down":true}, {"point":to}, {"key":0xff1b,"down":true}, {"key":0xff1b,"down":false}, {"down":false}])
-        });
+        input.perform(serde_json::json!([
+            contact(device, "down", from),
+            contact(device, "move", to),
+            {"key":0xff1b,"down":true},
+            {"key":0xff1b,"down":false},
+            contact(device, "up", to)
+        ]));
         assert_eq!(
             w.documents.model.borrow().order(),
             &[1, 2, 3],
@@ -689,11 +649,12 @@ fn native_document_tab_input() {
         assert!(w.documents.slide().is_none());
         assert_eq!(bounds(1).x(), first.x(), "cancel restores tab widgets");
         let away = [to[0], to[1] + first.height() * 2.];
-        perform(if touch {
-            serde_json::json!([{"touch":"down", "point":from}, {"touch":"move", "point":to}, {"touch":"move", "point":away}, {"touch":"up"}])
-        } else {
-            serde_json::json!([{"point":from}, {"down":true}, {"point":to}, {"point":away}, {"down":false}])
-        });
+        input.perform(serde_json::json!([
+            contact(device, "down", from),
+            contact(device, "move", to),
+            contact(device, "move", away),
+            contact(device, "up", away)
+        ]));
         assert_eq!(
             w.documents.model.borrow().order(),
             &[1, 2, 3],
@@ -703,13 +664,13 @@ fn native_document_tab_input() {
     }
     // Native clicks still select, and keyboard cycling follows visual order.
     let first = point(1, 0.3);
-    perform(serde_json::json!([{"point":first},{"down":true},{"down":false}]));
+    input.click(first);
     until(
         || w.documents.selected() == 1 && !w.documents.changing.get(),
         "mouse tab selection",
     );
     new_photo::ready(&w);
-    perform(
+    input.perform(
         serde_json::json!([{"key":0xffe3,"down":true},{"key":0xff09,"down":true},{"key":0xff09,"down":false},{"key":0xffe3,"down":false}]),
     );
     until(
@@ -718,7 +679,7 @@ fn native_document_tab_input() {
     );
     new_photo::ready(&w);
     let last = point(3, 0.3);
-    perform(serde_json::json!([{"touch":"down","point":last},{"touch":"up"}]));
+    input.perform(serde_json::json!([{"touch":"down","point":last},{"touch":"up"}]));
     until(
         || w.documents.selected() == 3 && !w.documents.changing.get(),
         "touch tab selection",
@@ -733,17 +694,17 @@ fn native_document_tab_input() {
             ("hover", point(1, 0.4)),
             ("selected", point(3, 0.4)),
         ] {
-            perform(serde_json::json!([{"point":target}]));
+            input.perform(serde_json::json!([{"point":target}]));
             crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-{state}.png"));
         }
         let tab = find_named(w.window.upcast_ref(), "document-tab-3").unwrap();
         let close = tab.last_child().unwrap();
         let b = close.compute_bounds(&w.window).unwrap();
-        perform(serde_json::json!([{"point":[b.x()+b.width()/2., b.y()+b.height()/2.]}]));
+        input.perform(serde_json::json!([{"point":[b.x()+b.width()/2., b.y()+b.height()/2.]}]));
         crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-close.png"));
-        perform(serde_json::json!([{"point":point(3, 0.4)}, {"down":true}]));
+        input.perform(serde_json::json!([{"point":point(3, 0.4)}, {"down":true}]));
         crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-pressed.png"));
-        perform(serde_json::json!([{"down":false}]));
+        input.perform(serde_json::json!([{"down":false}]));
         assert!(tab.first_child().unwrap().grab_focus());
         w.window.set_focus_visible(true);
         pump(100);
@@ -760,14 +721,14 @@ fn native_document_tab_input() {
         workspace: Box::new(workspace),
     });
     pump(100);
-    perform(
+    input.perform(
         serde_json::json!([{"key":0xffe3,"down":true},{"key":0xffe1,"down":true},{"key":0x61,"down":true},{"key":0x61,"down":false},{"key":0xffe1,"down":false},{"key":0xffe3,"down":false}]),
     );
     assert!(
         find_named(w.window.upcast_ref(), "drawing-selector-popup").is_some_and(|p| p.is_visible())
     );
-    perform(serde_json::json!([{"key":0xff1b,"down":true},{"key":0xff1b,"down":false}]));
-    std::fs::write(directory.join("finished"), "done").unwrap();
+    input.perform(serde_json::json!([{"key":0xff1b,"down":true},{"key":0xff1b,"down":false}]));
+    input.finish();
     w.window.destroy();
     pump(100);
 }

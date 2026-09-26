@@ -4,7 +4,6 @@ use super::*;
 #[test]
 #[ignore = "isolated native-input.js --drag-pickup"]
 fn native_drag_pickup_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.DragPickup");
     let w = fixture_workspace(&app);
     w.window.maximize();
@@ -22,23 +21,11 @@ fn native_drag_pickup_input() {
         .filter_map(|p| p.upgrade())
         .find(|p| p.has_css_class("panel-context-menu"))
         .unwrap();
-    let mut step = 0;
-    let mut perform = |events: serde_json::Value| {
-        let file = dir.join(format!("step-{step}.json"));
-        let temporary = file.with_extension("tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(temporary, file).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native input timed out");
-            pump(5);
-        }
-        step += 1;
-        pump(35);
-    };
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut input = RemoteInput::new().settle_ms(35);
+    input.ready();
     pump(500);
     for touch in [false, true] {
+        let device = if touch { "touch" } else { "mouse" };
         for source in [
             "tile",
             "drawer-tile",
@@ -128,15 +115,15 @@ fn native_drag_pickup_input() {
                     };
                     let tile = source.ends_with("tile") || source == "column";
                     if !touch {
-                        perform(serde_json::json!([{"point":start}]));
+                        input.perform(serde_json::json!([{"point":start}]));
                         assert_eq!(cursor().as_deref(), Some(if tile { "default" } else { "grab" }), "{source}: hover cursor");
                     }
                     if !touch && !held && !cancel && source != "column-grip" {
-                        perform(serde_json::json!([
+                        input.perform(serde_json::json!([
                             {"point":start},{"down":true,"button":273},{"down":false,"button":273}
                         ]));
                         assert!(menu.is_visible(), "{source}: right-click opens menu");
-                        perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]));
+                        input.perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]));
                     }
                     let before = saved();
                     let press = if touch {
@@ -144,7 +131,7 @@ fn native_drag_pickup_input() {
                     } else {
                         serde_json::json!([{"point":start},{"down":true}])
                     };
-                    perform(press.clone());
+                    input.perform(press.clone());
                     if !touch && tile {
                         assert_eq!(cursor().as_deref(), Some("default"), "press alone keeps the pointer");
                     }
@@ -156,16 +143,12 @@ fn native_drag_pickup_input() {
                             assert!(w.workspace_drag.borrow().as_ref().is_some_and(|d| d.held), "{touch} {source}: hold arms pickup");
                             if !touch {
                                 assert_eq!(cursor().as_deref(), Some("grab"), "{source}: held cursor");
-                                perform(serde_json::json!([{"point":[start[0]+1.,start[1]]}]));
+                                input.perform(serde_json::json!([{"point":[start[0]+1.,start[1]]}]));
                                 assert_eq!(cursor().as_deref(), Some("grab"), "small held movement keeps the open hand");
                             }
                         }
                         if !cancel && (source.ends_with("tile") || source == "column") {
-                            perform(if touch {
-                                serde_json::json!([{"touch":"up"}])
-                            } else {
-                                serde_json::json!([{"down":false}])
-                            });
+                            input.perform(serde_json::json!([contact(device, "up", start)]));
                             assert_eq!(menu.is_visible(), touch, "hold release menu lifetime");
                             assert_eq!(saved(), before, "held release must not activate");
                             if !touch {
@@ -173,15 +156,11 @@ fn native_drag_pickup_input() {
                             }
                             w.dismiss_context();
                             pump(150);
-                            perform(press);
+                            input.perform(press);
                             pump(800);
                         }
                     }
-                    perform(if touch {
-                        serde_json::json!([{"touch":"move","point":point}])
-                    } else {
-                        serde_json::json!([{"point":point}])
-                    });
+                    input.perform(serde_json::json!([contact(device, "move", point)]));
                     let expected = held || !source.ends_with("tile") && source != "column";
                     assert_eq!(
                         w.workspace_drag
@@ -196,15 +175,11 @@ fn native_drag_pickup_input() {
                     }
                     assert!(!menu.is_visible(), "drag/scroll dismisses hold");
                     if cancel {
-                        perform(
+                        input.perform(
                             serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
                         );
                     }
-                    perform(if touch {
-                        serde_json::json!([{"touch":"up"}])
-                    } else {
-                        serde_json::json!([{"down":false}])
-                    });
+                    input.perform(serde_json::json!([contact(device, "up", point)]));
                     pump(200);
                     assert!(w.workspace_drag.borrow().is_none());
                     assert!(w.drop_hint.borrow().is_none());
@@ -243,11 +218,11 @@ fn native_drag_pickup_input() {
         let widget = w.toolbar.first_child().unwrap();
         let bounds = widget.compute_bounds(&w.surface).unwrap();
         let start = [bounds.x() + bounds.width() / 2., bounds.y() + bounds.height() / 2.];
-        perform(serde_json::json!([{"point":start},{"down":true}]));
+        input.perform(serde_json::json!([{"point":start},{"down":true}]));
         pump(800);
         assert_eq!(cursor().as_deref(), Some("grab"));
         match reason {
-            "escape" => perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}])),
+            "escape" => input.perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}])),
             "blur" => { w.interact(UiInput::Blur); }
             _ => {
                 let tile = original.layout.panel(Panel::Toolbar).unwrap().tiles()[0].id;
@@ -255,17 +230,17 @@ fn native_drag_pickup_input() {
                     action: CustomizationAction::RemoveTool { panel: Panel::Toolbar, tile },
                 });
                 pump(150);
-                perform(serde_json::json!([{"point":[start[0]+20.,start[1]]}]));
+                input.perform(serde_json::json!([{"point":[start[0]+20.,start[1]]}]));
             }
         }
         assert!(w.workspace_drag.borrow().is_none(), "{reason}: retires hold");
         // GTK may clear the device override after the old widget disappears;
         // an unset window cursor is also the regular pointer.
         assert!(matches!(cursor().as_deref(), None | Some("default")), "{reason}: restores pointer");
-        perform(serde_json::json!([{"down":false}]));
+        input.perform(serde_json::json!([{"down":false}]));
         assert!(w.workspace_drag.borrow().is_none());
     }
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.destroy();
     pump(100);
 }

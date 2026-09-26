@@ -3,7 +3,7 @@ use super::*;
 #[test]
 #[ignore = "isolated Mutter input and SQLite; workspace-motion.sh gtk --workspace-transitions"]
 fn native_workspace_transition_stability() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let mut input = switcher_input();
     let app = native_test_app("art.capycanvas.WorkspaceTransitions");
     gtk::Settings::default()
         .unwrap()
@@ -51,8 +51,7 @@ fn native_workspace_transition_stability() {
             }
         }
     ));
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    input.ready();
     for _ in 0..2 {
         for (id, _) in DEFAULT_WORKSPACES {
             // The visible Sketch/Paint/Photo labels can change; widget identity
@@ -63,7 +62,7 @@ fn native_workspace_transition_stability() {
                 &format!("workspace-switch-{name}"),
             )
             .unwrap();
-            click(&w, &dir, &mut step, &button);
+            click(&w, &mut input, &button);
             while w.workspaces.busy.get()
                 || w.workspaces
                     .manager
@@ -99,17 +98,13 @@ fn native_workspace_transition_stability() {
     let active = w.workspaces.manager.as_ref().unwrap().active_id();
     w.workspaces.busy.set(true);
     w.workspaces.update_status();
-    click(&w, &dir, &mut step, painter.upcast_ref());
-    let point = at(&w, painter.upcast_ref(), 0.5, 0.5);
-    send(
-        &dir,
-        &mut step,
-        serde_json::json!([
-            {"touch":"down", "point":point}, {"touch":"up"},
-            {"key":0xff0d, "down":true}, {"key":0xff0d, "down":false},
-            {"key":0x20, "down":true}, {"key":0x20, "down":false},
-        ]),
-    );
+    click(&w, &mut input, painter.upcast_ref());
+    let point = screen_point(painter.upcast_ref(), &w.window, [0.5, 0.5]);
+    input.perform(serde_json::json!([
+        {"touch":"down", "point":point}, {"touch":"up"},
+        {"key":0xff0d, "down":true}, {"key":0xff0d, "down":false},
+        {"key":0x20, "down":true}, {"key":0x20, "down":false},
+    ]));
     assert_eq!(
         activations.get(),
         0,
@@ -118,7 +113,7 @@ fn native_workspace_transition_stability() {
     assert_eq!(w.workspaces.manager.as_ref().unwrap().active_id(), active);
     w.workspaces.busy.set(false);
     w.workspaces.update_status();
-    click(&w, &dir, &mut step, painter.upcast_ref());
+    click(&w, &mut input, painter.upcast_ref());
     assert_eq!(
         activations.get(),
         1,
@@ -136,7 +131,7 @@ fn native_workspace_transition_stability() {
     pump(250);
     let busy_notices = notices.get();
     let switching_frames = frames.borrow().clone();
-    capture_reference(&w, &dir.join("steady.png").to_string_lossy(), 1.0);
+    capture_reference(&w, &input.dir.join("steady.png").to_string_lossy(), 1.0);
     // A real failure still needs visible recovery actions, without moving the
     // canvas or changing its viewport and GPU swapchain size.
     w.workspaces.show_error(layer_workspace::StoreError::new(
@@ -146,7 +141,7 @@ fn native_workspace_transition_stability() {
     w.workspaces.update_status();
     pump(200);
     assert!(w.workspaces.root.is_visible());
-    capture_reference(&w, &dir.join("notice.png").to_string_lossy(), 1.0);
+    capture_reference(&w, &input.dir.join("notice.png").to_string_lossy(), 1.0);
     let error_geometry = geometry(&w);
     clock.disconnect(sampling);
     let moved = switching_frames
@@ -159,7 +154,7 @@ fn native_workspace_transition_stability() {
         "notice_geometry":error_geometry,
     });
     std::fs::write(
-        dir.join("transitions.json"),
+        input.dir.join("transitions.json"),
         serde_json::to_vec_pretty(&report).unwrap(),
     )
     .unwrap();
@@ -168,7 +163,7 @@ fn native_workspace_transition_stability() {
         switching_frames.len(),
         disabled.get()
     );
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     assert_eq!(
         disabled.get(),
         0,
@@ -195,9 +190,9 @@ use layer_workspace::{DEFAULT_WORKSPACES, ManagerPage};
 #[test]
 #[ignore = "GTK reference with real pointer input; --workspace-manager-visual"]
 fn native_workspace_manager_visual() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let mut input = switcher_input();
     let output =
-        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or(dir.to_string_lossy().into_owned());
+        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or(input.dir.to_string_lossy().into_owned());
     std::fs::create_dir_all(&output).unwrap();
     let app = native_test_app("art.capycanvas.WorkspaceManagerVisual");
     gtk::Settings::default()
@@ -211,8 +206,7 @@ fn native_workspace_manager_visual() {
         pump(20);
         assert!(Instant::now() < deadline);
     }
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    input.ready();
     fn record(widget: &gtk::Widget, root: &gtk::Widget) -> serde_json::Value {
         let b = widget.compute_bounds(root).unwrap();
         let mut children = Vec::new();
@@ -245,14 +239,20 @@ fn native_workspace_manager_visual() {
         let cancel = find_button(w.window.upcast_ref(), "Cancel").unwrap();
         for (state, point) in [
             ("normal", [10., 10.]),
-            ("row", at(&w, &painter, 0.4, 0.5)),
-            ("grip", at(&w, &grip, 0.5, 0.5)),
-            ("options", at(&w, more.upcast_ref(), 0.5, 0.5)),
-            ("current", at(&w, &current, 0.4, 0.5)),
-            ("new", at(&w, &add, 0.5, 0.5)),
-            ("cancel", at(&w, cancel.upcast_ref(), 0.5, 0.5)),
+            ("row", screen_point(&painter, &w.window, [0.4, 0.5])),
+            ("grip", screen_point(&grip, &w.window, [0.5, 0.5])),
+            (
+                "options",
+                screen_point(more.upcast_ref(), &w.window, [0.5, 0.5]),
+            ),
+            ("current", screen_point(&current, &w.window, [0.4, 0.5])),
+            ("new", screen_point(&add, &w.window, [0.5, 0.5])),
+            (
+                "cancel",
+                screen_point(cancel.upcast_ref(), &w.window, [0.5, 0.5]),
+            ),
         ] {
-            send(&dir, &mut step, serde_json::json!([{"point":point}]));
+            input.perform(serde_json::json!([{"point":point}]));
             capture_reference(&w, &format!("{output}/gtk-{name}-{state}.png"), 1.0);
             std::fs::write(
                 format!("{output}/gtk-{name}-{state}.json"),
@@ -267,7 +267,7 @@ fn native_workspace_manager_visual() {
         w.workspaces.ui.close();
         pump(250);
     }
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.close();
     pump(300);
 }
@@ -558,33 +558,8 @@ fn check_active_workspace_delete(occupied_default: bool) {
         .unwrap();
 }
 
-fn send(dir: &std::path::Path, step: &mut usize, events: serde_json::Value) {
-    std::fs::write(
-        dir.join(format!("step-{step}.json")),
-        serde_json::to_vec(&events).unwrap(),
-    )
-    .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while !dir.join(format!("done-{step}")).exists() {
-        pump(10);
-        assert!(Instant::now() < deadline, "native step {step} timed out");
-    }
-    *step += 1;
-    pump(200);
-}
-fn at(w: &Workspace, widget: &gtk::Widget, x: f32, y: f32) -> [f32; 2] {
-    if let Some(popup) = widget.native().and_downcast::<gtk::Popover>() {
-        let b = widget.compute_bounds(&popup).unwrap();
-        let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
-        let (dx, dy) = popup.surface_transform();
-        [
-            surface.position_x() as f32 - dx as f32 + b.x() + b.width() * x,
-            surface.position_y() as f32 - dy as f32 + b.y() + b.height() * y,
-        ]
-    } else {
-        let b = widget.compute_bounds(&w.window).unwrap();
-        [b.x() + b.width() * x, b.y() + b.height() * y]
-    }
+fn switcher_input() -> RemoteInput {
+    RemoteInput::new().settle_ms(200).timeout_secs(8)
 }
 fn row(w: &Workspace, id: &str) -> gtk::Widget {
     find_named(w.window.upcast_ref(), &format!("workspace-row-{id}")).unwrap()
@@ -594,12 +569,8 @@ fn dialog_button(w: &Workspace, label: &str) -> Option<gtk::Button> {
         .visible_dialog()
         .and_then(|dialog| find_button(dialog.upcast_ref(), label))
 }
-fn click(w: &Workspace, dir: &std::path::Path, step: &mut usize, widget: &gtk::Widget) {
-    send(
-        dir,
-        step,
-        serde_json::json!([{ "point": at(w, widget, 0.5, 0.5) }, { "down": true }, { "down": false }]),
-    );
+fn click(w: &Workspace, input: &mut RemoteInput, widget: &gtk::Widget) {
+    input.click(screen_point(widget, &w.window, [0.5, 0.5]));
 }
 fn switcher_buttons(w: &Workspace) -> Vec<gtk::ToggleButton> {
     fn collect(widget: &gtk::Widget, buttons: &mut Vec<gtk::ToggleButton>) {
@@ -637,8 +608,7 @@ fn menu_button(widget: &gtk::Widget) -> Option<gtk::MenuButton> {
 }
 fn drag(
     w: &Workspace,
-    dir: &std::path::Path,
-    step: &mut usize,
+    input: &mut RemoteInput,
     id: &str,
     target: &str,
     after: bool,
@@ -655,17 +625,14 @@ fn drag(
     } else {
         row(w, id)
     };
-    let start = at(w, &source, if handle { 0.5 } else { 0.35 }, 0.5);
-    let end = at(w, &row(w, target), 0.35, if after { 0.85 } else { 0.15 });
-    let mut events = vec![];
-    if touch {
-        events.push(serde_json::json!({"touch":"down", "point":start}));
-    } else {
-        events.extend([
-            serde_json::json!({"point":start}),
-            serde_json::json!({"down":true}),
-        ]);
-    }
+    let start = screen_point(&source, &w.window, [if handle { 0.5 } else { 0.35 }, 0.5]);
+    let end = screen_point(
+        &row(w, target),
+        &w.window,
+        [0.35, if after { 0.85 } else { 0.15 }],
+    );
+    let device = if touch { "touch" } else { "mouse" };
+    let mut events = vec![contact(device, "down", start)];
     if hold {
         events.extend((0..10).map(|_| serde_json::json!({})));
     }
@@ -674,24 +641,16 @@ fn drag(
             start[0] + (end[0] - start[0]) * t,
             start[1] + (end[1] - start[1]) * t,
         ];
-        events.push(if touch {
-            serde_json::json!({"touch":"move", "point":point})
-        } else {
-            serde_json::json!({"point":point})
-        });
+        events.push(contact(device, "move", point));
     }
-    events.push(if touch {
-        serde_json::json!({"touch":"up"})
-    } else {
-        serde_json::json!({"down":false})
-    });
-    send(dir, step, serde_json::Value::Array(events));
+    events.push(contact(device, "up", end));
+    input.perform(serde_json::Value::Array(events));
 }
 
 #[test]
 #[ignore = "isolated Mutter mouse/touch driver and SQLite; workspace-motion.sh gtk --workspace-switcher"]
 fn native_workspace_switcher_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let mut input = switcher_input();
     let app = native_test_app("art.capycanvas.WorkspaceSwitcherInput");
     let settings = gtk::Settings::default().unwrap();
     settings.set_gtk_enable_animations(false);
@@ -719,9 +678,8 @@ fn native_workspace_switcher_input() {
         .clone();
     w.workspaces.ui.show(&w, ManagerPage::Workspaces);
     pump(500);
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    click(&w, &dir, &mut step, &row(&w, &f));
+    input.ready();
+    click(&w, &mut input, &row(&w, &f));
     assert_eq!(manager.active_id().as_deref(), Some(i.as_str()));
     let preview = durable_layout(&state(&w).workspace.layout);
     assert_eq!(
@@ -739,25 +697,17 @@ fn native_workspace_switcher_input() {
     let popup = menu_button(&row(&w, &p)).unwrap().popover().unwrap();
     assert!(find_button(popup.upcast_ref(), "Rename…").is_none());
     assert!(find_button(popup.upcast_ref(), "Delete…").is_none());
-    send(
-        &dir,
-        &mut step,
-        serde_json::json!([
-            {"point":at(&w, &row(&w, &p), 0.35, 0.5)},
-            {"button":273,"down":true}, {"button":273,"down":false}
-        ]),
-    );
+    input.perform(serde_json::json!([
+        {"point":screen_point(&row(&w, &p), &w.window, [0.35, 0.5])},
+        {"button":273,"down":true}, {"button":273,"down":false}
+    ]));
     assert!(popup.is_visible(), "right-click opens the row menu");
     assert_eq!(durable_layout(&state(&w).workspace.layout), preview);
-    send(
-        &dir,
-        &mut step,
-        serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
-    );
+    input.perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]));
     assert!(!popup.is_visible());
     // Only touch holds open menus; mouse release remains with the native row.
     for touch in [false, true] {
-        let point = at(&w, &row(&w, &p), 0.35, 0.5);
+        let point = screen_point(&row(&w, &p), &w.window, [0.35, 0.5]);
         let mut events = if touch {
             vec![serde_json::json!({"touch":"down","point":point})]
         } else {
@@ -767,7 +717,7 @@ fn native_workspace_switcher_input() {
             ]
         };
         events.extend((0..10).map(|_| serde_json::json!({})));
-        send(&dir, &mut step, serde_json::Value::Array(events));
+        input.perform(serde_json::Value::Array(events));
         assert_eq!(
             popup.is_visible(),
             touch,
@@ -777,15 +727,11 @@ fn native_workspace_switcher_input() {
         if touch {
             assert!(!popup.is_autohide(), "hold retains the contact");
         }
-        send(
-            &dir,
-            &mut step,
-            serde_json::json!([if touch {
-                serde_json::json!({"touch":"up"})
-            } else {
-                serde_json::json!({"down":false})
-            }]),
-        );
+        input.perform(serde_json::json!([if touch {
+            serde_json::json!({"touch":"up"})
+        } else {
+            serde_json::json!({"down":false})
+        }]));
         assert_eq!(
             popup.is_visible(),
             touch,
@@ -794,15 +740,12 @@ fn native_workspace_switcher_input() {
         if !touch {
             // Restore the preview after the native mouse release before testing
             // that touch hold/release preserves it.
-            click(&w, &dir, &mut step, &row(&w, &f));
+            click(&w, &mut input, &row(&w, &f));
         }
         if touch {
             assert!(popup.is_autohide(), "released menu is dismissible");
-            send(
-                &dir,
-                &mut step,
-                serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
-            );
+            input
+                .perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]));
         }
         assert!(!popup.is_visible());
         assert!(
@@ -811,7 +754,7 @@ fn native_workspace_switcher_input() {
         );
     }
     // Dragging any row must preserve the selected Photographer preview.
-    drag(&w, &dir, &mut step, &p, &f, true, false, false, false);
+    drag(&w, &mut input, &p, &f, true, false, false, false);
     assert_eq!(
         manager.switcher_ids(),
         [i.clone(), f.clone(), p.clone()],
@@ -819,26 +762,26 @@ fn native_workspace_switcher_input() {
     );
     assert_eq!(durable_layout(&state(&w).workspace.layout), preview);
     assert_eq!(manager.current().unwrap().capture().unwrap(), original);
-    drag(&w, &dir, &mut step, &p, &i, false, false, true, false);
+    drag(&w, &mut input, &p, &i, false, false, true, false);
     assert_eq!(
         manager.switcher_ids(),
         [p.clone(), i.clone(), f.clone()],
         "mouse handle drag"
     );
-    drag(&w, &dir, &mut step, &p, &f, true, true, true, false);
+    drag(&w, &mut input, &p, &f, true, true, true, false);
     assert_eq!(
         manager.switcher_ids(),
         [i.clone(), f.clone(), p.clone()],
         "touch handle without hold"
     );
-    drag(&w, &dir, &mut step, &p, &i, false, true, false, false);
+    drag(&w, &mut input, &p, &i, false, true, false, false);
     assert_eq!(
         manager.switcher_ids(),
         [i.clone(), f.clone(), p.clone()],
         "ordinary touch swipe must not reorder"
     );
     let held_popup = menu_button(&row(&w, &p)).unwrap().popover().unwrap();
-    drag(&w, &dir, &mut step, &p, &i, false, true, false, true);
+    drag(&w, &mut input, &p, &i, false, true, false, true);
     assert!(
         !held_popup.is_visible(),
         "same-contact drag closes the hold menu"
@@ -851,26 +794,28 @@ fn native_workspace_switcher_input() {
     assert_eq!(durable_layout(&state(&w).workspace.layout), preview);
     assert_eq!(manager.current().unwrap().capture().unwrap(), original);
     let menu = menu_button(&row(&w, &p)).unwrap();
-    click(&w, &dir, &mut step, menu.upcast_ref());
+    click(&w, &mut input, menu.upcast_ref());
     let popup = menu.popover().unwrap();
-    capture_popover(&popup, dir.join("switcher-options.png").to_str().unwrap());
+    capture_popover(
+        &popup,
+        input.dir.join("switcher-options.png").to_str().unwrap(),
+    );
     click(
         &w,
-        &dir,
-        &mut step,
+        &mut input,
         find_button(popup.upcast_ref(), "Move Down")
             .unwrap()
             .upcast_ref(),
     );
     assert_eq!(manager.switcher_ids(), [i.clone(), p.clone(), f.clone()]);
     let menu = menu_button(&row(&w, &p)).unwrap();
-    click(&w, &dir, &mut step, menu.upcast_ref());
+    click(&w, &mut input, menu.upcast_ref());
     let pin = find_named(
         menu.popover().unwrap().upcast_ref(),
         &format!("workspace-pin-{p}"),
     )
     .unwrap();
-    click(&w, &dir, &mut step, &pin);
+    click(&w, &mut input, &pin);
     assert_eq!(manager.switcher_ids(), [i.clone(), f.clone()]);
     assert!(
         find_named(
@@ -879,21 +824,24 @@ fn native_workspace_switcher_input() {
         )
         .is_some()
     );
-    drag(&w, &dir, &mut step, &p, &f, true, true, true, false);
+    drag(&w, &mut input, &p, &f, true, true, true, false);
     assert_eq!(manager.workspace_ids(), [i.clone(), f.clone(), p.clone()]);
     assert_eq!(
         manager.switcher_ids(),
         [i.clone(), f.clone()],
         "reordering a hidden row never pins it"
     );
-    drag(&w, &dir, &mut step, &p, &i, false, false, true, false);
+    drag(&w, &mut input, &p, &i, false, false, true, false);
     assert_eq!(manager.workspace_ids(), [p.clone(), i.clone(), f.clone()]);
     assert_eq!(durable_layout(&state(&w).workspace.layout), preview);
-    capture_reference(&w, dir.join("switcher-manager.png").to_str().unwrap(), 1.);
+    capture_reference(
+        &w,
+        input.dir.join("switcher-manager.png").to_str().unwrap(),
+        1.,
+    );
     click(
         &w,
-        &dir,
-        &mut step,
+        &mut input,
         dialog_button(&w, "Cancel").unwrap().upcast_ref(),
     );
     assert_eq!(
@@ -940,53 +888,45 @@ fn native_workspace_switcher_input() {
     });
     w.workspaces.ui.show(&w, ManagerPage::Workspaces);
     pump(400);
-    click(&w, &dir, &mut step, &row(&w, &f));
-    let toggle_pin = |id: &str, step: &mut usize| {
+    click(&w, &mut input, &row(&w, &f));
+    let toggle_pin = |id: &str, input: &mut RemoteInput| {
         let menu = menu_button(&row(&w, id)).unwrap();
-        click(&w, &dir, step, menu.upcast_ref());
+        click(&w, input, menu.upcast_ref());
         let pin = find_named(
             menu.popover().unwrap().upcast_ref(),
             &format!("workspace-pin-{id}"),
         )
         .unwrap();
-        click(&w, &dir, step, &pin);
+        click(&w, input, &pin);
     };
-    toggle_pin(&custom, &mut step);
+    toggle_pin(&custom, &mut input);
     assert_eq!(
         manager.switcher_ids(),
         [i.clone(), f.clone(), custom.clone()]
     );
     for id in manager.switcher_ids() {
-        toggle_pin(&id, &mut step);
+        toggle_pin(&id, &mut input);
     }
     assert!(manager.switcher_ids().is_empty());
     assert!(w.workspaces.switcher.is_visible());
     assert_eq!(switcher_names(&w), ["workspace-switch-illustrator"]);
     assert!(switcher_buttons(&w)[0].is_active());
     // All hidden rows still have grips and can move before being shown again.
-    drag(&w, &dir, &mut step, &custom, &p, false, false, true, false);
+    drag(&w, &mut input, &custom, &p, false, false, true, false);
     assert_eq!(manager.workspace_ids()[0], custom);
     assert!(manager.switcher_ids().is_empty());
     let hidden_menu = menu_button(&row(&w, &custom)).unwrap();
-    send(
-        &dir,
-        &mut step,
-        serde_json::json!([
-            {"point":at(&w, &row(&w, &custom), 0.35, 0.5)},
-            {"button":273,"down":true}, {"button":273,"down":false}
-        ]),
-    );
+    input.perform(serde_json::json!([
+        {"point":screen_point(&row(&w, &custom), &w.window, [0.35, 0.5])},
+        {"button":273,"down":true}, {"button":273,"down":false}
+    ]));
     assert!(
         hidden_menu.popover().unwrap().is_visible(),
         "hidden rows have context menus too"
     );
-    send(
-        &dir,
-        &mut step,
-        serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
-    );
-    toggle_pin(&custom, &mut step);
-    toggle_pin(&p, &mut step);
+    input.perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]));
+    toggle_pin(&custom, &mut input);
+    toggle_pin(&p, &mut input);
     assert_eq!(manager.switcher_ids(), [custom.clone(), p.clone()]);
     assert!(w.workspaces.switcher.is_visible());
     assert_eq!(
@@ -999,16 +939,12 @@ fn native_workspace_switcher_input() {
     );
     // Row-menu ordering is available through keyboard activation, too.
     let menu = menu_button(&row(&w, &p)).unwrap();
-    click(&w, &dir, &mut step, menu.upcast_ref());
+    click(&w, &mut input, menu.upcast_ref());
     let up = find_button(menu.popover().unwrap().upcast_ref(), "Move Up").unwrap();
     up.grab_focus();
     pump(100);
     assert!(up.has_focus() && up.is_sensitive());
-    send(
-        &dir,
-        &mut step,
-        serde_json::json!([{"key":32,"down":true},{"key":32,"down":false}]),
-    );
+    input.perform(serde_json::json!([{"key":32,"down":true},{"key":32,"down":false}]));
     let deadline = Instant::now() + Duration::from_secs(2);
     while manager.switcher_ids() != [p.clone(), custom.clone()] && Instant::now() < deadline {
         pump(20);
@@ -1021,7 +957,7 @@ fn native_workspace_switcher_input() {
         .unwrap();
     scroll.vadjustment().set_value(0.);
     pump(100);
-    drag(&w, &dir, &mut step, &custom, &p, false, true, false, false);
+    drag(&w, &mut input, &custom, &p, false, true, false, false);
     assert!(
         scroll.vadjustment().value() > 10.,
         "touch body swipe should scroll a long list"
@@ -1034,24 +970,16 @@ fn native_workspace_switcher_input() {
     scroll.set_kinetic_scrolling(false);
     scroll.vadjustment().set_value(0.);
     pump(200);
-    let start = at(&w, &row(&w, &p), 0.35, 0.5);
-    let end = at(&w, &row(&w, &custom), 0.35, 0.8);
-    send(
-        &dir,
-        &mut step,
-        serde_json::json!([
-            { "point":start }, { "down":true },
-            { "point":[start[0], start[1]+18.] }, { "point":end }, { "point":end }
-        ]),
-    );
+    let start = screen_point(&row(&w, &p), &w.window, [0.35, 0.5]);
+    let end = screen_point(&row(&w, &custom), &w.window, [0.35, 0.8]);
+    input.perform(serde_json::json!([
+        { "point":start }, { "down":true },
+        { "point":[start[0], start[1]+18.] }, { "point":end }, { "point":end }
+    ]));
     assert!(row(&w, &p).has_css_class("workspace-row-dragging"));
-    send(
-        &dir,
-        &mut step,
-        serde_json::json!([
-            {"key":65307,"down":true}, {"key":65307,"down":false}, {"down":false}
-        ]),
-    );
+    input.perform(serde_json::json!([
+        {"key":65307,"down":true}, {"key":65307,"down":false}, {"down":false}
+    ]));
     assert_eq!(
         manager.switcher_ids(),
         [p.clone(), custom.clone()],
@@ -1066,11 +994,14 @@ fn native_workspace_switcher_input() {
         "cancelled drag must preserve the preview"
     );
     assert_eq!(manager.current().unwrap().capture().unwrap(), original);
-    capture_reference(&w, dir.join("switcher-custom.png").to_str().unwrap(), 1.);
+    capture_reference(
+        &w,
+        input.dir.join("switcher-custom.png").to_str().unwrap(),
+        1.,
+    );
     click(
         &w,
-        &dir,
-        &mut step,
+        &mut input,
         dialog_button(&w, "Cancel").unwrap().upcast_ref(),
     );
     let saved_order = manager.workspace_ids();
@@ -1079,7 +1010,7 @@ fn native_workspace_switcher_input() {
         &format!("workspace-switch-{custom}"),
     )
     .unwrap();
-    click(&w, &dir, &mut step, &custom_button);
+    click(&w, &mut input, &custom_button);
     let deadline = Instant::now() + Duration::from_secs(10);
     while manager.active_id().as_ref() != Some(&custom) {
         pump(20);
@@ -1128,7 +1059,7 @@ fn native_workspace_switcher_input() {
     );
     reopened.window.close();
     pump(300);
-    std::fs::write(dir.join("finished"), "done").unwrap();
+    input.finish();
     w.window.close();
     pump(500);
     assert!(!w.window.is_visible());

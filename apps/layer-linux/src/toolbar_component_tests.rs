@@ -22,32 +22,18 @@ fn component_id(d: &Driver, control: ToolbarControl) -> u32 {
         .id
 }
 pub(super) fn drag(d: &mut Driver, device: &str, a: [f32; 2], b: [f32; 2], held: bool) {
-    let down = match device {
-        "touch" => serde_json::json!({"touch":"down","point":a}),
-        "pen" => serde_json::json!({"pen":"down","point":a}),
-        _ => serde_json::json!({"point":a,"down":true}),
-    };
-    let motion = match device {
-        "touch" => serde_json::json!({"touch":"move","point":b}),
-        "pen" => serde_json::json!({"pen":"move","point":b}),
-        _ => serde_json::json!({"point":b}),
-    };
-    let up = match device {
-        "touch" => serde_json::json!({"touch":"up"}),
-        "pen" => serde_json::json!({"pen":"up"}),
-        _ => serde_json::json!({"down":false}),
-    };
     if device == "pen" {
-        d.perform(serde_json::json!([{"pen":"move","point":a}]));
+        d.input
+            .perform(serde_json::json!([contact(device, "move", a)]));
     }
-    d.perform(serde_json::Value::Array(vec![
-        down,
-        serde_json::json!({"wait_ms":if held {800} else {0}}),
-        motion,
-        up,
+    d.input.perform(serde_json::json!([
+        contact(device, "down", a),
+        {"wait_ms":if held {800} else {0}},
+        contact(device, "move", b),
+        contact(device, "up", b)
     ]));
     if device == "pen" {
-        d.perform(serde_json::json!([{"pen":"leave"}]));
+        d.input.perform(serde_json::json!([{"pen":"leave"}]));
     }
 }
 
@@ -326,8 +312,8 @@ fn native_toolbar_components_input() {
         d.w.dispatch(UiAction::SetColorSampleSize { width: 1 });
         pump(100);
         d.click_name("toolbar-choice-sample-size");
-        d.key(0xff54);
-        d.key(0xff0d);
+        d.input.key(0xff54);
+        d.input.key(0xff0d);
         let view = state(&d.w);
         assert_eq!(
             (view.color_picker.layer, view.color_picker.sample_width),
@@ -335,15 +321,15 @@ fn native_toolbar_components_input() {
             "sample source and size are independent"
         );
         d.click_name("toolbar-choice-variant");
-        d.key(0xff54);
-        d.key(0xff0d);
+        d.input.key(0xff54);
+        d.input.key(0xff0d);
         let view = state(&d.w);
         assert_eq!(view.layer_tools.tool, LayerCanvasTool::PickLayer);
         assert_eq!(view.color_picker.sample_width, 5);
         d.click_name("toolbar-choice-variant");
         d.capture_canvas(&format!("eyedropper-menu-{theme:?}.png"));
-        d.key(0xff1b);
-        d.key(0xff1b);
+        d.input.key(0xff1b);
+        d.input.key(0xff1b);
 
         // Actual canvas content enables a transform. Completion actions stay
         // at the start of the bar, and both exit the active operation.
@@ -382,7 +368,7 @@ fn native_toolbar_components_input() {
         d.click(&find_css(&number, "number-value").unwrap());
         let popup = descendant::<gtk::Popover>(&number).unwrap();
         d.number(&popup.child().unwrap(), "51");
-        d.key(0xff1b);
+        d.input.key(0xff1b);
         assert_eq!(state(&d.w).brush.diameter, 51.);
         d.capture_canvas(&format!("vertical-options-{theme:?}.png"));
         d.click_name(&format!("tile-{options}"));
@@ -426,7 +412,10 @@ fn native_toolbar_components_narrow_input() {
     );
     d.click_name(&format!("tile-{options}"));
     assert!(d.named("drawer-panel-ToolSettings").is_mapped());
-    crate::capture(&d.w, d.dir.join("narrow-options.png").to_str().unwrap());
+    crate::capture(
+        &d.w,
+        d.input.dir.join("narrow-options.png").to_str().unwrap(),
+    );
     d.click_name(&format!("tile-{options}"));
     assert!(state(&d.w).customization.drawer.is_none());
     d.finish();
@@ -562,7 +551,8 @@ fn native_toolbar_options_presentation_input() {
     let root = more.parent().unwrap().parent().unwrap();
     let b = root.compute_bounds(&d.w.window).unwrap();
     let a = [b.x() + b.width() - 100., b.y() + b.height() / 2.];
-    d.perform(serde_json::json!([{ "point": a, "down": true },{"wait_ms":800},{"down":false}]));
+    d.input
+        .perform(serde_json::json!([{ "point": a, "down": true },{"wait_ms":800},{"down":false}]));
     assert!(
         !d.w.popovers
             .borrow()
@@ -571,7 +561,7 @@ fn native_toolbar_options_presentation_input() {
             .any(|p| p.has_css_class("panel-context-menu") && p.is_visible()),
         "mouse holds never open a menu"
     );
-    d.perform(serde_json::json!([
+    d.input.perform(serde_json::json!([
         {"touch":"down","point":a},{"wait_ms":800},{"touch":"up"}
     ]));
     let menu =
@@ -717,31 +707,24 @@ fn compact_edge_gestures(d: &mut Driver, devices: &[&str]) {
             let a = toolbar_grip(d, panel);
             // Approach through the broad target and inspect the live preview,
             // instead of teleporting directly into a near-edge target.
-            let event = |phase: &str, p: [f32; 2]| match device {
-                "touch" => serde_json::json!({"touch":phase,"point":p}),
-                "pen" => serde_json::json!({"pen":phase,"point":p}),
-                _ => match phase {
-                    "down" => serde_json::json!({"point":p,"down":true}),
-                    "up" => serde_json::json!({"down":false}),
-                    _ => serde_json::json!({"point":p}),
-                },
-            };
+            let event = |phase: &str, p: [f32; 2]| contact(device, phase, p);
             if device == "pen" {
-                d.perform(serde_json::json!([event("move", a)]));
+                d.input.perform(serde_json::json!([event("move", a)]));
             }
             let mut events = vec![event("down", a)];
             for distance in [140., 70., 38., 28., 20.] {
                 events.push(event("move", [viewport[0] - distance, y]));
             }
-            d.perform(serde_json::Value::Array(events));
+            d.input.perform(serde_json::Value::Array(events));
             assert!(
                 matches!(d.w.drop_hint.borrow().as_ref().map(|h| &h.target),
                 Some(DockTarget::CompactEdge { edge: Edge::Right, alignment: a }) if *a == alignment),
                 "{device}: near-edge preview at a usable contact distance"
             );
-            d.perform(serde_json::json!([event("up", [viewport[0] - 20., y])]));
+            d.input
+                .perform(serde_json::json!([event("up", [viewport[0] - 20., y])]));
             if device == "pen" {
-                d.perform(serde_json::json!([{"pen":"leave"}]));
+                d.input.perform(serde_json::json!([{"pen":"leave"}]));
             }
             let view = state(&d.w);
             let band = view
@@ -838,7 +821,7 @@ fn compact_edge_gestures(d: &mut Driver, devices: &[&str]) {
         if device == "mouse" {
             let before = state(&d.w).workspace;
             let grip = toolbar_grip(d, panel);
-            d.perform(serde_json::json!([
+            d.input.perform(serde_json::json!([
                 {"point":grip,"down":true},{"down":false},
                 {"down":true},{"down":false}
             ]));
@@ -887,7 +870,7 @@ fn native_toolbar_value_controls_input() {
     let number = d.named("toolbar-setting-size");
     let label = find_css(&number.parent().unwrap(), "option-label").unwrap();
     let p = d.point(&label);
-    d.perform(
+    d.input.perform(
         serde_json::json!([{"point":p,"down":true},{"down":false},{"down":true},{"down":false}]),
     );
     assert_eq!(
@@ -913,7 +896,8 @@ fn native_toolbar_value_controls_input() {
     let number = d.named("toolbar-setting-size");
     let p = d.point(&find_css(&number, "number-value").unwrap());
     drag(&mut d, "touch", p, [p[0], p[1] + 20.], false);
-    d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+    d.input
+        .perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
     let popup = descendant::<gtk::Popover>(&number).expect("vertical value opens slider popover");
     assert!(popup.is_visible());
     assert_eq!(
@@ -940,7 +924,8 @@ fn native_toolbar_value_controls_input() {
     );
     capture_popover(
         &popup,
-        d.dir
+        d.input
+            .dir
             .join("vertical-options-slider-popover.png")
             .to_str()
             .unwrap(),
@@ -988,7 +973,8 @@ fn native_toolbar_visible_edges_input() {
             EdgeAlignment::End,
         ] {
             let a = toolbar_grip(&d, panel);
-            d.perform(serde_json::json!([{"point":a,"down":true},{"point":[800.,500.]}]));
+            d.input
+                .perform(serde_json::json!([{"point":a,"down":true},{"point":[800.,500.]}]));
             let update =
                 d.w.gpu
                     .borrow()
@@ -1017,13 +1003,13 @@ fn native_toolbar_visible_edges_input() {
                     viewport[1] - (preview.height - grab[1]),
                 ],
             };
-            d.perform(serde_json::json!([{"point":p}]));
+            d.input.perform(serde_json::json!([{"point":p}]));
             assert!(
                 matches!(d.w.drop_hint.borrow().as_ref().map(|h| &h.target), Some(DockTarget::CompactEdge { edge: e, alignment: a }) if *e == edge && *a == alignment),
                 "visible toolbar touches {edge:?} {alignment:?}: {:?}",
                 d.w.drop_hint.borrow()
             );
-            d.perform(serde_json::json!([{"down":false}]));
+            d.input.perform(serde_json::json!([{"down":false}]));
             assert!(
                 state(&d.w)
                     .workspace
@@ -1080,12 +1066,12 @@ fn native_toolbar_visual_audit_input() {
                 assert!(caption.layout().pixel_size().0 <= caption.width());
                 capture_popover(
                     &d.named("brush-slider-preview").downcast().unwrap(),
-                    d.dir
+                    d.input.dir
                         .join(format!("audit-slider-preview-{theme:?}-{edge:?}-{style:?}.png"))
                         .to_str()
                         .unwrap(),
                 );
-                d.key(0xff1b);
+                d.input.key(0xff1b);
             }
         }
         restore(&d, WorkspacePreset::Photographer);
@@ -1195,7 +1181,8 @@ fn native_toolbar_visual_audit_input() {
         assert!(!descendant::<gtk::Image>(&button).unwrap().is_mapped());
         d.capture_canvas(&format!("audit-icon-slider-value-{theme:?}.png"));
         let p = d.point(&button);
-        d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+        d.input
+            .perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
         let entry = find_css(&number, "number-entry").unwrap();
         assert!(entry.is_mapped());
         assert!(
@@ -1211,7 +1198,8 @@ fn native_toolbar_visual_audit_input() {
         let bar = number.parent().unwrap().parent().unwrap();
         let b = bar.compute_bounds(&d.w.window).unwrap();
         let p = [b.x() + b.width() - 80., b.y() + b.height() / 2.];
-        d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+        d.input
+            .perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
         assert!(!entry.is_mapped(), "tap outside ends numeric edit");
         assert!(
             !gtk::prelude::GtkWindowExt::focus(&d.w.window)
@@ -1336,7 +1324,7 @@ fn native_toolbar_rows_input() {
         d.click(&find_css(&size, "number-value").unwrap());
         let popup = descendant::<gtk::Popover>(&size).unwrap();
         d.number(&popup.child().unwrap(), "51");
-        d.key(0xff1b);
+        d.input.key(0xff1b);
         assert_eq!(state(&d.w).brush.diameter, 51.);
         d.capture_canvas(&format!("toolbox-rows-{edge:?}.png"));
     }
@@ -1516,16 +1504,14 @@ fn slider_preview_placement(d: &mut Driver, devices: &[&str]) {
                 .named("brush-slider-preview")
                 .downcast::<gtk::Popover>()
                 .unwrap();
-            let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
-            let content = popup.child().unwrap().compute_bounds(&popup).unwrap();
-            let (dx, dy) = popup.surface_transform();
-            let x = surface.position_x() as f32 - dx as f32 + content.x();
-            let y = surface.position_y() as f32 - dy as f32 + content.y();
+            let content = popup.child().unwrap();
+            let [x, y] = screen_point(&content, &d.w.window, [0., 0.]);
+            let [right, bottom] = screen_point(&content, &d.w.window, [1., 1.]);
             let gap = match edge {
                 Edge::Left => x - toolbar.x() - toolbar.width(),
-                Edge::Right => toolbar.x() - x - content.width(),
+                Edge::Right => toolbar.x() - right,
                 Edge::Top => y - toolbar.y() - toolbar.height(),
-                Edge::Bottom => toolbar.y() - y - content.height(),
+                Edge::Bottom => toolbar.y() - bottom,
             };
             assert!(
                 (7. ..=16.).contains(&gap),
@@ -1533,7 +1519,8 @@ fn slider_preview_placement(d: &mut Driver, devices: &[&str]) {
             );
             capture_popover(
                 &popup,
-                d.dir
+                d.input
+                    .dir
                     .join(format!("slider-placement-{edge:?}-{device}.png"))
                     .to_str()
                     .unwrap(),
@@ -1605,7 +1592,8 @@ fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
         d.capture_canvas(&format!("slider-preview-{device}.png"));
         capture_popover(
             &popup.clone().downcast::<gtk::Popover>().unwrap(),
-            d.dir
+            d.input
+                .dir
                 .join(format!("slider-stamp-{device}.png"))
                 .to_str()
                 .unwrap(),
@@ -1614,7 +1602,8 @@ fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
         pump(50);
         capture_popover(
             &popup.clone().downcast::<gtk::Popover>().unwrap(),
-            d.dir
+            d.input
+                .dir
                 .join(format!("slider-stamp-large-{device}.png"))
                 .to_str()
                 .unwrap(),
@@ -1664,7 +1653,7 @@ fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
                 .bookmarks
                 .is_empty()
         );
-        d.key(0xff1b);
+        d.input.key(0xff1b);
         pump(100);
         assert!(!popup.is_mapped());
         drag(d, device, p, [p[0], p[1] - 20.], false);
@@ -1720,7 +1709,7 @@ fn native_tonal_toolbar_input() {
         assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Choice {id:"tonal-tones",items,..} if items[4].selected)));
         assert!(d.w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.is_some());
         let _=crate::snapshot(&d.w);pump(120);
-        crate::snapshot(&d.w).save_to_png(d.dir.join(format!("tonal-toolbar-{edge:?}.png"))).unwrap();
+        crate::snapshot(&d.w).save_to_png(d.input.dir.join(format!("tonal-toolbar-{edge:?}.png"))).unwrap();
         if edge==Edge::Left {d.click_name(&format!("tile-{options}"));pump(100);}
     }
     d.click_name(&format!("tile-{options}"));pump(150);
@@ -1733,7 +1722,7 @@ fn native_tonal_toolbar_input() {
     assert_eq!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_softness").unwrap().value,0.75);
     assert!(state(&d.w).tool_actions.iter().all(|a|a.group().is_some()));
     let _=crate::snapshot(&d.w);pump(120);
-    crate::snapshot(&d.w).save_to_png(d.dir.join("tonal-toolbar-overflow.png")).unwrap();
+    crate::snapshot(&d.w).save_to_png(d.input.dir.join("tonal-toolbar-overflow.png")).unwrap();
     assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
     // A floating-point document adds Bright HDR, with Custom still last.
     let mut project=new_drawing(2048,1536).unwrap();
@@ -1751,7 +1740,7 @@ fn native_tonal_toolbar_input() {
     d.click_name("tool-choice-tonal-tones-5");ready(&d);
     assert!(d.named("tool-choice-tonal-tones-5").downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
     let _=crate::snapshot(&d.w);pump(120);
-    crate::snapshot(&d.w).save_to_png(d.dir.join("tonal-hdr-presets.png")).unwrap();
+    crate::snapshot(&d.w).save_to_png(d.input.dir.join("tonal-hdr-presets.png")).unwrap();
     d.click_name("tool-choice-tonal-tones-6");ready(&d);
     assert!(d.named("tool-setting-tonal_lower").is_mapped());
     assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
@@ -1801,7 +1790,7 @@ fn tonal_toolbar_range_input(pen: bool) {
     d.number(&upper, "2.3"); ready(&d);
     assert_eq!(bounds(&d), [-7.2, 2.3], "new context keeps both endpoints live");
     let _ = crate::snapshot(&d.w); pump(120);
-    crate::snapshot(&d.w).save_to_png(d.dir.join("tonal-toolbar-custom.png")).unwrap();
+    crate::snapshot(&d.w).save_to_png(d.input.dir.join("tonal-toolbar-custom.png")).unwrap();
 
     // The complete range is available in the narrow bar's existing overflow.
     d.w.dispatch(UiAction::MovePanel { panel: Panel::Commands, target: DockTarget::Edge { edge: Edge::Left, outer: true }, viewport: [1600., 1000.] }); pump(180);

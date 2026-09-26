@@ -4,10 +4,8 @@ use super::*;
 #[test]
 #[ignore = "isolated native-input.js --native-test=native_layout_drop_input"]
 fn native_layout_drop_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
-    let output = std::path::PathBuf::from(
-        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| dir.to_string_lossy().into()),
-    );
+    let mut input = RemoteInput::new().timeout_secs(10);
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map_or(input.dir.clone(), Into::into);
     std::fs::create_dir_all(&output).unwrap();
     let app = native_test_app("art.capycanvas.LayoutDrops");
     let w = fixture_workspace(&app);
@@ -15,36 +13,13 @@ fn native_layout_drop_input() {
     w.window.present();
     pump(1600);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let mut step = 0;
-    let mut perform = |events: serde_json::Value| {
-        let file = dir.join(format!("step-{step}.json"));
-        let temporary = file.with_extension("tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(temporary, file).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native input timed out");
-            pump(5);
-        }
-        step += 1;
-        pump(100);
-    };
     let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    input.ready();
     pump(500);
     for (theme, edge) in [(Theme::Dark, Edge::Left), (Theme::Light, Edge::Right)] {
         for touch in [false, true] {
-            let event = |phase: &str, point: [f32; 2]| {
-                if touch {
-                    serde_json::json!({"touch":phase,"point":point})
-                } else {
-                    match phase {
-                        "down" => serde_json::json!({"point":point,"down":true}),
-                        "up" => serde_json::json!({"down":false}),
-                        _ => serde_json::json!({"point":point}),
-                    }
-                }
-            };
+            let device = if touch { "touch" } else { "mouse" };
+            let event = |phase: &str, point: [f32; 2]| contact(device, phase, point);
             for target in ["menubar", "stack-menubar", "body", "tabs-top", "tabs-lower"] {
                 for source in ["panel", "group", "toolbar", "column"] {
                     if source == "column" && (target == "body" || target.starts_with("tabs")) {
@@ -164,7 +139,7 @@ fn native_layout_drop_input() {
                             index: Some(usize::from(target == "tabs-lower")),
                         },
                     };
-                    perform(serde_json::json!([
+                    input.perform(serde_json::json!([
                         event("down", start),
                         event("move", [viewport[0] * 0.5, viewport[1] * 0.5]),
                         event("move", destination)
@@ -186,20 +161,20 @@ fn native_layout_drop_input() {
                         );
                     }
                     if source == "panel" {
-                        perform(
+                        input.perform(
                             serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
                         );
-                        perform(serde_json::json!([event("up", destination)]));
+                        input.perform(serde_json::json!([event("up", destination)]));
                         assert_eq!(
                             layer_ui::durable_layout(&state(&w).workspace.layout),
                             before
                         );
-                        perform(serde_json::json!([
+                        input.perform(serde_json::json!([
                             event("down", start),
                             event("move", destination)
                         ]));
                     }
-                    perform(serde_json::json!([event("up", destination)]));
+                    input.perform(serde_json::json!([event("up", destination)]));
                     assert!(w.workspace_drag.borrow().is_none() && w.drop_hint.borrow().is_none());
                 }
             }

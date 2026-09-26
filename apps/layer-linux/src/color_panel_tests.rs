@@ -83,10 +83,8 @@ fn assert_hue_guide_colors(w: &Workspace, texture: &gtk::gdk::Texture) {
 #[test]
 #[ignore = "isolated Mutter input driver: --color-panel"]
 fn native_color_panel_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
-    let output = std::path::PathBuf::from(
-        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| dir.to_string_lossy().into()),
-    );
+    let mut input = RemoteInput::new().timeout_secs(10);
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map_or(input.dir.clone(), Into::into);
     std::fs::create_dir_all(&output).unwrap();
     let app = native_test_app("art.capycanvas.ColorPanel");
     let w = fixture_workspace(&app);
@@ -295,23 +293,7 @@ fn native_color_panel_input() {
     );
     let locate = |name: &str, x: f32, y: f32| {
         let widget = find_named(root.upcast_ref(), name).unwrap();
-        if let Some(popup) = widget.native().and_downcast::<gtk::Popover>() {
-            assert!(popup.is_visible(), "{name} menu is open");
-            let b = widget.compute_bounds(&popup).unwrap();
-            let surface = popup
-                .surface()
-                .unwrap()
-                .downcast::<gtk::gdk::Popup>()
-                .unwrap();
-            let (dx, dy) = popup.surface_transform();
-            [
-                surface.position_x() as f32 - dx as f32 + b.x() + b.width() * x,
-                surface.position_y() as f32 - dy as f32 + b.y() + b.height() * y,
-            ]
-        } else {
-            let b = widget.compute_bounds(&w.window).unwrap();
-            [b.x() + b.width() * x, b.y() + b.height() * y]
-        }
+        screen_point(&widget, &w.window, [x, y])
     };
     let on_ring = |hue: f32| {
         let wheel = find_named(root.upcast_ref(), "color-wheel")
@@ -325,38 +307,15 @@ fn native_color_panel_input() {
             .hue_marker(hue);
         [b.x() + origin[0] + p[0], b.y() + origin[1] + p[1]]
     };
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    let mut perform = |events: serde_json::Value| {
-        std::fs::write(
-            dir.join(format!("step-{step}.json.tmp")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        std::fs::rename(
-            dir.join(format!("step-{step}.json.tmp")),
-            dir.join(format!("step-{step}.json")),
-        )
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native color input");
-            pump(2);
-        }
-        step += 1;
-        pump(100);
-    };
+    input.ready();
     for touch in [false, true] {
+        let device = if touch { "touch" } else { "mouse" };
         let mut gesture = |from: [f32; 2], to: [f32; 2]| {
-            perform(if touch {
-                serde_json::json!([
-                    {"touch":"down","point":from}, {"touch":"move","point":to}, {"touch":"up"}
-                ])
-            } else {
-                serde_json::json!([
-                    {"point":from,"down":true}, {"point":to}, {"down":false}
-                ])
-            });
+            input.perform(serde_json::json!([
+                contact(device, "down", from),
+                contact(device, "move", to),
+                contact(device, "up", to)
+            ]));
         };
         w.dispatch(UiAction::Color {
             action: layer_ui::ColorAction::Select {
@@ -502,7 +461,7 @@ fn native_color_panel_input() {
         drop(gesture);
         let p = locate("color-Foreground", 0.5, 0.5);
         if touch {
-            perform(serde_json::json!([{ "touch":"down", "point":p }]));
+            input.perform(serde_json::json!([{ "touch":"down", "point":p }]));
             pump(900);
             let menu = find_named(root.upcast_ref(), "color-swap-menu")
                 .unwrap()
@@ -513,9 +472,9 @@ fn native_color_panel_input() {
                 menu.is_visible(),
                 "touch hold opens swap menu before release"
             );
-            perform(serde_json::json!([{ "touch":"up" }]));
+            input.perform(serde_json::json!([{ "touch":"up" }]));
         } else {
-            perform(
+            input.perform(
                 serde_json::json!([{ "point":p, "button":273, "down":true }, { "button":273, "down":false }]),
             );
         }
@@ -531,15 +490,15 @@ fn native_color_panel_input() {
         );
         let p = locate("color-swap-menu", 0.5, 0.5);
         if touch {
-            perform(serde_json::json!([{ "touch":"down", "point":p }]));
+            input.perform(serde_json::json!([{ "touch":"down", "point":p }]));
             assert_eq!(
                 state(&w).colors,
                 before,
                 "Menu press must not pick through to the wheel"
             );
-            perform(serde_json::json!([{ "touch":"up" }]));
+            input.perform(serde_json::json!([{ "touch":"up" }]));
         } else {
-            perform(serde_json::json!([{ "point":p, "down":true }, { "down":false }]));
+            input.perform(serde_json::json!([{ "point":p, "down":true }, { "down":false }]));
         }
         assert_eq!(
             state(&w).colors.foreground,
@@ -550,20 +509,20 @@ fn native_color_panel_input() {
     }
     // A mouse hold remains an ordinary swatch click; it never opens a menu.
     let p = locate("color-Foreground", 0.5, 0.5);
-    perform(serde_json::json!([{ "point":p, "down":true }]));
+    input.perform(serde_json::json!([{ "point":p, "down":true }]));
     pump(900);
     let swap = find_named(root.upcast_ref(), "color-swap-menu").unwrap();
     let menu = swap.native().and_downcast::<gtk::Popover>().unwrap();
     assert!(!menu.is_visible());
-    perform(serde_json::json!([{ "down":false }]));
+    input.perform(serde_json::json!([{ "down":false }]));
     // Native keyboard activation uses the same focused, accessible buttons.
     let readout = find_named(root.upcast_ref(), "color-readout").unwrap();
     assert!(readout.grab_focus());
     let before = state(&w).colors.readout;
-    perform(serde_json::json!([{ "key":32, "down":true }, { "key":32, "down":false }]));
+    input.perform(serde_json::json!([{ "key":32, "down":true }, { "key":32, "down":false }]));
     assert_eq!(state(&w).colors.readout, before.next());
     let before = state(&w).colors.readout;
-    perform(serde_json::json!([{ "key":65293, "down":true }, { "key":65293, "down":false }]));
+    input.perform(serde_json::json!([{ "key":65293, "down":true }, { "key":65293, "down":false }]));
     assert_eq!(state(&w).colors.readout, before.next());
     capture_reference(&w, output.join("keyboard-focus.png").to_str().unwrap(), 2.);
     // Three-digit RGB readouts are the widest values at the minimum size.
@@ -580,7 +539,7 @@ fn native_color_panel_input() {
         serde_json::to_vec_pretty(&reports).unwrap(),
     )
     .unwrap();
-    std::fs::write(dir.join("finished"), "done").unwrap();
+    input.finish();
     w.window.destroy();
     pump(100);
 }

@@ -39,26 +39,27 @@ fn assert_shared_icons(widget: &gtk::Widget) {
 struct Driver {
     w: Rc<Workspace>,
     _app: NativeTestApp,
-    dir: std::path::PathBuf,
-    step: usize,
+    input: RemoteInput,
 }
 impl Driver {
     fn managed(name: &str) -> Self {
         assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
-        let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
         let app = native_test_app(name);
         let w = Workspace::new(&app);
         w.window.maximize();
         w.window.present();
         Self::wait_ready(&w);
         pump(500);
-        std::fs::write(dir.join("ready"), "ready").unwrap();
+        Self::start(w, app)
+    }
+    fn start(w: Rc<Workspace>, app: NativeTestApp) -> Self {
+        let input = RemoteInput::new().settle_ms(180).timeout_secs(8);
+        input.ready();
         pump(500);
         Self {
             w,
             _app: app,
-            dir,
-            step: 0,
+            input,
         }
     }
     fn wait_ready(w: &Workspace) {
@@ -78,7 +79,7 @@ impl Driver {
             canvas_white(&self.w, &snapshot) > 100_000,
             "paper remains visible"
         );
-        snapshot.save_to_png(self.dir.join(name)).unwrap();
+        snapshot.save_to_png(self.input.dir.join(name)).unwrap();
     }
     fn header_tool(&self, control: ToolbarControl) -> String {
         let id = state(&self.w)
@@ -103,14 +104,13 @@ impl Driver {
             .downcast::<gtk::Entry>()
             .unwrap();
         assert!(entry.is_mapped());
-        self.perform(serde_json::json!([{ "key": 0xffe3, "down": true }, { "key": 0x61, "down": true }, { "key": 0x61, "down": false }, { "key": 0xffe3, "down": false }]));
+        self.input.perform(serde_json::json!([{ "key": 0xffe3, "down": true }, { "key": 0x61, "down": true }, { "key": 0x61, "down": false }, { "key": 0xffe3, "down": false }]));
         for c in text.chars() {
-            self.key(c as u32);
+            self.input.key(c as u32);
         }
-        self.key(0xff0d);
+        self.input.key(0xff0d);
     }
     fn new(name: &str) -> Self {
-        let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
         let app = native_test_app(name);
         let w = fixture_workspace(&app);
         w.window.maximize();
@@ -123,49 +123,18 @@ impl Driver {
             }),
         });
         pump(500);
-        std::fs::write(dir.join("ready"), "ready").unwrap();
-        pump(500);
-        Self {
-            w,
-            _app: app,
-            dir,
-            step: 0,
-        }
-    }
-    fn perform(&mut self, events: serde_json::Value) {
-        let file = self.dir.join(format!("step-{}.json", self.step));
-        let temporary = file.with_extension("tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(temporary, file).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(8);
-        while !self.dir.join(format!("done-{}", self.step)).exists() {
-            assert!(Instant::now() < deadline, "input step {}", self.step);
-            pump(5);
-        }
-        self.step += 1;
-        pump(180);
+        Self::start(w, app)
     }
     fn point(&self, widget: &gtk::Widget) -> [f32; 2] {
         assert!(widget.is_mapped(), "{} is not mapped", widget.widget_name());
-        if let Some(popup) = widget.native().and_downcast::<gtk::Popover>() {
-            let b = widget.compute_bounds(&popup).unwrap();
-            let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
-            let (dx, dy) = popup.surface_transform();
-            return [
-                surface.position_x() as f32 - dx as f32 + b.x() + b.width() / 2.,
-                surface.position_y() as f32 - dy as f32 + b.y() + b.height() / 2.,
-            ];
-        }
-        let b = widget.compute_bounds(&self.w.window).unwrap();
-        assert!(b.width() > 0. && b.height() > 0.);
-        [b.x() + b.width() / 2., b.y() + b.height() / 2.]
+        screen_point(widget, &self.w.window, [0.5, 0.5])
     }
     fn named(&self, name: &str) -> gtk::Widget {
         find_named(self.w.window.upcast_ref(), name).unwrap_or_else(|| panic!("missing {name}"))
     }
     fn click(&mut self, widget: &gtk::Widget) {
         let p = self.point(widget);
-        self.perform(serde_json::json!([{ "point": p }, { "down": true }, { "down": false }]));
+        self.input.click(p);
     }
     fn click_name(&mut self, name: &str) {
         self.click(&self.named(name));
@@ -206,11 +175,6 @@ impl Driver {
         }
         self.click(&label);
     }
-    fn key(&mut self, key: u32) {
-        self.perform(
-            serde_json::json!([{ "key": key, "down": true }, { "key": key, "down": false }]),
-        );
-    }
     fn edit(&mut self) {
         // Exercise a discoverable entry, not a test-only action or shortcut.
         let item = state(&self.w)
@@ -222,14 +186,17 @@ impl Driver {
             .cloned();
         if let Some(item) = item {
             let p = self.point(&self.named(&format!("header-item-{}", item.id)));
-            self.perform(serde_json::json!([{"point":p},{"button":273,"down":true},{"button":273,"down":false}]));
+            self.input.perform(serde_json::json!([{"point":p},{"button":273,"down":true},{"button":273,"down":false}]));
         } else {
             self.click_name("header-recovery");
             self.click_label("Window");
         }
         self.click_label("Customize Title Bar…");
         if !state(&self.w).customization.header_editing {
-            crate::capture(&self.w, self.dir.join("failed-entry.png").to_str().unwrap());
+            crate::capture(
+                &self.w,
+                self.input.dir.join("failed-entry.png").to_str().unwrap(),
+            );
             eprintln!(
                 "Editor entry focus: {:?}",
                 gtk::prelude::GtkWindowExt::focus(&self.w.window)
@@ -244,22 +211,19 @@ impl Driver {
         self.drop_component_at(name, point, false);
     }
     fn drop_component_at(&mut self, name: &str, point: [f32; 2], touch: bool) {
+        let device = if touch { "touch" } else { "mouse" };
         let start = self.point(&self.named(&format!("header-add-{name}")));
-        self.perform(if touch {
-            serde_json::json!([{"touch":"down","point":start},{"touch":"move","point":point}])
-        } else {
-            serde_json::json!([{"point":start},{"down":true},{"point":point}])
-        });
+        self.input.perform(serde_json::json!([
+            contact(device, "down", start),
+            contact(device, "move", point)
+        ]));
         assert!(self.w.dragging.get(), "immediate whole-body pickup: {name}");
         assert!(
             self.w.header.drag_for_test().unwrap().action.is_some(),
             "valid drop: {name}"
         );
-        self.perform(if touch {
-            serde_json::json!([{"touch":"up"}])
-        } else {
-            serde_json::json!([{"down":false}])
-        });
+        self.input
+            .perform(serde_json::json!([contact(device, "up", point)]));
     }
     fn drop_component_before(&mut self, name: &str, before: u32, touch: bool) {
         let bounds = self
@@ -273,7 +237,7 @@ impl Driver {
         );
     }
     fn finish(self) {
-        std::fs::write(self.dir.join("finished"), "done").unwrap();
+        self.input.finish();
         self.w.window.close();
         pump(200);
     }
@@ -331,7 +295,7 @@ fn native_header_managed_input() {
         .unwrap()
         .id;
     d.named(&format!("header-item-{capy}")).grab_focus();
-    d.key(0xffff);
+    d.input.key(0xffff);
     assert!(state(&d.w).workspace.layout.header.entry(capy).is_err());
     assert!(
         gtk::prelude::GtkWindowExt::focus(&d.w.window)
@@ -670,7 +634,10 @@ fn native_default_workspace_recovery_input() {
     assert!(d.w.workspaces.manager.as_ref().unwrap().error().is_none());
     d.click_name(&d.header_tool(ToolbarControl::Color));
     assert!(state(&d.w).customization.drawer.is_some());
-    crate::capture(&d.w, d.dir.join("recovered-painter.png").to_str().unwrap());
+    crate::capture(
+        &d.w,
+        d.input.dir.join("recovered-painter.png").to_str().unwrap(),
+    );
     d.finish();
 }
 
@@ -705,38 +672,31 @@ fn native_header_drag_only_bank_input() {
         inert(&chip);
         let p = d.point(&chip);
         for touch in [false, true] {
-            d.perform(if touch {
-                serde_json::json!([{"touch":"down","point":p},{"touch":"move","point":[p[0]+1.,p[1]]},{"touch":"up"}])
-            } else {
-                serde_json::json!([{"point":p},{"down":true},{"point":[p[0]+1.,p[1]]},{"down":false}])
-            });
+            let device = if touch { "touch" } else { "mouse" };
+            let moved = [p[0] + 1., p[1]];
+            d.input.perform(serde_json::json!([
+                contact(device, "down", p),
+                contact(device, "move", moved),
+                contact(device, "up", moved)
+            ]));
             assert_eq!(state(&d.w).workspace.layout.header, original.layout.header);
             assert!(d.w.window.visible_dialog().is_none());
             assert!(!d.w.dragging.get() && d.w.workspace_drag.borrow().is_none());
         }
     }
     for touch in [false, true] {
+        let device = if touch { "touch" } else { "mouse" };
         let p = d.point(&d.named("header-component-tools"));
-        let mut events = if touch {
-            vec![serde_json::json!({"touch":"down","point":p})]
-        } else {
-            vec![
-                serde_json::json!({"point":p}),
-                serde_json::json!({"down":true}),
-            ]
-        };
+        let mut events = vec![contact(device, "down", p)];
         events.extend((0..12).map(|_| serde_json::json!({})));
-        events.push(if touch {
-            serde_json::json!({"touch":"up"})
-        } else {
-            serde_json::json!({"down":false})
-        });
-        d.perform(serde_json::Value::Array(events));
+        events.push(contact(device, "up", p));
+        d.input.perform(serde_json::Value::Array(events));
         assert!(d.w.window.visible_dialog().is_none());
         assert_eq!(state(&d.w).workspace.layout.header, original.layout.header);
     }
     // Every visible part belongs to the same source, not just its old grip.
     for touch in [false, true] {
+        let device = if touch { "touch" } else { "mouse" };
         for hit in 0..4 {
             let chip = d.named("header-component-clock");
             let b = chip.compute_bounds(&d.w.surface).unwrap();
@@ -754,11 +714,10 @@ fn native_header_drag_only_bank_input() {
                 DragTarget::Header(HeaderDragSource::Component(HeaderItem::Clock))
             ));
             let to = [d.w.surface.width() as f32 / 2., 25.];
-            d.perform(if touch {
-                serde_json::json!([{"touch":"down","point":p},{"touch":"move","point":to}])
-            } else {
-                serde_json::json!([{"point":p},{"down":true},{"point":to}])
-            });
+            d.input.perform(serde_json::json!([
+                contact(device, "down", p),
+                contact(device, "move", to)
+            ]));
             assert!(d.w.dragging.get(), "touch={touch}, hit={hit}");
             assert!(!d.w.workspace_drag.borrow().as_ref().unwrap().wait_for_hold);
             assert_eq!(
@@ -766,11 +725,8 @@ fn native_header_drag_only_bank_input() {
                 original.layout.header,
                 "motion stays a preview"
             );
-            d.perform(if touch {
-                serde_json::json!([{"touch":"up"}])
-            } else {
-                serde_json::json!([{"down":false}])
-            });
+            d.input
+                .perform(serde_json::json!([contact(device, "up", to)]));
             let model = state(&d.w).workspace.layout.header;
             let clock = model
                 .entries()
@@ -784,7 +740,10 @@ fn native_header_drag_only_bank_input() {
             d.edit();
         }
     }
-    crate::capture(&d.w, d.dir.join("drag-only-bank.png").to_str().unwrap());
+    crate::capture(
+        &d.w,
+        d.input.dir.join("drag-only-bank.png").to_str().unwrap(),
+    );
     d.click_name("header-edit-cancel");
     d.finish();
 }
@@ -810,6 +769,7 @@ fn native_header_catalog_preview_input() {
         (true, false, true),
         (true, true, false),
     ] {
+        let device = if touch { "touch" } else { "mouse" };
         d.edit();
         let name = if grip {
             "header-add-grip-clock"
@@ -818,31 +778,16 @@ fn native_header_catalog_preview_input() {
         };
         let source = d.point(&d.named(name));
         let destination = [d.w.surface.width() as f32 / 2., 30.];
-        let mut events = if touch {
-            vec![serde_json::json!({"touch":"down","point":source})]
-        } else {
-            vec![
-                serde_json::json!({"point":source}),
-                serde_json::json!({"down":true}),
-            ]
-        };
+        let mut events = vec![contact(device, "down", source)];
         if held {
             events.extend((0..12).map(|_| serde_json::json!({})));
         }
-        events.extend(if touch {
-            vec![
-                serde_json::json!({"touch":"move","point":[source[0],source[1]-20.]}),
-                serde_json::json!({"touch":"move","point":destination}),
-                serde_json::json!({"touch":"up"}),
-            ]
-        } else {
-            vec![
-                serde_json::json!({"point":[source[0],source[1]-20.]}),
-                serde_json::json!({"point":destination}),
-                serde_json::json!({"down":false}),
-            ]
-        });
-        d.perform(serde_json::Value::Array(events));
+        events.extend([
+            contact(device, "move", [source[0], source[1] - 20.]),
+            contact(device, "move", destination),
+            contact(device, "up", destination),
+        ]);
+        d.input.perform(serde_json::Value::Array(events));
         let layout = state(&d.w).workspace.layout.header;
         assert_eq!(
             layout.entries().count(),
@@ -875,11 +820,12 @@ fn native_header_catalog_preview_input() {
     for cancellation in 0..4 {
         let source = d.point(&d.named("header-add-grip-clock"));
         let destination = [d.w.surface.width() as f32 / 2., 30.];
-        d.perform(serde_json::json!([{"point":source},{"down":true},{"point":destination}]));
+        d.input
+            .perform(serde_json::json!([{"point":source},{"down":true},{"point":destination}]));
         assert!(d.w.dragging.get());
         match cancellation {
-            0 => d.perform(serde_json::json!([{"point":[900.,700.]}])),
-            1 => d.key(0xff1b),
+            0 => d.input.perform(serde_json::json!([{"point":[900.,700.]}])),
+            1 => d.input.key(0xff1b),
             2 => {
                 d.w.interact(UiInput::Blur);
             }
@@ -899,7 +845,7 @@ fn native_header_catalog_preview_input() {
                 pump(250);
             }
         }
-        d.perform(serde_json::json!([{"down":false}]));
+        d.input.perform(serde_json::json!([{"down":false}]));
         assert!(!d.w.dragging.get() && d.w.workspace_drag.borrow().is_none());
         assert_eq!(state(&d.w).workspace.layout.header, original);
         assert!(state(&d.w).customization.header_editing);
@@ -978,7 +924,7 @@ fn native_header_picker_journey() {
         let item = d.named(&format!("header-item-{before}"));
         let b = item.compute_bounds(&d.w.window).unwrap();
         let point = [b.x() + 25., b.y() + b.height() / 2.]; // Body, before its midpoint; not its grip.
-        d.perform(if touch {
+        d.input.perform(if touch {
             serde_json::json!([{"touch":"down","point":point},{"touch":"up"}])
         } else {
             serde_json::json!([{"point":point},{"down":true},{"down":false}])
@@ -1011,7 +957,8 @@ fn native_header_picker_journey() {
         );
         crate::capture(
             &d.w,
-            d.dir
+            d.input
+                .dir
                 .join(format!("picker-empty-{touch}.png"))
                 .to_str()
                 .unwrap(),
@@ -1019,7 +966,7 @@ fn native_header_picker_journey() {
         if touch {
             d.click_name("cancel-tools");
         } else {
-            d.key(0xff1b);
+            d.input.key(0xff1b);
         }
         assert!(
             state(&d.w).customization.header_editing,
@@ -1042,7 +989,8 @@ fn native_header_picker_journey() {
         choose(&mut d, &color);
         crate::capture(
             &d.w,
-            d.dir
+            d.input
+                .dir
                 .join(format!("picker-selected-{touch}.png"))
                 .to_str()
                 .unwrap(),
@@ -1084,19 +1032,20 @@ fn native_header_picker_journey() {
         );
         assert!(!d.named("header-add-clock").is_mapped());
         d.click_name(&format!("header-item-{clock}"));
-        d.key(0xff08); // Backspace removes the clicked item.
+        d.input.key(0xff08); // Backspace removes the clicked item.
         assert!(d.named("header-add-clock").is_mapped());
         // Focus/Enter does not choose an insertion slot; the actual drop does.
         let target = d.named(&format!("header-item-{before}"));
         target.grab_focus();
-        d.key(0xff0d);
+        d.input.key(0xff0d);
         d.drop_component_before("space", before, touch);
         let current = state(&d.w).workspace.layout.header;
         let (_, index) = current.location(before).unwrap();
         assert_eq!(current.zones[2][index - 1].item, HeaderItem::Space);
         crate::capture(
             &d.w,
-            d.dir
+            d.input
+                .dir
                 .join(format!("editor-insertion-{touch}.png"))
                 .to_str()
                 .unwrap(),
@@ -1184,7 +1133,8 @@ fn native_header_spacing_visual() {
             assert!(switcher.height() <= 36., "selector stretched vertically");
             crate::capture(
                 &d.w,
-                d.dir
+                d.input
+                    .dir
                     .join(format!("bar-{theme:?}-{size:?}.png"))
                     .to_str()
                     .unwrap(),
@@ -1197,7 +1147,8 @@ fn native_header_spacing_visual() {
             assert!(!button.has_css_class("selected-tool"));
             crate::capture(
                 &d.w,
-                d.dir
+                d.input
+                    .dir
                     .join(format!("drawer-{theme:?}-{size:?}.png"))
                     .to_str()
                     .unwrap(),
@@ -1232,7 +1183,8 @@ fn native_header_spacing_visual() {
             );
             crate::capture(
                 &d.w,
-                d.dir
+                d.input
+                    .dir
                     .join(format!("editor-{theme:?}-{size:?}.png"))
                     .to_str()
                     .unwrap(),
@@ -1270,10 +1222,11 @@ fn native_header_spacing_visual() {
                     >= 8.
         );
         let p = d.point(&label);
-        d.perform(serde_json::json!([{"point":p}]));
+        d.input.perform(serde_json::json!([{"point":p}]));
         crate::capture(
             &d.w,
-            d.dir
+            d.input
+                .dir
                 .join(format!("menu-hover-{size:?}.png"))
                 .to_str()
                 .unwrap(),
@@ -1286,7 +1239,7 @@ fn native_header_spacing_visual() {
 #[ignore = "isolated native-input.js --native-test=native_drawer_dismissal_input"]
 fn native_drawer_dismissal_input() {
     fn contact(d: &mut Driver, point: [f32; 2], touch: bool) {
-        d.perform(if touch {
+        d.input.perform(if touch {
             serde_json::json!([{"touch":"down","point":point},{"touch":"up"}])
         } else {
             serde_json::json!([{"point":point},{"down":true},{"down":false}])
@@ -1343,7 +1296,7 @@ fn native_drawer_dismissal_input() {
                             .any(|p| p.is_visible()),
                         "The same click must open the menu, not just dismiss the drawer"
                     );
-                    d.key(0xff1b);
+                    d.input.key(0xff1b);
                 }
                 assert!(
                     !state(&d.w)
@@ -1458,35 +1411,35 @@ fn native_header_cancel_caption_input() {
     let mut d = Driver::new("art.capycanvas.HeaderCancellation");
     let original = state(&d.w).workspace.layout.header;
     // Native caption double-click remains owned by the window manager.
-    d.perform(serde_json::json!([{ "point": [400., 20.] }, { "down": true }, { "down": false }, { "down": true }, { "down": false }]));
+    d.input.perform(serde_json::json!([{ "point": [400., 20.] }, { "down": true }, { "down": false }, { "down": true }, { "down": false }]));
     assert!(!d.w.window.is_maximized());
     d.w.window.maximize();
     pump(400);
     d.edit();
     let id = original.zones[0][0].id;
-    d.key(0xff09);
+    d.input.key(0xff09);
     assert!(
         state(&d.w).customization.header_editing && !state(&d.w).workspace.zen_mode,
         "Tab navigates the editor instead of hiding it"
     );
     for blur in [false, true] {
         let start = d.point(&d.named(&format!("header-grip-{id}")));
-        d.perform(
+        d.input.perform(
             serde_json::json!([{ "point": start }, { "down": true }, { "point": [800.,start[1]] }]),
         );
         assert!(d.w.dragging.get());
         if blur {
             d.w.interact(UiInput::Blur);
         } else {
-            d.key(0xff1b);
+            d.input.key(0xff1b);
         }
-        d.perform(serde_json::json!([{ "down": false }]));
+        d.input.perform(serde_json::json!([{ "down": false }]));
         assert!(!d.w.dragging.get() && d.w.workspace_drag.borrow().is_none());
         assert_eq!(state(&d.w).workspace.layout.header, original);
         assert!(state(&d.w).customization.header_editing);
     }
     let start = d.point(&d.named(&format!("header-grip-{id}")));
-    d.perform(
+    d.input.perform(
         serde_json::json!([{ "point": start }, { "down": true }, { "point": [800.,start[1]] }]),
     );
     d.w.dispatch(HeaderAction::Remove { id }.action());
@@ -1495,7 +1448,7 @@ fn native_header_cancel_caption_input() {
         !d.w.dragging.get() && d.w.workspace_drag.borrow().is_none(),
         "source replacement retires the contact"
     );
-    d.perform(serde_json::json!([{ "down": false }]));
+    d.input.perform(serde_json::json!([{ "down": false }]));
     d.w.dispatch(HeaderAction::Cancel.action());
     d.w.dispatch(HeaderAction::Edit { editing: true }.action());
     pump(120);
@@ -1552,9 +1505,10 @@ fn native_header_cancel_caption_input() {
         .unwrap()
         .id;
     d.click_name(&format!("header-item-{capy}"));
-    d.perform(serde_json::json!([{ "point": [600.,400.] }]));
+    d.input
+        .perform(serde_json::json!([{ "point": [600.,400.] }]));
     assert!(state(&d.w).workspace.zen_mode && !d.w.header.root.can_target());
-    d.perform(serde_json::json!([{ "point": [6.,6.] }]));
+    d.input.perform(serde_json::json!([{ "point": [6.,6.] }]));
     assert!(
         !d.w.header.root.can_target(),
         "edge reveal is off by default"
@@ -1593,7 +1547,7 @@ fn native_brush_drawer_input() {
         assert!(button.height() >= 44, "touchable brush set row");
         let p = d.point(&button);
         if touch {
-            d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+            d.input.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
         } else { d.click(&button); }
         assert!(state(&d.w).customization.drawer.is_some());
         assert_eq!(state(&d.w).brush.tool, group.tool());
@@ -1609,7 +1563,7 @@ fn native_brush_drawer_input() {
     d.number(&find_named(&drawer, "tool-setting-size").unwrap(), "37");
     let remembered = state(&d.w).brush.preset;
     let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS")
-        .unwrap_or_else(|_| d.dir.to_string_lossy().into()));
+        .unwrap_or_else(|_| d.input.dir.to_string_lossy().into()));
     std::fs::create_dir_all(&output).unwrap();
     for theme in [Theme::Dark, Theme::Light] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
@@ -1625,7 +1579,8 @@ fn native_brush_drawer_input() {
     assert_eq!(state(&d.w).tool_panels.sculpt_sets.groups.len(), 2);
     let liquify = find_named(&sculpt_sets, "sculpt-set-liquify").unwrap();
     let p = d.point(&liquify);
-    d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+    d.input
+        .perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
     assert_eq!(state(&d.w).brush.tool, layer_ui::Tool::Liquify);
     d.header_icon(CommandId::Sculpt, "liquify");
     assert_eq!(d.header_icon(CommandId::DrawingBrush, "paint"), brush_icon);
@@ -1698,7 +1653,7 @@ fn native_filter_drawer_input() {
     crate::snapshot(&d.w).save_to_png(output.join("paper-properties.png")).unwrap();
     // Native hover exercises the GPU's prohibited cursor path.
     d.click_name(&opener);
-    d.perform(serde_json::json!([{"point":[600.,400.]}]));
+    d.input.perform(serde_json::json!([{"point":[600.,400.]}]));
     assert_eq!(d.w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().unwrap().segments[0].marker, 6.);
     d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::New { group: false, clipped: false } });
     let removable = state(&d.w).layer_properties.layer.unwrap();
@@ -1708,28 +1663,28 @@ fn native_filter_drawer_input() {
     let swipe = row.parent().unwrap().downcast::<crate::swipe_row::SwipeRow>().unwrap();
     let before = row.compute_bounds(&d.w.window).unwrap().x();
     let p = d.point(&row);
-    d.perform(serde_json::json!([{"touch":"down","point":p},
+    d.input.perform(serde_json::json!([{"touch":"down","point":p},
         {"touch":"move","point":[p[0]-18.,p[1]]}, {"touch":"move","point":[p[0]-48.,p[1]]}]));
     assert!(swipe.is_open());
     let moved = before - row.compute_bounds(&d.w.window).unwrap().x();
     assert!((moved - 48.).abs() < 2., "row follows the finger: {moved}");
-    d.perform(serde_json::json!([{"touch":"up"}]));
+    d.input.perform(serde_json::json!([{"touch":"up"}]));
     let _warm = crate::snapshot(&d.w); pump(120);
     crate::snapshot(&d.w).save_to_png(output.join("layer-delete.png")).unwrap();
     let p = d.point(&row);
-    d.perform(serde_json::json!([{"touch":"down","point":p},
+    d.input.perform(serde_json::json!([{"touch":"down","point":p},
         {"touch":"move","point":[p[0]+18.,p[1]]}, {"touch":"move","point":[p[0]+65.,p[1]]}, {"touch":"up"}]));
     assert!(!swipe.is_open(), "reverse swipe closes Delete");
     for delete in [false, true] {
         let row = d.named(&format!("art-layer-{removable}"));
         let swipe = row.parent().unwrap().downcast::<crate::swipe_row::SwipeRow>().unwrap();
         let p = d.point(&row);
-        d.perform(serde_json::json!([{"touch":"down","point":p},
+        d.input.perform(serde_json::json!([{"touch":"down","point":p},
             {"touch":"move","point":[p[0]-18.,p[1]]}, {"touch":"move","point":[p[0]-65.,p[1]]}, {"touch":"up"}]));
         assert!(swipe.is_open());
         if delete { d.click(swipe.delete_button().upcast_ref()); }
         else {
-            d.perform(serde_json::json!([{"point":[600.,400.]},{"down":true},{"down":false}]));
+            d.input.click([600., 400.]);
             assert!(!swipe.is_open(), "outside click closes Delete");
             if state(&d.w).customization.drawer.is_none() { d.click_name(&layers); }
         }
@@ -1820,12 +1775,12 @@ fn native_panel_pen_input() {
             input.push(if device == "mouse" { serde_json::json!({"point":q}) } else { serde_json::json!({device:"move","point":q}) });
         }
         input.push(if device == "mouse" { serde_json::json!({"down":false}) } else { serde_json::json!({device:"up"}) });
-        d.perform(input.into());
+        d.input.perform(input.into());
         if device == "mouse" { assert_eq!(scroll.vadjustment().value(), 0., "mouse choices do not pan"); }
         else { assert!(scroll.vadjustment().value() > 40_f64.min(overflow * 0.8), "{device} scrolls choices: {}", scroll.vadjustment().value()); }
     }
     assert!(input_tools.get() > 0, "Wayland tablet-v2 produced real GDK tablet events");
-    d.perform(serde_json::json!([{"pen":"leave"}]));
+    d.input.perform(serde_json::json!([{"pen":"leave"}]));
     d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::New { group: false, clipped: false } });
     let id = state(&d.w).layer_properties.layer.unwrap();
     let layers = d.header_tool(ToolbarControl::Panel { panel: Panel::Layers });
@@ -1833,11 +1788,11 @@ fn native_panel_pen_input() {
     let row = d.named(&format!("art-layer-{id}"));
     let swipe = row.parent().unwrap().downcast::<crate::swipe_row::SwipeRow>().unwrap();
     let p = d.point(&row);
-    d.perform(serde_json::json!([{"pen":"down","point":p}, {"pen":"move","point":[p[0]-20.,p[1]]},
+    d.input.perform(serde_json::json!([{"pen":"down","point":p}, {"pen":"move","point":[p[0]-20.,p[1]]},
         {"pen":"move","point":[p[0]-64.,p[1]]},{"pen":"up"}]));
     assert!(swipe.is_open(), "pen swipes expose Delete");
     let p = d.point(swipe.delete_button().upcast_ref());
-    d.perform(serde_json::json!([{"pen":"down","point":p},{"pen":"up"},{"pen":"leave"}]));
+    d.input.perform(serde_json::json!([{"pen":"down","point":p},{"pen":"up"},{"pen":"leave"}]));
     assert!(!state(&d.w).layers.iter().any(|l| l.id == id));
     d.finish();
 }
@@ -1888,7 +1843,7 @@ fn native_header_drawer_controls_input() {
             .any(|p| p.is_mapped() && p.parent().as_ref() == Some(layers.root.upcast_ref())),
         "Layers context menu uses its header drawer projection"
     );
-    d.key(0xff1b);
+    d.input.key(0xff1b);
     // Every content-panel family also works from an individual header item.
     let controls = Panel::ALL
         .into_iter()
@@ -1949,22 +1904,12 @@ fn native_header_hold_context_input() {
     let id = original.layout.header.zones[0][1].id;
     d.edit();
     for touch in [false, true] {
+        let device = if touch { "touch" } else { "mouse" };
         let point = d.point(&d.named(&format!("header-item-{id}")));
-        let mut events = if touch {
-            vec![serde_json::json!({"touch":"down", "point":point})]
-        } else {
-            vec![
-                serde_json::json!({"point":point}),
-                serde_json::json!({"down":true}),
-            ]
-        };
+        let mut events = vec![contact(device, "down", point)];
         events.extend((0..12).map(|_| serde_json::json!({})));
-        events.push(if touch {
-            serde_json::json!({"touch":"up"})
-        } else {
-            serde_json::json!({"down":false})
-        });
-        d.perform(serde_json::Value::Array(events));
+        events.push(contact(device, "up", point));
+        d.input.perform(serde_json::Value::Array(events));
         assert_eq!(
             d.w.popovers
                 .borrow()
@@ -1976,10 +1921,11 @@ fn native_header_hold_context_input() {
         );
         assert_eq!(state(&d.w).workspace.layout.header, original.layout.header);
         if touch {
-            d.key(0xff1b);
+            d.input.key(0xff1b);
         }
     }
     for touch in [false, true] {
+        let device = if touch { "touch" } else { "mouse" };
         for grip in [false, true] {
             for held in [false, true] {
                 if grip && held {
@@ -1996,31 +1942,16 @@ fn native_header_hold_context_input() {
                     if grip { "grip" } else { "item" }
                 )));
                 let to = [d.w.surface.width() as f32 / 2., from[1]];
-                let mut events = if touch {
-                    vec![serde_json::json!({"touch":"down", "point":from})]
-                } else {
-                    vec![
-                        serde_json::json!({"point":from}),
-                        serde_json::json!({"down":true}),
-                    ]
-                };
+                let mut events = vec![contact(device, "down", from)];
                 if held {
                     events.extend((0..12).map(|_| serde_json::json!({})));
                 }
-                if touch {
-                    events.extend([
-                        serde_json::json!({"touch":"move", "point":[from[0]+20.,from[1]]}),
-                        serde_json::json!({"touch":"move", "point":to}),
-                        serde_json::json!({"touch":"up"}),
-                    ]);
-                } else {
-                    events.extend([
-                        serde_json::json!({"point":[from[0]+20.,from[1]]}),
-                        serde_json::json!({"point":to}),
-                        serde_json::json!({"down":false}),
-                    ]);
-                }
-                d.perform(serde_json::Value::Array(events));
+                events.extend([
+                    contact(device, "move", [from[0] + 20., from[1]]),
+                    contact(device, "move", to),
+                    contact(device, "up", to),
+                ]);
+                d.input.perform(serde_json::Value::Array(events));
                 assert_eq!(
                     state(&d.w).workspace.layout.header.location(id).unwrap().0,
                     HeaderZone::Center,
@@ -2043,10 +1974,10 @@ fn native_header_hold_context_input() {
     d.w.dispatch(HeaderAction::Edit { editing: false }.action());
     pump(160);
     let p = d.point(&d.named(&format!("header-item-{id}")));
-    d.perform(serde_json::json!([{ "point": p }, { "button": 273, "down": true }, { "button": 273, "down": false }]));
+    d.input.perform(serde_json::json!([{ "point": p }, { "button": 273, "down": true }, { "button": 273, "down": false }]));
     d.click_label("Customize Title Bar…");
     let p = d.point(&d.named(&format!("header-item-{id}")));
-    d.perform(serde_json::json!([{ "point": p }, { "button": 273, "down": true }, { "button": 273, "down": false }]));
+    d.input.perform(serde_json::json!([{ "point": p }, { "button": 273, "down": true }, { "button": 273, "down": false }]));
     d.click_label("Move to Center");
     assert_eq!(
         state(&d.w).workspace.layout.header.location(id).unwrap().0,
@@ -2054,7 +1985,7 @@ fn native_header_hold_context_input() {
     );
     let item = d.named(&format!("header-item-{id}"));
     item.grab_focus();
-    d.perform(serde_json::json!([{ "key": 0xffe1, "down": true }, { "key": 0xffc7, "down": true }, { "key": 0xffc7, "down": false }, { "key": 0xffe1, "down": false }]));
+    d.input.perform(serde_json::json!([{ "key": 0xffe1, "down": true }, { "key": 0xffc7, "down": true }, { "key": 0xffc7, "down": false }, { "key": 0xffe1, "down": false }]));
     d.click_label("Remove from Title Bar");
     assert!(state(&d.w).workspace.layout.header.entry(id).is_err());
     d.w.dispatch(HeaderAction::Cancel.action());
@@ -2148,7 +2079,10 @@ fn native_header_editor_controls_input() {
     d.click_label("Window");
     d.click_label("Customize Title Bar…");
     assert!(state(&d.w).customization.header_editing);
-    crate::capture(&d.w, d.dir.join("empty-bar-palette.png").to_str().unwrap());
+    crate::capture(
+        &d.w,
+        d.input.dir.join("empty-bar-palette.png").to_str().unwrap(),
+    );
     for (i, item) in HeaderItem::COMPONENTS
         .into_iter()
         .filter(|item| item.available_on(Platform::Gtk))
@@ -2167,7 +2101,11 @@ fn native_header_editor_controls_input() {
     }
     crate::capture(
         &d.w,
-        d.dir.join("all-components-added.png").to_str().unwrap(),
+        d.input
+            .dir
+            .join("all-components-added.png")
+            .to_str()
+            .unwrap(),
     );
     d.click_name("header-edit-done");
     d.finish();
@@ -2197,7 +2135,7 @@ fn native_header_editor_keyboard_input() {
         };
         let mut next = previous.clone();
         next.move_item(id, zone, before).unwrap();
-        d.key(if forward { 0xff53 } else { 0xff51 });
+        d.input.key(if forward { 0xff53 } else { 0xff51 });
         assert_eq!(state(&d.w).workspace.layout.header, next);
         assert_eq!(
             gtk::prelude::GtkWindowExt::focus(&d.w.window)
@@ -2208,13 +2146,13 @@ fn native_header_editor_keyboard_input() {
     }
     assert_eq!(state(&d.w).workspace.layout.header, original.header);
     // Existing native keyboard context action and focus return survive rebuild.
-    d.key(0xff67);
+    d.input.key(0xff67);
     d.click_label("Move to Center");
     assert_eq!(
         state(&d.w).workspace.layout.header.location(id).unwrap().0,
         HeaderZone::Center
     );
-    d.key(0xff08);
+    d.input.key(0xff08);
     assert!(state(&d.w).workspace.layout.header.entry(id).is_err());
     let next = gtk::prelude::GtkWindowExt::focus(&d.w.window)
         .unwrap()
@@ -2223,18 +2161,18 @@ fn native_header_editor_keyboard_input() {
         .unwrap()
         .parse::<u32>()
         .unwrap();
-    d.key(0xffff);
+    d.input.key(0xffff);
     assert!(state(&d.w).workspace.layout.header.entry(next).is_err());
     assert!(d.named("header-add-main-menu").is_mapped());
     // Native Tab traverses controls and never fires canvas shortcuts.
     let mut sized = false;
     for _ in 0..36 {
-        d.key(0xff09);
+        d.input.key(0xff09);
         let focus = gtk::prelude::GtkWindowExt::focus(&d.w.window).unwrap();
         assert!(focus == d.w.header.root || focus.is_ancestor(&d.w.header.root));
         assert!(!state(&d.w).workspace.zen_mode);
         if focus.widget_name() == "header-size-2" {
-            d.key(0x20);
+            d.input.key(0x20);
             assert_eq!(state(&d.w).workspace.layout.header.size, HeaderSize::Large);
             sized = true;
         }
@@ -2254,7 +2192,7 @@ fn native_header_editor_keyboard_input() {
             root.pick(*x as f64, 20., gtk::PickFlags::DEFAULT).as_ref() == Some(root.upcast_ref())
         })
         .unwrap();
-    d.perform(serde_json::json!([{"point":[x,20]},{"button":273,"down":true},{"button":273,"down":false}]));
+    d.input.perform(serde_json::json!([{"point":[x,20]},{"button":273,"down":true},{"button":273,"down":false}]));
     d.click_label("Cancel Changes");
     assert!(!state(&d.w).customization.header_editing);
     d.finish();
@@ -2308,14 +2246,17 @@ fn native_header_editor_short_window_input() {
         {
             break;
         }
-        d.key(0xff09);
+        d.input.key(0xff09);
     }
     let focus = gtk::prelude::GtkWindowExt::focus(&d.w.window).unwrap();
     assert_eq!(focus.widget_name(), "header-edit-done");
     let done = focus.compute_bounds(&d.w.surface).unwrap();
     assert!(done.y() >= bounds.y() && done.y() + done.height() <= bounds.y() + bounds.height());
-    crate::capture(&d.w, d.dir.join("short-editor-done.png").to_str().unwrap());
-    d.key(0xff0d);
+    crate::capture(
+        &d.w,
+        d.input.dir.join("short-editor-done.png").to_str().unwrap(),
+    );
+    d.input.key(0xff0d);
     assert!(!state(&d.w).customization.header_editing);
     d.edit();
     d.click_name("header-edit-cancel");
@@ -2423,7 +2364,8 @@ fn native_header_compact_switcher_input() {
             }
             crate::capture(
                 &d.w,
-                d.dir
+                d.input
+                    .dir
                     .join(format!("compact-{theme:?}-{size:?}.png"))
                     .to_str()
                     .unwrap(),
@@ -2433,7 +2375,8 @@ fn native_header_compact_switcher_input() {
                     .downcast_ref::<gtk::PopoverMenu>()
                     .unwrap()
                     .upcast_ref(),
-                d.dir
+                d.input
+                    .dir
                     .join(format!("choices-{theme:?}-{size:?}.png"))
                     .to_str()
                     .unwrap(),
@@ -2455,7 +2398,7 @@ fn native_header_compact_switcher_input() {
                 0 => d.click(&label),
                 1 => {
                     let point = d.point(&label);
-                    d.perform(serde_json::json!([
+                    d.input.perform(serde_json::json!([
                         { "touch": "down", "point": point }, { "touch": "up" }
                     ]));
                 }
@@ -2465,7 +2408,7 @@ fn native_header_compact_switcher_input() {
                         row = row.parent().unwrap();
                     }
                     assert!(row.grab_focus());
-                    d.key(0xff0d);
+                    d.input.key(0xff0d);
                 }
             }
             Driver::wait_ready(&d.w);
@@ -2544,7 +2487,10 @@ fn native_header_overflow_input() {
                     )
                     .is_none()
                     {
-                        crate::capture(&d.w, d.dir.join("missing-overflow.png").to_str().unwrap());
+                        crate::capture(
+                            &d.w,
+                            d.input.dir.join("missing-overflow.png").to_str().unwrap(),
+                        );
                         eprintln!(
                             "Missing overflow {:?} at {:?}; dialog {:?} fullscreen {}",
                             entry.item,
@@ -2555,7 +2501,10 @@ fn native_header_overflow_input() {
                     }
                     let row = d.named(&format!("header-overflow-item-{}", entry.id));
                     if !row.is_mapped() {
-                        crate::capture(&d.w, d.dir.join("overflow-failure.png").to_str().unwrap());
+                        crate::capture(
+                            &d.w,
+                            d.input.dir.join("overflow-failure.png").to_str().unwrap(),
+                        );
                     }
                     assert!(
                         row.is_mapped(),
@@ -2598,12 +2547,12 @@ fn native_header_overflow_input() {
                                 .unwrap();
                         d.click(&find_css(&content, "close").unwrap());
                     } else {
-                        d.key(0xff1b);
+                        d.input.key(0xff1b);
                     }
                     pump(400);
                     if entry.item == HeaderItem::Fullscreen && d.w.window.is_fullscreen() {
                         // Keep each overflow case in the same window geometry.
-                        d.key(0xffc8); // F11, native Full Screen shortcut.
+                        d.input.key(0xffc8); // F11, native Full Screen shortcut.
                         pump(400);
                     }
                 }
@@ -2614,7 +2563,8 @@ fn native_header_overflow_input() {
         assert!(d.named("header-edit-done").is_mapped());
         crate::capture(
             &d.w,
-            d.dir
+            d.input
+                .dir
                 .join(format!("narrow-editor-{size:?}.png"))
                 .to_str()
                 .unwrap(),
@@ -2630,12 +2580,13 @@ fn native_header_overflow_input() {
             assert!(d.w.window.visible_dialog().is_some());
             crate::capture(
                 &d.w,
-                d.dir
+                d.input
+                    .dir
                     .join(format!("narrow-picker-{size:?}.png"))
                     .to_str()
                     .unwrap(),
             );
-            d.key(0xff1b);
+            d.input.key(0xff1b);
             assert!(state(&d.w).customization.header_editing);
             assert!(state(&d.w).customization.picker.is_none());
             assert!(d.w.window.visible_dialog().is_none());
@@ -2648,7 +2599,7 @@ fn native_header_overflow_input() {
         baseline.zones,
         "overflow never changes the stored item arrangement"
     );
-    crate::capture(&d.w, d.dir.join("narrow.png").to_str().unwrap());
+    crate::capture(&d.w, d.input.dir.join("narrow.png").to_str().unwrap());
     d.finish();
 }
 
@@ -2678,7 +2629,7 @@ fn native_header_canvas_visual() {
             "white artwork must remain visible beneath the window bar"
         );
         snapshot
-            .save_to_png(d.dir.join(format!("canvas-behind-{theme:?}.png")))
+            .save_to_png(d.input.dir.join(format!("canvas-behind-{theme:?}.png")))
             .unwrap();
     }
     d.finish();
@@ -2690,6 +2641,7 @@ fn native_header_slide_remove_input() {
     let mut d = Driver::new("art.capycanvas.HeaderSlideRemove");
     let original = state(&d.w).workspace.layout.header;
     for touch in [false, true] {
+        let device = if touch { "touch" } else { "mouse" };
         for tool in [false, true] {
             d.edit();
             let id = original.zones[0][if tool { 2 } else { 1 }].id;
@@ -2700,17 +2652,11 @@ fn native_header_slide_remove_input() {
             let offset = [start[0] - rect.x(), start[1] - rect.y()];
             let initial = d.w.header.geometry_for_test();
             let move_to = |d: &mut Driver, point: [f32; 2]| {
-                d.perform(if touch {
-                    serde_json::json!([{"touch":"move","point":point}])
-                } else {
-                    serde_json::json!([{"point":point}])
-                })
+                d.input
+                    .perform(serde_json::json!([contact(device, "move", point)]))
             };
-            d.perform(if touch {
-                serde_json::json!([{"touch":"down","point":start}])
-            } else {
-                serde_json::json!([{"point":start},{"down":true}])
-            });
+            d.input
+                .perform(serde_json::json!([contact(device, "down", start)]));
             move_to(&mut d, [start[0] + 50., start[1] + 4.]);
             let preview = d.w.header.drag_for_test().expect("native drag visual");
             assert!(!preview.detached);
@@ -2729,7 +2675,8 @@ fn native_header_slide_remove_input() {
             );
             crate::capture(
                 &d.w,
-                d.dir
+                d.input
+                    .dir
                     .join(format!("sliding-{touch}-{tool}.png"))
                     .to_str()
                     .unwrap(),
@@ -2751,7 +2698,8 @@ fn native_header_slide_remove_input() {
             );
             crate::capture(
                 &d.w,
-                d.dir
+                d.input
+                    .dir
                     .join(format!("detached-{touch}-{tool}.png"))
                     .to_str()
                     .unwrap(),
@@ -2765,11 +2713,8 @@ fn native_header_slide_remove_input() {
                 HeaderZone::Center
             );
             move_to(&mut d, outside);
-            d.perform(if touch {
-                serde_json::json!([{"touch":"up"}])
-            } else {
-                serde_json::json!([{"down":false}])
-            });
+            d.input
+                .perform(serde_json::json!([contact(device, "up", outside)]));
             assert!(state(&d.w).workspace.layout.header.entry(id).is_err());
             assert!(d.w.header.drag_for_test().is_none());
             for entry in state(&d.w).workspace.layout.header.entries() {
@@ -2793,14 +2738,14 @@ fn native_header_tools_drop_input() {
     let mut d = Driver::new("art.capycanvas.HeaderToolsDrop");
     let original = state(&d.w).workspace.layout.header;
     for touch in [false, true] {
+        let device = if touch { "touch" } else { "mouse" };
         d.edit();
         let start = d.point(&d.named("header-add-tools"));
         let target = [d.w.surface.width() as f32 / 2., 25.];
-        d.perform(if touch {
-            serde_json::json!([{"touch":"down","point":start},{"touch":"move","point":target}])
-        } else {
-            serde_json::json!([{"point":start},{"down":true},{"point":target}])
-        });
+        d.input.perform(serde_json::json!([
+            contact(device, "down", start),
+            contact(device, "move", target)
+        ]));
         assert!(matches!(
             d.w.header.drag_for_test().unwrap().action,
             Some(HeaderAction::InsertTools {
@@ -2814,16 +2759,14 @@ fn native_header_tools_drop_input() {
         );
         crate::capture(
             &d.w,
-            d.dir
+            d.input
+                .dir
                 .join(format!("tools-drop-{touch}.png"))
                 .to_str()
                 .unwrap(),
         );
-        d.perform(if touch {
-            serde_json::json!([{"touch":"up"}])
-        } else {
-            serde_json::json!([{"down":false}])
-        });
+        d.input
+            .perform(serde_json::json!([contact(device, "up", target)]));
         assert!(d.w.window.visible_dialog().is_some());
         assert!(d.w.header.drag_for_test().is_none());
         assert_eq!(
@@ -2832,9 +2775,9 @@ fn native_header_tools_drop_input() {
             "a Tools placeholder is never stored"
         );
         // Native editing keys belong to search, not to the selected bar item.
-        d.key(0x61);
-        d.key(0xff08);
-        d.key(0xffff);
+        d.input.key(0x61);
+        d.input.key(0xff08);
+        d.input.key(0xffff);
         assert_eq!(state(&d.w).workspace.layout.header, original);
         d.named("tool-search")
             .downcast::<gtk::SearchEntry>()
@@ -2872,6 +2815,7 @@ fn native_header_overflow_drag_input() {
         d.w.dispatch(HeaderAction::SetSize { size }.action());
         pump(250);
         for touch in [false, true] {
+            let device = if touch { "touch" } else { "mouse" };
             d.edit();
             let original = state(&d.w).workspace.layout.header;
             let geometry = d.w.header.geometry_for_test();
@@ -2879,26 +2823,23 @@ fn native_header_overflow_drag_input() {
             let id = geometry.items[0].id;
             let start = d.point(&d.named(&format!("header-grip-{id}")));
             let outside = [start[0] + 30., size.height() + 180.];
-            d.perform(if touch {
-                serde_json::json!([{"touch":"down","point":start},{"touch":"move","point":outside}])
-            } else {
-                serde_json::json!([{"point":start},{"down":true},{"point":outside}])
-            });
+            d.input.perform(serde_json::json!([
+                contact(device, "down", start),
+                contact(device, "move", outside)
+            ]));
             let preview = d.w.header.drag_for_test().expect("overflow drag preview");
             assert!(preview.detached);
             assert_eq!(state(&d.w).workspace.layout.header, original);
             crate::capture(
                 &d.w,
-                d.dir
+                d.input
+                    .dir
                     .join(format!("overflow-drag-{size:?}-{touch}.png"))
                     .to_str()
                     .unwrap(),
             );
-            d.perform(if touch {
-                serde_json::json!([{"touch":"up"}])
-            } else {
-                serde_json::json!([{"down":false}])
-            });
+            d.input
+                .perform(serde_json::json!([contact(device, "up", outside)]));
             assert!(d.w.header.drag_for_test().is_none());
             let model = state(&d.w).workspace.layout.header;
             assert_eq!(model.entries().count(), original.entries().count() - 1);
@@ -2924,12 +2865,13 @@ fn native_header_empty_center_input() {
         d.w.dispatch(HeaderAction::SetSize { size }.action());
         pump(250);
         for touch in [false, true] {
+            let device = if touch { "touch" } else { "mouse" };
             for edge in [-1., 1.] {
                 d.edit();
                 let original = state(&d.w).workspace.layout.header;
                 let id = original.zones[1][0].id;
                 d.click_name(&format!("header-item-{id}"));
-                d.key(0xffff);
+                d.input.key(0xffff);
                 assert!(state(&d.w).workspace.layout.header.zones[1].is_empty());
                 let b = d.w.header.geometry_for_test().zones[1];
                 assert!(b.width >= 160., "empty center remains easy to target");
@@ -2939,27 +2881,24 @@ fn native_header_empty_center_input() {
                 ];
                 assert!((point[0] - d.w.surface.width() as f32 / 2.).abs() > 40.);
                 let start = d.point(&d.named("header-add-grip-workspace-switcher"));
-                d.perform(if touch {
-                    serde_json::json!([{"touch":"down","point":start},{"touch":"move","point":point}])
-                } else {
-                    serde_json::json!([{"point":start},{"down":true},{"point":point}])
-                });
+                d.input.perform(serde_json::json!([
+                    contact(device, "down", start),
+                    contact(device, "move", point)
+                ]));
                 assert_eq!(
                     d.w.header.drag_for_test().unwrap().target,
                     Some((HeaderZone::Center, None))
                 );
                 crate::capture(
                     &d.w,
-                    d.dir
+                    d.input
+                        .dir
                         .join(format!("empty-center-{size:?}-{touch}-{edge}.png"))
                         .to_str()
                         .unwrap(),
                 );
-                d.perform(if touch {
-                    serde_json::json!([{"touch":"up"}])
-                } else {
-                    serde_json::json!([{"down":false}])
-                });
+                d.input
+                    .perform(serde_json::json!([contact(device, "up", point)]));
                 let model = state(&d.w).workspace.layout.header;
                 assert_eq!(model.zones[1].len(), 1);
                 assert_eq!(model.zones[1][0].item, HeaderItem::Workspaces);
@@ -3056,17 +2995,22 @@ fn native_header_window_actions_input() {
         assert!(state(&d.w).settings_open && d.w.window.visible_dialog().is_some());
         crate::capture(
             &d.w,
-            d.dir
+            d.input
+                .dir
                 .join(format!("settings-open-{size:?}.png"))
                 .to_str()
                 .unwrap(),
         );
-        d.key(0xff1b);
+        d.input.key(0xff1b);
         pump(400); // Adwaita emits closed after its closing animation.
         if state(&d.w).settings_open {
             crate::capture(
                 &d.w,
-                d.dir.join("settings-not-closed.png").to_str().unwrap(),
+                d.input
+                    .dir
+                    .join("settings-not-closed.png")
+                    .to_str()
+                    .unwrap(),
             );
             eprintln!(
                 "Settings focus: {:?}, can close {}",
@@ -3076,7 +3020,7 @@ fn native_header_window_actions_input() {
         }
         assert!(!state(&d.w).settings_open);
         for enabled in [true, false] {
-            d.key(0xffc8); // Native fullscreen remains available through F11/menu.
+            d.input.key(0xffc8); // Native fullscreen remains available through F11/menu.
             pump(500);
             assert_eq!(d.w.window.is_fullscreen(), enabled);
             assert_eq!(state(&d.w).fullscreen, enabled);
@@ -3089,7 +3033,8 @@ fn native_header_window_actions_input() {
             assert!(!geometry.items.iter().any(|item| item.id == ids[2]));
             crate::capture(
                 &d.w,
-                d.dir
+                d.input
+                    .dir
                     .join(format!("status-{size:?}-{enabled}.png"))
                     .to_str()
                     .unwrap(),

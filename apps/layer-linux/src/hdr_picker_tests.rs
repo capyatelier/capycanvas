@@ -334,29 +334,9 @@ fn native_hdr_picker_intensity_shape_and_input() {
             },
         });
         pump(100);
-        if let Some(dir) = std::env::var_os("LAYER_NATIVE_INPUT_DIR") {
-            let dir = std::path::PathBuf::from(dir);
-            std::fs::write(dir.join("ready"), "ready").unwrap();
-            let mut step = 0;
-            let mut perform = |events: serde_json::Value| {
-                std::fs::write(
-                    dir.join(format!("step-{step}.json.tmp")),
-                    serde_json::to_vec(&events).unwrap(),
-                )
-                .unwrap();
-                std::fs::rename(
-                    dir.join(format!("step-{step}.json.tmp")),
-                    dir.join(format!("step-{step}.json")),
-                )
-                .unwrap();
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while !dir.join(format!("done-{step}")).exists() {
-                    assert!(Instant::now() < deadline);
-                    pump(2);
-                }
-                step += 1;
-                pump(150);
-            };
+        if std::env::var_os("LAYER_NATIVE_INPUT_DIR").is_some() {
+            let mut input = RemoteInput::new().settle_ms(150).timeout_secs(10);
+            input.ready();
             let locate = |value: f32| {
                 let arc = scale.geometry().unwrap();
                 let [x, y] = arc.point((value + 2.) / 8.);
@@ -364,7 +344,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
                     .unwrap();
                 [p.x(), p.y()]
             };
-            perform(
+            input.perform(
                 serde_json::json!([{"point":locate(0.)},{"down":true},{"point":locate(2.)},{"down":false}]),
             );
             assert!(
@@ -372,7 +352,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
                 "mouse drag: {}",
                 state(&w).colors.hdr_intensity()
             );
-            perform(
+            input.perform(
                 serde_json::json!([{"touch":"down","point":locate(2.)},{"touch":"move","point":locate(1.)},{"touch":"up"}]),
             );
             assert!(
@@ -382,28 +362,29 @@ fn native_hdr_picker_intensity_shape_and_input() {
             );
             scale.grab_focus();
             let before = scale.value();
-            perform(serde_json::json!([{"key":65363,"down":true},{"key":65363,"down":false}]));
+            input
+                .perform(serde_json::json!([{"key":65363,"down":true},{"key":65363,"down":false}]));
             assert!(
                 (scale.value() - before - 0.1).abs() < 0.02,
                 "keyboard arrow"
             );
-            perform(serde_json::json!([{"wait_ms":500},{"point":locate(3.)},{"down":true},{"down":false},{"wait_ms":50},{"down":true},{"down":false}]));
+            input.perform(serde_json::json!([{"wait_ms":500},{"point":locate(3.)},{"down":true},{"down":false},{"wait_ms":50},{"down":true},{"down":false}]));
             assert_eq!(state(&w).colors.hdr_intensity(), 0., "Double-click resets to 1×, not +1 EV");
             let [x, y, font] = layer_ui::ColorPanelLayout::with_hdr(scale.width() as f32).unwrap().intensity_caption;
             let point = scale.compute_point(&w.window, &gtk::graphene::Point::new(x, y - font * 0.5)).unwrap();
             let original = state(&w).colors;
-            perform(serde_json::json!([{"wait_ms":500},{"point":[point.x(),point.y()]},{"down":true},{"down":false}]));
+            input.perform(serde_json::json!([{"wait_ms":500},{"point":[point.x(),point.y()]},{"down":true},{"down":false}]));
             assert!(w.window.visible_dialog().is_none(), "EV caption is read-only");
             assert_eq!(state(&w).colors, original, "EV caption does not pick through to the wheel");
             let point = pencil.compute_point(&w.window, &gtk::graphene::Point::new(pencil.width() as f32 * 0.5, pencil.height() as f32 * 0.5)).unwrap();
-            perform(serde_json::json!([{"point":[point.x(),point.y()]},{"down":true},{"down":false}]));
+            input.click([point.x(), point.y()]);
             assert_eq!(w.window.visible_dialog().unwrap().widget_name(), "edit-color-dialog");
             response(&w, "cancel");
             for slot in [ColorSlot::Foreground, ColorSlot::Background] {
                 let swatch = find_named(root.upcast_ref(), &format!("color-{slot:?}")).unwrap();
                 let point = swatch.compute_point(&w.window, &gtk::graphene::Point::new(swatch.width() as f32 * 0.7, swatch.height() as f32 * 0.75)).unwrap();
                 let original = if slot == ColorSlot::Foreground { state(&w).colors.foreground } else { state(&w).colors.background };
-                perform(serde_json::json!([{"wait_ms":500},{"point":[point.x(),point.y()]},{"down":true},{"down":false},{"wait_ms":50},{"down":true},{"down":false}]));
+                input.perform(serde_json::json!([{"wait_ms":500},{"point":[point.x(),point.y()]},{"down":true},{"down":false},{"wait_ms":50},{"down":true},{"down":false}]));
                 let dialog = w.window.visible_dialog().expect("Double-click opens Edit Color");
                 assert_eq!(dialog.widget_name(), "edit-color-dialog");
                 assert!(find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().is_visible());
@@ -454,7 +435,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
                         ),
                     )
                     .unwrap();
-                perform(serde_json::json!([{"point":[p.x(),p.y()]},{"down":true},{"down":false}]));
+                input.click([p.x(), p.y()]);
                 let colors = state(&sdr).colors;
                 assert_ne!(
                     colors.definition(),
@@ -468,7 +449,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
             sdr.window.destroy();
             w.window.present();
             pump(100);
-            std::fs::write(dir.join("finished"), "done").unwrap();
+            input.finish();
         }
         // Exercise repeated updates without document-size-dependent work.
         let before = Instant::now();

@@ -13,7 +13,7 @@ fn native_command_bar_input() {
     ]);
     let mut timings = Vec::new();
     for attempt in 0..3 {
-        d.perform(open.clone());
+        d.input.perform(open.clone());
         assert!(
             state(&d.w).command_search.is_some(),
             "keyboard opener {attempt}: focus={:?}, command={:?}, error={:?}",
@@ -42,10 +42,10 @@ fn native_command_bar_input() {
         );
         timings.push(start.elapsed());
         // Query and immediate Enter run the new result, without a debounce.
-        d.key(0xff0d);
+        d.input.key(0xff0d);
         assert!(state(&d.w).command_search.is_none());
     }
-    d.perform(open.clone());
+    d.input.perform(open.clone());
     let entry = d
         .named("command-search")
         .downcast::<gtk::SearchEntry>()
@@ -57,12 +57,12 @@ fn native_command_bar_input() {
     assert_eq!(detail.text(), "Nothing to undo");
     capture_popover(
         &popup,
-        d.dir.join("command-bar-light.png").to_str().unwrap(),
+        d.input.dir.join("command-bar-light.png").to_str().unwrap(),
     );
-    d.key(0xff0d);
+    d.input.key(0xff0d);
     assert!(state(&d.w).command_search.as_ref().unwrap().error.is_some());
     entry.set_text("brush size");
-    d.key(0xff0d);
+    d.input.key(0xff0d);
     assert!(
         state(&d.w)
             .command_search
@@ -74,37 +74,42 @@ fn native_command_bar_input() {
     pump(150);
     capture_popover(
         &popup,
-        d.dir.join("command-bar-value.png").to_str().unwrap(),
+        d.input.dir.join("command-bar-value.png").to_str().unwrap(),
     );
     entry.set_text("24");
-    d.key(0xff0d);
+    d.input.key(0xff0d);
     assert_eq!(state(&d.w).brush.diameter, 24.);
     assert!(state(&d.w).command_search.is_none());
     d.w.dispatch(UiAction::SetTheme {
         theme: Some(Theme::Dark),
     });
-    d.perform(open.clone());
+    d.input.perform(open.clone());
     entry.set_text("select");
     pump(150);
-    capture_popover(&popup, d.dir.join("command-bar-dark.png").to_str().unwrap());
+    capture_popover(
+        &popup,
+        d.input.dir.join("command-bar-dark.png").to_str().unwrap(),
+    );
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
-        d.perform(serde_json::json!([{ "capture": "command-bar-placement" }]));
+        d.input
+            .perform(serde_json::json!([{ "capture": "command-bar-placement" }]));
     }
-    d.key(0xff54); // Down
+    d.input.key(0xff54); // Down
     assert_eq!(state(&d.w).command_search.as_ref().unwrap().selected, 1);
-    d.key(0xff1b); // Escape
+    d.input.key(0xff1b); // Escape
     assert!(state(&d.w).command_search.is_none());
-    d.perform(open.clone());
+    d.input.perform(open.clone());
     entry.set_text("eraser");
     let row = d.named("command-result-0");
     let point = d.point(&row);
-    d.perform(serde_json::json!([{"touch":"down","point":point},{"touch":"up"}]));
+    d.input
+        .perform(serde_json::json!([{"touch":"down","point":point},{"touch":"up"}]));
     assert!(
         state(&d.w).command_search.is_none(),
         "touch invokes the selected command"
     );
     assert_eq!(state(&d.w).brush.tool, Tool::Eraser);
-    d.perform(open);
+    d.input.perform(open);
     let revision =
         d.w.gpu
             .borrow()
@@ -118,7 +123,7 @@ fn native_command_bar_input() {
         d.w.window.width() as f32 / 2.,
         d.w.window.height() as f32 * 0.8,
     ];
-    d.perform(serde_json::json!([{"point":point},{"down":true},{"down":false}]));
+    d.input.click(point);
     assert!(
         state(&d.w).command_search.is_none(),
         "outside contact dismisses"
@@ -216,7 +221,7 @@ fn native_command_bar_glass() {
     let (window_x, window_y) = d.w.window.surface_transform();
     let offset = [origin.x() + window_x as f32, origin.y() + window_y as f32];
     let capture = |d: &mut Driver, name: &str| {
-        d.perform(serde_json::json!([{ "wait_ms": 300 }, { "capture": name }]));
+        d.input.perform(serde_json::json!([{ "wait_ms": 300 }, { "capture": name }]));
         let texture = gdk::Texture::from_filename(captures.join(format!("{name}.png"))).unwrap();
         let stride = texture.width() as usize * 4;
         let mut pixels = vec![0; stride * texture.height() as usize];
@@ -276,7 +281,7 @@ fn native_command_bar_glass() {
         assert!(close(mean(&row), expected, 0.04), "{name} resized: {:?} vs {expected:?}", mean(&row));
         let vacated = fewer(body[1] + body[3] - 6., span);
         assert!(sharpness(&vacated) > 0.05, "{name}: no stale blur below the resized bar");
-        d.key(0xff1b);
+        d.input.key(0xff1b);
         assert!(state(&d.w).command_search.is_none());
         let closed = capture(&mut d, &format!("{name}-closed"));
         for y in [body[1] + 6., body[1] + body[3] - 6.] {

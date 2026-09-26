@@ -748,21 +748,12 @@ fn native_proof_dial_composited_motion() {
         let p = field.compute_point(window, &gtk::graphene::Point::new(p[0],p[1])).unwrap();
         [p.x(),p.y()]
     };
-    let dir = std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_INPUT_DIR").unwrap());
     let captures = std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").unwrap());
     std::fs::create_dir_all(&captures).unwrap();
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    let mut step=0;
-    let mut perform = |events: serde_json::Value| {
-        let path=dir.join(format!("step-{step}.json"));
-        std::fs::write(path.with_extension("tmp"),serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(path.with_extension("tmp"),path).unwrap();
-        let deadline=Instant::now()+Duration::from_secs(15);
-        while !dir.join(format!("done-{step}")).exists() {pump(1);assert!(Instant::now()<deadline,"capture/input step {step}");}
-        step+=1;
-    };
+    let mut input = RemoteInput::new().settle_ms(0).timeout_secs(15);
+    input.ready();
     let center=at(g.field.center);
-    perform(serde_json::json!([{"point":center,"down":true},{"wait_ms":250},{"capture":"before"}]));
+    input.perform(serde_json::json!([{"point":center,"down":true},{"wait_ms":250},{"capture":"before"}]));
     let load = |name: &str| {
         let texture=gtk::gdk::Texture::from_file(&gtk::gio::File::for_path(captures.join(format!("{name}.png")))).unwrap();
         let stride=texture.width() as usize*4;
@@ -778,7 +769,7 @@ fn native_proof_dial_composited_motion() {
         let angle=i as f32*std::f32::consts::TAU/24.;
         let to=at([g.field.center[0]+radius*0.65*angle.cos(),g.field.center[1]+radius*0.65*angle.sin()]);
         let name=format!("motion-{i:02}");
-        perform(serde_json::json!([{"point":to},{"wait_ms":24},{"capture":name}]));
+        input.perform(serde_json::json!([{"point":to},{"wait_ms":24},{"capture":name}]));
         let (after,next_stride)=load(&name);assert_eq!(stride,next_stride);
         let recipe=w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition;
         let fraction=layer_ui::proof_panel::sdr_tone_pad().fractions(layer_ui::proof_panel::sdr_pad_values(recipe));
@@ -802,10 +793,10 @@ fn native_proof_dial_composited_motion() {
         assert_eq!(changed,0,"stale selector pixels in composited frame {i}");
         assert!(selector_pixels>20,"capture {i} must include the new selector in front of the guide");
     }
-    perform(serde_json::json!([{"down":false}]));
+    input.perform(serde_json::json!([{"down":false}]));
     assert_eq!(crate::proof_dial::pattern_cache_metrics().2.as_ref(),Some(&cached));
     assert_eq!(crate::proof_dial::pattern_cache_metrics().0,1);
-    std::fs::write(dir.join("finished"),"finished").unwrap();
+    input.finish();
     eprintln!("PROOF_COMPOSITED frames=24 scale={scale} stale_pixels={worst} texture_builds=1");
     window.destroy();pump(50);
 }
@@ -822,33 +813,24 @@ fn native_proof_dial_pointer_input() {
     let g=layer_ui::parameter_pad::ParameterDialGeometry::new(field.width().min(field.height()) as f32).unwrap();
     let at=|point:[f32;2]| {let p=field.compute_point(&w.window,&gtk::graphene::Point::new(point[0],point[1])).unwrap();[p.x(),p.y()]};
     let rendition=||w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition;
-    let dir=std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_INPUT_DIR").unwrap());
-    let mut step=0;
-    std::fs::write(dir.join("ready"),"ready").unwrap();
-    let mut perform=|events:serde_json::Value| {
-        let path=dir.join(format!("step-{step}.json"));
-        std::fs::write(path.with_extension("tmp"),serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(path.with_extension("tmp"),path).unwrap();
-        let until=Instant::now()+Duration::from_secs(20);
-        while !dir.join(format!("done-{step}")).exists() {pump(2);assert!(Instant::now()<until);}
-        step+=1;pump(80);
-    };
+    let mut input=RemoteInput::new().settle_ms(80).timeout_secs(20);
+    input.ready();
     for touch in [false,true] {
-        let event=|phase:&str,point:[f32;2]| if touch {serde_json::json!({"touch":phase,"point":point})}
-            else {match phase {"down"=>serde_json::json!({"point":point,"down":true}),"up"=>serde_json::json!({"down":false}),_=>serde_json::json!({"point":point})}};
+        let device=if touch {"touch"} else {"mouse"};
+        let event=|phase:&str,point:[f32;2]| contact(device,phase,point);
         // Actual down/move/up, including the horizontal strip stolen by the old
         // invisible GtkRange children. Drag across an arc without changing owner.
         for start in [[0.5,0.5],[0.2,0.5],[0.8,0.5],[0.5,0.2],[0.5,0.8]] {
             let before=rendition();
             let from=at(g.field.disc_marker(start));let to=at(g.arcs[0].point(0.7));
-            perform(serde_json::json!([event("down",from),event("move",to),event("up",to)]));
+            input.perform(serde_json::json!([event("down",from),event("move",to),event("up",to)]));
             let after=rendition();assert_ne!(after,before,"circle contact must change contrast/scale; touch={touch}");
             assert_eq!((after.exposure,after.highlight_color),(before.exposure,before.highlight_color),"circle contact must not edit arcs");
             invoke(&w,CommandId::Undo);ready(&w);assert_eq!(rendition(),before,"one undo per circle gesture");
         }
         for i in 0..2 {
             let before=rendition();let from=at(g.arcs[i].point(0.2));let to=at(g.arcs[i].point(0.8));
-            perform(serde_json::json!([event("down",from),event("move",to),event("up",to)]));
+            input.perform(serde_json::json!([event("down",from),event("move",to),event("up",to)]));
             let after=rendition();assert_eq!((after.contrast,after.balance),(before.contrast,before.balance));
             if i==0 {assert_ne!(after.exposure,before.exposure);assert_eq!(after.highlight_color,before.highlight_color);}
             else {assert_eq!(after.exposure,before.exposure);assert_ne!(after.highlight_color,before.highlight_color);}
@@ -859,9 +841,9 @@ fn native_proof_dial_pointer_input() {
     let color=find_named(w.proof_panel.root.upcast_ref(),"sdr-appearance-highlight_color").unwrap().downcast::<gtk::Scale>().unwrap();
     color.set_value(0.8);pump(50);
     let point=at(g.arcs[1].point(0.6));
-    perform(serde_json::json!([{"point":point,"down":true},{"down":false},{"down":true},{"down":false}]));
+    input.perform(serde_json::json!([{"point":point,"down":true},{"down":false},{"down":true},{"down":false}]));
     assert_eq!(rendition().highlight_color,0.3);
-    std::fs::write(dir.join("finished"),"done").unwrap();
+    input.finish();
     w.window.destroy();pump(100);
 }
 

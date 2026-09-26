@@ -34,11 +34,12 @@ fn native_accent_preferences_input() {
             page: SettingsPage::Appearance,
         });
         pump(400);
-        d.perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
+        d.input
+            .perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
         assert_eq!(state(&d.w).settings.accent, None);
         assert_eq!(state(&d.w).palette.accent, system);
         let shot = crate::snapshot(&d.w);
-        shot.save_to_png(d.dir.join(format!("accent-system-{suffix}.png")))
+        shot.save_to_png(d.input.dir.join(format!("accent-system-{suffix}.png")))
             .unwrap();
         assert!(near(rgb(&d, &shot, &d.named(&swatch(0)), 5., 16.), system));
         assert!(near(rgb(&d, &shot, &d.named(&swatch(6)), 5., 16.), red));
@@ -80,22 +81,24 @@ fn native_accent_preferences_input() {
                 .contains(gtk::StateFlags::FOCUS_WITHIN)
         );
         assert_eq!(base_entry.text(), choices[0].to_string());
-        d.key(0xff57);
+        d.input.key(0xff57);
         for _ in 0..6 {
-            d.key(0xff08);
+            d.input.key(0xff08);
         }
         for c in "445566".chars() {
-            d.key(c as u32);
+            d.input.key(c as u32);
         }
-        d.key(0xff0d);
+        d.input.key(0xff0d);
         assert_eq!(state(&d.w).palette.bg, HexColor([0x44, 0x55, 0x66]));
-        d.perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
+        d.input
+            .perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
         crate::snapshot(&d.w)
-            .save_to_png(d.dir.join(format!("base-custom-{suffix}.png")))
+            .save_to_png(d.input.dir.join(format!("base-custom-{suffix}.png")))
             .unwrap();
         d.click_name(&base(default));
         assert_eq!(state(&d.w).palette.bg, theme.default_base());
-        d.perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
+        d.input
+            .perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
 
         d.click_name(&swatch(6));
         assert_eq!(state(&d.w).settings.accent, Some(red));
@@ -116,20 +119,21 @@ fn native_accent_preferences_input() {
             Some(red),
             "opening the editor changes nothing"
         );
-        d.key(0xff57);
+        d.input.key(0xff57);
         for _ in 0..6 {
-            d.key(0xff08);
+            d.input.key(0xff08);
         }
         for c in "12ab56".chars() {
-            d.key(c as u32);
+            d.input.key(c as u32);
         }
-        d.key(0xff0d);
+        d.input.key(0xff0d);
         assert_eq!(state(&d.w).settings.accent, Some(custom));
         assert_eq!(state(&d.w).palette.accent, custom);
         assert!(entry.is_mapped());
-        d.perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
+        d.input
+            .perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
         let shot = crate::snapshot(&d.w);
-        shot.save_to_png(d.dir.join(format!("accent-custom-{suffix}.png")))
+        shot.save_to_png(d.input.dir.join(format!("accent-custom-{suffix}.png")))
             .unwrap();
         assert!(near(
             rgb(&d, &shot, &d.named(&swatch(ACCENTS.len() + 1)), 5., 16.),
@@ -175,11 +179,12 @@ fn native_accent_preferences_input() {
                 .reveals_child()
         );
         d.w.dispatch(UiAction::CloseSettings);
-        d.perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
+        d.input
+            .perform(serde_json::json!([{ "point": [800.0, 990.0] }]));
         pump(400);
         let palette = state(&d.w).palette;
         let shot = crate::snapshot(&d.w);
-        shot.save_to_png(d.dir.join(format!("accent-workspace-{suffix}.png")))
+        shot.save_to_png(d.input.dir.join(format!("accent-workspace-{suffix}.png")))
             .unwrap();
         let pill = d.named("workspace-switch-painter");
         let sampled = rgb(&d, &shot, &pill, 8., pill.height() as f32 / 2.);

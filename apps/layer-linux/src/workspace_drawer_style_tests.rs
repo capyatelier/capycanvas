@@ -3,10 +3,8 @@ use super::*;
 #[test]
 #[ignore = "isolated Mutter remote-input driver: --drawer-style"]
 fn native_drawer_style_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
-    let output = std::path::PathBuf::from(
-        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| dir.to_string_lossy().into()),
-    );
+    let mut input = RemoteInput::new().settle_ms(280);
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map_or(input.dir.clone(), Into::into);
     std::fs::create_dir_all(&output).unwrap();
     let app = native_test_app("art.capycanvas.DrawerStyle");
     let w = fixture_workspace(&app);
@@ -22,24 +20,18 @@ fn native_drawer_style_input() {
         );
         pump(20);
     }
-    let mut step = 0;
+    input.ready();
     // Exercise live theme changes on the same editor. Workspace persistence and
     // opening another editor have separate integration tests.
     for theme in [Theme::Dark, Theme::Light] {
-        check_theme(&w, theme, &dir, &output, &mut step);
+        check_theme(&w, theme, &output, &mut input);
     }
-    std::fs::write(dir.join("finished"), "done").unwrap();
+    input.finish();
     w.window.destroy();
     pump(100);
 }
 
-fn check_theme(
-    w: &Rc<Workspace>,
-    theme: Theme,
-    dir: &std::path::Path,
-    output: &std::path::Path,
-    step: &mut usize,
-) {
+fn check_theme(w: &Rc<Workspace>, theme: Theme, output: &std::path::Path, input: &mut RemoteInput) {
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let mut initial = layer_ui::WorkspaceState::default();
     let old = initial
@@ -87,9 +79,6 @@ fn check_theme(
         .iter()
         .map(|t| t.id)
         .collect::<Vec<_>>();
-    if *step == 0 {
-        std::fs::write(dir.join("ready"), "ready").unwrap();
-    }
     let mut perform = |events: serde_json::Value| {
         let ready_deadline = Instant::now() + Duration::from_secs(5);
         while !w.workspaces.accepts_input(&w) {
@@ -99,21 +88,7 @@ fn check_theme(
             );
             pump(10);
         }
-        std::fs::write(
-            dir.join(format!("step-{step}.json")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !dir.join(format!("done-{step}")).exists() && Instant::now() < deadline {
-            pump(10);
-        }
-        assert!(
-            dir.join(format!("done-{step}")).exists(),
-            "native pointer timed out"
-        );
-        *step += 1;
-        pump(280);
+        input.perform(events);
     };
     let button = |id| {
         w.customization

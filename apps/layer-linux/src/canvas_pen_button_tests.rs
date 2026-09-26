@@ -61,16 +61,16 @@ fn native_canvas_pen_buttons() {
         for held_before in [false, true] {
             stats.lock().unwrap().pen_routes.clear();
             if held_before {
-                d.perform(serde_json::json!([
+                d.input.perform(serde_json::json!([
                     {"pen":"move","point":p},
                     {"pen":"button","button":button,"down":true}
                 ]));
             }
-            d.perform(serde_json::json!([
+            d.input.perform(serde_json::json!([
                 {"pen":"down","point":p}, {"pen":"move","point":q}
             ]));
             if !held_before {
-                d.perform(serde_json::json!([
+                d.input.perform(serde_json::json!([
                     {"pen":"button","button":button,"down":true},
                     {"pen":"move","point":r},
                     {"pen":"button","button":button,"down":false}
@@ -88,9 +88,10 @@ fn native_canvas_pen_buttons() {
                 expected,
                 "side buttons cannot finish the stroke"
             );
-            d.perform(serde_json::json!([{"pen":"move","point":r}, {"pen":"up"}]));
+            d.input
+                .perform(serde_json::json!([{"pen":"move","point":r}, {"pen":"up"}]));
             if held_before {
-                d.perform(serde_json::json!([
+                d.input.perform(serde_json::json!([
                     {"pen":"move","point":p},
                     {"pen":"button","button":button,"down":false}
                 ]));
@@ -138,11 +139,11 @@ fn native_canvas_pen_buttons() {
             pump(180);
         }
     }
-    d.perform(serde_json::json!([{"pen":"leave"}]));
+    d.input.perform(serde_json::json!([{"pen":"leave"}]));
     // The actual mouse still owns middle/right navigation.
     for button in [274, 273] {
         let before = state(&d.w).camera;
-        d.perform(serde_json::json!([
+        d.input.perform(serde_json::json!([
             {"point":p}, {"down":true,"button":button},
             {"point":q}, {"down":false,"button":button}
         ]));

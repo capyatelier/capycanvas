@@ -4,7 +4,6 @@ use super::*;
 #[test]
 #[ignore = "isolated native-input.js --column-drops"]
 fn native_collapsed_divider_drop_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.ColumnDrops");
     let w = fixture_workspace(&app);
     w.window.maximize();
@@ -12,21 +11,8 @@ fn native_collapsed_divider_drop_input() {
     pump(1600);
     let saved = || serde_json::to_value(state(&w).workspace).unwrap();
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let mut step = 0;
-    let mut perform = |events: serde_json::Value| {
-        let file = dir.join(format!("step-{step}.json"));
-        let temporary = file.with_extension("tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(temporary, file).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native input timed out");
-            pump(5);
-        }
-        step += 1;
-        pump(100);
-    };
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut input = RemoteInput::new();
+    input.ready();
     pump(500);
     for edge in [Edge::Left, Edge::Right] {
         let mut fixture = layer_ui::WorkspaceState::default();
@@ -45,6 +31,7 @@ fn native_collapsed_divider_drop_input() {
             .set_column_collapsed(8, true, viewport)
             .unwrap();
         for touch in [false, true] {
+            let device = if touch { "touch" } else { "mouse" };
             // +/-5px belongs to the divider; +/-8px joins a neighboring group.
             for (offset, merge, cancel) in [(0., false, false), (8., true, false), (5., false, true)] {
                 println!(
@@ -80,21 +67,16 @@ fn native_collapsed_divider_drop_input() {
                     source.x() + source.width() / 2.,
                     source.y() + source.height() / 2.,
                 ];
-                perform(if touch {
-                    serde_json::json!([{"touch":"down","point":start}])
-                } else {
-                    serde_json::json!([{"point":start},{"down":true}])
-                });
+                input.perform(serde_json::json!([contact(device, "down", start)]));
                 pump(800);
                 assert!(
                     w.workspace_drag.borrow().as_ref().is_some_and(|d| d.held),
                     "held collapsed icon arms pickup"
                 );
-                perform(if touch {
-                    serde_json::json!([{"touch":"move","point":[750.,470.]},{"touch":"move","point":destination}])
-                } else {
-                    serde_json::json!([{"point":[750.,470.]},{"point":destination}])
-                });
+                input.perform(serde_json::json!([
+                    contact(device, "move", [750., 470.]),
+                    contact(device, "move", destination)
+                ]));
                 let hint = w.drop_hint.borrow().clone().unwrap_or_else(|| {
                     panic!(
                         "missing preview: point={destination:?}, drag={:?}, direct={:?}",
@@ -127,7 +109,7 @@ fn native_collapsed_divider_drop_input() {
                     assert!((hint.bounds.y + hint.bounds.height / 2. - divider_y).abs() < 1.);
                 }
                 if cancel {
-                    perform(
+                    input.perform(
                         serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
                     );
                     assert!(
@@ -137,11 +119,7 @@ fn native_collapsed_divider_drop_input() {
                 } else if edge == Edge::Left && !touch && !merge && offset == 0. {
                     capture_reference(&w, "/tmp/capy-column-drop-gtk.png", 1.0);
                 }
-                perform(if touch {
-                    serde_json::json!([{"touch":"up"}])
-                } else {
-                    serde_json::json!([{"down":false}])
-                });
+                input.perform(serde_json::json!([contact(device, "up", destination)]));
                 assert!(w.workspace_drag.borrow().is_none());
                 assert!(w.drop_hint.borrow().is_none());
                 if cancel {
@@ -200,6 +178,7 @@ fn native_collapsed_divider_drop_input() {
             .map(|t| t.id)
             .collect::<Vec<_>>();
         for touch in [false, true] {
+            let device = if touch { "touch" } else { "mouse" };
             for (offset, cancel) in [(-5., false), (8., false), (5., true)] {
                 println!(
                     "Checking toolbar {edge:?}, touch={touch}, offset={offset}, cancel={cancel}"
@@ -221,17 +200,9 @@ fn native_collapsed_divider_drop_input() {
                 let center = [b.x() + b.width() / 2., b.y() + b.height() / 2.];
                 let mut point = center;
                 point[if edge == Edge::Top { 0 } else { 1 }] += offset;
-                perform(if touch {
-                    serde_json::json!([{"touch":"down","point":start}])
-                } else {
-                    serde_json::json!([{"point":start},{"down":true}])
-                });
+                input.perform(serde_json::json!([contact(device, "down", start)]));
                 pump(800);
-                perform(if touch {
-                    serde_json::json!([{"touch":"move","point":point}])
-                } else {
-                    serde_json::json!([{"point":point}])
-                });
+                input.perform(serde_json::json!([contact(device, "move", point)]));
                 let hint = w
                     .drop_hint
                     .borrow()
@@ -251,15 +222,11 @@ fn native_collapsed_divider_drop_input() {
                     assert!(matches!(hint.target, DockTarget::Tile { .. }));
                 }
                 if cancel {
-                    perform(
+                    input.perform(
                         serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
                     );
                 }
-                perform(if touch {
-                    serde_json::json!([{"touch":"up"}])
-                } else {
-                    serde_json::json!([{"down":false}])
-                });
+                input.perform(serde_json::json!([contact(device, "up", point)]));
                 assert!(w.workspace_drag.borrow().is_none());
                 assert!(w.drop_hint.borrow().is_none());
                 if cancel {
@@ -277,17 +244,12 @@ fn native_collapsed_divider_drop_input() {
                     } else {
                         [b.x() + b.width() / 2., b.y() + b.height() - 3.]
                     };
-                    perform(if touch {
-                        serde_json::json!([{"touch":"down","point":start}])
-                    } else {
-                        serde_json::json!([{"point":start},{"down":true}])
-                    });
+                    input.perform(serde_json::json!([contact(device, "down", start)]));
                     pump(800);
-                    perform(if touch {
-                        serde_json::json!([{"touch":"move","point":point},{"touch":"up"}])
-                    } else {
-                        serde_json::json!([{"point":point},{"down":false}])
-                    });
+                    input.perform(serde_json::json!([
+                        contact(device, "move", point),
+                        contact(device, "up", point)
+                    ]));
                     assert!(
                         find_named(w.surface.upcast_ref(), &format!("tile-{}", ids[4] + 1))
                             .is_none(),
@@ -303,7 +265,7 @@ fn native_collapsed_divider_drop_input() {
     println!(
         "PASS: native mouse/touch separator drops, adjacent-tile merges, aligned previews and cancellation on both sides"
     );
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.destroy();
     pump(100);
 }

@@ -25,12 +25,13 @@ fn canvas_point(d: &Driver, p: [f32; 2]) -> [f32; 2] {
 }
 fn canvas_click(d: &mut Driver, p: [f32; 2]) {
     let p = canvas_point(d, p);
-    d.perform(serde_json::json!([{"point":p,"down":true},{"down":false}]));
+    d.input
+        .perform(serde_json::json!([{"point":p,"down":true},{"down":false}]));
 }
 fn canvas_drag(d: &mut Driver, a: [f32; 2], b: [f32; 2], pen: bool) {
     let a = canvas_point(d, a);
     let b = canvas_point(d, b);
-    d.perform(if pen {serde_json::json!([{"pen":"move","point":a},{"pen":"down","point":a},{"pen":"move","point":b},{"pen":"up"},{"pen":"leave"}])}
+    d.input.perform(if pen {serde_json::json!([{"pen":"move","point":a},{"pen":"down","point":a},{"pen":"move","point":b},{"pen":"up"},{"pen":"leave"}])}
         else {serde_json::json!([{"point":a,"down":true},{"point":b},{"down":false}])});
 }
 fn wait_selection(d: &Driver) -> layer_core::Selection {
@@ -52,9 +53,12 @@ fn wait_selection(d: &Driver) -> layer_core::Selection {
 #[ignore = "isolated native-input.js --native-test=native_quick_mask_input"]
 fn native_quick_mask_input() {
     let mut d = Driver::new("art.capycanvas.QuickMask");
-    let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| d.dir.to_string_lossy().into()));
+    let output = std::path::PathBuf::from(
+        std::env::var("LAYER_TEST_ARTIFACTS")
+            .unwrap_or_else(|_| d.input.dir.to_string_lossy().into()),
+    );
     std::fs::create_dir_all(&output).unwrap();
-    d.key(b'q' as u32);
+    d.input.key(b'q' as u32);
     assert!(state(&d.w).layer_tools.quick_mask);
     assert!(selection(&d).is_none(), "entering is display state only");
     assert_eq!(state(&d.w).layer_properties.controls.len(),3);
@@ -106,9 +110,9 @@ fn native_quick_mask_input() {
     d.click_name(&layers); pump(100);
     let name = find_css(&d.named(&format!("art-layer-{id}")), "layer-name").unwrap();
     let point = d.point(&name);
-    d.perform(serde_json::json!([{"point":point},{"down":true},{"down":false},{"down":true},{"down":false}]));
+    d.input.perform(serde_json::json!([{"point":point},{"down":true},{"down":false},{"down":true},{"down":false}]));
     assert_eq!(state(&d.w).layer_tools.rename_layer,Some(id), "double-clicking the name edits it");
-    d.key(0xff1b);
+    d.input.key(0xff1b);
     assert_eq!(state(&d.w).layer_tools.mask_editing.unwrap().layer,Some(id));
     d.click_name(&layers); pump(100);
     let saved = || d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
@@ -141,7 +145,7 @@ fn pixel(s: &layer_core::Selection, x: u32, y: u32) -> u32 {
 #[ignore = "isolated native-input.js --tablet --native-test=native_selection_brush_input"]
 fn native_selection_brush_input() {
     let mut d=Driver::new("art.capycanvas.SelectionBrush");
-    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_|d.dir.to_string_lossy().into()));
+    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_|d.input.dir.to_string_lossy().into()));
     std::fs::create_dir_all(&output).unwrap();
     let opener=d.header_tool(ToolbarControl::Command {command:CommandId::Select});
     d.click_name(&opener);
@@ -192,7 +196,7 @@ fn native_selection_brush_input() {
         actions.push(if i==0 {serde_json::json!({"point":p,"down":true})} else {serde_json::json!({"point":p})});
     }
     actions.push(serde_json::json!({"down":false}));
-    d.perform(serde_json::Value::Array(actions));
+    d.input.perform(serde_json::Value::Array(actions));
     wait_value(&d,750,750,128);
     let _=crate::snapshot(&d.w); pump(100);
     crate::snapshot(&d.w).save_to_png(output.join("selection-brush-canvas.png")).unwrap();
@@ -203,7 +207,8 @@ fn native_selection_brush_input() {
 fn native_selection_tools_input() {
     let mut d = Driver::new("art.capycanvas.SelectionTools");
     let output = std::path::PathBuf::from(
-        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| d.dir.to_string_lossy().into()),
+        std::env::var("LAYER_TEST_ARTIFACTS")
+            .unwrap_or_else(|_| d.input.dir.to_string_lossy().into()),
     );
     std::fs::create_dir_all(&output).unwrap();
     let opener = d.header_tool(ToolbarControl::Command {
@@ -226,7 +231,9 @@ fn native_selection_tools_input() {
         let p = d.point(&button);
         match i % 3 {
             0 => d.click(&button),
-            1 => d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}])),
+            1 => d
+                .input
+                .perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}])),
             _ => d.click(&button),
         }
         assert_eq!(state(&d.w).layer_tools.tool.selection_tool(), Some(tool));
@@ -287,14 +294,14 @@ fn native_selection_tools_input() {
         Some(ellipse.clone()),
         "polygon is not committed until closed"
     );
-    d.key(0xff08); // Backspace
+    d.input.key(0xff08); // Backspace
     canvas_click(&mut d, [800., 850.]);
-    d.key(0xff0d); // Enter
+    d.input.key(0xff0d); // Enter
     let polygon = wait_selection(&d);
     assert_eq!(polygon.contours()[0].len(), 3);
     assert_ne!(polygon, ellipse);
     canvas_click(&mut d, [650., 650.]);
-    d.key(0xff1b);
+    d.input.key(0xff1b);
     assert_eq!(selection(&d), Some(polygon));
 
     // Separate patches with identical colors prove global selection differs from the wand.
@@ -402,7 +409,7 @@ fn native_selection_pen_input() {
     for tool in SelectionTool::ALL {
         let button = d.named(&format!("tool-choice-{:?}", tool.command()));
         let p = d.point(&button);
-        d.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
+        d.input.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
         assert_eq!(state(&d.w).layer_tools.tool.selection_tool(), Some(tool));
         assert!(state(&d.w).customization.drawer.is_some());
         d.header_icon(CommandId::Select, tool.command().icon().unwrap());
@@ -411,7 +418,7 @@ fn native_selection_pen_input() {
     for command in [CommandId::SelectionAdd, CommandId::SelectionSubtract, CommandId::SelectionIntersect, CommandId::SelectionNew] {
         let button = d.named(&format!("tool-action-{command:?}"));
         let p = d.point(&button);
-        d.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
+        d.input.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
         assert!(button.downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
         assert!(state(&d.w).commands.iter().any(|c| c.id == command && c.selected));
     }
@@ -422,9 +429,9 @@ fn native_selection_pen_input() {
         (CommandId::Select, "tool-choice-ColorSelect", "color-select"),
     ] {
         let p = d.point(&d.named(&d.header_tool(ToolbarControl::Command { command })));
-        d.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
+        d.input.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
         let p = d.point(&d.named(choice));
-        d.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
+        d.input.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
         d.header_icon(command, icon);
         if command == CommandId::Select {
             select_icon = icon;
@@ -526,7 +533,7 @@ fn native_selection_options_input() {
             let button = d.named(&format!("tool-action-{command:?}"));
             if i % 2 == 0 {
                 let p = d.point(&button);
-                d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+                d.input.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
             } else { d.click(&button); }
             assert!(
                 state(&d.w)
@@ -588,7 +595,8 @@ fn native_selection_options_input() {
     d.click_name("tool-choice-ColorSelect");
     d.click_name("tool-action-SelectionAntialias");
     let output = std::path::PathBuf::from(
-        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| d.dir.to_string_lossy().into()),
+        std::env::var("LAYER_TEST_ARTIFACTS")
+            .unwrap_or_else(|_| d.input.dir.to_string_lossy().into()),
     );
     std::fs::create_dir_all(&output).unwrap();
     for theme in [Theme::Light, Theme::Dark] {
@@ -611,7 +619,7 @@ pub(super) fn wait_tonal(d:&Driver) {
 #[ignore = "isolated native-input.js --native-test=native_tonal_selection_input"]
 fn native_tonal_selection_input() {
     let mut d=Driver::new("art.capycanvas.TonalSelection");
-    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_|d.dir.to_string_lossy().into()));
+    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_|d.input.dir.to_string_lossy().into()));
     std::fs::create_dir_all(&output).unwrap();
     d.w.dispatch(UiAction::SetColor {rgba:[0.08,0.08,0.08,1.]});
     d.w.dispatch(UiAction::SetBrushOpacity {value:1.});
@@ -643,7 +651,7 @@ fn native_tonal_selection_input() {
         assert!(button.tooltip_text().unwrap().contains("stop"));
     }
     let p=d.point(&d.named("tool-choice-tonal-tones-0"));
-    d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));wait_tonal(&d);
+    d.input.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));wait_tonal(&d);
     let first=wait_selection(&d);
     assert!(byte_pixel(&first,700,700)>240 && byte_pixel(&first,1250,700)>240);
     assert_eq!(byte_pixel(&first,1000,700),0);
@@ -696,7 +704,7 @@ fn native_tonal_selection_input() {
     eprintln!("Tonal range widths: low {}px, track {}px, high {}px",low.width(),track.width(),high.width());
     eprintln!("Tonal Custom: controls {custom_height}px; drawer {}px",d.named("tool-drawer").height());
     let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-custom.png")).unwrap();
-    d.key(b'q' as u32);wait_tonal(&d);
+    d.input.key(b'q' as u32);wait_tonal(&d);
     assert!(state(&d.w).layer_tools.quick_mask);
     assert_eq!(selection(&d),Some(sampled.clone()));
     if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
@@ -712,7 +720,7 @@ fn native_tonal_selection_input() {
     let quick=selection(&d).unwrap();assert!(byte_pixel(&quick,1000,700)>240);assert_eq!(byte_pixel(&quick,700,700),0);
     d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);
     assert_eq!(selection(&d),Some(sampled.clone()));
-    d.key(b'q' as u32);
+    d.input.key(b'q' as u32);
     d.w.dispatch(UiAction::Invoke {command:CommandId::NewSelectionLayer});wait_tonal(&d);
     let id=state(&d.w).layer_tools.mask_editing.unwrap().layer.unwrap();
     let saved=|d:&Driver| d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
@@ -731,7 +739,7 @@ fn native_tonal_selection_input() {
 fn native_tonal_selection_pen_input() {
     let mut d=Driver::new("art.capycanvas.TonalSelectionPen");
     d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSelect});
-    d.key(b'q' as u32);assert!(state(&d.w).layer_tools.quick_mask);
+    d.input.key(b'q' as u32);assert!(state(&d.w).layer_tools.quick_mask);
     canvas_drag(&mut d,[600.,600.],[850.,800.],true);wait_tonal(&d);
     let first=wait_selection(&d);
     assert!(byte_pixel(&first,1500,1000)>240,"pen range selects matching tones throughout the image");
@@ -779,7 +787,7 @@ pub(super) fn tonal_range_contacts(d: &mut Driver, range: &str, pen: bool, conta
     // The synthetic tablet proxy is for contacts. Numeric text focus runs
     // through the compositor directly in the mouse/touch journey.
     if pen { return; }
-    let before=tonal_bounds(d);d.key(0xff53);wait_tonal(d);
+    let before=tonal_bounds(d);d.input.key(0xff53);wait_tonal(d);
     assert!(tonal_bounds(d)[1]>before[1],"keyboard edits the focused native handle");
     // As with other focused GtkRanges, ordinary shortcuts belong to the
     // control. Exercise the mask action without changing native key ownership.
@@ -801,9 +809,9 @@ fn tonal_range_input(pen: bool) {
     assert!(tonal_bounds(&d)[0]<before[0],"range remains live when Quick Mask changes the tool context");
     // Escape cancels the current drag and returns just that endpoint.
     let before=tonal_bounds(&d);let a=tonal_handle_point(&d,range,0);let b=[a[0]+15.,a[1]];
-    d.perform(serde_json::json!([{"point":a,"down":true},{"point":b}]));pump(200);
+    d.input.perform(serde_json::json!([{"point":a,"down":true},{"point":b}]));pump(200);
     assert_ne!(tonal_bounds(&d),before);
-    d.key(0xff1b);d.perform(serde_json::json!([{"down":false}]));wait_tonal(&d);
+    d.input.key(0xff1b);d.input.perform(serde_json::json!([{"down":false}]));wait_tonal(&d);
     assert_eq!(tonal_bounds(&d),before);
     if state(&d.w).customization.drawer.is_none() { d.click_name(&opener); }
     let lower=d.named("tool-setting-tonal_lower");let upper=d.named("tool-setting-tonal_upper");

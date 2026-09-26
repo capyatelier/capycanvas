@@ -4,10 +4,10 @@ use super::*;
 #[test]
 #[ignore = "isolated native-input.js --workspace-edges"]
 fn native_workspace_drag_edges() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let mut input = RemoteInput::new();
     let captures = std::env::var("LAYER_TEST_ARTIFACTS")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| dir.join("captures"));
+        .unwrap_or_else(|_| input.dir.join("captures"));
     std::fs::create_dir_all(&captures).unwrap();
     let app = native_test_app("art.capycanvas.DragEdges");
     let w = fixture_workspace(&app);
@@ -16,21 +16,7 @@ fn native_workspace_drag_edges() {
     pump(1600);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let saved = || layer_ui::durable_layout(&state(&w).workspace.layout);
-    let mut step = 0;
-    let mut perform = |events: serde_json::Value| {
-        let file = dir.join(format!("step-{step}.json"));
-        let temporary = file.with_extension("tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(temporary, file).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native input timed out");
-            pump(5);
-        }
-        step += 1;
-        pump(100);
-    };
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    input.ready();
     pump(500);
     let mut reports = Vec::new();
     for theme in [Theme::Dark, Theme::Light] {
@@ -141,23 +127,14 @@ fn native_workspace_drag_edges() {
                 };
                 let b = handle.compute_bounds(&w.surface).unwrap();
                 let start = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
-                let event = |phase: &str, p: [f32; 2]| {
-                    if touch {
-                        serde_json::json!({"touch": phase, "point": p})
-                    } else {
-                        match phase {
-                            "down" => serde_json::json!({"point": p, "down": true}),
-                            "up" => serde_json::json!({"down": false}),
-                            _ => serde_json::json!({"point": p}),
-                        }
-                    }
-                };
-                perform(serde_json::json!([event("down", start)]));
+                let device = if touch { "touch" } else { "mouse" };
+                let event = |phase: &str, p: [f32; 2]| contact(device, phase, p);
+                input.perform(serde_json::json!([event("down", start)]));
                 if scenario == "icon" {
                     pump(700);
                 }
                 let center = [viewport[0] * 0.5, viewport[1] * 0.5];
-                perform(serde_json::json!([event("move", center)]));
+                input.perform(serde_json::json!([event("move", center)]));
                 pump(200);
                 let moving = || {
                     w.gpu
@@ -199,7 +176,7 @@ fn native_workspace_drag_edges() {
                     [center[0], 2.],
                     [center[0], viewport[1] - 2.],
                 ] {
-                    perform(serde_json::json!([event("move", point)]));
+                    input.perform(serde_json::json!([event("move", point)]));
                     let bounds = moving().bounds;
                     let native = root.compute_bounds(&w.surface).unwrap();
                     assert!(
@@ -260,7 +237,7 @@ fn native_workspace_drag_edges() {
                         target.bounds.x + target.bounds.width * 0.5,
                         target.bounds.y + target.bounds.height - 3.,
                     ];
-                    perform(serde_json::json!([event("move", point)]));
+                    input.perform(serde_json::json!([event("move", point)]));
                     let hint = w
                         .drop_hint
                         .borrow()
@@ -279,7 +256,7 @@ fn native_workspace_drag_edges() {
                             .unwrap(),
                         1.,
                     );
-                    perform(serde_json::json!([event("up", point)]));
+                    input.perform(serde_json::json!([event("up", point)]));
                     let docked = w
                         .resolved()
                         .groups
@@ -312,7 +289,7 @@ fn native_workspace_drag_edges() {
                 } else if scenario == "floating" {
                     let point = [center[0], viewport[1] - 2.];
                     assert!(w.drop_hint.borrow().is_none());
-                    perform(serde_json::json!([event("up", point)]));
+                    input.perform(serde_json::json!([event("up", point)]));
                     let bounds = w
                         .resolved()
                         .groups
@@ -340,7 +317,7 @@ fn native_workspace_drag_edges() {
                         .as_ref()
                         .and_then(|d| d.sequence.clone());
                     w.workspace_drag_input(ContactPhase::Cancel, center, sequence);
-                    perform(serde_json::json!([event("up", center)]));
+                    input.perform(serde_json::json!([event("up", center)]));
                     assert_eq!(saved(), before, "cancel restores the original layout");
                     reports.push(serde_json::json!({"theme": format!("{theme:?}"), "touch": touch,
                         "scenario": scenario, "preview": initial.bounds, "result": "cancelled", "refreshes": 0}));
@@ -360,7 +337,7 @@ fn native_workspace_drag_edges() {
         serde_json::to_vec_pretty(&reports).unwrap(),
     )
     .unwrap();
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.close();
     pump(100);
 }

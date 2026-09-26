@@ -4,29 +4,13 @@ use super::*;
 #[test]
 #[ignore = "isolated Mutter and native-input.js --workspace-resize"]
 fn native_workspace_resize_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.WorkspaceResize");
     let w = fixture_workspace(&app);
     w.window.maximize();
     w.window.present();
     pump(1600);
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    let mut perform = |events: serde_json::Value| {
-        let path = dir.join(format!("step-{step}.json"));
-        std::fs::write(
-            path.with_extension("tmp"),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        std::fs::rename(path.with_extension("tmp"), path).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native resize timed out");
-            pump(2);
-        }
-        step += 1;
-    };
+    let mut input = RemoteInput::new().settle_ms(0).timeout_secs(20);
+    input.ready();
     let saved = || serde_json::to_value(state(&w).workspace).unwrap();
     let mut reports = Vec::new();
     for touch in [false, true] {
@@ -84,21 +68,12 @@ fn native_workspace_resize_input() {
                 start[0] + if scenario == "left" { 20. } else { -20. },
                 start[1],
             ];
-            let event = |phase: &str, point: [f32; 2]| {
-                if touch {
-                    serde_json::json!({"touch":phase,"point":point})
-                } else {
-                    match phase {
-                        "down" => serde_json::json!({"point":point,"down":true}),
-                        "up" => serde_json::json!({"down":false}),
-                        _ => serde_json::json!({"point":point}),
-                    }
-                }
-            };
+            let device = if touch { "touch" } else { "mouse" };
+            let event = |phase: &str, point: [f32; 2]| contact(device, phase, point);
             let before = saved();
-            perform(serde_json::json!([event("down", start)]));
+            input.perform(serde_json::json!([event("down", start)]));
             pump(35);
-            perform(serde_json::json!([event("move", origin)]));
+            input.perform(serde_json::json!([event("move", origin)]));
             pump(300);
             assert!(
                 w.workspace_drag
@@ -140,7 +115,7 @@ fn native_workspace_resize_input() {
                     event("move", [origin[0] + triangle * 65., origin[1]])
                 })
                 .collect();
-            perform(serde_json::to_value(events).unwrap());
+            input.perform(serde_json::to_value(events).unwrap());
             pump(50);
             clock.disconnect(after_paint);
             let mut cpu = w.publication.inputs.borrow().clone();
@@ -186,7 +161,7 @@ fn native_workspace_resize_input() {
             let report = serde_json::json!({"touch":touch,"scenario":scenario,"inputs":cpu.len(),"model_refreshes":refreshed,"dispatch_ms":{"p50":cpu[cpu.len()/2],"p95":cpu[cpu.len()*95/100]},"geometry_hz":hz,"changed_presentations":times.len(),"width_range":[geometry.borrow().iter().map(|(_,w)|*w).min(),geometry.borrow().iter().map(|(_,w)|*w).max()]});
             eprintln!("{report}");
             reports.push(report);
-            perform(serde_json::json!([event("up", origin)]));
+            input.perform(serde_json::json!([event("up", origin)]));
             pump(200);
             let after = saved();
             assert_ne!(after, before);
@@ -212,16 +187,16 @@ fn native_workspace_resize_input() {
                 .unwrap()
                 .bounds;
             let start = [b.x + b.width * 0.5, b.y + b.height * 0.5];
-            perform(serde_json::json!([event("down", start)]));
+            input.perform(serde_json::json!([event("down", start)]));
             pump(25);
-            perform(serde_json::json!([event(
+            input.perform(serde_json::json!([event(
                 "move",
                 [start[0] + 35., start[1]]
             )]));
             pump(100);
             assert_ne!(saved(), after);
             w.interact(UiInput::Blur);
-            perform(serde_json::json!([event("up", start)]));
+            input.perform(serde_json::json!([event("up", start)]));
             pump(150);
             assert_eq!(saved(), after, "cancellation restores the live layout");
         }
@@ -234,7 +209,7 @@ fn native_workspace_resize_input() {
         serde_json::to_vec_pretty(&reports).unwrap(),
     )
     .unwrap();
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.close();
     pump(100);
 }

@@ -9408,12 +9408,11 @@ fn native_backdrop_blur_capture() {
         native_pen_path(&w, &points);
     }
     pump(500);
-    let directory = std::env::var("LAYER_NATIVE_INPUT_DIR").ok().map(std::path::PathBuf::from)
-        .filter(|_| std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some());
-    if let Some(directory) = &directory {
-        std::fs::write(directory.join("ready"), "ready").unwrap();
+    let input = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR")
+        .map(|_| RefCell::new(RemoteInput::new().settle_ms(0).timeout_secs(30)));
+    if let Some(input) = &input {
+        input.borrow().ready();
     }
-    let step = Cell::new(0);
     let capture = |name: &str| {
         pump(300);
         if std::env::var("LAYER_GLASS_REDRAW").as_deref() == Ok("1") {
@@ -9421,12 +9420,10 @@ fn native_backdrop_blur_capture() {
             pump(300);
         }
         eprintln!("{name}: {} glass regions", w.glass.borrow().len());
-        let Some(directory) = &directory else { return };
-        let path = directory.join(format!("step-{}.json", step.get()));
-        std::fs::write(path.with_extension("tmp"), format!(r#"[{{"wait_ms":400}},{{"capture":"{name}"}}]"#)).unwrap();
-        std::fs::rename(path.with_extension("tmp"), path).unwrap();
-        until(&|| directory.join(format!("done-{}", step.get())).exists(), "compositor capture");
-        step.set(step.get() + 1);
+        let Some(input) = &input else { return };
+        input
+            .borrow_mut()
+            .perform(serde_json::json!([{"wait_ms":400},{"capture":name}]));
     };
     if probe {
         fn find(root: &gtk::Widget, test: &dyn Fn(&gtk::Widget) -> bool) -> Option<gtk::Widget> {
@@ -10061,7 +10058,6 @@ fn native_frame_pacing() {
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_window_drag_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.WindowDragInput");
     let w = fixture_workspace(&app);
     w.window.set_default_size(1100, 760);
@@ -10096,25 +10092,8 @@ fn native_window_drag_input() {
     // This geometry test uses the fixed tab IDs, not that startup layout.
     let original = layer_ui::WorkspaceState::default();
     let saved = |w: &Workspace| serde_json::to_value(state(w).workspace).unwrap();
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    let mut perform = |events: serde_json::Value| {
-        std::fs::write(
-            dir.join(format!("step-{step}.json")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        let timeout = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
-            pump(10);
-        }
-        assert!(
-            dir.join(format!("done-{step}")).exists(),
-            "native pointer timed out"
-        );
-        step += 1;
-        pump(180);
-    };
+    let mut input = RemoteInput::new().settle_ms(180).timeout_secs(4);
+    input.ready();
     for mode in ["windowed", "maximized", "fullscreen", "restored"] {
         match mode {
             "maximized" => w.window.maximize(),
@@ -10134,7 +10113,7 @@ fn native_window_drag_input() {
         // the test pointer using GTK's widget-local motion, independently of
         // the production raw-event transform being checked here.
         observed.set(None);
-        perform(serde_json::json!([{ "point": [799., 499.] }, { "point": [800., 500.] }]));
+        input.perform(serde_json::json!([{ "point": [799., 499.] }, { "point": [800., 500.] }]));
         let (toolkit, raw) = observed.get().expect("pointer inside the test window");
         let mut origin = [800. - toolkit[0], 500. - toolkit[1]];
         assert!(
@@ -10172,10 +10151,11 @@ fn native_window_drag_input() {
                 origin[0] + b.x() + b.width() * 0.5,
                 origin[1] + b.y() + b.height() * 0.5,
             ];
-            perform(
+            input.perform(
                 serde_json::json!([{ "point": start }, { "down": true }, { "point": [start[0] + 20., start[1] + 10.] }, { "point": [start[0] + 80., start[1] + 40.] }, { "down": false }]),
             );
-            perform(serde_json::json!([{ "point": [799., 499.] }, { "point": [800., 500.] }]));
+            input
+                .perform(serde_json::json!([{ "point": [799., 499.] }, { "point": [800., 500.] }]));
             let (point, _) = observed.get().unwrap();
             let moved = [800. - point[0], 500. - point[1]];
             assert!(
@@ -10207,9 +10187,9 @@ fn native_window_drag_input() {
             .bounds;
         let start = global([tab.x + tab.width * 0.5, tab.y + tab.height * 0.5]);
         let away = global([viewport[0] * 0.5, viewport[1] * 0.55]);
-        perform(serde_json::json!([{ "point": start }, { "down": true }, { "point": away }]));
+        input.perform(serde_json::json!([{ "point": start }, { "down": true }, { "point": away }]));
         let bottom = global([viewport[0] * 0.5, viewport[1] - 2.]);
-        perform(serde_json::json!([{ "point": bottom }]));
+        input.perform(serde_json::json!([{ "point": bottom }]));
         let preview = w
             .gpu
             .borrow()
@@ -10235,7 +10215,7 @@ fn native_window_drag_input() {
             "{mode}: panel must follow the contact beyond the workspace bottom"
         );
         assert!((native.y() - preview.bounds.y).abs() < 1.);
-        perform(serde_json::json!([{ "down": false }]));
+        input.perform(serde_json::json!([{ "down": false }]));
         let fitted = w
             .resolved()
             .groups
@@ -10265,7 +10245,7 @@ fn native_window_drag_input() {
             divider.bounds.y + 150.,
         ]);
         let end = [start[0] - 40., start[1]];
-        perform(
+        input.perform(
             serde_json::json!([{ "point": start }, { "down": true }, { "point": end }, { "down": false }]),
         );
         assert_ne!(saved(&w), before, "divider resize in {mode}");
@@ -10288,7 +10268,7 @@ fn native_window_drag_input() {
         let grip = find_named(&root, "column-drawer-grip").unwrap();
         let b = grip.compute_bounds(&w.surface).unwrap();
         let start = global([b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]);
-        perform(
+        input.perform(
             serde_json::json!([{ "point": start }, { "down": true }, { "point": away }, { "down": false }]),
         );
         let layout = state(&w).workspace.layout;
@@ -10317,7 +10297,7 @@ fn native_window_drag_input() {
             .bounds;
         let start = global([source.x + source.width - 10., source.y + 18.]);
         let end = global([target.x + target.width * 0.5, target.y + 18.]);
-        perform(
+        input.perform(
             serde_json::json!([{ "point": start }, { "down": true }, { "point": end }, { "down": false }]),
         );
         assert_eq!(
@@ -10337,7 +10317,7 @@ fn native_window_drag_input() {
         pump(200);
         assert_eq!(saved(&w), collapsed);
     }
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.destroy();
     pump(100);
 }
@@ -10345,7 +10325,6 @@ fn native_window_drag_input() {
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_long_press_drag_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.LongPressDragInput");
     let w = fixture_workspace(&app);
     w.window.maximize();
@@ -10353,25 +10332,8 @@ fn native_long_press_drag_input() {
     pump(1200);
     let original = state(&w).workspace;
     let saved = || serde_json::to_value(state(&w).workspace).unwrap();
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    let mut perform = |events: serde_json::Value| {
-        std::fs::write(
-            dir.join(format!("step-{step}.json")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        let timeout = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
-            pump(10);
-        }
-        assert!(
-            dir.join(format!("done-{step}")).exists(),
-            "native touch timed out"
-        );
-        step += 1;
-        pump(150);
-    };
+    let mut input = RemoteInput::new().settle_ms(150).timeout_secs(4);
+    input.ready();
     let menu = w
         .popovers
         .borrow()
@@ -10459,7 +10421,7 @@ fn native_long_press_drag_input() {
             ];
         }
         let before = saved();
-        perform(serde_json::json!([{"touch":"down", "point":start}]));
+        input.perform(serde_json::json!([{"touch":"down", "point":start}]));
         pump(900);
         assert!(
             menu.is_visible(),
@@ -10471,20 +10433,22 @@ fn native_long_press_drag_input() {
             before,
             "{mode}: holding does not select or move a tab"
         );
-        perform(serde_json::json!([{"touch":"move", "point":[start[0] + 2., start[1]]}]));
+        input.perform(serde_json::json!([{"touch":"move", "point":[start[0] + 2., start[1]]}]));
         assert!(menu.is_visible(), "small movement keeps the menu open");
         if mode == "release" {
-            perform(serde_json::json!([{"touch":"up"}]));
+            input.perform(serde_json::json!([{"touch":"up"}]));
             assert!(menu.is_visible(), "hold release leaves the menu available");
             assert_eq!(saved(), before, "hold release does not select a tab");
             assert!(menu.is_autohide());
-            perform(serde_json::json!([{"touch":"down", "point":[800., 500.]}, {"touch":"up"}]));
+            input.perform(
+                serde_json::json!([{"touch":"down", "point":[800., 500.]}, {"touch":"up"}]),
+            );
             assert!(
                 !menu.is_visible(),
                 "a subsequent outside tap dismisses the menu"
             );
             assert!(w.workspace_drag.borrow().is_none());
-            perform(serde_json::json!([{"touch":"down", "point":start}, {"touch":"up"}]));
+            input.perform(serde_json::json!([{"touch":"down", "point":start}, {"touch":"up"}]));
             assert_eq!(
                 state(&w).workspace.layout.panel_group(Panel::Adjustments),
                 Some(group)
@@ -10525,7 +10489,7 @@ fn native_long_press_drag_input() {
                 w.surface.height() as f32 * 0.55,
             ]
         };
-        perform(serde_json::json!([{"touch":"move", "point":point}]));
+        input.perform(serde_json::json!([{"touch":"move", "point":point}]));
         assert!(
             !menu.is_visible(),
             "{mode}: movement dismisses the context menu"
@@ -10540,7 +10504,7 @@ fn native_long_press_drag_input() {
         if mode == "cancel" || mode == "tool-cancel" {
             w.interact(UiInput::Blur);
         }
-        perform(serde_json::json!([{"touch":"up"}]));
+        input.perform(serde_json::json!([{"touch":"up"}]));
         assert!(w.workspace_drag.borrow().is_none());
         if mode != "cancel" && mode != "tool-cancel" {
             let layout = state(&w).workspace.layout;
@@ -10591,7 +10555,7 @@ fn native_long_press_drag_input() {
     let grip = source.last_child().unwrap();
     let b = grip.compute_bounds(&w.surface).unwrap();
     let start = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
-    perform(serde_json::json!([{"touch":"down", "point":start}]));
+    input.perform(serde_json::json!([{"touch":"down", "point":start}]));
     pump(900);
     let layer_menu = w
         .popovers
@@ -10607,12 +10571,12 @@ fn native_long_press_drag_input() {
     .unwrap();
     let b = target.compute_bounds(&w.surface).unwrap();
     let point = [b.x() + b.width() * 0.5, b.y() + b.height() - 3.];
-    perform(serde_json::json!([{"touch":"move", "point":point}]));
+    input.perform(serde_json::json!([{"touch":"move", "point":point}]));
     assert!(
         !layer_menu.is_visible(),
         "layer grip movement dismisses its context menu"
     );
-    perform(
+    input.perform(
         serde_json::json!([{"touch":"move", "point":[point[0] + 1., point[1]]}, {"touch":"up"}]),
     );
     assert_ne!(order(), before, "the same held layer grip drops the layer");
@@ -10621,7 +10585,7 @@ fn native_long_press_drag_input() {
     });
     pump(200);
     assert_eq!(order(), before);
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.destroy();
     pump(100);
 }
@@ -10629,32 +10593,14 @@ fn native_long_press_drag_input() {
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_tab_slide_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.TabSlideInput");
     let w = fixture_workspace(&app);
     w.window.maximize();
     w.window.present();
     pump(1200);
     let original = layer_ui::WorkspaceState::default();
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    let mut perform = |events: serde_json::Value| {
-        std::fs::write(
-            dir.join(format!("step-{step}.json")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        let timeout = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
-            pump(10);
-        }
-        assert!(
-            dir.join(format!("done-{step}")).exists(),
-            "native pointer timed out"
-        );
-        step += 1;
-        pump(150);
-    };
+    let mut input = RemoteInput::new().settle_ms(150).timeout_secs(4);
+    input.ready();
     for (panel, end) in [
         (Panel::Layers, "cancel"),
         (Panel::Adjustments, "release"),
@@ -10684,12 +10630,12 @@ fn native_tab_slide_input() {
             bounds.y() + bounds.height() * 0.5,
         ];
         let before_hits = w.tab_hits();
-        perform(serde_json::json!([{ "point": start }, { "down": true },
+        input.perform(serde_json::json!([{ "point": start }, { "down": true },
             { "point": [start[0] + 2., start[1]] }]));
         assert!(w.workspace_drag.borrow().as_ref().unwrap().tab.is_none());
         assert_eq!(tab.opacity(), 1.);
         for dx in [24., -16.] {
-            perform(serde_json::json!([{ "point": [start[0] + dx, start[1] + 8.] }]));
+            input.perform(serde_json::json!([{ "point": [start[0] + dx, start[1] + 8.] }]));
             assert_eq!(tab.opacity(), 0.);
             assert_eq!(tab.compute_bounds(&w.surface).unwrap(), bounds);
             assert_eq!(
@@ -10726,7 +10672,7 @@ fn native_tab_slide_input() {
             .unwrap()
             .clip;
         for x in [clip.x - 40., clip.x + clip.width + 10.] {
-            perform(serde_json::json!([{ "point": [x, start[1]] }]));
+            input.perform(serde_json::json!([{ "point": [x, start[1]] }]));
             let drag = w.workspace_drag.borrow();
             let slide = drag.as_ref().unwrap().tab.as_ref().unwrap();
             assert!(
@@ -10762,13 +10708,13 @@ fn native_tab_slide_input() {
         let target_x = start[0] + threshold + direction * 2.;
         for crossed in [false, true, true, false] {
             let x = start[0] + threshold + direction * if crossed { 2. } else { -2. };
-            perform(serde_json::json!([{ "point": [x, start[1]] }]));
+            input.perform(serde_json::json!([{ "point": [x, start[1]] }]));
             let drag = w.workspace_drag.borrow();
             let slide = drag.as_ref().unwrap().tab.as_ref().unwrap();
             assert_eq!(slide.tabs.iter().any(|tab| tab.to != 0.), crossed);
         }
         for _ in 0..2 {
-            perform(serde_json::json!([{ "point": [target_x, start[1]] }]));
+            input.perform(serde_json::json!([{ "point": [target_x, start[1]] }]));
             let drag = w.workspace_drag.borrow();
             let slide = drag.as_ref().unwrap().tab.as_ref().unwrap();
             assert!(
@@ -10780,9 +10726,9 @@ fn native_tab_slide_input() {
             assert_eq!(w.tab_hits(), before_hits);
         }
         crate::snapshot(&w)
-            .save_to_png(dir.join(format!("tab-slide-{end}.png")))
+            .save_to_png(input.dir.join(format!("tab-slide-{end}.png")))
             .unwrap();
-        perform(serde_json::json!([{ "point": start }]));
+        input.perform(serde_json::json!([{ "point": start }]));
         assert!(
             w.workspace_drag
                 .borrow()
@@ -10801,7 +10747,7 @@ fn native_tab_slide_input() {
                 w.surface.width() as f32 * 0.5,
                 w.surface.height() as f32 * 0.55,
             ];
-            perform(serde_json::json!([{ "point": point }]));
+            input.perform(serde_json::json!([{ "point": point }]));
             assert_eq!(state(&w).workspace.layout.floating.len(), 1);
             let layout = w
                 .gpu
@@ -10824,13 +10770,13 @@ fn native_tab_slide_input() {
             w.workspace_drag_input(ContactPhase::Cancel, point, None);
         } else if end == "release" {
             point = [target_x, start[1]];
-            perform(serde_json::json!([{ "point": point }]));
+            input.perform(serde_json::json!([{ "point": point }]));
         } else if end == "blur" {
             w.interact(UiInput::Blur);
         } else {
             w.workspace_drag_input(ContactPhase::Cancel, point, None);
         }
-        perform(serde_json::json!([{ "down": false }]));
+        input.perform(serde_json::json!([{ "down": false }]));
         assert!(w.workspace_drag.borrow().is_none());
         assert_eq!(tab.opacity(), 1.);
         if end == "release" {
@@ -10847,7 +10793,7 @@ fn native_tab_slide_input() {
             serde_json::to_value(&original).unwrap()
         );
     }
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.destroy();
     pump(100);
 }
@@ -10855,7 +10801,6 @@ fn native_tab_slide_input() {
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_column_drawer_drag_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.ColumnDrawerDragInput");
     let w = fixture_workspace(&app);
     w.window.maximize();
@@ -10871,24 +10816,10 @@ fn native_column_drawer_drag_input() {
     pump(250);
     let saved = |w: &Workspace| serde_json::to_value(state(w).workspace).unwrap();
     let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut input = RemoteInput::new().settle_ms(150).timeout_secs(4);
+    input.ready();
     let mut perform = |events: serde_json::Value| {
-        std::fs::write(
-            dir.join(format!("step-{step}.json")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        let timeout = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
-            pump(10);
-        }
-        assert!(
-            dir.join(format!("done-{step}")).exists(),
-            "native pointer timed out"
-        );
-        step += 1;
-        pump(150);
+        input.perform(events);
         let native = w.window.surface().unwrap();
         let pointer = native.display().default_seat().unwrap().pointer().unwrap();
         let cursor = native.device_cursor(&pointer).and_then(|c| c.name());
@@ -11222,7 +11153,7 @@ fn native_column_drawer_drag_input() {
     );
     assert!(layout.is_collapsed(8));
     assert!(layout.floating.is_empty());
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.destroy();
     pump(100);
 }
@@ -11230,7 +11161,6 @@ fn native_column_drawer_drag_input() {
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_divider_cursor_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.DividerCursorInput");
     let w = fixture_workspace(&app);
     w.window.maximize();
@@ -11241,25 +11171,8 @@ fn native_divider_cursor_input() {
     let native = w.window.surface().unwrap();
     let pointer = native.display().default_seat().unwrap().pointer().unwrap();
     let cursor = || native.device_cursor(&pointer).and_then(|c| c.name());
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    let mut perform = |events: serde_json::Value| {
-        std::fs::write(
-            dir.join(format!("step-{step}.json")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        let timeout = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
-            pump(10);
-        }
-        assert!(
-            dir.join(format!("done-{step}")).exists(),
-            "native pointer timed out"
-        );
-        step += 1;
-        pump(150);
-    };
+    let mut input = RemoteInput::new().settle_ms(150).timeout_secs(4);
+    input.ready();
     for group in [5, 8] {
         w.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(original.clone()),
@@ -11295,9 +11208,9 @@ fn native_divider_cursor_input() {
             divider.bounds.y + 80.,
         ];
         let outward = if divider.reversed { -1. } else { 1. };
-        perform(serde_json::json!([{ "point": start }]));
+        input.perform(serde_json::json!([{ "point": start }]));
         assert_eq!(cursor().as_deref(), Some("col-resize"));
-        perform(
+        input.perform(
             serde_json::json!([{ "down": true }, { "point": [start[0] + outward * 18., start[1]] }]),
         );
         assert_eq!(cursor().as_deref(), Some("col-resize"));
@@ -11310,7 +11223,9 @@ fn native_divider_cursor_input() {
             (40., false),
             (36., false),
         ] {
-            perform(serde_json::json!([{ "point": [start[0] + outward * distance, start[1]] }]));
+            input.perform(
+                serde_json::json!([{ "point": [start[0] + outward * distance, start[1]] }]),
+            );
             assert_eq!(state(&w).workspace.layout.is_collapsed(root), collapsed);
             assert_eq!(
                 cursor().as_deref(),
@@ -11340,11 +11255,13 @@ fn native_divider_cursor_input() {
             (threshold - 2., true),
             (threshold + 2., false),
         ] {
-            perform(serde_json::json!([{ "point": [start[0] + outward * distance, start[1]] }]));
+            input.perform(
+                serde_json::json!([{ "point": [start[0] + outward * distance, start[1]] }]),
+            );
             assert_eq!(state(&w).workspace.layout.is_collapsed(root), collapsed);
             assert_eq!(cursor().as_deref(), Some("col-resize"));
         }
-        perform(serde_json::json!([
+        input.perform(serde_json::json!([
             { "down": false },
             { "point": [start[0] + outward * (threshold + 3.), start[1]] }
         ]));
@@ -11364,7 +11281,7 @@ fn native_divider_cursor_input() {
             .find(|d| d.id == band)
             .unwrap();
         let point = [d.bounds.x + d.bounds.width * 0.5, d.bounds.y + 80.];
-        perform(serde_json::json!([
+        input.perform(serde_json::json!([
             { "point": point }, { "down": true }, { "down": false },
             { "down": true }, { "down": false }
         ]));
@@ -11381,7 +11298,7 @@ fn native_divider_cursor_input() {
             expected + WORKSPACE_SPACING
         );
         assert!(w.workspace_drag.borrow().is_none());
-        perform(serde_json::json!([{ "point": [point[0] + outward * 20., point[1]] }]));
+        input.perform(serde_json::json!([{ "point": [point[0] + outward * 20., point[1]] }]));
         assert_eq!(
             serde_json::to_value(state(&w).workspace).unwrap(),
             serde_json::to_value(&after).unwrap()
@@ -11426,7 +11343,7 @@ fn native_divider_cursor_input() {
             };
             let b = tab.compute_bounds(&w.surface).unwrap();
             let point = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
-            perform(serde_json::json!([
+            input.perform(serde_json::json!([
                 { "point": point }, { "down": true }, { "down": false },
                 { "down": true }, { "down": false }
             ]));
@@ -11443,7 +11360,7 @@ fn native_divider_cursor_input() {
                 matches!(w.drag_target_at(point), Some(DragTarget::Dock(DockItem::Group { group: id })) if id == group)
             );
             let before = serde_json::to_value(state(&w).workspace).unwrap();
-            perform(serde_json::json!([
+            input.perform(serde_json::json!([
                 { "point": point }, { "down": true }, { "down": false },
                 { "down": true }, { "down": false }
             ]));
@@ -11462,14 +11379,14 @@ fn native_divider_cursor_input() {
                 .max(0) as u64;
             for _ in 0..2 {
                 pump(interval + 20);
-                perform(serde_json::json!([
+                input.perform(serde_json::json!([
                     { "point": point }, { "down": true }, { "down": false }
                 ]));
                 assert!(!state(&w).workspace.layout.is_collapsed(root));
             }
             // Recognizing a header click must not prevent a subsequent drag.
             pump(interval + 20);
-            perform(serde_json::json!([
+            input.perform(serde_json::json!([
                 { "point": point }, { "down": true },
                 { "point": [800., 550.] }, { "down": false }
             ]));
@@ -11487,7 +11404,7 @@ fn native_divider_cursor_input() {
             assert_eq!(serde_json::to_value(state(&w).workspace).unwrap(), before);
         }
     }
-    std::fs::write(dir.join("finished"), "done").unwrap();
+    input.finish();
     pump(100);
     w.window.destroy();
     pump(100);
@@ -11496,7 +11413,6 @@ fn native_divider_cursor_input() {
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_floating_click_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("dev.layer.FloatingClickInputTest");
     let w = fixture_workspace(&app);
     w.window.maximize();
@@ -11504,25 +11420,8 @@ fn native_floating_click_input() {
     pump(1200);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let initial = state(&w).workspace;
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    let mut perform = |events: serde_json::Value| {
-        std::fs::write(
-            dir.join(format!("step-{step}.json")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        let timeout = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
-            pump(10);
-        }
-        assert!(
-            dir.join(format!("done-{step}")).exists(),
-            "native pointer timed out"
-        );
-        step += 1;
-        pump(250);
-    };
+    let mut input = RemoteInput::new().settle_ms(250).timeout_secs(4);
+    input.ready();
     for panel in [Panel::Sizes, Panel::Toolbar] {
         w.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(initial.clone()),
@@ -11549,7 +11448,7 @@ fn native_floating_click_input() {
             natural.x + natural.width + 2.0,
             natural.y + natural.height + 2.0,
         ];
-        perform(serde_json::json!([
+        input.perform(serde_json::json!([
             {"point": corner}, {"down": true},
             {"point": [corner[0] + 60.0, corner[1] + 40.0]},
             {"point": [corner[0] + 120.0, corner[1] + 80.0]}, {"down": false}
@@ -11562,13 +11461,16 @@ fn native_floating_click_input() {
                 [g.bounds.x + g.bounds.width - 28.0, g.bounds.y + 12.0],
                 |b| [g.bounds.x + b.x + 3.0, g.bounds.y + b.y + 3.0],
             );
-            perform(serde_json::json!([
+            input.perform(serde_json::json!([
                 {"point": point}, {"down": true}, {"down": false}, {"down": true}, {"down": false}
             ]));
             let actual = placement();
             capture_reference(
                 &w,
-                &dir.join(format!("{panel:?}-{cycle}.png")).to_string_lossy(),
+                &input
+                    .dir
+                    .join(format!("{panel:?}-{cycle}.png"))
+                    .to_string_lossy(),
                 1.0,
             );
             if cycle == 0 {
@@ -11594,7 +11496,7 @@ fn native_floating_click_input() {
             }
         }
     }
-    std::fs::write(dir.join("finished"), "done").unwrap();
+    input.finish();
     pump(100);
     w.window.close();
     pump(100);
@@ -11603,7 +11505,6 @@ fn native_floating_click_input() {
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_collapsed_column_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.CollapsedColumnInput");
     let w = fixture_workspace(&app);
     w.window.maximize();
@@ -11620,27 +11521,10 @@ fn native_collapsed_column_input() {
     let native = w.window.surface().unwrap();
     let pointer = native.display().default_seat().unwrap().pointer().unwrap();
     let cursor = || native.device_cursor(&pointer).and_then(|c| c.name());
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    let mut perform = |events: serde_json::Value| {
-        std::fs::write(
-            dir.join(format!("step-{step}.json")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        let timeout = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
-            pump(10);
-        }
-        assert!(
-            dir.join(format!("done-{step}")).exists(),
-            "native pointer timed out"
-        );
-        step += 1;
-        pump(250);
-    };
+    let mut input = RemoteInput::new().settle_ms(250).timeout_secs(4);
+    input.ready();
     let mut double_click = |point: [f32; 2]| {
-        perform(serde_json::json!([
+        input.perform(serde_json::json!([
             {"point": point}, {"down": true}, {"down": false},
             {"down": true}, {"down": false}
         ]));
@@ -11726,13 +11610,13 @@ fn native_collapsed_column_input() {
             };
             let y = divider.bounds.y + divider.bounds.height * 0.5;
             let sign = if right { -1. } else { 1. };
-            perform(serde_json::json!([{ "point": start }]));
+            input.perform(serde_json::json!([{ "point": start }]));
             assert_eq!(cursor().as_deref(), Some("grab"));
-            perform(serde_json::json!([
+            input.perform(serde_json::json!([
                 {"point": start}, {"down": true}, {"point": [viewport[0] * 0.5, y]}
             ]));
             for distance in [90., 80., 60., 40., 20., 1., 0.] {
-                perform(serde_json::json!([{"point": [x + sign * distance, y]}]));
+                input.perform(serde_json::json!([{"point": [x + sign * distance, y]}]));
                 let hint = w.drop_hint.borrow().clone();
                 if distance == 90. {
                     assert!(hint.is_none());
@@ -11747,7 +11631,7 @@ fn native_collapsed_column_input() {
                     "drag keeps the column in place until release"
                 );
             }
-            perform(serde_json::json!([{"down": false}]));
+            input.perform(serde_json::json!([{"down": false}]));
             assert!(!matches!(cursor().as_deref(), Some("grabbing" | "no-drop")));
             let after = state(&w).workspace;
             assert_ne!(after, before);
@@ -11796,7 +11680,7 @@ fn native_collapsed_column_input() {
             .grip;
         let start = [grip.x + grip.width * 0.5, grip.y + grip.height * 0.5];
         let away = [viewport[0] * 0.5, viewport[1] * 0.5];
-        perform(serde_json::json!([{ "point": start }, { "down": true }, { "point": away }]));
+        input.perform(serde_json::json!([{ "point": start }, { "down": true }, { "point": away }]));
         assert_eq!(cursor().as_deref(), Some("grabbing"));
         if blur {
             w.interact(UiInput::Blur);
@@ -11806,10 +11690,10 @@ fn native_collapsed_column_input() {
         pump(100);
         assert!(w.workspace_drag.borrow().is_none());
         assert!(!matches!(cursor().as_deref(), Some("grabbing" | "no-drop")));
-        perform(serde_json::json!([{ "down": false }]));
+        input.perform(serde_json::json!([{ "down": false }]));
         assert_eq!(state(&w).workspace, before);
     }
-    std::fs::write(dir.join("finished"), "done").unwrap();
+    input.finish();
     pump(100);
     w.window.close();
     pump(100);
@@ -12818,6 +12702,82 @@ fn find_css(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
     None
 }
 
+struct RemoteInput {
+    dir: std::path::PathBuf,
+    step: usize,
+    settle_ms: u64,
+    timeout: Duration,
+}
+impl RemoteInput {
+    fn new() -> Self {
+        Self {
+            dir: std::env::var_os("LAYER_NATIVE_INPUT_DIR").unwrap().into(),
+            step: 0,
+            settle_ms: 100,
+            timeout: Duration::from_secs(5),
+        }
+    }
+    fn settle_ms(self, settle_ms: u64) -> Self {
+        Self { settle_ms, ..self }
+    }
+    fn timeout_secs(self, seconds: u64) -> Self {
+        Self {
+            timeout: Duration::from_secs(seconds),
+            ..self
+        }
+    }
+    fn ready(&self) {
+        std::fs::write(self.dir.join("ready"), "ready").unwrap();
+    }
+    fn perform(&mut self, events: serde_json::Value) {
+        let file = self.dir.join(format!("step-{}.json", self.step));
+        let temporary = file.with_extension("tmp");
+        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
+        std::fs::rename(temporary, file).unwrap();
+        let deadline = Instant::now() + self.timeout;
+        while !self.dir.join(format!("done-{}", self.step)).exists() {
+            assert!(Instant::now() < deadline, "native input step {}", self.step);
+            pump(5);
+        }
+        self.step += 1;
+        pump(self.settle_ms);
+    }
+    fn click(&mut self, point: [f32; 2]) {
+        self.perform(serde_json::json!([{ "point": point }, { "down": true }, { "down": false }]));
+    }
+    fn key(&mut self, key: u32) {
+        self.perform(
+            serde_json::json!([{ "key": key, "down": true }, { "key": key, "down": false }]),
+        );
+    }
+    fn finish(&self) {
+        std::fs::write(self.dir.join("finished"), "done").unwrap();
+    }
+}
+
+fn screen_point(widget: &gtk::Widget, window: &impl IsA<gtk::Widget>, at: [f32; 2]) -> [f32; 2] {
+    let b = if let Some(popup) = widget.native().and_downcast::<gtk::Popover>() {
+        let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
+        let (dx, dy) = popup.surface_transform();
+        widget.compute_bounds(&popup).unwrap().offset_r(
+            surface.position_x() as f32 - dx as f32,
+            surface.position_y() as f32 - dy as f32,
+        )
+    } else {
+        widget.compute_bounds(window).unwrap()
+    };
+    [b.x() + b.width() * at[0], b.y() + b.height() * at[1]]
+}
+
+fn contact(device: &str, phase: &str, point: [f32; 2]) -> serde_json::Value {
+    match (device, phase) {
+        ("touch" | "pen", _) => serde_json::json!({ device: phase, "point": point }),
+        (_, "down") => serde_json::json!({ "point": point, "down": true }),
+        (_, "up") => serde_json::json!({ "down": false }),
+        _ => serde_json::json!({ "point": point }),
+    }
+}
+
 #[test]
 #[ignore = "isolated Mutter pointer driver and SQLite; workspace-motion.sh gtk --workspace-menus"]
 fn native_workspace_menu_input() {
@@ -12838,15 +12798,6 @@ fn native_workspace_menu_input() {
         }
         None
     }
-    fn popup_point(popup: &gtk::Popover, label: &gtk::Widget) -> [f32; 2] {
-        let bounds = label.compute_bounds(popup).unwrap();
-        let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
-        let (x, y) = popup.surface_transform();
-        [
-            surface.position_x() as f32 - x as f32 + bounds.x() + bounds.width() * 0.5,
-            surface.position_y() as f32 - y as f32 + bounds.y() + bounds.height() * 0.5,
-        ]
-    }
     fn menu(root: &gtk::Widget, label: &str) -> Option<gtk::MenuButton> {
         if let Some(button) = root.downcast_ref::<gtk::MenuButton>()
             && button.label().as_deref() == Some(label)
@@ -12862,7 +12813,8 @@ fn native_workspace_menu_input() {
         }
         None
     }
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let mut input = RemoteInput::new().settle_ms(250);
+    let dir = input.dir.clone();
     assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
     let app = native_test_app("art.capycanvas.WorkspaceMenuInput");
     gtk::Settings::default()
@@ -12881,22 +12833,9 @@ fn native_workspace_menu_input() {
     }
     pump(500);
     assert!(w.window.is_maximized());
-    let mut step = 0;
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    input.ready();
     let mut click = |point: [f32; 2], button: u32| {
-        let events = serde_json::json!([{ "point": point }, { "button": button, "down": true }, { "button": button, "down": false }]);
-        std::fs::write(
-            dir.join(format!("step-{step}.json")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !dir.join(format!("done-{step}")).exists() {
-            pump(10);
-            assert!(Instant::now() < deadline, "native click timed out");
-        }
-        step += 1;
-        pump(250);
+        input.perform(serde_json::json!([{ "point": point }, { "button": button, "down": true }, { "button": button, "down": false }]));
     };
     let manager = w.workspaces.manager.as_ref().unwrap();
     assert_eq!(
@@ -13022,7 +12961,7 @@ fn native_workspace_menu_input() {
         if label == "Window" {
             assert!(menu_label(popup.upcast_ref(), "Layers").is_some());
             let toolbars = menu_label(popup.upcast_ref(), "Quick Access Toolbars").unwrap();
-            click(popup_point(&popup, &toolbars), 272);
+            click(screen_point(&toolbars, &w.window, [0.5, 0.5]), 272);
             assert!(menu_label(popup.upcast_ref(), "Tools").is_some());
             capture_popover(
                 &popup,
@@ -13034,11 +12973,11 @@ fn native_workspace_menu_input() {
                 .set_visible_submenu(Some("main"));
             pump(100);
             let workspace = menu_label(popup.upcast_ref(), "Workspaces").unwrap();
-            click(popup_point(&popup, &workspace), 272);
+            click(screen_point(&workspace, &w.window, [0.5, 0.5]), 272);
             let manage = menu_label(popup.upcast_ref(), "Manage Workspaces…")
                 .expect("Workspace submenu should open");
             capture_popover(&popup, dir.join("Workspace.png").to_str().unwrap());
-            click(popup_point(&popup, &manage), 272);
+            click(screen_point(&manage, &w.window, [0.5, 0.5]), 272);
             assert!(
                 w.workspaces.ui.dialog.is_visible(),
                 "Manage Workspaces should open through the native menu"
@@ -13084,9 +13023,9 @@ fn native_workspace_menu_input() {
                 272,
             );
             let workspace = menu_label(popup.upcast_ref(), "Workspaces").unwrap();
-            click(popup_point(&popup, &workspace), 272);
+            click(screen_point(&workspace, &w.window, [0.5, 0.5]), 272);
             let reset = menu_label(popup.upcast_ref(), "Reset All Brushes…").unwrap();
-            click(popup_point(&popup, &reset), 272);
+            click(screen_point(&reset, &w.window, [0.5, 0.5]), 272);
             let button = find_button(w.window.upcast_ref(), "Reset Brushes").unwrap();
             capture_reference(&w, dir.join("Reset-Brushes.png").to_str().unwrap(), 1.);
             let bounds = button.compute_bounds(&w.window).unwrap();
@@ -13149,7 +13088,7 @@ fn native_workspace_menu_input() {
         .expect("The panel context menu should remain open after a native right click");
     capture_popover(&context, dir.join("context.png").to_str().unwrap());
     w.dismiss_context();
-    std::fs::write(dir.join("finished"), "finished").unwrap();
+    input.finish();
     w.window.close();
     pump(300);
 }

@@ -4,7 +4,8 @@ use super::*;
 fn capture_palette(d: &mut Driver, name: &str) {
     d.capture_canvas(name);
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
-        d.perform(serde_json::json!([{"capture":name.trim_end_matches(".png").to_lowercase()}]));
+        d.input
+            .perform(serde_json::json!([{"capture":name.trim_end_matches(".png").to_lowercase()}]));
     }
 }
 
@@ -23,15 +24,6 @@ fn native_palette_reorder_pen_input() {
 fn check_palette_reorder(devices: &[&str]) {
     use layer_core::color::{RgbColor, RgbSpace};
     let mut d = Driver::new("art.capycanvas.PaletteReorder");
-    let event = |device: &str, phase: &str, point: [f32; 2]| match device {
-        "touch" => serde_json::json!({"touch":phase,"point":point}),
-        "pen" => serde_json::json!({"pen":phase,"point":point}),
-        _ => match phase {
-            "down" => serde_json::json!({"point":point,"down":true}),
-            "up" => serde_json::json!({"point":point,"down":false}),
-            _ => serde_json::json!({"point":point}),
-        },
-    };
     for surface in ["drawer", "dock", "float"] {
         d.w.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(WorkspaceState {
@@ -87,16 +79,18 @@ fn check_palette_reorder(devices: &[&str]) {
             let colors = |d: &Driver| state(&d.w).colors.library.active_palette().swatches.clone();
             // Tiny motion remains a tap; dragging needs movement slop, not a hold.
             let jitter = [start[0] + 2., start[1] + 2.];
-            d.perform(serde_json::json!([
-                event(device, "down", start),
-                event(device, "move", jitter),
-                event(device, "up", jitter)
+            d.input.perform(serde_json::json!([
+                contact(device, "down", start),
+                contact(device, "move", jitter),
+                contact(device, "up", jitter)
             ]));
             assert_eq!(colors(&d), original, "{surface} {device}: movement slop");
             let current = state(&d.w).colors.definition();
             // Immediate pickup and dragging out of a held menu use the same contact.
             for (hold_ms, cancel) in [(0, true), (850, true), (0, false)] {
-                d.perform(serde_json::json!([event(device, "down", start), {"wait_ms":hold_ms}]));
+                d.input.perform(
+                    serde_json::json!([contact(device, "down", start), {"wait_ms":hold_ms}]),
+                );
                 if *device == "mouse" {
                     assert_eq!(
                         tile.cursor().and_then(|c| c.name()).as_deref(),
@@ -121,7 +115,7 @@ fn check_palette_reorder(devices: &[&str]) {
                 });
                 let motion: Vec<_> = (1..=12)
                     .map(|i| {
-                        event(
+                        contact(
                             device,
                             "move",
                             [
@@ -131,7 +125,7 @@ fn check_palette_reorder(devices: &[&str]) {
                         )
                     })
                     .collect();
-                d.perform(serde_json::json!(motion));
+                d.input.perform(serde_json::json!(motion));
                 assert!(
                     tile.has_css_class("palette-drag-source"),
                     "{surface} {device}: dragging after {hold_ms}ms"
@@ -164,7 +158,8 @@ fn check_palette_reorder(devices: &[&str]) {
                 assert!((lifted.x() + tile.width() as f32 * 0.5 - pointer.x()).abs() < 1.);
                 assert!((lifted.y() + tile.height() as f32 * 0.5 - pointer.y()).abs() < 1.);
                 // Dwelling over an animated neighbor cannot cause oscillation.
-                d.perform(serde_json::json!([event(device, "move", end), {"wait_ms":180}]));
+                d.input
+                    .perform(serde_json::json!([contact(device, "move", end), {"wait_ms":180}]));
                 assert_eq!(grid.visual_bounds(&neighbor), Some(moved_neighbor));
                 assert_eq!(colors(&d), original, "preview never edits the palette");
                 assert!(
@@ -180,18 +175,21 @@ fn check_palette_reorder(devices: &[&str]) {
                 let outside = cancel && hold_ms == 0;
                 let release = if outside { [800., 500.] } else { end };
                 if outside {
-                    d.perform(serde_json::json!([event(device, "move", release), {"wait_ms":180}]));
+                    d.input.perform(
+                        serde_json::json!([contact(device, "move", release), {"wait_ms":180}]),
+                    );
                     assert!(
                         d.w.surface.drag_overlay_position().is_some(),
                         "lifted swatch follows outside the panel"
                     );
                     assert_eq!(grid.visual_bounds(&neighbor), Some(original_neighbor));
                 } else if cancel {
-                    d.key(0xff1b);
+                    d.input.key(0xff1b);
                 }
-                d.perform(serde_json::json!([event(device, "up", release)]));
+                d.input
+                    .perform(serde_json::json!([contact(device, "up", release)]));
                 if *device == "pen" {
-                    d.perform(serde_json::json!([{"pen":"leave"}]));
+                    d.input.perform(serde_json::json!([{"pen":"leave"}]));
                 }
                 assert!(!tile.has_css_class("palette-drag-source"));
                 assert!(!grid.is_reordering());
@@ -220,7 +218,7 @@ fn check_palette_reorder(devices: &[&str]) {
             );
             assert!(tile.grab_focus());
             for (key, expected) in [(0x7a, &original), (0x79, &expected)] {
-                d.perform(serde_json::json!([{"key":0xffe3,"down":true},{"key":key,"down":true},{"key":key,"down":false},{"key":0xffe3,"down":false}]));
+                d.input.perform(serde_json::json!([{"key":0xffe3,"down":true},{"key":key,"down":true},{"key":key,"down":false},{"key":0xffe3,"down":false}]));
                 assert_eq!(
                     &colors(&d),
                     expected,
@@ -276,17 +274,17 @@ fn check_palette_reorder(devices: &[&str]) {
             .unwrap();
         if *device == "pen" {
             let point = d.point(&tile);
-            d.perform(serde_json::json!([
-                event(device, "down", point),
-                event(device, "up", point),
+            d.input.perform(serde_json::json!([
+                contact(device, "down", point),
+                contact(device, "up", point),
                 {"pen":"leave"}
             ]));
             assert_eq!(state(&d.w).colors.definition(), original[0].color);
             let next = d.point(&d.named(&format!("palette-swatch-{}", original[1].id)));
-            d.perform(serde_json::json!([
-                event(device, "down", next),
+            d.input.perform(serde_json::json!([
+                contact(device, "down", next),
                 {"wait_ms":800},
-                event(device, "up", next),
+                contact(device, "up", next),
                 {"pen":"leave"}
             ]));
             // Synthetic tablet serials cannot grant compositor popup grabs, so
@@ -310,10 +308,10 @@ fn check_palette_reorder(devices: &[&str]) {
             let selected = state(&d.w).colors.definition();
             let mut p = d.point(scroll.upcast_ref());
             p[0] = d.point(&tile)[0] + tile.width() as f32 * 0.5 + 2.;
-            d.perform(serde_json::json!([
-                event(device, "down", p),
-                event(device, "move", [p[0], p[1] - 70.]),
-                event(device, "up", [p[0], p[1] - 70.])
+            d.input.perform(serde_json::json!([
+                contact(device, "down", p),
+                contact(device, "move", [p[0], p[1] - 70.]),
+                contact(device, "up", [p[0], p[1] - 70.])
             ]));
             assert!(
                 scroll.vadjustment().value() > 0.,
@@ -330,7 +328,7 @@ fn check_palette_reorder(devices: &[&str]) {
         let start = d.point(&tile);
         let b = scroll.compute_bounds(&d.w.window).unwrap();
         let edge = [b.x() + 60., b.y() + b.height() - 8.];
-        d.perform(serde_json::json!([event(device, "down", start), event(device, "move", edge), {"wait_ms":500}]));
+        d.input.perform(serde_json::json!([contact(device, "down", start), contact(device, "move", edge), {"wait_ms":500}]));
         assert!(
             tile.has_css_class("palette-drag-source"),
             "{device}: retained scrolled source"
@@ -346,9 +344,10 @@ fn check_palette_reorder(devices: &[&str]) {
         });
         assert!(!tile.has_css_class("palette-drag-source"));
         assert!(d.w.surface.drag_overlay_position().is_none());
-        d.perform(serde_json::json!([event(device, "up", edge)]));
+        d.input
+            .perform(serde_json::json!([contact(device, "up", edge)]));
         if *device == "pen" {
-            d.perform(serde_json::json!([{"pen":"leave"}]));
+            d.input.perform(serde_json::json!([{"pen":"leave"}]));
         }
         assert_eq!(
             state(&d.w).colors.library.active_palette().swatches,
@@ -375,7 +374,7 @@ fn native_palette_panel_input() {
     capture_palette(&mut d, "palette-starter-sketch.png");
     d.click_name("palette-chooser");
     capture_palette(&mut d, "palette-starter-list.png");
-    d.key(0xff1b);
+    d.input.key(0xff1b);
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
         let palettes = state(&d.w).colors.library.palettes.clone();
         for (index, palette) in palettes.iter().enumerate() {
@@ -386,7 +385,7 @@ fn native_palette_panel_input() {
             });
             pump(150);
             d.click_name(&format!("palette-swatch-{}", palette.swatches[0].id));
-            d.perform(serde_json::json!([{"point": [500., 70.]}]));
+            d.input.perform(serde_json::json!([{"point": [500., 70.]}]));
             pump(150);
             capture_palette(&mut d, &format!("palette-starter-{index:02}.png"));
         }
@@ -430,7 +429,7 @@ fn native_palette_panel_input() {
         .downcast::<gtk::Entry>()
         .unwrap();
     entry.set_text("Linen");
-    d.key(0xff0d);
+    d.input.key(0xff0d);
     assert_eq!(
         state(&d.w)
             .colors
@@ -446,7 +445,7 @@ fn native_palette_panel_input() {
     d.click_name(&format!("palette-swatch-{}", palette.swatches[0].id));
     d.click_name("palette-color-name");
     entry.set_text("linen");
-    d.key(0xff0d);
+    d.input.key(0xff0d);
     assert!(entry.has_css_class("error"));
     assert_ne!(
         state(&d.w)
@@ -457,7 +456,7 @@ fn native_palette_panel_input() {
             .name,
         "linen"
     );
-    d.key(0xff1b);
+    d.input.key(0xff1b);
     assert!(!entry.is_mapped());
     assert!(
         state(&d.w).customization.drawer.is_some(),
@@ -466,7 +465,8 @@ fn native_palette_panel_input() {
     // Mouse holds never open a context menu.
     let tile = d.named(&format!("palette-swatch-{}", palette.swatches[0].id));
     let point = d.point(&tile);
-    d.perform(serde_json::json!([{"point":point,"down":true},{"wait_ms":800},{"down":false}]));
+    d.input
+        .perform(serde_json::json!([{"point":point,"down":true},{"wait_ms":800},{"down":false}]));
     assert!(
         !d.w.popovers
             .borrow()
@@ -474,7 +474,7 @@ fn native_palette_panel_input() {
             .filter_map(|p| p.upgrade())
             .any(|p| p.is_visible())
     );
-    d.perform(
+    d.input.perform(
         serde_json::json!([{"point":point},{"button":273,"down":true},{"button":273,"down":false}]),
     );
     assert!(d.label("Rename Color…").is_mapped());
@@ -486,21 +486,23 @@ fn native_palette_panel_input() {
     capture_palette(&mut d, "palette-color-menu.png");
     d.click(&d.label("Rename Color…"));
     assert!(entry.is_mapped(), "native menu begins inline naming");
-    d.key(0xff1b);
+    d.input.key(0xff1b);
     assert!(tile.grab_focus());
-    d.key(0xff67); // Menu key.
+    d.input.key(0xff67); // Menu key.
     assert!(d.label("Rename Color…").is_mapped());
-    d.key(0xff1b);
+    d.input.key(0xff1b);
     let next = d.named(&format!("palette-swatch-{}", palette.swatches[1].id));
     let point = d.point(&next);
-    d.perform(serde_json::json!([{"touch":"down","point":point},{"wait_ms":800},{"touch":"up"}]));
+    d.input.perform(
+        serde_json::json!([{"touch":"down","point":point},{"wait_ms":800},{"touch":"up"}]),
+    );
     assert!(d.label("Rename Color…").is_mapped());
     assert_eq!(
         state(&d.w).colors.definition(),
         palette.swatches[0].color,
         "touch hold suppresses selection"
     );
-    d.key(0xff1b);
+    d.input.key(0xff1b);
     assert!(state(&d.w).customization.drawer.is_some());
     assert!(state(&d.w).colors.library.history.is_empty());
     capture_palette(&mut d, "palette-sketch.png");
@@ -508,7 +510,7 @@ fn native_palette_panel_input() {
     d.w.dispatch(UiAction::Invoke {
         command: CommandId::Brush,
     });
-    d.perform(
+    d.input.perform(
         serde_json::json!([{"point":[760,600],"down":true},{"point":[840,640]},{"down":false}]),
     );
     assert_eq!(state(&d.w).colors.library.history.len(), 1);
@@ -522,7 +524,7 @@ fn native_palette_panel_input() {
     for (index, rgba) in colors.into_iter().enumerate() {
         d.w.dispatch(UiAction::SetColor { rgba });
         let x = 1050 + index * 14;
-        d.perform(
+        d.input.perform(
             serde_json::json!([{"point":[x,780],"down":true},{"point":[x+8,790]},{"down":false}]),
         );
     }
@@ -651,7 +653,8 @@ fn native_palette_panel_input() {
     let first = state(&d.w).colors.library.active_palette().swatches[0].clone();
     let point = d.point(&d.named(&format!("palette-swatch-{}", first.id)));
     let history = state(&d.w).colors.library.history.clone();
-    d.perform(serde_json::json!([{"touch":"down","point":point},{"touch":"up"}]));
+    d.input
+        .perform(serde_json::json!([{"touch":"down","point":point},{"touch":"up"}]));
     assert_eq!(state(&d.w).colors.definition(), first.color);
     assert_eq!(state(&d.w).colors.library.history, history);
     // Floating widths exercise native allocation independently of dock defaults.
@@ -851,9 +854,9 @@ fn check_palette_context(devices: &[&str]) {
         for device in devices {
             let p = d.point(&row);
             match *device {
-                "mouse" => d.perform(serde_json::json!([{"point":p},{"button":273,"down":true},{"button":273,"down":false}])),
-                "touch" => d.perform(serde_json::json!([{"touch":"down","point":p},{"wait_ms":850},{"touch":"up"}])),
-                _ => d.perform(serde_json::json!([{"pen":"down","point":p},{"wait_ms":850},{"pen":"up"},{"pen":"leave"}])),
+                "mouse" => d.input.perform(serde_json::json!([{"point":p},{"button":273,"down":true},{"button":273,"down":false}])),
+                "touch" => d.input.perform(serde_json::json!([{"touch":"down","point":p},{"wait_ms":850},{"touch":"up"}])),
+                _ => d.input.perform(serde_json::json!([{"pen":"down","point":p},{"wait_ms":850},{"pen":"up"},{"pen":"leave"}])),
             }
             let menu = d
                 .named("palette-context-menu")
@@ -894,7 +897,7 @@ fn check_palette_context(devices: &[&str]) {
         }
         if !devices.contains(&"pen") {
             assert!(row.grab_focus());
-            d.key(0xff67);
+            d.input.key(0xff67);
             assert!(d.label("Rename Palette…").is_mapped());
             d.click(&d.label("Export Palette"));
             for format in layer_ui::PaletteFormat::ALL {
@@ -915,7 +918,7 @@ fn check_palette_context(devices: &[&str]) {
                 .and_downcast::<gtk::ScrolledWindow>()
                 .unwrap();
             let p = d.point(scroll.upcast_ref());
-            d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"move","point":[p[0],p[1]-65.]},{"touch":"up"}]));
+            d.input.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"move","point":[p[0],p[1]-65.]},{"touch":"up"}]));
             assert!(scroll.vadjustment().value() > 0.);
             assert!(!d.named("palette-context-menu").is_visible());
             assert_eq!(state(&d.w).colors.library.active, library.active);

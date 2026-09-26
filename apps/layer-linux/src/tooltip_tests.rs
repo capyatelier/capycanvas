@@ -5,32 +5,15 @@ use super::*;
 #[test]
 #[ignore = "isolated native-input.js --tooltips"]
 fn native_tooltip_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
-    let output = std::path::PathBuf::from(
-        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| dir.to_string_lossy().into()),
-    );
+    let mut input = RemoteInput::new();
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map_or(input.dir.clone(), Into::into);
     std::fs::create_dir_all(&output).unwrap();
     let app = native_test_app("art.capycanvas.TooltipInput");
     let w = fixture_workspace(&app);
     w.window.maximize();
     w.window.present();
     pump(1600);
-    let mut step = 0;
-    let mut perform = |events: serde_json::Value| {
-        std::fs::write(
-            dir.join(format!("step-{step}.json")),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline);
-            pump(10);
-        }
-        step += 1;
-        pump(100);
-    };
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    input.ready();
     pump(400);
     fn native_tip(root: &gtk::Widget) -> Option<gtk::Widget> {
         if root.css_name() == "tooltip" && root.is_visible() {
@@ -71,7 +54,7 @@ fn native_tooltip_input() {
             bounds.x() + bounds.width() / 2.,
             bounds.y() + bounds.height() / 2.,
         ];
-        perform(serde_json::json!([{"point":point}]));
+        input.perform(serde_json::json!([{"point":point}]));
         pump(850);
         assert!(
             native_tip(w.window.upcast_ref()).is_some(),
@@ -125,7 +108,7 @@ fn native_tooltip_input() {
             &tip,
             &output.join(format!("pen-{theme:?}.png")).to_string_lossy(),
         );
-        perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]));
+        input.perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]));
         assert!(
             popup().is_none(),
             "Keyboard input dismisses the pen tooltip"
@@ -141,7 +124,7 @@ fn native_tooltip_input() {
             pump(50);
         }
         // Returning to actual mouse input restores its native tooltip and policy.
-        perform(serde_json::json!([{"point":[point[0]+1.,point[1]]}]));
+        input.perform(serde_json::json!([{"point":[point[0]+1.,point[1]]}]));
         pump(700);
         assert!(source.has_tooltip());
         assert!(native_tip(w.window.upcast_ref()).is_some());
@@ -193,7 +176,7 @@ fn native_tooltip_input() {
         );
         w.tooltips.hide();
     }
-    std::fs::write(dir.join("finished"), "done").unwrap();
+    input.finish();
     w.window.destroy();
     pump(100);
 }

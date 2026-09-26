@@ -14,10 +14,8 @@ fn native_column_group_append_input() {
 }
 
 fn native_stack_drop_input(append: bool) {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
-    let output = std::path::PathBuf::from(
-        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| dir.to_string_lossy().into()),
-    );
+    let mut input = RemoteInput::new().timeout_secs(10);
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map_or(input.dir.clone(), Into::into);
     std::fs::create_dir_all(&output).unwrap();
     let app = native_test_app("art.capycanvas.StackMemberDrops");
     let w = fixture_workspace(&app);
@@ -25,36 +23,13 @@ fn native_stack_drop_input(append: bool) {
     w.window.present();
     pump(1600);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let mut step = 0;
-    let mut perform = |events: serde_json::Value| {
-        let file = dir.join(format!("step-{step}.json"));
-        let temporary = file.with_extension("tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(temporary, file).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native input timed out");
-            pump(5);
-        }
-        step += 1;
-        pump(100);
-    };
     let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    input.ready();
     pump(500);
     for (theme, edge) in [(Theme::Dark, Edge::Left), (Theme::Light, Edge::Right)] {
         for touch in [false, true] {
-            let event = |phase: &str, point: [f32; 2]| {
-                if touch {
-                    serde_json::json!({"touch":phase,"point":point})
-                } else {
-                    match phase {
-                        "down" => serde_json::json!({"point":point,"down":true}),
-                        "up" => serde_json::json!({"down":false}),
-                        _ => serde_json::json!({"point":point}),
-                    }
-                }
-            };
+            let device = if touch { "touch" } else { "mouse" };
+            let event = |phase: &str, point: [f32; 2]| contact(device, phase, point);
             for stacked in [false, true] {
                 for source in ["panel", "group", "toolbar", "icon", "drawer-tab"] {
                     eprintln!(
@@ -237,7 +212,7 @@ fn native_stack_drop_input(append: bool) {
                         "stack-member"
                     };
                     if source == "icon" {
-                        perform(serde_json::json!([
+                        input.perform(serde_json::json!([
                             event("down", start),
                             event("move", destination),
                             event("up", destination)
@@ -248,11 +223,11 @@ fn native_stack_drop_input(append: bool) {
                             "collapsed tiles cannot reorder before holding"
                         );
                     }
-                    perform(serde_json::json!([event("down", start)]));
+                    input.perform(serde_json::json!([event("down", start)]));
                     if source == "icon" {
                         pump(800);
                     }
-                    perform(serde_json::json!([
+                    input.perform(serde_json::json!([
                         event("move", [viewport[0] * 0.5, viewport[1] * 0.5]),
                         event("move", destination)
                     ]));
@@ -268,15 +243,15 @@ fn native_stack_drop_input(append: bool) {
                     }
                     if source == "panel" && !stacked {
                         // Cancellation must return the torn-off tab and its original selection.
-                        perform(
+                        input.perform(
                             serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
                         );
-                        perform(serde_json::json!([event("up", destination)]));
+                        input.perform(serde_json::json!([event("up", destination)]));
                         assert_eq!(
                             layer_ui::durable_layout(&state(&w).workspace.layout),
                             before
                         );
-                        perform(serde_json::json!([
+                        input.perform(serde_json::json!([
                             event("down", start),
                             event("move", destination)
                         ]));
@@ -291,7 +266,7 @@ fn native_stack_drop_input(append: bool) {
                             1.,
                         );
                     }
-                    perform(serde_json::json!([event("up", destination)]));
+                    input.perform(serde_json::json!([event("up", destination)]));
                     assert!(w.workspace_drag.borrow().is_none() && w.drop_hint.borrow().is_none());
                     let layout = state(&w).workspace.layout;
                     layout.validate().unwrap();
@@ -321,7 +296,7 @@ fn native_stack_drop_input(append: bool) {
                     let icon = w.columns.button(member, selected).unwrap();
                     let b = icon.compute_bounds(&w.surface).unwrap();
                     let point = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
-                    perform(serde_json::json!([
+                    input.perform(serde_json::json!([
                         event("down", point),
                         event("up", point)
                     ]));
@@ -357,10 +332,8 @@ fn native_stack_drop_input(append: bool) {
 #[test]
 #[ignore = "isolated Mutter mouse/touch driver: --column-stacks"]
 fn native_column_stack_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
-    let output = std::path::PathBuf::from(
-        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| dir.to_string_lossy().into()),
-    );
+    let mut input = RemoteInput::new().settle_ms(160).timeout_secs(10);
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map_or(input.dir.clone(), Into::into);
     std::fs::create_dir_all(&output).unwrap();
     let app = native_test_app("art.capycanvas.ColumnStacks");
     let w = fixture_workspace(&app);
@@ -372,22 +345,8 @@ fn native_column_stack_input() {
         assert!(Instant::now() < deadline, "workspace storage startup");
         pump(10);
     }
-    let mut step = 0;
-    let mut perform = |events: serde_json::Value| {
-        let file = dir.join(format!("step-{step}.json"));
-        let temporary = file.with_extension("tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(temporary, file).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native input timed out");
-            pump(5);
-        }
-        step += 1;
-        pump(160);
-    };
     let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
-    std::fs::write(dir.join("ready"), "ready").unwrap();
+    input.ready();
     pump(500);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     for theme in [Theme::Dark, Theme::Light] {
@@ -414,7 +373,7 @@ fn native_column_stack_input() {
             }
         }
         let canvas = center(resolved.work_area);
-        perform(serde_json::json!([{"point":canvas,"down":true},{"down":false}]));
+        input.perform(serde_json::json!([{"point":canvas,"down":true},{"down":false}]));
         assert!(w.resolved().collapsed.iter().all(|c| c.open.is_some()));
         crate::capture(
             &w,
@@ -426,17 +385,8 @@ fn native_column_stack_input() {
     }
     for (theme, edge) in [(Theme::Dark, Edge::Left), (Theme::Light, Edge::Right)] {
         for touch in [false, true] {
-            let event = |phase: &str, point: [f32; 2]| {
-                if touch {
-                    serde_json::json!({"touch":phase,"point":point})
-                } else {
-                    match phase {
-                        "down" => serde_json::json!({"point":point,"down":true}),
-                        "up" => serde_json::json!({"down":false}),
-                        _ => serde_json::json!({"point":point}),
-                    }
-                }
-            };
+            let device = if touch { "touch" } else { "mouse" };
+            let event = |phase: &str, point: [f32; 2]| contact(device, phase, point);
             let click = |p| serde_json::json!([event("down", p), event("up", p)]);
             let mut initial = layer_ui::WorkspaceState::default();
             initial.layout.bands[0].edge = edge;
@@ -461,7 +411,7 @@ fn native_column_stack_input() {
             let source = center(r.collapsed.iter().find(|c| c.id == 8).unwrap().grip);
             let target = center(r.collapsed.iter().find(|c| c.id == 4).unwrap().grip);
             // Handles pick up immediately for mouse and touch, without a hold.
-            perform(serde_json::json!([
+            input.perform(serde_json::json!([
                 event("down", source),
                 event("move", target),
                 event("up", target)
@@ -489,7 +439,7 @@ fn native_column_stack_input() {
             assert!(!handle.can_target() && !handle.is_focusable());
             let start = center(fixed.bounds);
             let moved = [viewport[0] * 0.5, start[1]];
-            perform(serde_json::json!([
+            input.perform(serde_json::json!([
                 event("down", start),
                 event("move", moved),
                 event("up", moved)
@@ -511,11 +461,11 @@ fn native_column_stack_input() {
                     .empty,
             );
             if touch {
-                perform(serde_json::json!([event("down", empty)]));
+                input.perform(serde_json::json!([event("down", empty)]));
                 pump(800);
-                perform(serde_json::json!([event("up", empty)]));
+                input.perform(serde_json::json!([event("up", empty)]));
             } else {
-                perform(
+                input.perform(
                     serde_json::json!([{"point":empty,"button":273,"down":true},{"button":273,"down":false}]),
                 );
             }
@@ -540,7 +490,7 @@ fn native_column_stack_input() {
                     .unwrap()
                     .bounds
             };
-            perform(click(center(icon(Panel::Brushes))));
+            input.perform(click(center(icon(Panel::Brushes))));
             let r = w.resolved();
             let member = r.collapsed.iter().find(|c| c.id == 4).unwrap();
             let open = member.open.as_ref().unwrap();
@@ -637,7 +587,7 @@ fn native_column_stack_input() {
                     .unwrap()
                     .root
                     .clone();
-                perform(serde_json::json!([
+                input.perform(serde_json::json!([
                     event("down", start),
                     event("move", moved)
                 ]));
@@ -692,7 +642,7 @@ fn native_column_stack_input() {
                         event("move", point)
                     })
                     .collect();
-                perform(serde_json::to_value(events).unwrap());
+                input.perform(serde_json::to_value(events).unwrap());
                 clock.disconnect(painted);
                 assert!(
                     missing.borrow().is_none(),
@@ -728,7 +678,7 @@ fn native_column_stack_input() {
                     w.groups.borrow().iter().find(|g| g.id == 5).unwrap().root,
                     root
                 );
-                perform(serde_json::json!([
+                input.perform(serde_json::json!([
                     event("move", moved),
                     event("up", moved)
                 ]));
@@ -745,7 +695,7 @@ fn native_column_stack_input() {
                         && (actual.height() - shared.height).abs() <= 1.
                 );
             }
-            perform(click(center(icon(Panel::Layers))));
+            input.perform(click(center(icon(Panel::Layers))));
             assert_eq!(
                 state(&w).workspace.layout.column_stack(4).open_column,
                 Some(8)
@@ -771,7 +721,7 @@ fn native_column_stack_input() {
                 600.
             };
             let moved = [(start[0] + inward).clamp(2., viewport[0] - 2.), start[1]];
-            perform(serde_json::json!([
+            input.perform(serde_json::json!([
                 event("down", start),
                 event("move", moved),
                 event("up", moved)
@@ -817,7 +767,7 @@ fn native_column_stack_input() {
                 },
             });
             pump(160);
-            perform(click([viewport[0] * 0.5, viewport[1] * 0.5]));
+            input.perform(click([viewport[0] * 0.5, viewport[1] * 0.5]));
             assert!(
                 state(&w)
                     .workspace
@@ -833,9 +783,10 @@ fn native_column_stack_input() {
                 },
             });
             pump(160);
-            perform(click(center(icon(Panel::Layers))));
+            input.perform(click(center(icon(Panel::Layers))));
             assert!(state(&w).customization.column_drawers[0].tabs.is_some());
-            perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]));
+            input
+                .perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]));
             assert!(state(&w).customization.column_drawers.is_empty());
             // Pulling a member to the opposite side makes it a singleton stack.
             let r = w.resolved();
@@ -848,7 +799,7 @@ fn native_column_stack_input() {
                 },
                 viewport[1] * 0.5,
             ];
-            perform(serde_json::json!([
+            input.perform(serde_json::json!([
                 event("down", source),
                 event("move", target),
                 event("up", target)
