@@ -32,6 +32,11 @@ python3 -m unittest discover -s tools/git -p 'test_*.py'
 
 # Before merging to main
 
+- **Commit milestones, not steps.** Commit only major, self-contained
+  milestones that build, pass their checks and leave the feature usable. Do not
+  commit every small task, fixup, experiment or intermediate state; finish or
+  squash the work locally first so the history stays clean and each commit
+  explains one complete change.
 - **Replace obsolete paths.** Refactor or delete superseded code instead of
   layering another implementation alongside it. For pure refactors, aim for
   neutral or fewer lines of code; explain any necessary growth.
