@@ -1,5 +1,6 @@
 //! Document-space affine geometry shared by input, handles and GPU operations.
-use crate::{Point, Rect};
+use crate::{DocumentError, MeshMap, Point, Rect};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -9,21 +10,81 @@ pub enum Interpolation {
     Linear,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+/// Forward homography from source to destination layer-local pixels, row-major:
+/// `[x', y', w'] = M [x, y, 1]`, mapping to `(x'/w', y'/w')`.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Projective(pub [f32; 9]);
+
+/// Source-to-destination geometry of one layer-local pixel transform.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum TransformMap {
+    Affine(Affine),
+    Projective(Projective),
+    Mesh(Arc<MeshMap>),
+}
+impl Default for TransformMap {
+    fn default() -> Self {
+        Self::Affine(Affine::IDENTITY)
+    }
+}
+
+/// Transient pixel-transform command. Holders never persist it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ImageTransform {
-    pub affine: Affine,
+    pub map: TransformMap,
     pub interpolation: Interpolation,
 }
 impl ImageTransform {
+    pub fn affine(affine: Affine) -> Self {
+        Self {
+            map: TransformMap::Affine(affine),
+            interpolation: Interpolation::default(),
+        }
+    }
+    pub fn as_affine(&self) -> Option<Affine> {
+        match self.map {
+            TransformMap::Affine(affine) => Some(affine),
+            _ => None,
+        }
+    }
+    pub fn is_identity(&self) -> bool {
+        self.map == TransformMap::Affine(Affine::IDENTITY)
+    }
+    /// Finite and invertible geometry that the renderer can resample.
+    pub fn validate(&self) -> Result<(), DocumentError> {
+        match &self.map {
+            TransformMap::Affine(affine) if affine.inverse().is_some() => Ok(()),
+            TransformMap::Affine(_) => Err(DocumentError::InvalidLayerOperation("Invalid transform")),
+            _ => Err(DocumentError::InvalidLayerOperation("Unsupported transform")),
+        }
+    }
+    /// The same motion expressed in another layer-local space, where `to` maps
+    /// this transform's space into it.
+    pub fn conjugate(&self, to: Affine) -> Option<Self> {
+        let from = to.inverse()?;
+        let map = match &self.map {
+            TransformMap::Affine(affine) => TransformMap::Affine(from.then(*affine).then(to)),
+            _ => return None,
+        };
+        Some(Self { map, interpolation: self.interpolation })
+    }
+    /// Bounds of the mapped source, without interpolation support.
+    pub fn forward_bounds(&self, source: Rect) -> Rect {
+        match &self.map {
+            TransformMap::Affine(affine) => affine.bounds(source),
+            _ if source.is_empty() => Rect::EMPTY,
+            _ => Rect::UNBOUNDED,
+        }
+    }
     /// Conservative cut + placement footprint. Expand in source space before
     /// mapping, since scaling also enlarges the interpolation support.
-    pub fn affected_bounds(self, source: Rect) -> Rect {
+    pub fn affected_bounds(&self, source: Rect) -> Rect {
         let [cut, placed] = self.affected_regions(source);
         cut.union(placed)
     }
     /// Keep distant cut/placement regions separate for sparse allocation.
-    pub fn affected_regions(self, source: Rect) -> [Rect; 2] {
-        if source.is_empty() || self.affine == Affine::IDENTITY {
+    pub fn affected_regions(&self, source: Rect) -> [Rect; 2] {
+        if source.is_empty() || self.is_identity() {
             return [Rect::EMPTY; 2];
         }
         let padding = f32::from(self.interpolation == Interpolation::Linear);
@@ -37,7 +98,7 @@ impl ImageTransform {
                 y: source.max.y + padding,
             },
         };
-        [source, self.affine.bounds(support)]
+        [source, self.forward_bounds(support)]
     }
 }
 
@@ -157,7 +218,7 @@ mod tests {
             max: Point { x: 30., y: 40. },
         };
         let mut transform = ImageTransform {
-            affine: Affine([4., 0., 0., 2., 300., 0.]),
+            map: TransformMap::Affine(Affine([4., 0., 0., 2., 300., 0.])),
             interpolation: Interpolation::Nearest,
         };
         let [cut, moved] = transform.affected_regions(source);
@@ -183,6 +244,22 @@ mod tests {
             Rect::EMPTY
         );
         assert_eq!(transform.affected_bounds(Rect::EMPTY), Rect::EMPTY);
+    }
+    #[test]
+    fn image_transforms_validate_and_conjugate_their_geometry() {
+        let affine = Affine::around(Point { x: 20., y: 10. }, [1.5, -0.5], 0.4, Point { x: 3., y: -7. });
+        let transform = ImageTransform::affine(affine);
+        assert_eq!(transform.as_affine(), Some(affine));
+        assert!(transform.validate().is_ok() && !transform.is_identity());
+        assert!(ImageTransform::default().is_identity());
+        assert!(ImageTransform::affine(Affine([0.; 6])).validate().is_err());
+        let to = Affine::translation(Point { x: 40., y: -12. }).then(Affine([0., 2., -2., 0., 0., 0.]));
+        let moved = transform.conjugate(to).unwrap();
+        assert_eq!(moved.interpolation, transform.interpolation);
+        for p in [Point::default(), Point { x: 31., y: -4. }] {
+            near(moved.as_affine().unwrap().map(to.map(p)), to.map(affine.map(p)));
+        }
+        assert!(transform.conjugate(Affine([0.; 6])).is_none());
     }
     #[test]
     fn affine_composition_pivots_bounds_and_inverse_agree() {

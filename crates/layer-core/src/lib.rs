@@ -34,7 +34,9 @@ pub use figures::{Figure, FigurePaint, FigureShape};
 mod rulers;
 pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler};
 mod affine;
-pub use affine::{Affine, ImageTransform, Interpolation};
+pub use affine::{Affine, ImageTransform, Interpolation, Projective, TransformMap};
+mod warp;
+pub use warp::MeshMap;
 mod project;
 mod project_storage;
 pub use project_storage::SelectionIndex as ProjectSelections;
@@ -124,6 +126,17 @@ impl Rect {
         max: Point {
             x: f32::NEG_INFINITY,
             y: f32::NEG_INFINITY,
+        },
+    };
+
+    pub const UNBOUNDED: Self = Self {
+        min: Point {
+            x: f32::NEG_INFINITY,
+            y: f32::NEG_INFINITY,
+        },
+        max: Point {
+            x: f32::INFINITY,
+            y: f32::INFINITY,
         },
     };
 

@@ -61,7 +61,7 @@ impl TileSnapshot {
     /// source footprints fit the portable sixteen texture bindings.
     pub fn jobs(
         &self,
-        transform: layer_core::ImageTransform,
+        transform: &layer_core::ImageTransform,
         coordinates: impl Iterator<Item = [u32; 2]>,
         regions: &[PixelRect],
     ) -> Result<Vec<RegionJob>, GpuRasterError> {
@@ -137,13 +137,15 @@ impl TileSnapshot {
 /// Shared finite, inverse-mapped neighborhoods for pixel edits and retained placement.
 pub(crate) fn region_jobs(
     bounds: PixelRect,
-    transform: layer_core::ImageTransform,
+    transform: &layer_core::ImageTransform,
     coordinates: impl Iterator<Item = [u32; 2]>,
     regions: &[PixelRect],
     contains: impl Fn([u32; 2]) -> bool,
 ) -> Result<Vec<RegionJob>, GpuRasterError> {
-    let inverse = transform
-        .affine
+    let affine = transform
+        .as_affine()
+        .ok_or(GpuRasterError::InvalidTransform("Unsupported transform"))?;
+    let inverse = affine
         .inverse()
         .ok_or(GpuRasterError::InvalidTransform(
             "Transform must be finite and invertible",
@@ -165,7 +167,7 @@ pub(crate) fn region_jobs(
             if contains(coordinate) {
                 required.push(coordinate);
             }
-            if transform.affine != layer_core::Affine::IDENTITY {
+            if affine != layer_core::Affine::IDENTITY {
                 let mut low = [f64::INFINITY; 2];
                 let mut high = [f64::NEG_INFINITY; 2];
                 for x in [region.min_x() as f64 + 0.5, region.max_x() as f64 - 0.5] {

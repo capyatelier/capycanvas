@@ -38,13 +38,10 @@ impl Scene {
             ));
         }
         let bounds = PixelRect::full(extent);
-        let transform = layer_core::ImageTransform {
-            affine,
-            ..Default::default()
-        };
+        let transform = layer_core::ImageTransform::affine(affine);
         let jobs = paint_transform::snapshot::region_jobs(
             bounds,
-            transform,
+            &transform,
             std::iter::once(tile),
             &[page_rect(tile)],
             |c| !page_rect(c).intersect(bounds).is_empty(),
@@ -68,7 +65,7 @@ impl Scene {
                 tile,
                 region: job.region,
                 extent,
-                transform,
+                transform: transform.clone(),
                 background,
                 sources,
                 source_size: [PAGE_SIZE; 2],
@@ -90,20 +87,17 @@ impl Scene {
         let layer = &packet.layers[index];
         let extent = layer.local_extent(r.document_extent);
         let bounds = PixelRect::new(0, 0, extent[0], extent[1]);
-        let transform = layer_core::ImageTransform {
-            affine: layer_core::target_transform(packet.layers, layer.id),
-            ..Default::default()
-        };
+        let affine = layer_core::target_transform(packet.layers, layer.id);
+        let transform = layer_core::ImageTransform::affine(affine);
         if self.placement_display
             && let Some(mip) = self.placement_mips.get(&layer.id).filter(|m| m.usable)
         {
             let (level, view, size) = mip.image.sample(mip.sample_level);
             let scale = (1 << level) as f32;
             let view = view.clone();
-            let transform = layer_core::ImageTransform {
-                affine: layer_core::Affine([scale, 0., 0., scale, 0., 0.]).then(transform.affine),
-                ..Default::default()
-            };
+            let transform = layer_core::ImageTransform::affine(
+                layer_core::Affine([scale, 0., 0., scale, 0., 0.]).then(affine),
+            );
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             self.jobs.push(Job::Placement(Box::new(PlacementJob {
                 target: self.pool[out].view.clone(),
@@ -119,7 +113,7 @@ impl Scene {
         }
         let jobs = paint_transform::snapshot::region_jobs(
             bounds,
-            transform,
+            &transform,
             std::iter::once(tile),
             &[page_rect(tile)],
             |c| !page_rect(c).intersect(bounds).is_empty(),
@@ -138,7 +132,7 @@ impl Scene {
                 tile,
                 region: job.region,
                 extent,
-                transform,
+                transform: transform.clone(),
                 background: 0.,
                 sources,
                 source_size: [PAGE_SIZE; 2],
@@ -249,7 +243,7 @@ pub(super) fn encode(
             encoder,
             bounds,
             job.background,
-            job.transform,
+            &job.transform,
             &[TiledTransformRecord {
                 target: job.tile,
                 sources: &coordinates,

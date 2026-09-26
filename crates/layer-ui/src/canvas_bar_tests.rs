@@ -252,7 +252,7 @@ fn transform_flips_quarter_turns_and_reset_keep_the_box_centred() {
     s.dispatch(UiAction::SetToolSetting { id: "transform_skew".into(), value: 0.2 }).unwrap();
     s.dispatch(UiAction::SetToolSetting { id: "transform_x".into(), value: 25. }).unwrap();
     s.frame(2, 2).unwrap();
-    let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform.affine;
+    let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform.as_affine().unwrap();
     let settled = preview(&mut s);
     let [x0, y0, x1, y1] = s.transform_document_bounds().unwrap();
     let centre = Point { x: (x0 + x1) * 0.5, y: (y0 + y1) * 0.5 };

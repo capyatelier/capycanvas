@@ -2,7 +2,7 @@
 //! render ordinary tool controls; no platform owns transform math or history.
 use super::error;
 use crate::*;
-use layer_core::{Affine, Document, ImageTransform, LayerKind, LayerOperationKind, Point, Rect};
+use layer_core::{Affine, Document, ImageTransform, LayerKind, LayerOperationKind, Point, Rect, TransformMap};
 use layer_engine::{PenEvent, PenPhase};
 use layer_render::{CanvasRenderer, CursorSegment, TransformPreview};
 #[path = "operation/placement.rs"]
@@ -228,9 +228,9 @@ fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
         }
     }
     for op in operations {
-        bounds = match op.kind {
+        bounds = match &op.kind {
             LayerOperationKind::Transform(t) if op.coverage.initial.is_none() => {
-                t.affine.bounds(bounds)
+                t.forward_bounds(bounds)
             }
             LayerOperationKind::ApplyMask => bounds,
             _ => bounds.union(op.bounds(extent)),
@@ -384,10 +384,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(t) = &mut self.operation.current else {
             return Ok(());
         };
-        t.request.transform.affine = t.pose.affine(center(t.bounds));
+        let affine = t.pose.affine(center(t.bounds));
+        t.request.transform.map = TransformMap::Affine(affine);
         if let Some(placement) = &t.placement {
             let mut edits = Vec::new();
-            for layer in placement.preview_layers(self.engine.document(), t.request.transform.affine)? {
+            for layer in placement.preview_layers(self.engine.document(), affine)? {
                 if self.engine.document().is_locked(layer.id) {
                     return Err("The destination layer is locked".into());
                 }

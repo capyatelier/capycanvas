@@ -1004,13 +1004,9 @@ mod gpu_tests {
                         LayerId(100),
                         layer_core::Point::default(),
                     ),
-                    kind: layer_core::LayerOperationKind::Transform(layer_core::ImageTransform {
-                        affine: layer_core::Affine::translation(layer_core::Point {
-                            x: 9.,
-                            y: 13.,
-                        }),
-                        ..Default::default()
-                    }),
+                    kind: layer_core::LayerOperationKind::Transform(layer_core::ImageTransform::affine(
+                        layer_core::Affine::translation(layer_core::Point { x: 9., y: 13. }),
+                    )),
                 });
             if target == 2 {
                 let mut mask =

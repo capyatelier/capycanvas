@@ -490,15 +490,11 @@ impl TransformPreview {
         };
         let to = layer_core::target_transform(layers, self.layer)
             .then(layer_core::target_transform(layers, target).inverse()?);
-        let from = to.inverse()?;
         Some(Self {
+            transaction: self.transaction,
             layer: target,
             selection: self.selection.as_ref().map(|s| s.transformed(to)).transpose().ok()?,
-            transform: layer_core::ImageTransform {
-                affine: from.then(self.transform.affine).then(to),
-                ..self.transform
-            },
-            ..self.clone()
+            transform: self.transform.conjugate(to)?,
         })
     }
 }
@@ -735,15 +731,12 @@ mod tests {
                 transaction: 7,
                 layer: primary,
                 selection: Some(selection.clone()),
-                transform: ImageTransform {
-                    affine: Affine::around(
-                        Point { x: 44., y: 12. },
-                        [-1.3, 0.7],
-                        0.6,
-                        Point { x: 2., y: -6. },
-                    ),
-                    ..Default::default()
-                },
+                transform: ImageTransform::affine(Affine::around(
+                    Point { x: 44., y: 12. },
+                    [-1.3, 0.7],
+                    0.6,
+                    Point { x: 2., y: -6. },
+                )),
             };
             let other = request.companion(&layers).unwrap();
             assert_ne!(other.layer, primary);
@@ -755,8 +748,8 @@ mod tests {
             };
             assert_eq!(other.selection, Some(selection.translated(delta)));
             for point in [Point::default(), Point { x: 50., y: 90. }] {
-                let p = request.transform.affine.map(point);
-                let q = other.transform.affine.map(Point {
+                let p = request.transform.as_affine().unwrap().map(point);
+                let q = other.transform.as_affine().unwrap().map(Point {
                     x: point.x + delta.x,
                     y: point.y + delta.y,
                 });

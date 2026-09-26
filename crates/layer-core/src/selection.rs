@@ -333,6 +333,13 @@ impl Selection {
             inverted: self.inverted,
         })
     }
+    /// The selection carried by a pixel transform's geometry.
+    pub fn mapped(&self, map: &crate::TransformMap) -> Result<Self, DocumentError> {
+        match map {
+            crate::TransformMap::Affine(affine) => self.transformed(*affine),
+            _ => Err(DocumentError::InvalidLayerOperation("Unsupported transform")),
+        }
+    }
 }
 
 #[cfg(test)]

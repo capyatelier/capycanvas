@@ -401,7 +401,7 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
             operation(
                 &mut live,
                 LayerOperationKind::Transform(ImageTransform {
-                    affine: Affine::translation(Point { x: 7.5, y: -4.25 }),
+                    map: TransformMap::Affine(Affine::translation(Point { x: 7.5, y: -4.25 })),
                     interpolation: Interpolation::Linear,
                 }),
                 None,

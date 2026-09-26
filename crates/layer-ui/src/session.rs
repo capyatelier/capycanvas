@@ -8007,7 +8007,7 @@ mod tests {
         s.frame(2, 2).unwrap();
         let preview = s.renderer_mut().transform.clone().unwrap();
         assert_eq!(s.engine.document().revision, original.revision);
-        assert_ne!(preview.transform.affine, Affine::IDENTITY);
+        assert!(!preview.transform.is_identity());
         let mut overlay = Vec::new();
         s.append_layer_overlay(&mut overlay);
         assert_eq!(overlay.iter().filter(|s| s.marker == 2.).count(), 9);

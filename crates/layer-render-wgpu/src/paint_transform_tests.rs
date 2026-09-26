@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{Affine, ImageTransform, Interpolation};
+use layer_core::{Affine, ImageTransform, Interpolation, TransformMap};
 
 fn operation(id: u64, affine: Affine, selection: Option<Selection>) -> LayerOperation {
     let mut coverage = LayerMask::reveal_all(LayerId(id), Point::default());
@@ -9,7 +9,7 @@ fn operation(id: u64, affine: Affine, selection: Option<Selection>) -> LayerOper
         placement: layer_core::Affine::IDENTITY,
         coverage,
         kind: LayerOperationKind::Transform(ImageTransform {
-            affine,
+            map: TransformMap::Affine(affine),
             interpolation: Interpolation::Nearest,
         }),
     }
@@ -134,12 +134,12 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                     layer: if primary_mask { LayerId(9) } else { paint.id },
                     selection: None,
                     transform: ImageTransform {
-                        affine: Affine::translation(Point { x: 290., y: 20. }),
+                        map: TransformMap::Affine(Affine::translation(Point { x: 290., y: 20. })),
                         interpolation: Interpolation::Nearest,
                     },
                 };
                 let matrices = [
-                    preview.transform.affine,
+                    preview.transform.as_affine().unwrap(),
                     Affine::around(
                         Point { x: 100., y: 100. },
                         [-1.2, 0.8],
@@ -155,7 +155,7 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                     .take(matrices.len() * 3)
                     .enumerate()
                 {
-                    preview.transform.affine = affine;
+                    preview.transform.map = TransformMap::Affine(affine);
                     r.set_transform_preview(Some(&preview)).unwrap();
                     frame(&mut r, std::slice::from_ref(&paint), &[], &[], false);
                     check_page_reuse(&r, &mut allocated, step >= matrices.len() * 2);
@@ -167,8 +167,8 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                         .enumerate()
                     {
                         let mut op =
-                            operation(20 + i as u64, p.transform.affine, p.selection.clone());
-                        op.kind = LayerOperationKind::Transform(p.transform);
+                            operation(20 + i as u64, p.transform.as_affine().unwrap(), p.selection.clone());
+                        op.kind = LayerOperationKind::Transform(p.transform.clone());
                         expected
                             .target_operations_mut(p.layer)
                             .unwrap()
@@ -280,7 +280,7 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                     frame(&mut r, std::slice::from_ref(&paint), &dabs, &brushes, true);
                 }
 
-                preview.transform.affine = Affine::translation(Point { x: 290.5, y: 20.25 });
+                preview.transform.map = TransformMap::Affine(Affine::translation(Point { x: 290.5, y: 20.25 }));
                 preview.transform.interpolation = Interpolation::Linear;
                 preview.transaction += 1;
                 r.set_transform_preview(Some(&preview)).unwrap();
@@ -293,8 +293,8 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                     .chain(companion.as_ref())
                     .enumerate()
                 {
-                    let mut op = operation(20 + i as u64, p.transform.affine, p.selection.clone());
-                    op.kind = LayerOperationKind::Transform(p.transform);
+                    let mut op = operation(20 + i as u64, p.transform.as_affine().unwrap(), p.selection.clone());
+                    op.kind = LayerOperationKind::Transform(p.transform.clone());
                     paint
                         .target_operations_mut(p.layer)
                         .unwrap()
@@ -498,14 +498,14 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
             .take(matrices.len() * 3)
             .enumerate()
         {
-            preview.transform.affine = affine;
+            preview.transform.map = TransformMap::Affine(affine);
             r.set_transform_preview(Some(&preview)).unwrap();
             frame(&mut r, layers, &[], &[], false);
             check_page_reuse(&r, &mut allocated, step >= matrices.len() * 2);
             let live = r.readback_srgb_rgba8().unwrap();
             let mut expected = layer.clone();
             let mut op = operation(20, affine, Some(selection.clone()));
-            op.kind = LayerOperationKind::Transform(preview.transform);
+            op.kind = LayerOperationKind::Transform(preview.transform.clone());
             expected.pending_operations.push(op.clone());
             let operation = DabBatch {
                 damage: op.bounds(extent),
@@ -587,8 +587,8 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
         frame(&mut r, layers, &[], &[], false);
         let before_commit = r.readback_srgb_rgba8().unwrap();
         let captures = r.transforms.as_ref().unwrap().source_captures();
-        let mut op = operation(21, preview.transform.affine, preview.selection.clone());
-        op.kind = LayerOperationKind::Transform(preview.transform);
+        let mut op = operation(21, preview.transform.as_affine().unwrap(), preview.selection.clone());
+        op.kind = LayerOperationKind::Transform(preview.transform.clone());
         let operation = DabBatch {
             damage: op.bounds(extent),
             ..op_batch(0, &op)
@@ -629,10 +629,7 @@ fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pix
         transaction: 1,
         layer: LayerId(1),
         selection: None,
-        transform: ImageTransform {
-            affine: Affine::translation(Point { x: 20., y: 0. }),
-            ..Default::default()
-        },
+        transform: ImageTransform::affine(Affine::translation(Point { x: 20., y: 0. })),
     }))
     .unwrap();
     submit(
@@ -921,13 +918,10 @@ fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
             transaction: 1,
             layer: LayerId(target),
             selection: None,
-            transform: ImageTransform {
-                affine: Affine::translation(Point { x: 150., y: 40. }),
-                ..Default::default()
-            },
+            transform: ImageTransform::default(),
         };
         for x in [150., 300., 70.] {
-            preview.transform.affine.0[4] = x;
+            preview.transform = ImageTransform::affine(Affine::translation(Point { x, y: 40. }));
             r.set_transform_preview(Some(&preview)).unwrap();
             let live = render(&mut r, &layers, &[], &[], false, false);
             if target == 1 || x == 150. {
@@ -1114,8 +1108,7 @@ fn measure_transform_latency(live: bool) {
                     transaction: 1,
                     layer: layer.id,
                     selection: selected.clone(),
-                    transform: ImageTransform {
-                        affine: Affine::around(
+                    transform: ImageTransform::affine(Affine::around(
                             Point { x: 1024., y: 768. },
                             [1. + t.sin() * 0.02; 2],
                             t.cos() * 0.01,
@@ -1123,9 +1116,7 @@ fn measure_transform_latency(live: bool) {
                                 x: t.sin() * 5.,
                                 y: t.cos() * 3.,
                             },
-                        ),
-                        ..Default::default()
-                    },
+                        )),
                 }))
                 .unwrap();
             }
@@ -1337,7 +1328,7 @@ fn original_photo_transforms_stream_tiles_cancel_and_restore_exact_raster_histor
             Affine::IDENTITY,
         ] {
             preview.transform = ImageTransform {
-                affine,
+                map: TransformMap::Affine(affine),
                 interpolation: Interpolation::Linear,
             };
             for (renderer, layer) in [(&mut r, &layer), (&mut reference, &baked)] {
@@ -1379,15 +1370,15 @@ fn original_photo_transforms_stream_tiles_cancel_and_restore_exact_raster_histor
     // A matching preview commits its existing tiles, then raster history alone
     // restores them. No transform reconstruction is needed by undo or redo.
     preview.transaction += 1;
-    preview.transform.affine = Affine::translation(Point { x: 83.25, y: 127.5 });
+    preview.transform.map = TransformMap::Affine(Affine::translation(Point { x: 83.25, y: 127.5 }));
     r.set_transform_preview(Some(&preview)).unwrap();
     frame(&mut r, &layer, &[], false);
     let transformed = display(&r);
     assert!(transformed != original);
     let before = layer.raster.clone();
     layer.raster = RasterRevision::pending();
-    let mut op = operation(999, preview.transform.affine, preview.selection.clone());
-    op.kind = LayerOperationKind::Transform(preview.transform);
+    let mut op = operation(999, preview.transform.as_affine().unwrap(), preview.selection.clone());
+    op.kind = LayerOperationKind::Transform(preview.transform.clone());
     let batch = DabBatch {
         damage: op.bounds(extent),
         ..op_batch(0, &op)
@@ -1532,7 +1523,7 @@ fn photo_transform_workloads() {
                 layer: layer.id,
                 selection: selection.clone(),
                 transform: ImageTransform {
-                    affine: Affine::around(
+                    map: TransformMap::Affine(Affine::around(
                         center,
                         [1. + t.sin() * 0.02; 2],
                         t.cos() * 0.01,
@@ -1540,7 +1531,7 @@ fn photo_transform_workloads() {
                             x: t.sin() * 5.,
                             y: t.cos() * 3.,
                         },
-                    ),
+                    )),
                     interpolation: Interpolation::Linear,
                 },
             }))

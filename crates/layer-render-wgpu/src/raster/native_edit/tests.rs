@@ -619,10 +619,7 @@ fn native_large_source_transform(linked_mask: bool) {
     let original = document.layers[0].raster.clone();
     let original_mask = document.layers[0].mask.as_ref().map(|mask| mask.raster.clone());
     let (_, mut live) = engine(document);
-    let transform = ImageTransform {
-        affine: Affine::translation(Point { x: 256., y: 0. }),
-        ..Default::default()
-    };
+    let transform = ImageTransform::affine(Affine::translation(Point { x: 256., y: 0. }));
     if linked_mask {
         live.set_transform_preview(Some(layer_render::TransformPreview {
             transaction: 1, layer: id, selection: None, transform,

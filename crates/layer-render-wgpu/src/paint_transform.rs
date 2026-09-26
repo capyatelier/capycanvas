@@ -230,10 +230,10 @@ impl ImageTransformState {
         operation: &layer_core::LayerOperation,
         extent: [u32; 2],
     ) -> Result<(), GpuRasterError> {
-        let layer_core::LayerOperationKind::Transform(transform) = operation.kind else {
+        let layer_core::LayerOperationKind::Transform(transform) = &operation.kind else {
             unreachable!()
         };
-        if transform.affine == layer_core::Affine::IDENTITY {
+        if transform.is_identity() {
             return Ok(());
         }
         self.capture_source(
@@ -366,7 +366,7 @@ impl ImageTransformState {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         layer: LayerId,
-        transform: layer_core::ImageTransform,
+        transform: &layer_core::ImageTransform,
         regions: &[PixelRect],
     ) -> Result<(), GpuRasterError> {
         if self.sources[0].is_none() || regions.iter().all(|b| b.is_empty()) {
@@ -701,7 +701,7 @@ impl ImageTransformState {
             .iter()
             .find_map(|l| l.target_operations(preview.layer))?
             .get(index as usize)?;
-        if operation.kind != layer_core::LayerOperationKind::Transform(preview.transform)
+        if !matches!(&operation.kind, layer_core::LayerOperationKind::Transform(t) if *t == preview.transform)
             || operation.coverage.initial != preview.selection
         {
             return None;
@@ -724,7 +724,7 @@ impl ImageTransformState {
         if r.paint_layers.iter().any(|l| l.id == previous.layer)
             || r.layer_masks.definitions.contains_key(&previous.layer)
         {
-            self.render_source(r, encoder, previous.layer, Default::default(), &regions)?;
+            self.render_source(r, encoder, previous.layer, &Default::default(), &regions)?;
         }
         self.retain_pages(r, previous.layer, &[], None);
         self.preview_regions = [PixelRect::EMPTY; 2];
@@ -762,10 +762,10 @@ impl ImageTransformState {
             regions[0],
             regions[1],
         ];
-        self.render_source(r, encoder, next.layer, next.transform, &affected)?;
+        self.render_source(r, encoder, next.layer, &next.transform, &affected)?;
         // Drop only pages created for a previous preview and no longer needed.
         // Original sparse pages remain untouched outside the preview footprint.
-        self.retain_pages(r, next.layer, &regions, Some(next.transform));
+        self.retain_pages(r, next.layer, &regions, Some(&next.transform));
         damage.push((
             next.layer,
             affected
@@ -778,7 +778,7 @@ impl ImageTransformState {
     }
     fn channel_regions(
         &self,
-        transform: layer_core::ImageTransform,
+        transform: &layer_core::ImageTransform,
         extent: [u32; 2],
     ) -> [[PixelRect; 2]; 3] {
         self.source_bounds.map(|b| {
@@ -802,7 +802,7 @@ impl ImageTransformState {
         r: &mut WgpuRasterizer,
         id: LayerId,
         regions: &[PixelRect],
-        transform: Option<layer_core::ImageTransform>,
+        transform: Option<&layer_core::ImageTransform>,
     ) {
         let support = transform
             .map(|t| self.channel_regions(t, r.target_extent(id)))

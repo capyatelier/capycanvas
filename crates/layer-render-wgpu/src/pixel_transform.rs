@@ -496,11 +496,11 @@ impl PixelTransform {
         encoder: &mut crate::submission::CommandEncoder,
         bounds: [i32; 4],
         background: f32,
-        transform: ImageTransform,
+        transform: &ImageTransform,
         jobs: &[TiledTransformRecord<'_>],
     ) -> Result<[u32; 2], &'static str> {
-        let inverse = transform
-            .affine
+        let affine = transform.as_affine().ok_or("Unsupported transform")?;
+        let inverse = affine
             .inverse()
             .ok_or("Transform must be finite and invertible")?
             .0;
@@ -566,7 +566,7 @@ impl PixelTransform {
                     (job.target[0] * super::PAGE_SIZE) as f32,
                     (job.target[1] * super::PAGE_SIZE) as f32,
                     f32::from(transform.interpolation == Interpolation::Linear)
-                        + 2. * f32::from(identity || transform.affine == Affine::IDENTITY)
+                        + 2. * f32::from(identity || affine == Affine::IDENTITY)
                         + 4. * f32::from(self.placement),
                     background,
                 ];
@@ -668,14 +668,12 @@ impl PixelTransform {
         uploads: &mut Uploads,
         encoder: &mut crate::submission::CommandEncoder,
         source: &TransformSource,
-        transform: ImageTransform,
+        transform: &ImageTransform,
         targets: &[TransformTarget<'_>],
     ) -> Result<(), &'static str> {
         let flat = source.flat.as_ref().expect("flat numerical fixture");
-        let ImageTransform {
-            affine: matrix,
-            interpolation,
-        } = transform;
+        let interpolation = transform.interpolation;
+        let matrix = transform.as_affine().ok_or("Unsupported transform")?;
         if !flat.background.is_finite() || !(0.0..=1.0).contains(&flat.background) {
             return Err("Invalid transform background");
         }

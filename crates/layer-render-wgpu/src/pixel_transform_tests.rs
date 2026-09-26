@@ -1,7 +1,7 @@
 //! Test-only CPU pixel oracle; production has no CPU transform/raster fallback.
 use super::*;
 use crate::{WgpuRasterizer, create_target};
-use layer_core::Point;
+use layer_core::{Point, TransformMap};
 use wgpu::util::DeviceExt;
 
 fn upload(r: &WgpuRasterizer, size: [u32; 2], pixels: &[u8]) -> wgpu::Texture {
@@ -102,7 +102,7 @@ fn draw(
     source: &TransformSource,
     t: &wgpu::Texture,
     origin: [i32; 2],
-    transform: ImageTransform,
+    transform: &ImageTransform,
 ) {
     let v = t.create_view(&Default::default());
     let mut uploads = Uploads::new(r.device(), 64 * 1024);
@@ -114,7 +114,7 @@ fn draw(
         &mut uploads,
         &mut e,
         source,
-        transform,
+        &transform,
         &[TransformTarget {
             view: &v,
             origin,
@@ -215,8 +215,8 @@ fn visibility_transform_matches_scalar_replacement_oracle() {
                         &source,
                         &output,
                         output_origin,
-                        ImageTransform {
-                            affine,
+                        &ImageTransform {
+                            map: TransformMap::Affine(affine),
                             interpolation,
                         },
                     );
@@ -352,10 +352,10 @@ fn transforms_match_independent_premultiplied_oracle_with_coverage_and_crop() {
                 Affine::translation(Point { x: 1e20, y: -1e20 }),
             ] {
                 let transform = ImageTransform {
-                    affine,
+                    map: TransformMap::Affine(affine),
                     interpolation,
                 };
-                draw(&r, &mut pass, &source, &output, output_origin, transform);
+                draw(&r, &mut pass, &source, &output, output_origin, &transform);
                 let actual = read(&r, &output);
                 let coverage = |x: i32, y: i32| -> f64 {
                     if mode == 0 {
@@ -479,7 +479,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
         &mut uploads,
         &mut empty,
         &source,
-        ImageTransform::default(),
+        &ImageTransform::default(),
         &[],
     )
     .unwrap();
@@ -489,16 +489,16 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
     );
     assert!(p.records.is_empty());
     let transform = ImageTransform {
-        affine: Affine::around(
+        map: TransformMap::Affine(Affine::around(
             Point { x: 260., y: 140. },
             [0.9, 0.8],
             0.15,
             Point { x: 20., y: 8. },
-        ),
+        )),
         interpolation: Interpolation::Linear,
     };
     let (full, _) = create_target(r.device(), size, crate::SRGB8_FORMAT, "whole transform");
-    draw(&r, &mut p, &source, &full, [0, 0], transform);
+    draw(&r, &mut p, &source, &full, [0, 0], &transform);
     let expected = read(&r, &full);
     let tiles: Vec<_> = [
         ([0, 0], [256, 256]),
@@ -531,7 +531,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
         &mut uploads,
         &mut e,
         &source,
-        transform,
+        &transform,
         &targets,
     )
     .unwrap();
@@ -565,10 +565,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
             &mut uploads,
             &mut e,
             &source,
-            ImageTransform {
-                affine: Affine::translation(Point { x: i as f32, y: 1. }),
-                ..Default::default()
-            },
+            &ImageTransform::affine(Affine::translation(Point { x: i as f32, y: 1. })),
             &[TransformTarget {
                 view: &view,
                 origin: [0, 0],
@@ -599,10 +596,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
             &mut uploads,
             &mut e,
             &source,
-            ImageTransform {
-                affine: Affine([0.; 6]),
-                ..Default::default()
-            },
+            &ImageTransform::affine(Affine([0.; 6])),
             &targets
         )
         .is_err()
@@ -614,7 +608,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
             &mut uploads,
             &mut e,
             &source,
-            transform,
+            &transform,
             &[TransformTarget {
                 view: &view,
                 extent: size,
@@ -740,7 +734,7 @@ fn transform_latency() {
         for i in 0..160 {
             p.begin_frame();
             let transform = ImageTransform {
-                affine: if identity {
+                map: TransformMap::Affine(if identity {
                     Affine::IDENTITY
                 } else {
                     Affine::around(
@@ -749,7 +743,7 @@ fn transform_latency() {
                         0.2 + i as f32 * 0.001,
                         Point { x: 30., y: 20. },
                     )
-                },
+                }),
                 interpolation: Interpolation::Linear,
             };
             let start = Instant::now();
@@ -763,7 +757,7 @@ fn transform_latency() {
                 &mut uploads,
                 &mut e,
                 source,
-                transform,
+                &transform,
                 targets,
             )
             .unwrap();
@@ -847,8 +841,8 @@ fn scalar_wetness_interpolates_without_color_alpha_or_extra_overlap_water() {
         &mut uploads,
         &mut encoder,
         &binding,
-        ImageTransform {
-            affine: Affine::translation(Point { x: 0.5, y: 0. }),
+        &ImageTransform {
+            map: TransformMap::Affine(Affine::translation(Point { x: 0.5, y: 0. })),
             interpolation: Interpolation::Linear,
         },
         &[TransformTarget {

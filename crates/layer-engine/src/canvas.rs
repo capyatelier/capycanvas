@@ -443,9 +443,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 || doc
                     .target_owner(p.layer)
                     .is_none_or(|l| l.id == p.layer && l.kind != layer_core::LayerKind::Paint)
-                || p.transform.affine.inverse().is_none()
+                || p.transform.validate().is_err()
                 || p.selection.as_ref().is_some_and(|s| {
-                    s.affine.inverse().is_none() || s.transformed(p.transform.affine).is_err()
+                    s.affine.inverse().is_none() || s.mapped(&p.transform.map).is_err()
                 })
             {
                 return Err(DocumentError::InvalidLayerOperation(
@@ -477,7 +477,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 "No transform to apply",
             ))?
             .clone();
-        if preview.transform.affine == layer_core::Affine::IDENTITY {
+        if preview.transform.is_identity() {
             self.transform_preview = None;
             return Ok(false);
         }
@@ -497,7 +497,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 layer_core::LayerOperation {
                     placement: layer_core::Affine::IDENTITY,
                     coverage,
-                    kind: layer_core::LayerOperationKind::Transform(target.transform),
+                    kind: layer_core::LayerOperationKind::Transform(target.transform.clone()),
                 },
             ));
         }
@@ -519,7 +519,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let selection = preview.selection.as_ref()?;
             let basis = self.document().layer_transform(preview.layer);
             return selection
-                .transformed(preview.transform.affine)
+                .mapped(&preview.transform.map)
                 .ok()
                 .and_then(|s| s.transformed(basis).ok())
                 .map(std::borrow::Cow::Owned);
@@ -2771,7 +2771,7 @@ mod tests {
             transform: layer_core::ImageTransform::default(),
         };
         for x in [12., 100., -23.] {
-            preview.transform.affine = layer_core::Affine::translation(Point { x, y: 4. });
+            preview.transform.map = layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x, y: 4. }));
             engine.set_transform_preview(Some(preview.clone())).unwrap();
             engine.render_frame().unwrap();
             assert_eq!(engine.backend.transform.as_ref(), Some(&preview));
@@ -2831,15 +2831,12 @@ mod tests {
                         y: -origin.y,
                     })
                 }),
-                transform: ImageTransform {
-                    affine: Affine::around(
+                transform: ImageTransform::affine(Affine::around(
                         Point { x: 30., y: 30. },
                         [1.2, 0.7],
                         0.2,
                         Point { x: 5., y: 8. },
-                    ),
-                    ..Default::default()
-                },
+                    )),
             };
             let companion = preview.companion(&doc.layers).unwrap();
             let mut engine = CanvasEngine::new(
@@ -2858,7 +2855,7 @@ mod tests {
             for p in [&preview, &companion] {
                 let ops = layer.target_operations(p.layer).unwrap();
                 assert_eq!(ops.len(), 1);
-                assert_eq!(ops[0].kind, LayerOperationKind::Transform(p.transform));
+                assert_eq!(ops[0].kind, LayerOperationKind::Transform(p.transform.clone()));
                 assert_eq!(ops[0].coverage.initial, p.selection);
             }
             assert_eq!(engine.batches.len(), 2);
@@ -2912,15 +2909,12 @@ mod tests {
             transaction: 1,
             layer,
             selection: Some(selection.translated(Point { x: -12., y: -7. })),
-            transform: ImageTransform {
-                affine: Affine::around(
+            transform: ImageTransform::affine(Affine::around(
                     Point { x: 28., y: 33. },
                     [1.5, 0.7],
                     0.5,
                     Point { x: 3., y: -2. },
-                ),
-                ..Default::default()
-            },
+                )),
         };
         engine.set_transform_preview(Some(preview.clone())).unwrap();
         let placed = engine.display_selection().unwrap().into_owned();
@@ -2937,7 +2931,7 @@ mod tests {
         assert_eq!(operation.coverage.initial, preview.selection);
         assert_eq!(
             operation.kind,
-            layer_core::LayerOperationKind::Transform(preview.transform)
+            layer_core::LayerOperationKind::Transform(preview.transform.clone())
         );
         assert!(engine.undo().unwrap());
         assert_eq!(engine.document().selection.as_ref(), Some(&selection));
@@ -2977,10 +2971,7 @@ mod tests {
     #[test]
     fn appended_raster_operations_are_incremental_and_undo_restores_revisions() {
         for kind in [
-            layer_core::LayerOperationKind::Transform(layer_core::ImageTransform {
-                affine: layer_core::Affine::translation(Point { x: 10., y: 4. }),
-                ..Default::default()
-            }),
+            layer_core::LayerOperationKind::Transform(layer_core::ImageTransform::affine(layer_core::Affine::translation(Point { x: 10., y: 4. }))),
             layer_core::LayerOperationKind::Gradient {
                 start: Point::default(),
                 end: Point { x: 128.0, y: 0.0 },

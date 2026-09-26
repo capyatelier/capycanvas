@@ -270,10 +270,7 @@ fn cold_native_transform_snapshots_keep_original_tiles_through_preview_and_cance
             transaction: 1,
             layer: id,
             selection: None,
-            transform: layer_core::ImageTransform {
-                affine: layer_core::Affine::translation(offset),
-                ..Default::default()
-            },
+            transform: layer_core::ImageTransform::affine(layer_core::Affine::translation(offset)),
         };
         for r in [&mut resident, &mut cold] {
             r.set_transform_preview(Some(&preview)).unwrap();
@@ -541,10 +538,7 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
             alpha_locked: true,
         },
         LayerOperationKind::ApplyMask,
-        LayerOperationKind::Transform(ImageTransform {
-            affine: Affine::translation(Point { x: 83.25, y: 127.5 }),
-            ..Default::default()
-        }),
+        LayerOperationKind::Transform(ImageTransform::affine(Affine::translation(Point { x: 83.25, y: 127.5 }))),
     ] {
         let mut a = project(DocumentColor {
             space: RgbSpace::DisplayP3,
@@ -574,12 +568,12 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
             damage: operation.bounds(EXTENT),
         };
         for (r, p) in [(&mut resident, &mut a), (&mut cold, &mut b)] {
-            if let LayerOperationKind::Transform(transform) = operation.kind {
+            if let LayerOperationKind::Transform(transform) = &operation.kind {
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
                     transaction: 8,
                     layer: id,
                     selection: None,
-                    transform,
+                    transform: transform.clone(),
                 }))
                 .unwrap();
                 r.submit(packet(p, false)).unwrap();

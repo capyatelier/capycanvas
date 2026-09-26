@@ -491,7 +491,7 @@ impl LayerOperation {
             bounds.max.x = bounds.max.x.min(selection.max.x);
             bounds.max.y = bounds.max.y.min(selection.max.y);
         }
-        if let LayerOperationKind::Transform(transform) = self.kind {
+        if let LayerOperationKind::Transform(transform) = &self.kind {
             transform.affected_bounds(bounds)
         } else {
             bounds
@@ -527,7 +527,7 @@ impl LayerOperation {
             LayerOperationKind::ApplyMask => self.placement == Affine::IDENTITY,
             LayerOperationKind::Transform(transform) => {
                 self.placement == Affine::IDENTITY
-                    && transform.affine.inverse().is_some()
+                    && transform.validate().is_ok()
                     && self.coverage.raster.is_empty()
                     && self.coverage.offset == Point::default()
                     && self.coverage.enabled

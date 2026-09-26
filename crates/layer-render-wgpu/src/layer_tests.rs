@@ -2881,10 +2881,7 @@ fn baked_operations_keep_the_ordinary_brush_path() {
             erase: false,
         }),
         LayerOperationKind::ApplyMask,
-        LayerOperationKind::Transform(layer_core::ImageTransform {
-            affine: layer_core::Affine::translation(Point { x: 24., y: 8. }),
-            ..Default::default()
-        }),
+        LayerOperationKind::Transform(layer_core::ImageTransform::affine(layer_core::Affine::translation(Point { x: 24., y: 8. }))),
     ] {
         for preset in [GPen, Airbrush, NaturalBlender, WatercolorWash] {
             for opacity in [1., 0.45] {
