@@ -7,7 +7,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/compact-color/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $run 'profile'))|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE')
+$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
 $previous=@{}
 foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name)}
 function Model {
@@ -68,7 +68,6 @@ try{
     # This fixture uses native controls only; keep the isolated profile and all
     # foreground/point ownership checks, without the unrelated overlay.
     Remove-Item Env:CAPY_SMOKE_TEST -ErrorAction SilentlyContinue
-    Remove-Item Env:CAPY_PRESENT_PROBE -ErrorAction SilentlyContinue
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $run 'pid.txt'),[string]$review.Id)

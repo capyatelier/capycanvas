@@ -103,7 +103,7 @@ __declspec(dllimport) int32_t capy_frame(CapyHost*, uint64_t now_ns, uint64_t pr
 /* Returned UTF-8 owned by Rust; release with capy_string_free. Null=no change. */
 __declspec(dllimport) char* capy_snapshot(CapyHost*);
 __declspec(dllimport) char* capy_query(CapyHost*, const char* json);
-/* Local-only DXGI identity for correlating a presentation probe with ETW. */
+/* Local-only DXGI identity for correlating a pen latency trace with ETW. */
 __declspec(dllimport) char* capy_surface_info(CapyHost*);
 /* Pure numeric policy; does not touch the render owner's host. */
 __declspec(dllimport) bool capy_document_tabs_compact(float width, size_t count);

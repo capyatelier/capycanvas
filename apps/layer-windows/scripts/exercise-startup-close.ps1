@@ -14,7 +14,7 @@ $run = Join-Path $repo ('artifacts/windows/startup-close/' + [Guid]::NewGuid().T
 $names = @(
     'CAPY_SETTINGS_DIRECTORY', 'CAPY_TRACE_UI', 'CAPY_TRACE_SHADER_JOBS',
     'CAPY_SMOKE_TEST', 'CAPY_TEST_DISPLAY', 'CAPY_TEST_PRIMARY',
-    'CAPY_PRESENT_PROBE', 'CAPY_FILTERS_DIR', 'CAPY_FILTERS_MODE'
+    'CAPY_FILTERS_DIR', 'CAPY_FILTERS_MODE'
 )
 $previous = @{}
 foreach ($name in $names) {

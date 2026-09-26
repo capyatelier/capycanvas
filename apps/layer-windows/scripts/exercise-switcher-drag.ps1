@@ -7,7 +7,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/switcher-drag/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE')
+$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
 $previous=@{}
 foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 function Read-Snapshot([string]$Path){
@@ -108,8 +108,6 @@ function Launch([string]$Label){
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Storage).ready -and !(Storage).switcher_busy} 'Switcher review did not start' 45
     $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     if(Find 'Test stroke' -Name){throw 'Switcher fixture requires the production UI without smoke controls'}
-    $probe=Get-Item -LiteralPath (Join-Path $directory 'presentation-probe.json') -ErrorAction SilentlyContinue
-    if($probe -and $probe.LastWriteTime -ge $review.StartTime){throw 'Switcher fixture must not run a presentation probe'}
 }
 function Close {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close

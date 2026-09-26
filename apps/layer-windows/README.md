@@ -71,8 +71,7 @@ They replay records through the input dispatcher; they do not validate OS input 
 Use exercise-window.ps1 with -Action 'Test stroke', Undo, Redo, 'Test pan', Resize,
 and Close, and inspect-window.ps1 to capture the app after each change. The ordinary
 Stroke action uses OS SendInput and fails unless the pointer reaches this process.
-Raw pointer tracing is separately opt-in through CAPY_TRACE_INPUT=1 and must be
-disabled for timing runs. All generated diagnostics remain local.
+All generated diagnostics remain local.
 
 Use inspect-window.ps1 -ClientOnly for Win32 client-area captures. Record the
 XAML viewport separately: the observed client capture includes one extra physical
@@ -99,13 +98,7 @@ Unchanged panel structures retain their controls across value updates; camera
 patches update only the camera readout. Full and camera snapshots use separate
 coalesced slots so camera motion cannot replace an unpublished workspace update.
 
-~~~powershell
-./apps/layer-windows/scripts/exercise-workspace.ps1 -ProcessId <app-process-id>
-~~~
-
-This test uses native UI Automation to check brush values, control retention,
-layer creation and undo. It does not verify OS pointer delivery. Build-time asset
-staging reuses the web app's SVG icons and brush previews under the ignored output
+Build-time asset staging reuses the web app's SVG icons and brush previews under the ignored output
 directory. No generated assets or captures need to be committed.
 
 The current web app has also been built and captured in local hardware-backed
@@ -145,50 +138,14 @@ Run allocation/order checks from a Visual Studio developer PowerShell:
 ~~~
 
 With CAPY_SMOKE_TEST=1, Test backlog replays 32,768 records in bounded batches.
-CAPY_TRACE_TRANSPORT=1 logs capacity waits locally to input-transport.log.
 Invoke Test backlog and then Close with exercise-window.ps1 to exercise shutdown
-during producer backpressure. Both transport and raw input tracing must be off
-for timing runs. Replay is not evidence of physical input delivery.
+during producer backpressure. Replay is not evidence of physical input delivery.
 
 WinUI's independent input source reports terminal capture loss and routed release;
 the adapter cancels shared contact state on those paths. Physical mouse/pen/touch,
 keyboard, wheel and mixed-DPI continuity still require end-to-end validation.
 See Microsoft's [InputPointerSource event ordering](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.input.inputpointersource?view=windows-app-sdk-1.8)
 for the OS routing contract.
-
-## Presentation probe
-
-Build Release, then start the opt-in steady-content probe at normal user privilege:
-
-~~~powershell
-./apps/layer-windows/scripts/start-presentation-probe.ps1
-~~~
-
-The probe waits for shader readiness and then keeps presenting the same canvas
-through DXGI, without a timer or per-frame disk logging. It writes local surface
-identity/configuration to presentation-probe.json. This is a baseline for the
-window/compositor path; it cannot pass sustained painting or input latency gates.
-
-Install the official standalone [PresentMon 2.5.1 release](https://github.com/GameTechDev/PresentMon/releases/tag/v2.5.1)
-under ~/.local/tools/presentmon/2.5.1, or pass its path explicitly. Capture the
-process ID returned by the launch script:
-
-~~~powershell
-./apps/layer-windows/scripts/capture-presentation.ps1 -ProcessId <probe-process-id>
-~~~
-
-Windows requires ETW tracing rights for capture. If access is denied, run only
-the capture script from Administrator PowerShell and leave the app at normal
-privilege. The script does not elevate itself or change account/group membership.
-It targets that process, disables input tracking, verifies the current display
-runs at least 120 Hz, and matches the DXGI canvas identity instead of assuming
-WinUI's other swap chains are the canvas. Keep the probe window fixed during
-capture; reconfiguration invalidates the run.
-
-Raw CSV, logs, display metadata and binary hashes stay under ignored
-artifacts/windows/presentation. Analyze actual display intervals and dropped
-frames separately from submission rate. No display-cadence conclusion is available
-without a valid capture and workload review; this probe measures no mouse/pen latency.
 
 ## Native header and Preferences checks
 
@@ -215,26 +172,12 @@ The fixture checks shared acknowledgments, native control state, all three
 clock visibility policies and the battery observation against Windows. Run it only
 against a disposable review instance; it edits settings and toggles fullscreen.
 It does not verify physical keyboard or pointer delivery. CAPY_TEST_PRIMARY=1
-with CAPY_TEST_DISPLAY=1 places review windows on the primary display, allowing
-a separate 120 Hz probe to remain visible.
+with CAPY_TEST_DISPLAY=1 places review windows on the primary display.
 
 The opt-in ui-state.json contains app state and may include private settings.
 It stays ignored alongside captures and traces, and must be off for performance
 runs. OS theme changes, complete visual/interaction parity and the full physical
 input, lifecycle, packaging and performance acceptance gates remain separate.
-
-Analyze a captured directory locally with:
-
-~~~powershell
-./apps/layer-windows/scripts/analyze-presentation.ps1 -Directory <local-capture-directory>
-./apps/layer-windows/scripts/test-presentation-analysis.ps1
-~~~
-
-The analyzer keeps submission rate, displayed-frame rate, missing display
-records and present-to-display latency distinct. It does not declare a 120 Hz
-or input-latency acceptance pass. Its tests use synthetic data. See the latest
-validation findings in ../../docs/history/windows-implementation.md for measured results
-and unresolved integration checks.
 
 ## Private preferences storage
 

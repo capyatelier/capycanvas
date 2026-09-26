@@ -9,7 +9,7 @@ $settingsProfile=Join-Path $run 'profile'
 [IO.Directory]::CreateDirectory($settingsProfile)|Out-Null
 $settingsFile=Join-Path $settingsProfile 'settings.json'
 $script:stateFile=$null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE','CAPY_TRACE_INPUT','CAPY_TRACE_TRANSPORT')
+$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')
 $previous=@{}
 foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 $script:review=$null

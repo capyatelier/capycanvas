@@ -288,7 +288,7 @@ $run = Join-Path (Get-Location) ('artifacts/windows/review/' + [Guid]::NewGuid()
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 $env:CAPY_SETTINGS_DIRECTORY = Join-Path $run 'profile'
 $env:CAPY_TRACE_UI = '1'
-Remove-Item Env:CAPY_SMOKE_TEST,Env:CAPY_PRESENT_PROBE,Env:CAPY_TEST_DISPLAY,Env:CAPY_TEST_PRIMARY -ErrorAction SilentlyContinue
+Remove-Item Env:CAPY_SMOKE_TEST,Env:CAPY_TEST_DISPLAY,Env:CAPY_TEST_PRIMARY -ErrorAction SilentlyContinue
 $review = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
 $null = $review.Handle
 ./apps/layer-windows/scripts/capture-editor.ps1 -ProcessId $review.Id -OutputDirectory $run
@@ -364,11 +364,10 @@ for details.
 
 Keep profiles, databases, images, traces and machine diagnostics under ignored
 `artifacts/windows`; publish only reviewed source and sanitized summaries.
-Run [presentation measurements](../../apps/layer-windows/README.md#presentation-probe)
+Run [pen latency measurements](windows-pen-latency-20260920.md#reproduction)
 separately, with diagnostic tracing off and no competing builds or GPU tests.
-Probe the actual display configuration first. Elevate only the capture script
-if Windows denies ETW access. UI Automation and replay do not establish physical
-pen/touch behavior, painting cadence or input latency.
+UI Automation and replay do not establish physical pen/touch behavior, painting
+cadence or input latency.
 
 ## GPU reconstruction checks
 

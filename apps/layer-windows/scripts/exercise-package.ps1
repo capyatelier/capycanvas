@@ -31,7 +31,7 @@ foreach($file in $manifest.files){
     if((Get-Item -LiteralPath $path).Length -ne $file.bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.sha256){throw "Package file does not match its hash: $($file.path)"}
 }
 if($names.Count -ne $declared.Count+1){throw 'Archive has files absent from its manifest'}
-$environment=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_TRACE_INPUT','CAPY_TRACE_TRANSPORT','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE','CAPY_FILTERS_DIR','CAPY_FILTERS_MODE','PATH')
+$environment=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_FILTERS_DIR','CAPY_FILTERS_MODE','PATH')
 $previous=@{};foreach($name in $environment){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 function Model {
     try {

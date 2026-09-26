@@ -118,11 +118,6 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
         next->Open();
     }
     App() {
-        UnhandledException([](auto&&, UnhandledExceptionEventArgs const& event) {
-            if(!GetEnvironmentVariableW(L"CAPY_TEST_DISPLAY",nullptr,0))return;
-            std::ofstream log("startup-error.log");
-            log << std::hex << uint32_t(event.Exception().value) << " " << to_string(event.Message()) << std::endl;
-        });
         metadata=Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider();
 
     }

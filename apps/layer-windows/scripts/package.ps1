@@ -44,7 +44,7 @@ try {
     foreach($file in Get-ChildItem -LiteralPath $build -File -Recurse){
         if($file.Extension -in @('.pdb','.ilk','.lib','.exp','.obj','.pch')){continue}
         $relative=$file.FullName.Substring($build.Length+1)
-        if($relative -match '(^|[\\/])(ui-state|camera-state|canvas-state|windows-)|\.(log|sqlite3|dmp)$'){throw "Private diagnostic in clean build output: $relative"}
+        if($relative -match '(^|[\\/])(ui-state|camera-state|windows-)|\.(log|sqlite3|dmp)$'){throw "Private diagnostic in clean build output: $relative"}
         $target=Join-Path $payload $relative
         [IO.Directory]::CreateDirectory((Split-Path -Parent $target))|Out-Null
         Copy-Item -LiteralPath $file.FullName -Destination $target

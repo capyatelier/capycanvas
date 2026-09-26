@@ -126,7 +126,6 @@ Run native GUI fixtures serially in disposable profiles:
 cargo test --locked -p layer-windows -p layer-ui -p layer-host --lib
 cargo clippy --locked -p layer-windows -p layer-host --all-targets --no-deps -- -D warnings
 ./apps/layer-windows/scripts/test-input.ps1
-./apps/layer-windows/scripts/test-presentation-analysis.ps1
 ./apps/layer-windows/scripts/exercise-proof.ps1 -Executable artifacts/windows/parity-final/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-compact-color.ps1 -Executable artifacts/windows/parity-final/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-documents.ps1 -Executable artifacts/windows/parity-final/CapyCanvas.exe -RecoverGpu

@@ -425,8 +425,6 @@ void CanvasWindow::Send(std::string json, CanvasCommandKind kind) {
 }
 bool CanvasWindow::SendIndependent(CanvasWork item) {
     std::unique_lock lock(mutex);
-    if(!work.CanPush(item)&&GetEnvironmentVariableW(L"CAPY_TRACE_TRANSPORT",nullptr,0))
-        std::ofstream("input-transport.log",std::ios::app) << "waiting for bounded queue capacity\n";
     space.wait(lock,[&]{return closing||rendererDone.load()||transportFailed||inputStopped||work.CanPush(item);});
     if(closing||rendererDone.load()||transportFailed||inputStopped)return false;
     work.Push(std::move(item));
@@ -592,7 +590,6 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
         if(!PrepareCanvasPrediction(p))return true;
         latencyTrace.Input(p,arrival);
         samples.push_back(p);
-        if(GetEnvironmentVariableW(L"CAPY_TRACE_INPUT",nullptr,0)) std::ofstream("pointer-input.log",std::ios::app) << p.phase << " " << p.x << " " << p.y << " " << p.timestamp_ns << std::endl;
         if(samples.size()==CanvasWorkBuffer::PointerBatch) {
             if(!SendIndependent(std::move(samples)))return false;
             samples={};samples.reserve(CanvasWorkBuffer::PointerBatch);
@@ -783,10 +780,8 @@ void CanvasWindow::Run() {
         if(!prepared) Fail(capy_error());
         else {std::lock_guard lock(mutex);resize=true;}
         bool dirty=true;
-        bool captured=false;
         bool inputStarted=false;
         bool brushReady=false;
-        bool probe=GetEnvironmentVariableW(L"CAPY_PRESENT_PROBE",nullptr,0)!=0;
         bool probeReady=false;
         unsigned recoveryAttempts=0;
         std::optional<std::chrono::steady_clock::time_point> lastPresent;
@@ -882,12 +877,8 @@ void CanvasWindow::Run() {
                     brushReady=ready;
                     if(ready)recoveryAttempts=0;
                 }
-                if(!captured && !dirty && GetEnvironmentVariableW(L"CAPY_TEST_DISPLAY",nullptr,0)) {
-                    TraceState("canvas-state",snapshot);
-                    captured=true;
-                }
             }
-            if((probe||latencyTrace.enabled)&&!probeReady&&result==0&&brushReady) {
+            if(latencyTrace.enabled&&!probeReady&&result==0&&brushReady) {
                 auto info=capy_surface_info(host);
                 if(!info){Fail(capy_error());break;}
                 std::unique_ptr<char,decltype(&capy_string_free)> owned(info,capy_string_free);
@@ -911,9 +902,6 @@ void CanvasWindow::Run() {
                 if(!packet&&!capy_device_lost(host))Fail(capy_error());
                 preview->reply(std::move(packet));
             }
-            // Opt-in baseline only: present unchanged content at DXGI cadence.
-            // No timer, per-frame disk I/O, synthetic input or display-time claim.
-            if(probe&&probeReady)dirty=true;
             if(overflow)break;
         }
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
@@ -1119,7 +1107,7 @@ void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject 
     std::optional<std::string> camera;
     if(!full&&model.HasKey(L"camera"))camera=to_string(CapyUi::O({{L"camera",model.GetNamedValue(L"camera")}}).Stringify());
     // Explicit local test evidence. This can include user state and is never
-    // enabled by ordinary or presentation-probe launches.
+    // enabled by ordinary launches.
     if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)){
         auto identity="{\"process_id\":"+std::to_string(GetCurrentProcessId())+
             ",\"window_id\":"+std::to_string(windowId);

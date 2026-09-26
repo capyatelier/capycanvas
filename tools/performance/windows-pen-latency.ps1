@@ -14,7 +14,7 @@ $directory=Split-Path -Parent $Executable
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 if(Test-Path $OutputDirectory){throw 'Use a fresh result directory'}
 New-Item -ItemType Directory $OutputDirectory|Out-Null
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_LATENCY_TRACE','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_PRESENT_PROBE','CAPY_TRACE_INPUT','CAPY_TRACE_TRANSPORT')
+$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_LATENCY_TRACE','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_WINDOWS_PRESENT_MODE','CAPY_WINDOWS_NO_VSYNC_WAIT')
 $previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 try{
  foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}

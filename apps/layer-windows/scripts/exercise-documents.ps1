@@ -46,7 +46,7 @@ try{
     }}
     $bitmap.Save($imageSource,[Drawing.Imaging.ImageFormat]::Png)
 }finally{$bitmap.Dispose()}
-$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE','CAPY_TEST_GPU_UNAVAILABLE')
+$names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_TEST_GPU_UNAVAILABLE')
 $previous=@{}
 foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 try {
@@ -56,7 +56,6 @@ $env:CAPY_TRACE_UI='1'
 $env:CAPY_SMOKE_TEST='1'
 $env:CAPY_TEST_DISPLAY='1'
 $env:CAPY_TEST_PRIMARY='1'
-Remove-Item Env:CAPY_PRESENT_PROBE -ErrorAction SilentlyContinue
 $stderr=Join-Path $run 'stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
