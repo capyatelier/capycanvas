@@ -1,9 +1,5 @@
 package art.capycanvas
 
-import android.os.SystemClock
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Surface
@@ -14,13 +10,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -87,6 +80,9 @@ private val BarItemStyle = obj("sliders" to false, "text" to true)
     fun reason(command: String, reply: (String) -> Unit) = host.query(obj("type" to "canvas_bar_reason", "context" to context, "command" to command)) {
         (it as? String)?.let(reply)
     }
+    fun choiceMenu(id: String, load: (JSONObject?) -> Unit) = host.query(obj("type" to "canvas_bar_choice_menu", "context" to context, "id" to id)) {
+        load(it as? JSONObject)
+    }
     Box(Modifier.placed(placement.getJSONObject("bounds"), density).zIndex(198f).testTag("canvas-action-bar")
         .chromeRegion(dock).onGloballyPositioned {
             val bounds = it.boundsInRoot().translate(-dock.origin)
@@ -102,9 +98,9 @@ private val BarItemStyle = obj("sliders" to false, "text" to true)
                         Text(it, Modifier.width(labelWidth.dp).padding(horizontal = BarLabelPadding.dp).testTag("canvas-bar-label"),
                             color = colors.secondary, maxLines = 1, softWrap = false)
                     }
-                    items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], false, ::edit, ::reason) }
+                    items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], false, ::edit, ::reason, ::choiceMenu) }
                     CanvasBarMore(host, context, shown)
-                    completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], true, ::edit, ::reason) }
+                    completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], true, ::edit, ::reason, ::choiceMenu) }
                 }
             }
         }
@@ -112,33 +108,25 @@ private val BarItemStyle = obj("sliders" to false, "text" to true)
 }
 
 @Composable private fun BarField(item: JSONObject, width: Float, completion: Boolean, edit: (JSONObject) -> Unit,
-    reason: (String, (String) -> Unit) -> Unit) {
+    reason: (String, (String) -> Unit) -> Unit, choiceMenu: (String, (JSONObject?) -> Unit) -> Unit) {
     val option = item.getJSONObject("option")
     val command = option.optJSONObject("Action")?.getJSONObject("state")?.getString("id")
     Box(Modifier.width(width.dp).height(BarItemHeight.dp), contentAlignment = Alignment.Center) {
         ToolOptionField(option, width, false, "medium", false, BarItemStyle, BarItemHeight, 16, edit,
             caption = item.getString("label"), prefix = "canvas-bar",
-            accent = completion && command in listOf("apply_transform", "complete_selection"), reason = reason)
+            accent = completion && command in listOf("apply_transform", "complete_selection"), reason = reason, choiceMenu = choiceMenu)
     }
 }
 
 @Composable private fun CanvasBarMore(host: CanvasHost, context: JSONObject, shown: Int) {
-    var menu by remember { mutableStateOf<JSONObject?>(null) }
-    var closedAt by remember { mutableLongStateOf(0L) }
-    var pressedAt by remember { mutableLongStateOf(0L) }
-    PopupOwner(menu != null)
+    val button = remember { WindowlessMenuButton() }
     HoverTip("More") {
         Box(Modifier.size(BarItemHeight.dp).testTag("canvas-bar-more").clip(ControlShape).focusProperties { canFocus = false }
-            .pointerInput(Unit) { awaitEachGesture { pressedAt = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial).uptimeMillis } }
-            .clickable(role = Role.Button, onClickLabel = "More") {
-                if (menu == null && closedAt < pressedAt) host.query(obj("type" to "canvas_bar_menu", "context" to context, "shown" to shown)) {
-                    menu = it as? JSONObject
-                }
+            .opensWindowlessMenu(button, "More") { load ->
+                host.query(obj("type" to "canvas_bar_menu", "context" to context, "shown" to shown)) { load(it as? JSONObject) }
             }, contentAlignment = Alignment.Center) {
             SharedIcon("more", "More", Modifier.size(16.dp))
-            menu?.let {
-                WorkspaceMenu(host, it, focusable = false) { menu = null; closedAt = SystemClock.uptimeMillis() }
-            }
+            WindowlessMenuHost(host, button)
         }
     }
 }

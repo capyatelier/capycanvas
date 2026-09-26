@@ -1880,7 +1880,19 @@ class AndroidInteractionTest {
         }
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         val originalTransparency = transparency()
-        fixture.getJSONObject("layout").put("bands", JSONArray(fixture.getJSONObject("layout").array("bands").objects().filter { it.getInt("id") != 42 }))
+        fixture.getJSONObject("layout").put("bands", JSONArray(fixture.getJSONObject("layout").array("bands").objects().filter { it.getInt("id") == 44 }))
+        fun choice(id: String) = canvasBar()?.array("items")?.objects()?.firstNotNullOfOrNull { item ->
+            item.getJSONObject("option").optJSONObject("Choice")?.takeIf { it.getString("id") == id }
+        }
+        fun chosen(id: String) = choice(id)?.array("items")?.objects()?.firstOrNull { it.getBoolean("selected") }?.getString("label")
+        fun corner(): Offset {
+            val anchor = canvasBar()!!.getJSONArray("anchor")
+            val camera = state().getJSONObject("camera")
+            val zoom = camera.getDouble("zoom").toFloat(); val translation = camera.getJSONArray("translation")
+            val work = bounds("workspace")
+            return Offset(work.left + anchor.getDouble(2).toFloat() * zoom + translation.getDouble(0).toFloat(),
+                work.top + anchor.getDouble(3).toFloat() * zoom + translation.getDouble(1).toFloat())
+        }
         val devices = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)
         popupInput = true
         try {
@@ -1918,6 +1930,30 @@ class AndroidInteractionTest {
                 val anchor = canvasBar()!!.opt("anchor").toString()
                 tap(Offset(bar.left + 3 * density, bar.center.y)); settle()
                 assertEquals("$device bar tap never reaches the transform", anchor, canvasBar()!!.opt("anchor").toString())
+                assertEquals("Free", chosen("transform-mode"))
+                assertTrue("$device flips are icon-only", canvasBar()!!.array("items").objects().any { it.getString("label").isEmpty() })
+                tap(bounds("canvas-bar-segment-transform-mode-2").center)
+                waitFor("$device Distort", 5_000) { chosen("transform-mode") == "Distort" && exists("canvas-bar-action-transform_perspective") }
+                settle()
+                tap(bounds("canvas-bar-segment-transform-mode-0").center)
+                waitFor("$device back to Free", 5_000) { chosen("transform-mode") == "Free" && !exists("canvas-bar-action-transform_perspective") }
+                settle()
+                tap(bounds("canvas-bar-choice-transform-interpolation").center)
+                waitFor("$device interpolation menu", 5_000) { popupCount() == 1 && textBounds("Nearest") != null }
+                instrumentation.runOnMainSync { assertTrue("$device the interpolation menu leaves window focus with the canvas", owner.view.hasWindowFocus()) }
+                tap(textBounds("Nearest")!!.center)
+                waitFor("$device Nearest", 5_000) { chosen("transform-interpolation") == "Nearest" && popupCount() == 0 }
+                settle()
+                tap(bounds("canvas-bar-segment-transform-mode-2").center)
+                waitFor("$device Distort for a corner drag", 5_000) { chosen("transform-mode") == "Distort" }
+                settle()
+                val quad = canvasBar()!!.opt("anchor").toString()
+                val start = corner()
+                drag(start, start + Offset(36 * density, 28 * density))
+                waitFor("$device Distort corner drag reshapes the transform", 5_000) { canvasBar()?.opt("anchor")?.toString() != quad }
+                waitFor("$device bar returns after the corner drag", 3_000) { exists("canvas-action-bar") }
+                assertEquals("Distort", chosen("transform-mode"))
+                settle()
 
                 var hiddenWhileHeld = false
                 var glassWhileHeld = -1

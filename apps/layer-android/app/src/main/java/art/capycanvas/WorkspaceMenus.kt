@@ -2,6 +2,8 @@ package art.capycanvas
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -17,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.Placeholder
@@ -60,6 +64,24 @@ internal val WindowlessMenu = PopupProperties(focusable = false)
         if (open) dock?.popup(true)
         onDispose { if (open) dock?.popup(false) }
     }
+}
+
+internal class WindowlessMenuButton {
+    var menu by mutableStateOf<JSONObject?>(null)
+    var pressedAt = 0L
+    var closedAt = 0L
+}
+
+internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: String, load: ((JSONObject?) -> Unit) -> Unit) =
+    pointerInput(button) {
+        awaitEachGesture { button.pressedAt = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial).uptimeMillis }
+    }.clickable(role = Role.Button, onClickLabel = label) {
+        if (button.menu == null && button.closedAt < button.pressedAt) load { button.menu = it }
+    }
+
+@Composable internal fun WindowlessMenuHost(host: CanvasHost, button: WindowlessMenuButton) {
+    PopupOwner(button.menu != null)
+    button.menu?.let { WorkspaceMenu(host, it, focusable = false) { button.menu = null; button.closedAt = android.os.SystemClock.uptimeMillis() } }
 }
 
 @Composable internal fun WorkspaceMenuItems(host: CanvasHost, sections: JSONArray,

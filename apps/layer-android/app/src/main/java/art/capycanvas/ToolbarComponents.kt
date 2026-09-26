@@ -186,8 +186,10 @@ internal fun toolOptionSize(option: JSONObject, vertical: Boolean, width: Float,
         else if (vertical) listOf(width, tileHeight * if (width < tileWidth * items.size) items.size else 1)
         else listOf(tileWidth * items.size, 24f)
     }
-    option.has("Action") && caption != null -> listOf(captionedWidth(caption, textWidth), tileHeight)
+    option.has("Action") && caption != null -> listOf(if (caption.isEmpty()) tileHeight else captionedWidth(caption, textWidth), tileHeight)
     vertical || option.has("Action") -> listOf(tileWidth, tileHeight)
+    option.has("Choice") && caption != null -> listOf(ChoicePadding * 2 + 16f + 12f + CaptionGap * 2 +
+        option.getJSONObject("Choice").array("items").objects().maxOf { kotlin.math.ceil(textWidth(it.getString("label"))) }, tileHeight)
     option.has("Choice") -> listOf(168f, 24f)
     else -> {
         val field = option.getJSONObject("Numeric")
@@ -199,11 +201,13 @@ internal fun toolOptionSize(option: JSONObject, vertical: Boolean, width: Float,
 
 private const val CaptionPadding = 10f
 private const val CaptionGap = 6f
+private const val ChoicePadding = 8f
 private fun captionedWidth(text: String, textWidth: (String) -> Float) = CaptionPadding * 2 + 16f + CaptionGap + kotlin.math.ceil(textWidth(text))
 
 @Composable internal fun ToolOptionField(option: JSONObject, width: Float, vertical: Boolean, style: String, labeled: Boolean,
     preferences: JSONObject, tileWidth: Float, iconSize: Int, edit: (JSONObject) -> Unit,
-    caption: String? = null, prefix: String = "toolbar", accent: Boolean = false, reason: ((String, (String) -> Unit) -> Unit)? = null) {
+    caption: String? = null, prefix: String = "toolbar", accent: Boolean = false, reason: ((String, (String) -> Unit) -> Unit)? = null,
+    choiceMenu: ((String, (JSONObject?) -> Unit) -> Unit)? = null) {
     when {
         option.has("Range") -> option.getJSONObject("Range").let { range ->
             val fields = range.array("bounds").objects()
@@ -214,7 +218,7 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
         option.has("Numeric") -> ToolbarNumber(option.getJSONObject("Numeric"), vertical, style, labeled, preferences, edit)
         option.has("Choice") -> option.getJSONObject("Choice").let { choice ->
             ToolbarChoice(choice, vertical, labeled, caption == null && width < tileWidth * choice.array("items").length(),
-                iconSize, edit, prefix = prefix, height = if (caption != null) 32f else 24f, captions = caption != null)
+                iconSize, edit, prefix = prefix, height = if (caption != null) 32f else 24f, captions = caption != null, menu = choiceMenu)
         }
         else -> ToolOptionAction(option.getJSONObject("Action").getJSONObject("state"), iconSize, caption, accent, prefix, reason) {
             edit(obj("type" to "invoke", "command" to it))
@@ -236,13 +240,13 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
             .then(if (caption == null) Modifier else Modifier.focusProperties { canFocus = false })
             .clickable(enabled = enabled || explained, role = Role.Button, onClickLabel = command.getString("label")) { if (enabled) invoke(id) else reveal++ }
             .semantics { if (!enabled) disabled() }
-            .padding(horizontal = if (caption == null) 0.dp else CaptionPadding.dp),
+            .padding(horizontal = if (caption.isNullOrEmpty()) 0.dp else CaptionPadding.dp),
             horizontalArrangement = Arrangement.spacedBy(CaptionGap.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
             val tint = if (accent && enabled) colors.accentForeground else colors.text
             command.optString("icon").takeIf { it.isNotEmpty() && it != "null" }?.let {
                 SharedIcon(it, command.getString("label"), Modifier.size(if (caption == null) iconSize.dp else 16.dp), tint = tint)
             }
-            if (caption != null) Text(caption, color = tint, maxLines = 1, softWrap = false)
+            if (!caption.isNullOrEmpty()) Text(caption, color = tint, maxLines = 1, softWrap = false)
         }
     }
     if (caption == null) face()
@@ -307,7 +311,8 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
 }
 
 @Composable internal fun ToolbarChoice(choice: JSONObject, vertical: Boolean, labeled: Boolean, stacked: Boolean,
-    iconSize: Int, edit: (JSONObject) -> Unit, prefix: String = "toolbar", height: Float = 24f, captions: Boolean = false) {
+    iconSize: Int, edit: (JSONObject) -> Unit, prefix: String = "toolbar", height: Float = 24f, captions: Boolean = false,
+    menu: ((String, (JSONObject?) -> Unit) -> Unit)? = null) {
     val colors = LocalPalette.current
     val items = choice.array("items").objects()
     val id = choice.getString("id")
@@ -334,21 +339,27 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
         return
     }
     var open by remember { mutableStateOf(false) }
+    val button = remember { WindowlessMenuButton() }
     val selected = items.firstOrNull { it.getBoolean("selected") } ?: items.first()
-    Box(Modifier.fillMaxSize().testTag("toolbar-choice-$id"), contentAlignment = Alignment.Center) {
-        Row(Modifier.fillMaxWidth().then(if (vertical) Modifier.fillMaxHeight() else Modifier.height(24.dp)).clip(ControlShape)
-            .background(if (vertical) Color.Transparent else colors.input).clickable { open = true }
-            .padding(horizontal = if (vertical && !labeled) 2.dp else 8.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = if (vertical && !labeled) Arrangement.Center else Arrangement.spacedBy(6.dp)) {
+    Box(Modifier.fillMaxSize().testTag("$prefix-choice-$id"), contentAlignment = Alignment.Center) {
+        Row(Modifier.fillMaxWidth().then(if (vertical) Modifier.fillMaxHeight() else Modifier.height(height.dp)).clip(ControlShape)
+            .background(if (vertical) Color.Transparent else colors.input)
+            .then(if (menu == null) Modifier.clickable { open = true }
+                else Modifier.focusProperties { canFocus = false }.opensWindowlessMenu(button, choice.getString("label")) { menu(id, it) })
+            .padding(horizontal = if (vertical && !labeled) 2.dp else ChoicePadding.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (vertical && !labeled) Arrangement.Center else Arrangement.spacedBy(CaptionGap.dp)) {
             SharedIcon(selected.getString("icon"), choice.getString("label"), Modifier.size(16.dp))
             if (!vertical || labeled) Text(selected.getString("label"), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (!vertical) SharedIcon("chevron-down", null, Modifier.size(12.dp))
         }
-        WindowlessPopup(open) { open = false }
-        DropdownMenu(open, { open = false }, properties = WindowlessMenu) { items.forEach { item ->
-            DropdownMenuItem(text = { Text(item.getString("label")) }, leadingIcon = { SharedIcon(item.getString("icon"), null, Modifier.size(16.dp)) },
-                onClick = { open = false; edit(item.getJSONObject("action")) })
-        } }
+        if (menu != null) WindowlessMenuHost(LocalCanvasHost.current, button)
+        else {
+            WindowlessPopup(open) { open = false }
+            DropdownMenu(open, { open = false }, properties = WindowlessMenu) { items.forEach { item ->
+                DropdownMenuItem(text = { Text(item.getString("label")) }, leadingIcon = { SharedIcon(item.getString("icon"), null, Modifier.size(16.dp)) },
+                    onClick = { open = false; edit(item.getJSONObject("action")) })
+            } }
+        }
     }
 }
 

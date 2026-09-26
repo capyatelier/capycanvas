@@ -1592,6 +1592,35 @@ mod tests {
     }
 
     #[test]
+    fn canvas_bar_choice_menus_list_wrapped_edits_for_the_current_bar() {
+        use layer_ui::CommandId;
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        app.resize(2560, 1600, 2.0).unwrap();
+        for command in [CommandId::RectangleSelect, CommandId::SelectAll, CommandId::FillSelection, CommandId::ScaleRotate] {
+            app.dispatch(UiAction::Invoke { command }).unwrap();
+        }
+        let bar = app.session.state().canvas_bar.clone().expect("transform bar");
+        let query = |context: Value| json!({"type": "canvas_bar_choice_menu", "context": context, "id": "transform-interpolation"});
+        let menu = app.query(query(json!(bar.context))).unwrap();
+        let items = menu["sections"][0].as_array().unwrap();
+        assert_eq!(items.len(), 3, "{menu}");
+        assert!(items.iter().all(|item| item["action"]["type"] == "canvas_bar_edit"));
+        assert_eq!(items.iter().filter(|item| item["selected"] == true).count(), 1);
+        let nearest = items.iter().find(|item| item["label"] == "Nearest").unwrap();
+        app.dispatch(serde_json::from_value(nearest["action"].clone()).unwrap()).unwrap();
+        let chosen = app.query(query(json!(app.session.state().canvas_bar.as_ref().unwrap().context))).unwrap();
+        assert!(chosen["sections"][0].as_array().unwrap().iter().any(|item| item["label"] == "Nearest" && item["selected"] == true));
+        let mut stale = json!(bar.context);
+        stale["generation"] = json!(bar.context.generation + 1);
+        assert!(app.query(query(stale)).unwrap().is_null());
+        assert!(
+            app.query(json!({"type": "canvas_bar_choice_menu", "context": bar.context, "id": "missing"}))
+                .unwrap()
+                .is_null()
+        );
+    }
+
+    #[test]
     fn canvas_contacts_report_the_hidden_canvas_bar() {
         use layer_ui::CommandId;
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
