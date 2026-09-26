@@ -1241,6 +1241,9 @@ impl ViewportPresenter {
         } else {
             (vec![crate::pixel_rect::PixelRect::full(extent)], true)
         };
+        let size = target.texture().size();
+        let bounds = crate::pixel_rect::PixelRect::full([size.width, size.height]);
+        let regions: Vec<_> = regions.into_iter().map(|r| r.intersect(bounds)).filter(|r| !r.is_empty()).collect();
         self.presented_area = regions.iter().map(|r| r.area()).sum();
         for (index, repaint) in regions.iter().enumerate() {
             // Each pass needs its own view: wgpu can defer encoding until
