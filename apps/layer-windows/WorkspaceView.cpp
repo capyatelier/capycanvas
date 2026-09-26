@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "WorkspaceView.h"
 #include "StrokeRecording.h"
+#include "CommandSearch.h"
 #include "PanelBody.h"
 #include "PanelConfiguration.h"
 #include "WorkspaceExpansion.h"
@@ -93,6 +94,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         int order=0;
     };
     std::map<uint32_t,Group> groups;
+    std::shared_ptr<CommandSearchPopup> commandSearch=std::make_shared<CommandSearchPopup>();
     hstring previousTheme,previousPalette;
     Flyout popup{nullptr};
     std::wstring popupControl;
@@ -143,6 +145,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         root.SizeChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->placeControls();});
         root.Children().Append(placementBar);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
+        commandSearch->data=data;commandSearch->init(root);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
         measureHost.IsHitTestVisible(false);measureHost.Opacity(0);Canvas::SetLeft(measureHost,-100000);root.Children().Append(measureHost);
@@ -283,6 +286,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             if(!publication.Accept(full,revision(update,L"revision"),revision(update,L"model_revision")))return false;
             workspaceUpdate=update;
         }
+        if(!full&&snapshot.HasKey(L"command_search")){
+            data->state.Insert(L"command_search",snapshot.GetNamedValue(L"command_search"));commandSearch->Apply(data->state);
+            return true;
+        }
         if(!full){
             if(snapshot.HasKey(L"color_preview")){data->colorPreview=object(snapshot,L"color_preview");previewColors();}
             else if(WorkspaceData::previewing(data->colorPreview)){data->colorPreview=J{};previewColors();}
@@ -371,6 +378,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }else ++it;
         }
         updateConfiguration();
+        commandSearch->Apply(data->state);
         expansion->Apply(configurationHeight());present();
         collapsed->Apply();drawers->Apply();gestures->Refresh();
         auto status=object(layout,L"status");place(cameraSlot,status);

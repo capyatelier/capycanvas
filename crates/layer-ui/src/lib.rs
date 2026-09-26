@@ -658,7 +658,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::SearchCommands => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
+            Self::SearchCommands => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows),
             Self::TonalSelect => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             // Decode saved shortcuts/layouts from the original tonal editor.
             // These controls are retired and must not be offered or dispatched.

@@ -1137,7 +1137,7 @@ void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject 
     bool post;
     {
         std::lock_guard lock(mutex);if(closing)return;
-        snapshots.Push(std::move(snapshot),full,model.HasKey(L"workspace_update"),std::move(camera));
+        snapshots.Push(std::move(snapshot),full,model.HasKey(L"workspace_update"),std::move(camera),model.HasKey(L"command_search"));
         post=!snapshotPosted;snapshotPosted=true;
     }
     if(post)dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyPending();});
@@ -1153,6 +1153,7 @@ void CanvasWindow::ApplyPending() {
         if(!batch.full.empty())ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.full)));
         if(!closing&&!batch.workspace.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.workspace)));
         if(!closing&&!batch.camera.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.camera)));
+        if(!closing&&!batch.search.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.search)));
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
 }
 

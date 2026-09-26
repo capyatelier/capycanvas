@@ -68,6 +68,15 @@ int main() {
     snapshots.Push("camera 5",false,false,"camera 5");
     shown=snapshots.Take();
     assert(shown.full=="models D (cancel)"&&shown.workspace.empty()&&shown.camera=="camera 5");
+    snapshots.Push("models E",true,true);
+    snapshots.Push("search open",false,false,{},true);
+    snapshots.Push("motion G",false,true);
+    shown=snapshots.Take();
+    assert(shown.full=="models E"&&shown.search=="search open"&&shown.workspace=="motion G");
+    snapshots.Push("search query",false,false,{},true);
+    snapshots.Push("models F (search closed)",true,true);
+    shown=snapshots.Take();
+    assert(shown.full=="models F (search closed)"&&shown.search.empty());
     shown=snapshots.Take();
     assert(shown.full.empty()&&shown.workspace.empty()&&shown.camera.empty());
     std::cout<<"Canvas presentation: retained models, independent motion/camera coalescing and completion boundaries passed\n";

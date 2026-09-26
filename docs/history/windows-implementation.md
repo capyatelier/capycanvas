@@ -2915,3 +2915,20 @@ It now reads both from one snapshot and passes.
 
 Title-bar capsules, the zoom readout and open collapsed-column sources now use
 the fitted squircle radii and square facing corners that Web uses (`b21a58ce`).
+
+### Command search on Windows (2026-09-26)
+
+Windows now offers the shared command search (Primary+K, Primary+Shift+P and
+Edit > Search Commands). A light-dismiss popup one-fifth down the workspace
+(48-192 DIP) uses a native TextBox with a search glyph, rows with checked state
+and shortcuts, and a footer that shows errors, unavailable reasons or the shared
+description. Escape leaves parameter entry, then closes; closing restores the
+previous focus. Focus changes report canvas, palette or text scope, so a
+focused palette offers color-reorder Undo/Redo. Search-only packets from the
+host have their own mailbox slot and update only the popup.
+
+`exercise-command-search.ps1` covers the opener, placement, parameter entry and
+Back, keyboard selection, empty results, outside dismissal without painting,
+touch activation, unavailable reasons and palette focus. Workspace layout,
+editor, header, toolbar, palette and canvas-editing fixtures pass with the new
+Edit menu entry and tool catalog command.

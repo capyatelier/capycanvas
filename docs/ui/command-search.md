@@ -73,6 +73,13 @@ WindowManager resize when the result count changes. IME insets constrain the
 scrolling results while the entry and selected-result explanation stay visible.
 The entrance uses the native animation duration scale.
 
+Windows uses a light-dismiss WinUI popup placed like GTK's, with a native
+TextBox for text and IME, a search glyph and a close button. Result rows expose
+UI Automation names, help text and selection. While search is closed, focus
+changes under the window root report canvas, palette or text scope. Search
+packets use their own latest-value slot beside workspace motion and camera,
+so opening, typing and closing never rebuild the workspace.
+
 Native transports distinguish search revisions from workspace revisions and
 publish a small `command_search` packet (including explicit null on close).
 Android observes it separately from the retained workspace. Keyboard actions
@@ -113,6 +120,11 @@ captures, numeric entry, repeated opening, disabled actions and outside-contact
 dismissal. Native artifacts are written to the test runner's temporary directory.
 The Web test additionally checks native keyboard focus, ARIA selection, touch
 activation at narrow width, retained workspace DOM and query-to-frame latency.
+
+On Windows, `apps/layer-windows/scripts/exercise-command-search.ps1 -Executable
+artifacts/windows/Release/CapyCanvas.exe` checks Primary+K, placement, parameter
+entry and Back, keyboard selection, Escape, outside dismissal without painting,
+touch activation, unavailable reasons and palette focus with real input.
 
 For Android, build `:app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug`
 with the SDK setup in [Android development](../development/android.md), install
