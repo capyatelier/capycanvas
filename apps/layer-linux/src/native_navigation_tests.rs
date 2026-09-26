@@ -4,7 +4,7 @@ use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 use std::sync::Arc;
 
-fn photo(extent: [u32; 2]) -> layer_core::Project {
+pub(super) fn photo(extent: [u32; 2]) -> layer_core::Project {
     let depth = match std::env::var("LAYER_NAVIGATION_HDR").as_deref() { Ok("32") => SampleDepth::F32, Ok("1") => SampleDepth::F16, _ => SampleDepth::U16 };
     let hdr = depth.is_float();
     let mut project = new_drawing(1, 1).unwrap();

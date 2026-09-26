@@ -9567,9 +9567,21 @@ fn native_frame_pacing() {
     let app = native_test_app("dev.layer.FramePacingTest");
     let w = match std::env::var("LAYER_PACING_WORKSPACE").as_deref() {
         Ok("fixture") => fixture_workspace(&app),
+        Ok("photo24") => {
+            let mut project = native_navigation::photo([6000, 4000]);
+            if std::env::var("LAYER_PACING_PHOTO_LAYERS").as_deref() == Ok("photo") {
+                project.document.layers.retain(|layer| layer.source.is_some());
+            }
+            let w = Workspace::with_project(&app, Some((project, None)));
+            w.window.maximize();
+            w
+        }
         Ok("default") | Err(_) => Workspace::new(&app),
         Ok(_) => panic!("Unknown pacing workspace"),
     };
+    let photo = std::env::var("LAYER_PACING_WORKSPACE").as_deref() == Ok("photo24");
+    let distort = std::env::var("LAYER_PACING_TRANSFORM_MODE").as_deref() == Ok("distort");
+    let interpolation = std::env::var("LAYER_PACING_INTERPOLATION").unwrap_or_default();
     w.window.present();
     pump(1500);
     set_transparency(&w, "LAYER_PACING_TRANSPARENCY");
@@ -9712,15 +9724,21 @@ fn native_frame_pacing() {
             w.dispatch(UiAction::Invoke {
                 command: CommandId::FitCanvas,
             });
-            w.dispatch(UiAction::Layer {
-                action: LayerAction::Tool {
-                    tool: LayerCanvasTool::Figure {
-                        shape: layer_ui::FigureShape::Rectangle,
-                        paint: layer_ui::FigurePaint::Fill,
+            if photo {
+                w.dispatch(UiAction::Invoke {
+                    command: CommandId::SelectAll,
+                });
+            } else {
+                w.dispatch(UiAction::Layer {
+                    action: LayerAction::Tool {
+                        tool: LayerCanvasTool::Figure {
+                            shape: layer_ui::FigureShape::Rectangle,
+                            paint: layer_ui::FigurePaint::Fill,
+                        },
                     },
-                },
-            });
-            native_pen_path(&w, &[[160., 128.], [1888., 1408.]]);
+                });
+                native_pen_path(&w, &[[160., 128.], [1888., 1408.]]);
+            }
             let mask_mode = std::env::var("LAYER_PACING_TRANSFORM_MASK").unwrap_or_default();
             if mask_mode == "watercolor" {
                 w.dispatch(UiAction::Layer {
@@ -9766,6 +9784,21 @@ fn native_frame_pacing() {
                 command: CommandId::ScaleRotate,
             });
             assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Transform);
+            if distort {
+                w.dispatch(UiAction::Invoke {
+                    command: CommandId::TransformDistort,
+                });
+            }
+            if let Some(command) = [
+                ("nearest", CommandId::TransformNearest),
+                ("bilinear", CommandId::TransformBilinear),
+                ("bicubic", CommandId::TransformBicubic),
+            ]
+            .into_iter()
+            .find_map(|(key, command)| (key == interpolation).then_some(command))
+            {
+                w.dispatch(UiAction::Invoke { command });
+            }
         }
         pump(300);
         // A cold material shader/texture may not be ready after a fixed sleep.
@@ -9846,6 +9879,11 @@ fn native_frame_pacing() {
             .committed_strokes;
         *worker_stats.lock().unwrap() = Default::default();
         let camera = state(&w).camera;
+        let transform_path = (name == "Transform").then(|| {
+            let [x0, y0, x1, y1] = state(&w).canvas_bar.and_then(|b| b.anchor).expect("transform box");
+            let from = if distort { [x0, y0] } else { [(x0 + x1) * 0.5, (y0 + y1) * 0.5] };
+            (from, [(x1 - x0) * 0.17, (y1 - y0) * 0.13])
+        });
         let start = Instant::now();
         let mut first = true;
         let mut last_event = None;
@@ -9887,9 +9925,9 @@ fn native_frame_pacing() {
                 flags: SampleFlags::PRIMARY,
             };
             sequence += 1;
-            if name == "Transform" {
+            if let Some((from, reach)) = transform_path {
                 let m = camera.document_to_surface();
-                let (x, y) = (1024. + 350. * t.sin(), 768. + 200. * (t * 1.3).sin());
+                let (x, y) = (from[0] + reach[0] * t.sin(), from[1] + reach[1] * (t * 1.3).sin());
                 event.surface_position = Point {
                     x: m[0] * x + m[2] * y + m[4],
                     y: m[1] * x + m[3] * y + m[5],
@@ -10025,6 +10063,8 @@ fn native_frame_pacing() {
             "navigator_updates": preview_updates,
             "navigator_frames": stats.overview_frames,
             "transform_mask": std::env::var("LAYER_PACING_TRANSFORM_MASK").unwrap_or_default(),
+            "transform_mode": if distort { "distort" } else { "free" },
+            "interpolation": interpolation,
             "input_cpu": stats.input_cpu,
             "input_handler_cpu": stats.input_handler_cpu,
             "frame_handler_cpu": stats.frame_handler_cpu,
