@@ -24,19 +24,14 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         self.placement_display = true;
-        let mut remaining = r.native_edit.as_ref().map_or(0, |n| {
-            n.display_complete_bytes
+        let mut remaining = if let Some(native) = &r.native_edit {
+            native.image_pixel_budget(r, packet.layers, packet.document_extent)?
+                .min(native.display_complete_bytes.saturating_sub(PixelRect::full(packet.document_extent).area() * 16))
                 .saturating_sub(
-                    u64::from(packet.document_extent[0])
-                        * u64::from(packet.document_extent[1])
-                        * 16,
-                )
-        });
-        // Use the admitted display allowance, which already leaves headroom
-        // for editing and other GPU users. A separate fixed cap can evict the
-        // preview precisely when a small scale-up needs more detail: a 61 MP
-        // photo's half-size Float32 preview needs about 231 MiB. Falling back
-        // then makes every transform/paint frame fetch hundreds of source tiles.
+                Self::capture_image_bound(packet.layers, PixelRect::full(packet.document_extent)))
+        } else { 0 };
+        // Placement previews use only the shared allowance left after display
+        // and exact filter dependencies. A windowed graph has no such surplus.
         let mut wanted = Vec::new();
         let mut retained = Vec::new();
         for layer in packet.layers {

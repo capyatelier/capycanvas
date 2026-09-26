@@ -462,6 +462,9 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
     behind.properties.placement = Affine([0.3, 0., 0., 0.3, 140.25, 87.5]);
     let canvas = [1031, 777]; // Both partial edge tiles and full interior tiles.
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    // This test requires an admitted placement cache, including on drivers
+    // where optional cache admission is unavailable (e.g. RADV memory budgets).
+    r.set_complete_display_allowance(64 * 1024 * 1024);
     let mut cached = None;
     for (step, transform) in [
         Affine([0.4, 0., 0., 0.4, 10.25, 19.75]),

@@ -83,12 +83,12 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                         layers.insert(0, g);
                         layers[1].mask.as_mut().unwrap().show_area = true;
                     }
-                    r.native_edit.as_mut().unwrap().image_pixel_bytes = u64::MAX;
+                    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
                     r.submit(packet(&layers, extent)).unwrap();
                     let expected = pixels(&r);
                     let full_cache = r.scene.as_ref().unwrap().image_cache_bytes();
                     let before = r.metrics().image_window_submissions;
-                    r.native_edit.as_mut().unwrap().image_pixel_bytes = CAP;
+                    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(CAP);
                     r.submit(packet(&layers, extent)).unwrap();
                     close(&pixels(&r), &expected);
                     assert!(r.metrics().image_window_submissions > before + 1);
@@ -126,7 +126,7 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                         "releasing temporary pixels must preserve damage metadata");
                     close(&pixels(&r), &expected);
                     // Returning to the ordinary cache must repopulate all of it.
-                    r.native_edit.as_mut().unwrap().image_pixel_bytes = u64::MAX;
+                    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
                     r.submit(packet(&layers, extent)).unwrap();
                     close(&pixels(&r), &expected);
                 }
@@ -148,7 +148,7 @@ fn native_live_global_limit_rejects_before_document_or_submission_changes() {
     let before = pixels(&r);
     let texture = r.composite_texture.clone();
     let metrics = r.metrics();
-    r.native_edit.as_mut().unwrap().image_pixel_bytes = 1024;
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(1024);
     // Includes a resize and reset: rejection must precede both.
     let error = r
         .submit(FramePacket {
@@ -181,7 +181,7 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
     };
     const CAP: u64 = 8 * 1024 * 1024;
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-    r.native_edit.as_mut().unwrap().image_pixel_bytes = CAP;
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(CAP);
     let mut layers = vec![
         effect(3, false, false),
         effect(2, false, false),
@@ -219,10 +219,10 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
     assert!(!backing.tiles.is_empty());
     let incremental = pixels(&r);
     assert_ne!(incremental, before);
-    r.native_edit.as_mut().unwrap().image_pixel_bytes = u64::MAX;
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
     r.submit(packet(&layers, extent)).unwrap();
     close(&incremental, &pixels(&r));
-    r.native_edit.as_mut().unwrap().image_pixel_bytes = CAP;
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(CAP);
     layers[2].raster = original;
     r.submit(FramePacket {
         composite_all: false,
@@ -242,7 +242,7 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
         &backing
     ));
     let mut replacement = WgpuRasterizer::new_native_headless(color).unwrap();
-    replacement.native_edit.as_mut().unwrap().image_pixel_bytes = CAP;
+    replacement.native_edit.as_mut().unwrap().image_pixel_bytes = Some(CAP);
     replacement.submit(packet(&layers, extent)).unwrap();
     close(&pixels(&replacement), &incremental);
     assert!(Arc::ptr_eq(
@@ -271,7 +271,7 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
     encoder.submit(&r.queue);
     r.scene = Some(scene);
     let changed = pixels(&r);
-    r.native_edit.as_mut().unwrap().image_pixel_bytes = u64::MAX;
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
     r.submit(packet(&layers, extent)).unwrap();
     close(&changed, &pixels(&r));
 }
@@ -292,7 +292,7 @@ fn native_live_animated_windows_refresh_with_empty_paint_damage_and_keep_frozen_
     })
     .unwrap();
     const CAP: u64 = 8 * 1024 * 1024;
-    r.native_edit.as_mut().unwrap().image_pixel_bytes = CAP;
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(CAP);
     r.submit(packet(&layers, extent)).unwrap();
     let before = pixels(&r);
     r.submit(FramePacket {
@@ -303,7 +303,7 @@ fn native_live_animated_windows_refresh_with_empty_paint_damage_and_keep_frozen_
     .unwrap();
     let animated = pixels(&r);
     assert_ne!(animated, before);
-    r.native_edit.as_mut().unwrap().image_pixel_bytes = u64::MAX;
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
     r.submit(FramePacket {
         time_seconds: 3.,
         ..packet(&layers, extent)
@@ -317,7 +317,7 @@ fn native_live_animated_windows_refresh_with_empty_paint_damage_and_keep_frozen_
     generator
         .set("time", layer_core::EffectValue::Number(3.))
         .unwrap();
-    r.native_edit.as_mut().unwrap().image_pixel_bytes = CAP;
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(CAP);
     r.submit(FramePacket {
         time_seconds: 7.,
         ..packet(&layers, extent)

@@ -161,7 +161,7 @@ function call(method, params = {}, sessionId = session) {
     const timer = setTimeout(() => {
       requests.delete(id);
       reject(new Error(`CDP timeout: ${method}`));
-    }, process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--contact-brushes","--filter-drawer","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo"].includes(x)) ? 180000 : 30000);
+    }, process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--contact-brushes","--filter-drawer","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo","--filter-investigation"].includes(x)) ? 180000 : 30000);
     requests.set(id, { resolve, reject, timer, method });
     chrome.stdio[3].write(
       JSON.stringify({
@@ -249,7 +249,10 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--ui-speed")) {
+  if (process.argv.includes("--filter-investigation")) {
+    await (await import('./filter-investigation.test.mjs')).investigate({call,evaluate,settle});
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--ui-speed")) {
     await checkUiUpdates({evaluate});
     await checkSettingsUpdates({evaluate,settle}); assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--drawing-tabs-recovery")) {

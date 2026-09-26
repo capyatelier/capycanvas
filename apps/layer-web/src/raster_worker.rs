@@ -54,7 +54,7 @@ pub(super) async fn call_cancellable(
 
 pub(super) fn install(renderer: &mut WgpuRasterizer) {
     // Browser capacity-based admission is documented separately from native
-    // measured headroom. Retain only this document's completed display pixels.
+    // measured headroom. Filters and display share this bounded allowance.
     renderer.set_complete_display_allowance(raster_project::photo_memory_budget().encode_bytes as u64);
     renderer.set_browser_raster_encoder(Rc::new(|bytes, descriptors| {
         Box::pin(async move {

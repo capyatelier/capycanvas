@@ -240,6 +240,7 @@ pub(super) struct Cache {
     pub coarse: display_mips::Image,
     retained: Vec<RetainedLevel>,
     complete_updates: Option<display_mips::CompleteUpdates>,
+    borrowed_image: bool,
     retained_level: Option<u32>,
     fine: Option<Fine>,
     window: Option<Window>,
@@ -247,14 +248,16 @@ pub(super) struct Cache {
     artwork_changed: bool,
     pub geometry: wgpu::Buffer,
     limit: u64,
+    pub allowance: u64,
 }
 impl Cache {
-    pub fn new(
+    fn allocation(
         r: &WgpuRasterizer,
-        pipelines: &display_mips::Pipelines,
+        extent: [u32; 2],
         limit: u64,
-    ) -> Result<Self, GpuRasterError> {
-        let plan = display_mips::Plan::new(r.document_extent)?;
+        allowance: u64,
+    ) -> Result<(display_mips::Plan, u64, bool, u64), GpuRasterError> {
+        let plan = display_mips::Plan::new(extent)?;
         let pyramid_bytes = (0..plan.level)
             .map(|level| {
                 plan.extent
@@ -266,7 +269,6 @@ impl Cache {
             .sum::<u64>();
         let record_bytes = display_mips::CompleteUpdates::record_bytes(&r.device, plan);
         let complete_bytes = pyramid_bytes + Self::base_bound(plan) + record_bytes;
-        let allowance = r.native_edit.as_ref().map_or(0, |native| native.display_complete_bytes);
         let complete = plan.extent.into_iter()
             .all(|v| v <= r.device.limits().max_texture_dimension_2d)
             && record_bytes <= r.device.limits().max_buffer_size.min(u64::from(u32::MAX))
@@ -277,6 +279,18 @@ impl Cache {
         if Self::base_bound(plan) > limit {
             return Err(GpuRasterError::SizeOverflow);
         }
+        Ok((plan, pyramid_bytes, complete, limit))
+    }
+    pub fn allocation_bound(r: &WgpuRasterizer, extent: [u32; 2], limit: u64, allowance: u64) -> Result<u64, GpuRasterError> {
+        Ok(Self::allocation(r, extent, limit, allowance)?.3)
+    }
+    pub fn new(
+        r: &WgpuRasterizer,
+        pipelines: &display_mips::Pipelines,
+        limit: u64,
+        allowance: u64,
+    ) -> Result<Self, GpuRasterError> {
+        let (plan, pyramid_bytes, complete, limit) = Self::allocation(r, r.document_extent, limit, allowance)?;
         let coarse = display_mips::Image::new(r, pipelines, plan);
         let retained = RetainedLevel::new(
                 r,
@@ -297,12 +311,14 @@ impl Cache {
             coarse,
             retained,
             complete_updates,
+            borrowed_image: false,
             retained_level: None,
             fine: None,
             window: None,
             visible: BTreeSet::new(),
             artwork_changed: true,
             limit,
+            allowance,
             geometry: r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("live display cache geometry"),
                 size: Self::geometry_size(plan),
@@ -314,6 +330,7 @@ impl Cache {
     pub fn storage_bytes(&self) -> u64 {
         self.coarse.storage_bytes()
             + self.retained_bytes()
+            - if self.borrowed_image { texture_bytes(&self.retained[0].texture) } else { 0 }
             + self.complete_updates.as_ref().map_or(0, |updates| updates.storage_bytes())
             + self.geometry.size()
             + self.fine.as_ref().map_or(0, Fine::bytes)
@@ -571,6 +588,7 @@ impl Cache {
         source_origin: [u32; 2],
         coordinate: [u32; 2],
     ) -> Result<(), GpuRasterError> {
+        self.make_writable(r, pipelines, encoder);
         if let Some(updates) = &mut self.complete_updates {
             let extent = self.coarse.plan.extent;
             if coordinate.into_iter().zip(extent).any(|(c, n)| c >= n.div_ceil(PAGE_SIZE)) {
@@ -683,6 +701,50 @@ impl Cache {
         }
 
         Ok(())
+    }
+    fn bind_complete_image(&mut self, r: &WgpuRasterizer, pipelines: &display_mips::Pipelines,
+        texture: wgpu::Texture, borrowed: bool) {
+        let view = texture.create_view(&Default::default());
+        self.retained[0] = RetainedLevel { level: 0, texture, view };
+        self.borrowed_image = borrowed;
+        let views: Vec<_> = self.retained.iter().map(|level| &level.view)
+            .chain(std::iter::once(&self.coarse.view)).collect();
+        self.complete_updates = Some(display_mips::CompleteUpdates::new(
+            &r.device, pipelines, self.coarse.plan, &views));
+    }
+    /// The filter owns the finished full-resolution pixels. Presentation and
+    /// mip reduction borrow that image instead of retaining and copying a twin.
+    pub fn publish_image(&mut self, r: &WgpuRasterizer, pipelines: &display_mips::Pipelines,
+        encoder: &mut crate::submission::CommandEncoder, source: &wgpu::Texture,
+        bounds: PixelRect, dirty: PixelRect, tiles: Option<&BTreeSet<[u32; 2]>>,
+    ) -> Result<u64, GpuRasterError> {
+        let borrow = self.is_complete() && bounds == PixelRect::full(self.coarse.plan.extent);
+        if borrow && self.retained[0].texture != *source {
+            self.bind_complete_image(r, pipelines, source.clone(), true);
+        }
+        let mut pixels = 0;
+        for tile in page_coordinates(dirty) {
+            if tiles.is_some_and(|tiles| !tiles.contains(&tile)) { continue; }
+            if borrow {
+                self.direct_tile_written(encoder, tile);
+            } else {
+                let origin = [tile[0] * PAGE_SIZE - bounds.min_x(), tile[1] * PAGE_SIZE - bounds.min_y()];
+                self.write_tile(r, pipelines, encoder, source, origin, tile)?;
+            }
+            pixels += page_rect(tile).intersect(dirty).area();
+        }
+        self.flush_updates(encoder);
+        Ok(pixels)
+    }
+    /// A new foreground layer or inspection overlay needs a writable composite.
+    /// Preserve unchanged pixels, and never render back into a filter dependency.
+    pub fn make_writable(&mut self, r: &WgpuRasterizer, pipelines: &display_mips::Pipelines,
+        encoder: &mut crate::submission::CommandEncoder) {
+        if !self.borrowed_image { return; }
+        let source = self.retained[0].texture.clone();
+        let (texture, _) = create_color_target(&r.device, self.coarse.plan.extent, "completed display image");
+        encoder.copy_texture_to_texture(source.as_image_copy(), texture.as_image_copy(), source.size());
+        self.bind_complete_image(r, pipelines, texture, false);
     }
     pub fn flush_updates(&mut self, encoder: &mut crate::submission::CommandEncoder) {
         if let Some(updates) = &mut self.complete_updates { updates.flush(encoder); }

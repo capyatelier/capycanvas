@@ -19,16 +19,29 @@ fn native_penup_and_following_strokes() {
             .layers
             .insert(position, layer_core::Layer::paint(id, "pacing layer"));
     }
-    let depth = project.document.color.depth;
+    let photo = std::env::var("LAYER_PEN_PROJECT").ok();
+    if let Some(path) = &photo {
+        project = layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap();
+        if std::env::var_os("LAYER_PEN_ON_SOURCE").is_some() {
+            project.document.active_layer = project.document.layers.iter()
+                .find(|layer| layer.source.is_some()).unwrap().id;
+        }
+    }
+    let extent = [project.document.width, project.document.height];
+    let color = project.document.color;
+    let depth = color.depth;
+    let paint_layers = project.document.layers.len();
+    let preset = if photo.is_some() { layer_core::DefaultBrushPreset::GPen }
+        else { layer_core::DefaultBrushPreset::PaletteKnife };
+    let diameter = std::env::var("LAYER_PEN_BRUSH_PX").ok().map(|v| v.parse().unwrap())
+        .unwrap_or(if photo.is_some() { 2000. } else { 720. });
+    let contact_ms = std::env::var("LAYER_PEN_CONTACT_MS").ok().map(|v| v.parse::<u64>().unwrap()).unwrap_or(800);
     project.validate(Default::default()).unwrap();
     let w = Workspace::with_project(&app, Some((project, None)));
+    if photo.is_some() { w.window.set_default_size(1400, 950); }
     let sdr = std::env::var_os("LAYER_DRAWING_SDR").is_some();
     if sdr { w.window.maximize(); }
     w.window.present();
-    w.dispatch(UiAction::SelectBrush {
-        id: layer_core::DefaultBrushPreset::PaletteKnife as u32,
-    });
-    w.dispatch(UiAction::SetBrushSize { value: 720. });
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         pump(5);
@@ -44,6 +57,14 @@ fn native_penup_and_following_strokes() {
         }
         assert!(Instant::now() < deadline, "native pen-up fixture startup");
     }
+    w.dispatch(UiAction::SelectBrush { id: preset as u32 });
+    w.dispatch(UiAction::SetBrushSize { value: diameter });
+    if photo.is_some() {
+        w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+        pump(200);
+    }
+    assert_eq!(state(&w).brush.diameter, diameter, "benchmark brush diameter");
+    assert_eq!(state(&w).brush.preset, preset as u32, "benchmark brush preset");
     if w.gpu.borrow().as_ref().unwrap().session.engine().document().color.depth.is_float() {
         w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
             color: layer_core::color::RgbColor::from_linear(
@@ -92,6 +113,9 @@ fn native_penup_and_following_strokes() {
     let mut pending = Vec::<(usize, layer_core::raster::RasterRevision)>::new();
     let mut backed = Vec::<[u64; 2]>::new();
     let mut ups = Vec::new();
+    let mut input_samples = Vec::new();
+    let mut delivery_cpu = Vec::new();
+    let mut contacts = Vec::new();
     let mut guides = Vec::new();
     let observe = |pending: &mut Vec<(usize, layer_core::raster::RasterRevision)>,
                    backed: &mut Vec<[u64; 2]>| {
@@ -123,11 +147,13 @@ fn native_penup_and_following_strokes() {
         let mut last = None;
         let guide = w.local_tone.preview_count();
         if sdr { assert!(guide.is_some(), "retain completed guide before contact"); }
-        while start.elapsed() < Duration::from_millis(800) {
-            let t = (start.elapsed().as_secs_f32() / 0.8).min(1.);
+        let contact_start = glib::monotonic_time() as u64 * 1000;
+        while start.elapsed() < Duration::from_millis(contact_ms) {
+            let t = (start.elapsed().as_secs_f32() * 1000. / contact_ms as f32).min(1.);
             let m = camera.document_to_surface();
-            let x = 400. + 3250. * t;
-            let y = 2048. + 1100. * (t * std::f32::consts::TAU + stroke as f32 * 0.3).sin();
+            let x = (400. + 3250. * t) * extent[0] as f32 / 4096.;
+            let y = (2048. + 1100. * (t * std::f32::consts::TAU + stroke as f32 * 0.3).sin())
+                * extent[1] as f32 / 4096.;
             let event = PenEvent {
                 device_id: 1,
                 sequence,
@@ -137,7 +163,7 @@ fn native_penup_and_following_strokes() {
                     x: m[0] * x + m[2] * y + m[4],
                     y: m[1] * x + m[3] * y + m[5],
                 },
-                pressure: 0.8,
+                pressure: if photo.is_some() { 1. } else { 0.8 },
                 tilt_radians: [0.; 2],
                 twist_radians: 0.,
                 distance: 0.,
@@ -150,8 +176,11 @@ fn native_penup_and_following_strokes() {
                 flags: SampleFlags::PRIMARY,
             };
             sequence += 1;
+            if stroke > 0 { input_samples.push([sequence, event.timestamp_ns]); }
+            let delivery = Instant::now();
             w.cursor_input(Some(event));
             w.input.send(&w, event);
+            if stroke > 0 { delivery_cpu.push(delivery.elapsed().as_secs_f64() * 1000.); }
             first = false;
             last = Some(event);
             while !due.replace(false) {
@@ -169,6 +198,7 @@ fn native_penup_and_following_strokes() {
         sequence += 1;
         guides.push(guide);
         w.input.send(&w, up);
+        if stroke > 0 { contacts.push([contact_start, up.timestamp_ns]); }
         expected += 1;
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -186,6 +216,7 @@ fn native_penup_and_following_strokes() {
                     .unwrap()
                     .raster
                     .clone();
+                assert!(!root.is_empty(), "contact must create raster paint");
                 pending.push((stroke, root));
                 break;
             }
@@ -231,16 +262,16 @@ fn native_penup_and_following_strokes() {
     tick.remove();
     pump(200);
     let stats = stats.lock().unwrap();
-    assert_eq!(
-        stats.raster_commits.len(),
-        count,
-        "each pen-up must render once"
-    );
-    assert_eq!(backed.len(), count);
-    assert!(stats.presented.iter().filter(|p| p[3] == 1).count() > 100);
+    let commit_count = stats.raster_commits.len();
+    let presented_count = stats.presented.iter().filter(|p| p[3] == 1).count();
     let report = serde_json::json!({
-        "document": {"extent": [4096,4096], "space": "ProPhoto", "depth": depth.bits(), "paint_layers": 32},
-        "brush": "PaletteKnife", "brush_size": 720, "contact_ms": 800, "contacts": count,
+        "document": {"extent": extent, "space": format!("{:?}", color.space), "depth": depth.bits(), "paint_layers": paint_layers},
+        "brush": format!("{preset:?}"), "brush_size": diameter, "contact_ms": contact_ms, "contacts": count,
+        "input_samples": input_samples, "contact_intervals": contacts,
+        "input_delivery_cpu_ms": delivery_cpu, "document_to_surface": camera.document_to_surface(),
+        "input_handler_cpu": stats.input_handler_cpu, "input_cpu": stats.input_cpu,
+        "wake_lateness": stats.wake_lateness, "camera_work": stats.camera_work,
+        "renderer_phases": stats.renderer_phases,
         "sdr_proof": sdr, "retained_guide_generations": guides,
         "viewport": camera.viewport, "gtk_renderer": w.window.renderer().unwrap().type_().name(),
         "path": "app-owned Wayland Vulkan subsurface", "backing_observation": "first observed host-backed at 2ms event-loop sampling",
@@ -252,6 +283,10 @@ fn native_penup_and_following_strokes() {
     drop(stats);
     let path = std::env::var("LAYER_PACING_REPORT").unwrap();
     std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    // Keep diagnostics from failed performance gates as well as successful runs.
+    assert_eq!(commit_count, count, "each pen-up must render once");
+    assert_eq!(backed.len(), count);
+    assert!(presented_count > 100);
     w.window.destroy();
     // This harness drives the main context directly, without Application::run
     // observing the analysis worker's application hold during shutdown.

@@ -3,6 +3,11 @@ use super::*;
 use layer_core::{EffectAlpha, EffectValue};
 const EXTENT: [u32; 2] = [384, 256];
 
+#[path = "filter_investigation.rs"]
+mod investigation;
+#[path = "../../../../tools/performance/filter-history-benchmark.rs"]
+mod historical;
+
 fn artwork([width, height]: [u32; 2]) -> Vec<u8> {
     // Original test artwork: gradients, curved silhouettes, bright highlights,
     // fine texture and transparent edges. No external image/licensing inputs.

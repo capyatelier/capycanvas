@@ -3,8 +3,8 @@
 //! staging before the next allocation; there is no reduced-precision edit cache.
 use super::*;
 
-// An implementation ceiling, not a measured device/workload qualification. The
-// native GTK mode remains disabled until total residency and latency pass.
+// Minimum filter reserve in the shared composition allowance. Larger admitted
+// documents retain their inputs; windows are the fallback when they do not fit.
 pub(crate) const DEFAULT_IMAGE_PIXEL_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]

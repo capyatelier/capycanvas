@@ -1499,7 +1499,7 @@ impl Scene {
     ) -> Result<(), GpuRasterError> {
         self.prepare_placement_mips(r, packet, encoder)?;
         if let Some(native) = &r.native_edit
-            && let Some(plan) = windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_bytes)?
+            && let Some(plan) = windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(r, packet.layers, packet.document_extent)?)?
         {
             return self.compose_windows(r, packet, dirty, encoder, overlay, plan);
         }
@@ -1540,7 +1540,7 @@ impl Scene {
         self.used.fill(false);
         // Completed image boundaries include their surrounding composition.
         // Copy only the changed region; clipping uses the same final path.
-        if r.live_display.is_none() && self.cached_composition()
+        if self.cached_composition()
             && let Some(top) = packet.layers.iter().find(|l| {
                 l.visible && l.properties.parent.is_none() && l.kind != LayerKind::Background && l.is_artwork()
             })
@@ -1555,6 +1555,13 @@ impl Scene {
                     .any(|l| l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area)))
             && let Some(source) = self.images.scene_texture(top)
         {
+            if let Some(mut cache) = r.live_display.take() {
+                let result = cache.publish_image(r, r.display_pipelines.as_ref().unwrap(), encoder,
+                    source, self.images.bounds, dirty, tiles);
+                r.live_display = Some(cache);
+                r.metrics.composited_pixels += result?;
+                return Ok(());
+            }
             let origin = wgpu::Origin3d {
                 x: dirty.min_x(),
                 y: dirty.min_y(),
@@ -1583,6 +1590,10 @@ impl Scene {
             );
             r.metrics.composited_pixels += dirty.area();
             return Ok(());
+        }
+        if let Some(mut cache) = r.live_display.take() {
+            cache.make_writable(r, r.display_pipelines.as_ref().unwrap(), encoder);
+            r.live_display = Some(cache);
         }
         let clear_composite = self.cached_composition() && r.live_display.is_none()
             && tiles.is_none() && dirty == PixelRect::full(packet.document_extent);

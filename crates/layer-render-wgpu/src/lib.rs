@@ -1652,19 +1652,22 @@ impl WgpuRasterizer {
         &mut self,
         extent: [u32; 2],
         layers: &[Layer],
-    ) -> Result<bool, GpuRasterError> {
+    ) -> Result<(bool, bool), GpuRasterError> {
         let resized = self.ensure_document_metadata(extent, layers)?;
         if let Some(native) = &self.native_edit
             && u64::from(extent[0]) * u64::from(extent[1]) * 16 > native.display_dense_bytes
         {
             let limit = native.display_cache_bytes;
-            if self.live_display.is_none() {
+            let allowance = native.display_allowance(layers, extent);
+            let rebuilt = self.live_display.as_ref().is_none_or(|cache| cache.allowance != allowance);
+            if rebuilt {
                 self.display_pipelines.get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
-                self.live_display = Some(live_display::Cache::new(self, self.display_pipelines.as_ref().unwrap(), limit)?);
+                self.live_display = Some(live_display::Cache::new(self, self.display_pipelines.as_ref().unwrap(), limit, allowance)?);
             }
-            return Ok(resized);
+            return Ok((resized, rebuilt));
         }
-        if resized || self.composite_texture.is_none() {
+        let rebuilt = resized || self.composite_texture.is_none();
+        if rebuilt {
             let (texture, view) = create_color_target(&self.device, extent, "layer composite");
             self.composite_bind_group = Some(create_texture_bind_group(
                 &self.device, &self.texture_layout, &view, &self.sampler,
@@ -1673,7 +1676,7 @@ impl WgpuRasterizer {
             self.composite_texture = Some(texture);
             self.composite_view = Some(view);
         }
-        Ok(resized)
+        Ok((resized, rebuilt))
     }
 
     /// Set the document topology independently of full-composite allocation.
@@ -3648,7 +3651,7 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(native) = &self.native_edit {
             // Reject unsupported global dependencies before clearing/restoring
             // paint, allocating the composite, or submitting any part of a frame.
-            scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_bytes)?;
+            scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(self, packet.layers, packet.document_extent)?)?;
         }
         if packet.layers.iter().any(|l| l.source.is_some()) {
             // Source-backed photos own no paint initially. Prepare their bounded
@@ -3747,7 +3750,8 @@ impl CanvasRenderer for WgpuRasterizer {
             ..packet
         };
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
-        let resized = self.ensure_document(packet.document_extent, packet.layers)?;
+        let (resized, display_rebuilt) = self.ensure_document(packet.document_extent, packet.layers)?;
+        let packet = FramePacket { composite_all: packet.composite_all || display_rebuilt, ..packet };
         self.prepare_selection_previews(packet.layers)?;
         let mut batch_tiles = original_batches.iter().map(|batch| {
             let start = batch.first_dab as usize;

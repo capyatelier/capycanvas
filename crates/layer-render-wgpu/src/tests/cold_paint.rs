@@ -524,7 +524,7 @@ fn cold_native_color_feeds_bounded_live_filter_windows() {
     let resident = renderer(&p, u64::MAX);
     let mut cold = WgpuRasterizer::new_native_headless(p.document.color).unwrap();
     cold.native_edit.as_mut().unwrap().color_cache_bytes = 0;
-    cold.native_edit.as_mut().unwrap().image_pixel_bytes = 8 * 1024 * 1024;
+    cold.native_edit.as_mut().unwrap().image_pixel_bytes = Some(8 * 1024 * 1024);
     cold.submit(packet(&p, true)).unwrap();
     close(&image(&cold), &image(&resident));
     assert!(cold.paint_layers[0].pages.is_empty());

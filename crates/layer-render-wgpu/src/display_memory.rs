@@ -10,6 +10,22 @@ fn allowance(headroom: Option<u64>, divisor: u64) -> u64 {
     headroom.map_or(0, |bytes| bytes / divisor)
 }
 
+/// Exact filter dependencies can use available unified memory when the driver
+/// budget is unavailable. This must not enlarge optional display/source caches:
+/// system capacity alone does not establish their fast-residency budget.
+pub(super) fn composition_budget(device: &wgpu::Device, display: u64) -> u64 {
+    let budget = display.saturating_add(crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES);
+    // wgpu disables RADV's unreliable memory-budget extension. Respect that
+    // workaround; query available process/system memory only for dependencies.
+    #[cfg(target_os = "linux")]
+    if display == 0 && unified_memory(device) {
+        return budget.max(allowance(layer_color::photo::PhotoMemoryBudget::available_memory(), 4));
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = device;
+    budget
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
     let headroom = vulkan_headroom(device);
@@ -139,7 +155,7 @@ fn android_admission_log(headroom: Option<u64>, system: Option<u64>, allowance: 
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn unified_memory(device: &wgpu::Device) -> bool {
     use ash::vk;
     // SAFETY: the guard owns the live instance; these queries only read properties.

@@ -9,6 +9,8 @@ mod prediction;
 mod stroke_recording;
 #[path = "native_navigation_tests.rs"]
 mod native_navigation;
+#[path = "filter_investigation_tests.rs"]
+mod filter_investigation;
 #[path = "editing_tools_tests.rs"]
 mod editing_tools;
 #[path = "color_panel_tests.rs"]

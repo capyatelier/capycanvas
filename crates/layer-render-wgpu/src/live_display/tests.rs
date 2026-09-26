@@ -4,8 +4,103 @@ use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
 
 fn bounded_renderer(color: DocumentColor) -> Result<WgpuRasterizer, GpuRasterError> {
     let mut r = WgpuRasterizer::new_native_headless(color)?;
-    r.native_edit.as_mut().unwrap().display_complete_bytes = 0;
+    r.set_complete_display_allowance(0);
     Ok(r)
+}
+
+#[test]
+fn filter_images_borrow_unused_display_allowance_with_a_combined_bound() {
+    let mut r = bounded_renderer(DocumentColor::default()).unwrap();
+    let extent = [5184, 3456];
+    let layers = [crate::tests::image_windows::effect(1, false, false)];
+    let image_bytes = scene::Scene::capture_image_bound(&layers, PixelRect::full(extent));
+    for allowance in [0, 512 << 20, 1536 << 20] {
+        r.set_complete_display_allowance(allowance);
+        let native = r.native_edit.as_ref().unwrap();
+        let display = Cache::allocation_bound(&r, extent, native.display_cache_bytes, native.display_allowance(&layers, extent)).unwrap();
+        let images = native.image_pixel_budget(&r, &layers, extent).unwrap();
+        let floor = native.display_cache_bytes + scene::windows::DEFAULT_IMAGE_PIXEL_BYTES;
+        assert_eq!(display + images, native.composition_bytes.max(floor));
+        let plan = scene::windows::Plan::new(&layers, extent, images).unwrap();
+        assert_eq!(plan.is_none(), allowance == 1536 << 20);
+        if plan.is_none() { assert!(image_bytes + display <= native.composition_bytes); }
+    }
+}
+
+#[test]
+fn completed_filter_publication_matches_tile_composition_through_windows_and_edits() {
+    let mut doc = document([777, 533]);
+    doc.layers.insert(0, crate::tests::image_windows::effect(20, false, false));
+    let mut r = bounded_renderer(doc.color).unwrap();
+    r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+    let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    for complete in [false, true] {
+        r.set_complete_display_allowance(if complete { 320 << 20 } else { 0 });
+        for limit in [u64::MAX, 8 << 20] {
+            r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(limit);
+            for step in 0..5 {
+                doc.layers[0].opacity = [1., 0.37, 0., 0.81, 1.][step];
+                let mut mask = layer_core::LayerMask::reveal_all(LayerId(99), Default::default());
+                mask.default_coverage = 0.63;
+                mask.show_area = step == 3;
+                doc.layers[0].mask = (step > 0).then_some(mask);
+                if step == 4 {
+                    let mut foreground = doc.layers[1].clone();
+                    foreground.id = LayerId(100);
+                    foreground.opacity = 0.3;
+                    doc.layers.insert(0, foreground);
+                }
+                let v = centered_view([doc.width, doc.height], [320, 240], 0.501, 0.12);
+                r.scene.as_mut().unwrap().set_tiled_composition(false);
+                submit(&mut r, &doc, v, true);
+                let actual = present(&r, &mut presenter, v);
+                r.scene.as_mut().unwrap().set_tiled_composition(true);
+                submit(&mut r, &doc, v, true);
+                close(&actual, &present(&r, &mut presenter, v));
+                if step == 4 { doc.layers.remove(0); }
+            }
+        }
+    }
+}
+
+#[test]
+fn filter_working_allowance_does_not_expand_unfiltered_caches() {
+    let mut doc = document([777, 533]);
+    let mut r = bounded_renderer(doc.color).unwrap();
+    r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+    r.native_edit.as_mut().unwrap().composition_bytes = 1536 << 20;
+    let source_limits = r.scene.as_ref().unwrap().source_cache_limits();
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.501, 0.12);
+    let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    submit(&mut r, &doc, v, true);
+    let unpainted = present(&r, &mut presenter, v);
+    let mut dab = crate::tests::test_dab([310., 230.], [0.8, 0.04, 0.2, 1.], 1.);
+    dab.radii = [90.; 2];
+    let batch = DabBatch {
+        material_update: 0, stroke_id: StrokeId(1), layer_id: doc.layers[0].id,
+        kind: DabBatchKind::Persistent, stroke_start: true, stroke_end: true,
+        first_dab: 0, dab_count: 1, damage: dab.bounds(),
+        style: crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen),
+    };
+    r.submit(FramePacket {
+        layers: &doc.layers, document_extent: [doc.width, doc.height], view: v,
+        time_seconds: 0., dabs: &[dab], dab_batches: &[batch],
+        restore_rasters: &[], reset_layers: false, composite_all: false,
+    }).unwrap();
+    let original = present(&r, &mut presenter, v);
+    assert_ne!(original, unpainted);
+    assert!(!r.live_display.as_ref().unwrap().is_complete());
+    doc.layers.insert(0, crate::tests::image_windows::effect(20, false, false));
+    submit(&mut r, &doc, v, false);
+    assert!(r.live_display.as_ref().unwrap().borrowed_image);
+    doc.layers.remove(0);
+    submit(&mut r, &doc, v, false);
+    assert!(!r.live_display.as_ref().unwrap().is_complete());
+    close(&original, &present(&r, &mut presenter, v));
+    assert_eq!(source_limits, r.scene.as_ref().unwrap().source_cache_limits());
+    assert_eq!(r.native_edit.as_ref().unwrap().display_complete_bytes, 0);
 }
 
 #[test]
@@ -22,7 +117,7 @@ fn display_batches_preserve_direct_and_fallback_submission_bounds() {
             let doc = layer_core::Document::new("paper batches", columns * PAGE_SIZE, rows * PAGE_SIZE);
             let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
             r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
-            r.native_edit.as_mut().unwrap().display_complete_bytes = if complete { u64::MAX } else { 0 };
+            r.set_complete_display_allowance(if complete { u64::MAX } else { 0 });
             // Constant paper can write directly on every device, including
             // Float32 devices without attachment blending.
             let batch = if complete {
@@ -189,10 +284,10 @@ fn centered_view(extent: [u32; 2], viewport: [u32; 2], scale: f32, angle: f32) -
 #[test]
 fn complete_admission_respects_texture_extent_even_with_free_memory() {
     let mut r = bounded_renderer(DocumentColor::default()).unwrap();
-    r.native_edit.as_mut().unwrap().display_complete_bytes = u64::MAX;
+    r.set_complete_display_allowance(u64::MAX);
     r.document_extent = [r.device.limits().max_texture_dimension_2d + 1, 16];
     let pipelines = display_mips::Pipelines::new(&r.device);
-    let cache = Cache::new(&r, &pipelines, CACHE_BYTES).unwrap();
+    let cache = Cache::new(&r, &pipelines, CACHE_BYTES, r.native_edit.as_ref().unwrap().display_complete_bytes).unwrap();
     assert!(cache.retained.iter().all(|level| level.level > 0));
     assert!(cache.retained.iter().all(|level|
         level.texture.width() <= r.device.limits().max_texture_dimension_2d));
@@ -205,7 +300,7 @@ fn unchanged_hidpi_navigation_keeps_reserved_detail_slots() {
     let pipelines = display_mips::Pipelines::new(&r.device);
     for extent in [[8192, 7324], [9504, 6336]] {
         r.document_extent = extent;
-        let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES).unwrap();
+        let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES, r.native_edit.as_ref().unwrap().display_complete_bytes).unwrap();
         let mut previous = 0;
         for (scale, angle) in [(1., 0.), (1., 0.2), (2., 0.2), (1., 0.), (0.5, 0.)] {
             let v = centered_view(extent, [2752, 2064], scale, angle);
@@ -225,9 +320,9 @@ fn partial_admission_preserves_reduced_levels_during_hidpi_zoom() {
     let mut r = bounded_renderer(DocumentColor::default()).unwrap();
     r.document_extent = [9504, 6336];
     let allowance = 768 * 1024 * 1024;
-    r.native_edit.as_mut().unwrap().display_complete_bytes = allowance;
+    r.set_complete_display_allowance(allowance);
     let pipelines = display_mips::Pipelines::new(&r.device);
-    let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES).unwrap();
+    let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES, r.native_edit.as_ref().unwrap().display_complete_bytes).unwrap();
     assert!(cache.retained.iter().all(|level| level.level > 0));
     let original_mips = cache.retained_bytes();
     for scale in [2., 1., 0.50001, 0.25, 0.125, 0.50001] {
@@ -249,7 +344,7 @@ fn large_rotated_hidpi_views_fit_the_original_display_budget() {
     }).unwrap();
     r.document_extent = [9504, 6336];
     let pipelines = display_mips::Pipelines::new(&r.device);
-    let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES).unwrap();
+    let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES, r.native_edit.as_ref().unwrap().display_complete_bytes).unwrap();
     let original_mips = cache.retained_bytes();
     for viewport in [[2400, 1800], [3840, 2160]] {
         for scale in [0.50001, 0.6, 0.75, 1., 0.25, 2.] {
@@ -326,7 +421,7 @@ fn complete_display_matches_bounded_pixels_and_never_recomposes_for_navigation()
     doc.layers.insert(0, crate::tests::image_windows::effect(20, false, false));
     let mut full = bounded_renderer(doc.color).unwrap();
     full.native_edit.as_mut().unwrap().display_dense_bytes = 0;
-    full.native_edit.as_mut().unwrap().display_complete_bytes = 64 * 1024 * 1024;
+    full.set_complete_display_allowance(64 * 1024 * 1024);
     let mut bounded = bounded_renderer(doc.color).unwrap();
     bounded.native_edit.as_mut().unwrap().display_dense_bytes = 0;
     let mut a = ViewportPresenter::for_surface(&full, wgpu::TextureFormat::Rgba32Float,
@@ -379,7 +474,7 @@ fn complete_display_batches_match_scratch_reduction_exactly_through_edits() {
     let mut reference = bounded_renderer(doc.color).unwrap();
     for r in [&mut direct, &mut reference] {
         r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
-        r.native_edit.as_mut().unwrap().display_complete_bytes = 256 * 1024 * 1024;
+        r.set_complete_display_allowance(256 * 1024 * 1024);
         r.ensure_document([doc.width, doc.height], &doc.layers).unwrap();
         assert!(r.live_display.as_ref().unwrap().complete_updates.is_some());
     }

@@ -1,5 +1,5 @@
 //! Deterministic 9504 x 6336 sRGB image with an empty paint layer for replays.
-//! Usage: photo_fixture OUTPUT.capy
+//! Usage: photo_fixture OUTPUT.capy [--source-layer]
 use layer_core::{color::{ColorProfile, RgbSpace, SampleDepth, source::*}, Layer};
 use std::{fs::File, io::BufWriter};
 
@@ -23,8 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Synthetic 61 MP source", SampleDepth::U8)?;
     let ink = project.document.allocate_layer_id();
     project.document.layers.insert(0, Layer::paint(ink, "Benchmark ink"));
-    project.document.active_layer = ink;
+    if !std::env::args().any(|arg| arg == "--source-layer") {
+        project.document.active_layer = ink;
+    }
     project.write(BufWriter::new(File::create(output)?))?;
-    println!("Created {width} x {height} synthetic image, hidden paper, empty selected paint layer");
+    println!("Created {width} x {height} synthetic image, hidden paper, active layer {:?}", project.document.active_layer);
     Ok(())
 }
