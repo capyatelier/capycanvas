@@ -1568,7 +1568,7 @@ impl PreferencesState {
                     .chord
                     .clone()
                     .ok_or("Press a key combination first")?;
-                chord.validate()?;
+                chord.validate_for(settings.held_shortcut(&capture.id, platform))?;
                 if !chord.available(platform) {
                     return Err("This shortcut is reserved by the browser".into());
                 }
@@ -1624,7 +1624,8 @@ impl PreferencesState {
     }
     pub(crate) fn record(&mut self, settings: &Settings, chord: KeyChord, platform: Platform) {
         self.error = None;
-        if KeyChord::modifier(&chord.key) {
+        let held = self.capture.as_ref().is_some_and(|c| settings.held_shortcut(&c.id, platform));
+        if KeyChord::modifier(&chord.key) && !(held && chord.validate_for(true).is_ok()) {
             return;
         }
         if chord.key == "escape" {
@@ -1632,7 +1633,7 @@ impl PreferencesState {
             return;
         }
         if let Some(capture) = &mut self.capture {
-            capture.error = chord.validate().err().or_else(|| {
+            capture.error = chord.validate_for(held).err().or_else(|| {
                 (!chord.available(platform))
                     .then(|| "This shortcut is reserved by the browser".into())
             });

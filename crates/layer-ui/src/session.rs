@@ -10,6 +10,8 @@ use layer_render::CanvasRenderer;
 mod art_layers;
 #[path = "color_picker_session.rs"]
 mod color_picker_session;
+#[path = "held_actions.rs"]
+mod held_actions;
 #[path = "source_edit.rs"]
 pub(crate) mod source_edit;
 #[path = "document_color_edit.rs"]
@@ -1007,6 +1009,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if !pressed {
                         self.interaction.keys.remove(&key);
                         if self.interaction.pan_key.as_deref() == Some(&key) { self.interaction.pan_key = None; }
+                        self.release_hold(&key);
+                        self.settle_holds_into(&mut reply)?;
                     }
                     // Native search entry/list owns text, IME and navigation.
                     return Ok(reply);
@@ -1022,6 +1026,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if self.interaction.pan_key.as_deref() == Some(&key) {
                         self.interaction.pan_key = None;
                     }
+                    reply.handled |= self.release_hold(&key);
                 } else {
                     let repeat = !self.interaction.keys.insert(key.clone()) || repeat;
                     if self.state.preferences.capture.is_some() {
@@ -1117,17 +1122,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 viewport,
                             })?;
                             reply.handled = true;
-                        } else if let Some(binding) = self
-                            .state
-                            .settings
-                            .shortcut_match(&KeyChord::new(&key, modifiers), self.state.platform)
-                        {
+                        } else if let Some(binding) = self.state.settings.shortcut_match(
+                            &KeyChord::new(&key, self.held_modifiers(modifiers)),
+                            self.state.platform,
+                            divider.is_none().then(|| self.binding_category()),
+                        ) {
                             reply.handled = true;
                             if !repeat || binding.repeat {
                                 match binding.action {
                                     ShortcutAction::Pan => self.interaction.pan_key = Some(key),
+                                    ShortcutAction::Hold { command } => self.press_hold(key, command),
                                     ShortcutAction::Action { action } => {
                                         if !matches!(*action, UiAction::Invoke { command } if !self.command(command).enabled)
+                                            && !matches!(&*action, UiAction::StepToolSetting { id, .. } if !self.state.tool_settings.iter().any(|c| c.id == *id))
                                         {
                                             reply.change = self.dispatch(*action)?;
                                         }
@@ -1210,6 +1217,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.interaction.keys.clear();
                 self.interaction.modifiers = Modifiers::default();
                 self.interaction.pan_key = None;
+                self.interaction.holds.clear();
                 self.interaction.keyboard_chrome = false;
                 self.interaction.facts.held = false;
                 // A native DND grab can blur the window without ending the
@@ -1231,6 +1239,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.touch.clear();
             }
         }
+        self.settle_holds_into(&mut reply)?;
         self.refresh_chrome();
         if let Some((was_hidden, popup_open)) = contact {
             reply.dismiss_popups = popup_open;
@@ -2160,6 +2169,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
         self.engine.backend_mut().shader_input();
+        self.end_holds_for_tool_choice(&action);
         match action {
             UiAction::CommandSearch { action } => return self.command_search_action(action),
             UiAction::ExecuteCommand { id, value } => return self.execute_catalog_command(&id, value),
@@ -2902,6 +2912,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::Tonal { action } => {self.tonal_action(action)?;(BRUSH | COMMANDS,true)}
             UiAction::SetToolText { .. } => return Err("Unknown text setting".into()),
+            UiAction::StepToolSetting { id, steps } => {
+                let setting = self
+                    .state
+                    .tool_settings
+                    .iter()
+                    .find(|c| c.id == id)
+                    .ok_or("This setting is not used by the selected tool")?;
+                let value = setting
+                    .numeric
+                    .resolve(setting.value as f64, NumericOperation::Step { steps: steps as f64 })?
+                    .value as f32;
+                return self.dispatch(UiAction::SetToolSetting { id, value });
+            }
             UiAction::SetToolSetting { id, value } => {
                 if id.starts_with("tonal_") {
                     if !self.tonal_active() {return Err("Choose Tonal range first".into());}
@@ -3935,6 +3958,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.layer_interaction.changed = false;
             self.refresh_document();
             changed |= regions::DOCUMENT;
+        }
+        if let Some(change) = self.settle_holds()? {
+            changed |= change.regions;
         }
         let tonal_changed=std::mem::take(&mut self.tonal_tools.changed);
         if tonal_changed {self.refresh_tools();changed |= regions::DOCUMENT | regions::BRUSH | regions::COMMANDS;}
@@ -5259,6 +5285,7 @@ mod tests {
     include!("painted_selection_tests.rs");
     include!("toolbar_component_tests.rs");
     include!("canvas_bar_tests.rs");
+    include!("held_action_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -15337,7 +15364,7 @@ mod tests {
         assert!(
             s.state
                 .settings
-                .shortcut_match(&KeyChord::new("F11", Default::default()), Platform::Web)
+                .shortcut_match(&KeyChord::new("F11", Default::default()), Platform::Web, None)
                 .is_none()
         );
         s.dispatch(UiAction::WindowFullscreen { fullscreen: false })
@@ -17511,6 +17538,7 @@ mod tests {
                     action: ShortcutAction::Action {
                         action: Box::new(UiAction::SetBrushSize { value: 42.0 }),
                     },
+                    scope: BindingScope::Application,
                 },
             },
         );

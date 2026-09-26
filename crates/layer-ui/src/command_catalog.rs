@@ -322,7 +322,7 @@ fn entry(
         &action,
         UiAction::Invoke {
             command: CommandId::Undo | CommandId::Redo
-        }
+        } | UiAction::StepToolSetting { .. }
     );
     let shortcut = settings
         .action_keys(&action, platform)
@@ -462,10 +462,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.command_search.focus = focus;
         }
     }
-    pub fn command_tool_context(&self) -> CommandToolContext {
+    pub(crate) fn tool_category(tool: LayerCanvasTool, brush: Tool) -> ToolCategory {
         use LayerCanvasTool as T;
-        let category = match self.layer_interaction.tool {
-            T::Paint => match self.state.brush.tool {
+        match tool {
+            T::Paint => match brush {
                 Tool::Eraser => ToolCategory::Erasing,
                 Tool::Blend => ToolCategory::Blending,
                 Tool::Liquify => ToolCategory::Warping,
@@ -479,7 +479,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ToolCategory::FillGradient
             }
             _ => ToolCategory::Selection,
-        };
+        }
+    }
+    pub fn command_tool_context(&self) -> CommandToolContext {
+        let category = Self::tool_category(self.layer_interaction.tool, self.state.brush.tool);
         CommandToolContext {
             category,
             parameters: self.state.tool_settings.iter().map(|s| s.id).collect(),
@@ -785,6 +788,40 @@ impl<R: CanvasRenderer> UiSession<R> {
         pan.descriptor.shortcut = settings.shortcut_label("canvas.pan", platform);
         pan.action = None;
         entries.push(pan);
+        for (definition, _) in crate::shortcuts::definitions(settings, platform) {
+            match definition.action {
+                crate::shortcuts::ShortcutAction::Hold { command } => {
+                    let mut held = entry(
+                        &definition.label,
+                        "Canvas",
+                        UiAction::Invoke { command },
+                        self.command(command).enabled,
+                        None,
+                        settings,
+                        platform,
+                    );
+                    held.descriptor.id = definition.id.clone();
+                    held.descriptor.kind = CommandKind::Held;
+                    held.descriptor.description = format!(
+                        "Temporarily use {}; release to return to the tool.",
+                        self.command_label(command)
+                    );
+                    held.descriptor.shortcut = settings.shortcut_label(&definition.id, platform);
+                    held.action = None;
+                    entries.push(held);
+                }
+                crate::shortcuts::ShortcutAction::Action { action }
+                    if matches!(&*action, UiAction::StepToolSetting { .. }) =>
+                {
+                    let enabled = matches!(&*action, UiAction::StepToolSetting { id, .. }
+                        if self.state.tool_settings.iter().any(|c| c.id == *id));
+                    let mut step = entry(&definition.label, "Tool settings", *action, enabled, None, settings, platform);
+                    step.descriptor.id = definition.id;
+                    entries.push(step);
+                }
+                _ => (),
+            }
+        }
         let mut seen = std::collections::BTreeSet::new();
         entries.retain(|e| seen.insert(e.descriptor.id.clone()));
         let mut labels = std::collections::BTreeMap::<String, usize>::new();
@@ -1072,6 +1109,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::Layer { action: LayerAction::ReferenceSelection } => {
                 Some("Mark layers as references first".into())
+            }
+            UiAction::StepToolSetting { id, .. } if !self.state.tool_settings.iter().any(|c| c.id == *id) => {
+                Some(format!("The selected tool has no {id} setting"))
             }
             UiAction::Effect { .. } if self.selection_masks.target().is_some() || document.active_mask => {
                 Some("Return to the artwork before applying a filter".into())

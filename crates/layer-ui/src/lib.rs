@@ -134,7 +134,7 @@ pub use settings::{
     SettingsPage, ShortcutEditor, Swatch, TextConstraint, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
 };
 pub use shortcuts::{
-    KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
+    BindingScope, KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
     TextEditMenuItem, text_edit_menu,
 };
 pub use theme::{
@@ -1461,6 +1461,10 @@ pub enum UiAction {
     SetToolSetting {
         id: String,
         value: f32,
+    },
+    StepToolSetting {
+        id: String,
+        steps: f32,
     },
     ResetToolSetting {
         id: String,

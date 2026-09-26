@@ -133,7 +133,8 @@ events cannot discard the parameter step.
 | Active layer properties | Numeric properties as value entries; choices and toggles as entries; one history step each |
 | Workspaces | Every managed workspace, beyond the Window menu's first five |
 | Colors | Paint slots, swap and quick colors |
-| Held pan | Cataloged as held; existing input lifecycle remains authoritative |
+| Held pan and held tools | Cataloged as held and excluded from results; the shared hold lifecycle owns press, release and blur |
+| Relative tool-setting steps | Cataloged with their bindings; disabled with a reason when the tool lacks the setting |
 | Focused palette Undo/Redo | Shared palette history, with origin focus retained through search |
 | Native text editing and drawing-tab focus actions | Existing native focus owners; general focus-context bindings require the resolver stage |
 | Complex forms, file pickers and confirmations | Existing native dialogs and host requests |
@@ -146,8 +147,9 @@ events cannot discard the parameter step.
 | Custom shortcut actions | Shortcut-only; search shows their binding on the matching catalog entry, never arbitrary serialized actions |
 | Measurements, drag/drop phases, restore/completion messages, raw pen samples | Private transport; never independently cataloged as commands |
 
-The general context resolver, tokenized held/continuous overrides, device
-adapters and compatibility presets remain the later C–F stages in the
+Scoped bindings and held tool overrides are described in
+[settings](settings.md#keyboard-shortcuts). Gesture and pen adapters, device
+adapters and compatibility presets remain the later D–F stages in the
 investigation. The command bar does not create Bluetooth support or reproduce
 other editors' held-modifier behavior by itself. The bar is implemented on GTK,
 Web, Android and Windows; the Apple presentation is separate follow-up work.

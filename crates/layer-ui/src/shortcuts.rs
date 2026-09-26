@@ -53,12 +53,36 @@ pub struct KeyChord {
 }
 impl KeyChord {
     pub fn new(key: &str, modifiers: Modifiers) -> Self {
-        Self {
-            key: key.to_lowercase(),
-            command: modifiers.command,
-            shift: modifiers.shift,
-            alt: modifiers.alt,
+        let key = key.to_lowercase();
+        match Self::modifier_name(&key) {
+            Some(name) => Self {
+                key: name.into(),
+                command: modifiers.command && name != "control" && name != "meta",
+                shift: modifiers.shift && name != "shift",
+                alt: modifiers.alt && name != "alt",
+            },
+            None => Self {
+                key,
+                command: modifiers.command,
+                shift: modifiers.shift,
+                alt: modifiers.alt,
+            },
         }
+    }
+    pub fn modifier_name(key: &str) -> Option<&'static str> {
+        Some(match key {
+            "shift" | "shift_l" | "shift_r" => "shift",
+            "control" | "control_l" | "control_r" | "ctrl" => "control",
+            "alt" | "alt_l" | "alt_r" => "alt",
+            "meta" | "meta_l" | "meta_r" | "super" | "super_l" | "super_r" => "meta",
+            _ => return None,
+        })
+    }
+    pub fn validate_for(&self, held: bool) -> Result<(), String> {
+        if held && matches!(self.key.as_str(), "shift" | "control" | "alt") && !self.command && !self.shift && !self.alt {
+            return Ok(());
+        }
+        self.validate()
     }
     pub fn validate(&self) -> Result<(), String> {
         let printable = self.key.chars().count() == 1 && !self.key.chars().any(char::is_control);
@@ -136,6 +160,8 @@ impl KeyChord {
         }
         parts.push(match self.key.as_str() {
             " " => "Space".into(),
+            "control" => if platform.apple() { "⌃" } else { "Ctrl" }.into(),
+            "alt" => if platform.apple() { "⌥" } else { "Alt" }.into(),
             "arrowleft" => "←".into(),
             "arrowright" => "→".into(),
             "arrowup" => "↑".into(),
@@ -160,6 +186,49 @@ pub enum ShortcutAction {
     },
     /// A momentary input mode: release its recorded key to leave it.
     Pan,
+    Hold {
+        command: CommandId,
+    },
+}
+impl ShortcutAction {
+    pub fn held(&self) -> bool {
+        matches!(self, Self::Pan | Self::Hold { .. })
+    }
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BindingScope {
+    #[default]
+    Application,
+    Canvas,
+    Tools {
+        categories: Vec<ToolCategory>,
+    },
+}
+impl BindingScope {
+    pub fn is_application(&self) -> bool {
+        *self == Self::Application
+    }
+    pub fn specificity(&self) -> u8 {
+        match self {
+            Self::Application => 0,
+            Self::Canvas => 1,
+            Self::Tools { .. } => 2,
+        }
+    }
+    pub fn applies(&self, canvas: Option<ToolCategory>) -> bool {
+        match self {
+            Self::Application => true,
+            Self::Canvas => canvas.is_some(),
+            Self::Tools { categories } => canvas.is_some_and(|c| categories.contains(&c)),
+        }
+    }
+    pub fn overlaps(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Tools { categories: a }, Self::Tools { categories: b }) => a.iter().any(|c| b.contains(c)),
+            _ => true,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShortcutDefinition {
@@ -168,6 +237,8 @@ pub struct ShortcutDefinition {
     pub action: ShortcutAction,
     #[serde(default)]
     pub repeat: bool,
+    #[serde(default, skip_serializing_if = "BindingScope::is_application")]
+    pub scope: BindingScope,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ShortcutRow {
@@ -429,6 +500,9 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.ExportDocument" => key("e", true, true),
         "command.CloseDocument" => key("w", true, false),
         "canvas.pan" => key(" ", false, false),
+        "hold.eyedropper" => key("alt", false, false),
+        "tool_setting.size.decrease" => key("[", false, false),
+        "tool_setting.size.increase" => key("]", false, false),
         _ => return Vec::new(),
     };
     vec![chord]
@@ -450,6 +524,7 @@ pub(crate) fn definitions(
                         action: Box::new(UiAction::Invoke { command }),
                     },
                     repeat: matches!(command, CommandId::Undo | CommandId::Redo),
+                    scope: BindingScope::Application,
                 },
                 "Commands",
             )
@@ -464,6 +539,7 @@ pub(crate) fn definitions(
                     action: Box::new(UiAction::CycleTool { family }),
                 },
                 repeat: false,
+                scope: BindingScope::Application,
             },
             "Tools",
         )
@@ -474,9 +550,41 @@ pub(crate) fn definitions(
             label: "Pan while held".into(),
             action: ShortcutAction::Pan,
             repeat: false,
+            scope: BindingScope::Canvas,
         },
         "Canvas",
     ));
+    use ToolCategory as C;
+    for (id, label, command, scope) in [
+        ("hold.eyedropper", "Sample color while held", CommandId::Eyedropper,
+            BindingScope::Tools { categories: vec![C::Drawing, C::Blending, C::FillGradient] }),
+        ("hold.eraser", "Erase while held", CommandId::Eraser,
+            BindingScope::Tools { categories: vec![C::Drawing, C::Blending] }),
+        ("hold.move", "Move while held", CommandId::Move, BindingScope::Canvas),
+    ] {
+        if command.available_on(platform) {
+            rows.push((
+                ShortcutDefinition { id: id.into(), label: label.into(), action: ShortcutAction::Hold { command }, repeat: false, scope },
+                "Canvas",
+            ));
+        }
+    }
+    for (setting, noun) in [("size", "brush size"), ("opacity", "brush opacity")] {
+        for (direction, steps) in [("decrease", -1.), ("increase", 1.)] {
+            rows.push((
+                ShortcutDefinition {
+                    id: format!("tool_setting.{setting}.{direction}"),
+                    label: format!("{}{} {noun}", direction[..1].to_uppercase(), &direction[1..]),
+                    action: ShortcutAction::Action {
+                        action: Box::new(UiAction::StepToolSetting { id: setting.into(), steps }),
+                    },
+                    repeat: true,
+                    scope: BindingScope::Canvas,
+                },
+                "Tool settings",
+            ));
+        }
+    }
     rows.extend(brush_catalog().map(|brush| {
         (
             ShortcutDefinition {
@@ -486,6 +594,7 @@ pub(crate) fn definitions(
                     action: Box::new(UiAction::SelectBrush { id: brush.id }),
                 },
                 repeat: false,
+                scope: BindingScope::Application,
             },
             "Brushes",
         )
@@ -499,6 +608,7 @@ pub(crate) fn definitions(
                     action: Box::new(UiAction::SetBrushSize { value }),
                 },
                 repeat: false,
+                scope: BindingScope::Application,
             },
             "Brush sizes",
         )
@@ -534,6 +644,9 @@ impl Settings {
             UiAction::Invoke { command } => Some(command.shortcut_id()),
             UiAction::SelectBrush { id } => Some(format!("brush.{id}")),
             UiAction::SetBrushSize { value } => Some(format!("size.{value}")),
+            UiAction::StepToolSetting { id, steps } if steps.abs() == 1. => {
+                Some(format!("tool_setting.{id}.{}", if *steps < 0. { "decrease" } else { "increase" }))
+            }
             _ => None,
         };
         let mut keys = if let Some(id) = builtin {
@@ -606,17 +719,19 @@ impl Settings {
         &self,
         chord: &KeyChord,
         platform: Platform,
+        canvas: Option<ToolCategory>,
     ) -> Option<ShortcutDefinition> {
         if !chord.available(platform) {
             return None;
         }
         definitions(self, platform)
             .into_iter()
-            .find_map(|(definition, _)| {
-                self.keys(&definition.id)
-                    .contains(chord)
-                    .then_some(definition)
-            })
+            .map(|(definition, _)| definition)
+            .filter(|definition| definition.scope.applies(canvas) && self.keys(&definition.id).contains(chord))
+            .max_by_key(|definition| definition.scope.specificity())
+    }
+    pub(crate) fn held_shortcut(&self, id: &str, platform: Platform) -> bool {
+        definitions(self, platform).iter().any(|(definition, _)| definition.id == id && definition.action.held())
     }
     pub(crate) fn conflict(
         &self,
@@ -624,12 +739,15 @@ impl Settings {
         chord: &KeyChord,
         platform: Platform,
     ) -> Option<ShortcutDefinition> {
-        definitions(self, platform)
-            .into_iter()
-            .find_map(|(definition, _)| {
-                (definition.id != id && self.keys(&definition.id).contains(chord))
-                    .then_some(definition)
-            })
+        let all = definitions(self, platform);
+        let scope = all.iter().find(|(d, _)| d.id == id).map(|(d, _)| d.scope.clone()).unwrap_or_default();
+        all.into_iter().find_map(|(definition, _)| {
+            (definition.id != id
+                && definition.scope.specificity() == scope.specificity()
+                && definition.scope.overlaps(&scope)
+                && self.keys(&definition.id).contains(chord))
+            .then_some(definition)
+        })
     }
     pub(crate) fn validate_shortcuts(&self) -> Result<(), String> {
         let mut ids = std::collections::BTreeSet::new();
@@ -651,8 +769,9 @@ impl Settings {
             if !all.iter().any(|(a, _)| a.id == *id) || keys.len() > MAX_SHORTCUTS {
                 return Err("Unknown action or too many shortcut alternatives".into());
             }
+            let held = all.iter().any(|(a, _)| a.id == *id && a.action.held());
             for (index, chord) in keys.iter().enumerate() {
-                chord.validate()?;
+                chord.validate_for(held)?;
                 if keys[..index].contains(chord) {
                     return Err("Duplicate shortcut alternative".into());
                 }
@@ -684,7 +803,7 @@ mod tests {
         }
         assert_eq!(
             settings
-                .shortcut_match(&key("j", false, false), Platform::Gtk)
+                .shortcut_match(&key("j", false, false), Platform::Gtk, None)
                 .unwrap()
                 .id,
             brush
@@ -764,6 +883,7 @@ mod tests {
                 action: Box::new(action.clone()),
             },
             repeat: false,
+            scope: BindingScope::Application,
         });
         settings
             .shortcuts

@@ -100,6 +100,13 @@ fn native_color_picker_input() {
     });
     let original = state(&d.w).colors.clone();
     let previous = state(&d.w).layer_tools.tool;
+    d.perform(serde_json::json!([{ "key": 0xffe9, "down": true }]));
+    pump(200);
+    assert!(state(&d.w).layer_tools.tool.picks_color(), "Alt samples while held");
+    d.perform(serde_json::json!([{ "key": 0xffe9, "down": false }]));
+    pump(200);
+    assert_eq!(state(&d.w).layer_tools.tool, previous);
+    assert_eq!(state(&d.w).colors, original);
     let revision =
         d.w.gpu
             .borrow()

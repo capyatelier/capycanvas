@@ -139,4 +139,8 @@ pub(crate) struct Interaction {
     pub viewport: Option<[f32; 2]>,
     pub pointer: Option<PointerContact>,
     pub keys: std::collections::BTreeSet<String>,
+    pub holds: Vec<(String, crate::CommandId)>,
+    pub held_tool: Option<crate::CommandId>,
+    pub hold_base: Option<(crate::LayerCanvasTool, u32)>,
+    pub applying_hold: bool,
 }

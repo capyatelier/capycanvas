@@ -55,6 +55,25 @@ The host translates native keyboard events and preserves normal widget behavior.
 Typing in a text field must not accidentally trigger a canvas shortcut. Platform
 modifiers and reserved OS interactions also need native testing.
 
+Each binding has a scope: Application, Canvas, or specific tool categories.
+Canvas and tool scopes apply only while no chrome control such as a divider owns
+keyboard focus. The most specific applicable scope wins, so `[` can step brush
+size on the canvas and still reach an Application binding elsewhere. Two
+bindings conflict only when their chord, specificity and scopes overlap. Tool
+scopes use the tool underneath an active hold, so Alt followed by a held eraser
+key works from a sampling override. An explicitly saved binding still suppresses
+a newer default on the same chord, so upgrades never shadow existing choices.
+
+Held bindings temporarily replace the tool: Alt samples color with drawing,
+blending, fill and gradient tools, and Space still pans. Held rows may record a
+lone Shift, Ctrl or Alt. The newest held key wins. Releasing it returns to the
+earlier hold, or to the tool captured before the first hold. A hold pressed or
+released during a stroke or other canvas interaction applies when that
+interaction finishes. Blur ends every hold. Explicitly choosing a tool also ends
+them and keeps the chosen tool. Modifiers owned by a hold do not change later
+chords, so Ctrl+Z still undoes while Alt samples. Relative step bindings use the
+setting's own numeric step and bounds and repeat while held.
+
 ## Saving and loading
 
 The host performs storage through its own APIs. Native clients write application

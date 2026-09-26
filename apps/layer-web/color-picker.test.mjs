@@ -20,6 +20,11 @@ export async function checkColorPicker({call,evaluate,settle}) {
   await invoke('brush');await invoke('fit_canvas');
   await key('i','KeyI',73);assert.equal((await state()).layer_tools.tool,'pick_visible');
   await key('Escape','Escape',27);assert.equal((await state()).layer_tools.tool,'paint');
+  const brush=(await state()).brush.preset;
+  await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Alt',code:'AltLeft',windowsVirtualKeyCode:18,modifiers:1});await settle();
+  assert.equal((await state()).layer_tools.tool,'pick_visible');
+  await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Alt',code:'AltLeft',windowsVirtualKeyCode:18});await settle();
+  assert.equal((await state()).layer_tools.tool,'paint');assert.equal((await state()).brush.preset,brush);
   const picker='button[aria-label="Color Picker"]';
   const tile=await buttonPoint(picker);
   const order=await evaluate(`(()=>{const layout=layerApp.state().workspace.layout;return layout.panels.find(p=>p.content.tiles?.some(t=>t.control.kind==='brush_size_slider')).content.tiles.map(t=>t.control.kind==='command'?t.control.command:t.control.kind)})()`);
