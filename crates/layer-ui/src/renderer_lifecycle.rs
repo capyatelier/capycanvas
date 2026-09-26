@@ -12,6 +12,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             && self.state.requests.is_empty() && !self.state.document_file.busy
     }
 
+    pub(super) fn discard_render_requests(&mut self) {
+        self.cancel_picker();
+        self.eyedropper.renderer_replaced();
+        self.cancel_tonal();
+        self.region_tools.renderer_replaced();
+        self.painted_selections.renderer_replaced();
+        self.reset_filter_previews();
+    }
+
     pub fn release_idle_document_buffers(&mut self) {
         self.engine.release_idle_buffers();
         self.filter_previews.renderer_replaced();
@@ -184,13 +193,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cancel_transform()?;
         self.engine.discard_unsubmitted_input();
         self.input_pending = false;
-        self.cancel_picker();
-        self.eyedropper.renderer_replaced();
-        self.cancel_tonal();
-        self.region_tools.renderer_replaced();
-        self.painted_selections.renderer_replaced();
-        self.renderer_mut().cancel_filter_previews();
-        self.filter_previews.renderer_replaced();
+        self.discard_render_requests();
         if self.pending_filters.take().is_some() {
             self.state.filter_load.pending = false;
             self.state.filter_load.error =
@@ -247,12 +250,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.host_error = None;
         }
         self.rendering_suspended = false;
-        self.cancel_picker();
-        self.eyedropper.renderer_replaced();
-        self.cancel_tonal();
-        self.region_tools.renderer_replaced();
-        self.painted_selections.renderer_replaced();
-        self.filter_previews.renderer_replaced();
+        self.discard_render_requests();
         if let Some(pending) = &mut self.pending_filters {
             pending.validated = false;
         }

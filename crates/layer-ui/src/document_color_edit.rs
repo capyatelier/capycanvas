@@ -173,6 +173,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         &self,
         transition: ColorTransition,
     ) -> Result<(PreparedColorTransition, Project), String> {
+        self.require_document_snapshot_idle()?;
         self.require_document_idle()?;
         if !matches!(
             self.state.platform,
@@ -193,6 +194,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         &mut self,
         prepared: PreparedColorTransition,
     ) -> Result<UiChange, String> {
+        self.require_document_snapshot_idle()?;
         self.require_document_idle()?;
         if !matches!(
             self.state.platform,
@@ -207,8 +209,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .commit_color_transition(prepared)
             .map_err(error)?;
         self.state.colors = colors;
-        self.eyedropper.renderer_replaced();
-        self.region_tools.renderer_replaced();
+        self.discard_render_requests();
         self.cursor.hover.reset();
         self.refresh_document();
         self.refresh_commands();

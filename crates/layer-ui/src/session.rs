@@ -5012,6 +5012,7 @@ mod tests {
         region_reply: Option<layer_render::RegionResult>,
         transform: Option<layer_render::TransformPreview>,
         overlay: Option<layer_render::SelectionOverlay>,
+        filter_preview: Option<layer_render::FilterPreviewRequest>,
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
@@ -5069,6 +5070,13 @@ mod tests {
         }
         fn take_effect_validation(&mut self) -> Option<layer_render::EffectValidationResult> {
             self.validation_result.take()
+        }
+        fn request_filter_previews(&mut self, request: layer_render::FilterPreviewRequest) -> Result<bool, Self::Error> {
+            self.filter_preview = Some(request);
+            Ok(true)
+        }
+        fn cancel_filter_previews(&mut self) {
+            self.filter_preview = None;
         }
         fn tip_outline(&self, asset: &AssetId) -> Option<&layer_render::TipOutline> {
             static OUTLINE: std::sync::OnceLock<layer_render::TipOutline> =

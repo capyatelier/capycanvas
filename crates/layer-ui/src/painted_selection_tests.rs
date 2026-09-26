@@ -119,6 +119,34 @@ mod painted_selection_checks {
         });
     }
     #[test]
+    fn color_transition_waits_for_selection_capture_and_discards_gpu_requests() {
+        use layer_core::{ColorTransition, color::{DocumentColor, RgbSpace, SampleDepth}};
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
+        let prepare = |s: &UiSession<Recorder>| s.prepare_document_color_transition(ColorTransition::Apply {
+            color, layers: s.engine.document().layers.clone(),
+        });
+        invoke(&mut s, CommandId::SelectionBrush);
+        send(&mut s, PenPhase::Down, 100.);
+        send(&mut s, PenPhase::Up, 100.);
+        s.frame(1, 1).unwrap();
+        assert_eq!(prepare(&s).err().unwrap(), "Wait for selection capture to finish");
+        reply(&mut s, 0x80808080);
+        s.frame(2, 2).unwrap();
+        let (prepared, _) = prepare(&s).unwrap();
+        s.eyedropper.queue(layer_render::ColorSampleSource::Composite, [10, 10]);
+        s.eyedropper.poll(s.engine.backend_mut(), RgbSpace::Srgb).unwrap();
+        for ms in [0, 200] {
+            s.poll_filter_previews(ms * 1_000_000, vec!["curves".into()], [96, 40], Default::default()).unwrap();
+        }
+        assert!(s.eyedropper.busy() && s.renderer_mut().filter_preview.is_some());
+        s.renderer_mut().prepared_color = Some(color);
+        s.commit_document_color_transition(prepared).unwrap();
+        assert!(!s.eyedropper.busy() && !s.painted_selections.busy());
+        assert!(s.renderer_mut().filter_preview.is_none());
+    }
+    #[test]
     fn mask_final_replay_waits_for_the_existing_submission_acknowledgement() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
