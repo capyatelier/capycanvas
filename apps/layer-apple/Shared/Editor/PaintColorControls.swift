@@ -30,7 +30,7 @@ struct PaintColorControls: View {
     }
     var body: some View {
         Button(action: open) {
-            if compact { Image(systemName: "square.and.pencil").resizable().scaledToFit().padding(3).frame(maxWidth: .infinity, maxHeight: .infinity) }
+            if compact { SharedIcon(name: "pencil").frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
             else { Text("Edit Color…") }
         }.buttonStyle(.plain).disabled(store.displayColors["slot"].string == "transparent")
             .accessibilityLabel("Edit Color").accessibilityIdentifier("paint-edit-color")

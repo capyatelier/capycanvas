@@ -4,4 +4,7 @@ enum StylusTilt {
     static func towardBarrel(altitude: CGFloat, azimuth: CGFloat) -> (x: Double, y: Double) {
         (Double(atan2(cos(altitude) * cos(azimuth), sin(altitude))), Double(atan2(cos(altitude) * sin(azimuth), sin(altitude))))
     }
+    static func towardBarrel(appKit tilt: CGPoint) -> (x: Double, y: Double) {
+        (Double(tilt.x) * .pi / 2, -Double(tilt.y) * .pi / 2)
+    }
 }

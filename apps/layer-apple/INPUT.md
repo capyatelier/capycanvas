@@ -41,8 +41,9 @@ the arrow unless a contact is still captured. iPadOS hides the pointer the same
 way and shows the system pointer while panning. `tests/canvas-native-input.swift`
 checks the AppKit cursor through real hover callbacks. UIKit tilt comes from the
 Pencil's altitude and azimuth and points toward the barrel; the same fixture pins
-that conversion. AppKit forwards `NSEvent.tilt` unchanged; its vertical sign has
-not been checked with a physical tablet.
+that conversion. `NSEvent.tilt` has its y axis pointing up, so AppKit negates it,
+as GTK's macOS backend and Qt do; the fixture pins both conversions. The AppKit
+sign has not been checked with a physical tablet.
 
 Pencil hover ends on both normal recognizer exit and cancellation. Both send the
 existing shared cancel phase to clear the cursor; an active Pencil contact still

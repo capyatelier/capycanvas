@@ -54,6 +54,9 @@ private final class TabletEvent: NSEvent {
             let tilt = StylusTilt.towardBarrel(altitude: .pi / 4, azimuth: azimuth)
             try require(abs(tilt.x - x * .pi / 4) < 1e-9 && abs(tilt.y - y * .pi / 4) < 1e-9,
                 "Pencil azimuth \(azimuth) must tilt toward the barrel in view axes")
+            let tablet = StylusTilt.towardBarrel(appKit: CGPoint(x: x / 2, y: -y / 2))
+            try require(abs(tablet.x - x * .pi / 4) < 1e-9 && abs(tablet.y - y * .pi / 4) < 1e-9,
+                "AppKit tilt, whose y axis points up, must tilt toward the barrel in view axes")
         }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-canvas-input-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)

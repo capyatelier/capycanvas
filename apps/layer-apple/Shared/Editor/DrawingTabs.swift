@@ -220,8 +220,10 @@ struct DrawingTabsHeader: View {
             } else {
                 Button { tabs.presented = true } label: {
                     HStack(spacing: 5) {
-                        Text(tabs.rows.first { $0["id"].uint == tabs.selected }?["title"].string ?? "Untitled").lineLimit(1)
-                        if tabs.rows.count > 1 { Image(systemName: "chevron.down").font(.caption) }
+                        if tabs.rows.count > 1 {
+                            Text(tabs.rows.first { $0["id"].uint == tabs.selected }?["title"].string ?? "Untitled").lineLimit(1)
+                            Image(systemName: "chevron.down").font(.caption)
+                        } else { Text(tabs.selectedDescription).lineLimit(1) }
                     }.padding(.horizontal, 8).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
                 }.buttonStyle(HeaderButtonStyle(radius: tile / 2)).accessibilityIdentifier("document-title")
                     .accessibilityValue(tabs.selectedDescription).help(tabs.selectedDescription)

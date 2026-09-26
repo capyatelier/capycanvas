@@ -32,10 +32,9 @@ import QuartzCore
     }
     private func pack(_ event: NSEvent, phase: Double) -> [Double] {
         let point = position(event), pen = tablet(event)
-        // NSEvent tilt has the same right/down axis convention as the core.
-        let tilt = pen ? event.tilt : .zero
+        let tilt = StylusTilt.towardBarrel(appKit: pen ? event.tilt : .zero)
         return [point.x, point.y, pen ? Double(event.pressure) : 1,
-            tilt.x * .pi / 2, tilt.y * .pi / 2,
+            tilt.x, tilt.y,
             pen ? Double(event.rotation) * .pi / 180 : 0, 0,
             event.timestamp * 1_000_000_000, phase]
     }

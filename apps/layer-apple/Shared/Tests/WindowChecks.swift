@@ -203,8 +203,8 @@ extension XCTestCase {
             for (command, expected) in [("Undo", paper), ("Redo", filled), ("Undo", paper)] {
                 editorHistory(command, in: app); expectPixels(expected)
             }
-            window.coordinate(withNormalizedOffset: CGVector(dx: 0.44, dy: 0.55)).click(forDuration: 0.05,
-                thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.55)))
+            window.coordinate(withNormalizedOffset: CGVector(dx: samplePoint.x - 0.04, dy: samplePoint.y)).click(forDuration: 0.05,
+                thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: samplePoint.x + 0.04, dy: samplePoint.y)))
             editorDocumentTitle(in: app).hover()
             expectation(for: NSPredicate { _, _ in pixels() != paper }, evaluatedWith: app)
             waitForExpectations(timeout: 10)

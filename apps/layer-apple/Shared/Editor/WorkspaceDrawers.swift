@@ -76,7 +76,7 @@ private struct WorkspaceCollapsedColumn: View {
             .environment(\.editorPalette, palette.glassy)
             .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: column["bounds"].rect,
                 cuts: column["open"]["connections"].array.map { $0[1]["bounds"].rect }, fill: palette.glassPanel,
-                shadow: 6, extra: openSources, identifier: "collapsed-column-\(column["id"].uint)"))
+                shadow: 4, shadowOpacity: 0.16, extra: openSources, identifier: "collapsed-column-\(column["id"].uint)"))
     }
 
 }
@@ -190,6 +190,7 @@ private struct DrawerContainerSurface: ViewModifier {
     var cuts: [CGRect] = []
     let fill: Color
     let shadow: CGFloat
+    var shadowOpacity = 0.22
     var joined = JSON()
     var excluding: String?
     var extra: [DrawerSource] = []
@@ -199,7 +200,7 @@ private struct DrawerContainerSurface: ViewModifier {
         let shape = SquircleShape(SquircleShape.surfaceRadius,
             square: DrawerSource.square(bounds, radius: SquircleShape.surfaceRadius, sources: sources, joined: joined))
         ZStack(alignment: .topLeading) {
-            OutsideShadow(shape: shape, opacity: 0.22, radius: shadow, y: 2,
+            OutsideShadow(shape: shape, opacity: shadowOpacity, radius: shadow, y: 2,
                 cuts: cuts.map { $0.offsetBy(dx: -bounds.minX, dy: -bounds.minY) })
             content.clipShape(shape.fittedClip)
                 .background { shape.fill(fill) }
