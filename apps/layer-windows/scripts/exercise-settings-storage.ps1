@@ -54,18 +54,31 @@ function Focus-Control($Entry) {
     Wait-Until {$Entry.Current.HasKeyboardFocus} 'Native control did not receive focus'
 }
 function Edit([string]$Name,[string]$Value) {
+    if($Name -like '* theme base color' -and !(Find $Name ([System.Windows.Automation.ControlType]::Edit))){
+        $swatch='setting-'+$Name.Split(' ')[0].ToLowerInvariant()+'_base-swatch-*'
+        $script:found=$null
+        Wait-Until {
+            $script:found=@($scope.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Custom'))|Where-Object {$_.Current.AutomationId -like $swatch})[0]
+            $null -ne $script:found
+        } "Missing custom swatch for $Name"
+        $script:found.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    }
     $entry=Control $Name ([System.Windows.Automation.ControlType]::Edit)
     Focus-Control $entry
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)
     try { Wait-Until {$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $Value} 'Native draft was not updated' }
     catch { throw ("Draft {0}: expected '{1}', got '{2}', focused={3}, offscreen={4}" -f $Name,$Value,$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value,$entry.Current.HasKeyboardFocus,$entry.Current.IsOffscreen) }
 }
-function Commit-Color {Focus-Control (Control 'Light theme base color' ([System.Windows.Automation.ControlType]::Edit))}
+function Commit-Color {
+    Focus-Control @($scope.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Custom'))|Where-Object {$_.Current.AutomationId -like 'setting-dark_base-swatch-*'})[0]
+}
 function Open-Preferences {
     $script:scope=$root
-    $button=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'settings-button'))
-    if(!$button){throw 'Settings button is missing'}
-    $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    $script:found=$null
+    Wait-Until {$script:found=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'settings-button'));$null -ne $script:found} 'Settings button is missing'
+    $script:found.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
 }
 function Close-Preferences {

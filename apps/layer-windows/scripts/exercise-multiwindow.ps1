@@ -80,6 +80,20 @@ function Invoke-Edit([string]$Name) {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit'
     (Control $Name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
+function Base-Entry([string]$Theme) {
+    $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
+    $label="$Theme theme base color"
+    $entry=Find $label -Name -Within $dialog -Type ([System.Windows.Automation.ControlType]::Edit)
+    if($entry){return $entry}
+    $swatch='setting-'+$Theme.ToLowerInvariant()+'_base-swatch-*'
+    $hit=@{item=$null};Wait-Until {
+        $hit.item=@($dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Custom'))|Where-Object {$_.Current.AutomationId -like $swatch})[0]
+        $null -ne $hit.item
+    } "Missing custom $Theme base swatch"
+    $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Control $label -Name -Within $dialog -Type ([System.Windows.Automation.ControlType]::Edit)
+}
 function Open-Preferences {
     Invoke-Edit 'Preferences'
     Wait-Until {$null -ne (Preferences)} 'Preferences did not open'
@@ -148,20 +162,20 @@ try {
     Use-Window $second;Open-Preferences
     Use-Window $first
     if(!(Preferences)){throw 'Second dialog displaced the first window dialog'}
-    $entry=Control 'Dark theme base color' -Name -Within (Preferences) -Type ([System.Windows.Automation.ControlType]::Edit)
+    $entry=Base-Entry 'Dark'
     $entry.SetFocus()
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('#1c2c3c')
-    (Control 'Light theme base color' -Name -Within (Preferences) -Type ([System.Windows.Automation.ControlType]::Edit)).SetFocus()
+    (Base-Entry 'Light').SetFocus()
     Wait-Until {(Model $first).state.settings.dark_base -eq '#1c2c3c' -and (Model $second).state.settings.dark_base -eq '#1c2c3c'} 'Preference edit did not propagate to both render owners'
     Close-Preferences
     Use-Window $second
     if(!(Preferences)){throw 'Closing one dialog dismissed another window dialog'}
-    $entry=Control 'Dark theme base color' -Name -Within (Preferences) -Type ([System.Windows.Automation.ControlType]::Edit)
+    $entry=Base-Entry 'Dark'
     if($entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -ne '#1c2c3c'){throw 'Second Preferences dialog retained stale values'}
-    $entry=Control 'Light theme base color' -Name -Within (Preferences) -Type ([System.Windows.Automation.ControlType]::Edit)
+    $entry=Base-Entry 'Light'
     $entry.SetFocus()
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('#dcecfb')
-    (Control 'Dark theme base color' -Name -Within (Preferences) -Type ([System.Windows.Automation.ControlType]::Edit)).SetFocus()
+    (Base-Entry 'Dark').SetFocus()
     Wait-Until {(Model $first).state.settings.light_base -eq '#dcecfb' -and (Model $second).state.settings.light_base -eq '#dcecfb'} 'Second window preference edit did not propagate'
     Close-Preferences
     Use-Window $first
@@ -223,9 +237,9 @@ try {
         $lockedPreferences=[IO.File]::Open($settingsFile,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite)
         Open-Preferences
         $expectedDark='#2d3e4f'
-        $entry=Control 'Dark theme base color' -Name -Within (Preferences) -Type ([System.Windows.Automation.ControlType]::Edit)
+        $entry=Base-Entry 'Dark'
         $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($expectedDark)
-        (Control 'Light theme base color' -Name -Within (Preferences) -Type ([System.Windows.Automation.ControlType]::Edit)).SetFocus()
+        (Base-Entry 'Light').SetFocus()
         Wait-Until {(Model $first).state.settings.dark_base -eq $expectedDark -and (Model $second).state.settings.dark_base -eq $expectedDark -and (Model $first).state.host_error} 'Denied preference write was not published while retaining shared values'
         Close-Preferences
     }

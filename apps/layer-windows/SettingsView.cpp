@@ -265,7 +265,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             else{VariableSizedWrapGrid grid;grid.Orientation(Orientation::Horizontal);grid.ItemWidth(side+10);grid.ItemHeight(side+10);grid.HorizontalAlignment(HorizontalAlignment::Center);circles=grid;}
             TextBox entry;entry.Width(96);entry.MaxLength(7);entry.PlaceholderText(str(kind,L"placeholder"));entry.VerticalAlignment(VerticalAlignment::Center);
             AutomationProperties::SetAutomationId(entry,L"setting-text-"+id);AutomationProperties::SetName(entry,titleText);
-            struct Draft{hstring text,key;bool changed=false;};
+            struct Draft{hstring text,key,saved;bool changed=false,editing=false;};
             auto draft=std::make_shared<Draft>();
             entry.TextChanging([data=data,draft](auto&& sender,auto&&){
                 if(!data->updating){draft->text=sender.template as<TextBox>().Text();draft->changed=true;}
@@ -274,10 +274,15 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             commits.push_back(commit);
             entry.LostFocus([commit](auto&&,auto&&){commit();});
             entry.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==winrt::Windows::System::VirtualKey::Enter){commit();e.Handled(true);}});
-            auto refresh=[data=data,id,side,circles,entry,draft]{
+            auto refresh=std::make_shared<std::function<void()>>();
+            *refresh=[data=data,id,side,circles,entry,draft,repaint=std::weak_ptr<std::function<void()>>(refresh)]{
                 auto current=object(rowFor(data,id),L"kind");auto swatches=array(current,L"swatches");auto chosen=uint32_t(num(current,L"selected"));
+                if(auto saved=str(current,L"value");saved!=draft->saved){draft->saved=saved;draft->editing=false;}
+                uint32_t customIndex=swatches.Size();
+                for(uint32_t i=0;i<swatches.Size();++i)if(flag(swatches.GetObjectAt(i),L"custom"))customIndex=i;
+                if(draft->editing&&customIndex<swatches.Size())chosen=customIndex;
                 auto key=swatches.Stringify()+to_hstring(chosen)+data->theme();
-                bool custom=chosen<swatches.Size()&&flag(swatches.GetObjectAt(chosen),L"custom");
+                bool custom=chosen<swatches.Size()&&chosen==customIndex;
                 entry.Visibility(custom?Visibility::Visible:Visibility::Collapsed);
                 if(!draft->changed&&entry.FocusState()==FocusState::Unfocused)entry.Text(str(current,L"custom"));
                 if(key==draft->key)return;
@@ -298,17 +303,19 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                     tooltip(circle,str(swatch,L"label"));
                     AutomationProperties::SetName(circle,str(swatch,L"label"));AutomationProperties::SetAutomationId(circle,L"setting-"+id+L"-swatch-"+to_hstring(i));
                     AutomationProperties::SetItemStatus(circle,active?L"Selected":L"");
-                    circle.Click([data,id,swatch,entry](auto&&,auto&&){
+                    circle.Click([data,id,swatch,entry,draft,repaint](auto&&,auto&&){
                         if(data->updating)return;
-                        if(flag(swatch,L"custom")){entry.Visibility(Visibility::Visible);entry.Focus(FocusState::Programmatic);return;}
-                        edit(data,id,S(str(swatch,L"value")));
+                        draft->editing=flag(swatch,L"custom");
+                        if(!draft->editing){edit(data,id,S(str(swatch,L"value")));return;}
+                        if(auto refresh=repaint.lock())(*refresh)();
+                        entry.Focus(FocusState::Programmatic);entry.SelectAll();
                     });
                     Border ring;ring.Padding({2,2,2,2});ring.CornerRadius({side/2+4,side/2+4,side/2+4,side/2+4});
                     ring.BorderThickness(active?Thickness{2,2,2,2}:Thickness{});ring.BorderBrush(data->brush(L"text"));
                     ring.Child(circle);circles.Children().Append(ring);
                 }
             };
-            bindings.emplace_back(refresh);refresh();
+            bindings.emplace_back([refresh]{(*refresh)();});(*refresh)();
             StackPanel host;host.Spacing(8);host.Children().Append(circles);host.Children().Append(entry);
             if(inlineRow){host.Orientation(Orientation::Horizontal);widget=host;}
             else{host.HorizontalAlignment(HorizontalAlignment::Center);text.Spacing(10);text.Children().Append(host);Grid::SetColumnSpan(text,2);}
