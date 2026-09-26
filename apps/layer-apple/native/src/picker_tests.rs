@@ -1,4 +1,5 @@
 use super::*;
+use super::fixtures::until;
 
 fn picker_app(platform: u32) -> App {
     let app = App::new(platform);
@@ -13,27 +14,8 @@ fn pointer(app: &App, id: u64, tool: u32, phase: f64, [x, y]: [f64; 2], time: f6
     assert_eq!(unsafe { capy_apple_pointer(app.0, id, tool, 0, records.as_ptr(), records.len(), 0, camera) }, 0);
 }
 
-fn input(app: &App, value: Value) -> Result<(), String> {
-    let text = CString::new(value.to_string()).unwrap();
-    let result = unsafe { capy_apple_request(app.0, 1, text.as_ptr()) };
-    if !result.is_null() {
-        unsafe { capy_apple_string_free(result) };
-    }
-    let error = unsafe { capy_apple_error(app.0) };
-    if error.is_null() { Ok(()) } else { Err(unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned()) }
-}
-
 fn picking(app: &App) -> bool {
     matches!(app.state()["layer_tools"]["tool"].as_str(), Some("pick_visible" | "pick_layer"))
-}
-
-fn until(app: &App, what: &str, done: impl Fn() -> bool) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !done() {
-        assert!(std::time::Instant::now() < deadline, "{what}");
-        app.draw_frame();
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    }
 }
 
 #[test]
@@ -48,7 +30,7 @@ fn apple_picker_previews_on_hover_and_contact_and_accepts_by_device() {
         until(&app, "mouse hover previews", || !app.state()["color_picker"]["preview"].is_null());
         assert!(unsafe { &*app.0 }.host.session.color_picker_overlay().is_some());
         assert_eq!(app.state()["colors"], colors, "Hover never commits");
-        input(&app, json!({"type":"cursor_leave"})).unwrap();
+        app.request(1, json!({"type":"cursor_leave"}));
         assert!(app.state()["color_picker"]["preview"].is_null());
         assert!(picking(&app), "Leaving the canvas keeps the picker");
         pointer(&app, 0, 1, 4., center, 3_010_000_000.);

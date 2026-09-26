@@ -52,6 +52,72 @@ mod tonal;
 #[path = "palette_tests.rs"]
 mod palette;
 
+mod fixtures {
+    use super::*;
+
+    pub(super) fn selection_app(platform: u32) -> App {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
+        app.draw_until_idle();
+        let project = ProjectJob::new(&app, true);
+        assert_eq!(project.create([64, 64]), 0);
+        assert_eq!(
+            unsafe { capy_apple_project_adopt(app.0, project.0, c"Selection check".as_ptr(), c"".as_ptr()) },
+            0
+        );
+        app.draw_until_idle();
+        app
+    }
+
+    pub(super) fn surface(app: &App, [x, y]: [f64; 2]) -> [f64; 2] {
+        let m = unsafe { &*app.0 }.host.session.state().camera.document_to_surface();
+        let [x, y] = [x as f32, y as f32];
+        [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]].map(f64::from)
+    }
+
+    pub(super) fn drag(app: &App, id: u64, device: u32, from: [f64; 2], to: [f64; 2]) {
+        let points = [from, [(from[0] + to[0]) / 2., (from[1] + to[1]) / 2.], to];
+        let records: Vec<f64> = points.iter().enumerate().flat_map(|(i, &point)| {
+            let [x, y] = surface(app, point);
+            [x, y, 1., 0., 0., 0., 0., (1_000_000_000 + id * 10_000_000 + i as u64 * 1_000_000) as f64, (i + 1) as f64]
+        }).collect();
+        assert_eq!(
+            unsafe {
+                capy_apple_pointer(app.0, id, device, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0))
+            },
+            0
+        );
+        app.draw_until_idle();
+    }
+
+    pub(super) fn selection_bounds(app: &App) -> Option<[f32; 4]> {
+        let session = &unsafe { &*app.0 }.host.session;
+        session.engine().document().selection.as_ref().map(|selection| match &selection.shape {
+            layer_core::SelectionShape::Pixels(mask) => mask.bounds().map(|v| v as f32),
+            _ => {
+                let b = selection.bounds();
+                [b.min.x + 1., b.min.y + 1., b.max.x - 1., b.max.y - 1.]
+            }
+        })
+    }
+
+    pub(super) fn until(app: &App, what: &str, done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            app.draw_frame();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    pub(super) fn tempfile() -> std::fs::File {
+        let path = std::env::temp_dir().join(format!("capy-apple-{}-{}", std::process::id(), layer_workspace::new_id()));
+        let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        file
+    }
+}
+
 type RasterSamples = (
     std::collections::BTreeMap<
         layer_core::raster::TileKey,
@@ -953,21 +1019,24 @@ impl App {
         assert_eq!(unsafe { capy_apple_resize(app.0, 1200, 900, 1.) }, 0);
         app
     }
-    fn request(&self, kind: u32, value: Value) -> Option<Value> {
+    fn try_request(&self, kind: u32, value: &Value) -> Result<Option<Value>, String> {
         let text = CString::new(value.to_string()).unwrap();
         let result = unsafe { capy_apple_request(self.0, kind, text.as_ptr()) };
+        let reply = (!result.is_null()).then(|| {
+            let reply = serde_json::from_slice(unsafe { CStr::from_ptr(result) }.to_bytes()).unwrap();
+            unsafe { capy_apple_string_free(result) };
+            reply
+        });
         let error = unsafe { capy_apple_error(self.0) };
-        assert!(
-            error.is_null(),
-            "request {kind} {value}: {}",
-            unsafe { CStr::from_ptr(error) }.to_string_lossy()
-        );
-        if result.is_null() {
-            return None;
+        if error.is_null() {
+            Ok(reply)
+        } else {
+            Err(unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned())
         }
-        let value = serde_json::from_slice(unsafe { CStr::from_ptr(result) }.to_bytes()).unwrap();
-        unsafe { capy_apple_string_free(result) };
-        Some(value)
+    }
+    fn request(&self, kind: u32, value: Value) -> Option<Value> {
+        self.try_request(kind, &value)
+            .unwrap_or_else(|error| panic!("request {kind} {value}: {error}"))
     }
     fn full_snapshot(&self) -> Value {
         unsafe { (*self.0).host.invalidate_snapshot() };
@@ -1552,13 +1621,9 @@ fn apple_transform_settings_and_actions_preserve_pixel_transactions() {
         app.invoke("scale_rotate");
         app.action(json!({"type":"set_tool_setting","id":"transform_x","value":48}));
         let before = app.state()["tool_settings"].clone();
-        let invalid = CString::new(
-            json!({"type":"set_tool_setting","id":"transform_width","value":0}).to_string(),
-        )
-        .unwrap();
-        assert!(unsafe { capy_apple_request(app.0, 0, invalid.as_ptr()) }.is_null());
         assert!(
-            !unsafe { capy_apple_error(app.0) }.is_null(),
+            app.try_request(0, &json!({"type":"set_tool_setting","id":"transform_width","value":0}))
+                .is_err(),
             "Semantic rejection must return field feedback"
         );
         assert_eq!(

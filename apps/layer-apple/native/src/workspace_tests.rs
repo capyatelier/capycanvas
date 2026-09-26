@@ -1,8 +1,5 @@
 use super::*;
 
-fn snapshot(app: &App) -> Value {
-    app.full_snapshot()
-}
 fn customize(app: &App, action: Value) {
     app.action(json!({"type":"customize","action":action}));
 }
@@ -85,7 +82,7 @@ fn apple_tab_preview_request_and_release_commit_the_same_slot() {
         for panel in ["toolbar", "navigator"] {
             app.action(json!({"type":"move_panel","panel":panel,"target":{"kind":"tab","group":group},"viewport":[1200,900]}));
         }
-        let bounds = snapshot(&app)["layout"]["groups"].as_array().unwrap().iter().find(|g| g["id"] == group).unwrap()["bounds"].clone();
+        let bounds = app.full_snapshot()["layout"]["groups"].as_array().unwrap().iter().find(|g| g["id"] == group).unwrap()["bounds"].clone();
         let (x, y) = (bounds["x"].as_f64().unwrap(), bounds["y"].as_f64().unwrap());
         let tabs = json!([
             {"group":group,"index":2,"bounds":{"x":x+140.,"y":y,"width":60.,"height":36.}},
@@ -134,7 +131,7 @@ fn apple_toolbar_styles_reach_ribbons_and_drawers_with_shared_metrics() {
                 .unwrap()["action"]
                 .clone();
             app.action(action);
-            let view = snapshot(&app);
+            let view = app.full_snapshot();
             let panel = view["panels"]
                 .as_array()
                 .unwrap()
@@ -432,7 +429,7 @@ fn apple_collapsed_toolbar_drawer_publishes_its_column_and_geometry() {
             .layout
             .collapsed_column_for_group(group)
             .unwrap();
-        let root = snapshot(&app);
+        let root = app.full_snapshot();
         assert!(
             root["layout"]["collapsed"]
                 .as_array()

@@ -1,56 +1,11 @@
 //! Shared selection tools and masks through the Apple action/pointer ABI and Metal.
 use super::*;
+use super::fixtures::{drag, selection_app, selection_bounds};
 use std::time::{Duration, Instant};
-
-fn selection_app(platform: u32) -> App {
-    let app = App::new(platform);
-    unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
-    app.draw_until_idle();
-    let project = ProjectJob::new(&app, true);
-    assert_eq!(project.create([64, 64]), 0);
-    assert_eq!(
-        unsafe { capy_apple_project_adopt(app.0, project.0, c"Selection check".as_ptr(), c"".as_ptr()) },
-        0
-    );
-    app.draw_until_idle();
-    app
-}
-
-fn surface(app: &App, [x, y]: [f64; 2]) -> [f64; 2] {
-    let m = unsafe { &*app.0 }.host.session.state().camera.document_to_surface();
-    let [x, y] = [x as f32, y as f32];
-    [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]].map(f64::from)
-}
-
-fn drag(app: &App, id: u64, device: u32, from: [f64; 2], to: [f64; 2]) {
-    let points = [from, [(from[0] + to[0]) / 2., (from[1] + to[1]) / 2.], to];
-    let records: Vec<f64> = points.iter().enumerate().flat_map(|(i, &point)| {
-        let [x, y] = surface(app, point);
-        [x, y, 1., 0., 0., 0., 0., (1_000_000_000 + id * 10_000_000 + i as u64 * 1_000_000) as f64, (i + 1) as f64]
-    }).collect();
-    assert_eq!(
-        unsafe {
-            capy_apple_pointer(app.0, id, device, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0))
-        },
-        0
-    );
-    app.draw_until_idle();
-}
 
 fn key(app: &App, key: &str, pressed: bool, shift: bool, alt: bool) {
     app.request(1, json!({"type":"key","key":key,"pressed":pressed,"repeat":false,
         "modifiers":{"command":false,"shift":shift,"alt":alt}}));
-}
-
-fn selection_bounds(app: &App) -> Option<[f32; 4]> {
-    let session = &unsafe { &*app.0 }.host.session;
-    session.engine().document().selection.as_ref().map(|selection| match &selection.shape {
-        layer_core::SelectionShape::Pixels(mask) => mask.bounds().map(|v| v as f32),
-        _ => {
-            let b = selection.bounds();
-            [b.min.x + 1., b.min.y + 1., b.max.x - 1., b.max.y - 1.]
-        }
-    })
 }
 
 fn assert_bounds(app: &App, expected: [f32; 4]) {

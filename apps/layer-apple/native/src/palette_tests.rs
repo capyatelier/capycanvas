@@ -1,17 +1,7 @@
 use super::*;
+use super::fixtures::tempfile;
 use std::io::{Read as _, Seek as _};
 use std::os::fd::AsRawFd;
-
-struct Published(std::cell::RefCell<Value>);
-impl Published {
-    fn new() -> Self { Self(std::cell::RefCell::new(Value::Null)) }
-    fn panel(&self, app: &App) -> Value {
-        *self.0.borrow_mut() = app.full_snapshot();
-        let panel = self.0.borrow()["palette_panel"].clone();
-        assert!(panel.is_object(), "Palettes are published");
-        panel
-    }
-}
 
 fn palette_file(request: Value, bytes: &[u8], output: Option<&std::fs::File>) -> Value {
     let text = CString::new(request.to_string()).unwrap();
@@ -28,8 +18,7 @@ fn palette_file(request: Value, bytes: &[u8], output: Option<&std::fs::File>) ->
 fn apple_palettes_publish_starters_and_sit_in_the_sketch_drawer() {
     for platform in [0, 1] {
         let app = App::new(platform);
-        let published = Published::new();
-        let panel = published.panel(&app);
+        let panel = app.full_snapshot()["palette_panel"].clone();
         assert_eq!(panel["palettes"].as_array().unwrap().len(), 10, "Apple installs the ten starters");
         let swatch = &panel["swatches"][0];
         assert_eq!(swatch["rgba"].as_array().unwrap().len(), 4);
@@ -79,11 +68,4 @@ fn apple_palette_file_codec_round_trips_every_format_and_rejects_damage() {
     assert!(damaged["error"].is_string(), "{damaged}");
     let oversized = vec![b' '; 1024 * 1024 + 2];
     assert!(palette_file(json!({"type":"import","file_name":"Huge.gpl"}), &oversized, None)["error"].is_string());
-}
-
-fn tempfile() -> std::fs::File {
-    let path = std::env::temp_dir().join(format!("capy-palette-{}-{:?}", std::process::id(), std::thread::current().id()));
-    let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&path).unwrap();
-    std::fs::remove_file(&path).unwrap();
-    file
 }

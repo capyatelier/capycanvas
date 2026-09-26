@@ -1,4 +1,5 @@
 use super::*;
+use super::fixtures::tempfile;
 use layer_core::color::{DocumentColor, RgbSpace, SampleDepth};
 use std::{io::Seek, os::fd::AsRawFd};
 fn new_drawing(app: &App, depth: SampleDepth) {
@@ -54,24 +55,6 @@ fn switch(app: &App, id: u64, closing: bool) {
     );
     unsafe { capy_document_free(task) };
     app.draw_until_idle();
-}
-fn tempfile() -> std::fs::File {
-    let path = std::env::temp_dir().join(format!(
-        "capy-tabs-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .unwrap();
-    std::fs::remove_file(path).unwrap();
-    file
 }
 #[test]
 fn apple_tabs_preserve_history_pixels_recovery_and_disk_parking() {
