@@ -372,20 +372,8 @@ impl SnapshotRenderer {
     /// checkerboard, proof, monitor conversion, selection or warning overlays.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn histogram(&mut self) -> Result<layer_core::color::histogram::Histogram, GpuRasterError> {
-        let mut result = layer_core::color::histogram::Histogram::new(self.color());
-        let mut y = 0;
-        while y < self.extent[1] {
-            self.check_cancelled()?;
-            let (height, pixels) = self.read_band(y)?;
-            result
-                .add(&pixels)
-                .map_err(|e| GpuRasterError::Color(e.into()))?;
-            y += height;
-        }
-        self.check_cancelled()?;
-        Ok(result)
+        pollster::block_on(self.histogram_async())
     }
-    #[cfg(target_arch = "wasm32")]
     pub async fn histogram_async(
         &mut self,
     ) -> Result<layer_core::color::histogram::Histogram, GpuRasterError> {
@@ -439,36 +427,9 @@ impl SnapshotRenderer {
         self.control.check()
     }
 
-    /// Capture complete tile rows when the dependency budget permits. Sixteen
-    /// separate captures of one tile row repeat composition, source decoding and
-    /// mapping. The CPU band is at most 32 MiB; planning includes its GPU target
-    /// and readback copy. Complex dependencies shrink the band before GPU work.
     #[cfg(not(target_arch = "wasm32"))]
     fn read_band(&mut self, y: u32) -> Result<(u32, Vec<[f32; 4]>), GpuRasterError> {
-        let [width, height] = self.extent;
-        if y >= height {
-            return Err(GpuRasterError::InvalidExtent);
-        }
-        // Keep browser readback conversion and inspection below a frame-sized
-        // input-owner slice. Native workers retain their larger bands.
-        let maximum = if self.color().depth.is_float() {
-            (4 * 1024 * 1024 / (width * 16)).clamp(16, 64)
-        } else { (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE) };
-        let mut rows = maximum.min(height - y);
-        loop {
-            let result = if self.shared_device && width > 512 {
-                self.read_interactive_band(y, rows)
-            } else {
-                self.read_region([0, y, width, rows])
-            };
-            match result {
-                Ok(pixels) => return Ok((rows, pixels)),
-                Err(GpuRasterError::CaptureBudget { .. }) if rows > 16 => {
-                    rows = (rows / 2).max(16);
-                }
-                Err(error) => return Err(error),
-            }
-        }
+        pollster::block_on(self.read_band_async(y))
     }
 
     /// A file worker shares the canvas queue. Complete at most two tile
@@ -714,28 +675,20 @@ impl SnapshotRenderer {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_region(&mut self, region: [u32; 4]) -> Result<Vec<[f32; 4]>, GpuRasterError> {
-        let readback = self.prepare_region(region)?;
-        let (tx, rx) = mpsc::channel();
-        readback
-            .buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result.map_err(|e| e.to_string()));
-            });
-        crate::raster::wait_mapping(&self.renderer.device, &rx)
-            .map_err(GpuRasterError::MapFailed)?;
-        self.finish_region(readback)
+        pollster::block_on(self.read_region_async(region))
     }
 
     /// Yields to WebGPU while mapping one bounded Float32 region. Callers await
     /// raster backing before creating the immutable capture, and await each
     /// region before submitting the next; no blocking browser device poll.
-    #[cfg(target_arch = "wasm32")]
     pub async fn read_region_async(
         &mut self,
         region: [u32; 4],
     ) -> Result<Vec<[f32; 4]>, GpuRasterError> {
         let readback = self.prepare_region(region)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let (tx, rx) = mpsc::channel();
+        #[cfg(target_arch = "wasm32")]
         let (tx, rx) = futures_channel::oneshot::channel();
         readback
             .buffer
@@ -743,13 +696,20 @@ impl SnapshotRenderer {
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = tx.send(result.map_err(|e| e.to_string()));
             });
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::raster::wait_mapping(&self.renderer.device, &rx)
+            .map_err(GpuRasterError::MapFailed)?;
+        #[cfg(target_arch = "wasm32")]
         rx.await
             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
             .map_err(GpuRasterError::MapFailed)?;
         self.finish_region(readback)
     }
 
-    #[cfg(target_arch = "wasm32")]
+    /// Capture complete tile rows when the dependency budget permits. Sixteen
+    /// separate captures of one tile row repeat composition, source decoding and
+    /// mapping. The CPU band is at most 32 MiB; planning includes its GPU target
+    /// and readback copy. Complex dependencies shrink the band before GPU work.
     pub async fn read_band_async(
         &mut self,
         y: u32,
@@ -758,14 +718,20 @@ impl SnapshotRenderer {
         if y >= height {
             return Err(GpuRasterError::InvalidExtent);
         }
-        // Keep browser readback conversion and inspection below a frame-sized
-        // input-owner slice. Native workers retain their larger bands.
         let maximum = if self.color().depth.is_float() {
             (4 * 1024 * 1024 / (width * 16)).clamp(16, 64)
         } else { (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE) };
         let mut rows = maximum.min(height - y);
         loop {
-            match self.read_region_async([0, y, width, rows]).await {
+            #[cfg(not(target_arch = "wasm32"))]
+            let result = if self.shared_device && width > 512 {
+                self.read_interactive_band(y, rows)
+            } else {
+                self.read_region_async([0, y, width, rows]).await
+            };
+            #[cfg(target_arch = "wasm32")]
+            let result = self.read_region_async([0, y, width, rows]).await;
+            match result {
                 Ok(pixels) => return Ok((rows, pixels)),
                 Err(GpuRasterError::CaptureBudget { .. }) if rows > 16 => rows = (rows / 2).max(16),
                 Err(error) => return Err(error),
