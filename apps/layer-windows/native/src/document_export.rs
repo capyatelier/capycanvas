@@ -9,7 +9,7 @@ pub(super) struct Task {
     gpu: SnapshotGpu,
     renderer: Option<SnapshotRenderer>,
     recipe: ExportRecipe,
-    pub(super) previews: Vec<color::Preview>,
+    pub(super) previews: Vec<Preview>,
     clipped: u64,
     name: String,
     pub(super) destination: usize,
@@ -90,7 +90,7 @@ impl Task {
         self.previews = [before, after]
             .into_iter()
             .map(|p| {
-                Ok(color::Preview {
+                Ok(Preview {
                     extent: p.extent,
                     pixels: p.encoded_bytes(layer_core::color::RgbSpace::Srgb)?,
                 })

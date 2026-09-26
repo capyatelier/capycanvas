@@ -5,24 +5,12 @@ use jni::{
     objects::{JClass, JString},
     sys::{jboolean, jbyteArray, jint, jlong, jstring},
 };
-use layer_core::{
-    Project,
-    color::{ColorProfile, source::SourceImage},
-};
-use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu, SnapshotPreview};
-use layer_ui::SourceWorkflow;
-use std::sync::Arc;
+use layer_core::color::{ColorProfile, RgbSpace};
+use layer_host::tasks::SourceTask;
+use layer_render_wgpu::snapshot::CaptureControl;
 struct Task {
-    workflow: SourceWorkflow,
-    candidate: Option<Project>,
-    converted: Option<Arc<SourceImage>>,
-    gpu: SnapshotGpu,
+    task: SourceTask,
     control: CaptureControl,
-    background: [f32; 4],
-    time: f32,
-    generation: u64,
-    clipped: u64,
-    previews: Vec<SnapshotPreview>,
 }
 unsafe fn task<'a>(handle: jlong) -> &'a mut Task {
     unsafe { &mut *(handle as *mut Task) }
@@ -37,26 +25,9 @@ pub extern "system" fn Java_art_capycanvas_Native_sourceTask(
 ) -> jlong {
     let result = (|| {
         let a = unsafe { app(handle) };
-        let s = &a.host.session;
-        let workflow = SourceWorkflow::begin(s, id as u32)?;
-        let gpu = s
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .ok_or("Canvas unavailable")?
-            .snapshot_gpu();
         Ok(Box::into_raw(Box::new(Task {
-            workflow,
-            candidate: None,
-            converted: None,
-            gpu,
+            task: SourceTask::capture(&a.host.session, Some(id as u32), RgbSpace::Srgb)?,
             control: crate::inspection::control(cancel),
-            background: s.engine().view().background_rgba_linear,
-            time: s.engine().animation_time(),
-            generation: a.gpu_generation,
-            clipped: 0,
-            previews: Vec::new(),
         })) as jlong)
     })();
     match result {
@@ -78,10 +49,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sourceWork(
         let profile: Option<ColorProfile> =
             serde_json::from_str(&read(&mut env, &profile)?).map_err(error)?;
         let t = unsafe { task(handle) };
-        let (source, clipped) = t.workflow.prepare(profile, 512 * 1024 * 1024, || t.control.is_cancelled())?;
-        t.clipped = clipped;
-        t.converted = Some(source);
-        Ok(())
+        t.task.work(profile, || t.control.is_cancelled())
     })();
     fail(&mut env, result)
 }
@@ -95,13 +63,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sourcePrepareComparison(
     let result = (|| {
         let a = unsafe { app(handle) };
         let t = unsafe { task(job) };
-        let s = &a.host.session;
-        let source = t
-            .converted
-            .clone()
-            .ok_or("Source conversion is not ready")?;
-        t.candidate = Some(t.workflow.preview(s, source, t.control.is_cancelled(), a.gpu_generation == t.generation)?);
-        Ok(())
+        t.task.prepare(&a.host, t.control.is_cancelled())
     })();
     fail(&mut env, result)
 }
@@ -114,16 +76,16 @@ pub extern "system" fn Java_art_capycanvas_Native_sourceCompare(
     let result = (|| {
         let t = unsafe { task(handle) };
         std::thread::scope(|scope| {
-            std::thread::Builder::new().name("capy-source".into()).stack_size(8*1024*1024).spawn_scoped(scope,||{
-            t.previews.clear();let candidate=t.candidate.as_ref().ok_or("Comparison is not prepared")?;
-            for p in [&t.workflow.project,candidate] {
-                let mut snapshot=t.gpu.capture(p.clone(),t.background,t.time,Default::default(),t.control.clone()).map_err(error)?;
-                t.previews.push(snapshot.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?);
-            }
-            t.workflow.comparison_completed()?;
-            serde_json::to_string(&serde_json::json!({"clipped_channels":t.clipped,"adds_layer":t.workflow.adds_layer(),
-                "source_profile":layer_color::profile_description(&t.workflow.original.interpretation.profile)?})).map_err(error)
-        }).map_err(error)?.join().map_err(|_|"Source comparison worker failed".to_string())?
+            std::thread::Builder::new()
+                .name("capy-source".into())
+                .stack_size(8 * 1024 * 1024)
+                .spawn_scoped(scope, || {
+                    t.task.compare(t.control.clone())?;
+                    serde_json::to_string(&t.task.details()?).map_err(error)
+                })
+                .map_err(error)?
+                .join()
+                .map_err(|_| "Source comparison worker failed".to_string())?
         })
     })();
     string(&mut env, result)
@@ -135,27 +97,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sourcePreview(
     handle: jlong,
     after: jboolean,
 ) -> jbyteArray {
-    let result = (|| {
-        let p = unsafe { task(handle) }
-            .previews
-            .get(usize::from(after != 0))
-            .ok_or("Comparison is unavailable")?;
-        let mut bytes = Vec::with_capacity(8 + p.pixels.len() * 4);
-        for v in p.extent {
-            bytes.extend_from_slice(&v.to_le_bytes())
-        }
-        bytes.extend(p.srgb_bytes()?);
-        env.byte_array_from_slice(&bytes)
-            .map(|a| a.into_raw())
-            .map_err(error)
-    })();
-    match result {
-        Ok(b) => b,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            std::ptr::null_mut()
-        }
-    }
+    crate::color_edit::preview_bytes(&mut env, unsafe { task(handle) }.task.previews(), after)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_sourceAdopt(
@@ -167,14 +109,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sourceAdopt(
     let result = (|| {
         let a = unsafe { app(handle) };
         let t = unsafe { task(job) };
-        let s = &mut a.host.session;
-        let previous = s.state().revision;
-        t.workflow.commit(s, t.control.is_cancelled(), a.gpu_generation == t.generation)?;
-        let mut change = s.complete_document_request(t.workflow.identity.request(), Ok(true))?;
-        change.canvas_wake = true;
-        a.host.apply_change(previous, change);
-        t.converted = None;
-        Ok(())
+        t.task.adopt(&mut a.host, t.control.is_cancelled(), || true)
     })();
     fail(&mut env, result)
 }

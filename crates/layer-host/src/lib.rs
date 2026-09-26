@@ -5,6 +5,7 @@ mod header;
 mod snapshot;
 mod model_update;
 pub mod open;
+pub mod tasks;
 pub mod tone;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};

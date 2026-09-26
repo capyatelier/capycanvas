@@ -1346,11 +1346,13 @@ dependencies = [
 name = "layer-host"
 version = "0.1.0"
 dependencies = [
+ "layer-color",
  "layer-core",
  "layer-engine",
  "layer-render",
  "layer-render-wgpu",
  "layer-ui",
+ "pollster",
  "serde",
  "serde_json",
  "wgpu",

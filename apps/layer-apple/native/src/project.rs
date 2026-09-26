@@ -2,8 +2,7 @@
 //! Jobs never retain a session pointer. File descriptors/URLs stay host-owned.
 use super::*;
 use layer_core::Project;
-use layer_host::{Renderer, open::OpenEnvironment};
-use layer_render::CanvasRenderer;
+use layer_host::{Renderer, open::OpenEnvironment, tasks::{ColorTask, Preview, SourceTask}};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
@@ -21,8 +20,6 @@ use std::{
 #[path = "project_color.rs"]
 mod color;
 pub use color::*;
-#[path = "project_source.rs"]
-mod source;
 #[path = "project_inspection.rs"]
 mod inspection;
 #[path = "project_export.rs"]
@@ -36,8 +33,8 @@ mod proof;
 pub use proof::*;
 
 enum Payload {
-    Color(Box<color::Task>),
-    Source(Box<source::Task>),
+    Color(Box<ColorTask>),
+    Source(Box<SourceTask>),
     Info(layer_color::DocumentInfo),
     Inspection(Box<inspection::Task>),
     Proof(Box<proof::Task>),
@@ -181,11 +178,11 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 project: None,
             }
         } else if opening == 4 {
-            Payload::Color(Box::new(color::Task::capture(session)?))
+            Payload::Color(Box::new(ColorTask::capture(session, None, DISPLAY_SPACE)?))
         } else if opening == 5 {
             Payload::Info(layer_color::DocumentInfo::capture(session.engine().document()))
         } else if opening == 6 {
-            Payload::Source(Box::new(source::Task::capture(session)?))
+            Payload::Source(Box::new(SourceTask::capture(session, None, DISPLAY_SPACE)?))
         } else if opening == 7 {
             Payload::Inspection(Box::new(inspection::Task::capture(session)?))
         } else if opening == 3 {
@@ -537,11 +534,11 @@ unsafe fn adopt_project(
         }
         if let Payload::Color(color) = &mut state.payload {
             if recovered { return Err("A color change is not a recovery drawing".into()); }
-            return color.adopt(app, task);
+            return color.adopt(&mut app.host, task.control.is_cancelled(), || unsafe { capy_project_begin_commit(task) } >= 0);
         }
         if let Payload::Source(source) = &mut state.payload {
             if recovered { return Err("A source edit is not a recovery drawing".into()); }
-            return source.adopt(app, task);
+            return source.adopt(&mut app.host, task.control.is_cancelled(), || unsafe { capy_project_begin_commit(task) } >= 0);
         }
         if let Payload::Placed { images, context, request, device } = &mut state.payload {
             if recovered { return Err("An image import is not a recovery drawing".into()); }

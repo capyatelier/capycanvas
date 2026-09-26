@@ -8,7 +8,7 @@ pub(super) struct Task {
     gpu: SnapshotGpu,
     renderer: Option<SnapshotRenderer>,
     recipe: ExportRecipe,
-    pub(super) previews: Vec<color::Preview>,
+    pub(super) previews: Vec<Preview>,
     clipped: u64,
 }
 impl Task {
@@ -60,7 +60,7 @@ impl Task {
             (image, None, stats)
         };
         self.previews = [before, after].into_iter().chain(base).map(|p| {
-            Ok(color::Preview { extent: p.extent, pixels: p.encoded_bytes(crate::DISPLAY_SPACE)? })
+            Ok(Preview { extent: p.extent, pixels: p.encoded_bytes(crate::DISPLAY_SPACE)? })
         }).collect::<Result<_, String>>()?;
         self.clipped = statistics.clipped_channels;
         Ok(())

@@ -1,8 +1,10 @@
 //! Windows scheduling around shared candidate policies. No WinUI callback owns
 //! artwork, converts profiles, or decides how an edit enters history.
-use layer_core::Project;
-use layer_host::{NativeHost, Renderer};
-use layer_render::CanvasRenderer;
+use layer_core::{Project, color::RgbSpace};
+use layer_host::{
+    NativeHost, Renderer,
+    tasks::{ColorTask, Preview, SourceTask},
+};
 use layer_render_wgpu::{
     WgpuRasterizer,
     snapshot::{CaptureControl, SnapshotGpu},
@@ -15,12 +17,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[path = "document_color.rs"]
-mod color;
 #[path = "document_export.rs"]
 mod export;
-#[path = "document_source.rs"]
-mod source;
 #[path = "document_proof.rs"]
 mod proof;
 
@@ -88,8 +86,8 @@ enum Payload {
     Proof(Box<proof::Task>),
     Export(Box<export::Task>),
     Import(Import),
-    Color(Box<color::Task>),
-    Source(Box<source::Task>),
+    Color(Box<ColorTask>),
+    Source(Box<SourceTask>),
     Info(layer_color::DocumentInfo),
     Histogram {
         project: Option<Project>,
@@ -194,13 +192,21 @@ impl Task {
                     layer_ui::DocumentColorOperation::Convert => "convert",
                     layer_ui::DocumentColorOperation::Depth => "depth",
                 },
-                Payload::Color(Box::new(color::Task::capture(session)?)),
+                Payload::Color(Box::new(ColorTask::capture(
+                    session,
+                    Some(id),
+                    RgbSpace::Srgb,
+                )?)),
             ),
             HostRequestKind::Document {
                 request: DocumentRequest::ColorHistory { .. },
             } => (
                 "history",
-                Payload::Color(Box::new(color::Task::capture(session)?)),
+                Payload::Color(Box::new(ColorTask::capture(
+                    session,
+                    Some(id),
+                    RgbSpace::Srgb,
+                )?)),
             ),
             HostRequestKind::Document {
                 request:
@@ -219,7 +225,11 @@ impl Task {
                 };
                 (
                     kind,
-                    Payload::Source(Box::new(source::Task::capture(session)?)),
+                    Payload::Source(Box::new(SourceTask::capture(
+                        session,
+                        Some(id),
+                        RgbSpace::Srgb,
+                    )?)),
                 )
             }
             HostRequestKind::Document {
@@ -306,9 +316,7 @@ impl Task {
                 json!({"pending":task.images.pending_source().map(|s| &s.interpretation),"extensions":layer_color::photo::extensions().collect::<Vec<_>>(),
                     "profiles":crate::color_storage::list(self.control.cancellation_flag())?, "clipboard":task.clipboard.as_ref().map(|p| json!({"path":p,"folder":p.parent(),"name":p.file_name().and_then(|s| s.to_str())}))})
             }
-            Payload::Color(task) => json!({"color":task.workflow.original.document.color,
-                "result":task.workflow.candidate.as_ref().map(|p| p.document.color), "clipped_channels":task.clipped,
-                "copy":task.workflow.is_copy()}),
+            Payload::Color(task) => task.details(),
             Payload::Source(task) => {
                 let mut details = task.details()?;
                 details["profiles"] = serde_json::to_value(crate::color_storage::list(
@@ -502,7 +510,7 @@ impl Task {
                             self.stage = "preview";
                         }
                         Payload::Source(task) if !copy => {
-                            task.work(serde_json::from_value::<Option<crate::color_storage::ProfileChoice>>(choice).map_err(|e| e.to_string())?.map(|p| p.resolve(self.control.cancellation_flag())).transpose()?, self.control.clone())?;
+                            task.work(serde_json::from_value::<Option<crate::color_storage::ProfileChoice>>(choice).map_err(|e| e.to_string())?.map(|p| p.resolve(self.control.cancellation_flag())).transpose()?, || self.control.is_cancelled())?;
                             self.stage = "source_candidate";
                         }
                         _ => return Err("This request cannot prepare an edit".into()),
@@ -611,7 +619,7 @@ impl Task {
         let Payload::Source(task) = &mut self.payload else {
             return Err("No source candidate".into());
         };
-        task.prepare(host, &self.control)?;
+        task.prepare(host, self.control.is_cancelled())?;
         Ok(true)
     }
     pub fn commit(&mut self, host: &mut NativeHost) -> Result<(), String> {
@@ -642,8 +650,8 @@ impl Task {
                 Ok(())
             }
             Payload::Proof(task) => task.adopt(host, &self.control),
-            Payload::Color(task) => task.adopt(host, &self.control),
-            Payload::Source(task) => task.adopt(host, &self.control),
+            Payload::Color(task) => task.adopt(host, self.control.is_cancelled(), || true),
+            Payload::Source(task) => task.adopt(host, self.control.is_cancelled(), || true),
             _ => Err("No document edit is ready".into()),
         }
     }
@@ -685,8 +693,8 @@ impl Task {
     }
     pub fn preview(&self, index: usize) -> Result<crate::previews::CapyPreview, String> {
         let previews = match &self.payload {
-            Payload::Color(task) => &task.previews,
-            Payload::Source(task) => &task.previews,
+            Payload::Color(task) => task.previews(),
+            Payload::Source(task) => task.previews(),
             Payload::Export(task) => &task.previews,
             _ => return Err("No comparison preview".into()),
         };
@@ -699,7 +707,7 @@ impl Task {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::color::{ColorProfile, SampleDepth, RgbSpace};
+    use layer_core::color::{ColorProfile, SampleDepth};
     use layer_ui::{CommandId, Platform, UiAction};
     fn begin(host: &mut NativeHost, command: CommandId) -> Box<Task> {
         host.dispatch(UiAction::Invoke { command }).unwrap();

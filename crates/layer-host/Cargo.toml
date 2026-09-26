@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+layer-color = { path = "../layer-color" }
 layer-core = { path = "../layer-core" }
 layer-engine = { path = "../layer-engine" }
 layer-render = { path = "../layer-render" }
@@ -13,3 +14,6 @@ layer-ui = { path = "../layer-ui" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 wgpu.workspace = true
+
+[dev-dependencies]
+pollster = "0.4"
