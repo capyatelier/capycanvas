@@ -219,6 +219,10 @@ impl FileDrag {
         });
     }
     fn click_placement(&mut self, w: &Workspace, name: &str) {
+        until(
+            || find_named(w.window.upcast_ref(), name).is_some_and(|b| b.is_mapped()),
+            "the canvas action bar shows the placement action",
+        );
         let button = find_named(w.window.upcast_ref(), name).expect("visible placement action");
         assert!(button.is_mapped() && button.is_sensitive(), "{name}");
         let bounds = button.compute_bounds(&w.window).unwrap();
@@ -227,9 +231,9 @@ impl FileDrag {
             bounds.y() + bounds.height() * 0.5,
         ];
         self.events(json!([{"point": point}, {"down": true}, {"down": false}]));
-        if name != "placement-original-size" {
+        if name != "canvas-bar-PlacementOriginalSize" {
             until(
-                || !w.placement_actions.root.is_visible(),
+                || !w.canvas_bar.root.is_visible(),
                 "placement controls retire after native click",
             );
         }
@@ -298,7 +302,7 @@ fn native_multiple_photo_import_chooser() {
             assert_eq!(layer.source.as_deref(), Some(&source));
             assert!(layer.raster.is_empty());
         }
-        driver.click_placement(&w, if apply { "placement-apply" } else { "placement-cancel" });
+        driver.click_placement(&w, if apply { "canvas-bar-ApplyTransform" } else { "canvas-bar-CancelTransform" });
         ready(&w);
         if apply {
             let saved = super::place_source::snapshot(&w);
@@ -433,7 +437,7 @@ fn native_photo_file_drops() {
             std::fs::create_dir_all(&report).unwrap();
             super::new_photo::capture_ui(&w, &report, "native-photo-batch.png");
         }
-        driver.click_placement(&w, "placement-apply");
+        driver.click_placement(&w, "canvas-bar-ApplyTransform");
         ready(&w);
         let saved = super::place_source::snapshot(&w);
         let reopened = layer_core::Project::read(saved.as_slice(), Default::default()).unwrap();
@@ -504,7 +508,7 @@ fn native_photo_file_drops() {
             doc.layers.iter().position(|l| l.id == photo.id),
             Some(expected)
         );
-        driver.click_placement(&w, "placement-cancel");
+        driver.click_placement(&w, "canvas-bar-CancelTransform");
         ready(&w);
         assert_eq!(
             w.gpu

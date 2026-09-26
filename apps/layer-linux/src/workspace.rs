@@ -218,7 +218,7 @@ mod allocation {
             for (slot, child) in self.children.borrow().iter() {
                 if matches!(
                     slot,
-                    Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0)
+                    Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0) | Slot::CanvasBar
                 ) {
                     continue; // Allocate parents before measuring child origins.
                 }
@@ -293,6 +293,7 @@ mod allocation {
                         .find(|g| g.id == *group && expansion.is_none_or(|e| e.group != *group))
                         .and_then(|g| g.resize_handles.iter().find(|h| h.edge == *edge))
                         .map(|h| h.bounds),
+                    Slot::CanvasBar => unreachable!("allocated after its owner"),
                 };
                 child.set_child_visible(bounds.is_some());
                 if let Some(b) = bounds {
@@ -312,6 +313,7 @@ mod allocation {
                         Slot::DrawerConnection(0) => placement
                             .as_ref()
                             .and_then(|p| p.connection().map(|c| c.bounds)),
+                        Slot::CanvasBar => owner.canvas_bar.bounds(),
                         _ => continue,
                     };
                     child.set_child_visible(bounds.is_some());
@@ -551,6 +553,7 @@ enum Slot {
     DrawerConnection(u32),
     Column(u32),
     ColumnConnection(u32, Panel),
+    CanvasBar,
 }
 glib::wrapper! {
     pub struct DockSurface(ObjectSubclass<allocation::DockSurface>)
@@ -626,6 +629,8 @@ impl DockSurface {
             item.1.insert_after(self, children.last().map(|(_, w)| w));
             children.push(item);
         }
+        drop(children);
+        self.raise_canvas_bar();
     }
     fn add(&self, slot: Slot, child: &impl IsA<gtk::Widget>) {
         child.set_parent(self);
@@ -633,6 +638,31 @@ impl DockSurface {
             .children
             .borrow_mut()
             .push((slot, child.clone().upcast()));
+        if slot != Slot::CanvasBar {
+            self.raise_canvas_bar();
+        }
+    }
+    /// Floating panels stay beneath the canvas action bar; open drawers stay above it.
+    fn raise_canvas_bar(&self) {
+        let mut children = self.imp().children.borrow_mut();
+        let Some(index) = children.iter().position(|(s, _)| *s == Slot::CanvasBar) else {
+            return;
+        };
+        let bar = children.remove(index);
+        let drawer = children.iter().position(|(s, w)| {
+            matches!(s, Slot::Drawer(_) | Slot::DrawerShadow(_) | Slot::DrawerConnection(_))
+                && w.is_child_visible()
+        });
+        match drawer {
+            Some(i) => {
+                bar.1.insert_before(self, Some(&children[i].1));
+                children.insert(i, bar);
+            }
+            None => {
+                bar.1.insert_after(self, children.last().map(|(_, w)| w));
+                children.push(bar);
+            }
+        }
     }
     fn clear_docks(&self) {
         self.remove_slots(|slot| {
@@ -641,6 +671,7 @@ impl DockSurface {
                 Slot::Canvas
                     | Slot::Header
                     | Slot::Status
+                    | Slot::CanvasBar
                     | Slot::Drawer(_)
                     | Slot::DrawerShadow(_)
                     | Slot::DrawerConnection(_)
@@ -910,7 +941,7 @@ pub struct Workspace {
     color: Rc<crate::color_editor::ColorButton>,
     pub(crate) color_editors: RefCell<Vec<std::rc::Weak<crate::color_editor::Form>>>,
     tool_settings: crate::tool_panels::ToolSettings,
-    placement_actions: crate::tool_panels::PlacementActions,
+    pub(crate) canvas_bar: crate::canvas_bar::CanvasBar,
     selection_resize: crate::selection_masks::ResizeDialog,
     color_panel: crate::tool_panels::ColorPanel,
     palette_panel: Rc<crate::color_library::PalettePanel>,
@@ -1041,6 +1072,8 @@ impl Workspace {
         surface.add(Slot::Canvas, &area);
         surface.add(Slot::Header, &header.root);
         surface.add(Slot::Status, &status_bar);
+        let canvas_bar = crate::canvas_bar::CanvasBar::new();
+        surface.add(Slot::CanvasBar, &canvas_bar.root);
         let toolbar = TileStrip::new();
         toolbar.add_css_class("toolbar-controls");
         let brushes = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -1110,8 +1143,6 @@ impl Workspace {
         image_drop_label.set_can_target(false);
         image_drop_label.set_visible(false);
         content.add_overlay(&image_drop_label);
-        let placement_actions = crate::tool_panels::PlacementActions::new();
-        content.add_overlay(&placement_actions.root);
         window.set_content(Some(&crate::squircle::Squircles::new(&content)));
         let this = Rc::new(Self {
             window,
@@ -1170,7 +1201,7 @@ impl Workspace {
             color,
             color_editors: RefCell::default(),
             tool_settings,
-            placement_actions,
+            canvas_bar,
             selection_resize: crate::selection_masks::ResizeDialog::new(),
             color_panel,
             palette_panel,
@@ -1207,7 +1238,7 @@ impl Workspace {
         this.apply_palette(Settings::default().palette(theme, Platform::Gtk, accent));
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes);
-        this.placement_actions.bind(&this);
+        this.canvas_bar.bind(&this);
         this.selection_resize.bind(&this);
         this.color_panel.bind(&this);
         this.palette_panel.bind(&this);
@@ -1569,6 +1600,24 @@ impl Workspace {
         menu
     }
 
+    pub(crate) fn queue_surface_allocate(&self) {
+        self.surface.queue_allocate();
+    }
+
+    pub(crate) fn populate_canvas_bar_menu(self: &Rc<Self>) {
+        let Some((context, shown)) = self.canvas_bar.context_menu_request() else {
+            return;
+        };
+        let menu = self
+            .gpu
+            .borrow()
+            .as_ref()
+            .and_then(|g| g.session.canvas_bar_menu(context, shown));
+        if let Some(menu) = menu {
+            self.canvas_bar.fill_menu(self, menu);
+        }
+    }
+
     pub(crate) fn watch_popover(self: &Rc<Self>, popover: &gtk::Popover) {
         self.popovers.borrow_mut().retain(|p| p.upgrade().is_some());
         self.popovers.borrow_mut().push(popover.downgrade());
@@ -1651,7 +1700,7 @@ impl Workspace {
             None
         };
         let facts = ChromeFacts {
-            canvas_bar: None,
+            canvas_bar: self.canvas_bar.bounds(),
             contact_tab,
             zen_button: self
                 .zen_capy
@@ -1757,6 +1806,7 @@ impl Workspace {
         let reply = match result {
             Some(Ok(reply)) => {
                 self.present_interaction(reply);
+                self.canvas_bar.suppress(self, reply.canvas_bar_hidden);
                 self.changed(Ok(reply.change));
                 reply
             }
@@ -1837,7 +1887,7 @@ impl Workspace {
 
     fn set_chrome_hidden(&self, hidden: bool) {
         for (slot, widget) in self.surface.imp().children.borrow().iter() {
-            if !matches!(slot, Slot::Canvas) {
+            if !matches!(slot, Slot::Canvas | Slot::CanvasBar) {
                 let hidden = hidden && !widget.has_css_class("floating-panel");
                 let can_target = !hidden && !widget.has_css_class("fixed-stack-divider")
                     && !matches!(slot, Slot::DrawerShadow(_) | Slot::ColumnConnection(_, _));
@@ -2522,7 +2572,6 @@ impl Workspace {
         }
         if regions & (regions::BRUSH | regions::DOCUMENT | regions::COMMANDS) != 0 {
             self.tool_settings.refresh(self, &state);
-            self.placement_actions.refresh(&state);
             self.selection_resize.refresh(self, &state);
         }
         if regions & (regions::COLOR_PREVIEW | regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
@@ -2611,6 +2660,12 @@ impl Workspace {
                 state.camera.zoom * 100.0,
                 state.camera.rotation.to_degrees()
             ));
+        }
+        if regions & (regions::CANVAS_BAR | regions::COMMANDS | regions::LAYOUT) != 0 {
+            self.canvas_bar.refresh(self, state.canvas_bar.as_ref());
+        }
+        if regions & regions::CAMERA != 0 {
+            self.canvas_bar.defer(self);
         }
         if regions & regions::LAYOUT != 0 {
             self.reconcile_layout(&state.workspace.layout);

@@ -125,14 +125,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn canvas_bar_contact(&self) -> bool {
-        self.interaction.pointer.is_some()
-            || self.touch.is_active()
-            || self.operation.dragging()
-            || self.engine.has_active_stroke()
+        self.interaction.pointer.is_some() || self.touch.is_active()
     }
 
     pub(super) fn update_canvas_bar(&mut self) -> bool {
-        if self.canvas_bar_contact() {
+        if self.canvas_bar_contact() || self.operation.dragging() {
             return false;
         }
         let preference = self.state.workspace.layout.canvas_bar.clone();
@@ -148,6 +145,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let toolbar = self.state.toolbar_context();
         let commands = || plan.items.iter().map(|i| i.0).chain(plan.completion.iter().copied());
+        let idle = self.require_idle().is_ok();
+        let previous_flags = self.canvas_bar.key.as_ref().map(|k| k.flags.clone()).unwrap_or_default();
         let key = CanvasBarKey {
             preference: preference.clone(),
             kind: plan.kind,
@@ -157,7 +156,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             flags: commands()
                 .map(|id| {
                     let (enabled, selected) = self.command_flags(id);
-                    (id, enabled, selected)
+                    let steady = previous_flags.iter().find(|f| f.0 == id).filter(|_| !idle);
+                    (id, steady.map_or(enabled, |f| f.1), selected)
                 })
                 .collect(),
         };
@@ -168,12 +168,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         if previous.is_none_or(|p| p.kind != key.kind || p.toolbar != key.toolbar || p.transaction != key.transaction) {
             self.canvas_bar.generation += 1;
         }
-        let item = |id: CommandId, checkable: bool| CanvasBarItem {
-            option: ToolOption::Action {
-                state: self.command(id),
-                checkable: checkable && id.is_toggle(),
-            },
-            label: short_label(id),
+        let item = |id: CommandId, checkable: bool| {
+            let mut state = self.command(id);
+            state.enabled = key.flags.iter().find(|f| f.0 == id).is_some_and(|f| f.1);
+            CanvasBarItem {
+                option: ToolOption::Action {
+                    state,
+                    checkable: checkable && id.is_toggle(),
+                },
+                label: short_label(id),
+            }
         };
         self.state.canvas_bar = Some(CanvasBarView {
             context: CanvasBarContext {

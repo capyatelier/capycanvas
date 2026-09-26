@@ -1,5 +1,6 @@
 mod alert;
 mod canvas;
+mod canvas_bar;
 mod documents;
 mod display_color;
 mod proof_view;

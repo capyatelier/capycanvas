@@ -98,6 +98,9 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .large-tiles { --tile-radius: 36px; }
 .tool-strip { --surface-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .toolbar-controls button.tile-button, .collapsed-column .tile-button { border-radius: calc(var(--tile-radius) * var(--corner-fit)); }
+.canvas-action-bar { padding: 6px; }
+.canvas-action-bar button { min-height: 40px; padding: 0 12px; }
+.canvas-action-bar .canvas-action-bar-label { padding: 0 8px; opacity: .8; }
 .dock-panel.join-nw { border-top-left-radius: 0; }
 .dock-panel.join-ne { border-top-right-radius: 0; }
 .dock-panel.join-se { border-bottom-right-radius: 0; }

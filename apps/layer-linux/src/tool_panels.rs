@@ -11,52 +11,6 @@ use layer_ui::{
     ToolActionGroup, UiState,
 };
 
-/// Placement completion remains visible when the artist's workspace hides the
-/// Tool Settings panel. Commands and transaction ownership stay in shared Rust.
-pub struct PlacementActions {
-    pub root: gtk::Box,
-    buttons: [(layer_ui::CommandId, gtk::Button); 3],
-}
-impl PlacementActions {
-    pub fn new() -> Self {
-        use layer_ui::CommandId::*;
-        let root = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        root.set_widget_name("photo-placement-actions");
-        root.add_css_class("toolbar");
-        root.add_css_class("card");
-        root.set_halign(gtk::Align::Center);
-        root.set_valign(gtk::Align::End);
-        root.set_margin_bottom(40);
-        root.set_visible(false);
-        let buttons = [
-            (PlacementOriginalSize, "Original Size", "placement-original-size"),
-            (CancelTransform, "Cancel", "placement-cancel"),
-            (ApplyTransform, "Apply", "placement-apply"),
-        ].map(|(command, label, name)| {
-            let button = gtk::Button::with_label(label);
-            button.set_widget_name(name);
-            if command == ApplyTransform { button.add_css_class("suggested-action"); }
-            root.append(&button);
-            (command, button)
-        });
-        Self { root, buttons }
-    }
-    pub fn bind(&self, workspace: &Rc<Workspace>) {
-        for (command, button) in &self.buttons {
-            let action = UiAction::Invoke { command: *command };
-            workspace.bind_action_tooltip(button, action.clone());
-            button.connect_clicked(glib::clone!(#[weak] workspace, move |_| workspace.dispatch(action.clone())));
-        }
-    }
-    pub fn refresh(&self, state: &UiState) {
-        self.root.set_visible(state.tool_actions.iter()
-            .any(|a| a.command == layer_ui::CommandId::PlacementOriginalSize));
-        for (id, button) in &self.buttons {
-            button.set_sensitive(state.commands.iter().any(|c| c.id == *id && c.enabled));
-        }
-    }
-}
-
 const TOOL_ROW_HEIGHT: i32 = 44;
 
 /// A body can be projected in a dock or a tool drawer without reparenting the

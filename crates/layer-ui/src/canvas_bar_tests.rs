@@ -119,14 +119,12 @@ fn canvas_bar_keeps_its_view_during_a_handle_drag_and_follows_the_object_after()
     s.transform_pen(event(&s, 2, PenPhase::Move, 1.), Point { x: 400., y: 260. }).unwrap();
     s.frame(2, 2).unwrap();
     assert_eq!(s.state.canvas_bar.as_ref().unwrap().anchor, before.anchor);
-    assert!(s.canvas_bar_contact());
     s.transform_pen(event(&s, 3, PenPhase::Up, 1.), Point { x: 400., y: 260. }).unwrap();
     s.frame(3, 3).unwrap();
     let after = s.state.canvas_bar.as_ref().unwrap();
     assert_eq!(after.context, before.context, "the same transform keeps its bar");
     let [x0, _, _, _] = after.anchor.unwrap();
     assert!(x0 > before.anchor.unwrap()[0] + 150.);
-    assert!(!s.canvas_bar_contact());
 }
 
 #[test]

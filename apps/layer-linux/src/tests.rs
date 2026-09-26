@@ -33,6 +33,8 @@ mod hdr_picker;
 mod place_source;
 #[path = "photo_drop_tests.rs"]
 mod photo_drop;
+#[path = "canvas_bar_tests.rs"]
+mod canvas_bar_tests;
 #[path = "file_launch_tests.rs"]
 mod file_launch;
 #[path = "document_tab_tests.rs"]
@@ -6860,7 +6862,7 @@ fn native_zen_behaviors() {
                 assert_eq!(w.zen_capy.is_visible(), show);
                 assert!(!w.header.root.can_target());
                 for (slot, widget) in w.surface.imp().children.borrow().iter() {
-                    if !matches!(slot, Slot::Canvas) && !widget.has_css_class("floating-panel") {
+                    if !matches!(slot, Slot::Canvas | Slot::CanvasBar) && !widget.has_css_class("floating-panel") {
                         assert!(widget.has_css_class("zen-hidden") && !widget.can_target());
                     }
                 }
@@ -14139,7 +14141,7 @@ fn native_workspace_controls_docking_and_ink() {
         "Zen fade must not run the canvas frame loop"
     );
     for (slot, widget) in w.surface.imp().children.borrow().iter() {
-        if *slot != Slot::Canvas {
+        if !matches!(slot, Slot::Canvas | Slot::CanvasBar) {
             assert!(!widget.can_target());
         }
     }

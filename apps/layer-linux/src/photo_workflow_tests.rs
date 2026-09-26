@@ -374,7 +374,7 @@ fn native_large_photo_placement_workflow() {
             "native drag must translate the clipped photo");
     }
     super::super::new_photo::capture_ui(&w, &output, "active-placement.png");
-    driver.click_placement(&w, "placement-apply");
+    driver.click_placement(&w, "canvas-bar-ApplyTransform");
     ready(&w);
     assert_eq!(layer(&w).properties.placement, posed.properties.placement);
     assert!(layer(&w).raster.is_empty());
@@ -436,8 +436,8 @@ fn native_large_photo_placement_workflow() {
         let native_size = std::env::var_os("LAYER_PLACEMENT_MATERIALS_NATIVE_SIZE").is_some();
         if native_size {
             invoke(&w, CommandId::ScaleRotate);
-            driver.click_placement(&w, "placement-original-size");
-            driver.click_placement(&w, "placement-apply");
+            driver.click_placement(&w, "canvas-bar-PlacementOriginalSize");
+            driver.click_placement(&w, "canvas-bar-ApplyTransform");
             ready(&w);
         }
         for (preset, command, label, diameter) in [
@@ -568,7 +568,7 @@ fn native_large_photo_placement_workflow() {
         "exact artwork capture survives save/reopen"
     );
     invoke(&restored, CommandId::ScaleRotate);
-    driver.click_placement(&restored, "placement-original-size");
+    driver.click_placement(&restored, "canvas-bar-PlacementOriginalSize");
     let native = layer(&restored);
     assert!(
         (native.properties.placement.0[0].hypot(native.properties.placement.0[1]) - 1.).abs()
@@ -576,7 +576,7 @@ fn native_large_photo_placement_workflow() {
     );
     assert_eq!(native.source.as_deref(), Some(source.as_ref()));
     assert_eq!(native.raster, restored_raster);
-    driver.click_placement(&restored, "placement-apply");
+    driver.click_placement(&restored, "canvas-bar-ApplyTransform");
     ready(&restored);
     let original_thumbnail_at = Instant::now();
     super::super::place_source::wait_layer_thumbnail(&restored, native.id.0);
@@ -598,7 +598,7 @@ fn native_large_photo_placement_workflow() {
     report["menu_import_ready_ms"] = json!(import_at.elapsed().as_secs_f64() * 1000.);
     assert_eq!(layer(&restored).source.as_deref(), Some(source.as_ref()));
     assert!(layer(&restored).raster.is_empty());
-    driver.click_placement(&restored, "placement-cancel");
+    driver.click_placement(&restored, "canvas-bar-CancelTransform");
     ready(&restored);
     assert_eq!(layer(&restored), before_import);
 
