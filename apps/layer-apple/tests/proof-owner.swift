@@ -16,26 +16,13 @@ import SwiftUI
             defer { try? FileManager.default.removeItem(at: root) }
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root), managedWorkspaces: false)
             let native = store.native!, model = store.proof, preferences = store.colorPreferences
-            let surface = CAMetalLayer(); surface.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
-            native.attach(surface, width: 128, height: 128, scale: 1)
+            let surface = attachSurface(store, CGSize(width: 128, height: 128))
             defer { model.setPaused(true); native.detach(); withExtendedLifetime(surface) {} }
             func wait(_ label: String, _ ready: () -> Bool) async throws {
-                let deadline = Date().addingTimeInterval(60)
-                while !ready() {
-                    try require(Date() < deadline && store.failure == nil, store.failure ?? "Timed out: \(label), \(model.error ?? "")")
-                    let now = FrameTrace.now()
-                    await withCheckedContinuation { done in native.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() } }
-                    try await drain(0.01)
-                }
+                try await CapyTest.wait("\(label), \(model.error ?? "")", seconds: 60, failure: { store.failure },
+                    step: { await frame(native) }, ready)
             }
-            func edit(_ action: [String: Any]) async throws {
-                try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                    store.edit(action) { failure in
-                        if let failure { done.resume(throwing: HostFailure(message: failure)) } else { done.resume() }
-                    }
-                }
-            }
-            func invoke(_ command: String) async throws { try await edit(["type": "invoke", "command": command]) }
+            func invoke(_ command: String) async throws { try await store.apply(["type": "invoke", "command": command]) }
             func query(_ type: String) async -> JSON {
                 await withCheckedContinuation { done in store.query(["type": type]) { done.resume(returning: $0) } }
             }
@@ -59,8 +46,8 @@ import SwiftUI
                 done(JSON(["extent": [64, 48], "color": ["space": "DisplayP3", "depth": "U16"], "background": "White"]))
             }))
             try await invoke("new_document"); try await idle()
-            try await edit(["type": "color", "action": ["op": "definition", "color": ["space": "DisplayP3", "rgba": [0.8, 0.2, 0.1, 1.0]]]])
-            try await invoke("select_all"); try await edit(["type": "layer", "action": ["op": "fill_selection"]]); try await invoke("deselect")
+            try await store.apply(["type": "color", "action": ["op": "definition", "color": ["space": "DisplayP3", "rgba": [0.8, 0.2, 0.1, 1.0]]]])
+            try await invoke("select_all"); try await store.apply(["type": "layer", "action": ["op": "fill_selection"]]); try await invoke("deselect")
             let flushed = await withCheckedContinuation { done in native.flushPersistence { done.resume(returning: $0) } }
             try require(flushed, "Paint is complete")
             try await invoke("save_document"); try await idle()

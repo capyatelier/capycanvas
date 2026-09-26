@@ -14,11 +14,7 @@ extension XCTestCase {
         let size = sliders.element(boundBy: 0), opacity = sliders.element(boundBy: 1)
         func tap(_ element: XCUIElement, _ offset: CGVector) {
             let point = element.coordinate(withNormalizedOffset: offset)
-            #if os(macOS)
-            point.click()
-            #else
-            point.tap()
-            #endif
+            point.clickOrTap()
         }
         tap(size, CGVector(dx: 0.5, dy: 0.25))
         let preview = app.descendants(matching: .any)["brush-slider-preview"].firstMatch

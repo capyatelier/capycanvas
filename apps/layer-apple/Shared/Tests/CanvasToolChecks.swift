@@ -93,6 +93,11 @@ extension XCTestCase {
         editorPixelSamples(in: app, at: [point], size: size)[0]
     }
 
+    @MainActor func expectPixels(_ expected: Data, in app: XCUIApplication, at point: CGPoint = CGPoint(x: 0.5, y: 0.6)) {
+        expectation(for: NSPredicate { _, _ in self.editorPixels(in: app, at: point) == expected }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+    }
+
     @MainActor func editorPixelSamples(in app: XCUIApplication, at points: [CGPoint], size: Int) -> [Data] {
         // Read all locations from one frame, avoiding repeated native captures.
         let screenshot = editorScreenshot(in: app)

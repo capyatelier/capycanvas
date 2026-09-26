@@ -5,9 +5,6 @@ import SwiftUI
 class NativeWorkspaceInputFixture {
     @MainActor static var previousPoint: CGPoint?
     static func note(_ text: String) { FileHandle.standardError.write(Data((text + "\n").utf8)) }
-    @MainActor static func require(_ value: Bool, _ message: String) throws {
-        if !value { throw HostFailure(message: message) }
-    }
     @MainActor static func drain(_ seconds: Double = 0.08) async throws {
         try await Task.sleep(for: .seconds(seconds))
     }

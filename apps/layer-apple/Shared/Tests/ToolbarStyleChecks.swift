@@ -18,31 +18,23 @@ extension XCTestCase {
         #endif
         let capture = XCTAttachment(screenshot: image)
         capture.name = "medium-labeled-toolbar"; capture.lifetime = .keepAlways; add(capture)
-        func activate(_ control: XCUIElement) {
-            XCTAssertTrue(control.waitForExistence(timeout: 10))
-            #if os(macOS)
-            control.click()
-            #else
-            control.tap()
-            #endif
-        }
         let camera = app.staticTexts["camera-status"]
         let usesValue = !(camera.value as? String ?? "").isEmpty
         let previous = usesValue ? camera.value as! String : camera.label
         XCTAssertFalse(previous.isEmpty, "The camera readout must provide a visible value before testing Zoom")
-        activate(zoom)
+        workspaceActivate(zoom)
         expectation(for: NSPredicate(format: (usesValue ? "value" : "label") + " != %@", previous), evaluatedWith: camera)
         waitForExpectations(timeout: 10)
-        activate(app.descendants(matching: .any)["toolbar-options-commands"].firstMatch)
+        workspaceActivate(app.descendants(matching: .any)["toolbar-options-commands"].firstMatch)
         let menu = app.descendants(matching: .any)["workspace-context-menu"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
         XCTAssertTrue(workspaceViewport(in: app).frame.contains(menu.frame), "The toolbar menu must fit inside its editor window")
         attachEditor(in: app, name: "toolbar-options-menu")
-        activate(app.buttons["menu-action-Medium Tiles"])
+        workspaceActivate(app.buttons["menu-action-Medium Tiles"])
         expectation(for: NSPredicate { _, _ in abs(zoom.frame.width - 54) <= 1 }, evaluatedWith: zoom)
         waitForExpectations(timeout: 10)
         XCTAssertEqual(zoom.frame.height, 54, accuracy: 1)
-        activate(app.buttons["zen-button"])
+        workspaceActivate(app.buttons["zen-button"])
         XCTAssertTrue(editorDocumentTitle(in: app).waitForNonExistence(timeout: 10))
         XCTAssertFalse(zoom.exists, "Full Zen hides docked toolbars")
         app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])

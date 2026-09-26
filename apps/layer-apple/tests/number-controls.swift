@@ -98,14 +98,7 @@ import SwiftUI
         func settle() async throws {
             for _ in 0..<20 { try await Task.sleep(for: .milliseconds(5)) }
         }
-        func edit(_ action: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-                store.edit(action) { error in
-                    if let error { c.resume(throwing: HostFailure(message: error)) } else { c.resume() }
-                }
-            }
-        }
-        try await edit(["type": "invoke", "command": "auto_select"])
+        try await store.apply(["type": "invoke", "command": "auto_select"])
         let diameter = store.state["brush"]["diameter"].number
         func setting() -> JSON { store.state["tool_settings"].array.first { $0["id"].string == "gap_closing" } ?? JSON() }
         precondition(!setting().isNull, "Auto select must expose Close gaps")
@@ -154,7 +147,7 @@ import SwiftUI
         try await key(#selector(NSResponder.moveDown(_:)))
         precondition(setting()["value"].number == 14)
         try await draft("9 +")
-        try await edit(["type": "set_tool_setting", "id": "gap_closing", "value": 26])
+        try await store.apply(["type": "set_tool_setting", "id": "gap_closing", "value": 26])
         try await settle()
         precondition(field.stringValue == "9 +", "Snapshots must preserve an unfinished field")
         try await key(#selector(NSResponder.cancelOperation(_:)))

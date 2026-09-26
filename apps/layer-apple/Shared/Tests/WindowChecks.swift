@@ -134,10 +134,6 @@ extension XCTestCase {
         let sceneID = scenes.firstMatch.identifier
         let samplePoint = CGPoint(x: 0.53, y: 0.55)
         func pixels() -> Data { editorPixels(in: app, at: samplePoint) }
-        func expectPixels(_ expected: Data) {
-            expectation(for: NSPredicate { _, _ in pixels() == expected }, evaluatedWith: app)
-            waitForExpectations(timeout: 15)
-        }
         func fill() { editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection") }
         func properties() {
             editorMenu(in: app, menu: "File", id: "document_properties", label: "Document Properties…")
@@ -199,9 +195,9 @@ extension XCTestCase {
             XCTAssertTrue(app.buttons["workspace-switch-builtin:workspace:illustrator"].isSelected)
             XCTAssertEqual(app.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-")).count, 2)
             XCTAssertEqual(app.descendants(matching: .any)["navigator-overview"].firstMatch.value as? String, "Live preview")
-            expectPixels(filled)
+            expectPixels(filled, in: app, at: samplePoint)
             for (command, expected) in [("Undo", paper), ("Redo", filled), ("Undo", paper)] {
-                editorHistory(command, in: app); expectPixels(expected)
+                editorHistory(command, in: app); expectPixels(expected, in: app, at: samplePoint)
             }
             window.coordinate(withNormalizedOffset: CGVector(dx: samplePoint.x - 0.04, dy: samplePoint.y)).click(forDuration: 0.05,
                 thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: samplePoint.x + 0.04, dy: samplePoint.y)))
@@ -211,9 +207,9 @@ extension XCTestCase {
             let stroke = pixels()
             attachEditor(in: app, name: "sdr-window-" + transition)
             for (command, expected) in [("Undo", paper), ("Redo", stroke), ("Undo", paper)] {
-                editorHistory(command, in: app); expectPixels(expected)
+                editorHistory(command, in: app); expectPixels(expected, in: app, at: samplePoint)
             }
-            fill(); expectPixels(filled)
+            fill(); expectPixels(filled, in: app, at: samplePoint)
             XCTAssertFalse(app.staticTexts["Canvas error"].exists)
             XCTAssertFalse(app.alerts.firstMatch.exists)
         }
@@ -235,11 +231,7 @@ extension XCTestCase {
             XCTAssertTrue(button.waitForExistence(timeout: 10))
             expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: button)
             waitForExpectations(timeout: 20)
-            #if os(macOS)
-            button.click()
-            #else
-            button.tap()
-            #endif
+            button.clickOrTap()
         }
         func command(_ scene: XCUIElement, _ label: String) -> XCUIElement {
             scene.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-", label)).firstMatch

@@ -16,27 +16,20 @@ enum ColorPanelCaptures {
                 guard Date() < deadline else { throw HostFailure(message: "Color owner startup timed out") }
                 try await Task.sleep(for: .milliseconds(5))
             }
-            func edit(_ action: [String: Any]) async throws {
-                try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-                    store.edit(action) { error in
-                        if let error { c.resume(throwing: HostFailure(message: error)) } else { c.resume() }
-                    }
-                }
-            }
-            try await edit(["type": "color", "action": ["op": "select", "slot": "background"]])
-            try await edit(["type": "set_color", "rgba": [0.1, 0.7, 0.3, 0.75]])
-            try await edit(["type": "color", "action": ["op": "select", "slot": "foreground"]])
-            try await edit(["type": "set_color", "rgba": [0.8, 0.2, 0.4, 0.5]])
+            try await store.apply(["type": "color", "action": ["op": "select", "slot": "background"]])
+            try await store.apply(["type": "set_color", "rgba": [0.1, 0.7, 0.3, 0.75]])
+            try await store.apply(["type": "color", "action": ["op": "select", "slot": "foreground"]])
+            try await store.apply(["type": "set_color", "rgba": [0.8, 0.2, 0.4, 0.5]])
             for theme in ["light", "dark"] {
-                try await edit(["type": "set_theme", "theme": theme])
+                try await store.apply(["type": "set_theme", "theme": theme])
                 for shape in ["circle", "square", "triangle"] {
-                    try await edit(["type": "color", "action": ["op": "shape", "shape": shape]])
+                    try await store.apply(["type": "color", "action": ["op": "shape", "shape": shape]])
                     for readout in ["shape", "rgb"] {
                         if store.snapshot["color_panel"]["readout"].string != readout {
-                            try await edit(["type": "color", "action": ["op": "toggle_readout"]])
+                            try await store.apply(["type": "color", "action": ["op": "toggle_readout"]])
                         }
                         for slot in ["foreground", "background", "transparent"] {
-                            try await edit(["type": "color", "action": ["op": "select", "slot": slot]])
+                            try await store.apply(["type": "color", "action": ["op": "select", "slot": slot]])
                             for width: CGFloat in [128, 160, 226] {
                                 let geometry = ColorGeometry()
                                 let palette = EditorPalette(source: store.state["palette"])

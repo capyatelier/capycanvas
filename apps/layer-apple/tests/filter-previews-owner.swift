@@ -11,29 +11,13 @@ import SwiftUI
             defer { try? FileManager.default.removeItem(at: root) }
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root), managedWorkspaces: false)
             let native = store.native!
-            let surface = CAMetalLayer(); surface.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
-            native.attach(surface, width: 128, height: 128, scale: 1)
+            let surface = attachSurface(store, CGSize(width: 128, height: 128))
             defer { store.filterPreviews.hide("check"); native.detach(); withExtendedLifetime(surface) {} }
-            func frame() async {
-                let now = FrameTrace.now()
-                await withCheckedContinuation { done in native.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() } }
-            }
             func wait(_ label: String, _ ready: () -> Bool) async throws {
-                let deadline = Date().addingTimeInterval(45)
-                while !ready() {
-                    try require(Date() < deadline && store.failure == nil, store.failure ?? "Timed out: \(label)")
-                    await frame(); try await drain(0.01)
-                }
+                try await CapyTest.wait(label, failure: { store.failure }, step: { await frame(native) }, ready)
                 try require(store.failure == nil, store.failure ?? "")
             }
-            func edit(_ action: [String: Any]) async throws {
-                try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                    store.edit(action) { failure in
-                        if let failure { done.resume(throwing: HostFailure(message: failure)) } else { done.resume() }
-                    }
-                }
-            }
-            func invoke(_ command: String) async throws { try await edit(["type": "invoke", "command": command]) }
+            func invoke(_ command: String) async throws { try await store.apply(["type": "invoke", "command": command]) }
             func idle() async throws {
                 try await wait("Document completion") { !store.projectFiles.busy && store.state["requests"].array.isEmpty }
                 try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
@@ -46,7 +30,7 @@ import SwiftUI
                 }))
             try await invoke("new_document"); try await idle()
             try await invoke("select_all")
-            try await edit(["type": "layer", "action": ["op": "fill_selection"]])
+            try await store.apply(["type": "layer", "action": ["op": "fill_selection"]])
             try await invoke("deselect")
             let flushed = await withCheckedContinuation { done in native.flushPersistence { done.resume(returning: $0) } }
             try require(flushed, "Complete initial artwork")
@@ -55,7 +39,7 @@ import SwiftUI
             store.filterPreviews.show(token: "check", id: "curves", width: 96, scale: 1)
             for step in 0..<6 {
                 try await drain(0.21)
-                try await edit(["type": "set_layer_opacity", "opacity": 0.4 + Double(step) * 0.1]); await frame()
+                try await store.apply(["type": "set_layer_opacity", "opacity": 0.4 + Double(step) * 0.1]); await frame(native)
                 try require(store.failure == nil, store.failure ?? "Edits cannot raise a preview alert")
             }
             try await wait("Automatic preview retry") { store.filterPreviews.images["curves"] != nil }
@@ -66,9 +50,9 @@ import SwiftUI
             try require(try Data(contentsOf: saved) == original && !store.state["document_file"]["modified"].bool,
                 "Reopen must preserve the saved file and clean document")
             try await wait("Previews after reopen") { store.filterPreviews.images["curves"] != nil }
-            try await edit(["type": "set_layer_opacity", "opacity": 0.3]); await frame()
+            try await store.apply(["type": "set_layer_opacity", "opacity": 0.3]); await frame(native)
             try require(store.state["document_file"]["modified"].bool, "Editing resumes after reopen")
-            try await invoke("undo"); await frame()
+            try await invoke("undo"); await frame(native)
             try await wait("Previews after Undo") { store.filterPreviews.images["curves"] != nil }
             try require(try Data(contentsOf: saved) == original, "Preview refresh and Undo never write the saved file")
             try require(store.failure == nil, "No background-preview failure")

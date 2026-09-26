@@ -5,17 +5,8 @@ import QuartzCore
 
 @main final class LayerRowLifecycleChecks: NativeWorkspaceInputFixture {
     @MainActor static func edit(_ store: EditorStore, _ value: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            store.edit(value) { error in
-                if let error { done.resume(throwing: HostFailure(message: error)) }
-                else { done.resume() }
-            }
-        }
+        try await store.apply(value)
         try await drain()
-    }
-    @MainActor static func wait(_ label: String, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(10)
-        while !ready() { try require(Date() < deadline, label); try await drain(0.01) }
     }
     @MainActor static func order(_ store: EditorStore) -> [UInt64] { store.state["layers"].array.map { $0["id"].uint } }
     @MainActor static func run(_ platform: UInt32) async throws {
@@ -120,8 +111,7 @@ import QuartzCore
         try require(model.contact.dragging, "Document reset must interrupt an active drag")
         // Document replacement uses the production Metal owner even though this
         // fixture presents only the layer panel and never captures the desktop.
-        let surface = CAMetalLayer(); surface.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
-        store.native!.attach(surface, width: 128, height: 128, scale: 1)
+        _ = attachSurface(store, CGSize(width: 128, height: 128))
         let attached = await withCheckedContinuation { done in
             store.native!.submit(2, JSON(["type": "catalog"])) { done.resume(returning: $0 != nil) }
         }

@@ -4,24 +4,6 @@ import QuartzCore
 /// Production document coordinator, owner queues and durable palette/settings
 /// storage in disposable sessions. UI delivery is a separate XCTest workflow.
 @main struct ColorWorkflowChecks {
-    @MainActor static func require(_ value: Bool, _ message: String) throws {
-        if !value { throw HostFailure(message: message) }
-    }
-    @MainActor static func wait(_ label: String, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(30)
-        while !ready() {
-            try require(Date() < deadline, "Timed out: \(label)")
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
-    @MainActor static func edit(_ store: EditorStore, _ action: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            store.edit(action) { error in
-                if let error { done.resume(throwing: HostFailure(message: error)) }
-                else { done.resume() }
-            }
-        }
-    }
     @MainActor static func main() async throws {
         for platform: UInt32 in [0, 1] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-color-workflows-\(UUID())")
@@ -30,20 +12,14 @@ import QuartzCore
             let store = EditorStore(platform: platform, scene: scene, persistence: EditorPersistence(root: root))
             try await wait("Workspace startup") { store.workspaceLibrary?.ready == true || store.failure != nil }
             try require(store.failure == nil, store.failure ?? "")
-            let surface = CAMetalLayer(); surface.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
-            store.native!.attach(surface, width: 128, height: 128, scale: 1)
-            let deadline = Date().addingTimeInterval(45)
-            while !store.snapshot["shaders_ready"].bool {
-                try require(Date() < deadline && store.failure == nil, store.failure ?? "Metal startup timed out")
-                let prepared = await withCheckedContinuation { done in store.native!.flushPersistence { done.resume(returning: $0) } }
-                try require(prepared, "Canvas preparation failed")
-                let now = FrameTrace.now()
-                await withCheckedContinuation { done in store.native!.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() } }
-                try await Task.sleep(for: .milliseconds(10))
-            }
+            _ = attachSurface(store, CGSize(width: 128, height: 128))
+            try await wait("Metal startup", failure: { store.failure }, step: {
+                try await prepare(store.native!, "Metal startup")
+                await frame(store.native!)
+            }) { store.snapshot["shaders_ready"].bool }
             let options = JSON(["extent": [63, 47], "color": ["space": "DisplayP3", "depth": "U16"], "background": "Transparent"])
-            try await edit(store, ["type": "new_document_preferences", "action": ["type": "remember", "options": options.raw, "name": "", "defaults": true]])
-            try await edit(store, ["type": "invoke", "command": "new_document"])
+            try await store.apply(["type": "new_document_preferences", "action": ["type": "remember", "options": options.raw, "name": "", "defaults": true]])
+            try await store.apply(["type": "invoke", "command": "new_document"])
             try await wait("Creation choices") { store.projectFiles.creating }
             try require(store.projectFiles.newDocumentSpec["creation"]["options"].stableKey == options.stableKey, "New must expose saved defaults")
             let epoch = store.state["document_file"]["epoch"].uint
@@ -58,14 +34,14 @@ import QuartzCore
             try require(store.state["settings"]["new_document"]["defaults"].stableKey == savedOptions.stableKey, "Save full options as defaults")
             try require(store.state["settings"]["new_document"]["presets"][0]["name"].string == "Studio P3", "Save the trimmed preset name")
             try require(store.state["colors"]["rgb_space"].string == "DisplayP3", "New must adopt the selected working space")
-            try await edit(store, ["type": "invoke", "command": "new_document"])
+            try await store.apply(["type": "invoke", "command": "new_document"])
             try await wait("Reopened creation") { store.projectFiles.creating }
             try require(store.projectFiles.newDocumentSpec["creation"]["options"].stableKey == savedOptions.stableKey, "Reopen with current defaults")
             store.projectFiles.created(nil)
             try await wait("New cancellation") { !store.projectFiles.busy }
             try require(store.state["document_file"]["epoch"].uint == epoch + 1, "Cancel must preserve the drawing")
 
-            func color(_ action: [String: Any]) async throws { try await edit(store, ["type": "color", "action": action]) }
+            func color(_ action: [String: Any]) async throws { try await store.apply(["type": "color", "action": action]) }
             func library(_ action: [String: Any]) async throws { try await color(["op": "library", "action": action]) }
             let starting = store.state["colors"]["library"]["palettes"].array.count
             try await library(["op": "create_palette", "name": "Studio colors"])
@@ -88,7 +64,7 @@ import QuartzCore
             try await library(["op": "rename_palette", "id": palette, "name": "Retained colors"])
             let savedLibrary = store.state["colors"]["library"].stableKey
             // A new document changes wheel space but retains workspace palettes.
-            try await edit(store, ["type": "invoke", "command": "new_document"])
+            try await store.apply(["type": "invoke", "command": "new_document"])
             try await wait("Next document choices") { store.projectFiles.creating }
             let next = JSON(["extent": [67, 43], "color": ["space": "ProPhoto", "depth": "U16"], "background": "White"])
             store.projectFiles.created(NewDrawingChoice(options: next, presetName: "", useAsDefaults: false))
@@ -105,7 +81,7 @@ import QuartzCore
             try require(restored.state["settings"]["new_document"].stableKey == settings, "Fresh owner must restore creation presets and defaults")
             let removal = saved(restored)["swatches"][0]["id"].uint
             for action: [String: Any] in [["op": "remove", "id": removal], ["op": "remove_palette", "id": palette]] {
-                try await edit(restored, ["type": "color", "action": ["op": "library", "action": action]])
+                try await restored.apply(["type": "color", "action": ["op": "library", "action": action]])
             }
             try require(restored.state["colors"]["library"]["palettes"].array.count == starting, "Swatch and palette removal must preserve the remaining palettes")
             try await restored.workspaceLibrary!.close()

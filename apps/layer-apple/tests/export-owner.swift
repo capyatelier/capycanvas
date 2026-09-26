@@ -6,9 +6,6 @@ import UniformTypeIdentifiers
 /// Real Metal owner and file coordinator, with disposable native-panel/provider
 /// destinations. Library/preset operations run on the production file worker.
 @main struct ExportOwnerChecks {
-    static func require(_ value: Bool, _ message: String) throws {
-        if !value { throw HostFailure(message: message) }
-    }
     static func io<T>(_ work: @escaping () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { done in
             NativeProjectTask.io.async { done.resume(with: Result(catching: work)) }
@@ -19,21 +16,8 @@ import UniformTypeIdentifiers
         do { try work() } catch { failed = true }
         try require(failed, label)
     }
-    @MainActor static func edit(_ store: EditorStore, _ action: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            store.edit(action) { error in
-                if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-            }
-        }
-    }
     @MainActor static func wait(_ label: String, store: EditorStore, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(45)
-        while !ready() {
-            try require(Date() < deadline && store.failure == nil, store.failure ?? "Timed out: \(label)")
-            let prepared = await withCheckedContinuation { done in store.native!.flushPersistence { done.resume(returning: $0) } }
-            try require(prepared, "Prepare canvas: \(label)")
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await CapyTest.wait(label, failure: { store.failure }, step: { try await prepare(store.native!, label) }, ready)
     }
     static func image(_ url: URL, type: UTType, depth: Int, extent: [Int]) throws {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -124,16 +108,9 @@ import UniformTypeIdentifiers
             let directory = root.appendingPathComponent("state-\(platform)")
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: directory), managedWorkspaces: false)
             let native = store.native!
-            let surface = CAMetalLayer(); surface.bounds = CGRect(x:0,y:0,width:128,height:128)
-            native.attach(surface,width:128,height:128,scale:1)
+            let surface = attachSurface(store, CGSize(width: 128, height: 128))
             defer { native.detach(); withExtendedLifetime(surface) {} }
-            let deadline = Date().addingTimeInterval(45)
-            while !store.snapshot["shaders_ready"].bool {
-                try require(Date() < deadline && store.failure == nil, store.failure ?? "Metal startup")
-                let now = FrameTrace.now()
-                await withCheckedContinuation { done in native.frame(now:now,target:now+16_666_667) { _,_,_ in done.resume() } }
-                try await Task.sleep(for: .milliseconds(10))
-            }
+            try await CapyTest.wait("Metal startup", failure: { store.failure }, step: { await frame(native) }) { store.snapshot["shaders_ready"].bool }
             let master = root.appendingPathComponent("Editable-\(platform).capy")
             var destination: URL? = master
             var chosenType: UTType?
@@ -148,7 +125,7 @@ import UniformTypeIdentifiers
                         catch { preconditionFailure("Fixture provider: \(error)") }
                     } else { done(nil) }
                 } : nil, exportOptions: { _ in }))
-            func invoke(_ command: String) async throws { try await edit(store, ["type": "invoke", "command": command]) }
+            func invoke(_ command: String) async throws { try await store.apply(["type": "invoke", "command": command]) }
             func idle(allowError: Bool = false) async throws {
                 try await wait("Document completion", store: store) { !store.projectFiles.busy && store.state["requests"].array.isEmpty }
                 if !allowError { try require(store.projectFiles.error == nil, store.projectFiles.error ?? "") }
@@ -165,8 +142,8 @@ import UniformTypeIdentifiers
                 try require(editor.error == nil, editor.error ?? "")
             }
             try await invoke("new_document"); try await idle()
-            try await edit(store, ["type":"color", "action":["op":"definition", "color":["space":"DisplayP3", "rgba":[0.7,0.3,0.15,0.8]]]])
-            try await invoke("select_all"); try await edit(store, ["type":"layer", "action":["op":"fill_selection"]]); try await invoke("deselect")
+            try await store.apply(["type":"color", "action":["op":"definition", "color":["space":"DisplayP3", "rgba":[0.7,0.3,0.15,0.8]]]])
+            try await invoke("select_all"); try await store.apply(["type":"layer", "action":["op":"fill_selection"]]); try await invoke("deselect")
             _ = await withCheckedContinuation { done in native.flushPersistence { done.resume(returning: $0) } }
             try await invoke("save_document"); try await idle()
             try await invoke("add_layer") // Export must preserve unsaved state too.

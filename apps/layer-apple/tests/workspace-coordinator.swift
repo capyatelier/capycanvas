@@ -4,21 +4,6 @@ import Foundation
 import SQLite3
 
 @main struct WorkspaceCoordinatorChecks {
-    @MainActor static func wait(_ label: String, until ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(15)
-        while !ready() {
-            guard Date() < deadline else { throw HostFailure(message: "Timed out: \(label)") }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-    }
-    @MainActor static func edit(_ store: EditorStore, _ action: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            store.edit(action) { error in
-                if let error { continuation.resume(throwing: HostFailure(message: error)) }
-                else { continuation.resume() }
-            }
-        }
-    }
     @MainActor static func main() async throws {
         for platform: UInt32 in [0, 1] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-coordinator-\(UUID())")
@@ -42,14 +27,14 @@ import SQLite3
             precondition(!manager.readOnly, "Startup must honor the latest active scene state")
             let original = manager.status["active_id"].string
             precondition(!original.isEmpty)
-            try await edit(first, ["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
-            try await edit(first, ["type": "invoke", "command": "zen_mode"])
+            try await first.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
+            try await first.apply(["type": "invoke", "command": "zen_mode"])
             precondition(first.state["workspace"]["zen_mode"].bool)
             let initial = try await manager.read(["type": "view", "page": "workspaces", "query": "", "idle": true])
             precondition(initial["rows"].array.count == 3, "Initialize only the shared default workspaces")
             // Current workspace edits persist only through the shared library.
-            try await edit(first, ["type": "set_brush_size", "value": 73])
-            try await edit(first, ["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": true]])
+            try await first.apply(["type": "set_brush_size", "value": 73])
+            try await first.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": true]])
             try await manager.flush()
             for file in [sceneFile, otherFile, fallback] {
                 let after = try Data(contentsOf: file)
@@ -57,18 +42,18 @@ import SQLite3
             }
             // Switching immediately after accepted edits must capture them,
             // without waiting for the autosave timer or restoring stale tools.
-            try await edit(first, ["type": "set_brush_size", "value": 87])
+            try await first.apply(["type": "set_brush_size", "value": 87])
             _ = try await manager.operation(["type": "new", "name": "Clean"])
             let clean = manager.status["active_id"].string
             precondition(clean != original && first.state["brush"]["diameter"].number == 87)
-            try await edit(first, ["type": "set_brush_size", "value": 44])
+            try await first.apply(["type": "set_brush_size", "value": 44])
             _ = try await manager.operation(["type": "switch", "id": original])
             precondition(first.state["brush"]["diameter"].number == 87)
             do {
                 _ = try await manager.operation(["type": "new", "name": "Clean"])
                 preconditionFailure("A conflicting workspace name must fail")
             } catch { precondition(manager.status["active_id"].string == original && !manager.busy) }
-            try await edit(first, ["type": "set_brush_size", "value": 91]) // Failure released the interaction lock.
+            try await first.apply(["type": "set_brush_size", "value": 91]) // Failure released the interaction lock.
             let autosaveDeadline = Date().addingTimeInterval(10)
             while true {
                 let saved = try await manager.read(["type": "load", "id": original])
@@ -87,7 +72,7 @@ import SQLite3
             // Drain storage work queued by suspension, then verify the Rust
             // editor is writable too; the Swift readOnly flag is not enough.
             try await manager.flush()
-            do { try await edit(first, ["type": "set_brush_size", "value": 91]) }
+            do { try await first.apply(["type": "set_brush_size", "value": 91]) }
             catch { throw HostFailure(message: "A resumed workspace must remain editable: \(error.localizedDescription)") }
             try await libraryActions(manager, editor: first, root: root)
             try await ownershipAndStorage(manager, editor: first, root: root, scene: scene, platform: platform)
@@ -137,12 +122,12 @@ import SQLite3
             try await Task.sleep(for: .seconds(3))
             try database.execute("ROLLBACK")
         }
-        try await edit(editor, ["type": "set_brush_size", "value": 93])
+        try await editor.apply(["type": "set_brush_size", "value": 93])
         var completed = false
         let saving = Task { @MainActor in try await manager.flush(); completed = true }
         try await wait("save waiting for storage") { manager.status["dirty"].bool }
         let started = ContinuousClock.now
-        try await edit(editor, ["type": "set_brush_size", "value": 94])
+        try await editor.apply(["type": "set_brush_size", "value": 94])
         let queried: JSON = await withCheckedContinuation { continuation in
             editor.query(["type": "catalog"]) { continuation.resume(returning: $0) }
         }
@@ -160,18 +145,18 @@ import SQLite3
         try await manager.flush()
         precondition(manager.readOnly, "A newer suspension must supersede queued activation")
         do {
-            try await edit(editor, ["type": "set_brush_size", "value": 94])
+            try await editor.apply(["type": "set_brush_size", "value": 94])
             preconditionFailure("A suspended workspace must reject editor changes")
         } catch { precondition(editor.state["brush"]["diameter"].number == 94) }
         try await manager.resume()
-        try await edit(editor, ["type": "set_brush_size", "value": 94])
+        try await editor.apply(["type": "set_brush_size", "value": 94])
         let latest = try await manager.read(["type": "load", "id": original])["entity"]["working"]
         precondition(latest["tools"]["overrides"][String(latest["preset"].uint)]["size"].number == 94,
             "A save acknowledgement must not clear edits accepted while storage was blocked")
         // Retire the native claim without saving the dirty edit, then let
         // another owner claim it. A suspended owner keeps its kernel lock;
         // changing a lease timestamp alone cannot simulate ownership loss.
-        try await edit(editor, ["type": "set_brush_size", "value": 95])
+        try await editor.apply(["type": "set_brush_size", "value": 95])
         await manager.detach()
         let successor = EditorStore(platform: platform, scene: scene,
             persistence: EditorPersistence(root: root), managedWorkspaces: true)
@@ -191,7 +176,7 @@ import SQLite3
         precondition(editor.state["brush"]["diameter"].number == 94)
         _ = try await manager.operation(["type": "delete", "id": recovered])
         _ = try await manager.operation(["type": "delete_permanently", "id": recovered])
-        try await edit(editor, ["type": "set_brush_size", "value": 91])
+        try await editor.apply(["type": "set_brush_size", "value": 91])
         let flushed: Bool = await withCheckedContinuation { continuation in
             editor.flushPersistence { continuation.resume(returning: $0) }
         }
@@ -261,12 +246,12 @@ import SQLite3
             _ = try await manager.operation(["type": "delete_permanently", "id": created])
         }
         // Export reads the latest accepted working edit even before autosave.
-        try await edit(editor, ["type": "set_brush_size", "value": 92])
+        try await editor.apply(["type": "set_brush_size", "value": 92])
         let current = try await manager.read(["type": "export", "id": original])
         let backup = try JSON.decode(current["text"].string)
         let working = backup["working"]
         precondition(working["tools"]["overrides"][String(working["preset"].uint)]["size"].number == 92)
-        try await edit(editor, ["type": "set_brush_size", "value": 91])
+        try await editor.apply(["type": "set_brush_size", "value": 91])
         _ = try await manager.read(["type": "storage", "clear_older": false, "apply": false])
         _ = try await manager.perform(["type": "storage", "clear_older": false, "apply": true])
         _ = try await manager.read(["type": "interrupted"])

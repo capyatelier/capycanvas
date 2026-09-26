@@ -26,16 +26,9 @@ import Vision
     @MainActor static func run() async throws {
         for platform: UInt32 in [0, 1] {
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
-            func wait(_ description: String, _ ready: () -> Bool) async throws {
-                let deadline = Date().addingTimeInterval(10)
-                while !ready() {
-                    try require(Date() < deadline && store.failure == nil, store.failure ?? description)
-                    try await drain(0.02)
-                }
-            }
-            try await wait("Initial Settings owner") { !store.state.isNull && !store.catalog.isNull }
+            try await wait("Initial Settings owner", failure: { store.failure }) { !store.state.isNull && !store.catalog.isNull }
             store.invoke("about")
-            try await wait("About page") { store.snapshot["preferences"]["page"].string == "about" }
+            try await wait("About page", failure: { store.failure }) { store.snapshot["preferences"]["page"].string == "about" }
             let layers = store.state["layers"].stableKey
             let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 900, height: 700),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -74,7 +67,7 @@ import Vision
                         try event(type, at: point, marker: host, number: count + 1)
                         try await drain()
                     }
-                    try await wait("Settings link callback") { urls.count == count + 1 }
+                    try await wait("Settings link callback", failure: { store.failure }) { urls.count == count + 1 }
                     try require(urls.last?.absoluteString == expected, "Settings must deliver the shared public URL")
                     try await drain(0.2)
                     let errorVisible = try text(in: host, capture: "\(platform)-\(id)-after-\(success)")

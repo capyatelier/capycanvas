@@ -87,10 +87,6 @@ extension XCTestCase {
             workspaceActivate(item)
         }
         func pixels() -> Data { editorPixels(in: app) }
-        func expectPixels(_ expected: Data) {
-            expectation(for: NSPredicate { _, _ in pixels() == expected }, evaluatedWith: app)
-            waitForExpectations(timeout: 15)
-        }
         func attach(_ name: String) { attachEditor(in: app, name: name) }
         func value(_ id: String) -> XCUIElement { app.buttons["number-value-tool-transform_" + id] }
         func reveal(_ element: XCUIElement) { revealTransform(element, in: app) }
@@ -105,12 +101,12 @@ extension XCTestCase {
         let painted = pixels()
         XCTAssertNotEqual(painted, paper)
         attach("selection-filled")
-        command("Undo"); expectPixels(paper)
-        command("Redo"); expectPixels(painted)
+        command("Undo"); expectPixels(paper, in: app)
+        command("Redo"); expectPixels(painted, in: app)
         menu("Select", "deselect", "Deselect pixels")
         // Selection changes have their own Undo entry. Restore it before
         // checking that cancelling a transform adds no artwork history.
-        command("Undo"); expectPixels(painted)
+        command("Undo"); expectPixels(painted, in: app)
 
         for apply in [false, true] {
             menu("Edit", "scale_rotate", "Transform")
@@ -132,21 +128,21 @@ extension XCTestCase {
             XCTAssertTrue(app.staticTexts["number-error-tool-transform_width"].waitForNonExistence(timeout: 5))
             edit("height", "100")
             edit("x", "4096")
-            expectPixels(paper)
+            expectPixels(paper, in: app)
             attach(apply ? "transform-before-apply" : "transform-before-cancel")
             let finish = app.buttons["tool-action-" + (apply ? "apply_transform" : "cancel_transform")]
             reveal(finish); workspaceActivate(finish)
             XCTAssertTrue(value("x").waitForNonExistence(timeout: 5))
             if apply {
-                expectPixels(paper)
-                command("Undo"); expectPixels(painted)
-                command("Redo"); expectPixels(paper)
+                expectPixels(paper, in: app)
+                command("Undo"); expectPixels(painted, in: app)
+                command("Redo"); expectPixels(paper, in: app)
                 attach("transform-redone")
             } else {
-                expectPixels(painted)
+                expectPixels(painted, in: app)
                 // Cancel must leave the existing fill as the next Undo entry.
-                command("Undo"); expectPixels(paper)
-                command("Redo"); expectPixels(painted)
+                command("Undo"); expectPixels(paper, in: app)
+                command("Redo"); expectPixels(painted, in: app)
             }
         }
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

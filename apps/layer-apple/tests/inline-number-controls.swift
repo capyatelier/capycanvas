@@ -17,20 +17,13 @@ import SwiftUI
                 precondition(Date() < deadline, "Inline control startup timed out")
                 try await Task.sleep(for: .milliseconds(5))
             }
-            func edit(_ action: [String: Any]) async throws {
-                try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-                    store.edit(action) { error in
-                        if let error { c.resume(throwing: HostFailure(message: error)) } else { c.resume() }
-                    }
-                }
-            }
             let control = store.catalog["layer_opacity"]
             for theme in ["light", "dark"] {
-                try await edit(["type": "set_theme", "theme": theme])
+                try await store.apply(["type": "set_theme", "theme": theme])
                 for panelWidth: CGFloat in [160, 226, 320] {
                     let width = (panelWidth - 18) / 2, height: CGFloat = 36
                     for value in [0.0, 0.5, 1.0] {
-                        try await edit(["type": "set_layer_opacity", "opacity": value])
+                        try await store.apply(["type": "set_layer_opacity", "opacity": value])
                         for enabled in [true, false] {
                             let geometry = InlineGeometry(), palette = EditorPalette(source: store.state["palette"])
                             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width + 12, height: height),

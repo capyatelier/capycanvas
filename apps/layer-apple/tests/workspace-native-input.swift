@@ -2,13 +2,6 @@ import AppKit
 import SwiftUI
 
 @main final class WorkspaceNativeInputChecks: NativeWorkspaceInputFixture {
-    @MainActor static func wait(_ label: String, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(15)
-        while !ready() {
-            try require(Date() < deadline, "Timed out: \(label)")
-            try await drain(0.01)
-        }
-    }
     @MainActor static func run(_ platform: UInt32) async throws {
         let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
         try await wait("Initial models") { !store.state.isNull }
@@ -49,11 +42,7 @@ import SwiftUI
             return CGPoint(x: bounds.midX, y: bounds.midY)
         }
         func action(_ value: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                store.edit(value) { error in
-                    if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-                }
-            }
+            try await store.apply(value)
             try await drain()
         }
         var start = center(item)

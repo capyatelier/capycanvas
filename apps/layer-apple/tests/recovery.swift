@@ -3,13 +3,6 @@ import AppKit
 import QuartzCore
 
 @main struct RecoveryChecks {
-    @MainActor static func wait(_ description: String, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(45)
-        while !condition() {
-            precondition(Date() < deadline, description)
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
     static func io<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             NativeProjectTask.io.async {
@@ -22,24 +15,14 @@ import QuartzCore
         await withCheckedContinuation { continuation in store.flushPersistence { continuation.resume(returning: $0) } }
     }
     @MainActor static func attach(_ store: EditorStore) async throws -> CAMetalLayer {
-        let layer = CAMetalLayer(); layer.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
-        store.native!.attach(layer, width: 128, height: 128, scale: 1)
+        let layer = attachSurface(store, CGSize(width: 128, height: 128))
         // Complete offscreen startup. Recovery below still
         // has no display link or frame after pen-up, preserving that regression.
-        let deadline = Date().addingTimeInterval(45)
-        while !store.snapshot["shaders_ready"].bool || store.workspaceLibrary?.ready != true {
-            precondition(Date() < deadline && store.failure == nil, store.failure ?? "Native startup timed out")
-            let ready = await withCheckedContinuation { continuation in
-                store.native!.flushPersistence { continuation.resume(returning: $0) }
-            }
-            precondition(ready, "Offscreen renderer preparation failed")
-            let now = FrameTrace.now()
-            await withCheckedContinuation { continuation in
-                store.native!.frame(now: now, target: now + 16_666_667) { _, _, _ in continuation.resume() }
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        precondition(store.failure == nil, store.failure ?? "")
+        try await wait("Native startup", failure: { store.failure }, step: {
+            try await prepare(store.native!, "Native startup")
+            await frame(store.native!)
+        }) { store.snapshot["shaders_ready"].bool && store.workspaceLibrary?.ready == true }
+        try require(store.failure == nil, store.failure ?? "")
         return layer
     }
     @MainActor static func releaseDuringFlush(platform: UInt32, root: URL) async throws {

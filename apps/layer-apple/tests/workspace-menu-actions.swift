@@ -3,21 +3,6 @@ import Foundation
 /// Exercise actual shared menu payloads through the Apple editor and service.
 /// No OS menu automation, user storage, renderer, or visible windows are needed.
 @main struct WorkspaceMenuActionChecks {
-    @MainActor static func wait(_ label: String, until ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(15)
-        while !ready() {
-            guard Date() < deadline else { throw HostFailure(message: "Timed out: \(label)") }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-    }
-    @MainActor static func edit(_ store: EditorStore, _ action: JSON) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            store.edit(action.object) { error in
-                if let error { continuation.resume(throwing: HostFailure(message: error)) }
-                else { continuation.resume() }
-            }
-        }
-    }
     @MainActor static func query(_ store: EditorStore, _ request: [String: Any]) async -> JSON {
         await withCheckedContinuation { continuation in
             store.query(request) { continuation.resume(returning: $0) }
@@ -80,8 +65,8 @@ import Foundation
             precondition(library.ready, library.error ?? "Startup failed")
             // Give reset/history something to operate on and retain across
             // cancellation. This changes the workspace, not the document.
-            try await edit(editor, JSON(["type": "set_brush_size", "value": 31]))
-            try await edit(editor, JSON(["type": "customize", "action": ["type": "set_panel_visible", "panel": "sizes", "visible": false]]))
+            try await editor.apply(["type": "set_brush_size", "value": 31])
+            try await editor.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "sizes", "visible": false]])
             let initial = try await capture(editor)
             let document = editor.state["layers"].stableKey
             let originalID = library.status["active_id"].string
@@ -91,7 +76,7 @@ import Foundation
                 let action = actions[key]!.first {
                     key != "switch" || $0["command"]["id"].string != originalID
                 }!
-                try await edit(editor, action)
+                try await editor.apply(action.object)
                 if let title = promptTitles[key] {
                     try await wait("\(key) prompt") { manager.prompt != nil || manager.error != nil }
                     precondition(manager.prompt?["title"].string == title, "Wrong form for \(key): \(manager.prompt?.stableKey ?? manager.error ?? "nil")")
@@ -124,7 +109,7 @@ import Foundation
             // Return using the newly projected menu and verify the original
             // working tools/history survived switching away and back.
             let returning = await menuActions(editor)["switch"]!.first { $0["command"]["id"].string == originalID }!
-            try await edit(editor, returning)
+            try await editor.apply(returning.object)
             try await wait("switch back") { library.status["active_id"].string == originalID && acknowledged(editor) }
             let restored = try await capture(editor)
             // Storage timestamps newly committed revisions on their first

@@ -53,10 +53,6 @@ extension XCTestCase {
     }
     @MainActor private func activate(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(element.exists, "Missing layer control: \(element)", file: file, line: line)
-        #if os(macOS)
-        element.click()
-        #else
-        element.tap()
-        #endif
+        element.clickOrTap()
     }
 }

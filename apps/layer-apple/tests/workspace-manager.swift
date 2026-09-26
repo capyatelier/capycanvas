@@ -3,20 +3,6 @@ import AppKit
 import SwiftUI
 
 @main struct WorkspaceManagerChecks {
-    @MainActor static func wait(_ label: String, until ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(15)
-        while !ready() {
-            guard Date() < deadline else { throw HostFailure(message: "Timed out: \(label)") }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-    }
-    @MainActor static func edit(_ store: EditorStore, _ action: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            store.edit(action) { error in
-                if let error { continuation.resume(throwing: HostFailure(message: error)) } else { continuation.resume() }
-            }
-        }
-    }
     @MainActor static func form(_ manager: WorkspaceManager, _ action: [String: Any], name: String? = nil,
         choice: String? = nil, retryName: String? = nil, cancel: Bool = false) async throws {
         var finished = false
@@ -56,7 +42,7 @@ import SwiftUI
             precondition(original == defaults[1]["id"].string)
             // Exercise the actual host request, rather than assuming the menu's
             // visible label means the editor/service action is connected.
-            try await edit(editor, ["type": "workspace_manager", "command": ["type": "manage"]])
+            try await editor.apply(["type": "workspace_manager", "command": ["type": "manage"]])
             try await wait("manager request acknowledgement") {
                 manager.presented && !manager.view.isNull && !editor.state["requests"].array.contains { $0["kind"]["type"].string == "workspace" }
             }
@@ -75,8 +61,8 @@ import SwiftUI
             try await form(manager, ["type": "new"], name: "Inking")
             let inking = library.status["active_id"].string
             precondition(inking != original && !manager.presented)
-            try await edit(editor, ["type": "set_brush_size", "value": 31])
-            try await edit(editor, ["type": "customize", "action": ["type": "set_panel_visible", "panel": "sizes", "visible": false]])
+            try await editor.apply(["type": "set_brush_size", "value": 31])
+            try await editor.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "sizes", "visible": false]])
             let source = try await captureSession(editor)
             try await form(manager, ["type": "new"], name: "Inking", retryName: "Sketching")
             let sketching = library.status["active_id"].string
@@ -88,8 +74,8 @@ import SwiftUI
                 source["capture"]["history"]["revisions"][sourceRevision]["layout"].raw))
             precondition(created["capture"]["history"]["undo"].array.isEmpty, "A new workspace starts independent history")
             try await manager.run(JSON(["type": "switch", "value": original]))
-            try await edit(editor, ["type": "set_brush_size", "value": 67])
-            try await edit(editor, ["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
+            try await editor.apply(["type": "set_brush_size", "value": 67])
+            try await editor.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
             try await selectionPreview(editor, page: "workspaces", target: inking, cancel: true)
             try await manager.show("workspaces")
             // Editing library metadata must remain available while a canvas
@@ -129,7 +115,7 @@ import SwiftUI
             try await wait("other window") { other.workspaceLibrary!.ready }
             _ = try await other.workspaceLibrary!.operation(["type": "switch", "id": defaults[0]["id"].raw])
             let otherID = other.workspaceLibrary!.status["active_id"].string
-            try await edit(other, ["type": "set_brush_size", "value": 113])
+            try await other.apply(["type": "set_brush_size", "value": 113])
             var focused = false
             other.focusWindow = { focused = true }
             try await manager.run(JSON(["type": "switch_to_window", "value": otherID]))
@@ -163,9 +149,9 @@ import SwiftUI
                 if action == "delete_toolbar" {
                     precondition(editor.snapshot["toolbar_prompt"]["message"].string.contains(library.status["name"].string))
                 } else {
-                    try await edit(editor, ["type": "customize", "action": ["type": "toolbar_name", "name": action == "rename_toolbar" ? "Renamed Ink" : "Copied Ink"]])
+                    try await editor.apply(["type": "customize", "action": ["type": "toolbar_name", "name": action == "rename_toolbar" ? "Renamed Ink" : "Copied Ink"]])
                 }
-                try await edit(editor, ["type": "customize", "action": ["type": "confirm_toolbar"]])
+                try await editor.apply(["type": "customize", "action": ["type": "confirm_toolbar"]])
                 precondition(editor.snapshot["toolbar_prompt"].isNull)
                 try await library.flush()
                 try await manager.show("this_workspace")
@@ -189,7 +175,7 @@ import SwiftUI
             precondition(prepared && !library.ready)
             await withCheckedContinuation { continuation in editor.cancelPreparedClose { continuation.resume() } }
             precondition(library.ready && !library.readOnly)
-            try await edit(editor, ["type": "set_brush_size", "value": 89])
+            try await editor.apply(["type": "set_brush_size", "value": 89])
             try await library.flush()
             precondition(!library.hasUnsavedChanges)
             // UIKit's discard callback releases only its matching scene. The
@@ -199,7 +185,7 @@ import SwiftUI
             try await wait("discarded scene release") { !other.workspaceLibrary!.ready }
             let released = try await library.read(["type": "load", "id": otherID])
             precondition(released["claim"].isNull && library.ready)
-            try await edit(editor, ["type": "set_brush_size", "value": 95])
+            try await editor.apply(["type": "set_brush_size", "value": 95])
             await library.detach()
             let saved = try await other.workspaceLibrary!.read(["type": "load", "id": library.status["active_id"].raw])
             precondition(saved["claim"].isNull)
@@ -278,7 +264,7 @@ import SwiftUI
         precondition(restored["capture"]["history"]["undo"].array.count == before["capture"]["history"]["undo"].array.count + 1)
         precondition(SnapshotProjection.equal(restored["capture"]["working"].raw, before["capture"]["working"].raw))
         precondition(library.status["active_id"].string == id && editor.state["layers"].stableKey == document)
-        try await edit(editor, ["type": "invoke", "command": "undo_workspace"])
+        try await editor.apply(["type": "invoke", "command": "undo_workspace"])
         let undone = try await captureSession(editor)
         precondition(undone["capture"]["history"]["current"].string == current)
         try await manager.show("workspaces")
@@ -318,9 +304,9 @@ import SwiftUI
         precondition(editor.state["workspace"]["layout"].stableKey == baseline.stableKey)
         precondition(restored["capture"]["history"]["undo"].array.count == before["capture"]["history"]["undo"].array.count + 1)
         precondition(SnapshotProjection.equal(restored["capture"]["working"].raw, before["capture"]["working"].raw))
-        try await edit(editor, ["type": "invoke", "command": "undo_workspace"])
+        try await editor.apply(["type": "invoke", "command": "undo_workspace"])
         precondition(editor.state["workspace"]["layout"].stableKey == original)
-        try await edit(editor, ["type": "invoke", "command": "redo_workspace"])
+        try await editor.apply(["type": "invoke", "command": "redo_workspace"])
         precondition(editor.state["workspace"]["layout"].stableKey == baseline.stableKey)
         precondition(editor.state["layers"].stableKey == layers)
     }

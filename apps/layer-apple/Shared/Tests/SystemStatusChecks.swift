@@ -105,11 +105,7 @@ extension XCTestCase {
         app.launch()
         func activate(_ element: XCUIElement) {
             XCTAssertTrue(element.waitForExistence(timeout: 15))
-            #if os(macOS)
-            element.click()
-            #else
-            element.tap()
-            #endif
+            element.clickOrTap()
         }
         let clockItem = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "header-item-", "Clock")).firstMatch
         XCTAssertTrue(clockItem.waitForExistence(timeout: 20), "Clock remains editable even while windowed")

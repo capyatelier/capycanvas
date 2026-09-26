@@ -34,18 +34,10 @@ import SwiftUI
             }
             precondition(store.failure == nil, store.failure ?? "")
         }
-        func action(_ value: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                store.edit(value) { error in
-                    if let error { continuation.resume(throwing: NSError(domain: error, code: 1)) }
-                    else { continuation.resume() }
-                }
-            }
-        }
         try await wait("Initial state") { !store.state.isNull }
-        try await action(["type": "set_theme", "theme": theme])
+        try await store.apply(["type": "set_theme", "theme": theme])
         store.native?.resize(width: 1200, height: 870, scale: 1)
-        try await action(["type": "invoke", "command": "fit_canvas"])
+        try await store.apply(["type": "invoke", "command": "fit_canvas"])
         guard let groupModel = store.snapshot["layout"]["groups"].array.first(where: {
             $0["panels"].array.contains { $0.string == "brushes" }
         }) else {
@@ -53,15 +45,15 @@ import SwiftUI
         }
         let group = groupModel["id"].uint
         for panel in ["toolbar", "navigator"] {
-            try await action(["type": "move_panel", "panel": panel,
+            try await store.apply(["type": "move_panel", "panel": panel,
                               "target": ["kind": "tab", "group": group], "viewport": [1200,870]])
         }
-        try await action(["type": "customize", "action": ["type": "set_tab_style", "group": group, "style": "icon_name"]])
+        try await store.apply(["type": "customize", "action": ["type": "set_tab_style", "group": group, "style": "icon_name"]])
         // A user-sized column deliberately clips the final tab in both hosts.
         let divider = store.snapshot["layout"]["dividers"].array.first { $0["band"].bool && !$0["reversed"].bool && $0["axis"].string == "horizontal" }!
-        try await action(["type": "nudge_divider", "id": divider["id"].raw, "forward": false, "viewport": [1200, 870]])
+        try await store.apply(["type": "nudge_divider", "id": divider["id"].raw, "forward": false, "viewport": [1200, 870]])
         if collapsed {
-            try await action(["type": "customize", "action": ["type": "set_column_collapsed", "group": group, "collapsed": true]])
+            try await store.apply(["type": "customize", "action": ["type": "set_column_collapsed", "group": group, "collapsed": true]])
         }
         let root = WorkspacePanels(store: store, workspace: store.workspace)
             .frame(width: 1200, height: 870).coordinateSpace(name: "editor-workspace")
@@ -77,7 +69,7 @@ import SwiftUI
             .onPreferenceChange(WorkspaceTabFrames.self) { store.workspace.tabFrames = $0 }
         window.contentView = NSHostingView(rootView: root)
         if collapsed {
-            try await action(["type": "customize", "action": ["type": "toggle_column_drawer", "group": group, "panel": "toolbar"]])
+            try await store.apply(["type": "customize", "action": ["type": "toggle_column_drawer", "group": group, "panel": "toolbar"]])
         }
         func frames() -> [WorkspaceTabFrame] { (0..<3).compactMap { store.workspace.tabFrames["\(group):\($0)"] } }
         var previous: [WorkspaceTabFrame] = [], stableSince = Date()
@@ -138,16 +130,16 @@ import SwiftUI
             store.workspace.tabSlide.grab == nil && store.state["workspace"].stableKey != before
         }
         let after = store.state["workspace"].stableKey
-        try await action(["type": "invoke", "command": "undo_workspace"])
+        try await store.apply(["type": "invoke", "command": "undo_workspace"])
         precondition(store.state["workspace"].stableKey == before)
-        try await action(["type": "invoke", "command": "redo_workspace"])
+        try await store.apply(["type": "invoke", "command": "redo_workspace"])
         precondition(store.state["workspace"].stableKey == after)
         // Cancellation and a new drag can overlap owner acknowledgements. An
         // old completion must not erase the newer gesture's frozen geometry.
-        try await action(["type": "invoke", "command": "undo_workspace"])
+        try await store.apply(["type": "invoke", "command": "undo_workspace"])
         if collapsed {
             // Workspace history retires transient drawers; reopen for the next gesture.
-            try await action(["type": "customize", "action": ["type": "toggle_column_drawer", "group": group, "panel": "toolbar"]])
+            try await store.apply(["type": "customize", "action": ["type": "toggle_column_drawer", "group": group, "panel": "toolbar"]])
         }
         previous = []; stableSince = Date()
         try await wait("Restored tab measurements") {
@@ -170,7 +162,7 @@ import SwiftUI
         store.workspace.cancel(item)
         try await wait("Cancellation retires the preview") { store.workspace.tabSlide.grab == nil }
         precondition(store.state["workspace"].stableKey == before)
-        try await action(["type": "customize", "action": ["type": "set_tab_style", "group": group, "style": "icon"]])
+        try await store.apply(["type": "customize", "action": ["type": "set_tab_style", "group": group, "style": "icon"]])
         try await wait("Shared icon-only tab widths") { frames().count == 3 && frames().allSatisfy { $0.bounds.width == 36 } }
         print("PASS: platform \(platform), \(theme) \(collapsed ? "drawer" : "docked") tabs: clipped natural widths, frozen hits, reversal, release, undo/redo, cancellation/restart, 36-point icon tabs")
     }

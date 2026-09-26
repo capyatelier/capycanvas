@@ -22,9 +22,6 @@ extension XCTestCase {
         let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
         let title = editorDocumentTitle(in: app)
         let accept = app.windows.buttons["OKButton"].firstMatch
-        func goTo(_ url: URL) {
-            app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(url.path + "\n")
-        }
         func outline(gap: Bool) throws -> Data {
             let bytes = Data((0..<64).flatMap { y in (0..<64).flatMap { x -> [UInt8] in
                 let wall = (16..<48).contains(x) && (16..<48).contains(y)
@@ -41,7 +38,7 @@ extension XCTestCase {
             let output = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
             CGImageDestinationAddImage(output, image, nil); XCTAssertTrue(CGImageDestinationFinalize(output))
             workspaceActivate(app.buttons["layer-Import image as layer"])
-            XCTAssertTrue(accept.waitForExistence(timeout: 15)); goTo(url); workspaceActivate(accept)
+            XCTAssertTrue(accept.waitForExistence(timeout: 15)); goToFolder(url, in: app); workspaceActivate(accept)
             XCTAssertTrue(accept.waitForNonExistence(timeout: 15))
             XCTAssertTrue(app.staticTexts[url.lastPathComponent].firstMatch.waitForExistence(timeout: 15))
             return try pixels()
@@ -52,7 +49,7 @@ extension XCTestCase {
             let url = root.appendingPathComponent("Result-\(exportIndex).png")
             editorMenu(in: app, menu: "File", id: "export_document", label: "Export…")
             chooseExportDestination(in: app)
-            XCTAssertTrue(accept.waitForExistence(timeout: 15)); goTo(root)
+            XCTAssertTrue(accept.waitForExistence(timeout: 15)); goToFolder(root, in: app)
             let name = app.textFields["saveAsNameTextField"]
             workspaceActivate(name); name.typeKey("a", modifierFlags: .command); name.typeText(url.lastPathComponent)
             workspaceActivate(accept); XCTAssertTrue(accept.waitForNonExistence(timeout: 15))
@@ -273,10 +270,6 @@ extension XCTestCase {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.9,0.25,0.2,1]},{"type":"color","action":{"op":"swap"}},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)
         func pixels() -> Data { editorPixels(in: app) }
-        func expectPixels(_ expected: Data) {
-            expectation(for: NSPredicate { _, _ in pixels() == expected }, evaluatedWith: app)
-            waitForExpectations(timeout: 15)
-        }
         func invert() { editorMenu(in: app, menu: "Select", id: "invert_selection", label: "Invert selection") }
         func fill() { editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection") }
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
@@ -285,15 +278,15 @@ extension XCTestCase {
         waitForExpectations(timeout: 15)
         let blue = pixels()
         workspaceActivate(app.buttons["color-swap"])
-        invert(); fill(); expectPixels(blue)
+        invert(); fill(); expectPixels(blue, in: app)
         attachEditor(in: app, name: "selection-inverted-empty")
         invert(); fill()
         expectation(for: NSPredicate { _, _ in let p = pixels(); return Int(p[0]) > Int(p[2]) + 50 }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
         let red = pixels()
         attachEditor(in: app, name: "selection-inverted-full")
-        editorHistory("Undo", in: app); expectPixels(blue)
-        editorHistory("Redo", in: app); expectPixels(red)
+        editorHistory("Undo", in: app); expectPixels(blue, in: app)
+        editorHistory("Redo", in: app); expectPixels(red, in: app)
         editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }

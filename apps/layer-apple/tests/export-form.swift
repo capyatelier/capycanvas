@@ -6,32 +6,17 @@ import SwiftUI
 @main final class ExportFormChecks: NativeWorkspaceInputFixture {
     @MainActor static func run() async throws {
         let store = EditorStore(platform: 1, persistence: EditorPersistence(root: nil), managedWorkspaces: false)
-        let native = store.native!, surface = CAMetalLayer()
-        surface.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
-        native.attach(surface, width: 128, height: 128, scale: 1)
+        let native = store.native!, surface = attachSurface(store, CGSize(width: 128, height: 128))
         defer { native.detach(); withExtendedLifetime(surface) {} }
         func wait(_ label: String, _ ready: () -> Bool) async throws {
-            let deadline = Date().addingTimeInterval(45)
-            while !ready() {
-                try require(Date() < deadline && store.failure == nil, store.failure ?? "Timed out: \(label)")
-                let now = FrameTrace.now()
-                await withCheckedContinuation { done in native.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() } }
-                try await drain(0.01)
-            }
-        }
-        func edit(_ value: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                store.edit(value) { error in
-                    if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-                }
-            }
+            try await CapyTest.wait(label, failure: { store.failure }, step: { await frame(native) }, ready)
         }
         try await wait("Metal startup") { store.snapshot["shaders_ready"].bool }
         var destinations: [String] = []
         store.projectFiles = ProjectFiles(store: store, dialogs: .init(open: { _, done in done([]) }, save: { _, type, done in
             destinations.append(type.identifier); done(nil)
         }, create: { _, done in done(JSON(["extent": [64, 48], "color": ["space": "DisplayP3", "depth": "U16"], "background": "White"])) }, exportOptions: { _ in }))
-        try await edit(["type": "invoke", "command": "new_document"])
+        try await store.apply(["type": "invoke", "command": "new_document"])
         try await wait("New drawing") { !store.projectFiles.busy && store.state["requests"].array.isEmpty }
         let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 600, height: 720), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -45,7 +30,7 @@ import SwiftUI
             try key("\r", code: 36, window: window); try await drain()
         }
         for draft in ["0", "not a number"] { for format in ["Png", "Tiff"] {
-            try await edit(["type": "invoke", "command": "export_document"])
+            try await store.apply(["type": "invoke", "command": "export_document"])
             try await wait("Export loaded") { store.projectFiles.exportEditor?.loaded == true }
             let editor = store.projectFiles.exportEditor!
             let host = NSHostingView(rootView: ExportForm(editor: editor)); window.contentView = host
@@ -75,7 +60,7 @@ import SwiftUI
             try require(!store.state["document_file"]["modified"].bool, "Export cancellation must not edit the drawing")
             window.contentView = nil
         } }
-        try await edit(["type": "invoke", "command": "export_document"])
+        try await store.apply(["type": "invoke", "command": "export_document"])
         try await wait("JPEG export loaded") { store.projectFiles.exportEditor?.loaded == true }
         let editor = store.projectFiles.exportEditor!
         let host = NSHostingView(rootView: ExportForm(editor: editor)); window.contentView = host

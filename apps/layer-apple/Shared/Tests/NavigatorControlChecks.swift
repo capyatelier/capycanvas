@@ -3,14 +3,6 @@ import ImageIO
 
 extension XCTestCase {
     @MainActor func checkNavigatorAndDiagnostics(in app: XCUIApplication) {
-        func activate(_ element: XCUIElement) {
-            XCTAssertTrue(element.waitForExistence(timeout: 10))
-            #if os(macOS)
-            element.click()
-            #else
-            element.tap()
-            #endif
-        }
         func text(_ element: XCUIElement) -> String {
             if let value = element.value as? String, !value.isEmpty { return value }
             return element.label
@@ -52,11 +44,11 @@ extension XCTestCase {
         waitForExpectations(timeout: 5)
         let painted = pixels(overview, "navigator-painted")
         XCTAssertNotEqual(painted, blank, "Ink must reach the native live overview after pen-up")
-        activate(undo)
+        workspaceActivate(undo)
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: redo)
         waitForExpectations(timeout: 5)
         XCTAssertEqual(pixels(overview, "navigator-undone"), blank, "Undo must restore the overview's actual pixels")
-        activate(redo)
+        workspaceActivate(redo)
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: undo)
         waitForExpectations(timeout: 5)
         XCTAssertEqual(pixels(overview, "navigator-redone"), painted, "Redo must restore the final ink in the overview")
@@ -69,11 +61,11 @@ extension XCTestCase {
         let status = app.staticTexts["camera-status"]
         let original = text(status)
         XCTAssertFalse(original.isEmpty, "The native camera readout must be accessible")
-        activate(app.buttons["navigator-zoom_in"])
+        workspaceActivate(app.buttons["navigator-zoom_in"])
         expectation(for: NSPredicate { _, _ in text(status) != original }, evaluatedWith: status)
         waitForExpectations(timeout: 5)
-        activate(app.buttons["navigator-rotate_right"])
-        activate(app.buttons["navigator-flip_horizontal"])
+        workspaceActivate(app.buttons["navigator-rotate_right"])
+        workspaceActivate(app.buttons["navigator-flip_horizontal"])
         let start = overview.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = overview.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.55))
         #if os(macOS)
@@ -82,11 +74,11 @@ extension XCTestCase {
         start.press(forDuration: 0.1, thenDragTo: end)
         #endif
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
-        activate(app.buttons["panel-tab-stats"])
+        workspaceActivate(app.buttons["panel-tab-stats"])
         let frames = app.staticTexts["stats-value-2"]
         XCTAssertTrue(frames.waitForExistence(timeout: 10))
         XCTAssertGreaterThan(Int(text(frames)) ?? 0, 0)
-        activate(app.buttons["panel-tab-navigator"])
+        workspaceActivate(app.buttons["panel-tab-navigator"])
         XCTAssertTrue(overview.waitForExistence(timeout: 10))
         expectation(for: NSPredicate(format: "value == %@", "Live preview"), evaluatedWith: overview)
         waitForExpectations(timeout: 10)

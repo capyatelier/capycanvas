@@ -4,24 +4,12 @@ import AppKit
 import SwiftUI
 
 @main final class LayerRowInputChecks: NativeWorkspaceInputFixture {
-    @MainActor static func edit(_ store: EditorStore, _ value: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            store.edit(value) { error in
-                if let error { continuation.resume(throwing: HostFailure(message: error)) }
-                else { continuation.resume() }
-            }
-        }
-    }
-    @MainActor static func wait(_ label: String, until ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(10)
-        while !ready() { try require(Date() < deadline, label); try await drain(0.01) }
-    }
     @MainActor static func order(_ store: EditorStore) -> [UInt64] { store.state["layers"].array.map { $0["id"].uint } }
     @MainActor static func run(_ platform: UInt32) async throws {
         let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
         try await wait("Layer startup timed out") { order(store).count == 2 }
         let original = order(store)[0]
-        try await edit(store, ["type": "layer", "action": ["op": "new", "group": false, "clipped": false]])
+        try await store.apply(["type": "layer", "action": ["op": "new", "group": false, "clipped": false]])
         let initial = order(store), added = initial[0]
         let window = NSWindow(contentRect: CGRect(x: 160, y: 160, width: 380, height: 260),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -47,7 +35,7 @@ import SwiftUI
         try event(.leftMouseUp, at: start, marker: marker, number: 1002); try await drain()
         blocker.removeFromSuperview()
         try require(!admittedCoveredRow, "A covered layer row must not take another view's contact")
-        try await edit(store, ["type": "layer", "action": ["op": "select", "id": original, "mask": false]])
+        try await store.apply(["type": "layer", "action": ["op": "select", "id": original, "mask": false]])
         window.setContentSize(CGSize(width: 380, height: 90)); try await drain()
         guard let scroll = marker.enclosingScrollView else { throw HostFailure(message: "Layer scroll view missing") }
         let scrollStart = body(added), scrollEnd = CGPoint(x: scrollStart.x, y: scrollStart.y - 60)
@@ -71,7 +59,7 @@ import SwiftUI
         try event(.leftMouseDown, at: delete, marker: marker, number: 1013)
         try event(.leftMouseUp, at: delete, marker: marker, number: 1014)
         try await wait("Revealed Delete must invoke the shared deletion action") { !order(store).contains(original) }
-        try await edit(store, ["type": "invoke", "command": "undo"])
+        try await store.apply(["type": "invoke", "command": "undo"])
         try require(order(store) == initial, "One Undo restores swipe deletion")
         try await drain()
         try event(.leftMouseDown, at: start, marker: marker, number: 1, tablet: true); try await drain(0.02)
@@ -87,9 +75,9 @@ import SwiftUI
         try event(.leftMouseUp, at: end, marker: marker, number: 6, tablet: true)
         try await wait("Pen body drop did not publish shared order") { order(store)[0] == original }
         let moved = order(store)
-        try await edit(store, ["type": "invoke", "command": "undo"])
+        try await store.apply(["type": "invoke", "command": "undo"])
         try require(order(store) == initial, "One Undo must restore the completed row move")
-        try await edit(store, ["type": "invoke", "command": "redo"])
+        try await store.apply(["type": "invoke", "command": "redo"])
         try require(order(store) == moved, "Redo must restore the same row move")
         try await drain()
         start = body(added); end = CGPoint(x: start.x, y: model.frames[original]!.row.minY + 2)
@@ -116,11 +104,11 @@ import SwiftUI
         try require(!model.contact.move(to: body(added)) && model.drag == nil,
             "Holding Paper must never make the background anchor draggable")
         model.cancel()
-        try await edit(store, ["type": "layer", "action": ["op": "begin_rename", "id": added]])
+        try await store.apply(["type": "layer", "action": ["op": "begin_rename", "id": added]])
         try require(model.source(at: body(added)) == nil, "Native name editing owns its contact")
-        try await edit(store, ["type": "layer", "action": ["op": "cancel_rename"]])
-        try await edit(store, ["type": "layer", "action": ["op": "select", "id": original, "mask": false]])
-        try await edit(store, ["type": "layer", "action": ["op": "toggle_selection", "id": added]])
+        try await store.apply(["type": "layer", "action": ["op": "cancel_rename"]])
+        try await store.apply(["type": "layer", "action": ["op": "select", "id": original, "mask": false]])
+        try await store.apply(["type": "layer", "action": ["op": "toggle_selection", "id": added]])
         let selected = Set(store.state["layers"].array.filter { $0["selected"].bool }.map { $0["id"].uint })
         model.openMenu(id: original, mask: false)
         try await wait("Shared context menu did not load") { !model.menu.isNull }
@@ -128,8 +116,8 @@ import SwiftUI
             && store.state["layer_tools"]["editing_layer"]["id"].uint == original,
             "Opening a checked row's menu preserves multiselection and sets the drawing target")
         model.closeMenu()
-        try await edit(store, ["type": "layer", "action": ["op": "toggle_selection", "id": added]])
-        try await edit(store, ["type": "layer", "action": ["op": "delete_selected"]])
+        try await store.apply(["type": "layer", "action": ["op": "toggle_selection", "id": added]])
+        try await store.apply(["type": "layer", "action": ["op": "delete_selected"]])
         model.openMenu(id: original, mask: false)
         try require(model.menu.isNull && model.menuSource == nil, "A removed row cannot open a menu")
         try require(store.failure == nil, store.failure ?? "")

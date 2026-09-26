@@ -12,22 +12,15 @@ import SwiftUI
             try require(Date() < deadline, "Color owner did not start")
             try await drain(0.02)
         }
-        func edit(_ action: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-                store.edit(action) { error in
-                    if let error { c.resume(throwing: HostFailure(message: error)) } else { c.resume() }
-                }
-            }
-        }
-        try await edit(["type": "color", "action": ["op": "select", "slot": "background"]])
-        try await edit(["type": "set_color", "rgba": [0.1, 0.7, 0.3, 0.75]])
-        try await edit(["type": "color", "action": ["op": "select", "slot": "foreground"]])
-        try await edit(["type": "set_color", "rgba": [0.8, 0.2, 0.4, 0.5]])
+        try await store.apply(["type": "color", "action": ["op": "select", "slot": "background"]])
+        try await store.apply(["type": "set_color", "rgba": [0.1, 0.7, 0.3, 0.75]])
+        try await store.apply(["type": "color", "action": ["op": "select", "slot": "foreground"]])
+        try await store.apply(["type": "set_color", "rgba": [0.8, 0.2, 0.4, 0.5]])
         var fixtures: [JSON] = []
         for theme in ["light", "dark"] {
-            try await edit(["type": "set_theme", "theme": theme])
+            try await store.apply(["type": "set_theme", "theme": theme])
             if store.snapshot["color_panel"]["readout"].string != "shape" {
-                try await edit(["type": "color", "action": ["op": "toggle_readout"]])
+                try await store.apply(["type": "color", "action": ["op": "toggle_readout"]])
             }
             let geometry = Geometry()
             let width: CGFloat = 226

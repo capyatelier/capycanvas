@@ -8,27 +8,12 @@ import SwiftUI
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = EditorStore(platform: 0, persistence: EditorPersistence(root: root), managedWorkspaces: false)
-        let native = store.native!, surface = CAMetalLayer()
-        surface.bounds = CGRect(x: 0, y: 0, width: 256, height: 192)
-        native.attach(surface, width: 256, height: 192, scale: 1)
+        let native = store.native!, surface = attachSurface(store, CGSize(width: 256, height: 192))
         defer { native.detach(); withExtendedLifetime(surface) {} }
         func wait(_ label: String, _ ready: () -> Bool) async throws {
-            let deadline = Date().addingTimeInterval(45)
-            while !ready() {
-                try require(Date() < deadline && store.failure == nil, store.failure ?? "Timed out: \(label)")
-                let now = FrameTrace.now()
-                await withCheckedContinuation { done in native.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() } }
-                try await drain(0.01)
-            }
+            try await CapyTest.wait(label, failure: { store.failure }, step: { await frame(native) }, ready)
         }
-        func edit(_ action: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                store.edit(action) { error in
-                    if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-                }
-            }
-        }
-        func invoke(_ command: String) async throws { try await edit(["type": "invoke", "command": command]) }
+        func invoke(_ command: String) async throws { try await store.apply(["type": "invoke", "command": command]) }
         func query(_ action: [String: Any]) async -> JSON {
             await withCheckedContinuation { done in store.query(action) { done.resume(returning: $0) } }
         }
@@ -101,7 +86,7 @@ import SwiftUI
         try await invoke("undo")
         try require(abs(store.snapshot["proof_panel"]["recipe"]["exposure"].number) < 0.001, "Key release makes one undo step")
         for theme in ["light", "dark"] {
-            try await edit(["type": "set_theme", "theme": theme])
+            try await store.apply(["type": "set_theme", "theme": theme])
             for width: CGFloat in [128, 160, 226, 400] {
                 let palette = EditorPalette(source: store.state["palette"])
                 let content = ProofDial(store: store, controller: proof).frame(width: width, height: width)

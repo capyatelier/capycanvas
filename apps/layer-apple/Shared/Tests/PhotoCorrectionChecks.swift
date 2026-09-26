@@ -34,10 +34,6 @@ extension XCTestCase {
             workspaceActivate(button); XCTAssertTrue(button.waitForNonExistence(timeout: 15))
         }
         func pixels() -> Data { editorPixels(in: app) }
-        func expectPixels(_ expected: Data) {
-            expectation(for: NSPredicate { _,_ in pixels() == expected }, evaluatedWith: app)
-            waitForExpectations(timeout: 15)
-        }
         func changed(_ before: Data) -> Data {
             expectation(for: NSPredicate { _,_ in pixels() != before }, evaluatedWith: app)
             waitForExpectations(timeout: 15); return pixels()
@@ -75,7 +71,7 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "count == %d", initialCount + index + 1), evaluatedWith: rows)
             waitForExpectations(timeout: 10)
             let row = rows.element(boundBy: 0), id = row.identifier
-            ids.append(id); expectPixels(before)
+            ids.append(id); expectPixels(before, in: app)
             if key.isEmpty {
                 let curve = app.descendants(matching: .any)["effect-curve"].firstMatch
                 curve.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).click()
@@ -84,24 +80,24 @@ extension XCTestCase {
             // Exercise the two native editor types once. The fast Metal test
             // covers every correction's reset, bypass, history and local mask.
             if index == 0 || key.isEmpty {
-                editorHistory("Undo", in: app); expectPixels(before)
-                editorHistory("Redo", in: app); expectPixels(edited)
+                editorHistory("Undo", in: app); expectPixels(before, in: app)
+                editorHistory("Redo", in: app); expectPixels(edited, in: app)
                 if key.isEmpty {
                     reveal(app.buttons["curve-reset"]); workspaceActivate(app.buttons["curve-reset"])
                 } else {
                     let number = app.buttons["number-value-property-" + key]
                     reveal(number); number.rightClick(); workspaceActivate(app.menuItems["Reset"].firstMatch)
                 }
-                expectPixels(before); editorHistory("Undo", in: app); expectPixels(edited)
-                workspaceActivate(row.buttons["Hide layer"]); expectPixels(before)
-                workspaceActivate(row.buttons["Show layer"]); expectPixels(edited)
+                expectPixels(before, in: app); editorHistory("Undo", in: app); expectPixels(edited, in: app)
+                workspaceActivate(row.buttons["Hide layer"]); expectPixels(before, in: app)
+                workspaceActivate(row.buttons["Show layer"]); expectPixels(edited, in: app)
             }
             workspaceActivate(app.buttons["layer-Add layer mask"])
             let mask = row.buttons["Edit layer mask"]
             XCTAssertTrue(mask.waitForExistence(timeout: 5))
             if index == 0 {
-                mask.rightClick(); workspaceActivate(app.buttons["Invert mask"]); expectPixels(before)
-                editorHistory("Undo", in: app); expectPixels(edited)
+                mask.rightClick(); workspaceActivate(app.buttons["Invert mask"]); expectPixels(before, in: app)
+                editorHistory("Undo", in: app); expectPixels(edited, in: app)
             }
             workspaceActivate(row.buttons["Edit layer content"])
             if index == 1 || index == 5 { attachEditor(in: app, name: "photo-corrections-" + filterID) }
@@ -116,7 +112,7 @@ extension XCTestCase {
         workspaceActivate(save); XCTAssertTrue(save.waitForNonExistence(timeout: 15))
         expectation(for: NSPredicate { _,_ in FileManager.default.fileExists(atPath: project.path) }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
-        open(project); expectPixels(corrected)
+        open(project); expectPixels(corrected, in: app)
         XCTAssertEqual(rows.count, initialCount + 6)
         for (index, id) in ids.enumerated() {
             let row = app.groups[id].firstMatch
@@ -129,7 +125,7 @@ extension XCTestCase {
             if corrections[index].2.isEmpty {
                 reveal(app.buttons["curve-reset"]); workspaceActivate(app.buttons["curve-reset"])
             } else { edit(corrections[index].2, index == 2 ? "1.2" : "0") }
-            _ = changed(corrected); editorHistory("Undo", in: app); expectPixels(corrected)
+            _ = changed(corrected); editorHistory("Undo", in: app); expectPixels(corrected, in: app)
         }
         XCTAssertEqual(try Data(contentsOf: photo), original)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

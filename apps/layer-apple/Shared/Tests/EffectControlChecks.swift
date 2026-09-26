@@ -9,10 +9,6 @@ extension XCTestCase {
         let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
         let layers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         func pixels() -> Data { editorPixels(in: app) }
-        func expectPixels(_ expected: Data) {
-            expectation(for: NSPredicate { _, _ in pixels() == expected }, evaluatedWith: app)
-            waitForExpectations(timeout: 15)
-        }
         func expectValue(_ element: XCUIElement, _ value: String) {
             expectation(for: NSPredicate(format: "value == %@", value), evaluatedWith: element)
             waitForExpectations(timeout: 10)
@@ -27,8 +23,8 @@ extension XCTestCase {
             return pixels()
         }
         func history(before: Data, after: Data) {
-            editorHistory("Undo", in: app); expectPixels(before)
-            editorHistory("Redo", in: app); expectPixels(after)
+            editorHistory("Undo", in: app); expectPixels(before, in: app)
+            editorHistory("Redo", in: app); expectPixels(after, in: app)
         }
         func reveal(_ element: XCUIElement) {
             revealEditorControl(element, in: app.scrollViews.containing(.any, identifier: "layer-properties").firstMatch)
@@ -62,12 +58,12 @@ extension XCTestCase {
         waitForExpectations(timeout: 15)
         let blue = pixels()
         func removeFilter(_ filtered: Data) {
-            workspaceActivate(app.buttons["layer-Delete selected layers"]); expectPixels(blue)
+            workspaceActivate(app.buttons["layer-Delete selected layers"]); expectPixels(blue, in: app)
             history(before: filtered, after: blue)
             expectLayers(2)
         }
 
-        addFilter("Brightness", id: "brightness_contrast"); expectPixels(blue)
+        addFilter("Brightness", id: "brightness_contrast"); expectPixels(blue, in: app)
         edit("property-brightness", "25 + 25", expected: "50")
         let brighter = changed(from: blue)
         XCTAssertGreaterThan(brighter[0], blue[0]); XCTAssertGreaterThan(brighter[1], blue[1])
@@ -76,7 +72,7 @@ extension XCTestCase {
         attachEditor(in: app, name: "filter-brightness-artwork")
         removeFilter(brighter)
 
-        addFilter("Curves", id: "curves"); expectPixels(blue)
+        addFilter("Curves", id: "curves"); expectPixels(blue, in: app)
         workspaceActivate(app.buttons["property-channel"])
         workspaceActivate(app.buttons["property-channel-option-1"])
         expectValue(app.buttons["property-channel"], "Red")
@@ -86,11 +82,7 @@ extension XCTestCase {
         let insertion = CGPoint(x: curve.frame.midX, y: curve.frame.minY + curve.frame.height * 0.25)
         XCTAssertTrue(app.scrollViews.containing(.any, identifier: "layer-properties").firstMatch.frame.contains(insertion))
         let point = curve.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
-        #if os(macOS)
-        point.click()
-        #else
-        point.tap()
-        #endif
+        point.clickOrTap()
         expectation(for: NSPredicate(format: "label == %@", "Red, 3 points"), evaluatedWith: curve)
         waitForExpectations(timeout: 10)
         XCTAssertTrue(app.buttons["curve-reset"].waitForExistence(timeout: 5), "An edited curve offers reset on the chart")
@@ -98,12 +90,8 @@ extension XCTestCase {
         XCTAssertGreaterThan(curved[0], blue[0])
         XCTAssertEqual(curved[1], blue[1]); XCTAssertEqual(curved[2], blue[2])
         let nearPoint = point.withOffset(CGVector(dx: 5, dy: 5))
-        #if os(macOS)
-        nearPoint.click()
-        #else
-        nearPoint.tap()
-        #endif
-        expectPixels(curved)
+        nearPoint.clickOrTap()
+        expectPixels(curved, in: app)
         history(before: blue, after: curved)
         attachEditor(in: app, name: "filter-red-curve-selection")
         let destination = curve.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.4))
@@ -116,23 +104,19 @@ extension XCTestCase {
         XCTAssertLessThan(moved[0], curved[0])
         XCTAssertEqual(Int(moved[1]), Int(curved[1]), accuracy: 1); XCTAssertEqual(Int(moved[2]), Int(curved[2]), accuracy: 1)
         XCTAssertEqual(curve.label, "Red, 3 points", "Dragging an existing point must not insert another")
-        editorHistory("Undo", in: app); expectPixels(curved)
-        #if os(macOS)
-        nearPoint.click()
-        #else
-        nearPoint.tap()
-        #endif
-        expectPixels(curved)
-        editorHistory("Redo", in: app); expectPixels(moved)
+        editorHistory("Undo", in: app); expectPixels(curved, in: app)
+        nearPoint.clickOrTap()
+        expectPixels(curved, in: app)
+        editorHistory("Redo", in: app); expectPixels(moved, in: app)
         attachEditor(in: app, name: "filter-red-curve-drag")
         #if os(macOS)
         destination.doubleClick()
         #else
         destination.doubleTap()
         #endif
-        expectPixels(blue); history(before: moved, after: blue)
+        expectPixels(blue, in: app); history(before: moved, after: blue)
         XCTAssertEqual(curve.label, "Red, 2 points", "Double-clicking a point removes it")
-        editorHistory("Undo", in: app); expectPixels(moved)
+        editorHistory("Undo", in: app); expectPixels(moved, in: app)
         #if os(iOS)
         // A touch on the plot edits its curve. Scroll from the noninteractive
         // heading instead of starting the gesture inside that editing surface.
@@ -144,7 +128,7 @@ extension XCTestCase {
         reveal(app.buttons["curve-reset"])
         #endif
         workspaceActivate(app.buttons["curve-reset"])
-        expectPixels(blue); history(before: moved, after: blue)
+        expectPixels(blue, in: app); history(before: moved, after: blue)
         func expectPoints(_ count: Int) {
             expectation(for: NSPredicate(format: "label == %@", "Red, \(count) points"), evaluatedWith: curve)
             waitForExpectations(timeout: 10)
@@ -154,13 +138,13 @@ extension XCTestCase {
         press.press(forDuration: 0.05, thenDragTo: pressed, withVelocity: .slow, thenHoldForDuration: 0.1)
         expectPoints(3)
         let inserted = changed(from: blue)
-        editorHistory("Undo", in: app); expectPixels(blue); expectPoints(2)
-        editorHistory("Redo", in: app); expectPixels(inserted); expectPoints(3)
+        editorHistory("Undo", in: app); expectPixels(blue, in: app); expectPoints(2)
+        editorHistory("Redo", in: app); expectPixels(inserted, in: app); expectPoints(3)
         pressed.press(forDuration: 0.05, thenDragTo: curve.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 1.4)),
             withVelocity: .slow, thenHoldForDuration: 0.1)
-        expectPoints(2); expectPixels(blue)
-        editorHistory("Undo", in: app); expectPixels(inserted); expectPoints(3)
-        editorHistory("Redo", in: app); expectPixels(blue)
+        expectPoints(2); expectPixels(blue, in: app)
+        editorHistory("Undo", in: app); expectPixels(inserted, in: app); expectPoints(3)
+        editorHistory("Redo", in: app); expectPixels(blue, in: app)
         workspaceActivate(app.buttons["layer-Delete selected layers"])
         expectLayers(2)
 
@@ -185,7 +169,7 @@ extension XCTestCase {
         reveal(reverse); toggleReverse(true)
         let reversed = changed(from: gray)
         history(before: gray, after: reversed)
-        toggleReverse(false); expectPixels(gray)
+        toggleReverse(false); expectPixels(gray, in: app)
         let color = app.buttons["gradient-stop-color"]
         reveal(color); workspaceActivate(color)
         let redField = app.textFields["color-input-0"]
@@ -201,22 +185,14 @@ extension XCTestCase {
         let gradient = app.descendants(matching: .any)["effect-gradient"].firstMatch
         reveal(gradient)
         let middle = gradient.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 43.0 / 52))
-        #if os(macOS)
-        middle.click()
-        #else
-        middle.tap()
-        #endif
+        middle.clickOrTap()
         expectation(for: NSPredicate(format: "label ENDSWITH %@", ", 3 stops"), evaluatedWith: gradient)
-        waitForExpectations(timeout: 10); expectPixels(red)
+        waitForExpectations(timeout: 10); expectPixels(red, in: app)
         expectValue(app.buttons["number-value-gradient-position"], "50.0 %")
         XCTAssertTrue(app.buttons["gradient-remove"].isEnabled, "A new stop must be selected without another tap")
         let nearMiddle = middle.withOffset(CGVector(dx: 3, dy: 0))
-        #if os(macOS)
-        nearMiddle.click()
-        #else
-        nearMiddle.tap()
-        #endif
-        expectPixels(red); expectValue(app.buttons["number-value-gradient-position"], "50.0 %")
+        nearMiddle.clickOrTap()
+        expectPixels(red, in: app); expectValue(app.buttons["number-value-gradient-position"], "50.0 %")
         let stopDestination = gradient.coordinate(withNormalizedOffset:
             CGVector(dx: (6 + (gradient.frame.width - 12) * 0.7) / gradient.frame.width, dy: 43.0 / 52))
         middle.press(forDuration: 0.05, thenDragTo: stopDestination, withVelocity: .slow, thenHoldForDuration: 0.1)
@@ -226,10 +202,10 @@ extension XCTestCase {
         history(before: red, after: shifted)
         attachEditor(in: app, name: "filter-gradient-stop-drag")
         reveal(app.buttons["gradient-remove"]); workspaceActivate(app.buttons["gradient-remove"])
-        expectPixels(red); history(before: shifted, after: red)
-        editorHistory("Undo", in: app); expectPixels(shifted)
+        expectPixels(red, in: app); history(before: shifted, after: red)
+        editorHistory("Undo", in: app); expectPixels(shifted, in: app)
         workspaceActivate(app.buttons["gradient-reset"])
-        expectPixels(gray); history(before: shifted, after: gray)
+        expectPixels(gray, in: app); history(before: shifted, after: gray)
         removeFilter(gray)
         XCTAssertEqual(viewport.frame, originalFrame)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
@@ -243,14 +219,6 @@ extension XCTestCase {
             app.frame
             #endif
         }
-        func activate(_ element: XCUIElement) {
-            XCTAssertTrue(element.waitForExistence(timeout: 10))
-            #if os(macOS)
-            element.click()
-            #else
-            element.tap()
-            #endif
-        }
         func expect(_ element: XCUIElement, _ value: String) {
             expectation(for: NSPredicate(format: "value == %@", value), evaluatedWith: element)
             waitForExpectations(timeout: 30)
@@ -262,7 +230,7 @@ extension XCTestCase {
         func search(_ text: String) {
             let canvas = app.descendants(matching: .any)["canvas"].firstMatch
             let before = canvas.frame
-            activate(app.buttons["filter-search-toggle"])
+            workspaceActivate(app.buttons["filter-search-toggle"])
             let field = app.textFields["filter-search"]
             XCTAssertTrue(field.waitForExistence(timeout: 5))
             field.typeText(text); expect(field, text)
@@ -272,36 +240,32 @@ extension XCTestCase {
         }
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 20)); expect(canvas, "Metal ready")
-        activate(app.buttons["panel-tab-adjustments"])
+        workspaceActivate(app.buttons["panel-tab-adjustments"])
         let category = app.buttons["filter-category"]
         for index in [1, 0] {
-            activate(category)
+            workspaceActivate(category)
             let option = app.buttons["filter-category-option-\(index)"]
             XCTAssertTrue(option.waitForExistence(timeout: 5))
             let label = option.label
-            activate(option); expect(category, label)
+            workspaceActivate(option); expect(category, label)
         }
         search("Gaussian Blur")
         let blur = app.buttons["adjustment-gaussian_blur"]
         XCTAssertTrue(blur.waitForExistence(timeout: 10)); expect(blur, "Preview ready")
-        activate(blur)
-        activate(app.buttons["number-value-property-sigma"])
+        workspaceActivate(blur)
+        workspaceActivate(app.buttons["number-value-property-sigma"])
         let sigma = app.textFields["number-entry-property-sigma"]
         XCTAssertTrue(sigma.waitForExistence(timeout: 10))
         sigma.typeText("2 + 3\n"); expect(app.buttons["number-value-property-sigma"], "5.0 px")
 
-        activate(app.buttons["panel-tab-adjustments"])
+        workspaceActivate(app.buttons["panel-tab-adjustments"])
         // Close search to clear its shared query, then open a fresh search.
-        activate(app.buttons["filter-search-toggle"]); search("Curves")
-        activate(app.buttons["adjustment-curves"])
+        workspaceActivate(app.buttons["filter-search-toggle"]); search("Curves")
+        workspaceActivate(app.buttons["adjustment-curves"])
         let curve = app.descendants(matching: .any)["effect-curve"].firstMatch
         XCTAssertTrue(curve.waitForExistence(timeout: 10)); expectGraphic(curve, "2 points")
         let point = curve.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
-        #if os(macOS)
-        point.click()
-        #else
-        point.tap()
-        #endif
+        point.clickOrTap()
         expectGraphic(curve, "3 points")
         let reset = app.buttons["curve-reset"]
         XCTAssertTrue(reset.waitForExistence(timeout: 10))
@@ -315,29 +279,21 @@ extension XCTestCase {
         #endif
         workspaceActivate(reset); expectGraphic(curve, "2 points")
 
-        activate(app.buttons["panel-tab-adjustments"])
-        activate(app.buttons["filter-search-toggle"]); search("Gradient Map")
-        activate(app.buttons["adjustment-gradient_map"])
+        workspaceActivate(app.buttons["panel-tab-adjustments"])
+        workspaceActivate(app.buttons["filter-search-toggle"]); search("Gradient Map")
+        workspaceActivate(app.buttons["adjustment-gradient_map"])
         let gradient = app.descendants(matching: .any)["effect-gradient"].firstMatch
         XCTAssertTrue(gradient.waitForExistence(timeout: 10)); expectGraphic(gradient, "2 stops")
         let stop = gradient.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
-        #if os(macOS)
-        stop.click()
-        #else
-        stop.tap()
-        #endif
+        stop.clickOrTap()
         expectGraphic(gradient, "3 stops")
         // Select the actual returned stop, then edit its shared numeric value.
-        #if os(macOS)
-        stop.click()
-        #else
-        stop.tap()
-        #endif
+        stop.clickOrTap()
         let position = app.textFields["number-entry-gradient-position"]
-        activate(app.buttons["number-value-gradient-position"])
+        workspaceActivate(app.buttons["number-value-gradient-position"])
         XCTAssertTrue(position.waitForExistence(timeout: 5))
         position.typeText("25\n"); expect(app.buttons["number-value-gradient-position"], "25.0 %")
-        activate(app.buttons["gradient-reset"]); expectGraphic(gradient, "2 stops")
+        workspaceActivate(app.buttons["gradient-reset"]); expectGraphic(gradient, "2 stops")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         #if os(macOS)
         let screenshot = app.windows.firstMatch.screenshot()

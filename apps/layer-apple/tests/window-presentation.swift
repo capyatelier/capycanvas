@@ -35,13 +35,6 @@ import AppKit
 }
 
 @main struct WindowPresentationChecks {
-    @MainActor static func wait(_ description: String, _ condition: () -> Bool) async throws {
-        let end = Date().addingTimeInterval(20)
-        while !condition() {
-            precondition(Date() < end, description)
-            try await Task.sleep(for: .milliseconds(5))
-        }
-    }
     @MainActor static func main() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)

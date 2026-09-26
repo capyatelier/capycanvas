@@ -42,26 +42,11 @@ private final class DisplayCaptureLayer: CAMetalLayer, @unchecked Sendable {
 }
 
 @main struct ManagedDisplayChecks {
-    static func require(_ value: Bool, _ message: String) throws {
-        if !value { throw HostFailure(message: message) }
-    }
-    @MainActor static func edit(_ store: EditorStore, _ action: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            store.edit(action) { error in
-                if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-            }
-        }
-    }
     @MainActor static func wait(_ label: String, store: EditorStore, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(45)
-        while !ready() {
-            try require(Date() < deadline && store.failure == nil, store.failure ?? "Timed out: \(label)")
-            let now = FrameTrace.now()
-            await withCheckedContinuation { done in store.native!.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() } }
-            let prepared = await withCheckedContinuation { done in store.native!.flushPersistence { done.resume(returning: $0) } }
-            try require(prepared, "Prepare canvas: \(label)")
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await CapyTest.wait(label, failure: { store.failure }, step: {
+            await frame(store.native!)
+            try await prepare(store.native!, label)
+        }, ready)
     }
     @MainActor static func swatches() throws {
         func decode(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
@@ -133,7 +118,7 @@ private final class DisplayCaptureLayer: CAMetalLayer, @unchecked Sendable {
             store.projectFiles = ProjectFiles(store: store, dialogs: .init(open: { _, done in done([]) }, save: { _, _, done in done(master) }, create: { _, done in
                 done(JSON(["extent": [128, 128], "color": ["space": space, "depth": "U16"], "background": "White"]))
             }))
-            func invoke(_ command: String) async throws { try await edit(store, ["type": "invoke", "command": command]) }
+            func invoke(_ command: String) async throws { try await store.apply(["type": "invoke", "command": command]) }
             func idle() async throws {
                 try await wait("Document completion", store: store) { !store.projectFiles.busy && store.state["requests"].array.isEmpty }
                 try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
@@ -142,9 +127,9 @@ private final class DisplayCaptureLayer: CAMetalLayer, @unchecked Sendable {
                 space = next
                 try await invoke("new_document"); try await idle()
                 let color = JSON(["space": space, "rgba": [0.65, 0.5, 0.25, 1.0]])
-                try await edit(store, ["type": "color", "action": ["op": "definition", "color": color.raw]])
+                try await store.apply(["type": "color", "action": ["op": "definition", "color": color.raw]])
                 try await invoke("select_all")
-                try await edit(store, ["type": "layer", "action": ["op": "fill_selection"]])
+                try await store.apply(["type": "layer", "action": ["op": "fill_selection"]])
                 try await invoke("deselect")
                 try await invoke("fit_canvas")
                 try await invoke("save_document"); try await idle()

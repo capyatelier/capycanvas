@@ -9,13 +9,6 @@ import SwiftUI
 /// Native events exercise the real shared header view and its serial Rust owner.
 /// Each window has isolated storage; no global input or artist data is used.
 @main final class HeaderNativeInputChecks: NativeWorkspaceInputFixture {
-    @MainActor static func wait(_ label: String, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(15)
-        while !ready() {
-            try require(Date() < deadline, "Timed out: \(label)")
-            try await drain(0.01)
-        }
-    }
     @MainActor static func run(_ platform: UInt32) async throws {
         let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
         try await wait("Initial models") { !store.snapshot["header"].isNull }
@@ -39,11 +32,7 @@ import SwiftUI
         }
         let header = store.header, hold = try holdDuration(marker)
         func action(_ value: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                store.edit(value) { error in
-                    if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-                }
-            }
+            try await store.apply(value)
             try await drain()
         }
         func edit(_ value: [String: Any]) async throws {

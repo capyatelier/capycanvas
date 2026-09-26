@@ -3,13 +3,6 @@
 import AppKit
 
 @main struct NativeContextMenuChecks {
-    @MainActor static func wait(_ label: String, until ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(15)
-        while !ready() {
-            guard Date() < deadline else { throw HostFailure(message: "Timed out: \(label)") }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-    }
     @MainActor static func query(_ store: EditorStore, _ request: [String: Any]) async -> JSON {
         await withCheckedContinuation { continuation in store.query(request) { continuation.resume(returning: $0) } }
     }

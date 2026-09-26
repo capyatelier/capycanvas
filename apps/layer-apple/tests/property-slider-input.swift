@@ -21,18 +21,9 @@ import QuartzCore
         for platform: UInt32 in [0, 1] {
             for (effect, mode) in cases {
                 let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
-                let deadline = Date().addingTimeInterval(15)
-                while store.state["layer_properties"]["controls"].array.isEmpty {
-                    try require(Date() < deadline, "Property owner startup timed out")
-                    try await drain(0.01)
-                }
+                try await wait("Property owner startup") { !store.state["layer_properties"]["controls"].array.isEmpty }
                 func action(_ value: [String: Any]) async throws {
-                    try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                        store.edit(value) { error in
-                            if let error { done.resume(throwing: HostFailure(message: error)) }
-                            else { done.resume() }
-                        }
-                    }
+                    try await store.apply(value)
                     try await drain()
                 }
                 if !effect.isEmpty {
@@ -115,8 +106,7 @@ import QuartzCore
                     let target = store.state["layer_tools"]["editing_layer"]["id"].uint
                     // Use the production document replacement path with an
                     // offscreen Metal surface and a supplied New Drawing size.
-                    let surface = CAMetalLayer(); surface.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
-                    store.native!.attach(surface, width: 128, height: 128, scale: 1)
+                    _ = attachSurface(store, CGSize(width: 128, height: 128))
                     try await action(["type": "set_tool_setting", "id": "tolerance", "value": 0.23])
                     try require(field.isDescendant(of: host) && field.stringValue == "37 %",
                         "An ordinary tool-value update must preserve its active draft")

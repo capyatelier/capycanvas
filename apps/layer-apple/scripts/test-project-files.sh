@@ -33,7 +33,7 @@ while IFS= read -r CAPY_SOURCE; do CAPY_SOURCES+=("$CAPY_SOURCE"); done < <(
   find "$CAPY_APP/Shared" "$CAPY_APP/macOS" "$CAPY_APP/tests/support" -name '*.swift' | grep -Ev '/Tests/|/CapyCanvasMacApp.swift$'
 )
 cargo build --manifest-path "$CAPY_APP/../../Cargo.toml" -p layer-apple --target aarch64-apple-darwin
-xcrun swiftc -import-objc-header "$CAPY_APP/native/include/CapyApple.h" \
+xcrun swiftc -module-name CapyTest -import-objc-header "$CAPY_APP/native/include/CapyApple.h" \
   "${CAPY_SOURCES[@]}" "${1:-$CAPY_APP/tests/project-files.swift}" \
   -L "$CAPY_TARGET_DIR/aarch64-apple-darwin/debug" -llayer_apple -lc++ \
   -framework Metal -framework QuartzCore -framework Security -framework AppKit -framework SwiftUI \

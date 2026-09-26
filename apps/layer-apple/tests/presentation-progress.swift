@@ -11,13 +11,6 @@ import SwiftUI
         func withheld() { lock.lock(); count += 1; lock.unlock() }
         var total: Int { lock.lock(); defer { lock.unlock() }; return count }
     }
-    @MainActor static func wait(_ label: String, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(15)
-        while !ready() {
-            try require(Date() < deadline, "Timed out: " + label)
-            try await drain(0.01)
-        }
-    }
     @MainActor static func run() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("capy-presentation-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }

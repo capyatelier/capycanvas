@@ -7,29 +7,10 @@ import UniformTypeIdentifiers
 /// Production photo transactions, file coordination and serial document owner.
 /// Uses temporary files and dialog results; native picker delivery is separate.
 @main struct ImageImportOwnerChecks {
-    static func require(_ condition: Bool, _ message: String) throws {
-        guard condition else { throw HostFailure(message: message) }
-    }
     @MainActor static func wait(_ label: String, native: NativeOwner, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(30)
-        while !ready() {
-            try require(Date() < deadline, "Timed out: \(label)")
-            // Placement is intentionally not saveable until Apply. Advance
-            // normal frames instead of trying to capture recovery to poll it.
-            let now = FrameTrace.now()
-            await withCheckedContinuation { done in
-                native.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() }
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
-    @MainActor static func edit(_ store: EditorStore, _ action: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            store.edit(action) { error in
-                if let error { done.resume(throwing: HostFailure(message: error)) }
-                else { done.resume() }
-            }
-        }
+        // Placement is intentionally not saveable until Apply. Advance
+        // normal frames instead of trying to capture recovery to poll it.
+        try await CapyTest.wait(label, step: { await frame(native) }, ready)
     }
     @MainActor static func main() async {
         do { try await run() }
@@ -59,17 +40,10 @@ import UniformTypeIdentifiers
             let store = EditorStore(platform: platform,
                 persistence: EditorPersistence(root: root.appendingPathComponent("state-\(platform)")), managedWorkspaces: false)
             let native = store.native!
-            let surface = CAMetalLayer(); surface.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
-            native.attach(surface, width: 128, height: 128, scale: 1)
+            let surface = attachSurface(store, CGSize(width: 128, height: 128))
             defer { native.detach(); withExtendedLifetime(surface) {} }
-            let deadline = Date().addingTimeInterval(30)
-            while !store.snapshot["shaders_ready"].bool {
-                try require(Date() < deadline && store.failure == nil, store.failure ?? "Canvas startup")
-                let now = FrameTrace.now()
-                await withCheckedContinuation { done in
-                    native.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() }
-                }
-                try await Task.sleep(for: .milliseconds(10))
+            try await CapyTest.wait("Canvas startup", failure: { store.failure }, step: { await frame(native) }) {
+                store.snapshot["shaders_ready"].bool
             }
             var selection: URL? = url
             var batch: [URL]?
@@ -102,7 +76,7 @@ import UniformTypeIdentifiers
                         .replacing("selection_icon", with: JSON("")).raw : layer.raw
                 }).stableKey
             }
-            func invoke(_ command: String) async throws { try await edit(store, ["type": "invoke", "command": command]) }
+            func invoke(_ command: String) async throws { try await store.apply(["type": "invoke", "command": command]) }
             func settled(_ label: String) async throws {
                 try await wait(label, native: native) {
                     !files.busy && !store.state["requests"].array.contains { $0["kind"]["type"].string == "document" }
@@ -286,7 +260,7 @@ import UniformTypeIdentifiers
             // and an explicit assumption through the real Swift coordinator.
             let untagged = root.appendingPathComponent("Untagged.png")
             try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAD0lEQVR4nGNQcGi4ygAEAAnyAbb4RS9rAAAAAElFTkSuQmCC")!.write(to: untagged)
-            try await edit(store, ["type": "preferences", "action": ["type": "edit", "id": "missing_profile", "value": 1]])
+            try await store.apply(["type": "preferences", "action": ["type": "edit", "id": "missing_profile", "value": 1]])
             selection = untagged
             let beforePrompt = layerState()
             try await invoke("import_image")

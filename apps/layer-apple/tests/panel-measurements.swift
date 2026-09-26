@@ -30,14 +30,6 @@ import SwiftUI
                 try await Task.sleep(for: .milliseconds(5))
             }
         }
-        func action(_ value: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                store.edit(value) { error in
-                    if let error { continuation.resume(throwing: NSError(domain: error, code: 1)) }
-                    else { continuation.resume() }
-                }
-            }
-        }
         func group(_ panel: String) -> JSON {
             store.snapshot["layout"]["groups"].array.first { $0["panels"].array.contains { $0.string == panel } } ?? JSON()
         }
@@ -51,7 +43,7 @@ import SwiftUI
             return g["floating"].bool && height > 0 && abs(g["bounds"].rect.height - min(body + 36, 675)) < 0.02
         }
         func float(_ panel: String, x: Double) async throws {
-            try await action(["type": "move_panel", "panel": panel, "target": ["kind": "float", "position": [x, 180]], "viewport": [1200, 900]])
+            try await store.apply(["type": "move_panel", "panel": panel, "target": ["kind": "float", "position": [x, 180]], "viewport": [1200, 900]])
             try await wait("\(panel) fits measured content") { fitted(panel) }
         }
         func settle() async throws {
@@ -66,7 +58,7 @@ import SwiftUI
         try await wait("Initial editor") { !store.state.isNull && !store.catalog.isNull }
         store.native?.resize(width: 1200, height: 900, scale: 1)
         for panel in ["navigator", "sizes"] where group(panel)["active"].string != panel {
-            try await action(["type": "select_panel_tab", "group": group(panel)["id"].raw, "panel": panel])
+            try await store.apply(["type": "select_panel_tab", "group": group(panel)["id"].raw, "panel": panel])
         }
         window.contentView = NSHostingView(rootView: WorkspacePanels(store: store, workspace: store.workspace)
             .frame(width: 1200, height: 900).coordinateSpace(name: "editor-workspace")
@@ -83,20 +75,20 @@ import SwiftUI
                 && !measured("brushes")["scroll"].isNull
         }
         precondition(measured("color")["scroll"].isNull, "The compact color picker must retain its full natural size")
-        try await action(["type": "customize", "action": ["type": "set_control_visible", "panel": "layers", "control": "layers", "visible": false]])
+        try await store.apply(["type": "customize", "action": ["type": "set_control_visible", "panel": "layers", "control": "layers", "visible": false]])
         try await wait("Hiding the rows removes their scrolling measurements") { measured("layers")["scroll"].isNull }
-        try await action(["type": "invoke", "command": "undo_workspace"])
+        try await store.apply(["type": "invoke", "command": "undo_workspace"])
         try await wait("Undo restores the measured rows") { measured("layers")["scroll"]["unit_height"].number >= 40 }
         try await float("sizes", x: 320)
         let sizes = measured("sizes")["content_height"].number
-        try await action(["type": "customize", "action": ["type": "set_control_visible", "panel": "sizes", "control": "size_presets", "visible": false]])
+        try await store.apply(["type": "customize", "action": ["type": "set_control_visible", "panel": "sizes", "control": "size_presets", "visible": false]])
         try await wait("Hidden presets shrink the actual floating body") { fitted("sizes") && measured("sizes")["content_height"].number < sizes - 50 }
-        try await action(["type": "invoke", "command": "undo_workspace"])
+        try await store.apply(["type": "invoke", "command": "undo_workspace"])
         try await wait("Workspace Undo restores natural sizing") { fitted("sizes") && abs(measured("sizes")["content_height"].number - sizes) < 0.02 }
 
         let originalBounds = group("sizes")["bounds"].rect
         for phase in ["down", "move", "up"] {
-            try await action(["type": "resize_floating", "group": group("sizes")["id"].raw, "edge": "right", "phase": phase,
+            try await store.apply(["type": "resize_floating", "group": group("sizes")["id"].raw, "edge": "right", "phase": phase,
                 "position": [phase == "down" ? originalBounds.maxX : originalBounds.minX + 140, originalBounds.midY], "viewport": [1200, 900]])
         }
         try await wait("Narrow body reflows while preserving the manually sized height") {
@@ -104,12 +96,12 @@ import SwiftUI
                 && abs(group("sizes")["bounds"].rect.height - originalBounds.height) < 0.02
                 && measured("sizes")["content_height"].number > sizes + 50
         }
-        try await action(["type": "invoke", "command": "undo_workspace"])
+        try await store.apply(["type": "invoke", "command": "undo_workspace"])
         try await wait("Undo resize restores the natural body and height") { fitted("sizes") && abs(measured("sizes")["content_height"].number - sizes) < 0.02 }
 
         try await float("layers", x: 640)
         let layers = measured("layers")["content_height"].number
-        try await action(["type": "invoke", "command": "add_layer"])
+        try await store.apply(["type": "invoke", "command": "add_layer"])
         try await wait("New layer grows intrinsic content") { fitted("layers") && measured("layers")["content_height"].number > layers + 20 }
         try await float("navigator", x: 880)
         let document = store.state["tabs"][0], navigatorWidth = group("navigator")["bounds"].rect.width
@@ -118,7 +110,7 @@ import SwiftUI
             "The Navigator measures its overview at the floating width plus its command row")
         precondition(geometry.navigators.count == 1, "Measuring tabs must not mount extra GPU Navigator views")
 
-        try await action(["type": "move_panel", "panel": "stats", "target": ["kind": "tab", "group": group("sizes")["id"].raw], "viewport": [1200, 900]])
+        try await store.apply(["type": "move_panel", "panel": "stats", "target": ["kind": "tab", "group": group("sizes")["id"].raw], "viewport": [1200, 900]])
         try await wait("Tabbed floating group fits both native labels") {
             let width = measured("sizes")["tab_width"].number + measured("stats")["tab_width"].number + 22
             return abs(group("sizes")["bounds"].rect.width - width) < 0.02 && fitted("stats")
@@ -128,7 +120,7 @@ import SwiftUI
         try await settle()
         let before = store.state["workspace"].stableKey
         let measurements = store.snapshot["panel_measurements"].stableKey
-        try await action(["type": "measure_panels", "measurements": []])
+        try await store.apply(["type": "measure_panels", "measurements": []])
         try await wait("Transient measurements are republished without a widget resize") {
             store.snapshot["panel_measurements"].stableKey == measurements
         }
@@ -145,7 +137,7 @@ import SwiftUI
         let source = group("brushes")["bounds"].rect
         let beforeDrag = store.state["workspace"]["layout"].stableKey
         func drag(_ phase: String, _ point: CGPoint) async throws {
-            try await action(["type": "drag_workspace", "item": ["kind": "panel", "panel": "brushes"],
+            try await store.apply(["type": "drag_workspace", "item": ["kind": "panel", "panel": "brushes"],
                 "phase": phase, "position": [point.x, point.y], "viewport": [1200, 900], "tabs": []])
         }
         try await drag("down", CGPoint(x: source.minX + 24, y: source.minY + 12))
@@ -161,9 +153,9 @@ import SwiftUI
                 && bounds.height >= 180 && bounds.maxY <= 900
         }
         let afterDrag = store.state["workspace"]["layout"].stableKey
-        try await action(["type": "invoke", "command": "undo_workspace"])
+        try await store.apply(["type": "invoke", "command": "undo_workspace"])
         try await wait("One Undo restores the docked panel") { store.state["workspace"]["layout"].stableKey == beforeDrag }
-        try await action(["type": "invoke", "command": "redo_workspace"])
+        try await store.apply(["type": "invoke", "command": "redo_workspace"])
         try await wait("One Redo restores the fitted float") { store.state["workspace"]["layout"].stableKey == afterDrag }
         print("PASS: platform \(platform), native tab/body/scroll measurements, floating/tab fit, width reflow, visibility/history, one Navigator, stable publication, frozen drag preview and fitted release with one-step history")
     }

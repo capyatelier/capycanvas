@@ -10,21 +10,13 @@ extension XCTestCase {
         XCTAssertTrue(manager.waitForExistence(timeout: 30))
         let start = app.buttons["workspace-history-r0"]
         XCTAssertTrue(start.waitForExistence(timeout: 10))
-        #if os(macOS)
-        start.click()
-        #else
-        start.tap()
-        #endif
+        start.clickOrTap()
         let restore = app.buttons["workspace-history-restore"]
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: restore)
         waitForExpectations(timeout: 10)
         XCTAssertTrue(start.isSelected, "The previewed history version must expose its selection")
         attachEditor(in: app, name: "workspace-history-selected")
-        #if os(macOS)
-        restore.click()
-        #else
-        restore.tap()
-        #endif
+        restore.clickOrTap()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: manager)
         waitForExpectations(timeout: 10)
         XCTAssertTrue(app.buttons["panel-tab-navigator"].firstMatch.waitForExistence(timeout: 10))

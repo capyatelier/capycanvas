@@ -10,13 +10,6 @@ import Foundation
             try await Task.sleep(for: .milliseconds(10))
         }
     }
-    @MainActor static func action(_ store: EditorStore, _ value: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            store.edit(value) { error in
-                if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-            }
-        }
-    }
     @MainActor static func main() async throws {
         for platform: UInt32 in [0, 1] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-column-persistence-\(UUID())")
@@ -28,11 +21,11 @@ import Foundation
             try await store.workspaceManager.run(JSON(["type":"switch", "value":paint]))
             func layout() -> String { store.state["workspace"]["layout"].stableKey }
             func member(_ id: UInt64) -> JSON { store.snapshot["layout"]["collapsed"].array.first { $0["id"].uint == id } ?? JSON() }
-            func customize(_ value: [String: Any]) async throws { try await action(store, ["type":"customize", "action":value]) }
+            func customize(_ value: [String: Any]) async throws { try await store.apply(["type":"customize", "action":value]) }
             try await customize(["type":"set_column_collapsed", "group":16, "collapsed":true])
             try await customize(["type":"set_column_drawers", "column":4, "drawers":false])
             let beforeStack = layout()
-            try await action(store, ["type":"move_column", "column":12,
+            try await store.apply(["type":"move_column", "column":12,
                 "target":["kind":"stack_column", "column":4, "before":false], "viewport":[1200,900]])
             let stacked = layout()
             precondition(stacked != beforeStack)
@@ -47,11 +40,11 @@ import Foundation
                     && min(abs($0["bounds"].rect.minX - bounds.maxX - 6),
                         abs(bounds.minX - $0["bounds"].rect.maxX - 6)) < 0.5
             }!
-            try await action(store, ["type":"nudge_divider", "id":divider["id"].raw,
+            try await store.apply(["type":"nudge_divider", "id":divider["id"].raw,
                 "forward":true, "viewport":store.snapshot["layout"]["viewport"].raw])
             let resized = layout()
             precondition(resized != preferred)
-            try await action(store, ["type":"set_brush_size", "value":73])
+            try await store.apply(["type":"set_brush_size", "value":73])
             let brush = store.state["brush"].stableKey
             try await store.workspaceLibrary!.flush()
             let other = store.workspaceLibrary!.status["default_workspaces"].array.first { $0["id"].string != paint }!["id"].string
@@ -69,11 +62,11 @@ import Foundation
             precondition(layout() == resized && store.state["brush"].stableKey == brush)
             precondition(member(12)["open"].isNull, "Restart does not restore transient opening")
             for expected in [preferred, stacked, beforeStack] {
-                try await action(store, ["type":"invoke", "command":"undo_workspace"])
+                try await store.apply(["type":"invoke", "command":"undo_workspace"])
                 precondition(layout() == expected, "Width, preference and membership each retain one history step")
             }
             for expected in [stacked, preferred, resized] {
-                try await action(store, ["type":"invoke", "command":"redo_workspace"])
+                try await store.apply(["type":"invoke", "command":"redo_workspace"])
                 precondition(layout() == expected)
             }
             precondition(store.state["brush"].stableKey == brush, "Workspace history preserves working brush settings")

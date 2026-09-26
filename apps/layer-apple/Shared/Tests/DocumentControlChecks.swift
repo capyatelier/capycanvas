@@ -43,6 +43,12 @@ import AppKit
 }
 
 extension XCTestCase {
+    @MainActor func fileCommand(_ id: String, _ label: String, in app: XCUIApplication) {
+        editorMenu(in: app, menu: "File", id: id, label: label)
+    }
+    @MainActor func goToFolder(_ url: URL, in app: XCUIApplication) {
+        app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(url.path + "\n")
+    }
     @MainActor func checkSavePanelKeepsItsDocumentAcrossWindowFocus(in app: XCUIApplication) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Window Files " + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
@@ -62,9 +68,6 @@ extension XCTestCase {
         let scenes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-"))
         let firstID = scenes.firstMatch.identifier
         let first = app.windows.containing(.any, identifier: firstID).firstMatch
-        func command(_ id: String, _ label: String) {
-            editorMenu(in: app, menu: "File", id: id, label: label)
-        }
         func expectTitle(_ window: XCUIElement, _ name: String) {
             expectation(for: NSPredicate { _, _ in window.title == name }, evaluatedWith: window)
                 .expectationDescription = "Native window title: \(name)"
@@ -80,7 +83,7 @@ extension XCTestCase {
             waitForExpectations(timeout: 15)
         }
         func beginSaveAs(_ url: URL) -> XCUIElement {
-            command("save_document_as", "Save As…")
+            fileCommand("save_document_as", "Save As…", in: app)
             let save = app.windows.buttons["OKButton"].firstMatch
             XCTAssertTrue(save.waitForExistence(timeout: 15))
             app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(root.path + "\n")
@@ -108,7 +111,7 @@ extension XCTestCase {
         finishSave(beginSaveAs(firstURL))
         expectTitle(first, "First.capy")
         let originalFirst = try Data(contentsOf: firstURL)
-        command("new_window", "New Window")
+        fileCommand("new_window", "New Window", in: app)
         let secondScene = scenes.matching(NSPredicate(format: "identifier != %@", firstID)).firstMatch
         XCTAssertTrue(secondScene.waitForExistence(timeout: 30))
         // Paint belongs to the first window; use the available Photo workspace
@@ -153,13 +156,13 @@ extension XCTestCase {
         XCTAssertEqual(try Data(contentsOf: firstURL), originalFirst)
         XCTAssertEqual(try Data(contentsOf: secondURL), originalSecond)
         focus("Second.capy")
-        command("save_document", "Save")
+        fileCommand("save_document", "Save", in: app)
         expectation(for: NSPredicate { _, _ in (try? Data(contentsOf: secondURL)) != originalSecond }, evaluatedWith: second)
         waitForExpectations(timeout: 15)
         XCTAssertEqual(try Data(contentsOf: copyURL), copied)
 
         focus("First Copy.capy")
-        command("open_document", "Open…")
+        fileCommand("open_document", "Open…", in: app)
         let open = app.windows.buttons["OKButton"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 15))
         app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(copyURL.path + "\n")
@@ -318,20 +321,10 @@ extension XCTestCase {
         let title = editorDocumentTitle(in: app)
         func titleText() -> String { title.value as? String ?? title.label }
         let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
-        func command(_ id: String, _ label: String) {
-            editorMenu(in: app, menu: "File", id: id, label: label)
-        }
-        func goTo(_ url: URL) {
-            app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(url.path + "\n")
-        }
-        func expectPixels(_ expected: Data) {
-            expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) == expected }, evaluatedWith: app)
-            waitForExpectations(timeout: 15)
-        }
         func chooseOpen(_ url: URL) {
             let open = app.windows.buttons["OKButton"].firstMatch
             XCTAssertTrue(open.waitForExistence(timeout: 15))
-            goTo(url); workspaceActivate(open)
+            goToFolder(url, in: app); workspaceActivate(open)
             XCTAssertTrue(open.waitForNonExistence(timeout: 15))
         }
         let paper = editorPixels(in: app)
@@ -343,9 +336,9 @@ extension XCTestCase {
         }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
         let painted = editorPixels(in: app)
-        command("save_document_as", "Save As…")
+        fileCommand("save_document_as", "Save As…", in: app)
         let save = app.windows.buttons["OKButton"].firstMatch
-        XCTAssertTrue(save.waitForExistence(timeout: 15)); goTo(root)
+        XCTAssertTrue(save.waitForExistence(timeout: 15)); goToFolder(root, in: app)
         let name = app.textFields["saveAsNameTextField"]
         workspaceActivate(name)
         name.typeKey("a", modifierFlags: .command); name.typeText(project.lastPathComponent)
@@ -361,8 +354,8 @@ extension XCTestCase {
         let dialog = app.sheets.firstMatch
 
         editorMenu(in: app, menu: "Edit", id: "clear_layer", label: "Clear layer")
-        expectPixels(paper)
-        command("open_document", "Open…")
+        expectPixels(paper, in: app)
+        fileCommand("open_document", "Open…", in: app)
         chooseOpen(invalid)
         let failure = dialog
         XCTAssertTrue(failure.waitForExistence(timeout: 20), "An invalid project must report its error")
@@ -371,24 +364,24 @@ extension XCTestCase {
         workspaceActivate(failure.buttons["OK"])
         XCTAssertTrue(failure.waitForNonExistence(timeout: 10))
         XCTAssertEqual(titleText(), savedTitle); XCTAssertEqual(rows.count, savedRows)
-        expectPixels(paper)
+        expectPixels(paper, in: app)
         for (action, pixels) in [("Undo", painted), ("Redo", paper)] {
-            editorHistory(action, in: app); expectPixels(pixels)
+            editorHistory(action, in: app); expectPixels(pixels, in: app)
         }
         attachEditor(in: app, name: "failed-open-preserves-unsaved-artwork-and-history")
 
         // Open now adds a drawing. Cancelling its native picker must preserve
         // the original dirty owner and its history without a discard decision.
-        command("open_document", "Open…")
+        fileCommand("open_document", "Open…", in: app)
         let picker = app.windows.buttons["OKButton"].firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 15))
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         XCTAssertTrue(picker.waitForNonExistence(timeout: 10))
         XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
-        expectPixels(paper)
-        command("open_document", "Open…")
+        expectPixels(paper, in: app)
+        fileCommand("open_document", "Open…", in: app)
         chooseOpen(project)
-        expectPixels(painted)
+        expectPixels(painted, in: app)
         XCTAssertEqual(titleText(), savedTitle); XCTAssertEqual(rows.count, savedRows)
         XCTAssertEqual(try Data(contentsOf: project), saved)
         XCTAssertEqual(try Data(contentsOf: invalid), invalidBytes)
@@ -492,17 +485,10 @@ extension XCTestCase {
         let dimensions = extent.components(separatedBy: " × ").compactMap(Int.init)
         XCTAssertEqual(dimensions.count, 2)
         let layers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
-        func command(_ id: String, _ label: String) {
-            editorMenu(in: app, menu: "File", id: id, label: label)
-        }
-        func goTo(_ url: URL) {
-            app.typeKey("g", modifierFlags: [.command, .shift])
-            app.typeText(url.path + "\n")
-        }
         func savePanel(to url: URL) {
             let save = app.windows.buttons["OKButton"].firstMatch
             XCTAssertTrue(save.waitForExistence(timeout: 15))
-            goTo(root)
+            goToFolder(root, in: app)
             let name = app.textFields["saveAsNameTextField"]
             workspaceActivate(name)
             name.typeKey("a", modifierFlags: .command); name.typeText(url.lastPathComponent)
@@ -512,7 +498,7 @@ extension XCTestCase {
             waitForExpectations(timeout: 15)
         }
         func export(to url: URL) {
-            command("export_document", "Export…"); chooseExportDestination(in: app); savePanel(to: url)
+            fileCommand("export_document", "Export…", in: app); chooseExportDestination(in: app); savePanel(to: url)
             XCTAssertTrue(titleText().hasPrefix("RoundTrip.capy · "), "PNG export must retain the editable project location")
         }
         func pixels(_ url: URL) throws -> Data {
@@ -536,12 +522,12 @@ extension XCTestCase {
         }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
         let artwork = editorPixels(in: app)
-        command("save_document_as", "Save As…"); savePanel(to: project)
+        fileCommand("save_document_as", "Save As…", in: app); savePanel(to: project)
         let firstSave = try Data(contentsOf: project)
         editorMenu(in: app, menu: "Layer", id: "add_layer", label: "New layer")
         expectation(for: NSPredicate(format: "count == 3"), evaluatedWith: layers)
         waitForExpectations(timeout: 10)
-        command("save_document", "Save")
+        fileCommand("save_document", "Save", in: app)
         expectation(for: NSPredicate { _, _ in (try? Data(contentsOf: project)) != firstSave }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
         let saved = try Data(contentsOf: project)
@@ -558,10 +544,10 @@ extension XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 30))
         XCTAssertTrue(titleText().hasPrefix("Untitled · "))
         XCTAssertEqual(layers.count, 2, "Reopen must load the saved file, independently of in-memory artwork")
-        command("open_document", "Open…")
+        fileCommand("open_document", "Open…", in: app)
         let open = app.windows.buttons["OKButton"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 15))
-        goTo(project); workspaceActivate(open)
+        goToFolder(project, in: app); workspaceActivate(open)
         XCTAssertTrue(open.waitForNonExistence(timeout: 15))
         expectation(for: NSPredicate { _, _ in titleText().hasPrefix("RoundTrip.capy · ") }, evaluatedWith: app)
         expectation(for: NSPredicate(format: "count == 3"), evaluatedWith: layers)
@@ -582,11 +568,7 @@ extension XCTestCase {
     @MainActor func checkNewDrawingAndExportCancellation(in app: XCUIApplication) {
         func activate(_ element: XCUIElement) {
             XCTAssertTrue(element.waitForExistence(timeout: 15))
-            #if os(macOS)
-            element.click()
-            #else
-            element.tap()
-            #endif
+            element.clickOrTap()
         }
         func replace(_ field: XCUIElement, _ text: String) {
             activate(field)

@@ -28,29 +28,17 @@ extension XCTestCase {
             // Activate its visible label, which lies inside the curved button.
             if element.identifier == "color-readout" {
                 let label = element.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.06))
-                #if os(macOS)
-                label.click()
-                #else
-                label.tap()
-                #endif
+                label.clickOrTap()
                 return
             }
-            #if os(macOS)
-            element.click()
-            #else
-            element.tap()
-            #endif
+            element.clickOrTap()
         }
         func point(_ x: Double, _ y: Double) -> XCUICoordinate {
             app.descendants(matching: .any)["color-wheel"].firstMatch.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y))
         }
         func tap(_ x: Double, _ y: Double) {
             reveal(app.descendants(matching: .any)["color-wheel"].firstMatch)
-            #if os(macOS)
-            point(x,y).click()
-            #else
-            point(x,y).tap()
-            #endif
+            point(x,y).clickOrTap()
         }
         let panel = app.descendants(matching: .any)["color-panel-controls"].firstMatch
         let wheel = app.descendants(matching: .any)["color-wheel"].firstMatch

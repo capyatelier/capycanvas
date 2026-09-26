@@ -7,44 +7,19 @@ import UniformTypeIdentifiers
 /// Production recovery coordinator with retained 16-bit source data, painted
 /// tiles and a revisable correction/mask. All files and scenes are disposable.
 @main struct SDRRecoveryChecks {
-    static func require(_ value: Bool, _ message: String) throws {
-        if !value { throw HostFailure(message: message) }
-    }
     static func io<T>(_ work: @escaping () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { done in
             NativeProjectTask.io.async { done.resume(with: Result(catching: work)) }
         }
     }
-    @MainActor static func edit(_ store: EditorStore, _ action: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            store.edit(action) { error in
-                if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-            }
-        }
-    }
     @MainActor static func wait(_ label: String, _ store: EditorStore, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(45)
-        while !ready() {
-            try require(Date() < deadline && store.failure == nil, store.failure ?? "Timed out: \(label)")
-            // Pending placement cannot be captured for recovery until Apply.
-            // Poll ordinary frames; explicit flush below tests durability.
-            let now = FrameTrace.now()
-            await withCheckedContinuation { done in
-                store.native!.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() }
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        // Pending placement cannot be captured for recovery until Apply.
+        // Poll ordinary frames; explicit flush below tests durability.
+        try await CapyTest.wait(label, failure: { store.failure }, step: { await frame(store.native!) }, ready)
     }
     @MainActor static func attach(_ store: EditorStore) async throws -> CAMetalLayer {
-        let layer = CAMetalLayer(); layer.bounds = CGRect(x: 0, y: 0, width: 1024, height: 768)
-        store.native!.attach(layer, width: 1024, height: 768, scale: 1)
-        let deadline = Date().addingTimeInterval(45)
-        while !store.snapshot["shaders_ready"].bool || store.workspaceLibrary?.ready != true {
-            try require(Date() < deadline && store.failure == nil, store.failure ?? "Native startup")
-            let now = FrameTrace.now()
-            await withCheckedContinuation { done in store.native!.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() } }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        let layer = attachSurface(store, CGSize(width: 1024, height: 768))
+        try await wait("Native startup", store) { store.snapshot["shaders_ready"].bool && store.workspaceLibrary?.ready == true }
         return layer
     }
     @MainActor static func flush(_ store: EditorStore) async throws {
@@ -85,7 +60,7 @@ import UniformTypeIdentifiers
         store!.projectFiles = ProjectFiles(store: store!, dialogs: .init(open: { _, done in done([]) }, save: { _, _, done in done(nil) }, create: { _, done in
             done(JSON(["extent": [128, 96], "color": ["space": space, "depth": depth], "background": "White"]))
         }, paste: { $0(.success([PhotoItem { $0(.success(.image(photo))) }])) }))
-        func invoke(_ command: String) async throws { try await edit(store!, ["type": "invoke", "command": command]) }
+        func invoke(_ command: String) async throws { try await store!.apply(["type": "invoke", "command": command]) }
         func idle() async throws {
             try await wait("Document completion", store!) { !store!.projectFiles.busy && store!.state["requests"].array.isEmpty }
             try require(store!.projectFiles.error == nil, store!.projectFiles.error ?? "")
@@ -93,14 +68,14 @@ import UniformTypeIdentifiers
         try await invoke("new_document"); try await idle()
         try await invoke("paste_image"); try await idle()
         try await invoke("apply_transform"); try await idle()
-        try await edit(store!, ["type": "color", "action": ["op": "definition", "color": ["space": "DisplayP3", "rgba": [0.8, 0.25, 0.1, 0.5]]]])
+        try await store!.apply(["type": "color", "action": ["op": "definition", "color": ["space": "DisplayP3", "rgba": [0.8, 0.25, 0.1, 0.5]]]])
         try await invoke("select_all")
-        try await edit(store!, ["type": "layer", "action": ["op": "fill_selection"]])
+        try await store!.apply(["type": "layer", "action": ["op": "fill_selection"]])
         try await invoke("deselect")
-        try await edit(store!, ["type": "effect", "action": ["op": "insert", "effect": "exposure"]])
+        try await store!.apply(["type": "effect", "action": ["op": "insert", "effect": "exposure"]])
         let effect = store!.state["layer_tools"]["editing_layer"]["id"].uint
-        try await edit(store!, ["type": "effect", "action": ["op": "set", "layer": effect, "key": "exposure", "value": ["kind": "number", "value": 0.75]]])
-        try await edit(store!, ["type": "layer", "action": ["op": "add_mask", "id": effect, "replace": false]])
+        try await store!.apply(["type": "effect", "action": ["op": "set", "layer": effect, "key": "exposure", "value": ["kind": "number", "value": 0.75]]])
+        try await store!.apply(["type": "layer", "action": ["op": "add_mask", "id": effect, "replace": false]])
         let paint = store!.state["colors"]["foreground"].stableKey
         // The scene boundary blurs input and suspends workspace ownership.
         // No drawable/frame follows these edits; recovery must prepare them.
@@ -134,8 +109,8 @@ import UniformTypeIdentifiers
         let recovered = try await io { try files.list().records.first! }
         let actual = try archive(try await io { try Data(contentsOf: files.archive(recovered)!) })
         try require(actual.0.stableKey == baseline.0.stableKey && actual.1 == baseline.1, "Recovery must preserve every source/profile, integer paint tile, correction and mask byte")
-        try await edit(restored, ["type": "effect", "action": ["op": "set", "layer": effect, "key": "exposure", "value": ["kind": "number", "value": 1.25]]])
-        try await edit(restored, ["type": "invoke", "command": "undo"])
+        try await restored.apply(["type": "effect", "action": ["op": "set", "layer": effect, "key": "exposure", "value": ["kind": "number", "value": 1.25]]])
+        try await restored.apply(["type": "invoke", "command": "undo"])
         try await flush(restored)
         let undone = try await io { try files.list().records.first! }
         let undo = try archive(try await io { try Data(contentsOf: files.archive(undone)!) })

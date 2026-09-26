@@ -4,24 +4,8 @@ import QuartzCore
 /// Real owner/coordinator, complete previews and color history on Mac Metal for
 /// both Apple policies. Files and persistence belong only to this fixture.
 @main struct DocumentColorOwnerChecks {
-    static func require(_ value: Bool, _ message: String) throws {
-        if !value { throw HostFailure(message: message) }
-    }
-    @MainActor static func edit(_ store: EditorStore, _ action: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            store.edit(action) { error in
-                if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-            }
-        }
-    }
     @MainActor static func wait(_ label: String, store: EditorStore, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(45)
-        while !ready() {
-            try require(Date() < deadline && store.failure == nil, store.failure ?? "Timed out: \(label)")
-            let prepared = await withCheckedContinuation { done in store.native!.flushPersistence { done.resume(returning: $0) } }
-            try require(prepared, "Prepare canvas: \(label)")
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await CapyTest.wait(label, failure: { store.failure }, step: { try await prepare(store.native!, label) }, ready)
     }
     @MainActor static func main() async throws {
         for platform: UInt32 in [0,1] {
@@ -30,21 +14,14 @@ import QuartzCore
             defer { try? FileManager.default.removeItem(at: root) }
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root), managedWorkspaces: false)
             let native = store.native!
-            let surface = CAMetalLayer(); surface.bounds = CGRect(x:0,y:0,width:128,height:128)
-            native.attach(surface,width:128,height:128,scale:1)
+            let surface = attachSurface(store, CGSize(width: 128, height: 128))
             defer { native.detach(); withExtendedLifetime(surface) {} }
-            let deadline = Date().addingTimeInterval(45)
-            while !store.snapshot["shaders_ready"].bool {
-                try require(Date() < deadline && store.failure == nil, store.failure ?? "Metal startup")
-                let now=FrameTrace.now()
-                await withCheckedContinuation { done in native.frame(now:now,target:now+16_666_667) { _,_,_ in done.resume() } }
-                try await Task.sleep(for:.milliseconds(10))
-            }
+            try await CapyTest.wait("Metal startup", failure: { store.failure }, step: { await frame(native) }) { store.snapshot["shaders_ready"].bool }
             let master=root.appendingPathComponent("Editable.capy")
             store.projectFiles = ProjectFiles(store:store,dialogs:.init(open:{_,done in done([])},save:{_,_,done in done(master)},create:{_,done in
                 done(JSON(["extent":[128,96],"color":["space":"DisplayP3","depth":"U16"],"background":"White"]))
             }))
-            func invoke(_ command:String) async throws { try await edit(store,["type":"invoke","command":command]) }
+            func invoke(_ command:String) async throws { try await store.apply(["type":"invoke","command":command]) }
             func idle() async throws {
                 try await wait("Document completion",store:store) { !store.projectFiles.busy && !store.state["requests"].array.contains {$0["kind"]["type"].string=="document"} }
                 try require(store.projectFiles.error == nil,store.projectFiles.error ?? "")
@@ -62,9 +39,9 @@ import QuartzCore
                 try require(editor.ready && editor.previews.count==2,editor.error ?? "Two complete previews required")
             }
             try await invoke("new_document");try await idle()
-            try await edit(store,["type":"color","action":["op":"definition","color":["space":"DisplayP3","rgba":[0.7,0.3,0.15,0.8]]]])
+            try await store.apply(["type":"color","action":["op":"definition","color":["space":"DisplayP3","rgba":[0.7,0.3,0.15,0.8]]]])
             try await invoke("select_all")
-            try await edit(store,["type":"layer","action":["op":"fill_selection"]])
+            try await store.apply(["type":"layer","action":["op":"fill_selection"]])
             try await invoke("deselect")
             let captured = await withCheckedContinuation { done in native.flushPersistence { done.resume(returning:$0) } }
             try require(captured,"Finish painted raster before saving")

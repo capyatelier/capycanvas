@@ -8,13 +8,6 @@ import SwiftUI
         let value = Mirror(reflecting: cache).children.first { $0.label == "pending" }!.value
         return Mirror(reflecting: value).children.count
     }
-    @MainActor static func wait(_ label: String, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(30)
-        while !ready() {
-            try require(Date() < deadline, "Timed out: \(label)")
-            try await drain(0.005)
-        }
-    }
     @MainActor static func run() async throws {
         for platform: UInt32 in [1, 0] {
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil), managedWorkspaces: false)

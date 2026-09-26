@@ -502,11 +502,7 @@ extension XCTestCase {
     @MainActor func checkShortcutConflictAndEditorEffect(in app: XCUIApplication) {
         func activate(_ item: XCUIElement) {
             XCTAssertTrue(item.waitForExistence(timeout: 15))
-            #if os(macOS)
-            item.click()
-            #else
-            item.tap()
-            #endif
+            item.clickOrTap()
         }
         let search = app.textFields["shortcut-search"]
         activate(search); search.typeText("Zen")

@@ -2,7 +2,7 @@
 import Foundation
 import Darwin
 
-private func require(_ condition: Bool, _ message: String) {
+private func verify(_ condition: Bool, _ message: String) {
     guard condition else {
         FileHandle.standardError.write(Data("FAIL: \(message)\n".utf8))
         exit(1)
@@ -21,7 +21,7 @@ private final class Retirements: @unchecked Sendable {
         if done { complete.signal() }
     }
     func wait() {
-        require(complete.wait(timeout: .now() + 15) == .success,
+        verify(complete.wait(timeout: .now() + 15) == .success,
             "The last owner task must drain its temporary resources before idle")
     }
 }
@@ -38,12 +38,12 @@ private final class TemporaryResource: NSObject {
             let retired = Retirements(expected: 64)
             let owner = try NativeOwner(platform: platform,
                 persistence: EditorPersistence(root: nil), receive: { _, error in
-                    require(error == nil, error ?? "")
+                    verify(error == nil, error ?? "")
                 })
             for index in 0..<64 {
                 owner.submit(2, JSON(["type": "catalog"])) { reply in
-                    require(reply != nil, "The real owner request must succeed")
-                    require(retired.retired == index,
+                    verify(reply != nil, "The real owner request must succeed")
+                    verify(retired.retired == index,
                         "Native temporary resources survived their owner task")
                     // Simulate a native autoreleased return value without
                     // retaining it in the caller. Its lifetime belongs to the

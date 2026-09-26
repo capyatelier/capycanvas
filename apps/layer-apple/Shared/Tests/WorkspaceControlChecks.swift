@@ -1,5 +1,13 @@
 import XCTest
 
+#if os(macOS)
+extension XCUIElement { @MainActor func clickOrTap() { click() } }
+extension XCUICoordinate { @MainActor func clickOrTap() { click() } }
+#else
+extension XCUIElement { @MainActor func clickOrTap() { tap() } }
+extension XCUICoordinate { @MainActor func clickOrTap() { tap() } }
+#endif
+
 extension XCTestCase {
     @MainActor func workspaceViewport(in app: XCUIApplication) -> XCUIElement {
         // Child frames use screen coordinates in windowed iPad scenes, while
@@ -53,11 +61,7 @@ extension XCTestCase {
         let window = workspaceViewport(in: app).frame, bounds = drawer.frame
         let outside = workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(
             dx: (bounds.midX - window.minX) / window.width, dy: min(0.95, (bounds.maxY + 40 - window.minY) / window.height)))
-        #if os(macOS)
-        outside.click()
-        #else
-        outside.tap()
-        #endif
+        outside.clickOrTap()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: drawer)
         waitForExpectations(timeout: 5)
         XCTAssertTrue(column.exists, "Open columns use explicit dismissal")

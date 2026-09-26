@@ -152,11 +152,7 @@ extension XCTestCase {
         workspaceActivate(leftGrip)
         workspaceActivate(app.buttons["Auto-hide"].firstMatch)
         let outside = workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.65))
-        #if os(macOS)
-        outside.click()
-        #else
-        outside.tap()
-        #endif
+        outside.clickOrTap()
         XCTAssertTrue(layerGroup.waitForNonExistence(timeout: 10))
         workspaceActivate(leftGrip)
         workspaceActivate(app.buttons["Open individual panels"].firstMatch)

@@ -6,24 +6,8 @@ import UniformTypeIdentifiers
 
 /// Production source/profile worker handoffs on Metal for both Apple policies.
 @main struct SourceEditOwnerChecks {
-    static func require(_ value: Bool, _ message: String) throws {
-        if !value { throw HostFailure(message: message) }
-    }
-    @MainActor static func edit(_ store: EditorStore, _ action: [String: Any]) async throws {
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            store.edit(action) { error in
-                if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-            }
-        }
-    }
     @MainActor static func wait(_ label: String, store: EditorStore, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(45)
-        while !ready() {
-            try require(Date() < deadline && store.failure == nil, store.failure ?? "Timed out: \(label)")
-            let prepared = await withCheckedContinuation { done in store.native!.flushPersistence { done.resume(returning: $0) } }
-            try require(prepared, "Prepare canvas: \(label)")
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await CapyTest.wait(label, failure: { store.failure }, step: { try await prepare(store.native!, label) }, ready)
     }
     @MainActor static func main() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-source-owner-\(UUID())")
@@ -55,16 +39,9 @@ import UniformTypeIdentifiers
         for platform: UInt32 in [0,1] {
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root.appendingPathComponent("state-\(platform)")), managedWorkspaces: false)
             let native = store.native!
-            let surface = CAMetalLayer(); surface.bounds = CGRect(x:0,y:0,width:128,height:128)
-            native.attach(surface,width:128,height:128,scale:1)
+            let surface = attachSurface(store, CGSize(width: 128, height: 128))
             defer { native.detach(); withExtendedLifetime(surface) {} }
-            let deadline = Date().addingTimeInterval(45)
-            while !store.snapshot["shaders_ready"].bool {
-                try require(Date() < deadline && store.failure == nil, store.failure ?? "Metal startup")
-                let now=FrameTrace.now()
-                await withCheckedContinuation { done in native.frame(now:now,target:now+16_666_667) { _,_,_ in done.resume() } }
-                try await Task.sleep(for:.milliseconds(10))
-            }
+            try await CapyTest.wait("Metal startup", failure: { store.failure }, step: { await frame(native) }) { store.snapshot["shaders_ready"].bool }
             let saved=root.appendingPathComponent("Edited-\(platform).capy")
             store.projectFiles = ProjectFiles(store:store,dialogs:.init(open:{_,done in done([imageURL])},save:{_,_,done in done(saved)},create:{_,done in
                 done(JSON(["extent":[64,48],"color":["space":"Srgb","depth":"U8"],"background":"White"]))
@@ -72,7 +49,7 @@ import UniformTypeIdentifiers
             var lastCommand = "startup"
             func invoke(_ command:String) async throws {
                 lastCommand = command
-                try await edit(store,["type":"invoke","command":command])
+                try await store.apply(["type":"invoke","command":command])
             }
             func idle() async throws {
                 try await wait("Document completion after \(lastCommand)",store:store) {!store.projectFiles.busy && !store.state["requests"].array.contains {$0["kind"]["type"].string=="document"}}
@@ -104,14 +81,14 @@ import UniformTypeIdentifiers
             try require(!editor.sourceInfo["adds_layer"].bool,"Untouched photo repair replaces interpretation")
             editor.apply();try await idle();try require(store.state["layers"].array.count==count,"Untouched repair stays in place")
             try await invoke("undo");try await idle();try await invoke("redo");try await idle()
-            try await invoke("select_all");try await edit(store,["type":"layer","action":["op":"fill_selection"]]);try await invoke("deselect")
+            try await invoke("select_all");try await store.apply(["type":"layer","action":["op":"fill_selection"]]);try await invoke("deselect")
             let prepared=await withCheckedContinuation {done in native.flushPersistence {done.resume(returning:$0)}};try require(prepared,"Commit paint before source repair")
             editor=try await dialog("repair_source_profile");try await preview(editor,JSON(["Builtin":"ProPhoto"]))
             try require(editor.sourceInfo["adds_layer"].bool,"Painted photo must preserve edits and add corrected original")
             editor.apply();try await idle();try require(store.state["layers"].array.count==count+1,"Corrected source layer added")
             try await invoke("undo");try await idle();try require(store.state["layers"].array.count==count,"One-step source Undo")
             try await invoke("redo");try await idle();try require(store.state["layers"].array.count==count+1,"One-step source Redo")
-            try await edit(store,["type":"layer","action":["op":"select","id":target,"mask":false]])
+            try await store.apply(["type":"layer","action":["op":"select","id":target,"mask":false]])
             editor=try await dialog("rasterize_source");try await preview(editor,nil);editor.apply();try await idle()
             try require(!store.command("rasterize_source")["enabled"].bool,"Rasterized source cannot be rasterized again")
             try await invoke("undo");try await idle();try require(store.command("repair_source_profile")["enabled"].bool,"Undo restores retained original")

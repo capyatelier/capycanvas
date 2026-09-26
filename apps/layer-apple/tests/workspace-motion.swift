@@ -35,22 +35,14 @@ import SwiftUI
             }
             precondition(store.failure == nil, store.failure ?? "")
         }
-        func action(_ value: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                store.edit(value) { error in
-                    if let error { continuation.resume(throwing: NSError(domain: error, code: 1)) }
-                    else { continuation.resume() }
-                }
-            }
-        }
         func group() -> JSON {
             store.snapshot["layout"]["groups"].array.first { $0["panels"].array.contains { $0.string == "navigator" } } ?? JSON()
         }
         try await wait("Initial state") { !store.state.isNull }
         store.native?.resize(width: 1200, height: 870, scale: 1)
-        try await action(["type": "invoke", "command": "fit_canvas"])
+        try await store.apply(["type": "invoke", "command": "fit_canvas"])
         if group()["active"].string != "navigator" {
-            try await action(["type": "select_panel_tab", "group": group()["id"].raw, "panel": "navigator"])
+            try await store.apply(["type": "select_panel_tab", "group": group()["id"].raw, "panel": "navigator"])
         }
         let root = WorkspacePanels(store: store, workspace: store.workspace)
             .frame(width: 1200, height: 870).coordinateSpace(name: "editor-workspace")
@@ -130,11 +122,11 @@ import SwiftUI
                             && store.workspaceMotion.contentRevision != content
                     }
                     let committed = store.state["workspace"].stableKey
-                    try await action(["type": "invoke", "command": "undo_workspace"])
+                    try await store.apply(["type": "invoke", "command": "undo_workspace"])
                     precondition(store.state["workspace"].stableKey == saved, "One Undo restores the complete resize")
-                    try await action(["type": "invoke", "command": "redo_workspace"])
+                    try await store.apply(["type": "invoke", "command": "redo_workspace"])
                     precondition(store.state["workspace"].stableKey == committed)
-                    try await action(["type": "invoke", "command": "undo_workspace"])
+                    try await store.apply(["type": "invoke", "command": "undo_workspace"])
                 }
                 try await settle()
                 precondition(geometry.navigators.count == 1 && geometry.navigators[identity] != nil,
@@ -210,12 +202,12 @@ import SwiftUI
         store.workspace.move(item, point: CGPoint(x: start.x + 30, y: start.y + 15), released: true)
         try await wait("Group release publishes committed geometry") { store.state["workspace"].stableKey != floated && store.workspaceMotion.position(group()["id"].uint).isNull }
         let after = store.state["workspace"].stableKey
-        try await action(["type": "invoke", "command": "undo_workspace"])
+        try await store.apply(["type": "invoke", "command": "undo_workspace"])
         precondition(store.state["workspace"].stableKey == floated)
-        try await action(["type": "invoke", "command": "redo_workspace"])
+        try await store.apply(["type": "invoke", "command": "redo_workspace"])
         precondition(store.state["workspace"].stableKey == after)
         let zoom = store.camera.value["zoom"].number
-        try await action(["type": "invoke", "command": "zoom_in"])
+        try await store.apply(["type": "invoke", "command": "zoom_in"])
         precondition(store.camera.value["zoom"].number > zoom)
         print("PASS: platform \(platform), 24 floating moves and 64 divider/floating resize moves retain content and Navigator identity; hits, tab clips, resize handles and overview follow; cancel/release/history/camera action pass")
     }

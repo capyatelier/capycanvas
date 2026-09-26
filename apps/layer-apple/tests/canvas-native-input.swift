@@ -42,13 +42,6 @@ private final class TabletEvent: NSEvent {
 /// Actions choose tools; pointer/key/focus events use the native window through
 /// the visible editor's actual hit targets. Not physical Pencil/OS menu delivery.
 @main final class CanvasNativeInputChecks: NativeWorkspaceInputFixture {
-    @MainActor static func wait(_ label: String, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(30)
-        while !ready() {
-            try require(Date() < deadline, "Timed out: \(label)")
-            try await drain(0.01)
-        }
-    }
     @MainActor static func run(_ platform: UInt32) async throws {
         for (azimuth, x, y) in [(0.0, 1.0, 0.0), (Double.pi / 2, 0, 1), (Double.pi, -1, 0), (-Double.pi / 2, 0, -1)] {
             let tilt = StylusTilt.towardBarrel(altitude: .pi / 4, azimuth: azimuth)
@@ -90,12 +83,7 @@ private final class TabletEvent: NSEvent {
         }
         defer { if let monitor { NSEvent.removeMonitor(monitor) } }
         func action(_ value: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                store.edit(value) { error in
-                    if let error { done.resume(throwing: HostFailure(message: error)) }
-                    else { done.resume() }
-                }
-            }
+            try await store.apply(value)
             try await drain(0.02)
             try require(store.failure == nil, store.failure ?? "")
         }

@@ -4,23 +4,12 @@ import SwiftUI
 /// Real native capture with the shared dock views and owner. Temporary windows
 /// and stores keep these mouse/tablet events separate from artist documents.
 @main final class ColumnStackInputChecks: NativeWorkspaceInputFixture {
-    @MainActor static func wait(_ label: String, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(15)
-        while !ready() {
-            try require(Date() < deadline, "Timed out: \(label)")
-            try await drain(0.01)
-        }
-    }
     @MainActor static func run(_ platform: UInt32) async throws {
         let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
         try await wait("Initial models") { !store.state.isNull }
         store.native?.resize(width: 1200, height: 870, scale: 1)
         func action(_ value: [String: Any]) async throws {
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                store.edit(value) { error in
-                    if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() }
-                }
-            }
+            try await store.apply(value)
             try await drain()
         }
         func edit(_ value: [String: Any]) async throws { try await action(["type":"customize", "action":value]) }

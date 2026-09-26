@@ -4,13 +4,6 @@ import SwiftUI
 /// Run the actual editor's OpenURLAction callback without opening a browser,
 /// attaching a Metal surface or touching the artist's settings and drawings.
 @main struct ApplicationLinkChecks {
-    @MainActor static func wait(_ description: String, _ ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(10)
-        while !ready() {
-            guard Date() < deadline else { throw HostFailure(message: description) }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
     @MainActor static func main() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)

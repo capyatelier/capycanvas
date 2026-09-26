@@ -232,11 +232,7 @@ extension XCTestCase {
         func activate(_ element: XCUIElement) {
             XCTAssertTrue(element.waitForExistence(timeout: 5))
             XCTAssertTrue(element.isHittable)
-            #if os(macOS)
-            element.click()
-            #else
-            element.tap()
-            #endif
+            element.clickOrTap()
         }
         capturePaintEditor(in: app)
         for command in ["zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"] {
@@ -263,18 +259,10 @@ extension XCTestCase {
     }
 
     @MainActor func checkNumericToolControls(in app: XCUIApplication) {
-        func activate(_ element: XCUIElement) {
-            XCTAssertTrue(element.waitForExistence(timeout: 5))
-            #if os(macOS)
-            element.click()
-            #else
-            element.tap()
-            #endif
-        }
         capturePaintEditor(in: app)
         let value = app.buttons["number-value-tool-size"]
         let entry = app.textFields["number-entry-tool-size"]
-        activate(value)
+        workspaceActivate(value)
         XCTAssertTrue(entry.waitForExistence(timeout: 5))
         entry.typeText("20 + 22\n")
         expectation(for: NSPredicate(format: "value BEGINSWITH %@", "42"), evaluatedWith: value)
@@ -282,26 +270,26 @@ extension XCTestCase {
         let sizePanel = app.buttons["number-value-Brush size"]
         // Tool and Brush size share one tab group in the current default layout.
         // Inspect the independent readout only after mounting its actual tab.
-        activate(app.buttons["panel-tab-sizes"])
+        workspaceActivate(app.buttons["panel-tab-sizes"])
         XCTAssertTrue(sizePanel.waitForExistence(timeout: 5))
         XCTAssertTrue((sizePanel.value as? String)?.hasPrefix("42") == true,
             "Tool Settings and Brush size must reflect the same accepted Rust edit")
-        activate(app.buttons["panel-tab-tool_settings"])
-        activate(app.buttons["number-increase-tool-size"])
+        workspaceActivate(app.buttons["panel-tab-tool_settings"])
+        workspaceActivate(app.buttons["number-increase-tool-size"])
         expectation(for: NSPredicate { _, _ in (value.value as? String)?.hasPrefix("42") == false }, evaluatedWith: value)
         waitForExpectations(timeout: 5)
         let accepted = value.value as? String
-        activate(value)
+        workspaceActivate(value)
         entry.typeText("1 / 0\n")
         let error = app.staticTexts["number-error-tool-size"]
         XCTAssertTrue(error.waitForExistence(timeout: 5))
-        activate(app.buttons["panel-tab-sizes"])
+        workspaceActivate(app.buttons["panel-tab-sizes"])
         XCTAssertTrue(sizePanel.waitForExistence(timeout: 5))
         XCTAssertEqual(sizePanel.value as? String, accepted, "An invalid expression must preserve brush size")
-        activate(app.buttons["panel-tab-tool_settings"])
+        workspaceActivate(app.buttons["panel-tab-tool_settings"])
         // Changing tabs retires the draft. Re-enter an invalid expression to
         // check Escape/correction independently of that view-lifecycle behavior.
-        activate(value)
+        workspaceActivate(value)
         entry.typeText("1 / 0\n")
         XCTAssertTrue(error.waitForExistence(timeout: 5))
         #if os(macOS)
@@ -320,25 +308,25 @@ extension XCTestCase {
         XCTAssertFalse(error.exists, "A corrected expression must clear local feedback")
         #endif
         let remembered = value.value as? String
-        activate(app.buttons["tool-group-1"])
-        activate(app.buttons["brush-7"])
+        workspaceActivate(app.buttons["tool-group-1"])
+        workspaceActivate(app.buttons["brush-7"])
         XCTAssertTrue(app.buttons["brush-7"].isSelected, "The Marker brush must become selected")
         let markerSize = value.value as? String
-        activate(app.buttons["tool-group-0"])
+        workspaceActivate(app.buttons["tool-group-0"])
         XCTAssertTrue(app.buttons["brush-1"].isSelected, "Returning to Pen must restore its selected subtool")
         XCTAssertEqual(value.value as? String, remembered, "Changing groups must preserve each brush's edited size")
-        activate(app.buttons["panel-tab-sizes"])
+        workspaceActivate(app.buttons["panel-tab-sizes"])
         let sizeEntry = app.textFields["number-entry-Brush size"]
         for draft in ["37", "2 * ("] {
-            activate(sizePanel)
+            workspaceActivate(sizePanel)
             XCTAssertTrue(sizeEntry.waitForExistence(timeout: 5))
             sizeEntry.typeText(draft)
-            activate(app.buttons["tool-group-1"])
+            workspaceActivate(app.buttons["tool-group-1"])
             XCTAssertTrue(app.buttons["brush-7"].isSelected)
             XCTAssertTrue(sizeEntry.waitForNonExistence(timeout: 5), "The draft must not follow a brush switch")
             XCTAssertEqual(sizePanel.value as? String, markerSize, "The old size draft must not edit Marker")
             XCTAssertFalse(app.staticTexts["number-error-Brush size"].exists)
-            activate(app.buttons["tool-group-0"])
+            workspaceActivate(app.buttons["tool-group-0"])
         }
         attachEditor(in: app, name: "brush-size-draft-switch")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

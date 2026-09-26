@@ -21,12 +21,6 @@ import SwiftUI
             NSApp.postEvent(delivery, atStart: false)
         }
     }
-    @MainActor static func wait(_ label: String, until ready: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(15)
-        while !ready() {
-            try require(Date() < deadline, "Timed out: \(label)"); try await drain(0.01)
-        }
-    }
     @MainActor static func run(_ platform: UInt32) async throws {
         let editor = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
         try await wait("editor startup") { !editor.state["layers"].array.isEmpty }

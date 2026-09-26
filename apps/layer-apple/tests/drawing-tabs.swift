@@ -8,27 +8,14 @@ import QuartzCore
         defer { try? FileManager.default.removeItem(at: root) }
         for platform: UInt32 in [0, 1] {
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root.appendingPathComponent("owner-\(platform)")), managedWorkspaces: false)
-            let native = store.native!, surface = CAMetalLayer()
-            surface.bounds = CGRect(x: 0, y: 0, width: 256, height: 192)
-            native.attach(surface, width: 256, height: 192, scale: 1)
+            let native = store.native!, surface = attachSurface(store, CGSize(width: 256, height: 192))
             defer { native.detach(); withExtendedLifetime(surface) {} }
             func wait(_ name: String, _ ready: () -> Bool) async throws {
-                let deadline = Date().addingTimeInterval(60)
-                while !ready() {
-                    if let error = store.failure ?? store.projectFiles.error { throw HostFailure(message: "\(name): \(error)") }
-                    guard Date() < deadline else { throw HostFailure(message: "Timed out: \(name)") }
-                    let now = FrameTrace.now()
-                    await withCheckedContinuation { done in native.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() } }
-                    try await Task.sleep(for: .milliseconds(10))
-                }
-            }
-            func edit(_ action: [String: Any]) async throws {
-                try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                    store.edit(action) { error in if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume() } }
-                }
+                try await CapyTest.wait(name, seconds: 60, failure: { (store.failure ?? store.projectFiles.error).map { "\(name): \($0)" } },
+                    step: { await frame(native) }, ready)
             }
             func invoke(_ command: String) async throws {
-                try await edit(["type": "invoke", "command": command])
+                try await store.apply(["type": "invoke", "command": command])
                 try await wait(command) { !store.projectFiles.busy && store.state["requests"].array.isEmpty }
             }
             func select(_ id: UInt64) async throws {

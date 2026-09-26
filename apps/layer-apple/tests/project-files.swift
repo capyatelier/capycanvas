@@ -6,12 +6,7 @@ import ImageIO
 @main struct ProjectFileChecks {
     @MainActor static var prepareFrame: (() async throws -> Void)?
     @MainActor static func wait(_ description: String, _ condition: () -> Bool) async throws {
-        let end = Date().addingTimeInterval(45)
-        while !condition() {
-            precondition(Date() < end, description)
-            if let prepareFrame { try await prepareFrame() }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await CapyTest.wait(description, step: { if let prepareFrame { try await prepareFrame() } }, condition)
     }
     @MainActor static func startupFrame(_ store: EditorStore) async throws {
         // No display link drives this fixture. Prepare document work without a
@@ -75,8 +70,7 @@ import ImageIO
                         catch { preconditionFailure("Provider copy failed: \(error)") }
                     } else { callback(nil) }
                 } : nil, exportOptions: { $0.choose($0.recipe) }))
-            let layer = CAMetalLayer(); layer.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
-            store.native!.attach(layer, width: 128, height: 128, scale: 1)
+            let layer = attachSurface(store, CGSize(width: 128, height: 128))
             let startupDeadline = Date().addingTimeInterval(45)
             while !store.snapshot["shaders_ready"].bool && store.failure == nil {
                 precondition(Date() < startupDeadline, "Native canvas startup did not finish")

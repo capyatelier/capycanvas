@@ -25,11 +25,7 @@ extension XCTestCase {
             }
             let point = viewport.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
                 dx: bounds.midX - viewport.frame.minX, dy: bounds.midY - viewport.frame.minY))
-            #if os(macOS)
-            point.click()
-            #else
-            point.tap()
-            #endif
+            point.clickOrTap()
         }
         XCTAssertTrue(painter.waitForExistence(timeout: 30))
         workspaceActivate(illustrator)

@@ -7,9 +7,6 @@ extension XCTestCase {
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
-        func activate(_ control: XCUIElement) {
-            workspaceActivate(control)
-        }
         func drag(_ control: XCUIElement, to destination: XCUICoordinate) {
             XCTAssertTrue(control.waitForExistence(timeout: 10))
             let start = control.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -19,7 +16,7 @@ extension XCTestCase {
             start.press(forDuration: 0.1, thenDragTo: destination)
             #endif
         }
-        activate(app.buttons["column-icon-toolbar"])
+        workspaceActivate(app.buttons["column-icon-toolbar"])
         let toolbar = app.buttons["drawer-tab-toolbar"], brushes = app.buttons["drawer-tab-brushes"]
         XCTAssertTrue(toolbar.waitForExistence(timeout: 10)); XCTAssertTrue(brushes.exists)
         XCTAssertGreaterThan(toolbar.frame.midX, brushes.frame.midX)
@@ -34,7 +31,7 @@ extension XCTestCase {
         let floating = app.descendants(matching: .any)["toolbar-options-toolbar"].firstMatch
         XCTAssertTrue(floating.waitForExistence(timeout: 10), "A drawer tab must tear off into a live floating panel")
         XCTAssertTrue(toolbar.waitForNonExistence(timeout: 10))
-        if !brushes.exists { activate(app.buttons["column-icon-brushes"]) }
+        if !brushes.exists { workspaceActivate(app.buttons["column-icon-brushes"]) }
         XCTAssertTrue(brushes.waitForExistence(timeout: 10))
         drag(floating, to: brushes.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
         XCTAssertTrue(toolbar.waitForExistence(timeout: 10), "Dropping on an open drawer must join its dock group")
