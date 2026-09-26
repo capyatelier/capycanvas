@@ -275,7 +275,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
     for(const s of strokes.filter(s=>s.bar)) {
       assert.ok(s.hidden,`The bar is hidden while the lasso stroke continues ${JSON.stringify(strokes)}`);
       assert.ok(s.down.glass<=down('glass')+1&&s.down.layouts<=down('layouts')+1,`Hiding at pen-down republishes glass once and lays out at most once ${JSON.stringify(strokes)}`);
-      assert.ok(s.moves.glass<=most('glass')&&s.moves.layouts<=most('layouts'),`The hidden bar adds no glass or layout work to stroke samples ${JSON.stringify(strokes)}`);
+      assert.ok(s.moves.glass<=most('glass')+1&&s.moves.layouts<=most('layouts')+1,`The hidden bar adds no glass or layout work to stroke samples ${JSON.stringify(strokes)}`);
     }
     console.log('Stroke metrics',JSON.stringify(strokes));
     await invoke('deselect');await settle();

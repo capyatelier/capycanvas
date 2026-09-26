@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Drag convention](../ui/drag-and-reorder.md) · [Panel transparency](../ui/panel-transparency.md)
 
-Status: **in progress.** Done and pushed: A1–A3, B1–B3, C1 (GTK), D1–D8, E1, E2, F1 (Web) and finger-touch handles for every transform. The Web journey still has to run in Chrome on the MovinkPad 11. The current behavior is documented in [the canvas action bar guide](../ui/canvas-action-bar.md).
+Status: **in progress.** Done and pushed: A1–A3, B1–B3, C1 (GTK), D1–D8, E1, E2, F1 (Web, including Chrome on the MovinkPad 11) and finger-touch handles for every transform. 24 MP photo transforms without adjustment layers are being brought to 120 Hz; adjustment layers above a transformed layer will be optimized later. The current behavior is documented in [the canvas action bar guide](../ui/canvas-action-bar.md).
 
 Two refinements made during implementation:
 - **More opens a menu,** not the Tool Options drawer: the items that did not fit (mode choices as submenus), then the context's own menu and the bar toggle. Bar items are commands and choices that menus can represent, so no new drawer anchor was needed on any host.
