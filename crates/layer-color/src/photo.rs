@@ -28,9 +28,6 @@ pub use gainmap::{preview_gainmap_rows_with_guide, write_gainmap_rows_with_guide
 pub use hdr_png::{inspect_hdr_rows, preview_hdr_rows, write_hdr_png_rows};
 mod bmp_io;
 mod gif_io;
-// Native HEIF is retained only as an independent interoperability oracle.
-#[cfg(all(test, feature = "native-codec-reference", target_os = "linux"))]
-mod heif_io;
 mod raster_io;
 mod tiff_io;
 #[cfg(test)]

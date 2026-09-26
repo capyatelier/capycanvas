@@ -1560,12 +1560,10 @@ Reproduce references with the system libavif 1.3.0/AOM library and C compiler:
 
 ```sh
 python3 tools/validation/avif_reference.py --fetch --output /tmp/capy-avif-reference
-CAPY_PHOTO_CODEC_DIR=target/photo-codec-reference/prefix/lib LAYER_HEIF_REFERENCES=target/photo-codec-reference/build/libheif-1.23.4 LAYER_AVIF_REFERENCES=/tmp/capy-avif-reference cargo test --locked --offline -p layer-color --features native-codec-reference --lib heif_ -- --include-ignored --nocapture
 ```
 
-Use absolute paths for the three environment variables if running outside the
-repository root. The helper verifies pinned downloads and records generator and
-pixel-reference hashes; fixture images remain outside application assets.
+The helper verifies pinned downloads and records generator and pixel-reference
+hashes; fixture images remain outside application assets.
 
 ### Native GTK and complete-package delivery
 

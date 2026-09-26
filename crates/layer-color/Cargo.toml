@@ -28,9 +28,6 @@ image-webp = "=0.2.4"
 # Sequential block IO keeps HDR interchange bounded on native and wasm.
 exr = { version = "=1.74.0", default-features = false }
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-libloading = "=0.8.9"
-
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 sysinfo = { version = "=0.37.2", default-features = false, features = ["system", "apple-sandbox"] }
 

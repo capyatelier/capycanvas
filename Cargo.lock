@@ -1301,7 +1301,6 @@ dependencies = [
  "image-webp",
  "layer-core",
  "libjpeg-turbo-rs",
- "libloading",
  "moxcms 0.9.1",
  "oxideav-av1",
  "png 0.18.1",
