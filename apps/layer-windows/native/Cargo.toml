@@ -26,5 +26,4 @@ layer-core = { path = "../../../crates/layer-core", features = ["test-support"] 
 png = "0.17.16"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62.2", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Gdi", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Storage_FileSystem", "Win32_System_WinRT", "Graphics_Imaging", "Storage", "Storage_Streams"] }
-windows-future = "0.3.2"
+windows = { version = "0.62.2", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Gdi", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Storage_FileSystem"] }

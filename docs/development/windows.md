@@ -183,8 +183,8 @@ Autosave and close preserve edits accepted while an earlier save is pending.
 The native File menu and pickers provide New, Open, Save, Save As and PNG Export.
 Layers uses virtualized native rows and bounded asynchronous GPU thumbnails.
 Layer menus and editing controls share their policy with the other ports.
-The Layers image picker decodes oriented sRGB pixels on the document worker;
-shared Core owns insertion, Undo and embedded project assets. Panel configuration
+The Layers image picker and image drops decode on the document worker and place
+the color-managed sources through the shared placement workflow. Panel configuration
 and toolbar management use shared layout and actions. New Toolbar can start empty
 or copy a saved definition; the native manager saves, adds, renames and deletes
 library entries while keeping installed copies independent. Toolbars host the

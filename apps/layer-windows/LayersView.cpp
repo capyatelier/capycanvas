@@ -116,7 +116,7 @@ void LayersView::init(){
     }});
     controls.emplace_back([data=data,import](J,J){
         auto file=object(data->state,L"document_file");
-        import.IsEnabled(flag(data->model,L"brush_ready")&&!flag(data->model,L"windows_importing")&&!flag(file,L"busy")&&!flag(file,L"close_ready"));import.Opacity(import.IsEnabled()?1.:.36);
+        import.IsEnabled(flag(data->model,L"brush_ready")&&!flag(file,L"busy")&&!flag(file,L"close_ready"));import.Opacity(import.IsEnabled()?1.:.36);
     });
     auto remove=footerButton(L"delete",L"Delete selected layers",L"layer-delete",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"delete_selected")}}));});
     controls.emplace_back([weak,remove](J,J){if(auto self=weak.lock()){remove.IsEnabled(flag(self->view(),L"can_delete"));remove.Opacity(remove.IsEnabled()?1.:.36);}});

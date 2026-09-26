@@ -302,7 +302,7 @@ function Import-Start {
     Picker 'Open'
 }
 function Import-Idle {
-    Wait-Until {$current=Model;$current -and !$current.windows_importing -and !$current.state.document_file.busy} 'Image import did not finish' 30
+    Wait-Until {$current=Model;$current -and !$current.state.document_file.busy} 'Image import did not finish' 30
     $script:scope=$root
 }
 $opacity=Find-Id 'layer-opacity'

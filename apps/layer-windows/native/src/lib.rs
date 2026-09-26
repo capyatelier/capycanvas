@@ -24,8 +24,6 @@ mod events;
 #[cfg(any(target_os = "windows", test))]
 mod filter_packages;
 #[cfg(any(target_os = "windows", test))]
-mod image_import;
-#[cfg(any(target_os = "windows", test))]
 mod navigator;
 #[cfg(any(target_os = "windows", test))]
 mod previews;

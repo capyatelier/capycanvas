@@ -1271,8 +1271,6 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
         if(message.empty())message=str(object(model,L"windows_filter_load"),L"error");
         if(message.empty()&&!flag(model,L"brush_ready"))message=L"Preparing brushes…";
         if(message.empty()&&flag(object(model,L"windows_filter_load"),L"pending"))message=L"Loading filters…";
-        if(message.empty()&&flag(model,L"windows_importing")&&!flag(object(model,L"windows_image_import"),L"picking"))
-            message=L"Importing image…";
         if(message.empty())message=str(object(model,L"windows_proof"),L"text");
         status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
     }

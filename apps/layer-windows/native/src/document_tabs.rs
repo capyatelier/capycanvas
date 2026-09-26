@@ -98,7 +98,6 @@ impl DocumentService {
     }
     fn idle(&self) -> bool {
         self.active.is_none()
-            && self.import.is_none()
             && self.workflow.is_none()
             && !self.workflow_running
             && self.activating.is_none()

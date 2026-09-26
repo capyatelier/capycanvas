@@ -79,17 +79,6 @@ impl Fixture {
         self.device = device;
         self.host.startup = Default::default();
     }
-    fn import(&mut self, path: &str) {
-        self.dispatch(DocumentAction::RequestImport);
-        let id = self.service.import_request().unwrap()["id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        self.dispatch(DocumentAction::ImportImage {
-            id,
-            path: Some(path.into()),
-        });
-    }
     fn prepare(&mut self, open: Option<&str>) {
         invoke(
             &mut self.host,
@@ -126,60 +115,13 @@ impl Drop for Fixture {
 
 #[test]
 #[ignore = "Removes process-owned D3D12 hardware devices; run this module alone"]
-fn decoded_import_survives_removal_before_adoption() {
-    let mut f = Fixture::new();
-    let source = f.path("source.png");
-    let rgba = [210u8, 45, 83, 180].repeat(12);
-    let mut encoder = png::Encoder::new(File::create(&source).unwrap(), 4, 3);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder
-        .write_header()
-        .unwrap()
-        .write_image_data(&rgba)
-        .unwrap();
-    f.import(&source);
-    f.finish();
-    let expected = image(&mut f.host).bytes;
-    invoke(&mut f.host, CommandId::Undo);
-    let baseline = image(&mut f.host).bytes;
-    assert_ne!(expected, baseline);
-    let document = f.host.session.engine().document().clone();
-    f.import(&source);
-    f.wait();
-    std::fs::remove_file(&source).unwrap(); // Recovery must use the accepted decode.
-    f.remove_device();
-    f.poll();
-    assert!(f.service.importing(), "Do not upload to a removed renderer");
-    assert_eq!(f.host.session.engine().document(), &document);
-    f.retire_renderer();
-    f.poll();
-    assert!(
-        f.service.importing(),
-        "Retain decoded bytes during reconstruction"
-    );
-    assert!(f.host.error.is_none());
-    f.restore_renderer();
-    f.poll();
-    assert!(!f.service.importing());
-    assert!(f.host.error.is_none(), "{:?}", f.host.error);
-    assert_eq!(image(&mut f.host).bytes, expected);
-    invoke(&mut f.host, CommandId::Undo);
-    assert_eq!(image(&mut f.host).bytes, baseline);
-    invoke(&mut f.host, CommandId::Redo);
-    assert_eq!(image(&mut f.host).bytes, expected);
-    f.device.check().unwrap();
-}
-
-#[test]
-#[ignore = "Removes process-owned D3D12 hardware devices; run this module alone"]
 fn new_open_and_save_keep_the_authoritative_document_across_removal() {
     let mut f = Fixture::new();
     f.host
         .session
         .import_layer_asset(
             "Embedded",
-            ProjectAsset {
+            layer_core::ProjectAsset {
                 extent: [2, 2],
                 format: layer_core::ProjectAssetFormat::Rgba8Srgb,
                 bytes: Arc::from([30u8, 90, 210, 180].repeat(4)),

@@ -8,9 +8,7 @@ pub(crate) struct WindowsMetadata {
     pub windows_gpu_generation: u64,
     pub windows_display: Value,
     pub windows_rendering_suspended: bool,
-    pub windows_importing: bool,
     pub windows_filter_load: Option<crate::filter_packages::Status>,
-    pub windows_image_import: Option<Value>,
     pub windows_document: Option<Value>,
     pub windows_proof: Option<layer_ui::proof_workflow::ProofStatus>,
     pub windows_proof_form: Value,
@@ -53,9 +51,7 @@ mod tests {
             windows_gpu_generation: 1,
             windows_display: Value::Null,
             windows_rendering_suspended: false,
-            windows_importing: false,
             windows_filter_load: None,
-            windows_image_import: None,
             windows_document: None,
             windows_proof: None,
             windows_proof_form: Value::Null,
@@ -80,16 +76,12 @@ mod tests {
         let (mut actual, _) = packet(new);
         assert!(actual["workspace_update"].is_object());
         assert_eq!(actual["windows_isolated_settings"], true);
-        assert_eq!(actual["windows_importing"], false);
-        assert!(actual["windows_image_import"].is_null());
         for field in [
             "workspace_update",
             "windows_gpu_generation",
             "windows_display",
             "windows_rendering_suspended",
-            "windows_importing",
             "windows_filter_load",
-            "windows_image_import",
             "windows_document",
             "windows_proof",
             "windows_proof_form",
@@ -259,15 +251,10 @@ mod tests {
     fn windows_metadata_is_escaped_without_rewriting_shared_models() {
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         let mut extra = metadata();
-        extra.windows_importing = true;
-        extra.windows_image_import = Some(json!({"title":"Quoted \"layer\"\n\\","epoch":"42"}));
+        extra.windows_document = Some(json!({"title":"Quoted \"layer\"\n\\","epoch":"42"}));
         let value: Value =
             serde_json::from_slice(&take(&mut host, &extra).unwrap().unwrap()).unwrap();
-        assert_eq!(
-            value["windows_image_import"],
-            extra.windows_image_import.unwrap()
-        );
-        assert_eq!(value["windows_importing"], true);
+        assert_eq!(value["windows_document"], extra.windows_document.unwrap());
         assert!(value["state"].is_object());
     }
 }
