@@ -92,7 +92,6 @@ and `CAPY_PHOTO_CODEC_DIR` to its photo directory for test executables):
 ```sh
 cargo test --locked --offline --release -p layer-linux --no-run
 python3 tools/performance/gtk-phase4.py CANDIDATE PARENT FIXED CURRENT_60MP_CAPY OUTPUT
-cargo run --locked --offline --release -p layer-color --example local_tone_limits
 python3 tools/validation/gtk_package_photo.py --binary RELOCATED/bin/capycanvas \
   --photo HDR_MASTER --photo HDR_AVIF --output EMPTY_EVIDENCE_DIRECTORY
 ```
@@ -112,12 +111,13 @@ Swatches and per-layer thumbnails retain their documented point-color mapping.
 Animated views replace the last complete guide at most twice per second;
 worker time can make updates slower. Export analyzes the captured frame, so a
 moving view can differ from that frame's final export. There is no temporal
-interpolation or proven flicker bound. The reproducible `local_tone_limits`
-assessment moves a six-stop light over textured background at 30 fps and
-compares the same current-frame pixel through old/new guides. Even ideal 2 Hz
-refresh produced a maximum 0.17837 linear or 102.63 encoded-sRGB-code change at
-publication; maximum stale-guide discrepancy was 0.22393 linear. These are
-adversarial synthetic mapping differences, not a perceptual or optical test.
+interpolation or proven flicker bound. The retired `local_tone_limits`
+assessment (removed after 2aa1d6d2) moved a six-stop light over textured
+background at 30 fps and compared the same current-frame pixel through old/new
+guides. Even ideal 2 Hz refresh produced a maximum 0.17837 linear or 102.63
+encoded-sRGB-code change at publication; maximum stale-guide discrepancy was
+0.22393 linear. These are adversarial synthetic mapping differences, not a
+perceptual or optical test.
 Animated local-tone preview is **not qualified as flicker-free**. Static artwork
 interaction and captured-frame exports have a separate qualification scope.
 

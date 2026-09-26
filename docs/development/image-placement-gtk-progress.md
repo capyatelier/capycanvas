@@ -801,10 +801,10 @@ qualification are recorded under [full-source thumbnails](#full-source-layers-th
 
 ### Isolated AVIF load and cancellation
 
-The release `photo_sources` runner now supports `cancel INPUT DELAY_MS` to
-measure cancellation acknowledgement during a real load. It stops its timer
-when a load finishes early and reports cancellation only when the shared reader
-returns the cancellation error. This is a file/codec/source-packing workload;
+The retired release `photo_sources` runner (removed after 2aa1d6d2) measured
+cancellation acknowledgement during a real load. It stopped its timer when a
+load finished early and reported cancellation only when the shared reader
+returned the cancellation error. This is a file/codec/source-packing workload;
 it does not exercise GTK or identify the exact internal codec phase.
 
 On the 61 MP AVIF above, with no compiler or GPU test active, source preparation
