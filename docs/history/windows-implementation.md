@@ -2932,3 +2932,20 @@ Back, keyboard selection, empty results, outside dismissal without painting,
 touch activation, unavailable reasons and palette focus. Workspace layout,
 editor, header, toolbar, palette and canvas-editing fixtures pass with the new
 Edit menu entry and tool catalog command.
+
+### Portable and MSIX refresh at 2aa1d6d (2026-09-26)
+
+Both packages contain clean source 2aa1d6d, including on-demand shaders and
+command search. They no longer carry a copy of the embedded filter catalog.
+The portable ZIP contains 1,442 files and is 77,410,922 bytes; its SHA-256 is
+4acff68c753e86e9c6c7233fd7b364088fb35233b29d960863d7ee5c21e7669d. The unsigned
+1.0.0.0 test-identity MSIX contains 1,448 archive files and is 77,596,507
+bytes; its SHA-256 is
+7bdbd820d480af8352699f36b659310bc4c8016da0e657706062f857d85cd57e.
+
+Repeated assembly produces identical archives. The extracted ZIP passes
+inventory, app-local runtime origins, launch, drawing/Undo/Redo, pan/resize and
+clean exit. The MSIX passes archive inventory, MakeAppx extraction, the
+activation manifest, repeated logos, normalization, ZIP32, signed-package
+refusal, invalid inputs and lock handling. No signing, installation,
+update/uninstall or clean-machine test occurred.

@@ -1,6 +1,6 @@
 # Windows acceptance status
 
-2026-09-26: [on-demand shaders on Windows](../history/windows-implementation.md#on-demand-shaders-on-windows-2026-09-26) removes the startup shader warmup and the duplicate filter catalog, with startup timings and the full fixture sweep.
+2026-09-26: [on-demand shaders on Windows](../history/windows-implementation.md#on-demand-shaders-on-windows-2026-09-26) removes the startup shader warmup and the duplicate filter catalog, with startup timings and the full fixture sweep; [command search](../history/windows-implementation.md#command-search-on-windows-2026-09-26) is available; the [package refresh at 2aa1d6d](../history/windows-implementation.md#portable-and-msix-refresh-at-2aa1d6d-2026-09-26) records the current ZIP and MSIX hashes.
 
 2026-09-25 (later): the [Windows follow-up through 32f53ce](../history/windows-implementation.md#windows-follow-up-through-32f53ce-2026-09-25) adds forwarded file launches and multi-copy recovery, and the [package refresh at e6bcb4d](../history/windows-implementation.md#portable-and-msix-refresh-at-e6bcb4d-2026-09-25) records the current ZIP and MSIX hashes.
 
