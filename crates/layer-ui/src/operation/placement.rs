@@ -56,30 +56,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             .clone();
         if layer.source.is_none() { return Err("Select a retained photo layer".into()); }
         let mut bounds = content_bounds(doc, layer.id);
-        let [a, b, c, d, _, _] = layer.properties.placement.0;
-        let sx = a.hypot(b);
-        let sy = (a * d - b * c) / sx;
-        let mut pose = Pose {
-            offset: sub(
-                layer.properties.placement.map(center(bounds)),
-                center(bounds),
-            ),
-            scale: [sx, sy],
-            angle: b.atan2(a),
-        };
-        // Current placement handles expose scale/rotation, without a skew tool.
-        // Refuse a sheared external pose before replacing its exact geometry.
-        if pose
-            .affine(center(bounds))
-            .0
-            .iter()
-            .zip(layer.properties.placement.0)
-            .any(|(x, y)| (*x - y).abs() > 0.001 * y.abs().max(1.))
-        {
-            return Err(
-                "This layer has skewed geometry; scale/rotate handles cannot edit it yet".into(),
-            );
-        }
+        let mut pose = Pose::from_affine(layer.properties.placement, center(bounds))
+            .ok_or("This layer has invalid placement geometry")?;
         let (insertion, rollback, ids, selected) = imported.map_or_else(
             || (None, Edit::ReplaceLayer(Box::new(layer.clone())), vec![layer.id],
                 self.layer_interaction.selected.clone()),

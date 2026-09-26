@@ -10,11 +10,13 @@ mod placement;
 use placement::Placement;
 pub(crate) use placement::PlacementInsertion;
 
+/// Translate, rotate, shear x by y, then scale, all about the box centre.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Pose {
     offset: Point,
     scale: [f32; 2],
     angle: f32,
+    shear: f32,
 }
 impl Pose {
     fn identity() -> Self {
@@ -22,12 +24,46 @@ impl Pose {
             offset: Point::default(),
             scale: [1.; 2],
             angle: 0.,
+            shear: 0.,
         }
     }
+    fn linear(self) -> [f32; 4] {
+        let (s, c) = self.angle.sin_cos();
+        let [sx, sy] = self.scale;
+        let k = self.shear;
+        [c * sx, s * sx, (c * k - s) * sy, (s * k + c) * sy]
+    }
     fn affine(self, pivot: Point) -> Affine {
-        Affine::around(pivot, self.scale, self.angle, self.offset)
+        let [a, b, c, d] = self.linear();
+        Affine::translation(sub(Point::default(), pivot))
+            .then(Affine([a, b, c, d, 0., 0.]))
+            .then(Affine::translation(add(pivot, self.offset)))
+    }
+    fn from_affine(affine: Affine, pivot: Point) -> Option<Self> {
+        let [a, b, c, d, _, _] = affine.0;
+        let sx = a.hypot(b);
+        let angle = b.atan2(a);
+        let (s, co) = angle.sin_cos();
+        let sy = co * d - s * c;
+        let pose = Self {
+            offset: sub(affine.map(pivot), pivot),
+            scale: [sx, sy],
+            angle,
+            shear: (co * c + s * d) / sy,
+        };
+        let det = a * d - b * c;
+        (det.abs() > 1e-6 * (a * a + b * b + c * c + d * d) && pose.shear.is_finite()).then_some(pose)
+    }
+    fn map_linear(self, v: Point) -> Point {
+        let [a, b, c, d] = self.linear();
+        Point {
+            x: a * v.x + c * v.y,
+            y: b * v.x + d * v.y,
+        }
     }
 }
+/// Skew is presented as an angle; its tangent is the pose shear.
+const MAX_SKEW: f32 = 85. * std::f32::consts::PI / 180.;
 #[derive(Clone, Copy)]
 enum Handle {
     Move,
@@ -431,6 +467,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 t.pose.angle,
             ),
+            (
+                "transform_skew",
+                "Skew",
+                "Skew",
+                NumericControl {
+                    scale: 180. / std::f64::consts::PI,
+                    step: std::f64::consts::PI / 180.,
+                    resolution: 0.00001,
+                    digits: 1,
+                    ..NumericControl::number(-f64::from(MAX_SKEW), f64::from(MAX_SKEW), 0.01, 3)
+                        .unit("°")
+                },
+                t.pose.shear.atan(),
+            ),
         ]
         .into_iter()
         .map(
@@ -458,6 +508,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             "transform_x" => pose.offset.x = value,
             "transform_y" => pose.offset.y = value,
             "transform_angle" => pose.angle = value,
+            "transform_skew" => pose.shear = value.tan(),
             "transform_width" | "transform_height" => {
                 if value.abs() < 0.001 {
                     return Err("Scale cannot be zero".into());
@@ -692,6 +743,36 @@ impl Transaction {
                 pose.angle = (pose.angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
                     - std::f32::consts::PI;
             }
+            Handle::Scale(side) if modifiers.command && (side[0] == 0. || side[1] == 0.) => {
+                let start = pose.affine(pivot);
+                let moving = local_handle(self.bounds, side);
+                let fixed = local_handle(self.bounds, side.map(|v| -v));
+                let top_bottom = side[0] == 0.;
+                let along = pose.map_linear(if top_bottom {
+                    Point { x: 1., y: 0. }
+                } else {
+                    Point { x: 0., y: 1. }
+                });
+                let delta = sub(p, drag.press);
+                let travel = (delta.x * along.x + delta.y * along.y) / (along.x * along.x + along.y * along.y);
+                let lever = if top_bottom { moving.y - fixed.y } else { moving.x - fixed.x };
+                let limit = MAX_SKEW.tan();
+                let skew = if top_bottom {
+                    (travel / lever).clamp(-limit - pose.shear, limit - pose.shear)
+                } else {
+                    travel / lever
+                };
+                let shear = if top_bottom {
+                    Affine([1., 0., skew, 1., -skew * fixed.y, 0.])
+                } else {
+                    Affine([1., skew, 0., 1., 0., -skew * fixed.x])
+                };
+                if let Some(next) = Pose::from_affine(shear.then(start), pivot)
+                    && next.shear.abs() <= limit
+                {
+                    pose = next;
+                }
+            }
             Handle::Scale(side) => {
                 let start = pose.affine(pivot);
                 let moving = local_handle(self.bounds, side);
@@ -707,10 +788,11 @@ impl Transaction {
                 let local = [delta.x * c + delta.y * s, -delta.x * s + delta.y * c];
                 let original = pose.scale;
                 let span = [moving.x - fixed.x, moving.y - fixed.y];
-                for axis in 0..2 {
-                    if side[axis] != 0. {
-                        pose.scale[axis] = local[axis] / span[axis];
-                    }
+                if side[1] != 0. {
+                    pose.scale[1] = local[1] / span[1];
+                }
+                if side[0] != 0. {
+                    pose.scale[0] = (local[0] - pose.shear * pose.scale[1] * span[1]) / span[0];
                 }
                 if aspect || modifiers.shift {
                     let axis = if side[0] == 0. {
@@ -733,21 +815,7 @@ impl Transaction {
                         v.clamp(-100., 100.)
                     }
                 });
-                let fixed_delta = sub(fixed, pivot);
-                let q = Point {
-                    x: fixed_delta.x * pose.scale[0],
-                    y: fixed_delta.y * pose.scale[1],
-                };
-                pose.offset = sub(
-                    sub(
-                        anchor,
-                        Point {
-                            x: c * q.x - s * q.y,
-                            y: s * q.x + c * q.y,
-                        },
-                    ),
-                    pivot,
-                );
+                pose.offset = sub(sub(anchor, pose.map_linear(sub(fixed, pivot))), pivot);
             }
         }
         pose
@@ -780,14 +848,56 @@ mod tests {
         assert!((a.x - b.x).hypot(a.y - b.y) < 0.001, "{a:?} != {b:?}");
     }
     #[test]
+    fn poses_decompose_every_invertible_affine_exactly() {
+        let pivot = Point { x: 40., y: 25. };
+        for pose in [
+            Pose::identity(),
+            Pose { offset: Point { x: 3., y: -8. }, scale: [1.5, 0.5], angle: 0.8, shear: 0.3 },
+            Pose { offset: Point { x: -30., y: 2. }, scale: [0.7, -2.], angle: -2.5, shear: -1.1 },
+        ] {
+            let affine = pose.affine(pivot);
+            let back = Pose::from_affine(affine, pivot).unwrap().affine(pivot);
+            for (a, b) in affine.0.iter().zip(back.0) {
+                assert!((a - b).abs() < 1e-4, "{affine:?} != {back:?}");
+            }
+        }
+        assert!(Pose::from_affine(Affine([1., 2., 2., 4., 0., 0.]), pivot).is_none());
+    }
+    #[test]
+    fn control_drag_of_an_edge_skews_about_the_opposite_edge() {
+        let mut t = transaction();
+        let pivot = center(t.bounds);
+        let command = Modifiers { command: true, ..Default::default() };
+        for (angle, scale) in [(0., [1., 1.]), (0.6, [1.4, -0.8])] {
+            t.pose = Pose { offset: Point { x: 12., y: 5. }, scale, angle, shear: 0. };
+            let original = t.pose.affine(pivot);
+            for side in [[0., 1.], [0., -1.], [1., 0.], [-1., 0.]] {
+                let press = original.map(local_handle(t.bounds, side));
+                let along = t.pose.map_linear(if side[0] == 0. {
+                    Point { x: 1., y: 0. }
+                } else {
+                    Point { x: 0., y: 1. }
+                });
+                let drag = Drag { handle: Handle::Scale(side), press, current: press, pose: t.pose };
+                let target = add(press, Point { x: along.x * 0.2, y: along.y * 0.2 });
+                let next = t.drag_pose(drag, target, command, false);
+                let fixed = local_handle(t.bounds, side.map(|v| -v));
+                near(original.map(fixed), next.affine(pivot).map(fixed));
+                near(next.affine(pivot).map(local_handle(t.bounds, side)), target);
+                assert_ne!(next.affine(pivot), original);
+            }
+        }
+    }
+    #[test]
     fn every_handle_keeps_its_anchor_and_grab_offset_under_rotation_and_reflection() {
         let mut t = transaction();
-        for angle in [0., 0.7, -2.1] {
+        for (angle, shear) in [(0., 0.), (0.7, 0.), (-2.1, 0.), (0.7, 0.45), (-2.1, -0.3)] {
             for scale in [[1., 1.], [-1.5, 0.7], [2., -3.]] {
                 t.pose = Pose {
                     offset: Point { x: 35., y: -17. },
                     angle,
                     scale,
+                    shear,
                 };
                 let pivot = center(t.bounds);
                 let original = t.pose.affine(pivot);

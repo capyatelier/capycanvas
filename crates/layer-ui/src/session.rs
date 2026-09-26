@@ -962,6 +962,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     self.interaction.modifiers.alt = pressed;
                 }
+                if key.eq_ignore_ascii_case("control")
+                    || key.eq_ignore_ascii_case("control_l")
+                    || key.eq_ignore_ascii_case("control_r")
+                    || key.eq_ignore_ascii_case("meta")
+                {
+                    self.interaction.modifiers.command = pressed;
+                }
                 if previous_modifiers != self.interaction.modifiers && self.layer_interaction.tool.selection_tool().is_some() {
                     if !self.interaction.modifiers.shift { self.selection_tools.start_modifiers.shift = false; }
                     if !self.interaction.modifiers.alt { self.selection_tools.start_modifiers.alt = false; }
@@ -7910,7 +7917,7 @@ mod tests {
         let original = s.engine.document().clone();
         invoke(&mut s, CommandId::ScaleRotate);
         assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Transform);
-        assert_eq!(s.state.tool_settings.len(), 5);
+        assert_eq!(s.state.tool_settings.len(), 6);
         assert_eq!(s.state.tool_set.groups.len(), 2);
         for (id, value) in [
             ("transform_x", 30.),
