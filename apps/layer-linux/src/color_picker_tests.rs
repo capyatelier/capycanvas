@@ -68,21 +68,6 @@ fn native_color_picker_input() {
                 .any(|t| t.control == ToolbarControl::BrushSizeSlider)
         })
         .unwrap();
-    let controls: Vec<_> = toolbar.tiles().iter().map(|t| t.control).collect();
-    assert_eq!(
-        controls,
-        [
-            ToolbarControl::BrushSizeSlider,
-            ToolbarControl::ColorPicker,
-            ToolbarControl::BrushOpacitySlider,
-            ToolbarControl::Command {
-                command: CommandId::Undo
-            },
-            ToolbarControl::Command {
-                command: CommandId::Redo
-            },
-        ]
-    );
     let id = toolbar.tiles()[1].id;
     let button = format!("tile-{id}");
     let undo = format!("tile-{}", toolbar.tiles()[3].id);

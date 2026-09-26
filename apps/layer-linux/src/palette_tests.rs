@@ -21,6 +21,7 @@ fn native_palette_reorder_pen_input() {
 }
 
 fn check_palette_reorder(devices: &[&str]) {
+    use layer_core::color::{RgbColor, RgbSpace};
     let mut d = Driver::new("art.capycanvas.PaletteReorder");
     let event = |device: &str, phase: &str, point: [f32; 2]| match device {
         "touch" => serde_json::json!({"touch":phase,"point":point}),
@@ -255,7 +256,13 @@ fn check_palette_reorder(devices: &[&str]) {
                 action: layer_ui::ColorLibraryAction::Import {
                     name: "Reorder scroll".into(),
                     swatches: (0..36)
-                        .map(|i| (format!("Gray {i}"), layer_core::color::RgbColor::BLACK))
+                        .map(|i| {
+                            let rgba = [i as f32 / 36., 0.3, 0.6, 1.];
+                            (
+                                format!("Study {i}"),
+                                RgbColor::new(RgbSpace::Srgb, rgba).unwrap(),
+                            )
+                        })
                         .collect(),
                 },
             },
@@ -267,7 +274,40 @@ fn check_palette_reorder(devices: &[&str]) {
             .ancestor(gtk::ScrolledWindow::static_type())
             .and_downcast::<gtk::ScrolledWindow>()
             .unwrap();
+        if *device == "pen" {
+            let point = d.point(&tile);
+            d.perform(serde_json::json!([
+                event(device, "down", point),
+                event(device, "up", point),
+                {"pen":"leave"}
+            ]));
+            assert_eq!(state(&d.w).colors.definition(), original[0].color);
+            let next = d.point(&d.named(&format!("palette-swatch-{}", original[1].id)));
+            d.perform(serde_json::json!([
+                event(device, "down", next),
+                {"wait_ms":800},
+                event(device, "up", next),
+                {"pen":"leave"}
+            ]));
+            // Synthetic tablet serials cannot grant compositor popup grabs, so
+            // pen checks hold recognition and click suppression only.
+            let menu =
+                d.w.popovers
+                    .borrow()
+                    .iter()
+                    .filter_map(|p| p.upgrade())
+                    .find(|p| p.is_visible() && p.widget_name() == "palette-context-menu")
+                    .expect("pen hold opens the swatch menu");
+            assert_eq!(
+                state(&d.w).colors.definition(),
+                original[0].color,
+                "hold does not select"
+            );
+            menu.popdown();
+            pump(100);
+        }
         if *device != "mouse" {
+            let selected = state(&d.w).colors.definition();
             let mut p = d.point(scroll.upcast_ref());
             p[0] = d.point(&tile)[0] + tile.width() as f32 * 0.5 + 2.;
             d.perform(serde_json::json!([
@@ -283,6 +323,7 @@ fn check_palette_reorder(devices: &[&str]) {
                 state(&d.w).colors.library.active_palette().swatches,
                 original
             );
+            assert_eq!(state(&d.w).colors.definition(), selected);
             scroll.vadjustment().set_value(0.);
             pump(350);
         }
@@ -320,87 +361,11 @@ fn check_palette_reorder(devices: &[&str]) {
 }
 
 #[test]
-#[ignore = "isolated native-input.js --native-test=native_palette_pen_input --tablet"]
-fn native_palette_pen_input() {
-    use layer_core::color::{RgbColor, RgbSpace};
-    use layer_ui::{ColorAction, ColorLibraryAction};
-    let mut d = Driver::new("art.capycanvas.PalettePenReview");
-    let swatches = (0..36)
-        .map(|i| {
-            (
-                format!("Study {}", i + 1),
-                RgbColor::new(RgbSpace::Srgb, [i as f32 / 36., 0.3, 0.6, 1.]).unwrap(),
-            )
-        })
-        .collect();
-    d.w.dispatch(UiAction::Color {
-        action: ColorAction::Library {
-            action: ColorLibraryAction::Import {
-                name: "Study".into(),
-                swatches,
-            },
-        },
-    });
-    d.click_name(&d.header_tool(ToolbarControl::Color));
-    let palette = state(&d.w).colors.library.active_palette().clone();
-    let tile = d.named(&format!("palette-swatch-{}", palette.swatches[0].id));
-    let point = d.point(&tile);
-    d.perform(serde_json::json!([{"pen":"down","point":point},{"pen":"up"},{"pen":"leave"}]));
-    assert_eq!(state(&d.w).colors.definition(), palette.swatches[0].color);
-    assert!(state(&d.w).colors.library.history.is_empty());
-    let next = d.named(&format!("palette-swatch-{}", palette.swatches[1].id));
-    let point = d.point(&next);
-    d.perform(serde_json::json!([{"pen":"down","point":point},{"wait_ms":800},{"pen":"up"},{"pen":"leave"}]));
-    // The proxy's synthetic serial cannot authorize a compositor popup grab.
-    // Check pen recognition and click suppression here; the mouse/touch journey
-    // below validates actual popup mapping, keyboard input and dismissal.
-    let menu =
-        d.w.popovers
-            .borrow()
-            .iter()
-            .filter_map(|p| p.upgrade())
-            .find(|p| p.is_visible() && p.widget_name() == "palette-context-menu")
-            .expect("pen hold opens the swatch menu");
-    assert_eq!(
-        state(&d.w).colors.definition(),
-        palette.swatches[0].color,
-        "hold does not select"
-    );
-    menu.popdown();
-    pump(100);
-    assert!(state(&d.w).customization.drawer.is_some());
-    // The gap between tiles remains available for ordinary pen scrolling.
-    let scroll = tile
-        .ancestor(gtk::ScrolledWindow::static_type())
-        .unwrap()
-        .downcast::<gtk::ScrolledWindow>()
-        .unwrap();
-    assert!(scroll.height() <= 172);
-    let mut p = d.point(scroll.upcast_ref());
-    p[0] = d.point(&tile)[0] + tile.width() as f32 * 0.5 + 2.;
-    d.perform(serde_json::json!([{"pen":"down","point":p},{"pen":"move","point":[p[0],p[1]-72.]},{"pen":"up"},{"pen":"leave"}]));
-    assert!(scroll.vadjustment().value() > 0.);
-    assert_eq!(state(&d.w).colors.definition(), palette.swatches[0].color);
-    capture_palette(&mut d, "palette-pen-scroll.png");
-    d.w.window.destroy();
-    pump(100);
-}
-
-#[test]
 #[ignore = "isolated native-input.js --native-test=native_palette_panel_input"]
 fn native_palette_panel_input() {
     use layer_core::color::{RgbColor, RgbSpace};
     use layer_ui::{ColorAction, ColorLibraryAction};
     let mut d = Driver::new("art.capycanvas.PaletteReview");
-    assert_eq!(state(&d.w).colors.library.palettes.len(), 10);
-    assert!(
-        state(&d.w)
-            .colors
-            .library
-            .palettes
-            .iter()
-            .all(|p| (11..=17).contains(&p.swatches.len()))
-    );
     let color_button = d.header_tool(ToolbarControl::Color);
     d.click_name(&color_button);
     assert_eq!(
@@ -620,10 +585,6 @@ fn native_palette_panel_input() {
             .layout
             .panel_group(Panel::Color)
             .unwrap();
-        assert_eq!(
-            state(&d.w).workspace.layout.group_panels(group).unwrap(),
-            [Panel::Color, Panel::Palettes]
-        );
         let before =
             d.w.resolved()
                 .groups

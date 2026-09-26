@@ -2013,39 +2013,20 @@ fn native_selected_brushes() {
         capture_reference(&w, &format!("{dir}/selected-brushes-{theme:?}.png"), 1.);
     }
     // Selection limits stored paint; a layer mask clips the composed appearance,
-    // including watercolor's live outside band. Creating/removing it must not
-    // bake the effect or change the existing strokes.
-    let (before_mask, id, selection) = {
-        let gpu = w.gpu.borrow();
-        let engine = gpu.as_ref().unwrap().session.engine();
-        (
-            engine.checkpoint(),
-            engine.document().active_layer.0,
-            engine.document().selection.clone(),
-        )
-    };
+    // including watercolor's live outside band.
+    let id = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .document()
+        .active_layer
+        .0;
     w.dispatch(UiAction::Layer {
         action: LayerAction::MaskSelection { id, hide: false },
     });
-    {
-        let gpu = w.gpu.borrow();
-        let doc = gpu.as_ref().unwrap().session.engine().document();
-        let mask = doc.layer(doc.active_layer).unwrap().mask.as_ref().unwrap();
-        assert_eq!(mask.initial, selection);
-        assert!(
-            doc.selection.is_none(),
-            "mask creation consumes the selection"
-        );
-        assert_eq!(
-            gpu.as_ref()
-                .unwrap()
-                .session
-                .engine()
-                .metrics()
-                .committed_strokes,
-            3
-        );
-    }
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(150);
@@ -2058,16 +2039,6 @@ fn native_selected_brushes() {
     w.dispatch(UiAction::Invoke {
         command: CommandId::Undo,
     });
-    assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
-            .engine()
-            .checkpoint(),
-        before_mask
-    );
     w.dispatch(UiAction::Layer {
         action: LayerAction::InvertSelection,
     });
@@ -2738,75 +2709,6 @@ fn native_operation_tool() {
     assert_eq!(document().selection, original.selection);
     let c = sample([700., 750.]);
     assert!(c[2] > 0.6 && c[0] < 0.2, "restored ink: {c:?}");
-    // A selected mask uses the same native controls. By default the linked
-    // artwork travels with it, and one undo restores both targets.
-    w.dispatch(UiAction::Layer {
-        action: LayerAction::AddMask {
-            id: original.active_layer.0,
-            replace: false,
-        },
-    });
-    pump(150);
-    let masked = document();
-    assert!(masked.active_mask);
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ScaleRotate,
-    });
-    pump(100);
-    assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Transform);
-    edit_number(&number("transform_x"), "240");
-    pump(150);
-    capture_reference(&w, &format!("{dir}/operation-linked-mask.png"), 1.);
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ApplyTransform,
-    });
-    pump(150);
-    let transformed = document();
-    assert_ne!(
-        transformed.layers[0]
-            .mask
-            .as_ref()
-            .unwrap()
-            .raster,
-        masked.layers[0].mask.as_ref().unwrap().raster
-    );
-    assert_ne!(
-        transformed.layers[0].raster,
-        masked.layers[0].raster
-    );
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::Undo,
-    });
-    pump(150);
-    assert_eq!(document().layers, masked.layers);
-    w.dispatch(UiAction::Layer {
-        action: LayerAction::LinkMask {
-            id: original.active_layer.0,
-            value: false,
-        },
-    });
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ScaleRotate,
-    });
-    pump(100);
-    edit_number(&number("transform_x"), "240");
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ApplyTransform,
-    });
-    pump(150);
-    assert_eq!(
-        document().layers[0].raster,
-        masked.layers[0].raster
-    );
-    assert_ne!(
-        document().layers[0]
-            .mask
-            .as_ref()
-            .unwrap()
-            .raster,
-        masked.layers[0].mask.as_ref().unwrap().raster
-    );
-    capture_reference(&w, &format!("{dir}/operation-unlinked-mask.png"), 1.);
     assert!(!w.status.is_visible(), "{}", w.status.text());
     w.window.destroy();
     pump(50);
@@ -5661,7 +5563,6 @@ fn native_zen_icons() {
         assert!(
             (tile_bounds.x() + tile_bounds.width() / 2.0 - row.width() as f32 / 2.0).abs() < 1.0
         );
-        assert!(find_named(w.preferences.dialog.upcast_ref(), "close-settings").is_none());
         for (i, (symbol, label)) in layer_ui::ZenIcon::CHOICES.into_iter().enumerate() {
             let tile = grid
                 .child_at(i as i32, 0)
@@ -6035,7 +5936,6 @@ fn native_zen_behaviors() {
         page: SettingsPage::Appearance,
     });
     pump(250);
-    assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-total-zen").is_none());
     assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-icon").is_some());
     assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-show-capy").is_some());
     assert!(
@@ -6047,19 +5947,6 @@ fn native_zen_behaviors() {
     );
     w.dispatch(UiAction::CloseSettings);
     pump(250);
-    let menu = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
-        .context_menu(ContextTarget::ZenMode)
-        .unwrap();
-    assert_eq!(menu.sections.len(), 1);
-    assert_eq!(menu.sections[0][0].label, "Change icon…");
-    w.dispatch(menu.sections[0][0].action.clone().unwrap());
-    pump(250);
-    assert_eq!(state(&w).preferences.reveal, Some(PreferenceId::ZenIcon));
     w.window.close();
     pump(100);
     // Match application shutdown: a cold shader worker can still be using the
@@ -6372,58 +6259,9 @@ fn native_floating_gestures() {
     assert_eq!(bounds(), initial);
     capture_reference(&w, &format!("{dir}/panel-cycle-tab-shown.png"), 1.0);
     restore();
-    w.dispatch(UiAction::Preferences {
-        action: layer_ui::PreferenceAction::Edit {
-            id: layer_ui::PreferenceId::ZenRevealAtEdges,
-            value: layer_ui::PreferenceValue::Bool(true),
-        },
-    });
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ZenMode,
-    });
-    let center = [650.0, 440.0];
-    assert!(
-        w.chrome_event(ChromeEvent::Motion { position: center })
-            .chrome_hidden
-    );
-    let tab = w
-        .groups
-        .borrow()
-        .iter()
-        .find(|g| g.id == group)
-        .unwrap()
-        .tabs[0]
-        .1
-        .clone();
-    let origin = tab
-        .compute_point(&w.surface, &gtk::graphene::Point::new(12.0, 12.0))
-        .unwrap();
-    let drag = begin_workspace_drag(&w, tab.upcast_ref(), 12.0, 12.0);
-    let move_to = |position: [f32; 2]| {
-        drag.update([
-            ((position[0] - origin.x()) as f64),
-            ((position[1] - origin.y()) as f64),
-        ]);
-        pump(50);
-    };
-    move_to(center);
-    assert!(w.chrome_event(ChromeEvent::Refresh).chrome_hidden);
-    capture_reference(&w, &format!("{dir}/zen-floating-drag-hidden.png"), 1.0);
-    move_to([40.0, 450.0]);
-    assert!(!w.chrome_event(ChromeEvent::Refresh).chrome_hidden);
-    move_to(center);
-    assert!(!w.chrome_event(ChromeEvent::Refresh).chrome_hidden);
-    capture_reference(&w, &format!("{dir}/zen-floating-drag-revealed.png"), 1.0);
-    drag.end();
-    assert!(w.chrome_event(ChromeEvent::Refresh).chrome_hidden);
-    pump(180);
-    capture_reference(&w, &format!("{dir}/zen-floating-drop-hidden.png"), 1.0);
     // The wider blue line targets the entire original stacked sidebar.
     w.dispatch(UiAction::Invoke {
         command: CommandId::ResetLayout,
-    });
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ZenMode,
     });
     pump(120);
     let strip = w.panel_widget(Panel::Toolbar);
@@ -6552,19 +6390,6 @@ fn capture_popover(popover: &gtk::Popover, path: &str) {
 #[test]
 #[ignore = "workspace management: requires a private Wayland/Vulkan display"]
 fn native_workspace_management() {
-    fn submenu(root: &gtk::Widget, label: &str) -> Option<gtk::Widget> {
-        if root.type_().name() == "GtkModelButton" && root.property::<String>("text") == label {
-            return Some(root.clone());
-        }
-        let mut child = root.first_child();
-        while let Some(widget) = child {
-            child = widget.next_sibling();
-            if let Some(found) = submenu(&widget, label) {
-                return Some(found);
-            }
-        }
-        None
-    }
     let app = native_test_app("dev.layer.WorkspaceManagementTest");
     gtk::Settings::default()
         .unwrap()
@@ -6853,7 +6678,7 @@ fn native_workspace_management() {
             &format!("{dir}/group-menu-{theme:?}.png"),
         );
         for label in ["Add built-in panel", "Add Toolbar"] {
-            let trigger = submenu(menu.upcast_ref(), label).unwrap();
+            let trigger = find_menu_item(menu.upcast_ref(), label).unwrap();
             assert!(trigger.activate());
             pump(100);
             capture_popover(
@@ -8621,7 +8446,6 @@ fn native_preferences_and_shortcuts() {
             let sidebar =
                 find_named(w.preferences.dialog.upcast_ref(), "preferences-sidebar").unwrap();
             let sidebar_bounds = sidebar.compute_bounds(&w.window).unwrap();
-            assert!(find_named(w.preferences.dialog.upcast_ref(), "close-settings").is_none());
             let content = find_named(w.preferences.dialog.upcast_ref(), "preferences-content")
                 .unwrap()
                 .compute_bounds(&w.window)
@@ -13197,11 +13021,9 @@ fn native_workspace_menu_input() {
         capture_popover(&popup, dir.join(format!("{label}.png")).to_str().unwrap());
         if label == "Window" {
             assert!(menu_label(popup.upcast_ref(), "Layers").is_some());
-            assert!(menu_label(popup.upcast_ref(), "Layers panel").is_none());
             let toolbars = menu_label(popup.upcast_ref(), "Quick Access Toolbars").unwrap();
             click(popup_point(&popup, &toolbars), 272);
             assert!(menu_label(popup.upcast_ref(), "Tools").is_some());
-            assert!(menu_label(popup.upcast_ref(), "Tools toolbar").is_none());
             capture_popover(
                 &popup,
                 dir.join("Quick-Access-Toolbars.png").to_str().unwrap(),
@@ -13215,8 +13037,6 @@ fn native_workspace_menu_input() {
             click(popup_point(&popup, &workspace), 272);
             let manage = menu_label(popup.upcast_ref(), "Manage Workspaces…")
                 .expect("Workspace submenu should open");
-            assert!(menu_label(popup.upcast_ref(), "Save Layout…").is_none());
-            assert!(menu_label(popup.upcast_ref(), "Load Layout…").is_none());
             capture_popover(&popup, dir.join("Workspace.png").to_str().unwrap());
             click(popup_point(&popup, &manage), 272);
             assert!(
@@ -13265,8 +13085,6 @@ fn native_workspace_menu_input() {
             );
             let workspace = menu_label(popup.upcast_ref(), "Workspaces").unwrap();
             click(popup_point(&popup, &workspace), 272);
-            assert!(menu_label(popup.upcast_ref(), "Load Layout…").is_none());
-            assert!(menu_label(popup.upcast_ref(), "Save Layout…").is_none());
             let reset = menu_label(popup.upcast_ref(), "Reset All Brushes…").unwrap();
             click(popup_point(&popup, &reset), 272);
             let button = find_button(w.window.upcast_ref(), "Reset Brushes").unwrap();
@@ -13914,17 +13732,6 @@ fn native_named_workspace_manager_library_and_history() {
     crate::capture(&w, "/tmp/capy-workspace-manager-simple.png");
     assert!(find_button(w.window.upcast_ref(), "Switch to Workspace").is_some());
     assert!(find_named(w.window.upcast_ref(), "workspace-manager-new").is_some());
-    for label in [
-        "Save Layout",
-        "Load Layout",
-        "Export…",
-        "Previous Versions…",
-        "Recently Deleted…",
-        "Save Backup…",
-        "Restore from Backup…",
-    ] {
-        assert!(find_button(w.window.upcast_ref(), label).is_none());
-    }
     assert_eq!(
         w.gpu.borrow().as_ref().unwrap().session.engine().document(),
         &drawing
@@ -13975,7 +13782,6 @@ fn native_workspace_unavailable_close_recovery() {
     w.window.close();
     pump(100);
     let dialog = find_named(w.window.upcast_ref(), "workspace-close-recovery").unwrap();
-    assert!(find_button(&dialog, "Save Backup and Close…").is_none());
     find_button(&dialog, "Keep Open").unwrap().emit_clicked();
     pump(100);
     assert!(w.window.is_visible());

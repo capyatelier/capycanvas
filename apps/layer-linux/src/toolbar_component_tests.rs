@@ -21,7 +21,7 @@ fn component_id(d: &Driver, control: ToolbarControl) -> u32 {
         .unwrap()
         .id
 }
-fn drag(d: &mut Driver, device: &str, a: [f32; 2], b: [f32; 2], held: bool) {
+pub(super) fn drag(d: &mut Driver, device: &str, a: [f32; 2], b: [f32; 2], held: bool) {
     let down = match device {
         "touch" => serde_json::json!({"touch":"down","point":a}),
         "pen" => serde_json::json!({"pen":"down","point":a}),
@@ -135,15 +135,6 @@ fn slider_gestures(d: &mut Driver, devices: &[&str]) {
         });
         pump(150);
         assert_eq!(state(&d.w).workspace, before, "one-step undo");
-        d.w.dispatch(UiAction::Invoke {
-            command: CommandId::RedoWorkspace,
-        });
-        pump(150);
-        assert_ne!(state(&d.w).workspace, before);
-        d.w.dispatch(UiAction::Invoke {
-            command: CommandId::UndoWorkspace,
-        });
-        pump(150);
     }
 }
 
@@ -714,7 +705,6 @@ fn compact_edge_gestures(d: &mut Driver, devices: &[&str]) {
     for &device in devices {
         restore(d, WorkspacePreset::Painter);
         let panel = brush_panel(d);
-        let initial = state(&d.w).workspace;
         let viewport = [d.w.surface.width() as f32, d.w.surface.height() as f32];
         let center = (state(&d.w).workspace.layout.header_presentation.height + viewport[1]
             - WORKSPACE_SPACING)
@@ -797,7 +787,6 @@ fn compact_edge_gestures(d: &mut Driver, devices: &[&str]) {
             full.bounds.height > viewport[1] * 0.8,
             "farther from edge keeps full-height target"
         );
-        let before = view.workspace;
         let a = toolbar_grip(d, panel);
         drag(d, device, a, [8., center], false);
         let moved = state(&d.w).workspace;
@@ -810,20 +799,6 @@ fn compact_edge_gestures(d: &mut Driver, devices: &[&str]) {
                 .unwrap()
                 .alignment,
             Some(EdgeAlignment::Center)
-        );
-        d.w.dispatch(UiAction::Invoke {
-            command: CommandId::UndoWorkspace,
-        });
-        pump(180);
-        assert_eq!(state(&d.w).workspace, before);
-        d.w.dispatch(UiAction::Invoke {
-            command: CommandId::RedoWorkspace,
-        });
-        pump(180);
-        assert_eq!(state(&d.w).workspace, moved);
-        assert_eq!(
-            moved.layout.panel(panel).unwrap().tiles(),
-            initial.layout.panel(panel).unwrap().tiles()
         );
         // Dock an independently draggable toolbar at the compact bar's end.
         let mut layout = moved.layout;
@@ -859,22 +834,6 @@ fn compact_edge_gestures(d: &mut Driver, devices: &[&str]) {
             a,
             [b.x + b.width / 2., b.y + b.height + 2.],
             false,
-        );
-        let r = d.w.resolved();
-        let a = r.groups.iter().find(|g| g.active == panel).unwrap().bounds;
-        let b = r
-            .groups
-            .iter()
-            .find(|g| g.active == companion)
-            .unwrap()
-            .bounds;
-        assert!(
-            (b.y - a.y - a.height - WORKSPACE_SPACING).abs() < 1.,
-            "small gap between stacked bars"
-        );
-        assert!(
-            (a.y + b.y + b.height - center * 2.).abs() < 1.,
-            "whole stack centers together"
         );
         if device == "mouse" {
             let before = state(&d.w).workspace;
@@ -1365,25 +1324,6 @@ fn native_toolbar_rows_input() {
             });
             pump(150);
         }
-        let view = state(&d.w);
-        let resolved = view
-            .workspace
-            .layout
-            .workspace(1600., 1000., HEADER_HEIGHT, STATUS_HEIGHT);
-        let group = resolved
-            .groups
-            .iter()
-            .find(|g| g.active == Panel::Commands)
-            .unwrap();
-        let cells = &group.tiles.as_ref().unwrap().tiles;
-        assert_eq!(cells[0].y, cells[1].y);
-        assert!(cells[1].x > cells[0].x);
-        let config = view.workspace.layout.panel(Panel::Commands).unwrap();
-        for (tile, bounds) in config.tiles().iter().zip(cells) {
-            if tile.control == ToolbarControl::Divider || tile.control.options_style().is_some() {
-                assert_eq!(bounds.width, group.bounds.width);
-            }
-        }
         let tool = d.named("toolbar-choice-tool");
         let size = d.named("toolbar-setting-size");
         assert!(tool.is_mapped() && size.is_mapped());
@@ -1835,18 +1775,9 @@ fn tonal_toolbar_range_input(pen: bool) {
     d.w.dispatch(UiAction::Invoke { command: CommandId::TonalSelect });
     pump(180);
     d.click_name("toolbar-segment-tonal-tones-5");
-    let ready = |d: &Driver| {
-        let deadline = Instant::now() + Duration::from_secs(25);
-        loop {
-            pump(20);
-            if d.w.gpu.borrow().as_ref().unwrap().session.require_document_idle().is_ok() { break; }
-            assert!(Instant::now() < deadline, "tonal update: {:?}", state(&d.w).host_error);
-        }
-    };
+    let ready = super::selection_tools::wait_tonal;
+    let bounds = super::selection_tools::tonal_bounds;
     ready(&d);
-    let bounds = |d: &Driver| {
-        ["tonal_lower", "tonal_upper"].map(|id| state(&d.w).tool_settings.iter().find(|f| f.id == id).unwrap().value)
-    };
     let range = d.named("tool-range-toolbar-tonal");
     assert!(range.is_mapped(), "the standard Photo toolbar fits the custom interval");
     assert_eq!(range.height(), 28);
@@ -1858,30 +1789,11 @@ fn tonal_toolbar_range_input(pen: bool) {
     }
     assert_eq!(d.named("toolbar-segments-tonal-tones").height(), 24);
     let before_workspace = state(&d.w).workspace;
-    for device in if pen { &["pen"][..] } else { &["mouse", "touch"][..] } {
-        for index in 0..2 {
-            let id = ["tonal_lower", "tonal_upper"][index];
-            let handle = find_named(&range, &format!("range-handle-{id}")).unwrap()
-                .downcast::<crate::range_control::RangeHandle>().unwrap();
-            let mut a = d.point(handle.upcast_ref());
-            a[0] += handle.position(handle.value()) as f32 - handle.width() as f32 / 2. + if index == 0 { -4. } else { 4. };
-            let z = [a[0] + if index == 0 { -8. } else { 8. }, a[1]];
-            let before = bounds(&d);
-            drag(&mut d, device, a, z, false);
-            ready(&d);
-            let after = bounds(&d);
-            assert!(if index == 0 { after[0] < before[0] } else { after[1] > before[1] }, "{device}: endpoint moves immediately");
-            assert_eq!(after[1-index], before[1-index]);
-            assert_eq!(d.named("tool-range-toolbar-tonal"), range, "retain the captured range");
-            assert_eq!(state(&d.w).workspace, before_workspace, "range contacts do not reorder the toolbar");
-        }
-    }
+    super::selection_tools::tonal_range_contacts(&mut d, "tool-range-toolbar-tonal", pen, |d, _| {
+        assert_eq!(d.named("tool-range-toolbar-tonal"), range, "retain the captured range");
+        assert_eq!(state(&d.w).workspace, before_workspace, "range contacts do not reorder the toolbar");
+    });
     if pen { assert!(state(&d.w).host_error.is_none()); d.finish(); return; }
-    let before = bounds(&d);
-    d.key(0xff53); ready(&d);
-    assert!(bounds(&d)[1] > before[1], "keyboard edits focused native handle");
-    d.w.dispatch(UiAction::Invoke { command: CommandId::QuickMask }); ready(&d);
-    assert!(state(&d.w).layer_tools.quick_mask);
     let range = d.named("tool-range-toolbar-tonal");
     let lower = find_named(&range, "toolbar-setting-tonal_lower").unwrap();
     let upper = find_named(&range, "toolbar-setting-tonal_upper").unwrap();

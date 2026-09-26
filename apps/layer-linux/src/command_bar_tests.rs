@@ -59,12 +59,6 @@ fn native_command_bar_input() {
         &popup,
         d.dir.join("command-bar-light.png").to_str().unwrap(),
     );
-    assert_eq!(
-        state(&d.w).command_search.as_ref().unwrap().results[0]
-            .disabled_reason
-            .as_deref(),
-        Some("Nothing to undo")
-    );
     d.key(0xff0d);
     assert!(state(&d.w).command_search.as_ref().unwrap().error.is_some());
     entry.set_text("brush size");

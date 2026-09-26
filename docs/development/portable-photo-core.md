@@ -629,9 +629,9 @@ Verification:
   test is `rust_avif_output_interoperates_with_native_libavif`.
 - The existing 1031×1037 partial-grid/alpha/gain regression passes in release
   mode (12.34 seconds on this Linux host). This is not a device throughput claim.
-- `portable_gainmap_export_without_codec_bundle` passes on private Mutter/Wayland
-  and NVIDIA Vulkan with an empty codec directory: actual GTK choices, encoded
-  preview switching, save, HDR reopen, JPEG flattening, and unchanged history.
+- `native_gainmap_export` passes on private Mutter/Wayland and NVIDIA Vulkan:
+  actual GTK choices, encoded preview switching, save, HDR reopen, JPEG
+  flattening, and unchanged history.
 - Chrome 152 executes both AVIF encoders, padded grids, HDR reconstruction and
   alpha through the application API. The validation harness uses wasm-bindgen
   packaging because v_frame exports enum bindings. Its only host import initializes

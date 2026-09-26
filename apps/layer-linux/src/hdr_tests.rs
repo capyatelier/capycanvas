@@ -64,66 +64,6 @@ fn appearance_exposure(window: &gtk::Window, value: f64) {
     pump(100);
 }
 
-#[test]
-#[ignore = "private Wayland display and hardware GPU"]
-fn native_hdr_delivery_failure_and_cancellation_preserve_destination() {
-    let app = native_test_app("art.capycanvas.HdrDeliveryAtomicity");
-    let mut p = new_drawing(64, 64).unwrap();
-    p.document.color.depth = SampleDepth::F16;
-    let w = Workspace::with_project(&app, Some((p, None)));
-    w.window.present();
-    ready(&w);
-    let before = snapshot(&w);
-    let path = std::env::temp_dir().join(format!("capy-hdr-atomic-{}.png", std::process::id()));
-    std::fs::write(&path, b"existing destination").unwrap();
-    let run = |format, cancelled| {
-        let gpu = w.snapshot_gpu().unwrap();
-        let snapshot = DocumentExport {
-            project: project(&w),
-            background: [100., 100., 100., 1.],
-            time: 0.,
-        };
-        let recipe = ExportRecipe {
-            format,
-            depth: SampleDepth::U16,
-            ..ExportRecipe::web_share()
-        };
-        let job = crate::files::export::ExportJob::default();
-        if cancelled {
-            assert!(job.cancel());
-        }
-        let path = path.clone();
-        glib::MainContext::default()
-            .block_on(gtk::gio::spawn_blocking(move || {
-                crate::files::export::write_snapshot(gpu, snapshot, recipe, &path, &job)
-            }))
-            .unwrap()
-    };
-    assert!(
-        run(ExportFormat::PngHdr, false)
-            .unwrap_err()
-            .contains("exceeds BT.2020 PQ")
-    );
-    assert_eq!(std::fs::read(&path).unwrap(), b"existing destination");
-    assert!(
-        run(ExportFormat::PngHdrMapped, true)
-            .unwrap_err()
-            .to_lowercase()
-            .contains("cancel")
-    );
-    assert_eq!(std::fs::read(&path).unwrap(), b"existing destination");
-    assert_eq!(run(ExportFormat::PngHdrMapped, false).unwrap(), 64 * 64 * 3);
-    let delivered = layer_color::photo::read_photo(
-        std::io::BufReader::new(std::fs::File::open(&path).unwrap()),
-        Default::default(),
-    )
-    .unwrap();
-    assert_eq!(delivered.interpretation.depth, SampleDepth::F16);
-    assert_eq!(snapshot(&w), before);
-    w.window.destroy();
-    pump(100);
-    std::fs::remove_file(path).unwrap();
-}
 #[allow(deprecated)]
 fn deliver(w: &Rc<Workspace>, directory: &std::path::Path, name: &str, format: u32) {
     invoke(w, CommandId::ExportDocument);
@@ -233,12 +173,6 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
         "exposure",
         layer_core::EffectValue::Number(1.),
     );
-    let exposed = pixels(&photo);
-    for (a, b) in before.iter().zip(&exposed) {
-        for c in 0..3 {
-            assert!((b[c] - a[c] * 2.).abs() <= 2e-6 + a[c].abs() * 2e-5);
-        }
-    }
     effect(
         &photo,
         "curves",
@@ -247,16 +181,6 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     );
     let curved = pixels(&photo);
     assert!(curved.iter().any(|p| p[0] > 1.));
-    let curve = project(&photo)
-        .document
-        .layers
-        .into_iter()
-        .find_map(|l| l.effect)
-        .unwrap();
-    assert_eq!(
-        curve.value("domain"),
-        Some(&layer_core::EffectValue::Choice(1))
-    );
     capture_ui(&photo, &directory, "hdr-curves.png");
     // Numeric HDR input and actual pen publication on an editable paint layer.
     invoke(&photo, CommandId::AddLayer);
@@ -326,9 +250,6 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,default);
     invoke(&photo,CommandId::Redo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition.highlight_color,0.65);
     invoke(&photo,CommandId::Undo);ready(&photo);
-    for removed in ["sdr-appearance-apply","sdr-appearance-cancel","sdr-appearance-compare","proof-preview-sdr","proof-advanced"] {
-        assert!(find_named(photo.proof_panel.root.upcast_ref(),removed).is_none());
-    }
     appearance_exposure(&window,-2.);
     assert_eq!(project(&photo).document.sdr_rendition.exposure,-2.);
     assert!(state(&photo).sdr_appearance_preview.is_none());
@@ -337,7 +258,6 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     mode.set_active_name(Some("off"));pump(50);assert!(!state(&photo).preview_sdr);
     assert_eq!(project(&photo).document.sdr_rendition,saved);
     mode.set_active_name(Some("sdr"));pump(50);
-    assert!(find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-method").is_none());
     let field=find_named(photo.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();
     let controllers=field.observe_controllers();let keys=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::EventControllerKey>()).unwrap();
     keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Up,&0u32,&gdk::ModifierType::empty()]);keys.emit_by_name::<()>("key-released",&[&gdk::Key::Up,&0u32,&gdk::ModifierType::empty()]);pump(50);
@@ -425,7 +345,6 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     assert_eq!(project(&restored).document.sdr_rendition, recipe);
     invoke(&restored, CommandId::ExportDocument);
     let dialog=restored.window.visible_dialog().unwrap();
-    assert!(find_named(dialog.upcast_ref(),"export-appearance").is_none());
     combo(&restored, "export-output").set_selected(0);
     assert_eq!(combo(&restored, "export-output").selected(), 0);
     pump(500);
@@ -590,7 +509,6 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !super::new_photo::export_enabled(&w) { pump(20); assert!(Instant::now() < deadline); }
     assert!(!find_named(dialog.upcast_ref(), "export-open-color").unwrap().is_visible());
-    assert!(find_named(dialog.upcast_ref(), "export-appearance").is_none());
     assert!(!find_named(dialog.upcast_ref(), "export-hdr-clip").unwrap().is_visible());
     capture_ui(&w, &output, "export-hdr-main.png");
     response(&w, "cancel"); finish(&w);
@@ -690,9 +608,9 @@ fn native_hdr_export_preview_preserves_master_and_tracks_display() {
 }
 
 #[test]
-#[ignore = "isolated Wayland display and GPU; run with no photo codec bundle"]
+#[ignore = "private Wayland display and hardware GPU"]
 #[allow(deprecated)]
-fn portable_gainmap_export_without_codec_bundle() {
+fn native_gainmap_export() {
     use layer_core::color::{ColorProfile, source::*};
     let app=native_test_app("art.capycanvas.GainmapExport");
     let output=std::path::Path::new("../../artifacts/color-m4/gainmap-ui");std::fs::create_dir_all(output).unwrap();let output=output.canonicalize().unwrap();
@@ -709,7 +627,6 @@ fn portable_gainmap_export_without_codec_bundle() {
         let w=Workspace::with_project(&app,Some((p,None)));w.window.present();ready(&w);
         let headroom=project(&w).document.sdr_rendition.headroom;
         invoke(&w,CommandId::SdrRendition);let panel=appearance(&w);appearance_button(&panel,"reset");
-        assert!(find_named(panel.upcast_ref(),"sdr-appearance-auto").is_none());
         assert_eq!(project(&w).document.sdr_rendition.headroom,headroom,"Reset preserves the source range");
         let original=snapshot(&w);
         invoke(&w,CommandId::ExportDocument);

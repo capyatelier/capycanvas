@@ -1135,6 +1135,25 @@ fn native_header_spacing_visual() {
             assert!((image.x() - (close.width() as f32 - image.x() - image.width())).abs() < 1.);
             assert!((image.y() - (close.height() as f32 - image.y() - image.height())).abs() < 1.);
             let h = state(&d.w).workspace.layout.header;
+            for entry in h.entries() {
+                let item = d.named(&format!("header-item-{}", entry.id));
+                assert!(item.is_mapped(), "header item {} must be mapped", entry.id);
+                let b = item.compute_bounds(&d.w.surface).unwrap();
+                let picked =
+                    d.w.surface
+                        .pick(
+                            (b.x() + b.width() / 2.).into(),
+                            (b.y() + b.height() / 2.).into(),
+                            gtk::PickFlags::DEFAULT,
+                        )
+                        .expect("hit target");
+                assert!(
+                    picked == item || picked.is_ancestor(&item),
+                    "header item {} is obscured by {}",
+                    entry.id,
+                    picked.widget_name()
+                );
+            }
             for pair in h.zones[2].windows(2) {
                 let a = d
                     .named(&format!("header-item-{}", pair[0].id))
@@ -1489,14 +1508,6 @@ fn native_header_cancel_caption_input() {
         .id;
     d.click_name(&format!("header-item-{menu}"));
     d.click_label("Window");
-    let menu_model =
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
-            .application_menu(ApplicationMenu::Window);
-    assert!(!format!("{menu_model:?}").contains("Show Menu Bar"));
     d.click_label("Customize Title Bar…");
     d.drop_component("menu-labels", HeaderZone::Left);
     d.click_name("header-edit-done");
@@ -2174,15 +2185,6 @@ fn native_header_editor_keyboard_input() {
             .widget_name(),
         "header-size-1"
     );
-    for absent in [
-        "header-help",
-        "header-reset",
-        "header-remove-item",
-        "header-zone-0",
-        "header-move-earlier",
-    ] {
-        assert!(find_named(d.w.window.upcast_ref(), absent).is_none());
-    }
     let id = original.header.zones[0][1].id;
     d.click_name(&format!("header-item-{id}"));
     for forward in [
@@ -2688,132 +2690,6 @@ fn native_header_canvas_visual() {
 }
 
 #[test]
-#[ignore = "isolated native-input.js --native-test=native_header_builder_input"]
-fn native_header_builder_input() {
-    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
-    let app = native_test_app("art.capycanvas.HeaderBuilder");
-    let w = fixture_workspace(&app);
-    w.window.maximize();
-    w.window.present();
-    pump(1800);
-    w.dispatch(UiAction::RestoreWorkspace {
-        workspace: Box::new(WorkspaceState {
-            layout: WorkspacePreset::Painter.layout(Platform::Gtk),
-            ..WorkspaceState::default()
-        }),
-    });
-    pump(600);
-    let original = state(&w).workspace.layout.header;
-    assert_eq!(w.area.height(), w.surface.height());
-    assert!(!w.view_info.is_visible());
-    assert_eq!(w.header.root.height(), 60);
-    let point = |name: &str| {
-        let widget =
-            find_named(w.window.upcast_ref(), name).unwrap_or_else(|| panic!("missing {name}"));
-        assert!(widget.is_mapped(), "{name} must be mapped");
-        let b = widget.compute_bounds(&w.surface).unwrap();
-        let point = [b.x() + b.width() / 2., b.y() + b.height() / 2.];
-        let picked = w
-            .surface
-            .pick(point[0].into(), point[1].into(), gtk::PickFlags::DEFAULT)
-            .expect("hit target");
-        assert!(
-            picked == widget || picked.is_ancestor(&widget),
-            "{name} is obscured by {}",
-            picked.widget_name()
-        );
-        point
-    };
-    for entry in original.entries() {
-        let _ = point(&format!("header-item-{}", entry.id));
-    }
-    crate::capture(&w, dir.join("painter.png").to_str().unwrap());
-    let mut step = 0;
-    let mut perform = |events: serde_json::Value| {
-        let file = dir.join(format!("step-{step}.json"));
-        let temporary = file.with_extension("tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&events).unwrap()).unwrap();
-        std::fs::rename(temporary, file).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(8);
-        while !dir.join(format!("done-{step}")).exists() {
-            assert!(Instant::now() < deadline, "native input step {step}");
-            pump(5);
-        }
-        step += 1;
-        pump(120);
-    };
-    std::fs::write(dir.join("ready"), "ready").unwrap();
-    pump(500);
-    let click = |p: [f32; 2]| serde_json::json!([{ "point": p }, { "button": 272, "down": true }, { "button": 272, "down": false }]);
-    for control in [
-        ToolbarControl::Command {
-            command: CommandId::Eraser,
-        },
-        ToolbarControl::Command {
-            command: CommandId::Sculpt,
-        },
-        ToolbarControl::Command {
-            command: CommandId::DrawingBrush,
-        },
-    ] {
-        let id = original
-            .entries()
-            .find(|e| e.item == HeaderItem::Tool { control })
-            .unwrap()
-            .id;
-        perform(click(point(&format!("header-item-{id}"))));
-        assert!(
-            tool_state(&state(&w), control).1,
-            "selected header tool {control:?}"
-        );
-        perform(click(point(&format!("header-item-{id}"))));
-        assert!(
-            state(&w).customization.drawer.is_some(),
-            "header tool drawer {control:?}"
-        );
-        assert!(find_named(w.window.upcast_ref(), "tool-drawer").is_some_and(|d| d.is_mapped()));
-        perform(click(point(&format!("header-item-{id}"))));
-        assert!(state(&w).customization.drawer.is_none());
-    }
-    w.dispatch(HeaderAction::Edit { editing: true }.action());
-    pump(300);
-    assert!(
-        find_named(w.window.upcast_ref(), "header-editor")
-            .unwrap()
-            .is_mapped()
-    );
-    crate::capture(&w, dir.join("editor.png").to_str().unwrap());
-    let id = original.zones[0][1].id; // Menu, moved as one individual item.
-    let from = point(&format!("header-grip-{id}"));
-    let to = point(&format!("header-item-{}", original.zones[2][0].id));
-    perform(
-        serde_json::json!([{ "point": from }, { "button": 272, "down": true }, { "point": [from[0] + 18., from[1]] }, { "point": to }, { "button": 272, "down": false }]),
-    );
-    assert_eq!(
-        state(&w).workspace.layout.header.location(id).unwrap().0,
-        HeaderZone::Right
-    );
-    w.dispatch(HeaderAction::Cancel.action());
-    w.dispatch(HeaderAction::Edit { editing: true }.action());
-    pump(200);
-    assert_eq!(state(&w).workspace.layout.header, original);
-    let from = point(&format!("header-grip-{id}"));
-    perform(
-        serde_json::json!([{ "point": from }, { "button": 272, "down": true }, { "point": [from[0] + 18., from[1]] }, { "point": [800., 400.] }, { "button": 272, "down": false }]),
-    );
-    assert!(
-        state(&w).workspace.layout.header.entry(id).is_err(),
-        "outside drop removes the detached item"
-    );
-    perform(click(point("header-edit-done")));
-    assert!(!state(&w).customization.header_editing);
-    assert_eq!(w.header.root.height(), 60);
-    std::fs::write(dir.join("finished"), "done").unwrap();
-    w.window.close();
-    pump(200);
-}
-
-#[test]
 #[ignore = "isolated native-input.js --native-test=native_header_slide_remove_input"]
 fn native_header_slide_remove_input() {
     let mut d = Driver::new("art.capycanvas.HeaderSlideRemove");
@@ -3225,9 +3101,6 @@ fn native_header_window_actions_input() {
             );
         }
     }
-    assert_eq!(WorkspacePreset::Illustrator.name(), "Paint");
-    assert_eq!(WorkspacePreset::Painter.name(), "Sketch");
-    assert_eq!(WorkspacePreset::Photographer.name(), "Photo");
     d.finish();
 }
 

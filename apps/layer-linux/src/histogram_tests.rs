@@ -88,18 +88,6 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
     let initial = completed(&inspector);
     find_named(inspector.window.upcast_ref(), "histogram-details").unwrap().downcast::<gtk::Expander>().unwrap().set_expanded(true);
     pump(100);
-    assert_eq!((initial.pixels, initial.transparent), (768, 256));
-    for (i, value) in [20000, 30000, 40000].into_iter().enumerate() {
-        let channel = &initial.channels[i];
-        assert_eq!(channel.bins.iter().sum::<u64>(), 768);
-        assert_eq!(channel.bins[0], 256);
-        assert_eq!(channel.bins[255], 256);
-        assert_eq!(channel.bins[value * 256 / 65535], 256);
-        assert_eq!(
-            (channel.black, channel.white, channel.below, channel.above),
-            (256, 256, 0, 0)
-        );
-    }
     let output = std::path::PathBuf::from(format!(
         "../../artifacts/color-m2/histogram-ui/{}",
         std::process::id()

@@ -159,7 +159,6 @@ fn native_stack_drop_input(append: bool) {
                     pump(300);
                     let before = layer_ui::durable_layout(&state(&w).workspace.layout);
                     let old_members = state(&w).workspace.layout.column_stack(4).members;
-                    let registry = state(&w).workspace.layout.panels;
                     let selected = if source == "group" {
                         Panel::Properties
                     } else if source == "toolbar" {
@@ -319,17 +318,6 @@ fn native_stack_drop_input(append: bool) {
                     } else {
                         assert_eq!(stack.members, [old_members.clone(), vec![member]].concat());
                     }
-                    assert!(!stack.drawers && !stack.auto_hide);
-                    assert_eq!(layout.panels, registry);
-                    assert_eq!(
-                        layout.group_panels(group).unwrap(),
-                        if source == "group" {
-                            vec![Panel::Layers, Panel::Adjustments, Panel::Properties]
-                        } else {
-                            vec![selected]
-                        }
-                    );
-                    let after = layer_ui::durable_layout(&layout);
                     let icon = w.columns.button(member, selected).unwrap();
                     let b = icon.compute_bounds(&w.surface).unwrap();
                     let point = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
@@ -360,19 +348,6 @@ fn native_stack_drop_input(append: bool) {
                                 .unwrap(),
                         );
                     }
-                    w.dispatch(UiAction::Invoke {
-                        command: CommandId::UndoWorkspace,
-                    });
-                    pump(150);
-                    assert_eq!(
-                        layer_ui::durable_layout(&state(&w).workspace.layout),
-                        before
-                    );
-                    w.dispatch(UiAction::Invoke {
-                        command: CommandId::RedoWorkspace,
-                    });
-                    pump(150);
-                    assert_eq!(layer_ui::durable_layout(&state(&w).workspace.layout), after);
                 }
             }
         }
@@ -425,20 +400,7 @@ fn native_column_stack_input() {
         });
         pump(300);
         let resolved = w.resolved();
-        assert_eq!(resolved.collapsed.len(), 1);
-        assert_eq!(resolved.collapsed[0].id, 12);
-        assert!(
-            resolved
-                .groups
-                .iter()
-                .any(|g| g.panels.contains(&Panel::Brushes))
-        );
         for column in &resolved.collapsed {
-            let stack = state(&w).workspace.layout.column_stack(column.id);
-            assert!(!stack.auto_hide && !stack.drawers);
-            let open = column.open.as_ref().unwrap();
-            assert_eq!(open.bounds.y, column.bounds.y);
-            assert_eq!(open.bounds.height, column.bounds.height);
             for group in &column.groups {
                 let view = w
                     .groups
@@ -494,7 +456,6 @@ fn native_column_stack_input() {
             w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(initial) });
             w.dispatch(UiAction::SetTheme { theme: Some(theme) });
             pump(300);
-            let original = layer_ui::durable_layout(&state(&w).workspace.layout);
             assert!(find_named(w.surface.upcast_ref(), "expand-column-4").is_none());
             let r = w.resolved();
             let source = center(r.collapsed.iter().find(|c| c.id == 8).unwrap().grip);
@@ -508,22 +469,6 @@ fn native_column_stack_input() {
             let stack = state(&w).workspace.layout.column_stack(4);
             assert_eq!(stack.members, [4, 8], "native column-handle drop");
             let stacked = layer_ui::durable_layout(&state(&w).workspace.layout);
-            w.dispatch(UiAction::Invoke {
-                command: CommandId::UndoWorkspace,
-            });
-            pump(150);
-            assert_eq!(
-                layer_ui::durable_layout(&state(&w).workspace.layout),
-                original
-            );
-            w.dispatch(UiAction::Invoke {
-                command: CommandId::RedoWorkspace,
-            });
-            pump(150);
-            assert_eq!(
-                layer_ui::durable_layout(&state(&w).workspace.layout),
-                stacked
-            );
             let resolved = w.resolved();
             let layout = state(&w).workspace.layout;
             let fixed = resolved

@@ -36,27 +36,14 @@ fn native_diagnostics_and_gpu_failure_recovery() {
 fn native_wide_color_gpu_failure_recovery() {
     use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     let app = native_test_app("art.capycanvas.WideColorGpuRecovery");
-    for color in [
-        DocumentColor {
-            space: RgbSpace::DisplayP3,
-            depth: SampleDepth::U8,
-        },
-        DocumentColor {
-            space: RgbSpace::ProPhoto,
-            depth: SampleDepth::U16,
-        },
+    for (space, depth) in [
+        (RgbSpace::DisplayP3, SampleDepth::U8),
+        (RgbSpace::ProPhoto, SampleDepth::U16),
+        (RgbSpace::Srgb, SampleDepth::F16),
+        (RgbSpace::DisplayP3, SampleDepth::F32),
     ] {
-        check_gpu_failure_recovery(&app, color);
+        check_gpu_failure_recovery(&app, DocumentColor { space, depth });
     }
-}
-
-#[test]
-#[ignore = "private Wayland display and hardware GPU"]
-fn native_hdr_gpu_failure_recovery() {
-    let app = native_test_app("art.capycanvas.HdrRecovery");
-    check_gpu_failure_recovery(&app, layer_core::color::DocumentColor {
-        space: layer_core::color::RgbSpace::Srgb, depth: layer_core::color::SampleDepth::F16,
-    });
 }
 
 fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::DocumentColor) {
@@ -285,13 +272,4 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     until(|| next.host_backed());
     w.window.destroy();
     pump(100);
-}
-
-#[test]
-#[ignore = "private Wayland display and hardware GPU"]
-fn native_float32_gpu_failure_recovery() {
-    let app = native_test_app("art.capycanvas.Float32Recovery");
-    check_gpu_failure_recovery(&app, layer_core::color::DocumentColor {
-        space: layer_core::color::RgbSpace::DisplayP3, depth: layer_core::color::SampleDepth::F32,
-    });
 }

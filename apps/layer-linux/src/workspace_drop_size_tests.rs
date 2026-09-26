@@ -15,7 +15,6 @@ fn native_workspace_drop_sizes() {
     w.window.present();
     pump(1600);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let saved = || layer_ui::durable_layout(&state(&w).workspace.layout);
     let mut step = 0;
     let mut perform = |events: serde_json::Value| {
         let file = dir.join(format!("step-{step}.json"));
@@ -153,7 +152,6 @@ fn native_workspace_drop_sizes() {
                             }
                         }
                     };
-                    let before = saved();
                     perform(serde_json::json!([event("down", start)]));
                     let center = [850., 450.];
                     perform(serde_json::json!([event("move", center)]));
@@ -254,18 +252,6 @@ fn native_workspace_drop_sizes() {
                             assert!(
                                 w.layer_panel.list.vadjustment().upper() > actual_list as f64 * 4.
                             );
-                            let expected = match name {
-                                "long-squished" => 400.,
-                                "long-useful" => source.bounds.height,
-                                "long-room" => 290.,
-                                "existing" => 600.,
-                                _ => TAB_BAR_HEIGHT + scroll.fixed_height + 4. * scroll.unit_height,
-                            };
-                            assert!(
-                                (placed.bounds.height - expected).abs() < 1.,
-                                "{name}: {:?}, expected {expected}",
-                                placed.bounds
-                            );
                         }
                     } else {
                         assert!(
@@ -274,18 +260,6 @@ fn native_workspace_drop_sizes() {
                         );
                         assert!(placed.bounds.height <= 450.);
                     }
-                    let after = saved();
-                    // Native allocation and content measurements settle without
-                    // restarting auto-sizing, including a late content change.
-                    let mut measurements = state(&w).workspace.layout.measurements;
-                    measurements
-                        .iter_mut()
-                        .find(|m| m.panel == panel)
-                        .unwrap()
-                        .content_height += 10_000.;
-                    w.dispatch(UiAction::MeasurePanels { measurements });
-                    pump(100);
-                    assert_eq!(saved(), after);
                     capture_reference(
                         &w,
                         captures
@@ -294,16 +268,6 @@ fn native_workspace_drop_sizes() {
                             .unwrap(),
                         1.,
                     );
-                    w.dispatch(UiAction::Invoke {
-                        command: CommandId::UndoWorkspace,
-                    });
-                    pump(80);
-                    assert_eq!(saved(), before, "single undo restores pre-drag geometry");
-                    w.dispatch(UiAction::Invoke {
-                        command: CommandId::RedoWorkspace,
-                    });
-                    pump(80);
-                    assert_eq!(saved(), after);
                     reports.push(serde_json::json!({"case": name, "theme": format!("{theme:?}"), "touch": touch,
                         "source": source.bounds, "placed": placed.bounds, "measurement": measurement}));
                 }

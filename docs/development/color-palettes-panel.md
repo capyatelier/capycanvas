@@ -226,7 +226,6 @@ bash tools/performance/workspace-motion.sh gtk --native-test=native_palette_reor
 bash tools/performance/workspace-motion.sh gtk --native-test=native_palette_reorder_pen_input --tablet
 bash tools/performance/workspace-motion.sh gtk --native-test=native_palette_context_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_palette_context_pen_input --tablet
-bash tools/performance/workspace-motion.sh gtk --native-test=native_palette_pen_input --tablet
 bash tools/performance/workspace-motion.sh gtk --native-test=native_numeric_colors_and_saved_palettes
 bash tools/performance/workspace-motion.sh gtk --native-test=native_paint_fitted_columns
 bash tools/performance/workspace-motion.sh gtk --native-test=native_nested_tool_drawers

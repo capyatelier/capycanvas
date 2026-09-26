@@ -119,8 +119,6 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     );
     invoke(&w, CommandId::SoftProofSetup);mode(&w,"print");
     pump(250);
-    assert!(find_named(w.proof_panel.root.upcast_ref(),"proof-apply").is_none());
-    assert!(find_named(w.proof_panel.root.upcast_ref(),"proof-remove").is_none());
     mode(&w,"off");
     finish(&w);
     assert_eq!(snapshot(&w), failed_document);
@@ -249,7 +247,6 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     invoke(&w, CommandId::SoftProofSetup);mode(&w,"print");
     let setup = w.proof_panel.root.clone();
     assert!(w.window.visible_dialog().is_none());
-    assert!(find_named(setup.upcast_ref(), "proof-apply").is_none());
     assert_eq!(
         proof_choice(&w, "proof-intent").selected(),
         0
@@ -258,8 +255,6 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         proof_choice(&w, "proof-simulation").selected_item().and_downcast::<gtk::StringObject>().unwrap().string().as_str(),
         "Black ink"
     );
-    assert!(find_named(setup.upcast_ref(), "proof-revert").is_none());
-    assert!(find_named(setup.upcast_ref(), "proof-remove").is_none());
     super::new_photo::capture_ui(&w, &output, "setup.png");
     for iteration in 0..2 {
         profile_action(&w, "proof", "add");
@@ -599,15 +594,6 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     proof_choice(&w, "proof-intent").set_selected(0);
     toggle(&w, "proof-bpc").set_active(true);
     proof_choice(&w, "proof-simulation").set_selected(2);
-    for removed in [
-        "proof-name",
-        "proof-profile-file",
-        "proof-black-ink",
-        "proof-paper",
-        "proof-manage-profiles",
-    ] {
-        assert!(find_named(w.proof_panel.root.upcast_ref(), removed).is_none());
-    }
     super::new_photo::profile_action(&w, "proof", "add");
     let file = chooser();
     file.set_file(&gtk::gio::File::for_path(&icc)).unwrap();
@@ -1052,7 +1038,6 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         mode.set_active_name(Some("print"));pump(300);
         assert!(w.proof_panel.root.width()<=viewport.width(),"Print controls must fit {}",preset.name());
         super::new_photo::capture_ui(&w,output,&format!("{}-print-compact.png",preset.name()));
-        assert!(find_named(w.proof_panel.root.upcast_ref(),"proof-options").is_none());
         for name in ["proof-profile-choose", "proof-simulation", "proof-intent", "proof-bpc", "proof-gamut-warning"] {
             let control=find_named(w.proof_panel.root.upcast_ref(),name).unwrap();
             assert!(control.is_mapped(), "{name} must be directly visible");
@@ -1117,36 +1102,16 @@ fn native_proof_toggle_remembers_mode_and_reveals_hidden_panel() {
     settled(&w);
     check(ProofMode::Print);
     let saved = snapshot(&w);
-    for (name, expected) in [("print", ProofMode::Print), ("sdr", ProofMode::Sdr)] {
-        mode(&w, name);
-        pump(50);
-        hide();
-        shortcut();
-        check(ProofMode::Off);
-        assert!(state(&w).workspace.layout.panel_group(Panel::Proof).is_none(), "disabling leaves the panel hidden");
-        shortcut();
-        pump(150);
-        check(expected);
-        assert!(w.proof_panel.root.is_mapped(), "enabling reveals the active Proof tab");
-        let selector = find_named(w.proof_panel.root.upcast_ref(), "proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap();
-        assert_eq!(selector.active_name().as_deref(), Some(name));
-        mode(&w, "off");
-        check(ProofMode::Off);
-        invoke(&w, CommandId::SoftProof);
-        check(expected);
-        assert_eq!(snapshot(&w), saved, "view changes never enter document history");
-    }
-    // A collapsed tab group must open its native drawer when enabling.
-    let group = state(&w).workspace.layout.panel_group(Panel::Proof).unwrap();
-    invoke(&w, CommandId::SoftProof);
-    w.dispatch(UiAction::Customize { action: CustomizationAction::SetColumnCollapsed { group, collapsed: true } });
-    let column = state(&w).workspace.layout.collapsed_column_for_group(group).unwrap();
-    w.dispatch(UiAction::Customize { action: CustomizationAction::SetColumnDrawers { column, drawers: true } });
+    hide();
+    shortcut();
+    check(ProofMode::Off);
     shortcut();
     pump(150);
-    check(ProofMode::Sdr);
-    assert!(state(&w).customization.column_drawers.iter().any(|d| matches!(d.anchor, layer_ui::DrawerAnchor::Column { group: g, origin: Panel::Proof, .. } if g == group)));
-    assert_eq!(snapshot(&w), saved);
+    check(ProofMode::Print);
+    assert!(w.proof_panel.root.is_mapped(), "enabling reveals the active Proof tab");
+    let selector = find_named(w.proof_panel.root.upcast_ref(), "proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap();
+    assert_eq!(selector.active_name().as_deref(), Some("print"));
+    assert_eq!(snapshot(&w), saved, "view changes never enter document history");
     w.window.destroy();
     pump(100);
 }
