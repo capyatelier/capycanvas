@@ -57,14 +57,12 @@ impl WgpuRasterizer {
             self.scene_pipelines.effects(self)
         };
         if let Some(startup) = &self.startup {
-            // Cold startup also warms unchanged catalog programs. Each program
-            // is its own background job so newly needed document/brush work can
-            // overtake speculative compilation between driver calls.
-            let programs = if !startup.finished {
-                request.namespace.clone()
-            } else {
-                request.programs.clone()
-            };
+            // Web has asynchronous first-use readiness. Native hosts still
+            // rely on their worker's cold catalog warmup for later use.
+            #[cfg(target_arch = "wasm32")]
+            let programs = request.programs.clone();
+            #[cfg(not(target_arch = "wasm32"))]
+            let programs = if startup.finished { request.programs.clone() } else { request.namespace.clone() };
             let state = Arc::new(std::sync::Mutex::new(BackgroundValidation {
                 effects: Some(candidate),
                 errors: Vec::new(),
@@ -114,12 +112,12 @@ impl WgpuRasterizer {
                     }
                 };
                 #[cfg(not(target_arch = "wasm32"))]
-                startup.compiler.enqueue(startup::OTHER, work);
+                startup.compiler.enqueue(startup::VALIDATION, work);
                 #[cfg(target_arch = "wasm32")]
-                startup.compiler.enqueue_async(startup::OTHER, work);
+                startup.compiler.enqueue_async(startup::VALIDATION, work);
             }
             let (tx, rx) = mpsc::channel();
-            startup.compiler.enqueue(startup::OTHER, move || {
+            startup.compiler.enqueue(startup::VALIDATION, move || {
                 let mut state = state.lock().unwrap();
                 let errors = std::mem::take(&mut state.errors);
                 let value = Validation {

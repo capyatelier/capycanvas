@@ -77,6 +77,20 @@ impl<R: CanvasRenderer> UiSession<R> {
             })
             .map(|f| f.program())
             .collect();
+        // The bundled catalog is already accepted. A refresh with no new code
+        // only updates library metadata; it must not lock the document or ask
+        // the renderer to compile every unused program again.
+        // Native hosts still use this transaction to warm their catalog on a
+        // worker. Web retains asynchronous first-use readiness instead.
+        if self.state.platform == Platform::Web && !migrate_instances && changed.is_empty() {
+            if candidate.filters() == self.effect_catalog.filters()
+                && candidate.categories() == self.effect_catalog.categories()
+            {
+                return Ok(UiChange::default());
+            }
+            self.publish_filters(candidate, false)?;
+            return Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, false));
+        }
         let mut namespace: Vec<_> = candidate.filters().iter().map(|f| f.program()).collect();
         // Self-contained documents may contain programs absent from the catalog.
         // Programs being replaced are deliberately excluded from this namespace.

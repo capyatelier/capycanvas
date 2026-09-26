@@ -130,6 +130,7 @@ impl Flood {
             }),
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
         STAGES.into_iter().map(|entry| &self.pipelines[entry])
     }

@@ -1,0 +1,327 @@
+{
+  "date": "2026-09-25",
+  "build": "dev-perf optimized; implementation commit containing this record",
+  "baseline_wasm_sha256": "2150997097d739529b8d795626586150ac136a9f0d2ceab6f0ab9efee538598a",
+  "final_wasm_sha256": "184733ad628157d71b9ff2097782e41faf1b4d896e84575ba8f52c8f4dce4458",
+  "device": "Huion Kamvas Pad 12 KP1202, Android 16, Chrome 143.0.7499.192",
+  "viewport_css_dpr": [
+    1200,
+    680,
+    2
+  ],
+  "tab_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+  "cache": "Normal browser/driver caches retained; final-rebuilt bypassed HTTP cache only. Frozen baseline repeated after final tests. No cold-driver, production-network or thermal-throttling claim.",
+  "thermal_status_observed": [
+    0,
+    0
+  ],
+  "origins": {
+    "baseline": "http://127.0.0.1:4298/ (initial baseline samples used 4297 before rebuild)",
+    "final": "http://127.0.0.1:4297/"
+  },
+  "passive": [
+    {
+      "run": "baseline/refresh-0.json",
+      "milestones_ms": {
+        "capy.startup.module": 737,
+        "capy.startup.wasm": 892.3,
+        "capy.startup.model": 926.9,
+        "capy.startup.controls": 1032.7,
+        "capy.startup.ui": 1146.3,
+        "capy.startup.workspace": 1533.4,
+        "capy.startup.gpu": 1533.5,
+        "capy.startup.canvas": 2441.5,
+        "capy.startup.document": 3351.7,
+        "capy.startup.brush": 6227.4,
+        "capy.startup.complete": 47191.9
+      },
+      "pipeline_calls": 203,
+      "effect_pipeline_calls": 86,
+      "disabled_commands_observed": true,
+      "errors": []
+    },
+    {
+      "run": "baseline/refresh-1.json",
+      "milestones_ms": {
+        "capy.startup.module": 287.9,
+        "capy.startup.wasm": 410.5,
+        "capy.startup.model": 428.9,
+        "capy.startup.controls": 488,
+        "capy.startup.ui": 551.6,
+        "capy.startup.workspace": 728.8,
+        "capy.startup.gpu": 728.9,
+        "capy.startup.canvas": 1538.4,
+        "capy.startup.document": 2364.9,
+        "capy.startup.brush": 5116.1,
+        "capy.startup.complete": 48059.5
+      },
+      "pipeline_calls": 203,
+      "effect_pipeline_calls": 86,
+      "disabled_commands_observed": true,
+      "errors": []
+    },
+    {
+      "run": "final-rebuilt/refresh-0.json",
+      "milestones_ms": {
+        "capy.startup.module": 573.8,
+        "capy.startup.wasm": 928.7,
+        "capy.startup.model": 950.5,
+        "capy.startup.controls": 992.9,
+        "capy.startup.ui": 1050.9,
+        "capy.startup.workspace": 1246.2,
+        "capy.startup.gpu": 1246.8,
+        "capy.startup.canvas": 1551.5,
+        "capy.startup.document": 1691.5,
+        "capy.startup.brush": 2122.1,
+        "capy.startup.complete": 2208.1
+      },
+      "pipeline_calls": 37,
+      "effect_pipeline_calls": 0,
+      "disabled_commands_observed": false,
+      "errors": []
+    },
+    {
+      "run": "final-passive/refresh-0.json",
+      "milestones_ms": {
+        "capy.startup.module": 295.9,
+        "capy.startup.wasm": 428.6,
+        "capy.startup.model": 444,
+        "capy.startup.controls": 495,
+        "capy.startup.ui": 562.2,
+        "capy.startup.workspace": 737.2,
+        "capy.startup.gpu": 737.7,
+        "capy.startup.canvas": 1074.4,
+        "capy.startup.document": 1236,
+        "capy.startup.brush": 1606.9,
+        "capy.startup.complete": 1704.7
+      },
+      "pipeline_calls": 37,
+      "effect_pipeline_calls": 0,
+      "disabled_commands_observed": false,
+      "errors": []
+    },
+    {
+      "run": "final-passive/refresh-1.json",
+      "milestones_ms": {
+        "capy.startup.module": 266.4,
+        "capy.startup.wasm": 385,
+        "capy.startup.model": 400.3,
+        "capy.startup.controls": 447,
+        "capy.startup.ui": 509.9,
+        "capy.startup.workspace": 676.2,
+        "capy.startup.gpu": 676.5,
+        "capy.startup.canvas": 946,
+        "capy.startup.document": 1176.4,
+        "capy.startup.brush": 1589.1,
+        "capy.startup.complete": 1671.3
+      },
+      "pipeline_calls": 37,
+      "effect_pipeline_calls": 0,
+      "disabled_commands_observed": false,
+      "errors": []
+    },
+    {
+      "run": "final-baseline/refresh-0.json",
+      "milestones_ms": {
+        "capy.startup.module": 367.9,
+        "capy.startup.wasm": 519.8,
+        "capy.startup.model": 554.1,
+        "capy.startup.controls": 629.5,
+        "capy.startup.ui": 712,
+        "capy.startup.workspace": 912.7,
+        "capy.startup.gpu": 912.9,
+        "capy.startup.canvas": 1871,
+        "capy.startup.document": 2730.6,
+        "capy.startup.brush": 5249.7,
+        "capy.startup.complete": 44803.2
+      },
+      "pipeline_calls": 203,
+      "effect_pipeline_calls": 86,
+      "disabled_commands_observed": true,
+      "errors": [],
+      "dialogs_ms": [
+        {
+          "start": 44897.4,
+          "title": "Recover drawing?"
+        }
+      ]
+    }
+  ],
+  "earlier_41_pipeline_implementation": {
+    "first_http_bypass_complete_ms": 5750.9,
+    "cached_complete_ms": [
+      1860.1,
+      1876.8
+    ],
+    "note": "Before narrowing native writeback to the selected bit depth; retained to show cache sensitivity."
+  },
+  "recovery": {
+    "fixture": {
+      "width": 2048,
+      "height": 1536,
+      "png_bytes": 2818792,
+      "content": "Gradient and checker pattern; no effects"
+    },
+    "baseline": {
+      "run": "baseline-recovery/refresh-0.json",
+      "milestones_ms": {
+        "capy.startup.module": 405.5,
+        "capy.startup.wasm": 431.7,
+        "capy.startup.model": 449.6,
+        "capy.startup.controls": 517.7,
+        "capy.startup.ui": 588,
+        "capy.startup.workspace": 766,
+        "capy.startup.gpu": 766.2,
+        "capy.startup.canvas": 1677,
+        "capy.startup.document": 2538.1,
+        "capy.startup.brush": 5302.5,
+        "capy.startup.complete": 51872.5
+      },
+      "pipeline_calls": 203,
+      "effect_pipeline_calls": 86,
+      "disabled_commands_observed": true,
+      "errors": [],
+      "dialogs_ms": [
+        {
+          "start": 51938.1,
+          "title": "Recover drawing?"
+        }
+      ]
+    },
+    "final": {
+      "run": "final-recovery/refresh-0.json",
+      "milestones_ms": {
+        "capy.startup.module": 342.1,
+        "capy.startup.wasm": 479.1,
+        "capy.startup.model": 496.2,
+        "capy.startup.controls": 559.8,
+        "capy.startup.ui": 629.4,
+        "capy.startup.workspace": 807.3,
+        "capy.startup.gpu": 807.7,
+        "capy.startup.canvas": 5117.7,
+        "capy.startup.document": 5117.7,
+        "capy.startup.brush": 5117.7,
+        "capy.startup.complete": 5275
+      },
+      "pipeline_calls": 75,
+      "effect_pipeline_calls": 0,
+      "disabled_commands_observed": false,
+      "errors": [],
+      "dialogs_ms": [
+        {
+          "start": 1346.8,
+          "title": "Recover drawing?"
+        },
+        {
+          "start": 5710.7,
+          "title": "Recover drawing?"
+        }
+      ]
+    },
+    "accepted_ms": 4311.4,
+    "adopted_ms": 5142.3,
+    "gpu_complete_ms": 5260.4,
+    "accepted_to_adopted_ms": 830.9,
+    "accepted_to_gpu_complete_ms": 949.0,
+    "restored_size": [
+      2048,
+      1536
+    ],
+    "workers": {
+      "recover-list": {
+        "start_ms": 902.4,
+        "end_ms": 1154.5,
+        "elapsed_ms": 252.1
+      },
+      "recover-get": {
+        "start_ms": 4356,
+        "end_ms": 4385.2,
+        "elapsed_ms": 29.2
+      },
+      "read": {
+        "start_ms": 4388.1,
+        "end_ms": 4847.3,
+        "elapsed_ms": 459.2
+      },
+      "recover-write": {
+        "start_ms": 5107.9,
+        "end_ms": 5489,
+        "elapsed_ms": 381.1
+      }
+    },
+    "note": "Two fixture records were available (explicit checkpoint and autosave); first restore was timed. Screenshot verified. GPU completion is not scanout."
+  },
+  "strokes": [
+    {
+      "run": "baseline-strokes",
+      "phase": "during-startup",
+      "start_ms": 7109.2,
+      "pointerup_ms": 14136,
+      "sent": 231,
+      "delivered_moves_per_second": 32.87,
+      "frame_cpu_p95_ms": 10.5,
+      "latest_sample_age_at_cpu_submission_p95_ms": 61.2,
+      "new_pipeline_calls_during_contact": 24,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    },
+    {
+      "run": "baseline-strokes",
+      "phase": "after-startup",
+      "start_ms": 56796.5,
+      "pointerup_ms": 61810,
+      "sent": 224,
+      "delivered_moves_per_second": 44.68,
+      "frame_cpu_p95_ms": 5.8,
+      "latest_sample_age_at_cpu_submission_p95_ms": 39.7,
+      "new_pipeline_calls_during_contact": 0,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    },
+    {
+      "run": "final-strokes",
+      "phase": "during-startup",
+      "start_ms": 1718.1,
+      "pointerup_ms": 8740.4,
+      "sent": 322,
+      "delivered_moves_per_second": 45.85,
+      "frame_cpu_p95_ms": 6.0,
+      "latest_sample_age_at_cpu_submission_p95_ms": 34.0,
+      "new_pipeline_calls_during_contact": 0,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    },
+    {
+      "run": "final-strokes",
+      "phase": "after-startup",
+      "start_ms": 9786.3,
+      "pointerup_ms": 14797,
+      "sent": 227,
+      "delivered_moves_per_second": 45.3,
+      "frame_cpu_p95_ms": 6,
+      "latest_sample_age_at_cpu_submission_p95_ms": 33.0,
+      "new_pipeline_calls_during_contact": 0,
+      "undo_enabled_after_stroke": true,
+      "modified_after_undo": false
+    }
+  ],
+  "stroke_measurement": "Nominal 120 Hz CDP pen replay, G Pen 18 px, pressure 0.65; 7 s early / 5 s steady. Statistics clip to pointer-up and exclude older samples. CPU submission age is not physical pen-to-photon latency.",
+  "menus": {
+    "count": 29,
+    "opened": 29,
+    "two_raf_p50_ms": 19,
+    "two_raf_p95_ms": 21.2,
+    "two_raf_max_ms": 29.3,
+    "disabled_commands_observed": false
+  },
+  "acceptance": {
+    "blank_startup_unused_effect_pipelines": 0,
+    "pipeline_calls_reduction": 166,
+    "pipeline_calls_reduction_percent": 81.77,
+    "final_early_to_steady_sample_age_ratio": 1.03,
+    "target_ratio_max": 1.1
+  },
+  "excluded_capture": "demand-first used cached old Wasm with new JS before an HTTP-bypass reload; not a valid implementation comparison.",
+  "tested_source_base_before_rebase": "1fc12fb1",
+  "baseline_source_revision": "367cff577e927183f58781d7a9ba1f60aaa1d9e5"
+}

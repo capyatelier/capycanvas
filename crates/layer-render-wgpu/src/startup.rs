@@ -8,7 +8,8 @@ use std::sync::Mutex;
 
 const DOCUMENT: u8 = 2;
 pub(super) const BRUSH: u8 = 3;
-pub(super) const OTHER: u8 = 4;
+pub(super) const VALIDATION: u8 = 4;
+pub(super) const OTHER: u8 = 5;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "startup_native.rs"]
 mod platform;
@@ -130,6 +131,7 @@ pub(super) struct Startup {
     current: Requirements,
     effects: Option<mpsc::Receiver<Result<effects::Effects, String>>>,
     effects_ready: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     others_queued: bool,
     pub(super) host_catalog_pending: bool,
     pub(super) finished: bool,
@@ -153,6 +155,7 @@ impl Startup {
             current: Requirements::default(),
             effects: None,
             effects_ready: false,
+            #[cfg(not(target_arch = "wasm32"))]
             others_queued: false,
             host_catalog_pending: false,
             finished: false,
@@ -160,23 +163,10 @@ impl Startup {
     }
 }
 impl WgpuRasterizer {
-    /// Browser hosts mark the catalog submitted after their asynchronous fetch,
-    /// then poll one owned compilation future between rendering opportunities.
-    #[cfg(target_arch = "wasm32")]
-    pub fn wait_for_startup_catalog(&mut self) {
-        if let Some(startup) = &mut self.startup {
-            startup.host_catalog_pending = true;
-        }
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub fn startup_catalog_submitted(&mut self) {
-        if let Some(startup) = &mut self.startup {
-            startup.host_catalog_pending = false;
-        }
-    }
     #[cfg(target_arch = "wasm32")]
     pub fn compile_startup_step(
         &self,
+        allow_optional: bool,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), GpuRasterError>>>> {
         self.startup.as_ref().map_or_else(
             || {
@@ -185,14 +175,14 @@ impl WgpuRasterizer {
                         Box<dyn std::future::Future<Output = Result<(), GpuRasterError>>>,
                     >
             },
-            |startup| startup.compiler.step(),
+            |startup| startup.compiler.step(allow_optional),
         )
     }
     #[cfg(target_arch = "wasm32")]
-    pub fn shader_work_pending(&self) -> bool {
+    pub fn shader_work_pending(&self, allow_optional: bool) -> bool {
         self.startup
             .as_ref()
-            .is_some_and(|s| s.compiler.pending() != 0)
+            .is_some_and(|s| s.compiler.has_work(allow_optional))
     }
     /// Call after the host has submitted its initial filter catalog. Saving runs
     /// behind all shader jobs, never on the canvas/input thread. The worker drops
@@ -218,7 +208,7 @@ impl WgpuRasterizer {
         transform: bool,
     ) -> bool {
         self.startup.as_ref().is_some_and(|s| {
-            !s.finished
+            (cfg!(target_arch = "wasm32") || !s.finished)
                 && (s.revision != Some(document.revision)
                     || s.brush.as_ref() != Some(brush)
                     || s.transform != transform)
@@ -236,6 +226,7 @@ impl WgpuRasterizer {
         let Some(mut startup) = self.startup.take() else {
             return Ok(());
         };
+        startup.finished = false;
         if startup.revision != Some(document.revision) {
             let mut required = Requirements::default();
             required
@@ -285,7 +276,8 @@ impl WgpuRasterizer {
             startup.document = required;
             startup.revision = Some(document.revision);
             let chains = scene::startup_effect_chains(&document.layers);
-            if !chains.is_empty() {
+            let cached = self.scene.as_ref().map(|s| &s.effects).or(self.validated_effects.as_ref());
+            if !chains.iter().all(|(layers, execution)| cached.is_some_and(|cache| cache.chain_ready(layers, *execution))) {
                 let mut candidate = self
                     .scene
                     .as_ref()
@@ -344,7 +336,7 @@ impl WgpuRasterizer {
         // Native publication must be ready before accepting a brush contact,
         // but blank paper does not depend on writeback/promotion/validation.
         if let Some(native) = &self.native_edit {
-            current.compute.extend(native.pipelines().cloned());
+            current.compute.extend(native.required_pipelines(document.color.depth).cloned());
         }
         let locked = document
             .layers
@@ -379,8 +371,14 @@ impl WgpuRasterizer {
         startup.current = current;
         startup.brush = Some(brush.clone());
         startup.transform = transform;
+        // Native hosts warm on a dedicated compiler thread. Browsers retain
+        // recipes and request only dependencies of the current document/tool.
+        #[cfg(not(target_arch = "wasm32"))]
         if !startup.others_queued {
             startup.masks.remaining(&startup.compiler);
+            if let Some(native) = &self.native_edit {
+                for p in native.pipelines() { startup.compiler.pipeline(p, OTHER); }
+            }
             if self.device.working_format() == wgpu::TextureFormat::Rgba32Float {
                 let mip = self.display_pipelines
                     .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
@@ -445,7 +443,7 @@ impl WgpuRasterizer {
             });
         };
         startup.compiler.check()?;
-        if startup.finished {
+        if !cfg!(target_arch = "wasm32") && startup.finished {
             return Ok(StartupProgress {
                 canvas_ready: true,
                 brush_ready: true,
@@ -602,7 +600,7 @@ mod gpu_tests {
                 .native_edit
                 .as_ref()
                 .unwrap()
-                .pipelines()
+                .required_pipelines(document.color.depth)
                 .all(Deferred::ready)
         );
         for index in [2, 3] {

@@ -62,8 +62,6 @@ impl SnapshotGpu {
             })?;
         }
         renderer.prepare_startup(&project.document, brush, false)?;
-        #[cfg(target_arch = "wasm32")]
-        renderer.startup_catalog_submitted();
         #[cfg(not(target_arch = "wasm32"))]
         renderer.finish_startup_cache();
         Ok(ColorCanvas {
@@ -83,7 +81,7 @@ impl ColorCanvas {
     #[cfg(target_arch = "wasm32")]
     pub async fn compile_step(&mut self) -> Result<(), GpuRasterError> {
         self.control.check()?;
-        self.renderer.as_mut().unwrap().compile_startup_step().await
+        self.renderer.as_mut().unwrap().compile_startup_step(false).await
     }
     pub fn poll(&mut self) -> Result<bool, GpuRasterError> {
         self.control.check()?;

@@ -102,6 +102,12 @@ impl NativeEdit {
             .chain(self.promoter.iter().flat_map(|p| p.pipelines.iter()))
             .chain(&self.validator.pipelines)
     }
+    pub(crate) fn required_pipelines(&self, depth: layer_core::color::SampleDepth) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
+        self.color.pipelines_for_depth(depth).iter()
+            .chain(&self.scalar.pipelines)
+            .chain(self.promoter.iter().flat_map(|p| p.pipelines.iter()))
+            .chain(&self.validator.pipelines)
+    }
     pub fn storage_bytes(&self) -> u64 {
         self.promoter
             .as_ref()
@@ -204,7 +210,7 @@ impl WgpuRasterizer {
             .with_working_format(wgpu::TextureFormat::Rgba32Float)?
             .with_working_space(color.space).with_hdr(color.depth.is_float());
         let mut r = Self::from_wgpu_inner(adapter, device, queue, Initialization::Interactive)?;
-        r.startup.as_mut().unwrap().host_catalog_pending = true;
+        r.startup.as_mut().unwrap().host_catalog_pending = !cfg!(target_arch = "wasm32");
         r.initialize_native(color)?;
         Ok(r)
     }

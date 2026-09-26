@@ -10,7 +10,7 @@ export async function fetchFilterPackage(app, manifestUrl, mode, moduleUrl=name=
   const modules=Object.fromEntries(await Promise.all(names.map(async name=>[name,await read(moduleUrl(name))])));
   return libraryOnly ? app.load_filter_library(manifest,modules,mode) : app.load_filter_package(manifest,modules,mode);
 }
-export function createEffectPanels({app,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged,splitPicker=false,message}) {
+export function createEffectPanels({app,wake,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged,splitPicker=false,message}) {
   const send=action=>dispatch({type:"effect",action});
   const adjustments=element("div","filter-picker");adjustments.dataset.control="adjustments";
   const pickerHeader=element("div","filter-picker-header"),category=element("select"),search=element("input"),list=element("div","filter-picker-list");
@@ -60,7 +60,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     }
     if(!children.length)children.push(element("p","dim",picker.empty_label));list.replaceChildren(...children);contentChanged("adjustments");
   }
-  const disposePreviews=filterPreviewView(app,()=>{
+  const disposePreviews=filterPreviewView(app,wake,()=>{
     if(!adjustments.isConnected||!adjustments.clientHeight)return null;
     const width=Math.min(512,Math.max(80,Math.round(Math.max(1,list.clientWidth-12)*devicePixelRatio))),height=Math.min(128,Math.round(40*devicePixelRatio));
     const viewport=panels.get("adjustments").getBoundingClientRect(),filters=[];

@@ -1,7 +1,7 @@
 // One clock and native image cache per editor, shared by docked/drawer views.
 // Rust decides generations, admission, batching, cancellation and retention.
 const editors=new WeakMap();
-export function filterPreviewView(app,geometry,present){
+export function filterPreviewView(app,wake,geometry,present){
   let editor=editors.get(app);
   if(!editor){
     const views=new Set(),images=new Map();let key=null,timer=null,frame=null;
@@ -24,6 +24,7 @@ export function filterPreviewView(app,geometry,present){
         for(const view of views)view.present(images,key);
         if(status.error)console.warn("Filter previews unavailable",status.error);
         wait=status.wait_ms;
+        if(app.shader_work_pending(true))wake();
       }catch(error){wait=1000;console.warn("Filter previews unavailable",error);}
       if(views.size){if(wait===0)frame=requestAnimationFrame(poll);else timer=setTimeout(poll,wait);}
     };

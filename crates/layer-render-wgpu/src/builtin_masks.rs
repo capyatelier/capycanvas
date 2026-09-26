@@ -46,6 +46,7 @@ impl Masks {
             }
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn remaining(&mut self, compiler: &startup::Compiler) {
         for mask in &mut self.0 {
             mask.priority = mask.priority.min(startup::OTHER);

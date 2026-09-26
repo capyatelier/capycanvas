@@ -12,7 +12,15 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
     }check();})`);
   await evaluate(`(()=>{
     const app=layerApp.app,original=app.poll_filter_previews;
-    window.previewCheck={restore(){app.poll_filter_previews=original;}};
+    const pipeline=GPUDevice.prototype.createRenderPipelineAsync;
+    window.previewCheck={pipelineCalls:0,restore(){app.poll_filter_previews=original;GPUDevice.prototype.createRenderPipelineAsync=pipeline;}};
+    GPUDevice.prototype.createRenderPipelineAsync=function(descriptor){
+      if(descriptor.label==='pointwise effect chain')previewCheck.pipelineCalls++;
+      return pipeline.call(this,descriptor);
+    };
+    // Hold a host pen contact outside the canvas. Preview requests may queue,
+    // but optional compiler admission must wait for release and quiet time.
+    document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:987,pointerType:'pen'}));
     app.poll_filter_previews=function(...args){
       const result=original.apply(this,args);
       previewCheck.status=result;previewCheck.ids=args[0];return result;
@@ -33,7 +41,12 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
   const status=()=>evaluate(`(()=>{const {atlas,bytes,...status}=previewCheck.status;return JSON.parse(JSON.stringify(status,(_,v)=>typeof v==='bigint'?Number(v):v));})()`);
   try {
     await settle();await show();
+    await wait('layerApp.app.shader_work_pending(true)');
+    await new Promise(resolve=>setTimeout(resolve,350));
+    assert.equal(await evaluate('previewCheck.pipelineCalls'),0,'Held contact defers optional preview pipelines');
+    await evaluate("document.body.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:987,pointerType:'pen'}));undefined");
     await wait(`previewCheck.status?.retained.includes('curves')&&!previewCheck.status.pending&&previewCheck.pixels('curves')`);
+    assert.ok(await evaluate('previewCheck.pipelineCalls>0'),'Queued previews resume after release');
     const first=await status();assert.equal(first.error??null,null);
     await evaluate(`document.querySelector('.dock-tab[data-panel=properties]').click()`);await settle();
     await wait(`previewCheck.ids.length===0&&!previewCheck.status.pending`);
@@ -56,5 +69,5 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
     const shot=await call('Page.captureScreenshot',{format:'png'});
     await writeFile(`${directory}/web-preview-lifecycle.png`,Buffer.from(shot.data,'base64'));
     console.log('PASS: GPU preview pixels, hide/reopen cache reuse, source/category changes and GPU replacement');
-  } finally { await evaluate(`previewCheck.restore();delete window.previewCheck`); }
+  } finally { await evaluate(`document.body.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:987,pointerType:'pen'}));previewCheck.restore();delete window.previewCheck`); }
 }

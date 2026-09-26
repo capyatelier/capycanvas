@@ -38,6 +38,14 @@ impl Thumbnails {
     }
 }
 impl WgpuRasterizer {
+    pub fn ui_readback_ready(&self) -> bool {
+        if let Some(startup) = &self.startup {
+            startup.compiler.pipeline(&self.pipelines.export, startup::OTHER);
+            startup.compiler.start();
+            return self.pipelines.export.ready();
+        }
+        true
+    }
     pub fn set_ui_rendition(&mut self, rendition: Option<layer_core::color::hdr::SdrRendition>) -> Result<(), GpuRasterError> {
         if let Some(recipe) = rendition { recipe.validate().map_err(|e| GpuRasterError::Color(e.into()))?; }
         if self.ui_rendition != rendition {

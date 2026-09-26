@@ -8340,6 +8340,30 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_library_refresh_does_not_validate_or_lock_document_commands() {
+        use layer_core::{EffectInstallMode, EffectPackage};
+        let mut s = session();
+        s.set_platform(Platform::Web);
+        s.frame(0, 0).unwrap();
+        let package = EffectPackage {
+            format: 1,
+            categories: s.effect_catalog.categories().to_vec(),
+            filters: s.effect_catalog.filters().to_vec(),
+        };
+        let revision = s.state.filter_catalog_revision;
+        let commands = [CommandId::NewDocument, CommandId::OpenDocument, CommandId::ExportDocument];
+        let enabled = commands.map(|id| s.command(id).enabled);
+        let change = s.load_effect_library(&serde_json::to_string(&package).unwrap(),
+            |_| panic!("inline sources"), EffectInstallMode::Merge).unwrap();
+        assert!(!change.canvas_wake);
+        assert_eq!(s.state.filter_catalog_revision, revision);
+        assert!(!s.state.filter_load.pending);
+        assert!(s.renderer_mut().validation.is_none());
+        assert!(s.require_document_idle().is_ok());
+        assert_eq!(commands.map(|id| s.command(id).enabled), enabled);
+    }
+
+    #[test]
     fn runtime_filter_publication_is_atomic_and_uses_current_values() {
         use layer_core::{EffectInstallMode, EffectPackage, EffectValue};
         use std::sync::Arc;
@@ -8555,10 +8579,12 @@ mod tests {
                         s.frame(0, 0).unwrap();
                     }
                     s.frame(0, 0).unwrap();
+                    let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
+                    std::sync::Arc::make_mut(&mut definition.program).label = "Changed library program".into();
                     let package = EffectPackage {
                         format: 1,
                         categories: s.effect_catalog.categories().to_vec(),
-                        filters: vec![s.effect_catalog.get("unsharp_mask").unwrap().clone()],
+                        filters: vec![definition],
                     };
                     let manifest = serde_json::to_string(&package).unwrap();
                     if library {

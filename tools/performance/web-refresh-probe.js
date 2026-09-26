@@ -111,11 +111,11 @@ export function installRefreshProbe({ duration, probes, uiOnly, skipCatalog, qui
     if (quietCompiler) {
       const compile = layerApp.app.compile_startup_step.bind(layerApp.app);
       cleanup.push(() => { layerApp.app.compile_startup_step = compile; });
-      layerApp.app.compile_startup_step = async () => {
+      layerApp.app.compile_startup_step = async (...args) => {
         while (active() && layerApp.app.brush_ready() && (contacts.size || now() < quietAt || document.querySelector('dialog[open],details[open]'))) {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
-        return compile();
+        return compile(...args);
       };
     }
     for (const name of ['frame', 'compile_startup_step', 'load_filter_library', 'attach_gpu', 'prepare_document', 'adopt_document', 'capture_tab_recovery', 'workspace_tick']) {

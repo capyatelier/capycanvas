@@ -286,7 +286,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
           const token = ++thumbnailRequest;
           if (app.request_layer_thumbnail(token, mask ? r.layer.mask_id : r.layer.id)) {
             owned.add(token);revisions.set(key,revision); pending.set(token,{key,revision,revisions,owned,canvas: (mask ? r.mask : r.content).image});
-          } else if (app.shader_work_pending()) {
+          } else if (app.shader_work_pending(true)) {
             // A drawer can request its first mask preview while the canvas is
             // idle. Start deferred compilation without waiting for canvas input.
             wake();

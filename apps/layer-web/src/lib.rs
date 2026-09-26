@@ -402,10 +402,13 @@ impl WebApp {
         )
     }
     pub fn request_layer_thumbnail(&mut self, request: u64, target: u64) -> Result<bool, JsValue> {
-        if !self.startup.complete || self.session.engine().has_pending_document_edits() {
+        if !self.startup.canvas_ready || !self.session.filter_previews_idle() {
             return Ok(false);
         }
         self.prepare_ui_previews()?;
+        if !self.session.renderer_mut().renderer().map_err(js)?.ui_readback_ready() {
+            return Ok(false);
+        }
         if !self.session.renderer_mut().renderer().map_err(js)?
             .prepare_selection_thumbnail(layer_core::LayerId(target)).map_err(js)? {
             return Ok(false);
@@ -540,13 +543,13 @@ impl WebApp {
             .as_ref()
             .is_some_and(|g| g.blank_presented)
     }
-    pub fn shader_work_pending(&self) -> bool {
+    pub fn shader_work_pending(&self, allow_optional: bool) -> bool {
         self.session
             .engine()
             .backend()
             .0
             .as_ref()
-            .is_some_and(|g| g.renderer.shader_work_pending())
+            .is_some_and(|g| g.renderer.shader_work_pending(allow_optional && self.session.filter_previews_idle()))
     }
     pub fn wait_for_canvas(&self) -> Result<js_sys::Promise, JsValue> {
         let gpu = self
@@ -573,22 +576,18 @@ impl WebApp {
             self.startup.complete,
         ])
     }
-    pub fn startup_catalog_submitted(&mut self) {
-        if let Some(gpu) = &mut self.session.renderer_mut().0 {
-            gpu.renderer.startup_catalog_submitted();
-        }
-    }
     /// Return an owned promise: UI/input may borrow the session while the
     /// browser validates this one job. No WebApp borrow survives an await.
-    pub fn compile_startup_step(&mut self) -> Result<js_sys::Promise, JsValue> {
+    pub fn compile_startup_step(&mut self, allow_optional: bool) -> Result<js_sys::Promise, JsValue> {
         self.prepare_startup()?;
+        let allow_optional = allow_optional && self.session.filter_previews_idle();
         let gpu = self
             .session
             .renderer_mut()
             .0
             .as_ref()
             .ok_or_else(|| js("GPU unavailable"))?;
-        let work = gpu.renderer.compile_startup_step();
+        let work = gpu.renderer.compile_startup_step(allow_optional);
         Ok(wasm_bindgen_futures::future_to_promise(async move {
             work.await.map_err(js)?;
             Ok(JsValue::UNDEFINED)
@@ -700,7 +699,6 @@ impl WebGpu {
             .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB);
         let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
         raster_worker::install(&mut renderer);
-        renderer.wait_for_startup_catalog();
         if let Some(error) = validation.pop().await {
             return Err(gpu_error("renderer", error));
         }
@@ -1036,6 +1034,14 @@ impl WebApp {
             if *phase == ContactPhase::Down {
                 if let Some(control) = self.tone.pending.take() { control.cancel(); }
                 self.deferred_contacts.remove(id);
+                // A preceding stroke/undo can change the revision before the
+                // next display callback. Refresh cached requirements now so a
+                // fully prepared tool does not lose the next quick contact.
+                if !self.brush_ready() {
+                    self.prepare_startup()?;
+                    self.startup = self.session.renderer_mut().renderer().map_err(js)?
+                        .poll_startup().map_err(js)?;
+                }
                 if !self.brush_ready()
                     && (*kind == layer_ui::PointerKind::Touch
                         || self.session.pointer_contact_paints(*button))

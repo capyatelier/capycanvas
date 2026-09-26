@@ -302,7 +302,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     await openBatch(files.map(value=>value.file?value:{file:value}));
   }
   const recovery=createDocumentRecovery({app,call:rasterWorker,dialog,element,button,message,restore:bytes=>openDrawing({recovered:true,bytes}),settled:trim,
-    canOffer:()=>!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
+    canOffer:()=>app.gpu_ready()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
   return {title:tabs.root,key:tabs.key,select,close,openFiles,busy:()=>changing||batching,showSelector:tabs.showSelector,
     mountProof:proof.mount,handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){

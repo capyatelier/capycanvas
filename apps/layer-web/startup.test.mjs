@@ -8,17 +8,7 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
     else if(performance.now()-start>${timeout})reject(Error('Staged startup timed out: '+JSON.stringify({test:window.startupTest,times:window.layerApp?.startupTimes,notice:document.querySelector('#gpu-notice')?.textContent})));
     else setTimeout(check,25)}check();})`);}catch(error){if(attempt>=3 || !/navigated|context.*destroyed|Cannot find context/i.test(String(error)))throw error;}}};
   const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
-    const p=window.startupTest={pipelines:[],held:null,required:false,optional:false};
-    const scopes=[];
-    const push=GPUDevice.prototype.pushErrorScope,pop=GPUDevice.prototype.popErrorScope;
-    GPUDevice.prototype.pushErrorScope=function(filter){scopes.push({filter});return push.call(this,filter)};
-    GPUDevice.prototype.popErrorScope=function(){
-      const scope=scopes.pop(),result=pop.call(this);
-      if(!scope?.hold)return result;
-      return result.then(error=>new Promise(resolve=>{
-        p.held=scope.hold;p.release=()=>{p.held=null;resolve(error)};
-      }));
-    };
+    const p=window.startupTest={pipelines:[],held:null,required:false};
     for(const name of ['createRenderPipeline','createComputePipeline','createRenderPipelineAsync','createComputePipelineAsync']){
       const original=GPUDevice.prototype[name];
       GPUDevice.prototype[name]=function(descriptor){
@@ -26,9 +16,7 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
         p.pipelines.push({method:name,label:descriptor.label,time:performance.now(),canvas:times?.canvas,brush:times?.brush});
         let hold;
         if(descriptor.label==='layer destination brush color'&&times?.brush==null&&!p.required){p.required=true;hold='required'}
-        else if(descriptor.label==='layer mask paint'&&times?.brush!=null&&!p.optional){p.optional=true;hold='optional'}
         if(hold==='required'&&name.endsWith('Async')) return original.call(this,descriptor).then(pipeline=>new Promise(resolve=>{p.held=hold;p.release=()=>{p.held=null;resolve(pipeline)}}));
-        if(hold){const scope=scopes.findLast(s=>s.filter==='validation');if(scope)scope.hold=hold}
         return original.call(this,descriptor);
       };
     }
@@ -42,7 +30,7 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
       "An unresolved required pipeline promise must gate painting");
     const blank = await canvasPixels();
     assert.ok(blank.white > blank.total * 0.1, "Paper is visible before the brush compiles");
-    await waitFor("layerApp.state().filter_load.pending");
+    assert.equal(await evaluate("layerApp.state().filter_load.pending"), false, "Bundled filters need no startup transaction");
     await waitFor("JSON.parse(layerApp.app.workspace_view())?.ready");
     assert.equal(await evaluate("layerApp.app.startup_progress()[2]"), false,
       "Workspace adoption must not wait for the startup filter library");
@@ -62,6 +50,7 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
       await settle();
     }
     const heldPan = await evaluate("layerApp.state().camera.translation");
+    const panScale = await evaluate("layerApp.canvas.width/layerApp.canvas.getBoundingClientRect().width");
     await call("Input.dispatchKeyEvent", { type:"keyDown", key:" ", code:"Space", windowsVirtualKeyCode:32 });
     for (const [type, x, buttons] of [["mousePressed",600,1],["mouseMoved",660,1],["mouseReleased",660,0]]) {
       await call("Input.dispatchMouseEvent", { type, x, y:450, button:"left", buttons, clickCount:1 });
@@ -69,14 +58,13 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
     await call("Input.dispatchKeyEvent", { type:"keyUp", key:" ", code:"Space", windowsVirtualKeyCode:32 });
     await settle();
     assert.equal(await evaluate("layerApp.app.brush_ready()"), false);
-    assert.deepEqual((await evaluate("layerApp.state().camera.translation")).map((v, i) => Math.round(v - heldPan[i])), [60, 0],
+    assert.deepEqual((await evaluate("layerApp.state().camera.translation")).map((v, i) => Math.round(v - heldPan[i])), [Math.round(60 * panScale), 0],
       "Space-drag pans the camera while the brush pipeline is compiling");
     await evaluate(`
       window.earlyContact = {type:'pointer',id:999n,kind:'pen',button:'primary',position:[650,450]};
       layerApp.app.input({...earlyContact,phase:'down'}); startupTest.release()`);
-    await waitFor("window.startupTest?.held === 'optional'");
+    await waitFor("layerApp.app.brush_ready()");
     assert.equal(await evaluate("layerApp.app.brush_ready()"), true);
-    assert.equal(await evaluate("layerApp.app.startup_progress()[2]"), false);
     assert.equal(await evaluate("layerApp.app.input({...earlyContact,phase:'move'}).paint"), false,
       "A contact started before readiness must not start painting halfway through");
     await evaluate("layerApp.app.input({...earlyContact,phase:'up'}); undefined");
@@ -87,17 +75,16 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
     }
     await settle();
     assert.ok((await canvasPixels()).white < before.white - 50,
-      "The current brush paints while an optional shader is still compiling");
+      "The current brush paints without warming unused shaders");
     await waitFor("layerApp.state().commands.find(c=>c.id==='undo').enabled", 5000);
     const panBefore = await evaluate("layerApp.state().camera.translation");
     await call("Input.dispatchMouseEvent", { type:"mouseWheel", x:650,y:450,deltaX:0,deltaY:40 });
     await settle();
     assert.notDeepEqual(await evaluate("layerApp.state().camera.translation"), panBefore,
-      "Camera input works while optional compilation is pending");
-    await evaluate("startupTest.release()");
+      "Camera input works after required compilation");
     await waitFor("window.layerApp?.startupTimes.complete != null", 55000);
     const result = await evaluate("({times:layerApp.startupTimes,pipelines:startupTest.pipelines})");
-    assert.ok(result.times.canvas < result.times.brush && result.times.brush < result.times.complete);
+    assert.ok(result.times.canvas < result.times.brush && result.times.brush <= result.times.complete);
     const early = result.pipelines.filter(p => p.time < result.times.canvas).map(p => p.label);
     assert.ok(!early.some(label => /brush|watercolor|export/i.test(label)),
       `Only general compositing is compiled before paper: ${early}`);
@@ -105,15 +92,59 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels,
       `Only paper, presentation and default panel glass pipelines precede canvas: ${early}`);
     assert.ok(result.pipelines.filter(p => p.time > result.times.canvas).some(p => p.method === 'createComputePipelineAsync' && p.label === 'native SDR tile writeback'));
     assert.ok(result.pipelines.filter(p => /brush|pointwise effect/.test(p.label)).every(p => p.method === 'createRenderPipelineAsync'), 'Startup brushes and effects use real async pipeline creation');
-    console.log("Staged startup: visible paper before brush, GPU validation gates readiness, painting and camera input during optional compilation passed", result.times);
+    assert.ok(!result.pipelines.some(p => /pointwise effect|layer mask paint|watercolor transport/.test(p.label)),
+      'Unused effects, mask brushes and watercolor are not warmed');
+    console.log("Demand startup: paper before brush, async readiness, early input suppression, painting and camera passed", result.times);
   } finally {
     await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
     await evaluate("window.startupTest?.release?.()");
   }
   if (uiOnly) return;
+  await checkFirstUse({ call, evaluate, waitFor });
   await checkLoadedDocument({ call, evaluate, waitFor });
   await checkCompilationFailure({ call, evaluate, waitFor });
   await checkFilterRejection({ call, evaluate, waitFor });
+}
+
+// Cold first use must take the same asynchronous path even after startup has
+// completed. A repeat insertion must reuse compilation rather than warm again.
+async function checkFirstUse({call,evaluate,waitFor}) {
+  await evaluate(`(()=>{
+    const original=GPUDevice.prototype.createRenderPipelineAsync;
+    window.firstUse={calls:0,held:false,restore(){GPUDevice.prototype.createRenderPipelineAsync=original;}};
+    GPUDevice.prototype.createRenderPipelineAsync=function(descriptor){
+      const promise=original.call(this,descriptor);
+      if(descriptor.label!=='pointwise effect chain')return promise;
+      firstUse.calls++;
+      if(firstUse.calls!==1)return promise;
+      return promise.then(pipeline=>new Promise(resolve=>{firstUse.held=true;firstUse.release=()=>resolve(pipeline);}));
+    };
+    layerApp.dispatch({type:'effect',action:{op:'insert',effect:'domain_warp'}});
+  })()`);
+  try {
+    await waitFor('firstUse.held');
+    assert.equal(await evaluate('layerApp.app.brush_ready()'),false);
+    assert.equal(await evaluate('layerApp.app.startup_progress()[0]'),false);
+    await evaluate("document.querySelector('#header details summary').click()");
+    assert.equal(await evaluate("!!document.querySelector('#header details[open] button')"),true,'Menus still open during first-use compilation');
+    await evaluate("document.querySelector('#header details[open]').open=false;firstUse.release()");
+    await waitFor('layerApp.app.brush_ready() && layerApp.app.document_park_ready()');
+    const count=await evaluate('firstUse.calls');
+    await evaluate("layerApp.dispatch({type:'invoke',command:'undo'})");
+    await waitFor('layerApp.app.brush_ready() && layerApp.app.document_park_ready()');
+    await evaluate("layerApp.dispatch({type:'effect',action:{op:'insert',effect:'domain_warp'}})");
+    await waitFor('layerApp.app.brush_ready() && layerApp.app.document_park_ready()');
+    assert.equal(await evaluate('firstUse.calls'),count,'Repeated effects reuse their pipelines');
+    const nextContact=await evaluate(`(()=>{
+      layerApp.dispatch({type:'invoke',command:'undo'});
+      const event={type:'pointer',id:998n,kind:'pen',button:'primary',position:[650,450]};
+      const paint=layerApp.app.input({...event,phase:'down'}).paint;
+      layerApp.app.input({...event,phase:'up'});return paint;
+    })()`);
+    assert.equal(nextContact,true,'A cached tool accepts a contact before the next post-undo frame');
+    await waitFor('layerApp.app.document_park_ready()');
+    console.log('Demand effects: cold first use stays asynchronous, gates rendering, preserves menus and reuses compiled variants');
+  } finally {await evaluate('firstUse.release?.();firstUse.restore()');}
 }
 
 async function checkLoadedDocument({ call, evaluate, waitFor }) {

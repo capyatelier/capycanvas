@@ -20,7 +20,7 @@ pub(crate) struct FilterPreviews {
     cancelled: bool,
     capture_background: [f32; 4],
     programs: HashMap<Arc<str>, Layer>,
-    probe: wgpu::ComputePipeline,
+    probe: Deferred<wgpu::ComputePipeline>,
     mask: Image,
     source: Option<Image>,
     key: Option<(u64, LayerId, [u32; 2], [f32; 4])>,
@@ -48,16 +48,15 @@ impl FilterPreviews {
             label: Some("filter preview content probe"),
             source: wgpu::ShaderSource::Wgsl(include_str!("filter_probe.wgsl").into()),
         });
-        let probe = r
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let device = r.device.clone();
+        let probe = Deferred::pipeline(move |mode| mode.compute(&device, &wgpu::ComputePipelineDescriptor {
                 label: Some("filter preview content probe"),
                 layout: None,
                 module: &shader,
                 entry_point: Some("measure"),
                 compilation_options: Default::default(),
                 cache: None,
-            });
+            }));
         // Reuse the original GPU-rendered G-Pen preview's alpha, not a second
         // approximation of its silhouette. Decode/upload only once.
         let png = png::Decoder::new(std::io::Cursor::new(include_bytes!(
@@ -159,6 +158,25 @@ impl FilterPreviews {
                 self.rows.remove(&id);
                 layer.effect = Some(effect.clone());
             }
+        }
+        if let Some(startup) = &r.startup {
+            // Visible rows prepare just their own preview variants. No draw or
+            // readback is admitted until their asynchronous pipelines are ready.
+            for effect in &request.filters {
+                self.scene.effects.prepare(r, &[&self.programs[&effect.program.id]], effects::Execution::Preview, 0.)?;
+            }
+            let source_layers = source_scope(&request.layers, request.target)
+                .map_or_else(Vec::new, |(_, layers)| layers.map(|(l, _)| l.clone()).collect());
+            for (layers, execution) in scene::startup_effect_chains(&source_layers) {
+                self.source_scene.effects.prepare(r, &layers.iter().collect::<Vec<_>>(), execution, 0.)?;
+            }
+            let mut ready = self.scene.effects.enqueue(&startup.compiler, startup::OTHER);
+            ready &= self.source_scene.effects.enqueue(&startup.compiler, startup::OTHER);
+            startup.compiler.pipeline(&self.probe, startup::OTHER);
+            // Preview readback uses the same conversion as document export.
+            ready &= r.ui_readback_ready() && self.probe.ready();
+            startup.compiler.start();
+            if !ready { return Ok(false); }
         }
         self.cancelled = false;
         self.capture_background = request.view.background_rgba_linear;

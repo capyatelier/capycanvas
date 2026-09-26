@@ -1,12 +1,15 @@
 import init, * as wasm from "./pkg/layer_web.js";
-const ready = init();
+let ready;
 let pending = Promise.resolve();
 self.onmessage = ({data}) => { pending = pending.then(() => execute(data)); };
 async function execute({id,request}) {
   let instance;
   const retire=()=>outputs.size===0 && (instance?.memory.buffer.byteLength || 0)>256*1024*1024;
   try {
-    instance=await ready;
+    // These operations only touch IndexedDB. Recovery discovery must not
+    // download/instantiate the image codec before listing a few keys.
+    if (!['recover-list','recover-get','recover-delete'].includes(request.operation))
+      instance=await (ready ??= init());
     let result;
     switch(request.operation) {
       case "color-field": result = wasm.raster_worker_color_field(request.metadata); break;

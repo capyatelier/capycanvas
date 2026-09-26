@@ -1,5 +1,5 @@
 //! Bounded jobs per browser task. Futures own GPU handles, never a borrow of
-//! the live renderer/session. Batch up to four same-priority pipeline promises;
+//! the live renderer/session. Batch up to four required pipeline promises;
 //! CPU recipes and effect transactions keep their individual task boundaries.
 use super::*;
 use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
@@ -63,6 +63,9 @@ impl Compiler {
         let queue = self.queue.borrow();
         queue.jobs.len() + usize::from(queue.busy.is_some())
     }
+    pub fn has_work(&self, allow_optional: bool) -> bool {
+        self.queue.borrow().jobs.iter().any(|job| allow_optional || job.priority < OTHER)
+    }
     pub fn ready_through(&self, priority: u8) -> bool {
         let queue = self.queue.borrow();
         !queue.busy.is_some_and(|p| p <= priority)
@@ -75,7 +78,7 @@ impl Compiler {
             .as_ref()
             .map_or(Ok(()), |e| Err(GpuRasterError::Effect(e.clone())))
     }
-    pub fn step(&self) -> Pin<Box<dyn Future<Output = Result<(), GpuRasterError>>>> {
+    pub fn step(&self, allow_optional: bool) -> Pin<Box<dyn Future<Output = Result<(), GpuRasterError>>>> {
         let device = self.device.clone();
         let shared = self.queue.clone();
         Box::pin(async move {
@@ -84,17 +87,17 @@ impl Compiler {
                 if queue.busy.is_some() || !queue.started || queue.jobs.is_empty() {
                     return Ok(());
                 }
-                let index = queue
+                let Some(index) = queue
                     .jobs
                     .iter()
                     .enumerate()
+                    .filter(|(_, job)| allow_optional || job.priority < OTHER)
                     .min_by_key(|(_, j)| j.priority)
-                    .unwrap()
-                    .0;
+                    .map(|(index, _)| index) else { return Ok(()); };
                 let job = queue.jobs.remove(index).unwrap();
                 queue.busy = Some(job.priority);
                 let mut jobs = vec![job];
-                if jobs[0].batchable {
+                if jobs[0].batchable && jobs[0].priority < OTHER {
                     while jobs.len() < 4 {
                         let Some(index) = queue
                             .jobs

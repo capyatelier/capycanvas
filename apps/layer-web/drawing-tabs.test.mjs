@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
 export async function checkDrawingTabRecovery({call,evaluate,settle}) {
-  // A cold full shader catalog on the Huion can outlive the usual UI timeout
-  // (149 s measured). This test deliberately reloads the whole browser app;
-  // ordinary tab switches are covered separately without catalog recreation.
+  // Exercise natural startup discovery, with independent recovery owners.
+  // Ordinary tab switches are covered separately without a browser reload.
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+240000;function poll(){if(${condition})resolve();else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}));else setTimeout(poll,30);}poll();})`);
   const ready=()=>wait('window.layerApp?.app.brush_ready()&&!layerApp.documents.busy()&&layerApp.app.document_park_ready()');
   const invoke=command=>evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);
@@ -25,13 +24,12 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
     await new Promise(resolve=>setTimeout(resolve,50));
   }
   await ready();
-  await evaluate('window.recoveryCompleted=false;layerApp.documents.startRecovery().then(()=>recoveryCompleted=true);null');
   for(const count of [2,3]){
     await wait(`!![...document.querySelectorAll('dialog[open] h2')].find(n=>n.textContent==='Recover drawing?')`);
     await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Recover').click()`);
     await wait(`layerApp.app.document_tabs(0).tabs.length===${count}`);
   }
-  await wait('window.recoveryCompleted');await ready();
+  await evaluate('layerApp.documents.startRecovery()');await ready();
   const tabs=await evaluate(`JSON.parse(JSON.stringify(layerApp.app.document_tabs(0),(_,v)=>typeof v==='bigint'?Number(v):v))`);
   assert.equal(tabs.tabs.length,3);assert.deepEqual(tabs.tabs.map(t=>t.modified),[false,true,true]);
   const counts=[];

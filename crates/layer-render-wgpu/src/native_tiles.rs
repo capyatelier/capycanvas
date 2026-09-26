@@ -200,6 +200,10 @@ pub struct NativeTileEncoder {
     parameter_stride: u32,
 }
 impl NativeTileEncoder {
+    pub(crate) fn pipelines_for_depth(&self, depth: SampleDepth) -> &[crate::Deferred<wgpu::ComputePipeline>] {
+        let start = depth.bytes().ilog2() as usize * self.tiles_per_dispatch;
+        &self.pipelines[start..start + self.tiles_per_dispatch]
+    }
     pub fn new(device: &wgpu::Device) -> Self {
         let encoder = Self::with_device(&device.clone().into());
         for pipeline in &encoder.pipelines {

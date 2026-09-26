@@ -84,6 +84,26 @@ pub(super) struct Effects {
     pub compilations: u64,
 }
 impl Effects {
+    pub(super) fn chain_ready(&self, layers: &[Layer], execution: Execution) -> bool {
+        let programs: Vec<_> = layers.iter().filter_map(|l| l.effect.as_ref().map(|e| &e.program)).collect();
+        self.pipelines.iter().any(|(chain, stage, pipeline)| *stage == execution
+            && chain.iter().eq(programs.iter().copied()) && pipeline.ready())
+            && self.preparation.pipelines.iter().all(|(_, p)| p.ready())
+    }
+    /// Queue missing variants without starting compilation on the render path.
+    /// The same cache serves document rendering and visible filter previews.
+    pub(super) fn enqueue(&self, compiler: &startup::Compiler, priority: u8) -> bool {
+        let mut ready = true;
+        for (_, _, pipeline) in &self.pipelines {
+            compiler.pipeline(pipeline, priority);
+            ready &= pipeline.ready();
+        }
+        for (_, pipeline) in &self.preparation.pipelines {
+            compiler.pipeline(pipeline, priority);
+            ready &= pipeline.ready();
+        }
+        ready
+    }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn compile(&self) {
         for (_, _, pipeline) in &self.pipelines {

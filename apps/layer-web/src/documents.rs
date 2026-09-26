@@ -298,13 +298,10 @@ impl WebApp {
             renderer
                 .prepare_startup(&project.document, &brush, false)
                 .map_err(js)?;
-            // This private renderer's project shader catalog was submitted
-            // above. It does not participate in the window's startup fetch.
-            renderer.startup_catalog_submitted();
             let start = js_sys::Date::now();
             loop {
                 check_cancelled()?;
-                renderer.compile_startup_step().await.map_err(js)?;
+                renderer.compile_startup_step(false).await.map_err(js)?;
                 if validating && let Some(result) = renderer.take_effect_validation() {
                     result.result.map_err(js)?;
                     validating = false;

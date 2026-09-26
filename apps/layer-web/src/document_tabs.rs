@@ -65,7 +65,6 @@ impl WebApp {
         )
         .map_err(js)?;
         raster_worker::install(&mut renderer);
-        renderer.startup_catalog_submitted();
         let presenter =
             ViewportPresenter::for_surface(&renderer, context.config.format, context.color)
                 .map_err(js)?;

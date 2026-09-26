@@ -271,12 +271,8 @@ function applyChange(change) {
           refreshPreferences(app.preferences_cached());
           updateZen();
         } else update(change.regions | (moving ? 1 : 0));
-        if (reopeningCanvas && startupTimes.complete === null) {
-          // Let dismissal paint and a burst of UI interactions finish before
-          // admitting another shader job. Drawing frames remain independent.
-          compilerResumeAt = performance.now() + 500;
-          clearTimeout(compilerResumeTimer);
-          compilerResumeTimer = setTimeout(wake, 500);
+        if (reopeningCanvas) {
+          deferOptionalCompiler();
           wake();
         }
       }
@@ -389,15 +385,43 @@ function refreshStartup() {
   if (startupNotice.hidden !== hidden) startupNotice.hidden = hidden;
   if (startupNotice.textContent !== text) startupNotice.textContent = text;
 }
+// Host timing and contacts govern admission; Rust also checks queued input,
+// strokes, gestures and unfinished edits. Required jobs always retain priority.
+const compilerContacts = new Set();
+function deferOptionalCompiler() {
+  compilerResumeAt = performance.now() + 200;
+  compilerResumeTimer ??= setTimeout(resumeOptionalCompiler, 200);
+}
+function resumeOptionalCompiler() {
+  const remaining = compilerResumeAt - performance.now();
+  compilerResumeTimer = remaining > 0 ? setTimeout(resumeOptionalCompiler, remaining) : null;
+  if (compilerResumeTimer === null) wake();
+}
+function optionalCompilerReady() {
+  return !compilerContacts.size && !pending.length && performance.now() >= compilerResumeAt
+    && !documents?.busy()
+    && !document.querySelector('dialog[open],#header details[open],:popover-open:not(.hover-tooltip)');
+}
+for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'keydown', 'wheel']) {
+  window.addEventListener(type, event => {
+    if (type === 'pointerdown') compilerContacts.add(event.pointerId);
+    if (type === 'pointerup' || type === 'pointercancel') compilerContacts.delete(event.pointerId);
+    deferOptionalCompiler();
+  }, { capture: true, passive: true });
+}
+window.addEventListener('blur', () => { compilerContacts.clear(); deferOptionalCompiler(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) deferOptionalCompiler(); });
+document.addEventListener('toggle', deferOptionalCompiler, true);
+document.addEventListener('close', deferOptionalCompiler, true);
 function scheduleCompiler() {
-  if (!gpuReady || state.settings_open || performance.now() < compilerResumeAt || compilerScheduled || compilerFailed || !app.shader_work_pending()) return;
+  if (!gpuReady || document.hidden || state.settings_open || compilerScheduled || compilerFailed || !app.shader_work_pending(optionalCompilerReady())) return;
   compilerScheduled = true;
   const epoch=compilerEpoch;
   // Start after this display callback can present. The next job is scheduled
   // by a later frame, with input/UI opportunities between each GPU scope.
   setTimeout(async () => {
     try {
-      if(epoch!==compilerEpoch || state.settings_open || performance.now()<compilerResumeAt)return;
+      if(epoch!==compilerEpoch || document.hidden || state.settings_open)return;
       if (!firstCanvasRendered) {
         // A display callback alone does not mean the GPU has rendered paper.
         // Starting document compilation sooner can hold up Chrome's GPU-process
@@ -407,8 +431,8 @@ function scheduleCompiler() {
         firstCanvasRendered = true;
         await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
       }
-      if(epoch!==compilerEpoch || state.settings_open || performance.now()<compilerResumeAt)return;
-      await gpuOperation(() => app.compile_startup_step());
+      if(epoch!==compilerEpoch || document.hidden || state.settings_open)return;
+      await gpuOperation(() => app.compile_startup_step(optionalCompilerReady()));
       if(epoch!==compilerEpoch)return;
       refreshStartup();
       wake();
@@ -746,7 +770,7 @@ function buildPanels() {
   panels.get("sizes").append(controls, grid);
   palettes.mount(panels.get("palettes"));
   layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext: () => customization.dismissContext(), contentChanged: panelContentChanged });
-  effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,message,
+  effectPanels = createEffectPanels({app,wake,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,message,
     contentChanged:panelContentChanged});
 }
 function contentPanel(id, splitPicker=false) {
@@ -760,7 +784,7 @@ function contentPanel(id, splitPicker=false) {
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else if(["filter_types","adjustments","properties","stats"].includes(id)) {
     const copies=new Map(["filter_types","adjustments","properties","stats"].map(name=>[name,name===id?panel:element("div","panel")]));
-    const view=createEffectPanels({app,catalog,state:()=>state,panels:copies,element,button,icon,dispatch,numberField,message,contentChanged:()=>{},splitPicker});
+    const view=createEffectPanels({app,wake,catalog,state:()=>state,panels:copies,element,button,icon,dispatch,numberField,message,contentChanged:()=>{},splitPicker});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else {
     for(const control of customization.view(id).controls.filter(c=>c.visible_in_panel)) panel.append(customization.field(control.control,control.label));
@@ -1652,6 +1676,7 @@ try {
   // Adopt the saved UI before competing with initial GPU allocation. A storage
   // failure must still allow canvas startup and the workspace recovery UI.
   await Promise.race([workspaceManager.ready, new Promise(resolve => setTimeout(resolve, 1000))]);
+  documents.startRecovery().catch(error => message(`Recovery unavailable: ${error}`));
   performance.mark("capy.startup.gpu");
   await startGpu();
   if (window.launchQueue?.setConsumer) {
@@ -1725,13 +1750,8 @@ async function startGpu() {
     document.body.dataset.gpu = "ready";
     notice.hidden = true;
     wake();
-    // Resource loading failure never disables the canvas or the working catalog.
-    // A catalog refresh cannot change the document. Explicit package imports
-    // still use the migrating path; making startup use it locks workspace
-    // adoption and consumes all input until the entire catalog has compiled.
-    loadFilters(asset("filters/manifest.json"), "merge", name=>asset(`filters/${name}`), true)
-      .catch(error=>console.warn("Using bundled filters:",error))
-      .finally(() => { app.startup_catalog_submitted(); wake(); });
+    // The immutable application bundle already contains its filter catalog.
+    // Runtime imports still validate atomically through loadFilters().
   } catch (error) {
     document.body.dataset.gpu = "unavailable";
     showGpuNotice({ container: notice, error, element, button });

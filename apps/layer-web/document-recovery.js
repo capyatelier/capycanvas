@@ -56,7 +56,7 @@ export function createDocumentRecovery({app,call,dialog,element,button,message,r
   }
   async function autosave(){try{for(const tab of app.document_tabs(0).tabs)await capture(tab.id);}finally{await settled();}}
   async function initialize(){
-    await ensure();await autosave();
+    await ensure();
     for(const key of await transport('list')){
       if([...owners.values()].some(o=>o.key===key))continue;
       while(!canOffer())await new Promise(resolve=>setTimeout(resolve,50));
@@ -85,13 +85,9 @@ export function createDocumentRecovery({app,call,dialog,element,button,message,r
         finally{if(!adopted)releaseOrigin(key);}
     }
   }
-  let started=false,initializing=false;
-  setInterval(()=>{
-    if(initializing)return;
-    if(!started&&app.gpu_ready()&&app.brush_ready()){initializing=true;start().catch(e=>message(`Recovery unavailable: ${e}`)).finally(()=>initializing=false);}
-    else if(started)autosave().catch(e=>message(`Recovery unavailable: ${e}`));
-  },15000);
-  function start(){return initialization??=initialize().then(()=>{started=true;});}
+  // Discovery is a startup task; the interval only checkpoints open drawings.
+  setInterval(()=>autosave().catch(e=>message(`Recovery unavailable: ${e}`)),15000);
+  function start(){return initialization??=initialize();}
   document.addEventListener('visibilitychange',()=>{if(document.hidden)autosave().catch(e=>message(`Recovery unavailable: ${e}`));});
   window.addEventListener('beforeunload',e=>{if(app.document_tabs(0).tabs.some(t=>t.modified)){e.preventDefault();e.returnValue='';}});
   return{ensure,capture,retire,autosave,start};
