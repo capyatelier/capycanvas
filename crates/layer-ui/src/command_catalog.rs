@@ -300,6 +300,7 @@ fn entry(
                 | CommandId::LowerLayer
                 | CommandId::ClearLayer
                 | CommandId::FillSelection
+                | CommandId::MaskSelection
                 | CommandId::SelectAll
                 | CommandId::Deselect
                 | CommandId::InvertSelection,
@@ -407,6 +408,7 @@ fn action_description(action: &UiAction) -> &'static str {
             TransformRotateLeft | TransformRotateRight => "Turn the content being transformed by a quarter turn.",
             ResetTransform => "Undo every change made in this transform, keeping it open.",
             RemoveSelectionPoint => "Remove the most recent point of a polygon selection in progress.",
+            MaskSelection => "Add or replace the active layer's mask so only the selection shows.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -999,6 +1001,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::CompleteSelection => "Place at least three points first",
             C::CancelSelection => "No selection path to cancel",
             C::RemoveSelectionPoint => "Place a polygon point first",
+            C::MaskSelection if self.engine.document().selection.is_none() => "Make a selection first",
+            C::MaskSelection => "Select an unlocked artwork layer",
             C::SelectionVisible | C::SelectionEditing | C::SelectionReference => "Choose a selection tool first",
             C::ZoomIn => "Already at the maximum zoom",
             C::ZoomOut => "Already at the minimum zoom",

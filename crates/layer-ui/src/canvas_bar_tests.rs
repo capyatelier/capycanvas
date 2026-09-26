@@ -97,7 +97,11 @@ fn transform_publishes_a_bar_whose_edits_expire_with_the_transform() {
     })
     .unwrap();
     assert!(!s.operation.active());
-    assert!(s.state.canvas_bar.is_none());
+    assert_eq!(
+        s.state.canvas_bar.as_ref().map(|b| b.context.kind),
+        Some(CanvasBarKind::Selection),
+        "the moved selection's bar follows the transform"
+    );
     invoke(&mut s, CommandId::ScaleRotate);
     let next = s.state.canvas_bar.clone().unwrap();
     assert_ne!(next.context, bar.context);
@@ -301,4 +305,93 @@ fn flipping_a_placement_stays_lossless_and_applies_as_one_step() {
     assert!(a.abs() < 1e-4 && d.abs() < 1e-4 && (b * c) > 0.9, "a mirrored quarter turn: {a} {b} {c} {d}");
     invoke(&mut s, CommandId::Undo);
     assert_eq!(s.engine.document().layers, placed.layers, "one undo step restores the placement");
+}
+
+fn rectangle_selection(s: &mut UiSession<Recorder>, [x0, y0, x1, y1]: [f32; 4]) {
+    let selection = layer_core::Selection::polygon(vec![
+        Point { x: x0, y: y0 },
+        Point { x: x1, y: y0 },
+        Point { x: x1, y: y1 },
+        Point { x: x0, y: y1 },
+    ])
+    .unwrap();
+    s.layer_edit(layer_core::Edit::SetSelection(Some(selection))).unwrap();
+    s.frame(1, 1).unwrap();
+}
+
+#[test]
+fn selection_bar_follows_selection_tools_commands_and_history() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();
+    invoke(&mut s, CommandId::FitCanvas);
+    invoke(&mut s, CommandId::RectangleSelect);
+    rectangle_selection(&mut s, [100., 100., 300., 250.]);
+    let bar = s.state.canvas_bar.clone().expect("selection bar with a selection tool");
+    assert_eq!(bar.context.kind, CanvasBarKind::Selection);
+    assert_eq!(bar.placement, CanvasBarPlacement::NearObject);
+    let [x0, y0, x1, y1] = bar.anchor.unwrap();
+    assert!(x0 <= 100. && y0 <= 100. && x1 >= 300. && y1 >= 250.);
+    assert_eq!(
+        bar_commands(&bar.items),
+        [
+            CommandId::Deselect,
+            CommandId::InvertSelection,
+            CommandId::ScaleRotate,
+            CommandId::MaskSelection,
+            CommandId::FillSelection,
+            CommandId::QuickMask,
+            CommandId::SaveSelectionLayer,
+        ]
+    );
+    let menu = s.canvas_bar_menu(bar.context, bar.items.len()).unwrap();
+    assert!(menu.sections.iter().flatten().any(|i| i.label.starts_with("Grow")), "More includes the Select menu");
+    invoke(&mut s, CommandId::Brush);
+    assert!(s.state.canvas_bar.is_none(), "painting inside a selection shows no bar");
+    invoke(&mut s, CommandId::Move);
+    assert!(s.state.canvas_bar.is_some(), "Move offers the selection bar");
+    invoke(&mut s, CommandId::Eyedropper);
+    assert!(s.state.canvas_bar.is_none());
+    invoke(&mut s, CommandId::SelectAll);
+    assert!(s.state.canvas_bar.is_some(), "a selection command arms the bar until the tool changes");
+    invoke(&mut s, CommandId::Brush);
+    assert!(s.state.canvas_bar.is_none());
+    invoke(&mut s, CommandId::Eyedropper);
+    assert!(s.state.canvas_bar.is_none(), "a tool change disarms it");
+    invoke(&mut s, CommandId::Deselect);
+    invoke(&mut s, CommandId::Undo);
+    assert!(s.engine.document().selection.is_some());
+    assert!(s.state.canvas_bar.is_none(), "undo restores the selection without offering the bar");
+    invoke(&mut s, CommandId::InvertSelection);
+    invoke(&mut s, CommandId::RectangleSelect);
+    let inverted = s.state.canvas_bar.clone().unwrap();
+    assert_eq!(inverted.placement, CanvasBarPlacement::BottomEdge, "an inverted selection surrounds the view");
+    s.dispatch(UiAction::CanvasBarEdit {
+        context: inverted.context,
+        action: Box::new(UiAction::Invoke { command: CommandId::Deselect }),
+    })
+    .unwrap();
+    assert!(s.engine.document().selection.is_none());
+    assert!(s.state.canvas_bar.is_none());
+}
+
+#[test]
+fn selection_bar_masks_the_active_layer_in_one_step() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::Move);
+    let bar = s.state.canvas_bar.clone().unwrap();
+    let before = s.engine.document().clone();
+    s.dispatch(UiAction::CanvasBarEdit {
+        context: bar.context,
+        action: Box::new(UiAction::Invoke { command: CommandId::MaskSelection }),
+    })
+    .unwrap();
+    s.frame(2, 2).unwrap();
+    let doc = s.engine.document();
+    assert!(doc.layer(doc.active_layer).unwrap().mask.is_some());
+    assert!(doc.selection.is_none(), "masking consumes the selection");
+    invoke(&mut s, CommandId::Undo);
+    s.frame(3, 3).unwrap();
+    assert_eq!(s.engine.document().layers, before.layers);
+    assert_eq!(s.engine.document().selection, before.selection);
 }

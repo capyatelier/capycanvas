@@ -360,6 +360,7 @@ impl CommandId {
             Self::TransformRotateRight => "command.TransformRotateRight",
             Self::ResetTransform => "command.ResetTransform",
             Self::RemoveSelectionPoint => "command.RemoveSelectionPoint",
+            Self::MaskSelection => "command.MaskSelection",
         }.into()
     }
 }

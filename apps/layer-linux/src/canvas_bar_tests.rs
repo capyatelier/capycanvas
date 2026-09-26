@@ -117,10 +117,18 @@ fn native_canvas_bar_input() {
             .document()
             .revision
     };
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::ScaleRotate,
-    });
-    until(|| w.canvas_bar.root.is_mapped(), "the bar appears with the transform");
+    let kind = |w: &Workspace| state(w).canvas_bar.map(|b| b.context.kind);
+    until(
+        || kind(&w) == Some(layer_ui::CanvasBarKind::Selection) && w.canvas_bar.root.is_mapped(),
+        "the selection bar appears beside the new selection",
+    );
+    let mut native = Native::start();
+    let transform = bar_widget(&w, "canvas-bar-ScaleRotate");
+    native.events(json!([{"point": center(&w, &transform)}, {"down": true}, {"down": false}]));
+    until(
+        || kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && w.canvas_bar.root.is_mapped(),
+        "Transform on the selection bar opens the transform bar",
+    );
     let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
     let anchor = anchor_in_window(&w);
     assert!(bar.y() > anchor[3], "the bar sits below the transform box");
@@ -139,7 +147,6 @@ fn native_canvas_bar_input() {
         "the bar registers its glass region",
     );
     let before = revision();
-    let mut native = Native::start();
     let uniform = bar_widget(&w, "canvas-bar-TransformAspect");
     let was = aspect(&w);
     native.events(json!([{"point": center(&w, &uniform)}, {"down": true}, {"down": false}]));
@@ -189,12 +196,17 @@ fn native_canvas_bar_input() {
     }
     let apply = bar_widget(&w, "canvas-bar-ApplyTransform");
     native.events(json!([{"point": center(&w, &apply)}, {"down": true}, {"down": false}]));
-    until(|| !w.canvas_bar.root.is_visible(), "Apply retires the bar");
+    until(
+        || state(&w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Selection),
+        "Apply hands the bar to the moved selection",
+    );
     assert!(!transforming(&w));
     assert!(revision() > before, "Apply commits the transform");
     w.dispatch(UiAction::Invoke {
         command: CommandId::ShowCanvasActionBar,
     });
+    pump(100);
+    assert!(state(&w).canvas_bar.is_none(), "the selection bar respects the toggle");
     w.dispatch(UiAction::Invoke {
         command: CommandId::ScaleRotate,
     });
@@ -258,5 +270,8 @@ fn native_canvas_bar_polygon_input() {
         || w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.is_some(),
         "Finish creates the selection",
     );
-    until(|| !w.canvas_bar.root.is_visible(), "the polygon bar retires");
+    until(
+        || state(&w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Selection),
+        "the finished polygon hands the bar to its selection",
+    );
 }

@@ -2038,6 +2038,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon })
                     && !self.layer_interaction.path.is_empty()
             }
+            CommandId::MaskSelection => {
+                idle && document.selection.is_some()
+                    && self.selection_masks.target().is_none()
+                    && !self.operation.active()
+                    && !document.is_locked(document.active_layer)
+                    && document.layer(document.active_layer).is_some_and(|l| {
+                        !matches!(l.kind, LayerKind::Background | LayerKind::Selection)
+                    })
+            }
             CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference => {
                 idle && self.layer_interaction.tool.selection_tool().is_some()
             }
@@ -4122,6 +4131,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.remove_polygon_point();
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
+            CommandId::MaskSelection => {
+                let id = self.engine.document().active_layer.0;
+                self.layer_action(LayerAction::MaskSelection { id, hide: false })?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
             CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect
             | CommandId::SelectionAntialias | CommandId::SelectionConstrainAngles => {
                 self.region_tools.cancel();
@@ -4242,6 +4256,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.request_document(DocumentRequest::ColorHistory { redo: false })?;
                     return Ok((DOCUMENT | HOST, false));
                 }
+                self.canvas_bar.history_step();
                 self.engine.undo().map_err(error)?;
                 Ok((0, true))
             }
@@ -4251,6 +4266,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.request_document(DocumentRequest::ColorHistory { redo: true })?;
                     return Ok((DOCUMENT | HOST, false));
                 }
+                self.canvas_bar.history_step();
                 self.engine.redo().map_err(error)?;
                 Ok((0, true))
             }

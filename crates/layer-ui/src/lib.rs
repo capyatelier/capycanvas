@@ -662,6 +662,7 @@ pub enum CommandId {
     TransformRotateRight,
     ResetTransform,
     RemoveSelectionPoint,
+    MaskSelection,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -680,7 +681,8 @@ impl CommandId {
             | Self::TransformRotateLeft
             | Self::TransformRotateRight
             | Self::ResetTransform
-            | Self::RemoveSelectionPoint => platform.canvas_bar(),
+            | Self::RemoveSelectionPoint
+            | Self::MaskSelection => platform.canvas_bar(),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
             Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
@@ -884,13 +886,14 @@ impl CommandId {
             Self::TransformRotateRight => "rotate-right",
             Self::ResetTransform => "reset",
             Self::RemoveSelectionPoint => "back",
+            Self::MaskSelection => "mask",
             Self::KeyboardShortcuts => "keyboard",
             Self::About => "info",
             Self::Website => "website",
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 133] = [
+    pub const ALL: [Self; 134] = [
         Self::SearchCommands,
         Self::DrawingBrush,
         Self::Sculpt,
@@ -1026,6 +1029,7 @@ impl CommandId {
         Self::TransformRotateRight,
         Self::ResetTransform,
         Self::RemoveSelectionPoint,
+        Self::MaskSelection,
     ];
     pub const TOOLS: [Self; 25] = [
         Self::DrawingBrush,
@@ -1194,6 +1198,7 @@ impl CommandId {
             Self::TransformRotateRight => "Rotate 90° right",
             Self::ResetTransform => "Reset transform",
             Self::RemoveSelectionPoint => "Remove last point",
+            Self::MaskSelection => "Mask to selection",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
             Self::Website => ApplicationLink::Website.label(),

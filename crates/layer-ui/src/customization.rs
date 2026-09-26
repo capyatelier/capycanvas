@@ -1079,6 +1079,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::TransformRotateRight => "Turn the transform box a quarter turn clockwise",
                 CommandId::ResetTransform => "Return the transform box to where it started",
                 CommandId::RemoveSelectionPoint => "Remove the polygon point placed last (Backspace)",
+                CommandId::MaskSelection => "Hide the active layer outside the selection with a mask",
                 CommandId::NewDocument => "Create a drawing",
                 CommandId::OpenDocument => "Open an editable drawing",
                 CommandId::SaveDocument => "Save the current drawing",

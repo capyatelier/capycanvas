@@ -2,6 +2,7 @@
 //! beside it. Items are ordinary commands, so menus and Tool Options stay
 //! complete and every item keeps its shared validation and history.
 use super::*;
+use layer_core::{Affine, Point};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -10,6 +11,7 @@ pub enum CanvasBarKind {
     Placement,
     Transform,
     Polygon,
+    Selection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +74,13 @@ pub(crate) fn short_label(command: CommandId) -> &'static str {
         CommandId::TransformRotateRight => "+90°",
         CommandId::ResetTransform => "Reset",
         CommandId::RemoveSelectionPoint => "Remove Point",
+        CommandId::Deselect => "Deselect",
+        CommandId::InvertSelection => "Invert",
+        CommandId::ScaleRotate => "Transform",
+        CommandId::MaskSelection => "Mask",
+        CommandId::FillSelection => "Fill",
+        CommandId::QuickMask => "Quick Mask",
+        CommandId::SaveSelectionLayer => "Save",
         CommandId::CompleteSelection => "Finish",
         CommandId::CancelSelection => "Cancel",
         _ => command.label(),
@@ -88,10 +97,30 @@ pub(super) struct CanvasBarKey {
     flags: Vec<(CommandId, bool, bool)>,
 }
 
+type SelectionIdentity = (usize, [u32; 6], bool);
+
+fn selection_identity(selection: &layer_core::Selection) -> SelectionIdentity {
+    let shape = match &selection.shape {
+        layer_core::SelectionShape::Contours(paths) => paths.as_ptr() as *const u8 as usize,
+        layer_core::SelectionShape::Pixels(pixels) => std::sync::Arc::as_ptr(pixels) as *const u8 as usize,
+    };
+    (shape, selection.affine.0.map(f32::to_bits), selection.inverted)
+}
+
 #[derive(Default)]
 pub(super) struct CanvasBarState {
     key: Option<CanvasBarKey>,
     generation: u64,
+    selection: Option<(SelectionIdentity, Option<[f32; 4]>)>,
+    tool: Option<LayerCanvasTool>,
+    armed: bool,
+    history: bool,
+}
+impl CanvasBarState {
+    /// Undo and Redo restore selections without offering the bar for them.
+    pub(super) fn history_step(&mut self) {
+        self.history = true;
+    }
 }
 
 struct Plan {
@@ -103,6 +132,63 @@ struct Plan {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    /// Arm the selection bar when a command replaces the selection; a tool change disarms it.
+    fn track_selection(&mut self) {
+        let tool = self.layer_interaction.tool;
+        if self.canvas_bar.tool.replace(tool).is_some_and(|previous| previous != tool) {
+            self.canvas_bar.armed = false;
+        }
+        let history = std::mem::take(&mut self.canvas_bar.history);
+        let identity = self.engine.document().selection.as_ref().map(selection_identity);
+        if identity == self.canvas_bar.selection.as_ref().map(|s| s.0) {
+            return;
+        }
+        self.canvas_bar.armed = identity.is_some() && !history;
+        self.canvas_bar.selection = identity.map(|identity| {
+            let selection = self.engine.document().selection.as_ref().unwrap();
+            let bounds = (!selection.inverted)
+                .then(|| selection.bounds())
+                .filter(|b| !b.is_empty())
+                .map(|b| [b.min.x, b.min.y, b.max.x, b.max.y]);
+            (identity, bounds)
+        });
+    }
+
+    fn selection_plan(&self) -> Option<Plan> {
+        let doc = self.engine.document();
+        doc.selection.as_ref()?;
+        if doc.active_mask || self.selection_masks.target().is_some() {
+            return None;
+        }
+        let tool = self.layer_interaction.tool;
+        let offered = tool.selection_tool().is_some()
+            || tool == LayerCanvasTool::Move
+            || (self.canvas_bar.armed && !tool.draws());
+        if !offered {
+            return None;
+        }
+        let edge = matches!(tool.selection_tool(), Some(SelectionTool::Tonal | SelectionTool::Brush))
+            || self.canvas_bar.selection.as_ref().is_none_or(|s| s.1.is_none());
+        Some(Plan {
+            kind: CanvasBarKind::Selection,
+            label: None,
+            items: vec![
+                (CommandId::Deselect, false),
+                (CommandId::InvertSelection, false),
+                (CommandId::ScaleRotate, false),
+                (CommandId::MaskSelection, false),
+                (CommandId::FillSelection, false),
+                (CommandId::QuickMask, true),
+                (CommandId::SaveSelectionLayer, false),
+            ]
+            .into_iter()
+            .filter(|(id, _)| id.available_on(self.state.platform))
+            .collect(),
+            completion: Vec::new(),
+            placement: edge.then_some(CanvasBarPlacement::BottomEdge),
+        })
+    }
+
     fn canvas_bar_plan(&self) -> Option<Plan> {
         if !self.state.platform.canvas_bar() {
             return None;
@@ -111,7 +197,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             let polygon = self.layer_interaction.tool
                 == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon })
                 && !self.layer_interaction.path.is_empty();
-            return polygon.then(|| Plan {
+            if !polygon {
+                return self.selection_plan();
+            }
+            return Some(Plan {
                 kind: CanvasBarKind::Polygon,
                 label: None,
                 items: vec![(CommandId::RemoveSelectionPoint, false)],
@@ -153,6 +242,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         match kind {
             CanvasBarKind::Placement | CanvasBarKind::Transform => self.transform_document_bounds(),
             CanvasBarKind::Polygon => None,
+            CanvasBarKind::Selection => self.canvas_bar.selection.as_ref().and_then(|s| s.1),
         }
     }
 
@@ -164,10 +254,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.canvas_bar_contact() || self.operation.dragging() {
             return false;
         }
+        self.track_selection();
         let preference = self.state.workspace.layout.canvas_bar.clone();
         let Some(mut plan) = self
             .canvas_bar_plan()
             .filter(|plan| preference.visible || !plan.completion.is_empty())
+            .filter(|plan| !plan.items.is_empty() || !plan.completion.is_empty())
         else {
             self.canvas_bar.key = None;
             return self.state.canvas_bar.take().is_some();
@@ -381,6 +473,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 points
             }
             CanvasBarKind::Polygon => return None,
+            CanvasBarKind::Selection => {
+                let [x0, y0, x1, y1] = self.canvas_bar.selection.as_ref()?.1?;
+                let camera = Affine(self.state.camera.view().document_to_surface);
+                let dpi = self
+                    .logical_viewport
+                    .map_or(1., |v| self.state.camera.viewport[0] as f32 / v[0]);
+                [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+                    .map(|[x, y]| {
+                        let p = camera.map(Point { x, y });
+                        [p.x / dpi, p.y / dpi]
+                    })
+                    .to_vec()
+            }
         };
         let reach = crate::session::rulers::HIT_DISTANCE;
         let [mut min, mut max] = [[f32::INFINITY; 2], [f32::NEG_INFINITY; 2]];
@@ -443,10 +548,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 UiAction::Invoke { command: CommandId::ShowCanvasActionBar },
             )
         };
+        let mut sections = vec![overflow.collect::<Vec<_>>()];
+        if bar.context.kind == CanvasBarKind::Selection {
+            sections.extend(self.selection_menu(SelectionMenu::Selection).sections);
+        }
+        sections.push(vec![toggle]);
         Some(
             ContextMenu {
                 title: "More".into(),
-                sections: vec![overflow.collect(), vec![toggle]],
+                sections,
             }
             .with_shortcuts(&self.state.settings, self.state.platform),
         )

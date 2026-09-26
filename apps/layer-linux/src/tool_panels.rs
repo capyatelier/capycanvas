@@ -187,6 +187,9 @@ pub struct ToolSettings {
     fields: RefCell<Vec<(ToolSetting, NumberControl)>>,
     range: RefCell<Option<Rc<crate::range_control::RangeControl>>>,
     actions: RefCell<Vec<(ToolSettingAction, &'static str, gtk::Widget)>>,
+    selection_actions: gtk::MenuButton,
+    selection_menu: gtk::PopoverMenu,
+    selection_bound: Cell<bool>,
     updating: Rc<Cell<bool>>,
 }
 impl ToolSettings {
@@ -202,6 +205,14 @@ impl ToolSettings {
         modes.add_css_class("selection-modes");
         modes.update_property(&[gtk::accessible::Property::Label("Selection mode")]);
         mode_container.append(&modes);
+        let selection_menu = gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>);
+        let selection_actions = gtk::MenuButton::builder()
+            .label("Selection Actions…")
+            .popover(&selection_menu)
+            .build();
+        selection_actions.set_widget_name("selection-actions");
+        selection_actions.set_margin_top(6);
+        mode_container.append(&selection_actions);
         root.append(&mode_container);
         let extra=body();
         root.append(&extra);
@@ -212,6 +223,9 @@ impl ToolSettings {
             fields: RefCell::default(),
             range: RefCell::default(),
             actions: RefCell::default(),
+            selection_actions,
+            selection_menu,
+            selection_bound: Cell::new(false),
             updating: Rc::new(Cell::new(false)),
         }
     }
@@ -229,6 +243,24 @@ impl ToolSettings {
         self.form.set_margin_top(if compact {0} else {inset});
         self.form.set_spacing(if compact {2} else {6});
         self.mode_container.set_visible(state.layer_tools.tool.selection_tool().is_some());
+        self.selection_actions.set_visible(!compact && state.layer_tools.tool.selection_tool().is_some());
+        if !self.selection_bound.replace(true) {
+            workspace.watch_popover(self.selection_menu.upcast_ref());
+            self.selection_menu.connect_show(glib::clone!(
+                #[weak]
+                workspace,
+                move |menu| {
+                    let model = workspace
+                        .gpu
+                        .borrow()
+                        .as_ref()
+                        .map(|g| g.session.selection_menu(layer_ui::SelectionMenu::Selection));
+                    if let Some(model) = model {
+                        workspace.populate_workspace_menu(menu, model);
+                    }
+                }
+            ));
+        }
         self.picker.root.set_visible(picking);
         if picking { self.picker.refresh(workspace, state); return; }
         let context=state.toolbar_context();
