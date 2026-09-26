@@ -640,6 +640,7 @@ impl NativeHost {
             ToolbarStamp { context: layer_ui::ToolbarContext },
             ImageLayerDrop { target: u64, fraction: f32 },
             DocumentColor,
+            Requests,
             ProofPanel { action: Option<layer_ui::proof_panel::ProofAction> },
             ProofForm,
             ProofStatus,
@@ -795,6 +796,7 @@ impl NativeHost {
                 layer_ui::color_management::proof_view(&self.session)
             },
             Query::DocumentColor => json!(self.session.engine().document().color),
+            Query::Requests => json!(self.session.state().requests),
             Query::ExportForm => json!(layer_ui::ExportForm::new(self.session.engine().document())),
             Query::ExportDraft { recipe, action } => json!(recipe.draft(action)),
             Query::ExportValidate { recipe } => { recipe.validate()?; json!(recipe) },
@@ -1039,6 +1041,28 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn requests_query_does_not_consume_publications() {
+        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        host.take_model_update_bytes().unwrap();
+        host.dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::ImportImage,
+        })
+        .unwrap();
+        let query = json!({"type": "requests"});
+        let requests = host.query(query.clone()).unwrap();
+        assert_eq!(host.query(query).unwrap(), requests);
+        assert!(
+            requests
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["kind"]["type"] == "document")
+        );
+        let update: Value =
+            serde_json::from_slice(&host.take_model_update_bytes().unwrap().unwrap()).unwrap();
+        assert!(update.to_string().contains("requests"), "{update}");
+    }
     #[test]
     fn application_menus_follow_actions_without_entering_camera_patches() {
         use layer_ui::{ApplicationMenu, CommandId, Platform};

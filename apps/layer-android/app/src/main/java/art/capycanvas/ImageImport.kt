@@ -79,7 +79,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                     }
                     val captured = Native.imageImportContext(handle, screen?.toString() ?: "null", resolved?.toString() ?: "null")
                     Native.dispatch(handle, obj("type" to "invoke", "command" to "import_image").toString())
-                    val request = JSONObject(Native.snapshot(handle)!!).getJSONObject("state").array("requests").objects().first { it.getJSONObject("kind").getString("type") == "document" }
+                    val request = JSONArray(Native.query(handle, obj("type" to "requests").toString())).objects().first { it.getJSONObject("kind").getString("type") == "document" }
                     captured to request
                 }
                 requestId=request.getInt("id");cancelled=false;providerSignal=android.os.CancellationSignal()
