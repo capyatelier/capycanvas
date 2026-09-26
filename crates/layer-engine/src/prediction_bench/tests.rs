@@ -196,20 +196,12 @@ fn collected_recording_bank_preserves_accuracy_and_useful_prediction() {
         for key in ["contacts", "samples", "queries"] {
             assert_eq!(measured[key], baseline[key], "{} {key}", label);
         }
-        // Different accepted horizons can make more boundary queries
-        // gradable. Protect coverage; do not require identical omissions.
-        for key in ["graded_queries", "transitions"] {
-            assert!(
-                measured["accuracy"][key].as_u64().unwrap()
-                    >= baseline["accuracy"][key].as_u64().unwrap(),
-                "{} lost {key}",
-                label
-            );
-        }
-        // Endpoint-error steps and a model's chosen horizon are diagnostics,
-        // not comparable flicker/lag objectives when reach changes. The
-        // Python bank guards full-preview temporal errors, fixed-clock gaps,
-        // braking, severity and eligibility against the frozen references.
+        assert!(
+            measured["accuracy"]["graded_queries"].as_u64().unwrap()
+                >= baseline["accuracy"]["graded_queries"].as_u64().unwrap(),
+            "{} lost graded_queries",
+            label
+        );
         assert!(
             actual.accuracy.position_rms_px
                 <= baseline["accuracy"]["position_rms_px"].as_f64().unwrap() + 1e-6,

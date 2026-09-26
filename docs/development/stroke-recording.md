@@ -143,11 +143,10 @@ use the common initial preview support. The version migration remeasures the
 frozen pre-change outputs, without changing the other reference values or budgets.
 The per-tablet regression gate guards stability, tracking, ghosts, braking and
 scoring eligibility together. It must not be passed by shortening the preview.
-The Rust summary preserves endpoint RMS and prediction coverage guards. Endpoint
-error-step bins and chosen-horizon means remain diagnostics: their targets change
-with the predictor, and shorter horizons can improve them while making tracking
-worse. The Python bank gates full-preview severity and common-clock tracking
-instead. More gradable boundary queries are allowed; lost scoring coverage is not.
+The Rust summary preserves endpoint RMS and prediction coverage guards.
+Chosen-horizon means remain diagnostics: their targets change with the
+predictor, and shorter horizons can improve them while making tracking worse.
+The Python bank gates full-preview severity and common-clock tracking instead. More gradable boundary queries are allowed; lost scoring coverage is not.
 
 These captures do not contain GPU presentation timestamps, brush raster, opacity
 or texture; centerline metrics and display-delay sweeps do not establish actual

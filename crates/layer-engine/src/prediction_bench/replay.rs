@@ -307,17 +307,11 @@ fn replay_contacts(
         real.reverse();
         real.dedup_by_key(|p| p.elapsed_micros);
         real.reverse();
-        let mut previous: Option<(u32, [f64; 2])> = None;
         for row in rows {
             let predicted = surface(row.point.position, row.transform);
             let truth = reference(&real, row.point.elapsed_micros, row.transform);
             if let Some(truth) = truth {
-                let error = [predicted[0] - truth[0], predicted[1] - truth[1]];
-                let prior = previous
-                    .filter(|(time, _)| row.now > *time && row.now - *time <= 50_000)
-                    .map(|(_, error)| error);
-                summary.accuracy.add(error, prior);
-                previous = Some((row.now, error));
+                summary.accuracy.add([predicted[0] - truth[0], predicted[1] - truth[1]]);
             }
             let optional = |axis: usize| truth.map(|p| p[axis].to_string()).unwrap_or_default();
             writeln!(

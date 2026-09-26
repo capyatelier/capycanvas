@@ -49,9 +49,8 @@ provenance, results and preview episodes before checking in data and sidecars.
 Never update an existing baseline merely to make a failing change pass.
 
 The expected JSON version 1 binds the recording hash to `summary` (counts,
-accuracy, coverage, useful horizon) and `correction_stability` (version 5 temporal
-snapshot) for Optimized. Historical fields such as
-`error_step_rms_px` are endpoint diagnostics, not flicker measurements.
+graded queries and endpoint position RMS, coverage, useful horizon) and
+`correction_stability` (version 5 temporal snapshot) for Optimized.
 Version 5 additionally follows the initial preview through measured-ink
 settlement and disappearance. These temporal references were recomputed from
 frozen pre-change outputs: `9ccc9b22` for Wacom Pro 27, and `ba9b91e0` for

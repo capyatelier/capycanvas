@@ -417,14 +417,7 @@
     "mean_display_lead_ms": 8.913135821574917,
     "accuracy": {
       "graded_queries": 10946,
-      "transitions": 10865,
-      "tiny_4_to_8": 1498,
-      "small_8_to_16": 483,
-      "medium_16_to_32": 71,
-      "severe_ge32": 4,
-      "position_rms_px": 6.472869023245338,
-      "error_step_rms_px": 3.9770819409284583,
-      "worst_step_px": 41.11941527195786
+      "position_rms_px": 6.472869023245338
     }
   }
 }
