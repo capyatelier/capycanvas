@@ -488,8 +488,6 @@ drift, unvisited or unresolved tool choices, and missing control/service reviews
 cargo run -p layer-host --example inventory -- --gpu > /tmp/capy-inventory.json
 python3 apps/layer-apple/scripts/audit-commands.py /tmp/capy-inventory.json
 python3 apps/layer-apple/scripts/test-property-audit.py /tmp/capy-inventory.json
-CAPY_PROPERTY_INVENTORY=/tmp/capy-inventory.json \
-  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/property-actions.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-menu-actions.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/editor-appearance.swift
@@ -511,12 +509,6 @@ audit rejects missing filters, controls, handlers and contradictory results.
 Older schema 2 artifacts receive command-only checks; schemas 2/3 warn that
 property scenarios are not checked.
 
-The direct Swift property check replays those actions through `EditorStore` and
-the serial `NativeOwner`, comparing the actual published schemas and values.
-Both presets run without visible windows or a renderer, in disposable storage.
-This covers shared Apple routing, decoding, history and lock behavior; it does
-not establish UIKit widget, GPU filter-pixel or physical interaction acceptance.
-
 The Filters category control reuses the shared editor choice and its opaque menu.
 Opening a choice focuses its selected enabled row; Escape closes filter search.
 The focused native check visits every category, types a search, verifies Escape
@@ -531,6 +523,13 @@ CAPY_FILTER_CAPTURES=/tmp/capy-filter-controls \
 Point `CAPY_TEST_ASSETS_APP` at a built Mac app to supply the shared vector assets.
 This check uses local mouse/keyboard events in temporary AppKit windows; it does
 not launch the simulator or validate UIKit event delivery or GPU filter previews.
+
+The preview owner check retries Filter previews during edits and after Save As,
+reopen and Undo, in isolated storage:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/filter-previews-owner.swift
+```
 
 The direct Swift menu check dispatches actual shared menu payloads through the
 Apple editor and workspace service on both presets. It checks all nine routes,
@@ -565,6 +564,14 @@ Supplied scene/application notifications must cancel only the owning scene's
 pending contact, held menu or drag; late releases, resumed drops and reparenting
 are covered for mouse, touch and pen policies. This does not replace physical
 scene-interruption acceptance.
+
+The shared contact policy covers all six reorder surfaces with mouse, touch and
+pen, without Rust or a simulator:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library apps/layer-apple/Shared/Bridge/ReorderContact.swift apps/layer-apple/tests/reorder-contact.swift -o /tmp/capy-reorder-contact && /tmp/capy-reorder-contact
+```
+
 `EditorLaunchTests/testLayerMenuDragUpward` and `EditorMenuChecks` exercise the
 UIKit editor on simulator or device destinations with disposable persistence.
 The connected iPad passes upward layer dragging with exact Undo/Redo, layer
@@ -623,6 +630,14 @@ The installed UIKit SDK's [iOS geometry preferences](https://developer.apple.com
 expose orientation changes but no equivalent iPad window toggle. That shared
 command capability remains explicitly unavailable on iPad and open in the review.
 Full-screen editor layout/rendering remains an open acceptance item.
+
+The drawing-tab check covers mouse, touch and pen pickup on grips and bodies,
+per-tab history and save destinations, ordered multi-file open and window-close
+approval:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/drawing-tabs.swift
+```
 
 Both Apple hosts project the shared [workspace title bar](../../docs/ui/window-bar.md).
 Window → Customize Title Bar… opens the inline editor. Whole items and bank

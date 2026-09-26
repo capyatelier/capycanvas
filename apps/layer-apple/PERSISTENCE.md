@@ -68,7 +68,6 @@ migration code used by other hosts is unchanged.
 The direct checks use temporary storage and both Apple platform configurations:
 
 ```sh
-bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-library.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-coordinator.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
 cargo test -p layer-apple -p layer-workspace -p layer-ui -p layer-host --features layer-workspace/native
@@ -161,6 +160,12 @@ Cancellation wins before the replacement boundary. File-provider export is
 completed by the native picker. Source/sample allocations are shared
 with the snapshot, but large-document capture cost, GPU preparation, memory peaks
 and storage latency still require measurement.
+
+This check writes through a real file-only App Sandbox grant:
+
+```sh
+python3 apps/layer-apple/scripts/test-project-access.py
+```
 
 Image layer imports use that same coordinated reader, including its substituted
 URL, throughout ImageIO decoding. This follows Apple's

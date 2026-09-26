@@ -102,7 +102,7 @@ import QuartzCore
             store.projectFiles.choose("discard")
             try await wait("close tab") { store.drawingTabs.rows.count == 1 && !store.drawingTabs.busy }
             precondition(store.drawingTabs.selected == 1)
-            store.projectFiles.openURLs([a, b])
+            store.projectFiles.openItems([a, b].map(PhotoItem.init(fileURL:)))
             try await wait("ordered multi-file open") { store.drawingTabs.rows.count == 3 && !store.projectFiles.busy && store.state["requests"].array.isEmpty }
             precondition(store.drawingTabs.rows[1]["title"].string == a.lastPathComponent)
             precondition(store.drawingTabs.rows[2]["title"].string == b.lastPathComponent)

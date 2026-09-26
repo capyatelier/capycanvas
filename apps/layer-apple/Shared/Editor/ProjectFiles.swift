@@ -144,7 +144,6 @@ import UIKit
         default: fail("This document service is not available yet")
         }
     }
-    func openURLs(_ urls: [URL]) { openItems(urls.map(PhotoItem.init(fileURL:))) }
     func openItems(_ items: [PhotoItem]) {
         guard !items.isEmpty else { return }
         queuedOpens.append(contentsOf: items)

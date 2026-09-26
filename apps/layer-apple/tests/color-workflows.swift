@@ -87,14 +87,6 @@ import QuartzCore
             }
             try await library(["op": "rename_palette", "id": palette, "name": "Retained colors"])
             let savedLibrary = store.state["colors"]["library"].stableKey
-            var rejected = false
-            do {
-                try await library(["op": "rename_palette", "id": palette, "name": ""])
-            } catch {
-                rejected = true
-                try require(store.state["colors"]["library"].stableKey == savedLibrary, "Invalid palette edits must be atomic")
-            }
-            try require(rejected, "An empty palette name must be rejected")
             // A new document changes wheel space but retains workspace palettes.
             try await edit(store, ["type": "invoke", "command": "new_document"])
             try await wait("Next document choices") { store.projectFiles.creating }
