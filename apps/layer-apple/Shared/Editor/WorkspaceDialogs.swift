@@ -38,7 +38,7 @@ private struct WorkspaceDialog: View {
                     .textFieldStyle(.roundedBorder).accessibilityIdentifier("toolbar-name")
             }
             EditorTextField(view["search_hint"].string, value: view["query"].string) { store.customize(["type": "picker_search", "query": $0]) }
-                .textFieldStyle(.roundedBorder).accessibilityIdentifier("tool-picker-search")
+                .editorSearchInput().textFieldStyle(.roundedBorder).accessibilityIdentifier("tool-picker-search")
             EditorScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(view["choices"].array, id: \.workspaceChoiceKey) { choice in

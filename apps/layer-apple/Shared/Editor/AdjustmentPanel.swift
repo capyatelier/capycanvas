@@ -19,7 +19,7 @@ struct AdjustmentPanel: View {
                     EditorTextField(picker["search_label"].string, value: picker["search"].string) {
                         send(["op": "search", "query": $0])
                     }
-                        .textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 34)
+                        .editorSearchInput().textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 34)
                         .background(palette["input"], in: SquircleShape(2))
                         .overlay(SquircleShape(2).stroke(palette["text"].opacity(0.4), lineWidth: 1))
                         .focused($searching).accessibilityIdentifier("filter-search")

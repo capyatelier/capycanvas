@@ -17,6 +17,7 @@ final class CanvasView: UIView {
     private var attached = false
     private var drawableExtent = CGSize.zero
     private var sceneGeometry: NSKeyValueObservation?
+    private var keyboardCoversField = false
     private var workspaceBottom: CGFloat = -1
     var contacts: [ObjectIdentifier: PencilContact] = [:]
     var nextContact: UInt64 = 0
@@ -155,16 +156,27 @@ final class CanvasView: UIView {
         // Read UIKit's per-window guide after its layout update. Shared workspace
         // clearance moves controls above the keyboard without resizing the canvas.
         DispatchQueue.main.async { [weak self] in
-            self?.window?.layoutIfNeeded()
-            self?.measureWorkspaceBottom()
+            guard let self else { return }
+            window?.layoutIfNeeded()
+            if let keyboard = keyboardFrame {
+                keyboardCoversField = keyboardCoversField || (focusedFieldBottom ?? 0) > keyboard.minY
+            } else { keyboardCoversField = false }
+            measureWorkspaceBottom()
         }
+    }
+    private var keyboardFrame: CGRect? {
+        let keyboard = bounds.intersection(keyboardLayoutGuide.layoutFrame)
+        return keyboard.isNull || keyboard.height <= safeAreaInsets.bottom + 0.5 ? nil : keyboard
+    }
+    private var focusedFieldBottom: CGFloat? {
+        FocusedResponder.current = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.captureFocusedResponder), to: nil, from: nil, for: nil)
+        guard let field = FocusedResponder.current as? UIView, field.window === window else { return nil }
+        return field.convert(field.bounds, to: self).maxY
     }
     private func measureWorkspaceBottom() {
         guard window != nil, bounds.height > 0 else { return }
-        var minimum: CGFloat = 0
-        if #available(iOS 26.0, *), traitCollection.userInterfaceIdiom == .pad { minimum = 36 }
-        let keyboard = bounds.intersection(keyboardLayoutGuide.layoutFrame)
-        let inset = max(minimum, keyboard.isNull ? 0 : keyboard.height)
+        let inset = keyboardCoversField ? keyboardFrame?.height ?? 0 : 0
         guard inset != workspaceBottom else { return }
         workspaceBottom = inset
         store.dispatch(["type": "measure_workspace_bottom", "inset": Double(inset)])
@@ -204,4 +216,9 @@ final class CanvasView: UIView {
         routeKeys(presses, pressed: false)
         super.pressesCancelled(presses, with: event)
     }
+}
+
+private enum FocusedResponder { static weak var current: UIResponder? }
+private extension UIResponder {
+    @objc func captureFocusedResponder() { FocusedResponder.current = self }
 }

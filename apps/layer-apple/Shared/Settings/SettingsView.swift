@@ -15,7 +15,7 @@ struct SettingsView: View {
                 EditorTextField("Search settings", value: model["query"].string) {
                     action(["type": "search", "query": $0])
                 }
-                    .textFieldStyle(.roundedBorder).padding(.horizontal).focused($searching)
+                    .editorSearchInput().textFieldStyle(.roundedBorder).padding(.horizontal).focused($searching)
                     .accessibilityIdentifier("settings-search")
                 List(selection: Binding<String?>(get: { model["page"].string }, set: { if let next = $0 {
                     searching = false

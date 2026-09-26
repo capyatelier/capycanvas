@@ -118,7 +118,6 @@ struct NumberControl: View {
                     .frame(width: max(0, geometry.size.width * formatted["fill"].number))
             }.frame(height: 4).clipShape(Capsule()).frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
-                .onTapGesture { location in position(location.x / max(1, geometry.size.width)) }
                 // Preserve vertical scrolling through long tool-settings lists.
                 .simultaneousGesture(DragGesture(minimumDistance: 6).updating($contact) { _, active, _ in active = true }.onChanged { event in
                     guard enabled else { cancelDrag(); return }
@@ -133,7 +132,7 @@ struct NumberControl: View {
                     guard enabled else { cancelDrag(); return }
                     if horizontalDrag == true { position(event.location.x / max(1, geometry.size.width), phase: "up") }
                     horizontalDrag = nil
-                })
+                }.exclusively(before: SpatialTapGesture().onEnded { tap in position(tap.location.x / max(1, geometry.size.width)) }))
         }.frame(height: 24).modifier(NumberControlMeasurement(id: key + ":track"))
             .accessibilityElement().accessibilityLabel(label)
             .accessibilityValue(formatted["text"].string)

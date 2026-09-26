@@ -325,13 +325,29 @@ extension XCTestCase {
         #endif
     }
 
+    @MainActor private func revealLayerMenuAction(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        let action = app.buttons["menu-action-" + label]
+        guard !action.waitForExistence(timeout: 1) else { return action }
+        let back = app.buttons["editor-menu-back"]
+        while back.exists { workspaceActivate(back) }
+        guard !action.exists else { return action }
+        for submenu in ["Organize", "Layer Settings", "Mask", "Pixel Selection", "Layer Row Selection", "Visibility", "New"] {
+            let entry = app.buttons["menu-action-" + submenu]
+            guard entry.exists else { continue }
+            workspaceActivate(entry)
+            if action.waitForExistence(timeout: 1) { break }
+            workspaceActivate(back)
+        }
+        return action
+    }
+
     @MainActor private func layerContext(_ label: String, on element: XCUIElement, in app: XCUIApplication) {
         #if os(macOS)
         element.rightClick()
         #else
         element.press(forDuration: 0.6)
         #endif
-        let action = app.buttons["menu-action-" + label]
+        let action = revealLayerMenuAction(label, in: app)
         revealEditorControl(action, in: app.scrollViews.containing(.button, identifier: "menu-action-" + label).firstMatch)
         workspaceActivate(action)
         XCTAssertTrue(action.waitForNonExistence(timeout: 5))
@@ -577,9 +593,9 @@ extension XCTestCase {
         #else
         content().press(forDuration: 0.6)
         #endif
-        XCTAssertTrue(app.buttons["menu-action-Clear layer"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["menu-action-Clear layer"].isEnabled)
-        workspaceActivate(app.buttons["menu-action-Lock editing"])
+        let clear = revealLayerMenuAction("Clear layer", in: app)
+        XCTAssertTrue(clear.waitForExistence(timeout: 5)); XCTAssertFalse(clear.isEnabled)
+        workspaceActivate(revealLayerMenuAction("Lock editing", in: app))
         flag("Lock editing", false)
         editorHistory("Undo", in: app); flag("Lock editing", true); expectSamples(opaqueRed)
         editorHistory("Redo", in: app); flag("Lock editing", false); expectSamples(opaqueRed)

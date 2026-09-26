@@ -10,7 +10,7 @@ struct ShortcutSettingsView: View {
             EditorTextField("Search shortcuts", value: model["shortcut_query"].string) {
                 action(["type": "search_shortcuts", "query": $0])
             }
-                .textFieldStyle(.roundedBorder).accessibilityIdentifier("shortcut-search")
+                .editorSearchInput().textFieldStyle(.roundedBorder).accessibilityIdentifier("shortcut-search")
             List {
                 ForEach(model["shortcuts"].array.filter { $0["visible"].bool }, id: \.shortcutID) { row in
                     Button { action(["type": "edit_shortcut", "id": row["id"].string]) } label: {

@@ -79,7 +79,7 @@ struct WorkspaceManagerView: View {
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             if manager.toolbarMode { HStack {
-                TextField("Search", text: $manager.query).textFieldStyle(.roundedBorder)
+                TextField("Search", text: $manager.query).editorSearchInput().textFieldStyle(.roundedBorder)
                     .onChange(of: manager.query) { _, _ in manager.search() }.accessibilityIdentifier("workspace-manager-search")
                 if manager.page == "this_workspace" {
                     Button("New Toolbar…") { manager.activate(JSON(["type": "new_toolbar"])) }.accessibilityIdentifier("workspace-action-new_toolbar")

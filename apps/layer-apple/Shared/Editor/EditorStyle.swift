@@ -304,6 +304,16 @@ struct EditorTextField: View {
     }
 }
 
+extension View {
+    func editorSearchInput() -> some View {
+        #if os(iOS)
+        textInputAutocapitalization(.never).autocorrectionDisabled()
+        #else
+        autocorrectionDisabled()
+        #endif
+    }
+}
+
 /// Submit the focused field before a containing dialog closes.
 private struct EditorTextCommit: FocusedValueKey { typealias Value = () -> Void }
 extension FocusedValues {

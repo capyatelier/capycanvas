@@ -348,7 +348,7 @@ final class EditorLaunchTests: XCTestCase {
         let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         let row = rows.element(boundBy: 1)
         row.buttons["Edit layer content"].press(forDuration: 0.6)
-        let nativeMenuItem = app.buttons["Rename layer…"]
+        let nativeMenuItem = app.buttons["menu-action-Organize"]
         XCTAssertTrue(nativeMenuItem.waitForExistence(timeout: 5))
         attachLayerMenu("layer-content-context-anchor")
         // Dismiss through the app canvas, then check the separate footer origin.

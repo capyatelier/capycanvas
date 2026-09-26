@@ -42,8 +42,6 @@ extension XCTestCase {
         workspaceActivate(button)
     }
 
-    /// The visible white paper, normalized to the editor screenshot. Points
-    /// derived from it follow the shared layout instead of fixed window positions.
     @MainActor func editorPaper(in app: XCUIApplication) -> EditorPaper {
         let source = CGImageSourceCreateWithData(editorScreenshot(in: app).pngRepresentation as CFData, nil)!
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)! as NSDictionary

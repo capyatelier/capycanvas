@@ -117,7 +117,6 @@ private struct CurveProperty: View {
     @State private var selected: Int?
     @State private var dragging = false
     @State private var dragPoint: (index: Int, point: CGPoint, existing: Bool)?
-    @State private var lastTap: (index: Int, time: Date)?
     private var key: String { control["key"].string }
     private var points: [JSON] { control["value"]["value"].array }
     private var modified: Bool { control["modified"].bool }
@@ -167,7 +166,8 @@ private struct CurveProperty: View {
                         context.fill(Path(ellipseIn: CGRect(x: p[0].number * size.width - radius,
                             y: (1 - p[1].number) * size.height - radius, width: radius * 2, height: radius * 2)), with: .color(palette["text"]))
                     }
-                }.background(palette["text"].opacity(0.12)).contentShape(Rectangle())
+                }.background(palette["text"].opacity(0.12))
+                    .contentShape(CurvePlotHitShape(reset: modified ? 32 : 0), eoFill: true)
                     .gesture(DragGesture(minimumDistance: 0).updating($contact) { _, active, _ in active = true }.onChanged { event in
                         let size = geometry.size
                         guard size.width > 0, size.height > 0 else { return }
@@ -195,18 +195,20 @@ private struct CurveProperty: View {
                         guard dragging else { return }
                         guard geometry.size.width > 0, geometry.size.height > 0 else { cancelDrag(); return }
                         if let point = dragPoint {
-                            let tapped = hypot(event.translation.width, event.translation.height) < 4
-                            let now = Date()
-                            let double = point.existing && tapped
-                                && lastTap.map { $0.index == point.index && now.timeIntervalSince($0.time) < 0.4 } == true
-                            lastTap = point.existing && tapped && !double ? (point.index, now) : nil
                             let next = CGPoint(x: point.point.x + event.translation.width / geometry.size.width,
                                 y: point.point.y - event.translation.height / geometry.size.height)
-                            change([next.x, next.y], index: point.index, remove: double, phase: "up")
-                            let onGraph = (-0.1...1.1).contains(next.x) && (-0.1...1.1).contains(next.y)
-                            if double || !onGraph { selected = nil }
+                            change([next.x, next.y], index: point.index, phase: "up")
+                            if !((-0.1...1.1).contains(next.x) && (-0.1...1.1).contains(next.y)) { selected = nil }
                         }
                         dragging = false; dragPoint = nil
+                    })
+                    .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { tap in
+                        let size = geometry.size
+                        guard size.width > 0, size.height > 0, let index = points.indices.min(by: {
+                            distance(points[$0], tap.location, size) < distance(points[$1], tap.location, size)
+                        }), distance(points[index], tap.location, size) <= 16 else { return }
+                        cancelDrag(); selected = nil
+                        change([points[index][0].number, points[index][1].number], index: index, remove: true)
                     })
                     .allowsHitTesting(enabled)
                     .onChange(of: contact) { _, active in if !active { cancelDrag() } }
@@ -217,7 +219,7 @@ private struct CurveProperty: View {
             }.frame(height: 200)
                 .overlay(alignment: .bottomTrailing) {
                     if modified {
-                        Button { selected = nil; lastTap = nil; store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) } label: {
+                        Button { selected = nil; store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) } label: {
                             SharedIcon(name: "reset").frame(width: 28, height: 28).contentShape(Rectangle())
                         }.buttonStyle(.plain).foregroundColor(palette["text"].opacity(0.7)).padding(2)
                             .help("Reset curve").accessibilityLabel("Reset curve").accessibilityIdentifier("curve-reset")
@@ -227,6 +229,15 @@ private struct CurveProperty: View {
     }
     private func distance(_ point: JSON, _ location: CGPoint, _ size: CGSize) -> CGFloat {
         hypot(point[0].number * size.width - location.x, (1 - point[1].number) * size.height - location.y)
+    }
+}
+
+private struct CurvePlotHitShape: Shape {
+    let reset: CGFloat
+    func path(in rect: CGRect) -> Path {
+        var path = Path(rect)
+        if reset > 0 { path.addRect(CGRect(x: rect.maxX - reset, y: rect.maxY - reset, width: reset, height: reset)) }
+        return path
     }
 }
 

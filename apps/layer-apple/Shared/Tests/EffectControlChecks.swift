@@ -303,7 +303,17 @@ extension XCTestCase {
         point.tap()
         #endif
         expectGraphic(curve, "3 points")
-        activate(app.buttons["curve-reset"]); expectGraphic(curve, "2 points")
+        let reset = app.buttons["curve-reset"]
+        XCTAssertTrue(reset.waitForExistence(timeout: 10))
+        #if os(iOS)
+        let heading = app.descendants(matching: .any)["layer-properties"].firstMatch.staticTexts["Curves"]
+        let scrollStart = heading.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        scrollStart.press(forDuration: 0.05, thenDragTo: scrollStart.withOffset(CGVector(dx: 0, dy: -160)),
+            withVelocity: .slow, thenHoldForDuration: 0.1)
+        #else
+        revealEditorControl(reset, in: app.scrollViews.containing(.any, identifier: "layer-properties").firstMatch)
+        #endif
+        workspaceActivate(reset); expectGraphic(curve, "2 points")
 
         activate(app.buttons["panel-tab-adjustments"])
         activate(app.buttons["filter-search-toggle"]); search("Gradient Map")

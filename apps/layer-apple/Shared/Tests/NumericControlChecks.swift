@@ -222,15 +222,9 @@ extension XCTestCase {
         #endif
         let initial = XCTAttachment(screenshot: screenshot)
         initial.name = "complete-editor-" + scenario; initial.lifetime = .keepAlways; add(initial)
-        let bottomInset: Double = {
-            #if os(iOS)
-            if #available(iOS 26.0, *) { return 36 }
-            #endif
-            return 0
-        }()
         let metadata = XCTAttachment(data: try! JSONSerialization.data(withJSONObject:
             ["scenario": scenario, "theme": theme, "viewport": [viewport.width, viewport.height],
-             "workspace_bottom": bottomInset]), uniformTypeIdentifier: "public.json")
+             "workspace_bottom": 0]), uniformTypeIdentifier: "public.json")
         metadata.name = "complete-editor-geometry-" + scenario; metadata.lifetime = .keepAlways; add(metadata)
     }
 
