@@ -100,7 +100,7 @@ class AndroidInteractionTest {
                 if (action == MotionEvent.ACTION_DOWN) {
                     inputWindow = owner.view
                     if (popupInput) android.view.inspector.WindowInspector.getGlobalWindowViews().lastOrNull { view ->
-                        view.descendant<ViewRootForTest>()?.let { root -> listOf("brush-slider-preview", "workspace-menu").any { root.find(hasTag(it)) != null } } == true
+                        view.descendant<ViewRootForTest>()?.let { root -> listOf("brush-slider-preview", "workspace-menu", "toolbar-number-menu").any { root.find(hasTag(it)) != null } } == true
                     }?.let { view ->
                         val p = IntArray(2); view.getLocationOnScreen(p)
                         if (coords[0].x >= p[0] && coords[0].x < p[0]+view.width && coords[0].y >= p[1] && coords[0].y < p[1]+view.height) inputWindow = view
@@ -1674,6 +1674,13 @@ class AndroidInteractionTest {
         waitFor("vertical field") { exists("toolbar-setting-size") }
         tap(bounds("toolbar-setting-size").center); settle()
         captureToolbar("vertical-value-popup")
+        instrumentation.runOnMainSync { assertTrue("The value popup leaves window focus with the canvas", owner.view.hasWindowFocus()) }
+        popupInput = true
+        tap(bounds("number-value-Brush size").center)
+        waitFor("typing moves focus into the value popup") { exists("number-Brush size") && !owner.view.hasWindowFocus() }
+        instrumentation.sendStringSync("123"); instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ENTER)
+        waitFor("typed value applies") { state().getJSONObject("brush").number("diameter") == 123f }
+        popupInput = false
         action(obj("type" to "invoke", "command" to "eraser")); settle()
         assertTrue(owner.view.hasWindowFocus())
         switchToolbarWorkspace("painter"); action(obj("type" to "invoke", "command" to "brush"))

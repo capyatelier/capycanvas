@@ -39,7 +39,7 @@ import org.json.JSONObject
     modifier: Modifier = Modifier, enabled: Boolean = true, description: String = "",
     settings: Boolean = false, id: String = label, inline: Boolean = false,
     toolbar: Boolean = false, showUnits: Boolean = true, showSlider: Boolean = true, valueOnly: Boolean = false,
-    limits: ClosedFloatingPointRange<Float>? = null,
+    limits: ClosedFloatingPointRange<Float>? = null, onTyping: (Boolean) -> Unit = {},
     onChange: (Float) -> Unit) {
     val host = LocalCanvasHost.current
     val colors = LocalPalette.current
@@ -106,7 +106,7 @@ import org.json.JSONObject
             .onGloballyPositioned { fieldBounds = it.boundsInRoot(); if (toolbar && focused) host.toolbarEditorBounds = fieldBounds }
             .focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) finish()
-                focused = it.isFocused; host.editingText = focused
+                focused = it.isFocused; host.editingText = focused; onTyping(focused)
                 if (toolbar) {
                     if (focused) host.toolbarEditorBounds = fieldBounds
                     else if (host.toolbarEditorBounds == fieldBounds) host.toolbarEditorBounds = null

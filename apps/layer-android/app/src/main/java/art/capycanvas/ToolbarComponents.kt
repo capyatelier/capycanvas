@@ -1,5 +1,6 @@
 package art.capycanvas
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -272,9 +273,15 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
             SharedIcon(info.getString("icon"), label, Modifier.size(16.dp))
             ToolbarFaceValue(shown.getString("text"), formatted(control, value, false).getString("text"), style == "small")
         }
-        WindowlessPopup(open) { open = false }
-        DropdownMenu(open, { open = false }, properties = WindowlessMenu) {
-            Box(Modifier.width(240.dp).padding(10.dp)) { NumericSetting(label, value, control, onChange = change) }
+        var typing by remember { mutableStateOf(false) }
+        LaunchedEffect(open) { if (!open) typing = false }
+        BackHandler(open && !typing) { open = false }
+        PopupOwner(open)
+        DropdownMenu(open, { open = false }, Modifier.testTag("toolbar-number-menu"),
+            properties = if (typing) PopupProperties(focusable = true) else WindowlessMenu) {
+            Box(Modifier.width(240.dp).padding(10.dp)) {
+                NumericSetting(label, value, control, onTyping = { if (it) typing = true }, onChange = change)
+            }
         }
     } else Row(Modifier.fillMaxSize().testTag("toolbar-setting-$id"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Box(Modifier.combinedClickable(onClick = {}, onDoubleClick = reset)) {
