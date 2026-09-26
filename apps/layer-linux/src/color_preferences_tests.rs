@@ -141,11 +141,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
         .unwrap()
         .downcast::<gtk::ListBox>()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while list.row_at_index(0).is_none() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(|| list.row_at_index(0).is_some(), "profile library rows");
     capture_ui(&w, &output, "profile-library.png");
     response(&w, "close");
     w.dispatch(UiAction::CloseSettings);
@@ -209,11 +205,10 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     dialog(&w, "export-options");
     super::new_photo::profile_action(&w, "export", "saved-0");
     dialog(&w, "export-options");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !super::new_photo::export_enabled(&w) {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || super::new_photo::export_enabled(&w),
+        "profile export ready",
+    );
     response(&w, "export");
     let file = chooser();
     #[allow(deprecated)]
@@ -244,11 +239,10 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
         .downcast::<gtk::ListBox>()
         .unwrap();
     super::new_photo::profile_manager_action(&w, 0, "remove");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while list.row_at_index(0).is_some() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || list.row_at_index(0).is_none(),
+        "profile library row removed",
+    );
     response(&w, "close");
     w.dispatch(UiAction::CloseSettings);
     pump(200);

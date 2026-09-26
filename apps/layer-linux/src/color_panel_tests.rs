@@ -91,11 +91,7 @@ fn native_color_panel_input() {
     w.window.maximize();
     w.window.present();
     pump(1400);
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        assert!(Instant::now() < deadline, "workspace startup");
-        pump(20);
-    }
+    wait_workspaces(&w);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let mut fixture = layer_ui::WorkspaceState::default();
     fixture

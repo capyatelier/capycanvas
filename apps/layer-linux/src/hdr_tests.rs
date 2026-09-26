@@ -44,11 +44,7 @@ fn effect(w: &Rc<Workspace>, name: &str, key: &str, value: layer_core::EffectVal
 }
 
 fn appearance(w: &Rc<Workspace>) -> gtk::Window {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !w.proof_panel.root.is_mapped() {
-        pump(20);
-        assert!(Instant::now() < deadline, "Proof panel is visible");
-    }
+    until(|| w.proof_panel.root.is_mapped(), "Proof panel is visible");
     assert!(w.window.visible_dialog().is_none(), "Proof must leave the canvas operable");
     w.window.clone().upcast()
 }
@@ -76,8 +72,7 @@ fn deliver(w: &Rc<Workspace>, directory: &std::path::Path, name: &str, format: u
     if format >= 3 {
         assert!(!combo(w, "export-depth").is_visible());
         assert!(!combo(w, "export-format").is_visible());
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !super::new_photo::export_enabled(&w) { pump(20); assert!(Instant::now() < deadline, "HDR preflight"); }
+        until(|| super::new_photo::export_enabled(&w), "HDR preflight");
     }
     if format == 0 {
         combo(w, "export-depth").set_selected(0);
@@ -285,11 +280,10 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     });
     photo.dispatch(UiAction::SetColorSampleSize { width: 1 });
     native_pen_path(&photo, &[[400.5, 200.5], [400.5, 200.5]]);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while state(&photo).colors.definition() == layer_core::color::RgbColor::WHITE {
-        pump(10);
-        assert!(Instant::now() < deadline, "HDR eyedropper completion");
-    }
+    until(
+        || state(&photo).colors.definition() != layer_core::color::RgbColor::WHITE,
+        "HDR eyedropper completion",
+    );
     let sampled = state(&photo)
         .colors
         .definition()
@@ -304,11 +298,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     invoke(&photo, CommandId::Histogram);
     finish(&photo);
     let inspector = photo.histogram.borrow().as_ref().unwrap().clone();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while inspector.result.borrow().is_none() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(|| inspector.result.borrow().is_some(), "histogram result");
     let histogram = inspector.result.borrow().clone().unwrap();
     assert_eq!(histogram.color.depth, SampleDepth::F16);
     assert!(histogram.channels[0].above > 0);
@@ -441,13 +431,7 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     // Promote the existing window, so HDR cannot depend on reopening the file.
     invoke(&w, CommandId::ChangeBitDepth);
     combo(&w, "document-color-depth").set_selected(2);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        pump(20);
-        let d = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
-        if d.is_response_enabled("apply") { break; }
-        assert!(Instant::now() < deadline);
-    }
+    apply_dialog(&w, "document-color-dialog", true);
     response(&w, "apply"); finish(&w); ready(&w);
     assert_eq!(project(&w).document.color.depth, SampleDepth::F16);
     let expected_hdr = std::env::var_os("LAYER_EXPECT_HDR").is_some();
@@ -505,8 +489,7 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     super::new_photo::export_page(&w, "main");
     assert_eq!(combo(&w, "export-depth").selected(), 1);
     combo(&w, "export-output").set_selected(1);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !super::new_photo::export_enabled(&w) { pump(20); assert!(Instant::now() < deadline); }
+    until(|| super::new_photo::export_enabled(&w), "HDR export ready");
     assert!(!find_named(dialog.upcast_ref(), "export-open-color").unwrap().is_visible());
     assert!(!find_named(dialog.upcast_ref(), "export-hdr-clip").unwrap().is_visible());
     capture_ui(&w, &output, "export-hdr-main.png");
@@ -913,10 +896,7 @@ fn native_hdr_close_cancels_pending_local_analysis() {
         }
         w.window.destroy();
         assert_eq!(w.local_tone.worker_state(), (true, Some(true)), "canvas unrealize must cancel before the future releases its window reference (visible={}, mapped={}, realized={})", w.window.is_visible(), w.window.is_mapped(), w.window.is_realized());
-        while w.local_tone.worker_state().0 {
-            pump(5);
-            assert!(Instant::now() < deadline, "cancelled local analysis did not finish");
-        }
+        until(|| !w.local_tone.worker_state().0, "cancelled local analysis did not finish");
         pump(50);
     }
 }

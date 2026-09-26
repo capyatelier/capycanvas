@@ -270,16 +270,15 @@ fn controls(app: &adw::Application, output: &Path) {
     let w = fixture_workspace(app);
     w.window.present();
     pump(1200);
-    let deadline = Instant::now() + Duration::from_secs(25);
-    while w
-        .gpu
-        .borrow()
-        .as_ref()
-        .is_none_or(|g| !g.session.engine().backend().startup.brush_ready)
-    {
-        assert!(Instant::now() < deadline, "native brush startup");
-        pump(30);
-    }
+    until(
+        || {
+            w.gpu
+                .borrow()
+                .as_ref()
+                .is_some_and(|g| g.session.engine().backend().startup.brush_ready)
+        },
+        "native brush startup",
+    );
     let mut workspace = state(&w).workspace;
     // Show the real tool settings beside the docked category/preset projection.
     workspace

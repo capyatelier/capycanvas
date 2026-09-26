@@ -365,11 +365,7 @@ fn native_profiled_place_paste_and_source_history() {
     w.dispatch(UiAction::Invoke {
         command: CommandId::PasteImage,
     });
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while state(&w).document_file.busy {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(|| !state(&w).document_file.busy, "paste completion");
     assert!(
         state(&w)
             .host_error
@@ -447,11 +443,10 @@ fn native_unsupported_hdr_and_multiple_picture_inputs_preserve_the_document() {
             pump(200);
             file.response(gtk::ResponseType::Accept);
         }
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while state(&w).document_file.busy || !state(&w).requests.is_empty() {
-            pump(20);
-            assert!(Instant::now() < deadline, "input rejection");
-        }
+        until(
+            || !state(&w).document_file.busy && state(&w).requests.is_empty(),
+            "input rejection",
+        );
         assert!(
             state(&w)
                 .host_error

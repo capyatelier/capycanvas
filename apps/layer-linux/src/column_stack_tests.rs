@@ -340,11 +340,7 @@ fn native_column_stack_input() {
     w.window.maximize();
     w.window.present();
     pump(1600);
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        assert!(Instant::now() < deadline, "workspace storage startup");
-        pump(10);
-    }
+    wait_workspaces(&w);
     let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
     input.ready();
     pump(500);

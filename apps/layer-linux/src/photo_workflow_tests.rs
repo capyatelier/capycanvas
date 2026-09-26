@@ -87,27 +87,6 @@ fn frames(stats: &Arc<Mutex<crate::timing::Stats>>) -> Value {
         "camera_work": stats.camera_work, "raster_commits": stats.raster_commits,
     })
 }
-fn resident_memory() -> Value {
-    let text = std::fs::read_to_string("/proc/self/status").unwrap();
-    let mut value = serde_json::Map::new();
-    for key in ["VmRSS", "VmHWM"] {
-        let line = text
-            .lines()
-            .find(|line| line.starts_with(&format!("{key}:")))
-            .unwrap();
-        value.insert(
-            format!("{key}_kib"),
-            json!(
-                line.split_whitespace()
-                    .nth(1)
-                    .unwrap()
-                    .parse::<u64>()
-                    .unwrap()
-            ),
-        );
-    }
-    Value::Object(value)
-}
 fn measured_events(
     driver: &mut FileDrag,
     w: &Rc<Workspace>,
@@ -165,7 +144,7 @@ fn measured_events(
     report["stroke_completion_wait_ms"] = json!(drain_ms);
     report["input_trace"] =
         read(&driver.input.dir.join(format!("trace-{step}.json"))).unwrap_or(Value::Null);
-    report["process_memory"] = resident_memory();
+    report["process_memory"] = json!(process_memory());
     report
 }
 
@@ -285,7 +264,7 @@ fn native_large_photo_placement_workflow() {
     report["source_extent"] = json!(source.extent);
     report["source_resident_bytes"] = json!(source.resident_bytes());
     report["drop_frames"] = frames(&stats);
-    report["loading_memory"] = resident_memory();
+    report["loading_memory"] = json!(process_memory());
     println!(
         "photo {:?}: first placement {} ms, extent {:?}",
         path.file_name(),
@@ -649,7 +628,7 @@ fn native_large_photo_placement_workflow() {
         layer(&photo_document).source.as_deref(),
         Some(source.as_ref())
     );
-    report["final_memory"] = resident_memory();
+    report["final_memory"] = json!(process_memory());
     publish(&output.join("workflow.json"), &report);
     println!(
         "native large-photo workflow report: {}",

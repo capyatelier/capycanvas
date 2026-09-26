@@ -314,8 +314,7 @@ fn native_large_photo_navigation() {
         "hdr": original.color.depth.is_float(),
         "reference_white_nits": if original.color.depth.is_float() { Some(203) } else { None },
         "effect_count": original.layers.iter().filter(|layer| layer.effect.is_some()).count(),
-        "process_memory": std::fs::read_to_string("/proc/self/status").unwrap().lines()
-            .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:")).collect::<Vec<_>>(),
+        "process_memory": process_memory(),
         "renderer_resident_bytes": telemetry.resident_bytes,
         "proof": proof,
         "extent": extent, "space": "ProPhoto", "depth": original.color.depth.bits(), "viewport": viewport,

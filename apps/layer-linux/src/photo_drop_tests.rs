@@ -16,13 +16,6 @@ fn publish(path: &Path, value: &Value) {
 fn read(path: &Path) -> Option<Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
-fn until(mut predicate: impl FnMut() -> bool, message: &str) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !predicate() {
-        assert!(Instant::now() < deadline, "{message}");
-        pump(10);
-    }
-}
 
 /// This helper is launched by the receiving test. It has its own GDK display
 /// connection, and offers only text/uri-list, forcing native MIME negotiation.

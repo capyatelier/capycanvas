@@ -8,14 +8,6 @@ use std::{
     process::{Child, Command, Stdio},
 };
 
-fn until(mut ready: impl FnMut() -> bool, message: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "{message}");
-        pump(10);
-    }
-}
-
 #[test]
 #[ignore = "secondary process for native_application_file_launch"]
 fn application_file_launch_sender() {

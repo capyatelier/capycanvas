@@ -102,11 +102,10 @@ fn native_stroke_recording() {
     dialog.set_current_name("gtk.capystrokes");
     pump(300);
     dialog.response(gtk::ResponseType::Accept);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while button.label().as_deref() != Some("Start stroke recording") {
-        pump(30);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || button.label().as_deref() == Some("Start stroke recording"),
+        "stroke recording stopped",
+    );
     let records =
         layer_engine::recording::read(std::fs::File::open(folder.join("gtk.capystrokes")).unwrap())
             .unwrap();

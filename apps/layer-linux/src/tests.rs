@@ -73,6 +73,8 @@ mod workspace_drop_size;
 mod workspace_motion;
 #[path = "workspace_resize_tests.rs"]
 mod workspace_resize;
+#[path = "fullscreen_tests.rs"]
+mod fullscreen;
 use super::*;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
@@ -88,6 +90,49 @@ fn pump(ms: u64) {
         }
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+fn until(mut ready: impl FnMut() -> bool, message: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready() {
+        assert!(Instant::now() < deadline, "{message}");
+        pump(10);
+    }
+}
+fn wait_workspaces(w: &Workspace) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+        let error = w.workspaces.manager.as_ref().and_then(|m| m.error());
+        assert!(Instant::now() < deadline, "workspace startup: {error:?}");
+        pump(20);
+    }
+}
+fn pen_event(camera: &layer_ui::Camera, at: [f32; 2], phase: PenPhase, sequence: u64) -> PenEvent {
+    let m = camera.document_to_surface();
+    PenEvent {
+        device_id: 1,
+        sequence,
+        timestamp_ns: glib::monotonic_time() as u64 * 1000,
+        view_revision: camera.revision,
+        surface_position: Point {
+            x: m[0] * at[0] + m[2] * at[1] + m[4],
+            y: m[1] * at[0] + m[3] * at[1] + m[5],
+        },
+        pressure: 1.,
+        tilt_radians: [0.; 2],
+        twist_radians: 0.,
+        distance: 0.,
+        phase,
+        tool: ToolKind::Pen,
+        flags: SampleFlags::PRIMARY,
+    }
+}
+fn process_memory() -> Vec<String> {
+    std::fs::read_to_string("/proc/self/status")
+        .unwrap()
+        .lines()
+        .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
+        .map(str::to_owned)
+        .collect()
 }
 fn state(w: &Workspace) -> UiState {
     w.gpu.borrow().as_ref().unwrap().session.state().clone()
@@ -135,21 +180,20 @@ fn native_default_workspace() {
     let w = Workspace::new(&app);
     w.window.present();
     pump(1600);
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
-        .engine()
-        .backend()
-        .startup
-        .brush_ready
-    {
-        assert!(Instant::now() < deadline, "active brush startup");
-        pump(30);
-    }
+    until(
+        || {
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .engine()
+                .backend()
+                .startup
+                .brush_ready
+        },
+        "active brush startup",
+    );
     for (row, color) in [
         [0.12, 0.38, 0.58, 1.],
         [0.8, 0.4, 0.22, 1.],
@@ -569,14 +613,10 @@ fn native_document_files() {
         state(&w).host_error
     );
     w.recovery().capture(&w);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while recovery_path.exists() {
-        pump(20);
-        assert!(
-            Instant::now() < deadline,
-            "saved recovery copy was not removed"
-        );
-    }
+    until(
+        || !recovery_path.exists(),
+        "saved recovery copy was not removed",
+    );
     let project =
         layer_core::Project::read(std::fs::File::open(&path).unwrap(), Default::default()).unwrap();
     assert_eq!(project.assets.len(), 1);
@@ -740,11 +780,7 @@ fn native_document_files() {
                 .downcast::<adw::ButtonRow>().unwrap();
             reset.emit_by_name::<()>("activated", &[]);
             pump(100);
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !reset.is_sensitive() {
-                pump(20);
-                assert!(Instant::now() < deadline, "reset export destination");
-            }
+            until(|| reset.is_sensitive(), "reset export destination");
             for (name, selected) in [
                 ("export-preset", "Web / Share"), ("export-format", "PNG"),
                 ("export-depth", "8-bit"),
@@ -1003,27 +1039,14 @@ fn native_startup_latency() {
     w.window.present();
     let presented = started.elapsed().as_secs_f64() * 1000.;
     let send = |phase, x| {
-        let camera = state(&w).camera;
-        let m = camera.document_to_surface();
         let now = glib::monotonic_time() as u64 * 1000;
+        let event = pen_event(&state(&w).camera, [x, 400.], phase, now);
         w.input.send(
             &w,
             PenEvent {
                 device_id: 92,
-                sequence: now,
                 timestamp_ns: now,
-                view_revision: camera.revision,
-                surface_position: Point {
-                    x: m[0] * x + m[2] * 400. + m[4],
-                    y: m[1] * x + m[3] * 400. + m[5],
-                },
-                pressure: 1.,
-                tilt_radians: [0.; 2],
-                twist_radians: 0.,
-                distance: 0.,
-                phase,
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
+                ..event
             },
         );
     };
@@ -1106,7 +1129,7 @@ fn native_startup_latency() {
     pump(20);
 }
 
-struct NativeTestApp(adw::Application);
+pub(crate) struct NativeTestApp(adw::Application);
 impl std::ops::Deref for NativeTestApp {
     type Target = adw::Application;
     fn deref(&self) -> &Self::Target {
@@ -1120,9 +1143,10 @@ impl Drop for NativeTestApp {
         for window in self.0.windows() {
             window.destroy();
         }
+        layer_render_wgpu::finish_shader_compiler_shutdown();
     }
 }
-fn native_test_app(id: &str) -> NativeTestApp {
+pub(crate) fn native_test_app(id: &str) -> NativeTestApp {
     adw::init().unwrap();
     let css = crate::stylesheet_provider();
     gtk::style_context_add_provider_for_display(
@@ -1905,33 +1929,20 @@ fn native_pen_path(w: &Rc<Workspace>, points: &[[f32; 2]]) {
         pump(5);
     }
     let camera = state(w).camera;
-    let m = camera.document_to_surface();
     for (i, p) in points.iter().enumerate() {
         let now = glib::monotonic_time() as u64 * 1000;
+        let phase = match i {
+            0 => PenPhase::Down,
+            _ if i + 1 == points.len() => PenPhase::Up,
+            _ => PenPhase::Move,
+        };
+        let event = pen_event(&camera, *p, phase, now);
         w.input.send(
             w,
             PenEvent {
                 device_id: 92,
-                sequence: now,
                 timestamp_ns: now,
-                view_revision: camera.revision,
-                surface_position: Point {
-                    x: m[0] * p[0] + m[2] * p[1] + m[4],
-                    y: m[1] * p[0] + m[3] * p[1] + m[5],
-                },
-                pressure: 1.,
-                tilt_radians: [0.; 2],
-                twist_radians: 0.,
-                distance: 0.,
-                phase: if i == 0 {
-                    PenPhase::Down
-                } else if i + 1 == points.len() {
-                    PenPhase::Up
-                } else {
-                    PenPhase::Move
-                },
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
+                ..event
             },
         );
         pump(20);
@@ -2687,11 +2698,10 @@ fn native_operation_tool() {
             },
         });
         native_pen_path(&w, &[point, point]);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while state(&w).layer_tools.tool.picks_color() {
-            assert!(Instant::now() < deadline, "visible color sample");
-            pump(10);
-        }
+        until(
+            || !state(&w).layer_tools.tool.picks_color(),
+            "visible color sample",
+        );
         state(&w).colors.foreground.rgba
     };
     assert!(
@@ -2789,25 +2799,7 @@ fn native_figure_tools() {
     edit_number(&opacity, "85");
     assert!((state(&w).brush.opacity - 0.85).abs() < 0.001);
     let send = |phase, p: [f32; 2]| {
-        let camera = state(&w).camera;
-        let m = camera.document_to_surface();
-        let e = PenEvent {
-            device_id: 1,
-            sequence: 0,
-            timestamp_ns: glib::monotonic_time() as u64 * 1000,
-            view_revision: camera.revision,
-            surface_position: Point {
-                x: m[0] * p[0] + m[2] * p[1] + m[4],
-                y: m[1] * p[0] + m[3] * p[1] + m[5],
-            },
-            pressure: 1.,
-            tilt_radians: [0.; 2],
-            twist_radians: 0.,
-            distance: 0.,
-            phase,
-            tool: ToolKind::Pen,
-            flags: SampleFlags::PRIMARY,
-        };
+        let e = pen_event(&state(&w).camera, p, phase, 0);
         w.cursor_input(Some(e));
         w.input.send(&w, e);
         pump(30);
@@ -2994,7 +2986,6 @@ fn native_gradient_tool() {
         let button = w.tool_set.buttons.borrow()[index].1.clone();
         click(&button);
         let camera = state(&w).camera;
-        let m = camera.document_to_surface();
         for (i, (phase, p)) in [
             (PenPhase::Down, [760.0, 620.0]),
             (PenPhase::Move, [1220.0, 850.0]),
@@ -3003,23 +2994,7 @@ fn native_gradient_tool() {
         .into_iter()
         .enumerate()
         {
-            let e = PenEvent {
-                device_id: 1,
-                sequence: i as u64,
-                timestamp_ns: glib::monotonic_time() as u64 * 1000,
-                view_revision: camera.revision,
-                surface_position: Point {
-                    x: m[0] * p[0] + m[2] * p[1] + m[4],
-                    y: m[1] * p[0] + m[3] * p[1] + m[5],
-                },
-                pressure: 1.0,
-                tilt_radians: [0.0; 2],
-                twist_radians: 0.0,
-                distance: 0.0,
-                phase,
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
-            };
+            let e = pen_event(&camera, p, phase, i as u64);
             w.cursor_input(Some(e));
             w.input.send(&w, e);
             pump(25);
@@ -3027,24 +3002,8 @@ fn native_gradient_tool() {
         pump(200);
         assert!(!w.status.is_visible(), "{}", w.status.text());
         let color = |phase| {
-            let e = PenEvent {
-                device_id: 1,
-                sequence: 100,
-                timestamp_ns: glib::monotonic_time() as u64 * 1000,
-                view_revision: camera.revision,
-                surface_position: Point {
-                    x: m[0] * 760.0 + m[2] * 620.0 + m[4],
-                    y: m[1] * 760.0 + m[3] * 620.0 + m[5],
-                },
-                pressure: 1.0,
-                tilt_radians: [0.0; 2],
-                twist_radians: 0.0,
-                distance: 0.0,
-                phase,
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
-            };
-            w.input.send(&w, e);
+            w.input
+                .send(&w, pen_event(&camera, [760.0, 620.0], phase, 100))
         };
         // Probe rendered pigment using the real asynchronous GPU path.
         w.dispatch(UiAction::Layer {
@@ -3125,25 +3084,7 @@ fn native_navigation_tools() {
         rgba: [1.0, 0.0, 0.0, 1.0],
     });
     let contact = |phase| {
-        let camera = state(&w).camera;
-        let m = camera.document_to_surface();
-        let e = PenEvent {
-            device_id: 1,
-            sequence: 0,
-            timestamp_ns: glib::monotonic_time() as u64 * 1000,
-            view_revision: camera.revision,
-            surface_position: Point {
-                x: m[0] * 1024.0 + m[2] * 768.0 + m[4],
-                y: m[1] * 1024.0 + m[3] * 768.0 + m[5],
-            },
-            pressure: 1.0,
-            tilt_radians: [0.0; 2],
-            twist_radians: 0.0,
-            distance: 0.0,
-            phase,
-            tool: ToolKind::Pen,
-            flags: SampleFlags::PRIMARY,
-        };
+        let e = pen_event(&state(&w).camera, [1024.0, 768.0], phase, 0);
         w.cursor_input(Some(e));
         w.input.send(&w, e);
     };
@@ -3473,38 +3414,22 @@ fn native_navigator() {
     {
         w.dispatch(UiAction::SetColor { rgba });
         let camera = state(&w).camera;
-        let m = camera.document_to_surface();
         for i in 0..32 {
             let x = 200.0 + i as f32 * 50.0;
             let y = 350.0 + row as f32 * 350.0 + (i as f32 * 0.2).sin() * 120.0;
             sequence += 1;
-            w.gpu
-                .borrow_mut()
-                .as_mut()
-                .unwrap()
-                .session
+            let phase = match i {
+                0 => PenPhase::Down,
+                31 => PenPhase::Up,
+                _ => PenPhase::Move,
+            };
+            let event = pen_event(&camera, [x, y], phase, sequence);
+            let mut gpu = w.gpu.borrow_mut();
+            let session = &mut gpu.as_mut().unwrap().session;
+            session
                 .pen(PenEvent {
                     device_id: 91,
-                    sequence,
-                    timestamp_ns: glib::monotonic_time() as u64 * 1000,
-                    view_revision: camera.revision,
-                    surface_position: Point {
-                        x: m[0] * x + m[2] * y + m[4],
-                        y: m[1] * x + m[3] * y + m[5],
-                    },
-                    pressure: 1.0,
-                    tilt_radians: [0.0; 2],
-                    twist_radians: 0.0,
-                    distance: 0.0,
-                    phase: if i == 0 {
-                        PenPhase::Down
-                    } else if i == 31 {
-                        PenPhase::Up
-                    } else {
-                        PenPhase::Move
-                    },
-                    tool: ToolKind::Pen,
-                    flags: SampleFlags::PRIMARY,
+                    ..event
                 })
                 .unwrap();
         }
@@ -4555,35 +4480,20 @@ fn native_layer_panel_review() {
     fn polygon(w: &Rc<Workspace>, points: &[[f32; 2]], tool: T) {
         send(w, A::Tool { tool });
         let camera = state(w).camera;
-        let m = camera.view().document_to_surface;
         for (i, p) in points.iter().enumerate() {
-            w.gpu
-                .borrow_mut()
-                .as_mut()
+            let phase = match i {
+                0 => PenPhase::Down,
+                _ if i + 1 == points.len() => PenPhase::Up,
+                _ => PenPhase::Move,
+            };
+            let event = pen_event(&camera, *p, phase, i as u64 + 1);
+            let mut gpu = w.gpu.borrow_mut();
+            gpu.as_mut()
                 .unwrap()
                 .session
                 .pen(PenEvent {
                     device_id: 91,
-                    sequence: i as u64 + 1,
-                    timestamp_ns: glib::monotonic_time() as u64 * 1000,
-                    view_revision: camera.revision,
-                    surface_position: Point {
-                        x: m[0] * p[0] + m[2] * p[1] + m[4],
-                        y: m[1] * p[0] + m[3] * p[1] + m[5],
-                    },
-                    pressure: 1.,
-                    tilt_radians: [0.; 2],
-                    twist_radians: 0.,
-                    distance: 0.,
-                    phase: if i == 0 {
-                        PenPhase::Down
-                    } else if i + 1 == points.len() {
-                        PenPhase::Up
-                    } else {
-                        PenPhase::Move
-                    },
-                    tool: ToolKind::Pen,
-                    flags: SampleFlags::PRIMARY,
+                    ..event
                 })
                 .unwrap();
         }
@@ -9017,31 +8927,7 @@ fn native_number_controls() {
     window.set_content(Some(&body));
     window.present();
     pump(300);
-    fn descendant<T: IsA<gtk::Widget> + glib::types::StaticType + Clone>(
-        w: &impl IsA<gtk::Widget>,
-    ) -> T {
-        let mut child = w.first_child();
-        while let Some(node) = child {
-            if let Ok(found) = node.clone().downcast::<T>() {
-                return found;
-            }
-            // Flatten without depending on private GTK node layout.
-            let mut queue = vec![node.clone()];
-            while let Some(parent) = queue.pop() {
-                let mut nested = parent.first_child();
-                while let Some(n) = nested {
-                    if let Ok(found) = n.clone().downcast::<T>() {
-                        return found;
-                    }
-                    nested = n.next_sibling();
-                    queue.push(n);
-                }
-            }
-            child = node.next_sibling();
-        }
-        panic!("missing widget {}", T::static_type());
-    }
-    let scale: gtk::Scale = descendant(&size);
+    let scale: gtk::Scale = descendant(&size).unwrap();
     for field in [&size, &narrow, &described] {
         let header = field.first_child().unwrap();
         let labels = header.first_child().unwrap();
@@ -9083,13 +8969,13 @@ fn native_number_controls() {
     assert_eq!(scale.range_rect().width(), scale.width());
     let (start, end) = scale.slider_range();
     assert_eq!(start, end, "compact slider reserves no thumb width");
-    let value_label: gtk::Label = descendant(&descendant::<gtk::Button>(&size));
+    let value_label: gtk::Label = descendant(&descendant::<gtk::Button>(&size).unwrap()).unwrap();
     assert_eq!(value_label.xalign(), 1.0);
     scale.set_value(0.5);
     assert!((size.value() - 32.0).abs() < 0.1);
-    let display: gtk::Button = descendant(&size);
+    let display: gtk::Button = descendant(&size).unwrap();
     click(&display);
-    let entry: gtk::Entry = descendant(&size);
+    let entry: gtk::Entry = descendant(&size).unwrap();
     entry.set_text("85/2");
     entry.emit_activate();
     assert_eq!(size.value(), 43.);
@@ -9101,15 +8987,15 @@ fn native_number_controls() {
     entry.set_text("2049");
     entry.emit_activate();
     assert_eq!(size.value(), 2048.0);
-    let spin: gtk::SpinButton = descendant(&small);
+    let spin: gtk::SpinButton = descendant(&small).unwrap();
     spin.set_text("3*2");
     spin.update();
     assert_eq!(small.value(), 6.0);
     spin.set_text("sqrt(81)");
     spin.update();
     assert_eq!(small.value(), 9.0);
-    click(&descendant::<gtk::Button>(&alpha));
-    let percent: gtk::Entry = descendant(&alpha);
+    click(&descendant::<gtk::Button>(&alpha).unwrap());
+    let percent: gtk::Entry = descendant(&alpha).unwrap();
     percent.set_text("75%");
     percent.emit_activate();
     assert_eq!(alpha.value(), 0.75);
@@ -9127,10 +9013,10 @@ fn native_number_controls() {
         crate::snapshot_window(&window, 1.0)
             .save_to_png(format!("{dir}/gtk-{theme}.png"))
             .unwrap();
-        let value: gtk::Button = descendant(&narrow);
+        let value: gtk::Button = descendant(&narrow).unwrap();
         click(&value);
         pump(100);
-        let input: gtk::Entry = descendant(&narrow);
+        let input: gtk::Entry = descendant(&narrow).unwrap();
         assert!(input.width() < 100, "short values use compact editors");
         crate::snapshot_window(&window, 1.0)
             .save_to_png(format!("{dir}/gtk-edit-{theme}.png"))
@@ -9156,11 +9042,11 @@ fn native_number_controls() {
             window.remove_css_class("light-theme");
         }
         pump(150);
-        let value: gtk::Button = descendant(&described);
+        let value: gtk::Button = descendant(&described).unwrap();
         assert_eq!(value.height(), standard.height());
         click(&value);
         pump(100);
-        let entry: gtk::Entry = descendant(&described);
+        let entry: gtk::Entry = descendant(&described).unwrap();
         assert_eq!(entry.height(), standard.height());
         assert_eq!(entry.height(), 34);
         crate::snapshot_window(&window, 1.0)
@@ -9335,13 +9221,6 @@ pub(crate) fn use_transparency(w: &Rc<Workspace>, level: layer_ui::Transparency)
 fn native_backdrop_blur_capture() {
     use layer_core::DefaultBrushPreset;
     use layer_ui::{PreferenceAction, PreferenceId, PreferenceValue, WorkspacePreset};
-    let until = |check: &dyn Fn() -> bool, what: &str| {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !check() {
-            assert!(Instant::now() < deadline, "{what} timed out");
-            pump(10);
-        }
-    };
     let (app, windows) = crate::application("art.capycanvas.BackdropBlur");
     let app = NativeTestApp(app);
     app.register(None::<&gtk::gio::Cancellable>).unwrap();
@@ -9351,7 +9230,12 @@ fn native_backdrop_blur_capture() {
     w.window.present();
     pump(1500);
     until(
-        &|| w.gpu.borrow().as_ref().is_some_and(|g| g.session.engine().backend().startup.complete),
+        || {
+            w.gpu
+                .borrow()
+                .as_ref()
+                .is_some_and(|g| g.session.engine().backend().startup.complete)
+        },
         "startup",
     );
     if std::env::var("LAYER_GLASS_THEME").as_deref() == Ok("light") {
@@ -9370,7 +9254,10 @@ fn native_backdrop_blur_capture() {
     if std::env::var("LAYER_GLASS_DOCUMENTS").as_deref() != Ok("0") {
         new_photo::invoke(&w, CommandId::NewDocument);
         new_photo::response(&w, "create");
-        until(&|| w.documents.len() == 2 && !w.documents.changing.get(), "second document");
+        until(
+            || w.documents.len() == 2 && !w.documents.changing.get(),
+            "second document",
+        );
         new_photo::ready(&w);
         pump(300);
     }
@@ -10126,11 +10013,7 @@ fn native_window_drag_input() {
     w.window.add_controller(motion);
     w.window.present();
     pump(1200);
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        assert!(Instant::now() < deadline, "workspace startup timed out");
-        pump(20);
-    }
+    wait_workspaces(&w);
     // Storage adopts the shipped preset asynchronously after realization.
     // This geometry test uses the fixed tab IDs, not that startup layout.
     let original = layer_ui::WorkspaceState::default();
@@ -11935,18 +11818,7 @@ fn native_compositor_input() {
 #[test]
 #[ignore = "hardware desktop: run this test separately with --ignored --test-threads=1"]
 fn native_workspace_controls_docking_and_ink() {
-    adw::init().unwrap();
-    let css = crate::stylesheet_provider();
-    gtk::style_context_add_provider_for_display(
-        &gdk::Display::default().unwrap(),
-        &css,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-    let app = adw::Application::builder()
-        .application_id("dev.layer.CopilotTest")
-        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
-        .build();
-    app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    let app = native_test_app("dev.layer.CopilotTest");
     let w = fixture_workspace(&app);
     w.window.present();
     pump(3000);
@@ -12731,6 +12603,42 @@ fn find_named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
     None
 }
 
+fn descendant<T: IsA<gtk::Widget>>(root: &impl IsA<gtk::Widget>) -> Option<T> {
+    let root = root.as_ref();
+    if let Some(found) = root.downcast_ref::<T>() {
+        return Some(found.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(widget) = child {
+        if let Some(found) = descendant(&widget) {
+            return Some(found);
+        }
+        child = widget.next_sibling();
+    }
+    None
+}
+
+fn apply_dialog(w: &Workspace, name: &str, completed: bool) -> adw::AlertDialog {
+    let deadline = Instant::now() + Duration::from_secs(40);
+    loop {
+        pump(if completed { 20 } else { 1 });
+        if let Some(d) = w
+            .window
+            .visible_dialog()
+            .filter(|d| d.widget_name() == name)
+        {
+            let d = d.downcast::<adw::AlertDialog>().unwrap();
+            if !completed || d.is_response_enabled("apply") {
+                return d;
+            }
+            let status = find_named(d.upcast_ref(), "color-preview-status").unwrap();
+            let status = status.downcast::<gtk::Label>().unwrap().label();
+            assert!(Instant::now() < deadline, "{name}: {status}");
+        }
+        assert!(Instant::now() < deadline, "{name}: {}", w.status.text());
+    }
+}
+
 fn find_css(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
     if root.has_css_class(class) {
         return Some(root.clone());
@@ -12866,14 +12774,7 @@ fn native_workspace_menu_input() {
     let w = Workspace::new(&app);
     w.window.maximize();
     w.window.present();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        pump(20);
-        assert!(
-            Instant::now() < deadline,
-            "workspace startup did not finish"
-        );
-    }
+    wait_workspaces(&w);
     pump(500);
     assert!(w.window.is_maximized());
     input.ready();
@@ -12910,11 +12811,10 @@ fn native_workspace_menu_input() {
             ],
             272,
         );
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !w.workspaces.switcher.is_sensitive() {
-            pump(20);
-            assert!(Instant::now() < deadline, "workspace switch timed out");
-        }
+        until(
+            || w.workspaces.switcher.is_sensitive(),
+            "workspace switch timed out",
+        );
         assert_eq!(manager.active_id().as_deref(), Some(id));
         assert!(
             button
@@ -13079,11 +12979,7 @@ fn native_workspace_menu_input() {
                 ],
                 272,
             );
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while w.workspaces.busy.get() {
-                pump(20);
-                assert!(Instant::now() < deadline);
-            }
+            until(|| !w.workspaces.busy.get(), "workspace switch");
             assert!(
                 manager
                     .current()
@@ -13144,17 +13040,6 @@ fn native_workspace_database_resume_and_independent_windows() {
         "Use an isolated CAPY_WORKSPACE_DIR for this test"
     );
     let app = native_test_app("art.capycanvas.WorkspacePersistence");
-    let wait_ready = |w: &Workspace| {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-            pump(20);
-            assert!(
-                Instant::now() < deadline,
-                "workspace startup: {:?}",
-                w.workspaces.manager.as_ref().unwrap().error()
-            );
-        }
-    };
     let wait_saved = |w: &Workspace| {
         let deadline = Instant::now() + Duration::from_secs(10);
         let manager = w.workspaces.manager.as_ref().unwrap();
@@ -13171,7 +13056,7 @@ fn native_workspace_database_resume_and_independent_windows() {
     };
     let w = Workspace::new(&app);
     w.window.present();
-    wait_ready(&w);
+    wait_workspaces(&w);
     let id = w.workspaces.manager.as_ref().unwrap().active_id().unwrap();
     let baseline = durable_layout(&state(&w).workspace.layout);
     let document = w
@@ -13205,16 +13090,12 @@ fn native_workspace_database_resume_and_independent_windows() {
         &document
     );
     w.window.close();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while w.window.is_visible() {
-        pump(20);
-        assert!(Instant::now() < deadline, "acknowledged close");
-    }
+    until(|| !w.window.is_visible(), "acknowledged close");
     drop(w);
     pump(30);
     let reopened = Workspace::new(&app);
     reopened.window.present();
-    wait_ready(&reopened);
+    wait_workspaces(&reopened);
     assert_eq!(
         reopened
             .workspaces
@@ -13237,15 +13118,12 @@ fn native_workspace_database_resume_and_independent_windows() {
     assert!(state(&reopened).workspace.zen_mode);
     wait_saved(&reopened);
     reopened.window.close();
-    while reopened.window.is_visible() {
-        pump(20);
-        assert!(Instant::now() < deadline + Duration::from_secs(20));
-    }
+    until(|| !reopened.window.is_visible(), "reopened window close");
     drop(reopened);
     pump(30);
     let again = Workspace::new(&app);
     again.window.present();
-    wait_ready(&again);
+    wait_workspaces(&again);
     again.dispatch(UiAction::Invoke {
         command: CommandId::RedoWorkspace,
     });
@@ -13254,7 +13132,7 @@ fn native_workspace_database_resume_and_independent_windows() {
     wait_saved(&again);
     let second = Workspace::new(&app);
     second.window.present();
-    wait_ready(&second);
+    wait_workspaces(&second);
     assert_ne!(
         again.workspaces.manager.as_ref().unwrap().active_id(),
         second.workspaces.manager.as_ref().unwrap().active_id()
@@ -13287,15 +13165,7 @@ fn native_named_workspace_manager_library_and_history() {
         .set_gtk_enable_animations(false);
     let w = Workspace::new(&app);
     w.window.present();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        pump(20);
-        assert!(
-            Instant::now() < deadline,
-            "startup: {:?}",
-            w.workspaces.manager.as_ref().unwrap().error()
-        );
-    }
+    wait_workspaces(&w);
     let manager = w.workspaces.manager.as_ref().unwrap();
     let run = |action: A, name: Option<&str>, confirm: Option<&str>| {
         if name.is_some() || confirm.is_some() {
@@ -13475,14 +13345,10 @@ fn native_named_workspace_manager_library_and_history() {
                 .unwrap()
                 .emit_clicked();
         }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while w.workspaces.ui.dialog.is_mapped() || w.workspaces.busy.get() {
-            pump(20);
-            assert!(
-                Instant::now() < deadline,
-                "Workspace selection did not finish"
-            );
-        }
+        until(
+            || !(w.workspaces.ui.dialog.is_mapped() || w.workspaces.busy.get()),
+            "Workspace selection did not finish",
+        );
         if commit {
             assert_eq!(manager.active_id().as_deref(), Some(inking.as_str()));
             assert_eq!(capture(), inking_before_preview);
@@ -13666,11 +13532,7 @@ fn native_named_workspace_manager_library_and_history() {
         )
         .unwrap()
         .emit_clicked();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !done.get() {
-            pump(20);
-            assert!(Instant::now() < deadline);
-        }
+        until(|| done.get(), "workspace operation");
         pump(100);
         assert!(!w.workspaces.busy.get());
         let after = w
@@ -13733,11 +13595,7 @@ fn native_named_workspace_manager_library_and_history() {
         *saved_before_close.history.layout()
     );
     w.window.close();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while w.window.is_visible() {
-        pump(20);
-        assert!(Instant::now() < deadline, "Window close did not finish");
-    }
+    until(|| !w.window.is_visible(), "Window close did not finish");
     assert_eq!(saved(&painting), saved_before_close);
 }
 
@@ -13753,11 +13611,10 @@ fn native_workspace_unavailable_close_recovery() {
         .set_gtk_enable_animations(false);
     let w = Workspace::new(&app);
     w.window.present();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while w.workspaces.busy.get() || w.workspaces.manager.as_ref().unwrap().error().is_none() {
-        pump(20);
-        assert!(Instant::now() < deadline, "startup error was not presented");
-    }
+    until(
+        || !w.workspaces.busy.get() && w.workspaces.manager.as_ref().unwrap().error().is_some(),
+        "startup error was not presented",
+    );
     assert!(!w.workspaces.ready.get());
     w.dispatch(UiAction::SetBrushSize { value: 83. });
     assert_eq!(state(&w).brush.diameter, 83.);
@@ -13789,16 +13646,9 @@ fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
     gtk::Settings::default()
         .unwrap()
         .set_gtk_enable_animations(false);
-    let ready = |w: &Workspace| {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-            pump(20);
-            assert!(Instant::now() < deadline);
-        }
-    };
     let first = Workspace::new(&app);
     first.window.present();
-    ready(&first);
+    wait_workspaces(&first);
     first.dispatch(UiAction::SetBrushSize { value: 73. });
     let manager = first.workspaces.manager.as_ref().unwrap();
     let id = manager.active_id().unwrap();
@@ -13811,18 +13661,14 @@ fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
         .unwrap();
     let second = Workspace::new(&app);
     second.window.present();
-    ready(&second);
+    wait_workspaces(&second);
     assert_eq!(
         second.workspaces.manager.as_ref().unwrap().active_id(),
         Some(id.clone())
     );
     first.workspaces.busy.set(false);
     first.workspaces.revalidate(&first);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while manager.error().is_none() {
-        pump(10);
-        assert!(Instant::now() < deadline);
-    }
+    until(|| manager.error().is_some(), "ownership loss");
     assert!(!first.workspaces.accepts_input(&first));
     first.dispatch(UiAction::SetBrushSize { value: 119. });
     assert_eq!(state(&first).brush.diameter, 73.);

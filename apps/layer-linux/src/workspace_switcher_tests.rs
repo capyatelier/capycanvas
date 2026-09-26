@@ -11,11 +11,7 @@ fn native_workspace_transition_stability() {
     let w = Workspace::new(&app);
     w.window.maximize();
     w.window.present();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    wait_workspaces(&w);
     pump(300);
     let geometry = |w: &Workspace| {
         let b = w.area.compute_bounds(&w.window).unwrap();
@@ -63,18 +59,19 @@ fn native_workspace_transition_stability() {
             )
             .unwrap();
             click(&w, &mut input, &button);
-            while w.workspaces.busy.get()
-                || w.workspaces
-                    .manager
-                    .as_ref()
-                    .unwrap()
-                    .active_id()
-                    .as_deref()
-                    != Some(id)
-            {
-                pump(5);
-                assert!(Instant::now() < deadline);
-            }
+            until(
+                || {
+                    !w.workspaces.busy.get()
+                        && w.workspaces
+                            .manager
+                            .as_ref()
+                            .unwrap()
+                            .active_id()
+                            .as_deref()
+                            == Some(id)
+                },
+                "workspace switch",
+            );
             pump(200);
         }
     }
@@ -201,11 +198,7 @@ fn native_workspace_manager_visual() {
     let w = Workspace::new(&app);
     w.window.maximize();
     w.window.present();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    wait_workspaces(&w);
     input.ready();
     fn record(widget: &gtk::Widget, root: &gtk::Widget) -> serde_json::Value {
         let b = widget.compute_bounds(root).unwrap();
@@ -279,11 +272,7 @@ fn native_starting_layout_preview() {
     let app = native_test_app("art.capycanvas.StartingLayoutPreview");
     let w = Workspace::new(&app);
     w.window.present();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    wait_workspaces(&w);
     let manager = w.workspaces.manager.as_ref().unwrap();
     let baseline = manager
         .current()
@@ -400,11 +389,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
     let app = native_test_app("art.capycanvas.WorkspaceDelete");
     let w = Workspace::new(&app);
     w.window.present();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    wait_workspaces(&w);
     let manager = w.workspaces.manager.as_ref().unwrap();
     let original = manager.current().unwrap().capture().unwrap();
     let create = |name: &str| {
@@ -528,20 +513,12 @@ fn check_active_workspace_delete(occupied_default: bool) {
     w.workspaces.ui.close();
     pump(300);
     w.window.close();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while w.window.is_visible() {
-        pump(20);
-        assert!(Instant::now() < deadline, "acknowledged close");
-    }
+    until(|| !w.window.is_visible(), "acknowledged close");
     drop(w);
     pump(30);
     let reopened = Workspace::new(&app);
     reopened.window.present();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !reopened.workspaces.ready.get() || reopened.workspaces.busy.get() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    wait_workspaces(&reopened);
     let manager = reopened.workspaces.manager.as_ref().unwrap();
     assert_eq!(manager.active_id().as_deref(), Some(replacement));
     assert!(
@@ -658,11 +635,7 @@ fn native_workspace_switcher_input() {
     let w = Workspace::new(&app);
     w.window.maximize();
     w.window.present();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    wait_workspaces(&w);
     pump(300);
     let manager = w.workspaces.manager.as_ref().unwrap();
     let [p, i, f] = DEFAULT_WORKSPACES.map(|(id, _)| id.to_string());
@@ -1011,11 +984,10 @@ fn native_workspace_switcher_input() {
     )
     .unwrap();
     click(&w, &mut input, &custom_button);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while manager.active_id().as_ref() != Some(&custom) {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || manager.active_id().as_ref() == Some(&custom),
+        "custom workspace switch",
+    );
     assert_eq!(
         switcher_names(&w),
         [
@@ -1030,11 +1002,7 @@ fn native_workspace_switcher_input() {
     assert!(!w.window.is_visible());
     let reopened = Workspace::new(&app);
     reopened.window.present();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !reopened.workspaces.ready.get() || reopened.workspaces.busy.get() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    wait_workspaces(&reopened);
     assert_eq!(
         reopened.workspaces.manager.as_ref().unwrap().switcher_ids(),
         [p, custom.clone()]

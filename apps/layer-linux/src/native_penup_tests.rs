@@ -150,30 +150,13 @@ fn native_penup_and_following_strokes() {
         let contact_start = glib::monotonic_time() as u64 * 1000;
         while start.elapsed() < Duration::from_millis(contact_ms) {
             let t = (start.elapsed().as_secs_f32() * 1000. / contact_ms as f32).min(1.);
-            let m = camera.document_to_surface();
             let x = (400. + 3250. * t) * extent[0] as f32 / 4096.;
             let y = (2048. + 1100. * (t * std::f32::consts::TAU + stroke as f32 * 0.3).sin())
                 * extent[1] as f32 / 4096.;
+            let phase = if first { PenPhase::Down } else { PenPhase::Move };
             let event = PenEvent {
-                device_id: 1,
-                sequence,
-                timestamp_ns: glib::monotonic_time() as u64 * 1000,
-                view_revision: camera.revision,
-                surface_position: Point {
-                    x: m[0] * x + m[2] * y + m[4],
-                    y: m[1] * x + m[3] * y + m[5],
-                },
                 pressure: if photo.is_some() { 1. } else { 0.8 },
-                tilt_radians: [0.; 2],
-                twist_radians: 0.,
-                distance: 0.,
-                phase: if first {
-                    PenPhase::Down
-                } else {
-                    PenPhase::Move
-                },
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
+                ..pen_event(&camera, [x, y], phase, sequence)
             };
             sequence += 1;
             if stroke > 0 { input_samples.push([sequence, event.timestamp_ns]); }
@@ -290,11 +273,10 @@ fn native_penup_and_following_strokes() {
     w.window.destroy();
     // This harness drives the main context directly, without Application::run
     // observing the analysis worker's application hold during shutdown.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while w.local_tone.worker_state().0 {
-        pump(5);
-        assert!(Instant::now() < deadline, "cancelled local analysis did not stop");
-    }
+    until(
+        || !w.local_tone.worker_state().0,
+        "cancelled local analysis did not stop",
+    );
     pump(100);
 }
 
@@ -358,26 +340,13 @@ fn native_terminal_wake_preserves_commit_cancel_and_idle() {
     let empty = root();
     let count = committed();
     let camera = state(&w).camera;
-    let m = camera.document_to_surface();
     let send = |phase, x, y| {
         w.input.send(
             &w,
             PenEvent {
                 device_id: 91,
-                sequence: 0, // The native input owner assigns the actual sequence.
-                timestamp_ns: glib::monotonic_time() as u64 * 1000,
-                view_revision: camera.revision,
-                surface_position: Point {
-                    x: m[0] * x + m[2] * y + m[4],
-                    y: m[1] * x + m[3] * y + m[5],
-                },
                 pressure: 0.8,
-                tilt_radians: [0.; 2],
-                twist_radians: 0.,
-                distance: 0.,
-                phase,
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
+                ..pen_event(&camera, [x, y], phase, 0)
             },
         );
     };

@@ -466,11 +466,7 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     let preview = widget("color-preview-after")
         .downcast::<gtk::Picture>()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while preview.paintable().is_none() {
-        pump(20);
-        assert!(Instant::now() < deadline, "saved preset preview");
-    }
+    until(|| preview.paintable().is_some(), "saved preset preview");
     capture_ui(&w, &directory, "saved-presets.png");
     response(&w, "cancel");
     finish(&w);

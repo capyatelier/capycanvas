@@ -101,11 +101,10 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
         ColorProfile::Icc(vec![0; 132].into()),
     ));
     let failed_document = snapshot(&w);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while w.proof.label.text() != "Proof unavailable" {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || w.proof.label.text() == "Proof unavailable",
+        "proof unavailable",
+    );
     assert!(w.proof.label.tooltip_text().unwrap().contains("ICC"));
     assert_eq!(snapshot(&w), failed_document);
     assert!(w.proof.cache_info().is_none());
@@ -156,15 +155,7 @@ pub(super) fn benchmark_proof(w: &Rc<Workspace>) -> Option<serde_json::Value> {
         recipe.conversion.black_point_compensation = false;
         recipe.simulate_black_ink = false;
     }
-    let memory = || {
-        std::fs::read_to_string("/proc/self/status")
-            .unwrap()
-            .lines()
-            .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
-            .collect::<Vec<_>>()
-            .join("; ")
-    };
-    let before = memory();
+    let before = process_memory();
     let start = Instant::now();
     let change = w
         .gpu
@@ -183,7 +174,7 @@ pub(super) fn benchmark_proof(w: &Rc<Workspace>) -> Option<serde_json::Value> {
             "shadow workload must exercise the larger cache"
         );
     }
-    let after = memory();
+    let after = process_memory();
     invoke(w, CommandId::SoftProof);
     wait_proof(w, "Normal");
     let start = Instant::now();
@@ -268,20 +259,26 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         file.set_file(&gtk::gio::File::for_path(&path)).unwrap();
         pump(150);
         file.response(gtk::ResponseType::Accept);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !find_named(setup.upcast_ref(), "proof-profile-choose").unwrap().is_sensitive() {
-            pump(20);
-            assert!(Instant::now() < deadline);
-        }
+        until(
+            || {
+                find_named(setup.upcast_ref(), "proof-profile-choose")
+                    .unwrap()
+                    .is_sensitive()
+            },
+            "proof profile choice",
+        );
         assert_eq!(profile_name(&w, "proof-profile"), expected);
     }
     // Import selects immediately and duplicate imports occupy one saved entry.
     profile_action(&w, "proof", "manage");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while w.window.visible_dialog().is_none_or(|d| d.widget_name() != "profile-library-manager") {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || {
+            w.window
+                .visible_dialog()
+                .is_some_and(|d| d.widget_name() == "profile-library-manager")
+        },
+        "profile library manager",
+    );
     let manager = w.window.visible_dialog().unwrap();
     let list = find_named(manager.upcast_ref(), "profile-library-list")
         .unwrap()
@@ -364,31 +361,38 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     menu.popdown();
     // Removing a library copy leaves the selected bytes usable and reusable.
     profile_action(&w, "proof", "manage");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while w.window.visible_dialog().is_none_or(|d| d.widget_name() != "profile-library-manager") {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || {
+            w.window
+                .visible_dialog()
+                .is_some_and(|d| d.widget_name() == "profile-library-manager")
+        },
+        "profile library manager",
+    );
     let manager = w.window.visible_dialog().unwrap();
     let list = find_named(manager.upcast_ref(), "profile-library-list")
         .unwrap()
         .downcast::<gtk::ListBox>()
         .unwrap();
     super::new_photo::profile_manager_action(&w, 0, "remove");
-    while list.row_at_index(0).is_some() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || list.row_at_index(0).is_none(),
+        "profile library row removed",
+    );
     response(&w, "close");
     assert_eq!(profile_name(&w, "proof-profile"), expected);
     profile_action(&w, "proof", "current");
     // Cancel adding a replacement leaves the current selection usable.
     profile_action(&w, "proof", "add");
     chooser().response(gtk::ResponseType::Cancel);
-    while !find_named(setup.upcast_ref(), "proof-profile-choose").unwrap().is_sensitive() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || {
+            find_named(setup.upcast_ref(), "proof-profile-choose")
+                .unwrap()
+                .is_sensitive()
+        },
+        "proof profile choice",
+    );
     assert_eq!(profile_name(&w, "proof-profile"), expected);
     for simulation in 0..3 {
         if simulation != 0 {
@@ -430,11 +434,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         "export-profile-choose",
     )
     .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !menu.is_sensitive() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(|| menu.is_sensitive(), "export space menu");
     assert_eq!(profile_name(&w, "export-space"), "sRGB");
     assert_eq!(combo(&w, "export-preset").selected(), 0);
     response(&w, "cancel");
@@ -860,11 +860,14 @@ fn native_open_and_profile_pickers_remember_separate_folders() {
     file.response(gtk::ResponseType::Accept);
     let setup = w.proof_panel.root.clone();
     assert!(w.window.visible_dialog().is_none());
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !find_named(setup.upcast_ref(), "proof-profile-choose").unwrap().is_sensitive() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || {
+            find_named(setup.upcast_ref(), "proof-profile-choose")
+                .unwrap()
+                .is_sensitive()
+        },
+        "proof profile choice",
+    );
     mode(&w,"off");settled(&w);
     finish(&w);
     invoke(&w, CommandId::OpenDocument);
@@ -975,11 +978,7 @@ fn native_desktop_file_picker_uses_portal() {
             "desktop picker fell back to an in-process file dialog"
         );
         cancel.cancel();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while result.borrow().is_none() {
-            pump(20);
-            assert!(Instant::now() < deadline);
-        }
+        until(|| result.borrow().is_some(), "cancelled picker result");
         assert!(result.borrow().as_ref().unwrap().is_err());
     }
     window.close();

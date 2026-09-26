@@ -4,15 +4,10 @@ use gtk::prelude::*;
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_hdr_display_hint_before_first_frame() {
-    adw::init().unwrap();
-    let app = adw::Application::builder()
-        .application_id("art.capycanvas.EarlyHdrDisplayHint")
-        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
-        .build();
-    app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    let app = crate::workspace::tests::native_test_app("art.capycanvas.EarlyHdrDisplayHint");
     let area = gtk::Picture::new();
     let window = gtk::ApplicationWindow::builder()
-        .application(&app)
+        .application(&*app)
         .child(&area)
         .default_width(320)
         .default_height(240)

@@ -601,20 +601,7 @@ fn native_color_picker_preview_pacing() {
             use super::super::new_photo::{combo, finish, invoke, ready, response};
             invoke(&d.w, CommandId::ChangeBitDepth);
             combo(&d.w, "document-color-depth").set_selected(2);
-            let deadline = Instant::now() + Duration::from_secs(30);
-            loop {
-                pump(20);
-                let dialog =
-                    d.w.window
-                        .visible_dialog()
-                        .unwrap()
-                        .downcast::<adw::AlertDialog>()
-                        .unwrap();
-                if dialog.is_response_enabled("apply") {
-                    break;
-                }
-                assert!(Instant::now() < deadline);
-            }
+            apply_dialog(&d.w, "document-color-dialog", true);
             response(&d.w, "apply");
             finish(&d.w);
             ready(&d.w);

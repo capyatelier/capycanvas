@@ -514,20 +514,6 @@ fn brush_panel(d: &Driver) -> Panel {
         .id
 }
 
-fn descendant<T: IsA<gtk::Widget> + glib::object::IsClass>(root: &gtk::Widget) -> Option<T> {
-    if let Ok(widget) = root.clone().downcast::<T>() {
-        return Some(widget);
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        if let Some(found) = descendant(&widget) {
-            return Some(found);
-        }
-        child = widget.next_sibling();
-    }
-    None
-}
-
 #[test]
 #[ignore = "private Mutter: --native-test=native_toolbar_options_presentation_input"]
 fn native_toolbar_options_presentation_input() {
@@ -909,7 +895,7 @@ fn native_toolbar_value_controls_input() {
         "Brush size",
         "popup keeps its title after a number drag"
     );
-    let scale = descendant::<gtk::Scale>(popup.upcast_ref()).unwrap();
+    let scale = descendant::<gtk::Scale>(&popup).unwrap();
     assert!(
         scale.is_mapped(),
         "popover {:?}: mapped {}, size {}x{}, scale visible {}, child visible {}, size {}x{}",

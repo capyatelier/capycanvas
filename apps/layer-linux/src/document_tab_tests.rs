@@ -2,13 +2,6 @@
 use super::*;
 use layer_core::{Project, raster::*};
 
-fn until(mut predicate: impl FnMut() -> bool, message: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !predicate() {
-        assert!(Instant::now() < deadline, "{message}");
-        pump(10);
-    }
-}
 fn switch(w: &Rc<Workspace>, id: u64) {
     glib::MainContext::default()
         .block_on(w.documents.activate(w, id))
@@ -897,7 +890,6 @@ fn native_document_tabs_immediate_stroke_and_undo() {
             let mut gpu = w.gpu.borrow_mut();
             let session = &mut gpu.as_mut().unwrap().session;
             let camera = session.state().camera.clone();
-            let m = camera.document_to_surface();
             let now = glib::monotonic_time() as u64 * 1000;
             for (i, (phase, x)) in [(PenPhase::Down, 50.), (PenPhase::Up, 180.)]
                 .into_iter()
@@ -906,20 +898,9 @@ fn native_document_tabs_immediate_stroke_and_undo() {
                 session
                     .pen(PenEvent {
                         device_id: 71,
-                        sequence: now + i as u64,
                         timestamp_ns: now + i as u64,
-                        view_revision: camera.revision,
-                        surface_position: Point {
-                            x: m[0] * x + m[2] * 120. + m[4],
-                            y: m[1] * x + m[3] * 120. + m[5],
-                        },
                         pressure: 0.7,
-                        tilt_radians: [0.; 2],
-                        twist_radians: 0.,
-                        distance: 0.,
-                        phase,
-                        tool: ToolKind::Pen,
-                        flags: SampleFlags::PRIMARY,
+                        ..pen_event(&camera, [x, 120.], phase, now + i as u64)
                     })
                     .unwrap();
             }

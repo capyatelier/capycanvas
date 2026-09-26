@@ -35,32 +35,6 @@ fn source() -> SourceImage {
     }
     builder.finish().unwrap()
 }
-fn dialog(w: &Rc<Workspace>, completed: bool) -> adw::AlertDialog {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        pump(if completed { 20 } else { 1 });
-        if let Some(d) = w
-            .window
-            .visible_dialog()
-            .filter(|d| d.widget_name() == "rasterize-source-dialog")
-        {
-            let d = d.downcast::<adw::AlertDialog>().unwrap();
-            if !completed || d.is_response_enabled("apply") {
-                return d;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "{}",
-                find_named(d.upcast_ref(), "color-preview-status")
-                    .unwrap()
-                    .downcast::<gtk::Label>()
-                    .unwrap()
-                    .label()
-            );
-        }
-        assert!(Instant::now() < deadline, "rasterization dialog");
-    }
-}
 fn current(w: &Rc<Workspace>, id: layer_core::LayerId) -> layer_core::Layer {
     w.gpu
         .borrow()
@@ -157,12 +131,12 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     w.dispatch(UiAction::Layer {
         action: LayerAction::RasterizeSource { id: id.0 },
     });
-    dialog(&w, false);
+    apply_dialog(&w, "rasterize-source-dialog", false);
     response(&w, "cancel");
     finish(&w);
     assert_eq!(snapshot(&w), before);
     invoke(&w, CommandId::RasterizeSource);
-    let d = dialog(&w, true);
+    let d = apply_dialog(&w, "rasterize-source-dialog", true);
     let output = std::path::Path::new("../../artifacts/color-m2/rasterize-ui")
         .join(std::process::id().to_string());
     std::fs::create_dir_all(&output).unwrap();

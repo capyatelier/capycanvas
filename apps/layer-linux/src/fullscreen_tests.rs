@@ -1,76 +1,24 @@
-use adw::prelude::*;
-use gtk::{gdk, glib};
+use super::*;
 use layer_ui::{ApplicationMenu, CommandId, HeaderAction, HeaderItem, HeaderZone};
-use std::time::{Duration, Instant};
-
-fn pump() {
-    let context = glib::MainContext::default();
-    let deadline = Instant::now() + Duration::from_millis(20);
-    while context.pending() && Instant::now() < deadline {
-        context.iteration(false);
-    }
-    std::thread::sleep(Duration::from_millis(5));
-}
-fn until(check: impl Fn() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !check() {
-        assert!(
-            Instant::now() < deadline,
-            "Native fullscreen transition timed out"
-        );
-        pump();
-    }
-}
-fn named(widget: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
-    if widget.widget_name() == name {
-        return Some(widget.clone());
-    }
-    let mut child = widget.first_child();
-    while let Some(w) = child {
-        if let Some(found) = named(&w, name) {
-            return Some(found);
-        }
-        child = w.next_sibling();
-    }
-    None
-}
-struct Windows(adw::Application);
-impl Drop for Windows {
-    fn drop(&mut self) {
-        for w in self.0.windows() {
-            w.destroy();
-        }
-        layer_render_wgpu::finish_shader_compiler_shutdown();
-    }
-}
 
 #[test]
 #[ignore = "Wayland compositor and GPU: fullscreen window and native header"]
 fn native_fullscreen_header_clock_and_battery() {
-    adw::init().unwrap();
-    let css = gtk::CssProvider::new();
-    css.load_from_string(&crate::stylesheet());
-    gtk::style_context_add_provider_for_display(
-        &gdk::Display::default().unwrap(),
-        &css,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-    let app = adw::Application::builder()
-        .application_id("art.capycanvas.FullscreenTest")
-        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
-        .build();
-    app.register(None::<&gtk::gio::Cancellable>).unwrap();
-    let _cleanup = Windows(app.clone());
-    let w = crate::workspace::Workspace::new(&app);
+    let app = native_test_app("art.capycanvas.FullscreenTest");
+    let w = Workspace::new(&app);
     w.window.present();
-    until(|| w.gpu.borrow().is_some());
-    let clock = named(w.window.upcast_ref(), "system-clock")
+    until(|| w.gpu.borrow().is_some(), "canvas startup");
+    let clock = find_named(w.window.upcast_ref(), "system-clock")
         .unwrap()
         .downcast::<gtk::Label>()
         .unwrap();
-    until(|| {
-        named(w.window.upcast_ref(), "workspace-window-bar").is_some_and(|bar| bar.is_mapped())
-    });
+    until(
+        || {
+            find_named(w.window.upcast_ref(), "workspace-window-bar")
+                .is_some_and(|bar| bar.is_mapped())
+        },
+        "window bar mapped",
+    );
     assert!(
         !clock.is_mapped(),
         "windowed status does not occupy title-bar space"
@@ -90,28 +38,34 @@ fn native_fullscreen_header_clock_and_battery() {
         .unwrap();
     assert_eq!(item.hint, "F11");
     w.dispatch(item.action.clone().unwrap());
-    until(|| {
-        w.window.is_fullscreen()
-            && clock.is_mapped()
-            && w.gpu.borrow().as_ref().unwrap().session.state().fullscreen
-    });
+    until(
+        || {
+            w.window.is_fullscreen()
+                && clock.is_mapped()
+                && w.gpu.borrow().as_ref().unwrap().session.state().fullscreen
+        },
+        "fullscreen clock",
+    );
     assert!(!clock.text().is_empty());
     if let Ok(directory) = std::env::var("LAYER_TEST_ARTIFACTS") {
-        until(|| {
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
-                .engine()
-                .backend()
-                .startup
-                .brush_ready
-        });
+        until(
+            || {
+                w.gpu
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    .engine()
+                    .backend()
+                    .startup
+                    .brush_ready
+            },
+            "brush readiness",
+        );
         crate::capture(&w, &format!("{directory}/gtk-fullscreen.png"));
     }
     assert!(
-        named(w.window.upcast_ref(), "workspace-window-bar")
+        find_named(w.window.upcast_ref(), "workspace-window-bar")
             .unwrap()
             .is_mapped()
     );
@@ -128,22 +82,25 @@ fn native_fullscreen_header_clock_and_battery() {
     let settings = gtk::gio::Settings::new("org.gnome.desktop.interface");
     for preference in ["12h", "24h"] {
         settings.set_string("clock-format", preference).unwrap();
-        until(|| {
-            let time = glib::DateTime::now_local()
-                .unwrap()
-                .format(if preference == "12h" {
-                    "%I:%M %p"
-                } else {
-                    "%H:%M"
-                })
-                .unwrap();
-            clock.text()
-                == if preference == "12h" {
-                    time.trim_start_matches('0')
-                } else {
-                    &time
-                }
-        });
+        until(
+            || {
+                let time = glib::DateTime::now_local()
+                    .unwrap()
+                    .format(if preference == "12h" {
+                        "%I:%M %p"
+                    } else {
+                        "%H:%M"
+                    })
+                    .unwrap();
+                clock.text()
+                    == if preference == "12h" {
+                        time.trim_start_matches('0')
+                    } else {
+                        &time
+                    }
+            },
+            &format!("{preference} clock format"),
+        );
     }
     let reply = w
         .gpu
@@ -161,25 +118,29 @@ fn native_fullscreen_header_clock_and_battery() {
         .unwrap();
     assert!(reply.handled);
     w.changed(Ok(reply.change));
-    until(|| !w.window.is_fullscreen() && !clock.is_mapped());
+    until(
+        || !w.window.is_fullscreen() && !clock.is_mapped(),
+        "leave fullscreen",
+    );
     w.window.fullscreen();
-    until(|| {
-        w.window.is_fullscreen() && w.gpu.borrow().as_ref().unwrap().session.state().fullscreen
-    });
+    until(
+        || w.window.is_fullscreen() && w.gpu.borrow().as_ref().unwrap().session.state().fullscreen,
+        "fullscreen state",
+    );
     let native = crate::system_status::SystemStatus::simulated_power();
     let probe = gtk::Window::builder()
-        .application(&app)
+        .application(&*app)
         .child(&native.root)
         .build();
     native.set_visibility(true);
     probe.present();
-    until(|| native.root.is_mapped());
+    until(|| native.root.is_mapped(), "status probe mapped");
     native.show_battery(Some(crate::system_status::Battery {
         percent: 8,
         charging: false,
         low: true,
     }));
-    let battery = named(native.root.upcast_ref(), "system-battery").unwrap();
+    let battery = find_named(native.root.upcast_ref(), "system-battery").unwrap();
     assert!(battery.is_visible() && battery.has_css_class("low"));
     let percent = battery
         .first_child()
@@ -188,7 +149,10 @@ fn native_fullscreen_header_clock_and_battery() {
         .unwrap()
         .downcast::<gtk::Label>()
         .unwrap();
-    until(|| percent.is_mapped() && battery.width() > 0);
+    until(
+        || percent.is_mapped() && battery.width() > 0,
+        "battery percentage mapped",
+    );
     // The embedded face must resolve in the real GTK font map; otherwise
     // desktop font substitutions silently change the compact icon's numerals.
     assert_eq!(
@@ -209,10 +173,13 @@ fn native_fullscreen_header_clock_and_battery() {
     assert_eq!(battery.height(), layer_ui::TILE_SIZE as i32);
     for size in layer_ui::HeaderSize::ALL {
         native.set_header_size(size);
-        until(|| {
-            assert!(battery.is_visible());
-            battery.width() >= size.tile() as i32 && battery.height() >= size.tile() as i32
-        });
+        until(
+            || {
+                assert!(battery.is_visible());
+                battery.width() >= size.tile() as i32 && battery.height() >= size.tile() as i32
+            },
+            "battery header size",
+        );
     }
     native.set_visibility(false);
     assert!(!battery.is_visible() && !native.root.is_visible());
@@ -227,7 +194,10 @@ fn native_fullscreen_header_clock_and_battery() {
     assert!(!battery.is_visible());
     probe.destroy();
     w.window.unfullscreen();
-    until(|| !w.window.is_fullscreen() && !clock.is_mapped());
+    until(
+        || !w.window.is_fullscreen() && !clock.is_mapped(),
+        "leave fullscreen",
+    );
     assert!(
         !w.gpu
             .borrow()
@@ -254,9 +224,9 @@ fn native_fullscreen_header_clock_and_battery() {
         .unwrap()
         .id;
     w.dispatch(HeaderAction::Remove { id }.action());
-    until(|| !clock.is_mapped());
+    until(|| !clock.is_mapped(), "clock removed");
     w.window.fullscreen();
-    until(|| w.window.is_fullscreen());
+    until(|| w.window.is_fullscreen(), "window fullscreen");
     assert!(!clock.is_mapped());
     w.dispatch(
         HeaderAction::Add {
@@ -266,9 +236,12 @@ fn native_fullscreen_header_clock_and_battery() {
         }
         .action(),
     );
-    until(|| clock.is_mapped());
+    until(|| clock.is_mapped(), "clock restored");
     w.window.unfullscreen();
-    until(|| !w.window.is_fullscreen() && !clock.is_mapped());
+    until(
+        || !w.window.is_fullscreen() && !clock.is_mapped(),
+        "leave fullscreen",
+    );
     w.window.destroy();
     assert!(
         w.gpu
@@ -278,5 +251,5 @@ fn native_fullscreen_header_clock_and_battery() {
     );
     // Finish compositor releases before libtest tears down the GTK owner thread.
     gdk::Display::default().unwrap().sync();
-    pump();
+    pump(20);
 }

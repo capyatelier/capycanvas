@@ -243,12 +243,3 @@ fn native_local_tone_sustained_qualification() {
     w.window.destroy();
     pump(100);
 }
-
-fn process_memory() -> Vec<String> {
-    std::fs::read_to_string("/proc/self/status")
-        .unwrap()
-        .lines()
-        .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
-        .map(str::to_owned)
-        .collect()
-}

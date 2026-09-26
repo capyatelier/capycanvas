@@ -16,8 +16,6 @@ mod color_preview_raster;
 mod color_readout;
 mod new_document;
 mod color_library;
-#[cfg(test)]
-mod fullscreen_tests;
 mod icons;
 mod image_selector;
 mod input;

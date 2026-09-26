@@ -40,26 +40,13 @@ fn native_gpu_tone_retains_preview_cancels_and_refreshes_after_drawing() {
     let initial_ms = wait_ready();
     let original = w.local_tone.preview_count().unwrap();
     let camera = state(&w).camera;
-    let m = camera.document_to_surface();
     let send = |phase, x, y| {
         w.input.send(
             &w,
             PenEvent {
                 device_id: 91,
-                sequence: 0,
-                timestamp_ns: glib::monotonic_time() as u64 * 1000,
-                view_revision: camera.revision,
-                surface_position: Point {
-                    x: m[0] * x + m[2] * y + m[4],
-                    y: m[1] * x + m[3] * y + m[5],
-                },
                 pressure: 0.8,
-                tilt_radians: [0.; 2],
-                twist_radians: 0.,
-                distance: 0.,
-                phase,
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
+                ..pen_event(&camera, [x, y], phase, 0)
             },
         )
     };
@@ -153,10 +140,6 @@ fn native_gpu_tone_retains_preview_cancels_and_refreshes_after_drawing() {
         "GPU_TONE_DRAWING initial_ms={initial_ms:.2} refresh_ms={refresh_ms:.2} cancelled_inflight=true retained_during_contact=true"
     );
     w.window.destroy();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while w.local_tone.worker_state().0 {
-        pump(5);
-        assert!(Instant::now() < deadline);
-    }
+    until(|| !w.local_tone.worker_state().0, "local tone worker stop");
     pump(50);
 }

@@ -14,36 +14,6 @@ fn document(w: &Rc<Workspace>) -> Document {
         .document()
         .clone()
 }
-fn dialog(w: &Rc<Workspace>, completed: bool) -> adw::AlertDialog {
-    let deadline = Instant::now() + Duration::from_secs(40);
-    loop {
-        pump(if completed { 20 } else { 1 });
-        if let Some(d) = w
-            .window
-            .visible_dialog()
-            .filter(|d| d.widget_name() == "document-color-dialog")
-        {
-            let d = d.downcast::<adw::AlertDialog>().unwrap();
-            if !completed || d.is_response_enabled("apply") {
-                return d;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "{}",
-                find_named(d.upcast_ref(), "color-preview-status")
-                    .unwrap()
-                    .downcast::<gtk::Label>()
-                    .unwrap()
-                    .label()
-            );
-        }
-        assert!(
-            Instant::now() < deadline,
-            "color dialog: {}",
-            w.status.text()
-        );
-    }
-}
 fn exact_document(mut actual: Document, expected: &Document) {
     actual.revision = expected.revision;
     assert_eq!(actual, *expected);
@@ -184,7 +154,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     std::fs::create_dir_all(&output).unwrap();
     // Rapid choices then Cancel must retire the worker before releasing busy.
     invoke(&w, CommandId::AssignProfile);
-    dialog(&w, false);
+    apply_dialog(&w, "document-color-dialog", false);
     for selected in [2, 0, 3, 2] {
         combo(&w, "document-color-space").set_selected(selected);
     }
@@ -234,7 +204,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
             .engine()
             .checkpoint();
         invoke(&w, command);
-        dialog(&w, false);
+        apply_dialog(&w, "document-color-dialog", false);
         combo(
             &w,
             if command == CommandId::ChangeBitDepth {
@@ -244,7 +214,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
             },
         )
         .set_selected(selected);
-        dialog(&w, true);
+        apply_dialog(&w, "document-color-dialog", true);
         if command == CommandId::ConvertColorSpace {
             assert_visible_choice(&w, "document-color-result", "Convert editable layers");
             assert_visible_choice(&w, "document-color-intent", "Relative colorimetric");
@@ -335,23 +305,24 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
             .unwrap();
         session.renderer_mut().discard_prepared_color().unwrap()
     };
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while matches!(
-        acknowledgement.try_recv(),
-        Err(std::sync::mpsc::TryRecvError::Empty)
-    ) {
-        pump(5);
-        assert!(Instant::now() < deadline);
-    }
+    until(
+        || {
+            !matches!(
+                acknowledgement.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            )
+        },
+        "color preparation acknowledgement",
+    );
     assert_eq!(snapshot(&w), saved);
     assert_mode(&w, changed.color);
     // A flattened conversion opens a separate editable document and leaves
     // the layered document, source, adjustments, mask and history unchanged.
     invoke(&w, CommandId::ConvertColorSpace);
-    dialog(&w, false);
+    apply_dialog(&w, "document-color-dialog", false);
     combo(&w, "document-color-result").set_selected(1);
     combo(&w, "document-color-space").set_selected(0);
-    dialog(&w, true);
+    apply_dialog(&w, "document-color-dialog", true);
     capture_ui(&w, &output, "flattened-copy-comparison.png");
     response(&w, "apply");
     finish(&w);
@@ -403,7 +374,6 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         let session = &mut gpu.as_mut().unwrap().session;
         session.renderer_mut().fail_next_frame();
         let camera = session.state().camera.clone();
-        let m = camera.document_to_surface();
         let now = glib::monotonic_time() as u64 * 1000;
         for (i, (phase, x)) in [(PenPhase::Down, 20.), (PenPhase::Up, 220.)]
             .into_iter()
@@ -412,38 +382,25 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
             session
                 .pen(PenEvent {
                     device_id: 94,
-                    sequence: now + i as u64,
                     timestamp_ns: now + i as u64,
-                    view_revision: camera.revision,
-                    surface_position: Point {
-                        x: m[0] * x + m[2] * 110. + m[4],
-                        y: m[1] * x + m[3] * 110. + m[5],
-                    },
-                    pressure: 1.,
-                    tilt_radians: [0.; 2],
-                    twist_radians: 0.,
-                    distance: 0.,
-                    phase,
-                    tool: ToolKind::Pen,
-                    flags: SampleFlags::PRIMARY,
+                    ..pen_event(&camera, [x, 110.], phase, now + i as u64)
                 })
                 .unwrap();
         }
         session.frame(now + 2, now + 2).unwrap();
     }
     w.wake();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
-        .rendering_suspended()
-    {
-        pump(20);
-        assert!(Instant::now() < deadline, "color recovery suspension");
-    }
+    until(
+        || {
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .rendering_suspended()
+        },
+        "color recovery suspension",
+    );
     // Failed contacts consume their unique ID; recovery restores artwork and
     // history without reusing that identity for a later stroke.
     let mut recovered = surviving.clone();

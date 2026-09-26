@@ -3,43 +3,6 @@ use super::place_source::{snapshot, source};
 use super::*;
 use layer_core::color::{ColorProfile, RgbSpace};
 
-fn profile_dialog(w: &Rc<Workspace>) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        pump(20);
-        if w.window
-            .visible_dialog()
-            .is_some_and(|d| d.widget_name() == "source-profile-dialog")
-        {
-            break;
-        }
-        assert!(Instant::now() < deadline, "source profile dialog");
-    }
-}
-fn preview_ready(w: &Rc<Workspace>) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        pump(20);
-        let dialog = w
-            .window
-            .visible_dialog()
-            .unwrap()
-            .downcast::<adw::AlertDialog>()
-            .unwrap();
-        if dialog.is_response_enabled("apply") {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "{}",
-            find_named(dialog.upcast_ref(), "color-preview-status")
-                .unwrap()
-                .downcast::<gtk::Label>()
-                .unwrap()
-                .label()
-        );
-    }
-}
 fn layer(w: &Rc<Workspace>, id: layer_core::LayerId) -> layer_core::Layer {
     w.gpu
         .borrow()
@@ -90,9 +53,9 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     w.dispatch(UiAction::Layer {
         action: LayerAction::RepairSourceProfile { id: id.0 },
     });
-    profile_dialog(&w);
+    apply_dialog(&w, "source-profile-dialog", false);
     super::new_photo::profile_action(&w, "source", "builtin-0");
-    preview_ready(&w);
+    apply_dialog(&w, "source-profile-dialog", true);
     pump(200);
     capture_ui(&w, &directory, "untouched-source.png");
     response(&w, "cancel");
@@ -101,7 +64,7 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     // Cancel an active preview and replace queued choices rapidly. Completion
     // must acknowledge cancellation without publishing any artwork or stale UI.
     invoke(&w, CommandId::RepairSourceProfile);
-    profile_dialog(&w);
+    apply_dialog(&w, "source-profile-dialog", false);
     super::new_photo::profile_action(&w, "source", "builtin-0");
     pump(1);
     for index in [1, 2, 0, 3] {
@@ -118,7 +81,7 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     finish(&w);
     assert_eq!(snapshot(&w), clean);
     invoke(&w, CommandId::RepairSourceProfile);
-    profile_dialog(&w);
+    apply_dialog(&w, "source-profile-dialog", false);
     let choose_profile = |path: &std::path::Path| {
         let dialog = w.window.visible_dialog().unwrap();
         super::new_photo::profile_action(&w, "source", "add");
@@ -154,9 +117,9 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     pump(200);
     capture_ui(&w, &directory, "mismatched-source-profile.png");
     choose_profile(&adobe_path);
-    preview_ready(&w);
+    apply_dialog(&w, "source-profile-dialog", true);
     assert!(dialog.is_response_enabled("apply"));
-    preview_ready(&w);
+    apply_dialog(&w, "source-profile-dialog", true);
     response(&w, "apply");
     finish(&w);
     ready(&w);
@@ -176,18 +139,18 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     assert!(!baked.raster.wait_data().unwrap().tiles.is_empty());
     let baked_bytes = snapshot(&w);
     invoke(&w, CommandId::RepairSourceProfile);
-    profile_dialog(&w);
+    apply_dialog(&w, "source-profile-dialog", false);
     super::new_photo::profile_action(&w, "source", "builtin-3");
-    preview_ready(&w);
+    apply_dialog(&w, "source-profile-dialog", true);
     pump(200);
     capture_ui(&w, &directory, "baked-source-choice.png");
     response(&w, "cancel");
     finish(&w);
     assert_eq!(snapshot(&w), baked_bytes);
     invoke(&w, CommandId::RepairSourceProfile);
-    profile_dialog(&w);
+    apply_dialog(&w, "source-profile-dialog", false);
     super::new_photo::profile_action(&w, "source", "builtin-3");
-    preview_ready(&w);
+    apply_dialog(&w, "source-profile-dialog", true);
     response(&w, "apply");
     finish(&w);
     ready(&w);

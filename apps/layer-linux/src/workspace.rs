@@ -3854,4 +3854,4 @@ pub(crate) fn selected(widget: &impl IsA<gtk::Widget>, selected: bool) {
 }
 #[cfg(test)]
 #[path = "tests.rs"]
-mod tests;
+pub(crate) mod tests;

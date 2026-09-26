@@ -1,13 +1,5 @@
 use super::*;
 
-fn until(mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "GPU lifecycle timed out");
-        pump(20);
-    }
-}
-
 fn snapshot_pixels(w: &Workspace) -> Vec<[f32; 4]> {
     let gpu = w.snapshot_gpu().unwrap();
     let (project, background, time) = {
@@ -52,11 +44,15 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     project.document.color = color;
     let w = Workspace::with_project(app, Some((project, None)));
     w.window.present();
-    until(|| {
-        w.gpu.borrow().as_ref().is_some_and(|g| {
-            g.session.engine().backend().startup.complete && !g.session.state().filter_load.pending
-        })
-    });
+    until(
+        || {
+            w.gpu.borrow().as_ref().is_some_and(|g| {
+                g.session.engine().backend().startup.complete
+                    && !g.session.state().filter_load.pending
+            })
+        },
+        "canvas startup",
+    );
     if w.gpu.borrow().as_ref().unwrap().session.engine().document().color.depth.is_float() {
         w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
             color: layer_core::color::RgbColor::from_linear(
@@ -104,10 +100,14 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         w.dispatch(UiAction::SetLayerOpacity { id: None, opacity });
         pump(40);
     }
-    until(|| {
-        let stats = w.gpu.borrow().as_ref().unwrap().session.renderer_stats();
-        !stats.samples.is_empty() && !["Unavailable", "—"].contains(&stats.rows[1].value.as_str())
-    });
+    until(
+        || {
+            let stats = w.gpu.borrow().as_ref().unwrap().session.renderer_stats();
+            !stats.samples.is_empty()
+                && !["Unavailable", "—"].contains(&stats.rows[1].value.as_str())
+        },
+        "renderer statistics",
+    );
     w.dispatch(UiAction::SetBrushSize { value: 70. });
     let stroke = |fail: bool| {
         let mut gpu = w.gpu.borrow_mut();
@@ -116,7 +116,6 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
             g.session.renderer_mut().fail_next_frame();
         }
         let camera = g.session.state().camera.clone();
-        let m = camera.view().document_to_surface;
         let now = glib::monotonic_time() as u64 * 1000;
         for (i, (phase, x)) in [(PenPhase::Down, 80.), (PenPhase::Up, 240.)]
             .into_iter()
@@ -125,20 +124,9 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
             g.session
                 .pen(PenEvent {
                     device_id: 71,
-                    sequence: now + i as u64,
                     timestamp_ns: now + i as u64,
-                    view_revision: camera.revision,
-                    surface_position: Point {
-                        x: m[0] * x + m[2] * 120. + m[4],
-                        y: m[1] * x + m[3] * 120. + m[5],
-                    },
                     pressure: 0.7,
-                    tilt_radians: [0.; 2],
-                    twist_radians: 0.,
-                    distance: 0.,
-                    phase,
-                    tool: ToolKind::Pen,
-                    flags: SampleFlags::PRIMARY,
+                    ..pen_event(&camera, [x, 120.], phase, now + i as u64)
                 })
                 .unwrap();
         }
@@ -147,7 +135,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     };
     let saved_root = stroke(false);
     w.wake();
-    until(|| saved_root.host_backed());
+    until(|| saved_root.host_backed(), "saved stroke backing");
     let before = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 8001))
         .unwrap();
@@ -160,18 +148,23 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         .session
         .engine()
         .checkpoint();
-    if color.depth.is_float() {until(|| w.local_tone.ready_count().is_some());}
+    if color.depth.is_float() {
+        until(|| w.local_tone.ready_count().is_some(), "local tone guide");
+    }
     let local_before=w.local_tone.ready_count();
     let failed_root = stroke(true);
     w.wake();
-    until(|| {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
-            .rendering_suspended()
-    });
+    until(
+        || {
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .rendering_suspended()
+        },
+        "rendering suspended",
+    );
     assert!(
         matches!(failed_root.try_data(), Some(Err(_))),
         "failed producer resolves immediately"
@@ -209,11 +202,14 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     assert!(w.frame_timer.borrow().is_none(), "failed workers must not be rescheduled");
     assert!(w.restart_canvas.is_visible());
     click(&w.restart_canvas);
-    until(|| {
-        w.gpu.borrow().as_ref().is_some_and(|g| {
-            !g.session.rendering_suspended() && g.session.engine().backend().startup.complete
-        })
-    });
+    until(
+        || {
+            w.gpu.borrow().as_ref().is_some_and(|g| {
+                !g.session.rendering_suspended() && g.session.engine().backend().startup.complete
+            })
+        },
+        "canvas restart",
+    );
     let after = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 8002))
         .unwrap();
@@ -250,7 +246,14 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     );
     assert!(!w.restart_canvas.is_visible());
     if color.depth.is_float() {
-        until(|| w.local_tone.ready_count().is_some_and(|n| n>local_before.unwrap()));
+        until(
+            || {
+                w.local_tone
+                    .ready_count()
+                    .is_some_and(|n| n > local_before.unwrap())
+            },
+            "local tone refresh",
+        );
     }
     w.dispatch(UiAction::Invoke {
         command: CommandId::Undo,
@@ -269,7 +272,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     );
     let next = stroke(false);
     w.wake();
-    until(|| next.host_backed());
+    until(|| next.host_backed(), "next stroke backing");
     w.window.destroy();
     pump(100);
 }

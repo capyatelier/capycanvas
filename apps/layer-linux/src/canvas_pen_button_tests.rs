@@ -5,20 +5,17 @@ use super::*;
 #[ignore = "isolated native-input.js --native-test=native_canvas_pen_buttons --tablet"]
 fn native_canvas_pen_buttons() {
     let mut d = Driver::new("art.capycanvas.CanvasPenButtons");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let ready = d.w.gpu.borrow().as_ref().is_some_and(|g| {
-            let engine = g.session.engine();
-            engine
-                .backend()
-                .paint_ready(engine.document(), engine.brush(), false)
-        });
-        if ready {
-            break;
-        }
-        assert!(Instant::now() < deadline, "active brush startup");
-        pump(20);
-    }
+    until(
+        || {
+            d.w.gpu.borrow().as_ref().is_some_and(|g| {
+                let engine = g.session.engine();
+                engine
+                    .backend()
+                    .paint_ready(engine.document(), engine.brush(), false)
+            })
+        },
+        "active brush startup",
+    );
     let area = d.w.resolved().work_area;
     let p = [area.x + area.width * 0.4, area.y + area.height * 0.5];
     let q = [p[0] + 50., p[1] + 20.];

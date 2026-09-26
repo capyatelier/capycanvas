@@ -12,14 +12,7 @@ fn native_drawer_style_input() {
     w.window.present();
     pump(1400);
     super::use_transparency(&w, layer_ui::Transparency::Off);
-    let ready_deadline = Instant::now() + Duration::from_secs(20);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        assert!(
-            Instant::now() < ready_deadline,
-            "workspace startup did not finish"
-        );
-        pump(20);
-    }
+    wait_workspaces(&w);
     input.ready();
     // Exercise live theme changes on the same editor. Workspace persistence and
     // opening another editor have separate integration tests.

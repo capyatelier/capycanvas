@@ -48,7 +48,7 @@ impl Driver {
         let w = Workspace::new(&app);
         w.window.maximize();
         w.window.present();
-        Self::wait_ready(&w);
+        wait_workspaces(&w);
         pump(500);
         Self::start(w, app)
     }
@@ -60,13 +60,6 @@ impl Driver {
             w,
             _app: app,
             input,
-        }
-    }
-    fn wait_ready(w: &Workspace) {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-            assert!(Instant::now() < deadline, "workspace startup or switch");
-            pump(20);
         }
     }
     fn capture_canvas(&self, name: &str) {
@@ -261,7 +254,7 @@ fn native_header_managed_input() {
     }
     d.capture_canvas("paint-default.png");
     d.click_name("workspace-switch-painter");
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     pump(400);
     assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     assert_eq!(
@@ -319,7 +312,7 @@ fn native_header_managed_input() {
     let saved = durable_layout(&state(&d.w).workspace.layout);
     for name in ["illustrator", "painter"] {
         d.click_name(&format!("workspace-switch-{name}"));
-        Driver::wait_ready(&d.w);
+        wait_workspaces(&d.w);
         pump(400);
     }
     assert_eq!(durable_layout(&state(&d.w).workspace.layout), saved);
@@ -329,15 +322,11 @@ fn native_header_managed_input() {
     assert_ne!(state(&d.w).workspace.layout.header, saved.header);
     // Closing without Done must persist the committed workspace, not the preview.
     d.w.window.close();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while d.w.window.is_visible() {
-        assert!(Instant::now() < deadline);
-        pump(20);
-    }
+    until(|| !d.w.window.is_visible(), "window close");
     d.w = Workspace::new(&d._app);
     d.w.window.maximize();
     d.w.window.present();
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     pump(500);
     assert_eq!(
         d.w.workspaces
@@ -399,7 +388,7 @@ fn native_workspace_ownership_input() {
         .unwrap();
     assert!(output.status.success());
     d.click_name(target_button);
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     assert_eq!(
         d.w.workspaces
             .manager
@@ -416,7 +405,7 @@ fn native_workspace_ownership_input() {
     // Keep the GTK process/worker alive while this independent owner exits.
     drop(external);
     d.click_name(target_button);
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     let manager = d.w.workspaces.manager.as_ref().unwrap();
     assert_eq!(manager.active_id().as_deref(), Some(target_id));
     assert!(manager.error().is_none());
@@ -451,14 +440,14 @@ fn native_workspace_ownership_input() {
             layer_workspace::ManagerAction::SwitchToWindow(original.clone()),
         ))
         .unwrap();
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     assert_eq!(manager.active_id().as_deref(), Some(original.as_str()));
 
     // An actual second GTK window is focused, not stolen. Closing it makes
     // its workspace immediately available to the first window.
     let second = Workspace::new(&d._app);
     second.window.present();
-    Driver::wait_ready(&second);
+    wait_workspaces(&second);
     let second_id = second
         .workspaces
         .manager
@@ -480,11 +469,7 @@ fn native_workspace_ownership_input() {
         "switching to a live owner focuses its GTK window"
     );
     second.window.close();
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while second.window.is_visible() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(|| !second.window.is_visible(), "second window close");
     d.w.window.present();
     glib::MainContext::default()
         .block_on(d.w.workspaces.perform(
@@ -492,7 +477,7 @@ fn native_workspace_ownership_input() {
             layer_workspace::ManagerAction::Switch(second_id.clone()),
         ))
         .unwrap();
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     assert_eq!(manager.active_id().as_deref(), Some(second_id.as_str()));
     assert!(manager.error().is_none());
     d.finish();
@@ -534,7 +519,7 @@ fn native_default_workspace_recovery_input() {
         "UPDATE items SET working=json_set(working,'$.colors.shape','wheel') WHERE id='builtin:workspace:painter'",
     );
     d.click_name("workspace-switch-painter");
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     pump(400);
     assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     assert!(d.w.workspaces.manager.as_ref().unwrap().error().is_none());
@@ -550,11 +535,7 @@ fn native_default_workspace_recovery_input() {
         action: CustomizationAction::CloseExpanded,
     });
     d.w.window.close();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while d.w.window.is_visible() {
-        assert!(Instant::now() < deadline, "workspace close");
-        pump(20);
-    }
+    until(|| !d.w.window.is_visible(), "workspace close");
     // Startup repairs only the resumed Painter, not every included workspace.
     sql(
         "UPDATE items SET working=json_set(working,'$.colors.shape','wheel') WHERE id IN ('builtin:workspace:painter','builtin:workspace:photographer')",
@@ -562,7 +543,7 @@ fn native_default_workspace_recovery_input() {
     d.w = Workspace::new(&d._app);
     d.w.window.maximize();
     d.w.window.present();
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     pump(500);
     assert_eq!(
         d.w.workspaces
@@ -611,7 +592,7 @@ fn native_default_workspace_recovery_input() {
     assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     for name in ["illustrator", "photographer", "painter"] {
         d.click_name(&format!("workspace-switch-{name}"));
-        Driver::wait_ready(&d.w);
+        wait_workspaces(&d.w);
         pump(300);
         if name == "illustrator" {
             assert_eq!(
@@ -1061,7 +1042,7 @@ fn native_header_picker_journey() {
 fn native_header_spacing_visual() {
     let mut d = Driver::managed("art.capycanvas.HeaderSpacing");
     d.click_name("workspace-switch-painter");
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     pump(250);
     for theme in [Theme::Dark, Theme::Light] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
@@ -1193,7 +1174,7 @@ fn native_header_spacing_visual() {
         }
     }
     d.click_name("workspace-switch-illustrator");
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     for size in HeaderSize::ALL {
         d.w.dispatch(HeaderAction::SetSize { size }.action());
         pump(200);
@@ -2285,7 +2266,7 @@ fn native_header_compact_switcher_input() {
             .await
             .unwrap();
     });
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     let ids = manager.switcher_display_ids();
     assert_eq!(ids.len(), 4);
     glib::MainContext::default()
@@ -2411,7 +2392,7 @@ fn native_header_compact_switcher_input() {
                     d.input.key(0xff0d);
                 }
             }
-            Driver::wait_ready(&d.w);
+            wait_workspaces(&d.w);
             assert_eq!(manager.active_id().as_ref(), Some(&target));
             assert!(!popup.is_visible());
         }
@@ -2458,7 +2439,7 @@ fn native_header_compact_switcher_input() {
         .metadata
         .name;
     d.click_label(&name);
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     assert_eq!(manager.active_id().as_ref(), Some(&target));
     d.finish();
 }

@@ -21,7 +21,7 @@ fn near(actual: [u8; 3], expected: HexColor) -> bool {
 fn native_accent_preferences_input() {
     let mut d = Driver::managed("art.capycanvas.AccentPreferences");
     d.click_name("workspace-switch-painter");
-    Driver::wait_ready(&d.w);
+    wait_workspaces(&d.w);
     let (_, system) = crate::workspace::system_appearance();
     let system = system.unwrap_or(DEFAULT_ACCENT);
     let red = ACCENTS[5].1;
@@ -147,7 +147,7 @@ fn native_accent_preferences_input() {
         });
         pump(400);
         let row = d.named("setting-zen-show-capy");
-        let switch = find_type::<gtk::Switch>(&row).unwrap();
+        let switch = descendant::<gtk::Switch>(&row).unwrap();
         assert!(switch.is_active());
         let shot = crate::snapshot(&d.w);
         let track = rgb(
@@ -195,18 +195,4 @@ fn native_accent_preferences_input() {
         );
     }
     d.finish();
-}
-
-fn find_type<T: IsA<gtk::Widget>>(root: &gtk::Widget) -> Option<T> {
-    if let Some(found) = root.downcast_ref::<T>() {
-        return Some(found.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        if let Some(found) = find_type(&widget) {
-            return Some(found);
-        }
-        child = widget.next_sibling();
-    }
-    None
 }

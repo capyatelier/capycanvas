@@ -9,21 +9,20 @@ fn native_contact_brushes() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(1600);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
-        .engine()
-        .backend()
-        .startup
-        .brush_ready
-    {
-        assert!(Instant::now() < deadline, "brush startup timed out");
-        pump(20);
-    }
+    until(
+        || {
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .engine()
+                .backend()
+                .startup
+                .brush_ready
+        },
+        "brush startup timed out",
+    );
     w.dispatch(UiAction::SetTheme {
         theme: Some(Theme::Light),
     });
@@ -101,7 +100,6 @@ fn native_contact_brushes() {
         eprintln!("brush_ready preset={preset:?} elapsed_ms={:.3}", prepare_started.elapsed().as_secs_f64() * 1000.);
         pump(100);
         let camera = state(&w).camera;
-        let m = camera.document_to_surface();
         for i in 0..=64 {
             let t = i as f32 / 64.;
             let column = if matches!(
@@ -119,30 +117,19 @@ fn native_contact_brushes() {
                 210. + (row % 11) as f32 * 110.
             } + (t * std::f32::consts::TAU).sin() * 16.;
             let now = glib::monotonic_time() as u64 * 1000;
+            let phase = match i {
+                0 => PenPhase::Down,
+                64 => PenPhase::Up,
+                _ => PenPhase::Move,
+            };
             w.input.send(
                 &w,
                 PenEvent {
                     device_id: 94,
-                    sequence: now,
                     timestamp_ns: now,
-                    view_revision: camera.revision,
-                    surface_position: Point {
-                        x: m[0] * x + m[2] * y + m[4],
-                        y: m[1] * x + m[3] * y + m[5],
-                    },
                     pressure: (t * std::f32::consts::PI).sin().max(0.).powf(0.65),
                     tilt_radians: if row < 4 { [0., 0.8] } else { [0.; 2] },
-                    twist_radians: 0.,
-                    distance: 0.,
-                    phase: if i == 0 {
-                        PenPhase::Down
-                    } else if i == 64 {
-                        PenPhase::Up
-                    } else {
-                        PenPhase::Move
-                    },
-                    tool: ToolKind::Pen,
-                    flags: SampleFlags::PRIMARY,
+                    ..pen_event(&camera, [x, y], phase, now)
                 },
             );
             pump(5);

@@ -29,14 +29,6 @@ impl Native {
     }
 }
 
-fn until(mut predicate: impl FnMut() -> bool, message: &str) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !predicate() {
-        assert!(Instant::now() < deadline, "{message}");
-        pump(10);
-    }
-}
-
 fn until_some<T>(mut find: impl FnMut() -> Option<T>, message: &str) -> T {
     let mut found = None;
     until(|| {

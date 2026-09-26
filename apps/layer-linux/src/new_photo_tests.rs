@@ -153,11 +153,7 @@ pub(super) fn profile_manager_action(w: &Rc<Workspace>, index: u32, action: &str
         .activate_action(&format!("saved.{action}"), None)
         .unwrap();
     let list = find_named(dialog.upcast_ref(), "profile-library-list").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !list.is_sensitive() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(|| list.is_sensitive(), "profile library list");
 }
 pub(super) fn profile_name(w: &Rc<Workspace>, name: &str) -> String {
     let root=controls_root(&w.window);
@@ -175,8 +171,7 @@ pub(super) fn response(w: &Rc<Workspace>, id: &str) {
         assert!(widget.is_visible());
         if let Some(button) = widget.downcast_ref::<gtk::Button>() { click(button); }
         else { widget.downcast::<adw::ActionRow>().unwrap().emit_by_name::<()>("activated", &[]); }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while dialog.is_mapped() { pump(20); assert!(Instant::now() < deadline); }
+        until(|| !dialog.is_mapped(), "profile dialog dismissal");
         return;
     }
     if id == "close"
@@ -186,11 +181,7 @@ pub(super) fn response(w: &Rc<Workspace>, id: &str) {
     {
         let dialog = w.window.visible_dialog().unwrap();
         click(&find_button(dialog.upcast_ref(), "Done").unwrap());
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while dialog.is_mapped() {
-            pump(20);
-            assert!(Instant::now() < deadline);
-        }
+        until(|| !dialog.is_mapped(), "profile library dismissal");
         return;
     }
     let dialog = w
@@ -201,11 +192,7 @@ pub(super) fn response(w: &Rc<Workspace>, id: &str) {
         .unwrap();
     assert!(dialog.is_response_enabled(id), "{id} disabled");
     click(&find_button(dialog.upcast_ref(), &dialog.response_label(id)).unwrap());
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while dialog.is_mapped() {
-        pump(20);
-        assert!(Instant::now() < deadline, "dialog dismissal");
-    }
+    until(|| !dialog.is_mapped(), "dialog dismissal");
 }
 pub(super) fn invoke(w: &Rc<Workspace>, command: CommandId) {
     w.dispatch(UiAction::Invoke { command });
@@ -522,11 +509,7 @@ fn native_new_presets_and_profiled_photo_master() {
         source_path.file_stem().unwrap().to_str().unwrap()
     );
     invoke(&photo, CommandId::DocumentProperties);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while photo.window.visible_dialog().is_none() {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
+    until(|| photo.window.visible_dialog().is_some(), "document properties dialog");
     pump(350);
     capture_ui(&photo, &output, "opened-prophoto-details.png");
     response(&photo, "done");
