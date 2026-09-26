@@ -43,7 +43,7 @@ with (output / "gpu-samples.csv").open("w") as gpu_log:
             record = dict(name=name, command=command, started_unix=started,
                           seconds=time.time()-started, exit_code=result.returncode,
                           binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
-                          environment={k:v for k,v in (env|extra).items() if k.startswith("LAYER_") or k in ["LD_LIBRARY_PATH", "CAPY_PHOTO_CODEC_DIR"]})
+                          environment={k:v for k,v in (env|extra).items() if k.startswith("LAYER_") or k == "LD_LIBRARY_PATH"})
             if result.returncode == 0:
                 script = "local-tone-report.py" if test.startswith("native_local") else "photo-navigation-report.py"
                 with Path(str(prefix)+".summary.json").open("w") as summary:

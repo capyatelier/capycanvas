@@ -68,19 +68,12 @@ uses an i64 offset and conventional Linux result codes without a libc dependency
 or syscalls. The public error enum lets callers match target-correct EAGAIN
 without hard-coding Unix errno values. The AV1 decoding algorithm is unchanged.
 Both bit-depth features are enabled and default/assembly features disabled by
-the application and the
-[portability check](../tools/validation/portable-av1/README.md).
+the application.
 
 The patch also removes unused function-pointer equality derives and an obsolete
 pending-task struct, makes three borrowed return lifetimes explicit, and builds
 the overlap helper only for debug assertions or tests. This keeps release builds
 warning-free without suppressing lints or changing decoding behavior.
-
-That independent check proves exact lossless 8/10/12-bit plane decoding in native
-Rust and Chrome WebAssembly, with no WebAssembly host imports, and checks the
-Android target. It uses one decoder thread and a frame-size limit. Application
-container/color/memory/cancellation integration is tracked separately in the
-[migration plan](../docs/development/portable-photo-core.md).
 
 ## WebP entropy-table admission
 

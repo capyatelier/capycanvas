@@ -530,25 +530,11 @@ Verification:
   `/tmp/capy-lz4-web-raster.log`. Android runtime storage remains to be exercised
   during its host integration; target compilation is not device qualification.
 
-## AV1 portability qualification — 2026-09-19
-
-The [rav1d portability patch](../../vendor/README.md#av1-decoder-portability)
-removes the initial WebAssembly compile failure from libc ABI aliases and makes
-assembly build tools optional. With assembly disabled, the independent
-[portable AV1 check](../../tools/validation/portable-av1/README.md) decodes
-lossless AOM-generated 8/10/12-bit frames in native Rust and Chrome 152
-WebAssembly. Every plane sample matches the known formula; the Wasm module has
-zero host imports. Android target compilation also passes. These tests use a
-single decoder thread and small bounded frames.
-
-This qualification workspace is separate from application builds. AVIF
-container parsing, alpha, geometry, NCLX/ICC, gain maps, encoding, large-image
-memory admission and host integration still require implementation and tests.
-
 ## Shared AVIF import milestone — 2026-09-19
 
-Application AVIF imports now use Rust BMFF parsing and the patched, assembly-free
-rav1d decoder. AVIF import capability is always present, including when GTK has
+Application AVIF imports now use Rust BMFF parsing and the
+[patched, assembly-free rav1d decoder](../../vendor/README.md#av1-decoder-portability).
+AVIF import capability is always present, including when GTK has
 no codec bundle. HEIC and AVIF writing still use the old adapters pending their
 own replacements.
 
@@ -601,11 +587,6 @@ Verification:
   the legacy HEIC feature and GTK compilation still passes. The repository
   license/source check passes with rav1d's BSD-2-Clause notice retained and a
   pinned CC0-1.0 exception for its `to_method` 1.1.0 dependency.
-- [The integrated browser check](../../tools/validation/portable_photo.py) runs
-  actual application dispatch, AV1 decoding, gain reconstruction, ICC and raster
-  storage in Chrome 152 WebAssembly, with zero host imports. Exact SDR and HDR
-  reference comparisons plus failed-budget/cancellation retry pass. This checks
-  the shared core; browser UI and Android device integration are still pending.
 
 ## Shared AVIF export milestone — 2026-09-19
 

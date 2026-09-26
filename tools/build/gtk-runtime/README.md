@@ -37,6 +37,5 @@ From a relocated package, rebuild the supplied source without a network fetch:
 bash share/doc/capycanvas-gtk/build.sh /tmp/capy-gtk-build /tmp/capy-gtk-prefix
 ```
 
-The old `tools/build/gtk-review/build.sh` delegates here for archived review
-launchers. Package smoke validation checks the actual mapped GTK library path;
+Package smoke validation checks the actual mapped GTK library path;
 source-file presence alone is not the startup qualification.

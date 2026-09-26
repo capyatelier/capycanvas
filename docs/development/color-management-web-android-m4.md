@@ -220,7 +220,6 @@ LAYER_WASM_BINDGEN=/path/to/wasm-bindgen tools/performance/workspace-motion.sh w
 LAYER_WASM_BINDGEN=/path/to/wasm-bindgen tools/performance/workspace-motion.sh web --package --package-offline
 LAYER_HDR_WORKLOADS=sparse4k,hdr12.png,hdr12.exr tools/performance/workspace-motion.sh web --hdr-performance
 python3 tools/validation/hdr_reference.py verify-delivery artifacts/color-m4-web-android/android-delivery
-python3 tools/validation/summarize_hdr_hosts.py artifacts/color-m4-web-android
 ```
 
 Generate the independent small PQ fixture with `hdr_reference.py generate DIR`,

@@ -338,7 +338,7 @@ python3 tools/validation/gtk_package_photo.py \
 
 This uses a private compositor, isolated settings and the existing
 `LAYER_UI_CAPTURE` diagnostic, which now also captures documents opened by file
-launch. It verifies loaded GTK/codec paths and records captures/build hashes. Its
+launch. It verifies the loaded GTK path and records captures/build hashes. Its
 four-second capture delay is not a decode-performance measurement.
 
 ## Validate

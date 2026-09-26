@@ -879,14 +879,6 @@ fn native_document_files() {
         assert_eq!(decoded.interpretation.channels, *channels);
         assert_eq!(decoded.interpretation.depth, layer_core::color::SampleDepth::U16);
         assert_eq!(layer_color::profile_bytes(&decoded.interpretation.profile).unwrap(), *profile);
-        std::fs::write(path.with_extension("icc"), profile).unwrap();
-        let mut raw = std::fs::File::create(path.with_extension("raw")).unwrap();
-        let mut rows = decoded.rows();
-        let mut row = vec![0; decoded.row_bytes()];
-        for y in 0..decoded.extent[1] {
-            rows.read(y, &mut row).unwrap();
-            std::io::Write::write_all(&mut raw, &row).unwrap();
-        }
     }
     let tiff = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&tiff_path).unwrap()), Default::default()).unwrap();
     assert_eq!(tiff.extent, [384, 256]);

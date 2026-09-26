@@ -67,9 +67,7 @@ manifest edits and added files, but not omitted upstream package files.
 The vendor README and eight patch files add 82,194 bytes, making all of `vendor/`
 16.156 MiB across 621 tracked files. Upstream-generated WebGPU bindings inside
 `wgpu`, and dav1d-derived assembly inside `rav1d`, are included in these totals.
-The seven crates are selected by root `[patch.crates-io]`; the isolated
-[AV1 qualification tool](../../tools/validation/portable-av1/Cargo.toml) also
-patches `rav1d` independently.
+The seven crates are selected by root `[patch.crates-io]`.
 
 **1. `rav1d`: AVIF decoder.**
 
