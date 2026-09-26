@@ -280,9 +280,7 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
 fn native_live_animated_windows_refresh_with_empty_paint_damage_and_keep_frozen_time() {
     let extent = [777, 533];
     let mut generator = effect(1, true, false);
-    let mut program = (*generator.effect.as_ref().unwrap().program)
-        .clone()
-        .with_time_controls();
+    let mut program = with_time_controls((*generator.effect.as_ref().unwrap().program).clone());
     program.wgsl = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let a=.37;return vec4<f32>(vec3<f32>(fract(p.x/37.+fx_time(b)/7.),fract(p.y/29.),.27)*a,a);}".into();
     generator.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
     let mut layers = vec![effect(2, false, false), generator];

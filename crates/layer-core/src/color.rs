@@ -152,21 +152,6 @@ pub fn srgb_encode(value: f32) -> f32 {
     }
 }
 
-/// A raw sRGB paint texel becomes straight linear color for brush/UI consumers.
-/// Alpha-zero is canonical transparent black, independent of unused RGB bits.
-pub fn decode_paint_texel(texel: [u8; 4]) -> [f32; 4] {
-    let alpha = f32::from(texel[3]) / 255.;
-    if alpha == 0. {
-        return [0.; 4];
-    }
-    [
-        srgb_decode(f32::from(texel[0]) / 255.) / alpha,
-        srgb_decode(f32::from(texel[1]) / 255.) / alpha,
-        srgb_decode(f32::from(texel[2]) / 255.) / alpha,
-        alpha,
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,21 +165,6 @@ mod tests {
             .map(|v| (srgb_decode(v as f32 / 255.) * 255.).round() as u8)
             .collect();
         assert_eq!(old.len(), 9);
-    }
-    #[test]
-    fn alpha_is_linear_and_association_precedes_transfer() {
-        assert_eq!(decode_paint_texel([255, 200, 128, 0]), [0.; 4]);
-        for alpha in [1u8, 2, 8, 32, 128, 255] {
-            let a = f32::from(alpha) / 255.;
-            let code = (srgb_encode(0.25 * a) * 255.).round() as u8;
-            let decoded = decode_paint_texel([code, code, code, alpha]);
-            assert_eq!(decoded[3], a);
-            // One encoded half-code, decoded at its endpoints, is the declared
-            // straight-color tolerance. A fixed epsilon hides low-alpha loss.
-            let lo = srgb_decode((f32::from(code) - 0.5).max(0.) / 255.) / a;
-            let hi = srgb_decode((f32::from(code) + 0.5).min(255.) / 255.) / a;
-            assert!(lo <= 0.25 && hi >= 0.25);
-        }
     }
     #[test]
     fn unsupported_layouts_and_invalid_extents_fail() {

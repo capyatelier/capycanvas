@@ -207,9 +207,6 @@ impl SourceRows<'_> {
         }
         Ok(())
     }
-    pub fn decoded_bytes(&self) -> usize {
-        self.tiles.iter().map(Vec::len).sum()
-    }
 }
 
 /// Source decoding accumulates one row band and compresses it before continuing.
@@ -361,7 +358,6 @@ mod tests {
         for y in (0..259).rev() {
             rows.read(y, &mut decoded).unwrap();
             assert_eq!(decoded, row(y));
-            assert_eq!(rows.decoded_bytes(), 3 * 256 * 256 * 8);
         }
     }
 }

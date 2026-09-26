@@ -110,10 +110,6 @@ impl RgbColor {
         Ok((peak > 0.).then(|| peak.log2()))
     }
 
-    pub fn with_brightness_ev(self, destination: RgbSpace, stops: f32) -> Result<Self, String> {
-        self.with_brightness_ev_at_depth(destination, stops, super::SampleDepth::F16)
-    }
-
     pub fn with_brightness_ev_at_depth(self, destination: RgbSpace, stops: f32, depth: super::SampleDepth) -> Result<Self, String> {
         let lower = if depth == super::SampleDepth::F32 { -149. } else { -16. };
         let upper = if depth == super::SampleDepth::F32 { 128. } else { 15. };
@@ -141,6 +137,7 @@ impl RgbColor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::SampleDepth;
 
     #[test]
     fn authored_linear_float32_survives_transfer_encoding_and_serialization() {
@@ -166,14 +163,14 @@ mod tests {
         assert!(color.in_hdr_gamut(RgbSpace::Srgb).unwrap());
         assert!(!color.in_gamut(RgbSpace::Srgb).unwrap());
         assert!((color.brightness_ev(RgbSpace::Srgb).unwrap().unwrap() - 3.).abs() < 1e-6);
-        let brighter = color.with_brightness_ev(RgbSpace::Srgb, 4.).unwrap().linear_in(RgbSpace::Srgb).unwrap();
+        let brighter = color.with_brightness_ev_at_depth(RgbSpace::Srgb, 4., SampleDepth::F16).unwrap().linear_in(RgbSpace::Srgb).unwrap();
         for (a, b) in brighter.into_iter().zip([16., 4., 2., 0.25]) { assert!((a-b).abs() < 2e-5); }
         let red = RgbColor::from_linear(RgbSpace::DisplayP3, [8., 0., 0., 1.]).unwrap();
         assert!(!red.in_hdr_gamut(RgbSpace::Srgb).unwrap());
         assert!(red.in_hdr_gamut(RgbSpace::DisplayP3).unwrap());
         assert!(RgbColor::BLACK.brightness_ev(RgbSpace::Srgb).unwrap().is_none());
-        assert!(RgbColor::BLACK.with_brightness_ev(RgbSpace::Srgb, 1.).is_err());
-        assert!(color.with_brightness_ev(RgbSpace::Srgb, f32::NAN).is_err());
+        assert!(RgbColor::BLACK.with_brightness_ev_at_depth(RgbSpace::Srgb, 1., SampleDepth::F16).is_err());
+        assert!(color.with_brightness_ev_at_depth(RgbSpace::Srgb, f32::NAN, SampleDepth::F16).is_err());
     }
 
     #[test]

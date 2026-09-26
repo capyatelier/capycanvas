@@ -2017,10 +2017,6 @@ impl Editor {
         Ok(true)
     }
 
-    pub fn clear_history(&mut self) {
-        self.undo.clear();
-        self.redo.clear();
-    }
     /// Roll back the suffix whose raster producers failed. Run after the host
     /// retires those producers; pending captures are not evidence of failure.
     /// Validate a candidate first so a missing recovery boundary cannot partly
@@ -2285,8 +2281,6 @@ mod tests {
         assert_ne!(editor.checkpoint(), saved); // a same-depth branch is not saved
         assert_ne!(editor.checkpoint(), initial);
         let branch = editor.checkpoint();
-        editor.clear_history();
-        assert_eq!(editor.checkpoint(), branch);
         assert!(
             editor
                 .perform(Edit::SetActiveLayer { id: LayerId(999) })

@@ -586,7 +586,7 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
         p.tilt_x=radians(props.XTilt());p.tilt_y=radians(props.YTilt());p.twist=radians(props.Twist());
         p.phase=phase;p.tool=tool;
         p.button=CanvasPointerButton(tool,props.IsMiddleButtonPressed(),props.IsRightButtonPressed(),props.IsXButton1Pressed()||props.IsXButton2Pressed());
-        p.flags=deviceFlags|(predicted?1:0)|(props.IsPrimary()?2:0)|(props.IsBarrelButtonPressed()?4:0)|(props.IsInverted()?8:0);
+        p.flags=deviceFlags|(predicted?1:0)|(props.IsPrimary()?2:0)|(props.IsInverted()?8:0);
         if(!PrepareCanvasPrediction(p))return true;
         latencyTrace.Input(p,arrival);
         samples.push_back(p);

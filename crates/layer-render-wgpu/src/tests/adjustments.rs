@@ -40,9 +40,7 @@ fn image_passes_cross_tiles_cache_inputs_and_freeze_animation() {
     generator.entry = "pattern".into();
     source.effect = Some(Arc::new(EffectInstance::new(Arc::new(generator))));
     let mut filter = effect(2, fixture("brightness_contrast"));
-    let mut program = (*filter.effect.as_ref().unwrap().program)
-        .clone()
-        .with_time_controls();
+    let mut program = with_time_controls((*filter.effect.as_ref().unwrap().program).clone());
     program.entry = "horizontal".into();
     program.wgsl = "fn horizontal(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return (fx_sample(p+vec2<f32>(-2.,0.))+c+fx_sample(p+vec2<f32>(2.,0.)))/3.;}\nfn vertical(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let a=(fx_sample(p+vec2<f32>(0.,-2.))+c+fx_sample(p+vec2<f32>(0.,2.)))/3.;return vec4<f32>(a.rg,clamp(a.b+fx_time(b)*.1,0.,1.),a.a);}".into();
     program.passes = ["horizontal", "vertical"]

@@ -10,12 +10,6 @@ pub enum ProjectAssetFormat {
     Rgba8Srgb,
 }
 impl ProjectAssetFormat {
-    pub fn descriptor(self) -> color::PixelDescriptor {
-        match self {
-            Self::R8Unorm => color::PixelDescriptor::COVERAGE8,
-            Self::Rgba8Srgb => color::PixelDescriptor::SRGB8_STRAIGHT,
-        }
-    }
     pub fn channels(self) -> u32 {
         match self {
             Self::R8Unorm => 1,

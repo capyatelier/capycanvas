@@ -827,7 +827,7 @@ fn gpu_preparation_is_shared_and_dependency_driven() {
     let base = setup(&mut r, EXTENT);
     let mut effect = filter(fixture("unsharp_mask"));
     let old = effect.effect.take().unwrap();
-    let program = Arc::new((*old.program).clone().with_time_controls());
+    let program = Arc::new(with_time_controls((*old.program).clone()));
     effect.effect = Some(Arc::new(layer_core::EffectInstance::new(program)));
     let mut layers = vec![effect, base];
     let count = |r: &WgpuRasterizer| r.scene.as_ref().unwrap().effects.preparation_count();

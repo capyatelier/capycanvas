@@ -146,34 +146,6 @@ pub struct EffectLookup {
 }
 
 impl EffectProgram {
-    pub fn with_time_controls(mut self) -> Self {
-        self.time = true;
-        let mut parameters = self.parameters.to_vec();
-        parameters.extend([
-            EffectParameter {
-                key: "animate".into(),
-                label: "Animate".into(),
-                section: Some("Animation".into()),
-                kind: EffectParameterKind::Toggle,
-                default: EffectValue::Toggle(true),
-            },
-            EffectParameter {
-                key: "time".into(),
-                label: "Frozen time".into(),
-                section: Some("Animation".into()),
-                kind: EffectParameterKind::Number {
-                    min: 0.,
-                    max: 3600.,
-                    step: 0.1,
-                    decimals: 2,
-                    unit: "s".into(),
-                },
-                default: EffectValue::Number(0.),
-            },
-        ]);
-        self.parameters = parameters.into();
-        self
-    }
     pub fn image_boundary(&self) -> bool {
         !self.passes.is_empty()
             || self.time

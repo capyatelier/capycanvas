@@ -6713,6 +6713,36 @@ mod tests {
     pub(super) fn fixture(id: &str) -> &'static layer_core::EffectDefinition {
         layer_core::bundled_effect_catalog().get(id).unwrap()
     }
+    pub(super) fn with_time_controls(
+        mut program: layer_core::EffectProgram,
+    ) -> layer_core::EffectProgram {
+        program.time = true;
+        let mut parameters = program.parameters.to_vec();
+        parameters.extend([
+            layer_core::EffectParameter {
+                key: "animate".into(),
+                label: "Animate".into(),
+                section: Some("Animation".into()),
+                kind: layer_core::EffectParameterKind::Toggle,
+                default: layer_core::EffectValue::Toggle(true),
+            },
+            layer_core::EffectParameter {
+                key: "time".into(),
+                label: "Frozen time".into(),
+                section: Some("Animation".into()),
+                kind: layer_core::EffectParameterKind::Number {
+                    min: 0.,
+                    max: 3600.,
+                    step: 0.1,
+                    decimals: 2,
+                    unit: "s".into(),
+                },
+                default: layer_core::EffectValue::Number(0.),
+            },
+        ]);
+        program.parameters = parameters.into();
+        program
+    }
     mod adjustments;
     pub(crate) mod image_windows;
     #[cfg(not(target_arch = "wasm32"))]

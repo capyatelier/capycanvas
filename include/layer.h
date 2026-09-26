@@ -44,7 +44,6 @@ enum {
 enum {
   LAYER_SAMPLE_PREDICTED = 1u << 0,
   LAYER_SAMPLE_PRIMARY = 1u << 1,
-  LAYER_SAMPLE_BARREL_BUTTON = 1u << 2,
   LAYER_SAMPLE_INVERTED = 1u << 3,
 };
 

@@ -502,11 +502,8 @@ mod tests {
         ));
         assert!(editor.redo().unwrap());
         assert!(weak.upgrade().is_some(), "history retains original source");
-        editor.clear_history();
-        assert!(
-            weak.upgrade().is_none(),
-            "cleared history releases an unused source"
-        );
+        drop(editor);
+        assert!(weak.upgrade().is_none(), "unused source is released");
     }
 
     fn rewrite_manifest(bytes: &[u8], edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
