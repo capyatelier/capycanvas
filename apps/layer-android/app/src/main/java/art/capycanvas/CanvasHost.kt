@@ -134,6 +134,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         post { Native.navigatorPlacements(handle, payload); wake() }
     }
     private val glassBoxes = linkedMapOf<Any, FloatArray>()
+    internal val glassBoxesForTest get() = glassBoxes.values.toList()
     private val glassConnections = linkedMapOf<Any, JSONObject>()
     private var glassQueued = false
     internal fun glassBox(key: Any, box: FloatArray?) {

@@ -48,6 +48,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
@@ -111,13 +112,13 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     val onGlass by lazy { Palette(dark, source, true) }
 }
 
-@Composable internal fun Modifier.glass(shape: Shape, color: Color = Color.Transparent): Modifier {
+@Composable internal fun Modifier.glass(shape: Shape, color: Color = Color.Transparent, rootOffset: () -> Offset = { Offset.Zero }): Modifier {
     val host = LocalCanvasHost.current
     val density = LocalDensity.current
     val key = remember { Any() }
     DisposableEffect(host, key) { onDispose { host.glassBox(key, null) } }
     return background(color, shape).onGloballyPositioned { coords ->
-        val origin = coords.positionInRoot() - host.surfaceOrigin
+        val origin = coords.positionInRoot() + rootOffset() - host.surfaceOrigin
         val size = coords.size.toSize()
         val radii = (shape as? CornerBasedShape)?.let { s ->
             listOf(s.topStart, s.topEnd, s.bottomEnd, s.bottomStart).map { it.toPx(size, density) }

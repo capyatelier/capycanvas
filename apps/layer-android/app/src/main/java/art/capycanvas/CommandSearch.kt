@@ -2,6 +2,7 @@ package art.capycanvas
 
 import android.content.res.Configuration
 import android.view.KeyEvent
+import android.view.View
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -22,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -41,17 +43,20 @@ import org.json.JSONObject
 /** Native focus, IME and modal capture; Rust owns results, applicability and execution. */
 @Composable internal fun CommandSearch(host: CanvasHost) {
     val view = host.commandSearch ?: return
-    val colors = LocalPalette.current
+    val colors = LocalPalette.current.onGlass
     val style = host.catalog?.objectOrNull("command_search_style")
-    val inset = (style?.optInt("inset", 12) ?: 12).dp
-    val gap = (style?.optInt("gap", 8) ?: 8).dp
-    val rowHeight = (style?.optInt("row_height", 44) ?: 44).coerceAtLeast(48).dp
+    fun metric(name: String, default: Int) = (style?.optInt(name, default) ?: default).dp
+    val inset = metric("inset", 12)
+    val gap = metric("gap", 8)
+    val rowHeight = metric("row_height", 44).coerceAtLeast(48.dp)
+    val shape = SquircleShape(metric("radius", 12))
     val parameter = view.objectOrNull("parameter")
     val parameterId = parameter?.getString("id")
     val results = view.array("results").objects()
     val selected = view.optInt("selected")
     val configuration = LocalConfiguration.current
     val keyboard = LocalSoftwareKeyboardController.current
+    val editor = LocalView.current
     val focus = remember { FocusRequester() }
     val list = rememberLazyListState()
     var text by remember { mutableStateOf(TextFieldValue(view.optString("query"))) }
@@ -73,8 +78,8 @@ import org.json.JSONObject
     }
     LaunchedEffect(selected, parameterId) { if (parameter == null && selected in results.indices) list.scrollToItem(selected) }
     Dialog(onDismissRequest = { back() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        val window = (LocalView.current.parent as DialogWindowProvider).window
-        val top = (if (configuration.screenWidthDp < 600) 16 else 72).dp
+        val root = LocalView.current
+        val window = (root.parent as DialogWindowProvider).window
         DisposableEffect(window) {
             window.setDimAmount(0f)
             window.enterCanvasFullscreen()
@@ -84,10 +89,12 @@ import org.json.JSONObject
         // count. Compose sizes only the visible card inside the IME-safe area.
         BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
             Box(Modifier.matchParentSize().pointerInput(Unit) { detectTapGestures { close() } })
+            val top = if (configuration.screenWidthDp < 600) 16.dp else (maxHeight / 5).coerceIn(metric("top_min", 48), metric("top_max", 192))
             val availableHeight = (maxHeight - top - 16.dp).coerceAtLeast(144.dp)
-            Surface(color = colors.panel, shape = RoundedCornerShape(12.dp), shadowElevation = 12.dp,
-                modifier = Modifier.align(Alignment.TopCenter).padding(start = 16.dp, end = 16.dp, top = top).widthIn(max = (style?.optInt("width", 560) ?: 560).dp)
+            Surface(color = colors.panelFill, shape = shape,
+                modifier = Modifier.align(Alignment.TopCenter).padding(start = 16.dp, end = 16.dp, top = top).widthIn(max = metric("width", 560))
                     .fillMaxWidth().testTag("command-bar").graphicsLayer { alpha = progress; translationY = (1f - progress) * -4.dp.toPx() }
+                    .panelShadow(12.dp, shape).glass(shape) { root.screenOffset(editor) }
                     .onPreviewKeyEvent { event ->
                         val native = event.nativeKeyEvent
                         if (native.action == KeyEvent.ACTION_UP) {
@@ -140,13 +147,16 @@ import org.json.JSONObject
                             }
                         }
                     }
-                    val current = parameter ?: results.getOrNull(selected)
-                    val detail = view.optString("error").takeUnless { it.isEmpty() || it == "null" }
-                        ?: current?.optString("disabled_reason")?.takeUnless { it.isEmpty() || it == "null" }
-                        ?: current?.optString(if (parameter != null) "label" else "category").orEmpty()
-                    Text(detail, Modifier.padding(horizontal = inset).heightIn(min = 20.dp).semantics { liveRegion = LiveRegionMode.Polite }, color = colors.secondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(view.optString("detail"), Modifier.padding(horizontal = inset).heightIn(min = 20.dp).testTag("command-detail").semantics { liveRegion = LiveRegionMode.Polite },
+                        color = colors.secondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
     }
+}
+
+private fun View.screenOffset(from: View): Offset {
+    val position = IntArray(2).also(::getLocationOnScreen)
+    val origin = IntArray(2).also(from::getLocationOnScreen)
+    return Offset((position[0] - origin[0]).toFloat(), (position[1] - origin[1]).toFloat())
 }
