@@ -225,7 +225,7 @@ fn delayed_explicit_import_cannot_migrate_a_replacement_document() {
             )
             .unwrap();
         finish_read(&mut service, &mut native);
-        let replacement = layer_ui::UiSession::from_project(
+        let mut replacement = layer_ui::UiSession::from_project(
             layer_host::Renderer(None),
             layer_ui::new_drawing(32, 24).unwrap(),
             None,
@@ -233,13 +233,8 @@ fn delayed_explicit_import_cannot_migrate_a_replacement_document() {
         )
         .unwrap();
         let epoch = native.session.state().document_file.epoch;
-        let revision = native.session.engine().document().revision;
-        let retired = native
-            .session
-            .adopt_project(Box::new(replacement), epoch, revision, None)
-            .map_err(|(error, _)| error)
-            .unwrap();
-        drop(retired);
+        replacement.inherit_window_state(&native.session).unwrap();
+        drop(std::mem::replace(&mut native.session, replacement));
         assert_ne!(native.session.state().document_file.epoch, epoch);
         service.poll(&mut native);
         if library {

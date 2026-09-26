@@ -62,8 +62,6 @@ mod filter_previews;
 pub use filter_previews::{FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 #[path = "filter_loading.rs"]
 mod filter_loading;
-#[path = "project_files.rs"]
-mod project_files;
 #[path = "renderer_lifecycle.rs"]
 mod renderer_lifecycle;
 pub use document_files::*;
@@ -5693,9 +5691,6 @@ mod tests {
         app.cancel_workspace_layout_preview();
         app.end_workspace_transition();
         assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
-        app.restore_workspace_layout(initial.history.layout().clone(), "Restore test")
-            .unwrap();
-        assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
         app.adopt_workspace(PreparedWorkspace::new(saved).unwrap())
             .unwrap();
         assert_eq!(app.state.workspace.layout.bottom_inset, 48.);
@@ -5716,7 +5711,7 @@ mod tests {
     }
 
     #[test]
-    fn history_preview_never_changes_capture_and_restoration_is_one_undoable_edit() {
+    fn history_preview_never_changes_capture() {
         let mut s = session();
         let starting = s.capture_workspace().unwrap();
         for position in [[410., 170.], [520., 220.]] {
@@ -5755,10 +5750,6 @@ mod tests {
         }
         assert!(s.dispatch(UiAction::SetBrushSize { value: 99. }).is_err());
         assert!(
-            s.restore_workspace_layout(starting.history.layout().clone(), "Restored layout")
-                .is_err()
-        );
-        assert!(
             s.adopt_workspace(PreparedWorkspace::new(starting.clone()).unwrap())
                 .is_err()
         );
@@ -5766,20 +5757,6 @@ mod tests {
         s.end_workspace_transition();
         assert_eq!(s.capture_workspace().unwrap(), original);
         assert!(s.state.workspace.zen_mode);
-        s.restore_workspace_layout(starting.history.layout().clone(), "Restored layout")
-            .unwrap();
-        let restored = s.capture_workspace().unwrap();
-        assert_eq!(
-            restored.history.revisions.len(),
-            original.history.revisions.len() + 1
-        );
-        assert_eq!(restored.history.generation, original.history.generation + 1);
-        assert_eq!(restored.working, original.working);
-        invoke(&mut s, CommandId::UndoWorkspace);
-        assert_eq!(
-            durable_layout(&s.state.workspace.layout),
-            *original.history.layout()
-        );
         assert_eq!(s.engine.document(), &document);
     }
 
@@ -6072,16 +6049,7 @@ mod tests {
         s.install_workspace_toolbar(library, Some(copy), None)
             .unwrap();
         assert_eq!(s.state.workspace.layout.panel_group(copy), placement);
-        let customized = durable_layout(&s.state.workspace.layout);
         assert_eq!(s.workspace_working_state(), working);
-        s.restore_workspace_layout(baseline.clone(), "Reset to original layout")
-            .unwrap();
-        assert_eq!(durable_layout(&s.state.workspace.layout), baseline);
-        assert_eq!(s.workspace_working_state(), working);
-        invoke(&mut s, CommandId::UndoWorkspace);
-        assert_eq!(durable_layout(&s.state.workspace.layout), customized);
-        assert_eq!(s.workspace_working_state(), working);
-        assert_eq!(s.capture_workspace().unwrap().history.revisions.len(), 4);
     }
 
     #[test]
@@ -6229,9 +6197,8 @@ mod tests {
     }
 
     #[test]
-    fn layout_reset_and_switch_keep_independent_working_values_and_document_history() {
+    fn workspace_switch_keeps_independent_working_values_and_document_history() {
         let mut s = session();
-        let baseline = s.state.workspace.layout.clone();
         invoke(&mut s, CommandId::AddLayer);
         let document = s.engine.document().clone();
         let blank = s.capture_workspace().unwrap();
@@ -6257,12 +6224,6 @@ mod tests {
         .unwrap();
         let working = s.workspace_working_state();
         let painting = s.capture_workspace().unwrap();
-        s.restore_workspace_layout(baseline.clone(), "Reset layout")
-            .unwrap();
-        assert_eq!(s.state.workspace.layout, baseline);
-        assert_eq!(s.workspace_working_state(), working);
-        invoke(&mut s, CommandId::UndoWorkspace);
-        assert_eq!(&s.state.workspace.layout, painting.history.layout());
         s.adopt_workspace(PreparedWorkspace::new(blank.clone()).unwrap())
             .unwrap();
         assert_eq!(s.workspace_working_state(), blank.working);
@@ -16924,7 +16885,7 @@ mod tests {
     }
 
     #[test]
-    fn project_adoption_keeps_the_receiving_windows_prediction_policy() {
+    fn new_drawings_take_the_windows_prediction_policy() {
         for platform in [
             Platform::Ios,
             Platform::Mac,
@@ -16935,92 +16896,80 @@ mod tests {
             for available in [false, true] {
                 for native in [false, true] {
                     for milliseconds in [64., 0.] {
-                        for recovered in [false, true] {
-                            let mut s = session();
-                            s.set_platform(platform);
-                            s.set_platform_prediction_available(available);
-                            s.apply_settings(Settings {
+                        let mut window = session();
+                        window.set_platform(platform);
+                        window.set_platform_prediction_available(available);
+                        window
+                            .apply_settings(Settings {
                                 platform_prediction: native,
                                 prediction_ms: milliseconds,
                                 ..Default::default()
                             })
                             .unwrap();
-                            s.dispatch(UiAction::SetBrushSize { value: 4. }).unwrap();
-                            // The file worker prepares a generic session. Only
-                            // its document/renderer belong to the incoming file.
-                            let candidate = Box::new(
-                                UiSession::from_project(
-                                    Recorder::default(),
-                                    new_drawing(1024, 768).unwrap(),
-                                    None,
-                                    s.state.camera.viewport,
-                                )
-                                .unwrap(),
-                            );
-                            let epoch = s.state.document_file.epoch;
-                            let revision = s.engine.document().revision;
-                            let result = if recovered {
-                                s.adopt_recovered_project(candidate, epoch, revision)
+                        let mut s = UiSession::from_project(
+                            Recorder::default(),
+                            new_drawing(1024, 768).unwrap(),
+                            None,
+                            window.state.camera.viewport,
+                        )
+                        .unwrap();
+                        s.inherit_window_state(&window).unwrap();
+                        s.dispatch(UiAction::SetBrushSize { value: 4. }).unwrap();
+                        let uses_native = native && available && platform != Platform::Mac;
+                        let mut last = event(&s, 1, PenPhase::Down, 0.8);
+                        for index in 0..101 {
+                            last.timestamp_ns = 1_000_000_000 + index * 10_000_000;
+                            last.sequence = index + 1;
+                            last.surface_position = Point {
+                                x: 300. + index as f32 * 4.,
+                                y: 450.,
+                            };
+                            last.phase = if index == 0 {
+                                PenPhase::Down
                             } else {
-                                s.adopt_project(candidate, epoch, revision, None)
+                                PenPhase::Move
                             };
-                            assert!(result.is_ok());
-                            let uses_native = native && available && platform != Platform::Mac;
-                            let mut last = event(&s, 1, PenPhase::Down, 0.8);
-                            for index in 0..101 {
-                                last.timestamp_ns = 1_000_000_000 + index * 10_000_000;
-                                last.sequence = index + 1;
-                                last.surface_position = Point {
-                                    x: 300. + index as f32 * 4.,
-                                    y: 450.,
-                                };
-                                last.phase = if index == 0 {
-                                    PenPhase::Down
-                                } else {
-                                    PenPhase::Move
-                                };
-                                s.pen(last).unwrap();
-                                // Native prediction bends upward, making source
-                                // selection distinguishable from extrapolation.
-                                let predicted = PenEvent {
-                                    timestamp_ns: last.timestamp_ns + 8_000_000,
-                                    surface_position: Point {
-                                        x: last.surface_position.x + 3.2,
-                                        y: 446.,
-                                    },
-                                    phase: PenPhase::Move,
-                                    flags: SampleFlags::PREDICTED,
-                                    ..last
-                                };
-                                s.pen(predicted).unwrap();
-                                s.renderer_mut().recorded_dabs.clear();
-                                s.frame(last.timestamp_ns, predicted.timestamp_ns).unwrap();
-                            }
-                            let metrics = s.engine.metrics();
-                            let tip = s.renderer_mut().recorded_dabs.last().unwrap().center;
-                            let [a, b, c, d, x, y] = s.state.camera.document_to_surface();
-                            let tip = Point {
-                                x: a * tip.x + c * tip.y + x,
-                                y: b * tip.x + d * tip.y + y,
+                            s.pen(last).unwrap();
+                            // Native prediction bends upward, making source
+                            // selection distinguishable from extrapolation.
+                            let predicted = PenEvent {
+                                timestamp_ns: last.timestamp_ns + 8_000_000,
+                                surface_position: Point {
+                                    x: last.surface_position.x + 3.2,
+                                    y: 446.,
+                                },
+                                phase: PenPhase::Move,
+                                flags: SampleFlags::PREDICTED,
+                                ..last
                             };
-                            let tracks_policy = if uses_native {
-                                (tip.x - 703.2).abs() < 0.3 && (tip.y - 446.).abs() < 0.3
-                            } else if milliseconds == 0. {
-                                (tip.x - 700.).abs() < 0.3 && (tip.y - 450.).abs() < 0.3
-                            } else {
-                                // Adaptive lookahead may shorten the requested
-                                // 64 ms. It must still exceed the default 8 ms
-                                // and stay inside the receiving window's limit.
-                                (716. ..=725.9).contains(&tip.x) && (tip.y - 450.).abs() < 0.3
-                            };
-                            assert!(tracks_policy,
-                                "{platform:?} available={available} native={native} saved={milliseconds}ms recovered={recovered}: tip={tip:?}");
-                            assert_eq!(metrics.platform_prediction_frames > 0, uses_native);
-                            assert_eq!(
-                                metrics.engine_prediction_frames > 0,
-                                !uses_native && milliseconds > 0.
-                            );
+                            s.pen(predicted).unwrap();
+                            s.renderer_mut().recorded_dabs.clear();
+                            s.frame(last.timestamp_ns, predicted.timestamp_ns).unwrap();
                         }
+                        let metrics = s.engine.metrics();
+                        let tip = s.renderer_mut().recorded_dabs.last().unwrap().center;
+                        let [a, b, c, d, x, y] = s.state.camera.document_to_surface();
+                        let tip = Point {
+                            x: a * tip.x + c * tip.y + x,
+                            y: b * tip.x + d * tip.y + y,
+                        };
+                        let tracks_policy = if uses_native {
+                            (tip.x - 703.2).abs() < 0.3 && (tip.y - 446.).abs() < 0.3
+                        } else if milliseconds == 0. {
+                            (tip.x - 700.).abs() < 0.3 && (tip.y - 450.).abs() < 0.3
+                        } else {
+                            // Adaptive lookahead may shorten the requested
+                            // 64 ms. It must still exceed the default 8 ms
+                            // and stay inside the receiving window's limit.
+                            (716. ..=725.9).contains(&tip.x) && (tip.y - 450.).abs() < 0.3
+                        };
+                        assert!(tracks_policy,
+                            "{platform:?} available={available} native={native} saved={milliseconds}ms: tip={tip:?}");
+                        assert_eq!(metrics.platform_prediction_frames > 0, uses_native);
+                        assert_eq!(
+                            metrics.engine_prediction_frames > 0,
+                            !uses_native && milliseconds > 0.
+                        );
                     }
                 }
             }

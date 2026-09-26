@@ -1,7 +1,7 @@
 use super::*;
 #[path = "workspace_manager_tests.rs"]
 mod manager_tests;
-use layer_ui::{DockLayout, UiAction};
+use layer_ui::UiAction;
 use layer_workspace::{OWNER_LEASE_MS, StoreResponse, StoreWorker, new_id};
 use std::{
     cell::{Cell, RefCell},
@@ -165,6 +165,18 @@ impl Fixture {
         drop(self);
         std::fs::remove_dir_all(directory).unwrap();
     }
+    fn edit_layout(&mut self) {
+        let panel = self.native.session.layout([1200., 900.]).groups[0].panels[0];
+        self.native
+            .dispatch(UiAction::MovePanel {
+                panel,
+                target: layer_ui::DockTarget::Float {
+                    position: [410., 170.],
+                },
+                viewport: [1200., 900.],
+            })
+            .unwrap();
+    }
 }
 
 #[test]
@@ -220,13 +232,7 @@ fn startup_waits_for_canvas_idle_then_close_restores_layout_and_working_values()
     f.native
         .dispatch(UiAction::SetBrushSize { value: 47. })
         .unwrap();
-    let previous = f.native.session.state().revision;
-    let change = f
-        .native
-        .session
-        .restore_workspace_layout(DockLayout::default(), "Test layout")
-        .unwrap();
-    f.native.apply_change(previous, change);
+    f.edit_layout();
     let expected = f.native.session.capture_workspace().unwrap();
     let id = f.service.manager.active_id().unwrap();
     f.close();

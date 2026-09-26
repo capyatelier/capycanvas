@@ -73,15 +73,6 @@ fn input(f: &mut Fixture, command: Input) {
     f.service.manager_input(&mut f.native, id, command).unwrap();
     f.service.poll(&mut f.native, f.now, wall());
 }
-fn layout(f: &mut Fixture, layout: DockLayout) {
-    let before = f.native.session.state().revision;
-    let change = f
-        .native
-        .session
-        .restore_workspace_layout(layout, "Test arrangement")
-        .unwrap();
-    f.native.apply_change(before, change);
-}
 fn release_reads(f: &mut Fixture) {
     f.faults.hold_reads.set(false);
     if let Some(waker) = f.faults.read_waker.borrow_mut().take() {
@@ -134,7 +125,7 @@ fn included_workspace_preview_is_temporary_and_switch_restores_saved_edits() {
     f.native
         .dispatch(UiAction::SetBrushSize { value: 42. })
         .unwrap();
-    layout(&mut f, DockLayout::default());
+    f.edit_layout();
     let edited = f.native.session.capture_workspace().unwrap();
     open(&mut f, Command::Switch { id: original });
     assert_eq!(f.native.session.capture_workspace().unwrap(), before);
@@ -334,7 +325,7 @@ fn failed_create_retries_the_same_item_and_keeps_the_outgoing_workspace() {
 fn history_selection_is_temporary_and_restore_preserves_current_working_values() {
     let mut f = Fixture::new();
     f.ready();
-    layout(&mut f, DockLayout::default());
+    f.edit_layout();
     f.native
         .dispatch(UiAction::SetBrushSize { value: 91. })
         .unwrap();
@@ -639,7 +630,7 @@ fn starting_layout_preview_is_temporary_and_confirmed_reset_is_one_undo_step() {
         .unwrap()
         .starting_layout(layer_ui::Platform::Windows)
         .unwrap();
-    layout(&mut f, DockLayout::default());
+    f.edit_layout();
     f.native
         .dispatch(UiAction::SetBrushSize { value: 73. })
         .unwrap();
@@ -671,7 +662,7 @@ fn starting_layout_preview_is_temporary_and_confirmed_reset_is_one_undo_step() {
             input(&mut f, Input::Cancel);
             assert!(view(&f).is_null());
             assert_eq!(
-                &f.native.session.state().workspace.layout,
+                &layer_ui::durable_layout(&f.native.session.state().workspace.layout),
                 before.history.layout()
             );
             assert_eq!(f.native.session.capture_workspace().unwrap(), before);
@@ -689,7 +680,7 @@ fn starting_layout_preview_is_temporary_and_confirmed_reset_is_one_undo_step() {
             assert_eq!(view(&f)["can_retry"], true);
             assert_eq!(f.native.session.capture_workspace().unwrap(), before);
             assert_eq!(
-                &f.native.session.state().workspace.layout,
+                &layer_ui::durable_layout(&f.native.session.state().workspace.layout),
                 before.history.layout()
             );
             f.faults.fail.set(false);
@@ -709,7 +700,7 @@ fn starting_layout_preview_is_temporary_and_confirmed_reset_is_one_undo_step() {
         })
         .unwrap();
     assert_eq!(
-        &f.native.session.state().workspace.layout,
+        &layer_ui::durable_layout(&f.native.session.state().workspace.layout),
         before.history.layout()
     );
     f.native

@@ -32,8 +32,6 @@ pub struct CollapsedColumnPlacement {
     /// The owner of Drawers and Auto-hide; a singleton owns itself.
     pub stack: u32,
     pub bounds: Bounds,
-    /// Legacy wire field; zero height while the expand caret is retired.
-    pub expand: Bounds,
     pub grip: Bounds,
     pub empty: Bounds,
     /// Clip/scroll the groups in this area, leaving the grip fixed.
@@ -130,9 +128,6 @@ impl CollapsedColumnPlacement {
             },
         }
     }
-    pub fn expand_label(&self) -> &'static str {
-        "Expand column"
-    }
     pub fn expand_action(&self) -> crate::UiAction {
         crate::UiAction::Customize {
             action: crate::CustomizationAction::SetColumnCollapsed {
@@ -158,11 +153,10 @@ impl CollapsedColumnPlacement {
         self.empty.height = (self.grip.y - self.empty.y).max(0.);
     }
     /// Vertical strips insert tabs vertically; divider neighborhoods create groups.
-    /// Expand/grip controls and clipped overflow are never accidental targets.
+    /// The grip and clipped overflow are never accidental targets.
     pub fn drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
         let [x, y] = point;
         if !self.bounds.contains(x, y)
-            || self.expand.contains(x, y)
             || self.grip.contains(x, y)
             || (!self.content.contains(x, y) && !self.empty.contains(x, y))
         {
@@ -231,7 +225,6 @@ impl CollapsedColumnPlacement {
             b.y += delta[1];
         };
         shift(&mut self.bounds);
-        shift(&mut self.expand);
         shift(&mut self.grip);
         shift(&mut self.empty);
         shift(&mut self.content);
@@ -1165,19 +1158,14 @@ fn column_width(
 pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumnPlacement {
     let width = bounds.width.min(TILE_SIZE);
     let bounds = Bounds { width, ..bounds };
-    let expand = Bounds {
-        height: 0.,
-        width,
-        ..bounds
-    };
-    let grip_height = PANEL_GRIP_HEIGHT.min(bounds.height - expand.height);
+    let grip_height = PANEL_GRIP_HEIGHT.min(bounds.height);
     let grip = Bounds {
         y: bounds.y + bounds.height - grip_height,
         height: grip_height,
         width,
         ..bounds
     };
-    let top = (expand.y + expand.height).min(grip.y);
+    let top = bounds.y.min(grip.y);
     let content = Bounds {
         y: top,
         height: (grip.y - WORKSPACE_SPACING - top).max(0.),
@@ -1237,7 +1225,6 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
         id: node.id(),
         stack: node.id(),
         bounds,
-        expand,
         grip,
         content,
         empty,
@@ -1818,7 +1805,7 @@ mod tests {
                     height: 110.,
                 },
             );
-            assert_eq!(c.groups[0].divider.y, c.expand.y + c.expand.height);
+            assert_eq!(c.groups[0].divider.y, c.bounds.y);
             c.scroll(offset);
             for (index, group) in c.groups.iter().enumerate() {
                 assert_eq!(group.divider.height, if index == 0 { 0. } else { 1. });
@@ -1904,7 +1891,6 @@ mod tests {
                 edge: Edge::Bottom
             }
         );
-        assert_eq!(c.expand.height, 0.);
         assert!(c.drop_hint([x, c.grip.y + 2.]).is_none());
     }
 
@@ -2011,11 +1997,10 @@ mod tests {
                 height,
             };
             let c = resolve_column(layout.node(8).unwrap(), bounds);
-            for b in [c.expand, c.grip, c.content, c.empty] {
+            for b in [c.grip, c.content, c.empty] {
                 assert!(b.x >= bounds.x && b.x + b.width <= bounds.x + bounds.width);
                 assert!(b.y >= bounds.y && b.y + b.height <= bounds.y + bounds.height);
             }
-            assert!(c.expand.y + c.expand.height <= c.grip.y);
             for icon in c.groups.iter().flat_map(|g| &g.icons) {
                 let point = [icon.bounds.x + 18., icon.bounds.y + 18.];
                 if !c.content.contains(point[0], point[1]) {

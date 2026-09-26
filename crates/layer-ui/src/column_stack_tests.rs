@@ -584,8 +584,13 @@ fn check_paint_default_stack(platform: Platform) {
         .unwrap();
     assert_open(&s);
     click_column(&mut s, Panel::Layers);
-    s.restore_workspace_layout(layout.clone(), "Reset Paint")
-        .unwrap();
+    s.dispatch(UiAction::RestoreWorkspace {
+        workspace: Box::new(crate::WorkspaceState {
+            layout: layout.clone(),
+            ..s.state.workspace.clone()
+        }),
+    })
+    .unwrap();
     assert_open(&s);
 
     let mut customized = layout;
@@ -739,11 +744,7 @@ fn stacking_and_unstacking_preserve_member_trees_and_widths() {
         matches!(s.state.workspace.layout.column_drop_hint(&resolved, right, gap).unwrap().target,
         DockTarget::StackColumn { column, before: false } if column == left)
     );
-    assert!(
-        members
-            .iter()
-            .all(|c| c.bounds.width == TILE_SIZE && c.expand.height == 0.)
-    );
+    assert!(members.iter().all(|c| c.bounds.width == TILE_SIZE));
     for (index, id) in [left, right].into_iter().enumerate() {
         assert_eq!(s.state.workspace.layout.node(id).unwrap(), &trees[index]);
         assert_eq!(

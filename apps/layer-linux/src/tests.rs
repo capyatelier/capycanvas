@@ -11829,7 +11829,6 @@ fn native_collapsed_column_input() {
         pump(250);
         let column = w.resolved().collapsed.into_iter().next().unwrap();
         let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
-        assert_eq!(column.expand.height, 0.);
         assert!(find_named(w.surface.upcast_ref(), &format!("expand-column-{}", column.id)).is_none());
         for icon in column.groups.iter().flat_map(|g| &g.icons) {
             let point = center(icon.bounds);
@@ -11841,7 +11840,7 @@ fn native_collapsed_column_input() {
         let collapsed = state(&w).workspace;
         let gap = [
             column.bounds.x + column.bounds.width * 0.5,
-            column.expand.y + column.expand.height + WORKSPACE_SPACING * 0.5,
+            column.bounds.y + WORKSPACE_SPACING * 0.5,
         ];
         for point in [center(column.empty), gap, center(column.grip)] {
             assert_eq!(w.columns.background_at(&w, point), Some(column.id));

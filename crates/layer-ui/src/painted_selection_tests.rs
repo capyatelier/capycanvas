@@ -143,7 +143,7 @@ mod painted_selection_checks {
         assert!(replay.restart && replay.finish);
     }
     #[test]
-    fn quick_mask_final_taper_replaces_preview_and_adoption_clears_runtime_target() {
+    fn quick_mask_final_taper_replaces_preview() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
         let mut brush = s.engine.configured_brush().clone();
@@ -164,15 +164,6 @@ mod painted_selection_checks {
         assert_eq!(s.state.layer_properties.controls.len(), 3);
         assert!(!s.state.layer_tools.controls.opacity);
         assert!(s.dispatch(UiAction::SetLayerOpacity { id: None, opacity: 0.5 }).is_err());
-        let epoch = s.state.document_file.epoch;
-        let revision = s.engine.document().revision;
-        assert!(
-            s.adopt_project(Box::new(session()), epoch, revision, None)
-                .is_ok()
-        );
-        assert!(!s.state.layer_tools.quick_mask);
-        assert!(s.selection_masks.target().is_none());
-        assert!(s.selection_masks.reselect.is_none());
     }
     #[test]
     fn mask_editing_blocks_artwork_filters_and_destructive_commands() {

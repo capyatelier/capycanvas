@@ -205,15 +205,8 @@ mod tests {
             insets: [0., 144., 48.],
         })
         .unwrap();
-        host.session
-            .restore_workspace_layout(layer_ui::DockLayout::default(), "Reset")
-            .unwrap();
-        assert_eq!(
-            host.session.state().workspace.layout.titlebar_insets,
-            [0., 144., 48.]
-        );
-        host.dispatch(UiAction::Invoke {
-            command: layer_ui::CommandId::UndoWorkspace,
+        host.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(layer_ui::WorkspaceState::default()),
         })
         .unwrap();
         assert_eq!(

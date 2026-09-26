@@ -12,9 +12,9 @@ fn tone_preview_survives_edits_but_not_document_replacement() {
     assert!(edited != original && original.can_preview(&edited));
     s.set_sdr_view(Some(SdrRendition {exposure:2.,..Default::default()}),true).unwrap();
     assert!(ToneKey::current(&s).unwrap() == edited,"appearance changes reuse exact analysis");
-    let epoch=s.state.document_file.epoch; let revision=s.engine.document().revision;
-    assert!(s.adopt_project(Box::new(make()),epoch,revision,None).is_ok());
-    let replacement=ToneKey::current(&s).unwrap();
+    let mut replacement=make();
+    replacement.inherit_window_state(&s).unwrap();
+    let replacement=ToneKey::current(&replacement).unwrap();
     assert!(!original.can_preview(&replacement),"same-size replacement must reject old illumination");
 }
 
@@ -241,25 +241,22 @@ fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
     let capture = s.capture_workspace().unwrap();
     let encoded = serde_json::to_vec(&capture).unwrap();
     for space in RgbSpace::ALL {
-        let candidate = Box::new(make(space));
-        let epoch = s.state.document_file.epoch;
-        let revision = s.engine.document().revision;
-        s.adopt_project(candidate, epoch, revision, None)
-            .map_err(|(e, _)| e)
-            .unwrap();
-        assert_eq!(s.state.colors.definition(), definition);
-        assert_eq!(s.state.colors.rgb_space(), space);
+        let mut c = make(space);
+        c.inherit_initial_drawing_tools(&s).unwrap();
+        let revision = c.engine.document().revision;
+        assert_eq!(c.state.colors.definition(), definition);
+        assert_eq!(c.state.colors.rgb_space(), space);
         assert_eq!(
-            s.engine.configured_brush().color_rgba_linear,
+            c.engine.configured_brush().color_rgba_linear,
             definition.linear_in(space).unwrap()
         );
-        assert_eq!(s.state.brush.opacity, 0.23);
+        assert_eq!(c.state.brush.opacity, 0.23);
         let prepared = PreparedWorkspace::new(serde_json::from_slice(&encoded).unwrap()).unwrap();
-        s.adopt_workspace(prepared).unwrap();
-        assert_eq!(s.state.colors.rgb_space(), space);
-        assert_eq!(s.state.colors.definition(), definition);
+        c.adopt_workspace(prepared).unwrap();
+        assert_eq!(c.state.colors.rgb_space(), space);
+        assert_eq!(c.state.colors.definition(), definition);
         assert_eq!(
-            s.engine.configured_brush().color_rgba_linear,
+            c.engine.configured_brush().color_rgba_linear,
             definition.linear_in(space).unwrap()
         );
         for preset in [
@@ -267,9 +264,9 @@ fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
             DefaultBrushPreset::WetRound,
             DefaultBrushPreset::GPen,
         ] {
-            s.select_brush(preset as u32).unwrap();
+            c.select_brush(preset as u32).unwrap();
             assert_eq!(
-                s.engine.configured_brush().color_rgba_linear,
+                c.engine.configured_brush().color_rgba_linear,
                 definition.linear_in(space).unwrap()
             );
             let secondary = default_brush(preset)
@@ -279,7 +276,7 @@ fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
                 .unwrap()
                 .linear_in(space)
                 .unwrap();
-            for (a, b) in s
+            for (a, b) in c
                 .engine
                 .configured_brush()
                 .color_dynamics
@@ -292,17 +289,17 @@ fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
         }
         // Sampling preserves extended straight document RGB; alpha controls
         // whether a sample exists, while paint opacity remains independent.
-        let opacity = s.state.brush.opacity;
-        s.eyedropper.queue(ColorSampleSource::Composite, [32, 32]);
-        s.frame(1, 1).unwrap();
-        let request = *s.renderer_mut().sample_requests.last().unwrap();
-        s.renderer_mut().sample_reply = Some(ColorSample {
+        let opacity = c.state.brush.opacity;
+        c.eyedropper.queue(ColorSampleSource::Composite, [32, 32]);
+        c.frame(1, 1).unwrap();
+        let request = *c.renderer_mut().sample_requests.last().unwrap();
+        c.renderer_mut().sample_reply = Some(ColorSample {
             request_id: request.request_id,
             rgba: [-0.1, 1.2, 0.4, 0.00001],
         });
-        s.frame(2, 2).unwrap();
-        assert_eq!(s.state.colors.definition().space, space);
-        for (a, b) in s
+        c.frame(2, 2).unwrap();
+        assert_eq!(c.state.colors.definition().space, space);
+        for (a, b) in c
             .engine
             .configured_brush()
             .color_rgba_linear
@@ -311,12 +308,8 @@ fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
         {
             assert!((a - b).abs() < 2e-7, "{space:?}: {a} != {b}");
         }
-        assert_eq!(s.state.brush.opacity, opacity);
-        assert_eq!(s.engine.document().revision, revision);
-        s.dispatch(UiAction::Color {
-            action: ColorAction::Definition { color: definition },
-        })
-        .unwrap();
+        assert_eq!(c.state.brush.opacity, opacity);
+        assert_eq!(c.engine.document().revision, revision);
     }
 }
 

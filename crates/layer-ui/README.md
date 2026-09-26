@@ -59,7 +59,7 @@ within the source group, keeping the grabbed point under the pointer.
 | [layout.rs](src/layout.rs), [customization.rs](src/customization.rs) and [workspace.rs](src/workspace.rs) | Docking, configurable panel contents and workspace history. |
 | [interaction.rs](src/interaction.rs) and [camera.rs](src/camera.rs) | Routing pointer gestures and navigating the canvas. |
 | [settings.rs](src/settings.rs), [shortcuts.rs](src/shortcuts.rs) and [numeric.rs](src/numeric.rs) | Preference definitions, key bindings and numeric editing rules. |
-| [document_files.rs](src/document_files.rs) and [project_files.rs](src/project_files.rs) | File requests, save checkpoints and document adoption. |
+| [document_files.rs](src/document_files.rs) | File requests and save checkpoints. |
 
 Keep command meaning and validation here when adding a control. Native widget
 construction and storage stay in the host. Start with the

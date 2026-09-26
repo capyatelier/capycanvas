@@ -411,35 +411,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             true,
         ))
     }
-
-    /// Reset and Layout History restoration only replace layout. This is one new
-    /// recoverable edit, preserving metadata, latest tool values, and Zen.
-    pub fn restore_workspace_layout(
-        &mut self,
-        layout: DockLayout,
-        description: &str,
-    ) -> Result<UiChange, String> {
-        self.require_workspace_idle()?;
-        if self.workspace_preview.is_some() {
-            return Err("Finish previewing the layout first".into());
-        }
-        layout.validate()?;
-        let before = self.state.workspace.clone();
-        self.state.workspace.layout = durable_layout(&layout);
-        self.state.workspace.layout.open_default_columns(self.state.platform);
-        self.state.workspace.layout.titlebar_insets = before.layout.titlebar_insets;
-        self.state.workspace.layout.bottom_inset = before.layout.bottom_inset;
-        self.state.workspace.layout.header_presentation = before.layout.header_presentation.clone();
-        self.workspace_history
-            .record_named(before, &self.state.workspace, description);
-        self.state.customization = CustomizationState::default();
-        self.sync_work_area();
-        self.refresh_commands();
-        Ok(self.changed(
-            regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS,
-            false,
-        ))
-    }
 }
 
 impl<R: CanvasRenderer> UiSession<R> {

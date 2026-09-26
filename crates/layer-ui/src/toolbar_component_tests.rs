@@ -102,14 +102,10 @@ fn toolbar_components_edit_shared_parameters_and_reject_obsolete_contexts() {
         .is_err()
     );
     let context = s.state().toolbar_context();
-    let file = s.state().document_file.clone();
-    let revision = s.engine().document().revision;
+    let mut next = session();
+    next.inherit_window_state(&s).unwrap();
     assert!(
-        s.adopt_project(Box::new(session()), file.epoch, revision, None)
-            .is_ok()
-    );
-    assert!(
-        s.dispatch(UiAction::ToolbarEdit {
+        next.dispatch(UiAction::ToolbarEdit {
             context,
             action: Box::new(UiAction::SetBrushSize { value: 17. })
         })
