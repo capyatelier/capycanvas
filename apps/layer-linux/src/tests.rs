@@ -81,6 +81,8 @@ mod workspace_motion;
 mod workspace_resize;
 #[path = "fullscreen_tests.rs"]
 mod fullscreen;
+#[path = "screen_view_tests.rs"]
+mod screen_view;
 use super::*;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};

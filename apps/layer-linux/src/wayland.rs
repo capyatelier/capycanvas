@@ -1,5 +1,6 @@
 //! Our child surface only. GTK retains its connection, parent, input and chrome.
 mod color;
+mod feedback;
 mod hdr;
 mod pacing;
 pub(crate) use pacing::StrokeTarget;
@@ -343,6 +344,7 @@ pub struct Child {
 struct Events {
     color: color::State,
     hdr: hdr::HdrState,
+    display: feedback::DisplayFeedback,
     clock: Arc<FrameClock>,
     monotonic: bool,
     feedback_pending: usize,
@@ -421,7 +423,7 @@ impl Child {
         self.events
             .dispatch_pending(&mut self.state)
             .map_err(error)?;
-        self.poll_hdr_feedback();
+        self.poll_display_feedback();
         self.connection.flush().map_err(error)
     }
 

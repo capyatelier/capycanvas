@@ -54,6 +54,10 @@ pub struct ViewportPresenter {
     proof_uniform: wgpu::Buffer,
     hdr_uniform: wgpu::Buffer,
     hdr_options: [f32; 8],
+    screen_uniform: wgpu::Buffer,
+    screen_options: [f32; 16],
+    screen_counts: wgpu::Buffer,
+    screen_counter: Option<crate::present_screen::ScreenCounter>,
     local_buffer: wgpu::Buffer,
     disabled_local_buffer: wgpu::Buffer,
     gpu_local_guide: Option<std::sync::Arc<crate::local_tone::GpuToneGuide>>,
@@ -301,6 +305,46 @@ impl ViewportPresenter {
         Ok(())
     }
 
+    pub fn set_screen_check(&mut self, renderer: &WgpuRasterizer, check: Option<crate::present_screen::ScreenCheck>) {
+        let options = crate::present_screen::ScreenCheck::uniform(check);
+        if options != self.screen_options {
+            renderer.queue.write_buffer(&self.screen_uniform, 0, options.map(f32::to_ne_bytes).as_flattened());
+            self.screen_options = options;
+        }
+    }
+
+    pub fn screen_check_busy(&self) -> bool {
+        self.screen_counter.as_ref().is_some_and(|c| c.busy())
+    }
+
+    pub fn check_screen(&mut self, renderer: &WgpuRasterizer) -> bool {
+        let (Some(group), Some(camera)) = (&self.bind_group, self.camera_data) else { return false };
+        if self.standalone_overview || !crate::present_screen::ScreenCheck::counts(&self.screen_options) {
+            return false;
+        }
+        let signature: Vec<u32> = camera
+            .iter()
+            .chain(&self.hdr_options)
+            .chain(&self.screen_options)
+            .map(|v| v.to_bits())
+            .chain(self.proof_options)
+            .chain([renderer.composite_revision as u32, (renderer.composite_revision >> 32) as u32])
+            .collect();
+        let counter = self.screen_counter.get_or_insert_with(|| {
+            crate::present_screen::ScreenCounter::new(&renderer.device, &self.pipeline_layout, &self.shader)
+        });
+        if counter.busy() || counter.current(&signature) {
+            return false;
+        }
+        let viewport = [camera[8] as u32, camera[9] as u32];
+        counter.start(&renderer.device, &renderer.queue, group, &self.screen_counts, viewport, signature);
+        true
+    }
+
+    pub fn screen_check_result(&mut self) -> Option<Result<bool, GpuRasterError>> {
+        self.screen_counter.as_mut()?.finish()
+    }
+
     /// Shares the renderer's optional startup cache with presentation shaders.
     pub fn for_renderer(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> Self {
         Self::with_device(&renderer.device, format, SdrSurfaceColor::Srgb)
@@ -344,7 +388,7 @@ impl ViewportPresenter {
         let layout = crate::bindings::layout(device, "viewport bindings", &[
             crate::bindings::buffer(
                 10,
-                wgpu::ShaderStages::FRAGMENT,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: true },
                 false,
                 std::num::NonZeroU64::new(32),
@@ -357,15 +401,15 @@ impl ViewportPresenter {
             ),
             crate::bindings::buffer(
                 0,
-                wgpu::ShaderStages::VERTEX_FRAGMENT,
+                wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Uniform,
                 true,
                 wgpu::BufferSize::new(CAMERA_SIZE),
             ),
-            crate::bindings::texture(1, wgpu::ShaderStages::FRAGMENT, true),
+            crate::bindings::texture(1, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
             crate::bindings::sampler(
                 2,
-                wgpu::ShaderStages::FRAGMENT,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::SamplerBindingType::Filtering,
             ),
             crate::bindings::buffer(
@@ -375,35 +419,49 @@ impl ViewportPresenter {
                 false,
                 None,
             ),
-            crate::bindings::texture(4, wgpu::ShaderStages::FRAGMENT, false),
+            crate::bindings::texture(4, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, false),
             crate::bindings::buffer(
                 5,
-                wgpu::ShaderStages::FRAGMENT,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: true },
                 false,
                 std::num::NonZeroU64::new(64),
             ),
-            crate::bindings::texture(6, wgpu::ShaderStages::FRAGMENT, true),
+            crate::bindings::texture(6, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
             crate::bindings::buffer(
                 7,
-                wgpu::ShaderStages::FRAGMENT,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: true },
                 false,
                 std::num::NonZeroU64::new(20),
             ),
             crate::bindings::buffer(
                 9,
-                wgpu::ShaderStages::FRAGMENT,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Uniform,
                 false,
                 std::num::NonZeroU64::new(32),
             ),
             crate::bindings::buffer(
                 8,
-                wgpu::ShaderStages::FRAGMENT,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Uniform,
                 false,
                 std::num::NonZeroU64::new(16),
+            ),
+            crate::bindings::buffer(
+                12,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+                false,
+                std::num::NonZeroU64::new(crate::present_screen::UNIFORM_SIZE),
+            ),
+            crate::bindings::buffer(
+                13,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: false },
+                false,
+                std::num::NonZeroU64::new(crate::present_screen::COUNTS_SIZE),
             ),
         ]);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -415,7 +473,7 @@ impl ViewportPresenter {
             label: Some("viewport shader"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                     format == wgpu::TextureFormat::Rgba16Float,
                     if color == SdrSurfaceColor::WindowsScrgb { 2.5375 } else { 1. },
                     color == SdrSurfaceColor::Bt2100Pq,
@@ -427,7 +485,8 @@ impl ViewportPresenter {
                     include_str!("hdr_view.wgsl"),
                     include_str!("proof_view.wgsl"),
                     include_str!("overview_sample.wgsl"),
-                    include_str!("present.wgsl")
+                    include_str!("present.wgsl"),
+                    include_str!("present_screen.wgsl")
                 )
                 .into(),
             ),
@@ -481,6 +540,20 @@ impl ViewportPresenter {
                 mapped_at_creation: false,
             }),
             hdr_options: [0.; 8],
+            screen_uniform: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("screen gamut check"),
+                size: crate::present_screen::UNIFORM_SIZE,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            screen_options: [0.; 16],
+            screen_counts: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("screen gamut counts"),
+                size: crate::present_screen::COUNTS_SIZE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            screen_counter: None,
             local_buffer: disabled_local_buffer.clone(),
             disabled_local_buffer,
             gpu_local_guide: None,
@@ -788,6 +861,8 @@ impl ViewportPresenter {
                 self.hdr_uniform.as_entire_binding(),
                 self.local_buffer.as_entire_binding(),
                 wgpu::BindingResource::TextureView(saved),
+                self.screen_uniform.as_entire_binding(),
+                self.screen_counts.as_entire_binding(),
             ]));
             self.document_extent = renderer.document_extent;
             self.selection_buffer = Some(coverage.clone());
@@ -903,6 +978,7 @@ impl ViewportPresenter {
             let content = !previous.valid
                 || previous.hdr != self.hdr_options
                 || previous.proof != self.proof_options
+                || previous.screen != self.screen_options
                 || (previous.selection_revision != renderer.selection_paint_revision
                     && previous.selection_revision.wrapping_add(1) != renderer.selection_paint_revision)
                 || (previous.revision != renderer.composite_revision
@@ -982,6 +1058,7 @@ impl ViewportPresenter {
             previous.selection_revision = renderer.selection_paint_revision;
             previous.hdr = self.hdr_options;
             previous.proof = self.proof_options;
+            previous.screen = self.screen_options;
             previous.cursor = cursor;
             previous.picker = self.picker.bounds();
             previous.overviews.clone_from(&self.overviews);

@@ -159,7 +159,7 @@ pub fn bradford(source_white: [f64; 2], destination_white: [f64; 2]) -> Matrix3 
 fn xy_to_xyz([x, y]: [f64; 2]) -> [f64; 3] {
     [x / y, 1., (1. - x - y) / y]
 }
-fn multiply(a: Matrix3, b: Matrix3) -> Matrix3 {
+pub fn multiply(a: Matrix3, b: Matrix3) -> Matrix3 {
     std::array::from_fn(|row| {
         std::array::from_fn(|col| (0..3).map(|k| a[row][k] * b[k][col]).sum())
     })

@@ -4,6 +4,7 @@ mod canvas_bar;
 mod documents;
 mod display_color;
 mod proof_view;
+mod screen_view;
 mod hdr;
 mod hdr_color_scale;
 mod effects;

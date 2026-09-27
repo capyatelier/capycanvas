@@ -232,9 +232,82 @@ Show Before/After, Apply and Cancel for consequential changes. Apply is one undo
 step. Routine edits and settings do not trigger repeated confirmation dialogs.
 
 Display handling is automatic where supported, including calibrated profiles and
-monitor moves. **Display Details…** reports active management and capabilities;
-show limitations truthfully. Do not offer a monitor profile as a working-space
-fix or ask users to configure technical display settings on every launch.
+monitor moves. Show limitations truthfully. Do not offer a monitor profile as a
+working-space fix or ask users to configure technical display settings on every
+launch.
+
+**Trusting what the screen shows**
+
+The goal is that painters can trust the canvas, and know when they cannot. There
+is no display setting, menu item or command. A footer chip speaks only when the
+screen matters:
+
+| Situation | Footer |
+| --- | --- |
+| SDR drawing, every visible color fits the screen | Nothing |
+| Visible artwork or proof has colors the screen can't show | **Colors clipped**, with a warning icon |
+| Print proof or gamut warning, and the screen may not match the print | **May not match print** |
+| HDR drawing, no proof | **HDR**, **SDR preview** or **Showing SDR**, unless colors are clipped |
+
+A screen that can show everything in view, converted by a desktop that knows the
+monitor's colors, gets no chip, even while proofing: "Proof: …" already says what
+is on the canvas, and a chip that only reports the absence of a problem trains
+people to ignore the warnings. The app cannot claim the screen is accurate, only
+that nothing it knows of gets in the way.
+
+Clicking the chip opens a small popover with the screen's name, a one-line
+headline and, when it helps, one or two plain sentences: what the painter is
+seeing, why, and what they can do about it. It never lists values the app
+doesn't know, and uses numbers only inside the sentence that needs them, for
+example "Your brightness setting is so high that there's no extra brightness
+left for HDR highlights. Lower the screen brightness to see them." **Highlight these colors** appears only while
+colors are clipped (or highlighting is on);
+it paints them blue on the canvas, distinct from the proof's gray gamut warning.
+Highlighting is temporary view state, never saved.
+
+Write this text for a painter, not an engineer, and for every platform:
+
+- Say what they can't rely on on this screen, why in their terms, and the one
+  thing that fixes it. Say nothing when nothing needs fixing.
+- Name real places: HDR in the operating system's display settings, the screen
+  brightness, the buttons on the monitor. The popover shows the next step once
+  that one is done.
+- Scope every claim to this screen; never imply that HDR or
+  proofing is unreliable in general. Don't state consequences that may not
+  apply, and hedge only facts the app cannot know ("if it isn't already").
+- Use one word per thing (screen; monitor only for its buttons) and only terms
+  the app already teaches (sRGB, HDR, ×, EV). Say "your operating system" when
+  it is the one doing something, and "Capy Canvas can't tell" when the app lacks
+  information, so each sentence is true on every platform, including browsers.
+- No metaphors or personification, no invented tasks such as confirming or
+  checking elsewhere, and no reassurance nobody asked for, such as "your file
+  is unchanged".
+
+"May not match print" means the system's conversion is not known to match the
+panel: the screen reports only its signal format (HDR mode), the system assumes
+sRGB for a monitor that reports a wider gamut, white is at the monitor's peak,
+or colors are unmanaged. The system's own description always wins; a
+monitor's declared values only fill what the system leaves unknown and are never
+used to convert artwork.
+
+Shared Rust (`layer_color::screen`, `UiSession::screen_chip` and
+`screen_details`) owns the assessment, wording and chip rules. Hosts supply a
+`ScreenReport`: the system description of the window's screen and, where
+available, the monitor's EDID. The presenter counts clipped visible pixels in a
+compute pass once the view has been idle for 250 ms, after proof simulation, and
+never during motion.
+
+- **GTK** reads the compositor's preferred description for the canvas surface
+  (`wp_color_management_surface_feedback_v1`) and the monitor's EDID from
+  `/sys/class/drm/*-<connector>/edid`, which needs no permission. GNOME 50 reports
+  sRGB in its default mode, EDID primaries in its native mode, and only the
+  BT.2020 PQ signal in HDR mode; it never uses an assigned ICC profile for its
+  conversion. TV EDIDs that report BT.709 while accepting BT.2020 leave the HDR
+  gamut unknown.
+- **macOS/iPadOS** can use the screen's color space (including measured
+  profiles) and EDR headroom; **Windows** the DXGI output description; **Android**
+  the display's HDR capabilities and wide-gamut flag; **Web** only the
+  `color-gamut` and `dynamic-range` media queries.
 
 **8. Edit HDR and provide an intentional SDR version**
 
@@ -316,8 +389,8 @@ processing and fixed reference white of 203 cd/m². It supports noninterlaced
 gain-map AVIF route, plus authored SDR PNG/TIFF/JPEG. Unsupported AVIF profiles,
 transforms and gain-map layouts fail explicitly. Other hosts reject the new
 gain-map output choices until their codec integration is qualified.
-The footer reports **HDR**, **SDR preview** or **Showing SDR**; click it for display
-and reference-white details. New Drawing offers an **HDR drawing** preset.
+The footer reports **HDR**, **SDR preview** or **Showing SDR**; click it for the
+screen details described above. New Drawing offers an **HDR drawing** preset.
 HDR Edit Color opens in **Linear RGB**, accepting above-white and negative
 values. Only HDR documents show the colored intensity arc below the hue ring.
 Double-click resets it to 1× (0 EV); the angled EV caption is read-only. The
@@ -371,7 +444,7 @@ VFX/OCIO and specialist EXR processing remain separately scoped.
 
 Add a small **Preferences → Color** page: defaults/presets for New, **Open images:
 Preserve source depth/profile** (default), an optional promote-to-16-bit photo
-policy, missing-profile handling, profile import/management and display details.
+policy, missing-profile handling and profile import/management.
 Proof and output presets belong beside those tasks. Valid embedded profiles
 should not produce routine mismatch warnings; an advanced ask/convert policy can
 serve users who deliberately want a fixed working space.

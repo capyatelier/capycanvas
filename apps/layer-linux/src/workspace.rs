@@ -909,7 +909,7 @@ pub struct Workspace {
     pub(crate) proof: Rc<crate::proof_view::ProofView>,
     pub(crate) local_tone: Rc<crate::local_tone_view::LocalToneView>,
     pub(crate) proof_panel: Rc<crate::files::proof::ProofPanel>,
-    pub(crate) hdr_status: gtk::Button,
+    pub(crate) screen: Rc<crate::screen_view::ScreenView>,
     pub(crate) recovery: RefCell<Rc<crate::recovery::Recovery>>,
     pub(crate) documents: crate::documents::Documents,
     pub input: Rc<crate::input::Input>,
@@ -1061,11 +1061,8 @@ impl Workspace {
         let proof_panel = crate::files::proof::ProofPanel::new();
         status_bar.append(&proof.label);
         status_bar.append(&local_tone.label);
-        let hdr_status=gtk::Button::builder().visible(false).build();
-        hdr_status.add_css_class("flat");
-        hdr_status.set_widget_name("hdr-view-status");
-        hdr_status.add_css_class("status-bubble");
-        status_bar.append(&hdr_status);
+        let screen = crate::screen_view::ScreenView::new();
+        status_bar.append(&screen.button);
         status_bar.add_css_class("workspace-status");
         view_info.root.set_hexpand(true);
         view_info.root.set_halign(gtk::Align::End);
@@ -1157,7 +1154,7 @@ impl Workspace {
             image_drop_label,
             proof,
             local_tone,
-            hdr_status,
+            screen,
             recovery: RefCell::new(Rc::new(crate::recovery::Recovery::default())),
             documents: crate::documents::Documents::new(),
             surface,
@@ -1239,7 +1236,7 @@ impl Workspace {
             input: Rc::default(),
             tooltips: Rc::default(),
         });
-        this.hdr_status.connect_clicked(glib::clone!(#[weak] this, move |_| crate::hdr::display_details(&this)));
+        this.screen.bind(&this);
         let (theme, accent) = system_appearance();
         this.apply_palette(Settings::default().palette(theme, Platform::Gtk, accent));
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
@@ -1959,20 +1956,6 @@ impl Workspace {
         if !self.window.renderer().is_some_and(|r| r.type_().name() == "GskVulkanRenderer") { return 1.; }
         self.gpu.borrow().as_ref().map_or(1., |g| g.session.engine().backend().display_headroom)
     }
-    pub(crate) fn display_description(&self) -> String {
-        let encoding = self.gpu.borrow().as_ref().and_then(|g| g.session.engine().backend().display_encoding);
-        let mut description = match encoding {
-            Some(layer_render_wgpu::SdrSurfaceColor::Bt2100Pq) => "Managed BT.2020 PQ canvas. The compositor maps its color and brightness to each monitor; the HDR picker and paint previews use the same display headroom. The hue guide stays an SDR reference.".to_string(),
-            Some(_) => "Managed linear scRGB canvas. The compositor maps its color and brightness to each monitor; the HDR picker and paint previews use the same display headroom. The hue guide stays an SDR reference.".to_string(),
-            None => self.view_color().description().to_string(),
-        };
-        if let Some(monitor) = self.window.surface().and_then(|s| s.display().monitor_at_surface(&s)) {
-            if let Some(name) = monitor.description().or_else(|| monitor.model()).or_else(|| monitor.connector()) {
-                description.push_str(&format!(" Monitor: {name}."));
-            }
-        }
-        description
-    }
     fn remember_command_focus(&self) {
         if self.command_bar.is_open() || self.window.visible_dialog().is_some() { return; }
         let Some(focus) = gtk::prelude::GtkWindowExt::focus(&self.window) else { return; };
@@ -2086,13 +2069,10 @@ impl Workspace {
                 if let Some(g) = self.gpu.borrow_mut().as_mut() {
                     let hdr = g.session.engine().document().color.depth.is_float();
                     let rendition = hdr.then(|| g.session.effective_sdr_rendition());
-                    let proof = g.session.state().soft_proof || g.session.state().gamut_warning;
-                    self.hdr_status.set_visible(hdr && !proof && g.session.state().workspace.layout.canvas_info.visible);
                     let preview = g.session.state().preview_sdr;
                     let headroom = g.session.renderer_mut().display_headroom;
                     if g.session.set_hdr_display_available(headroom > 1.) { change.regions |= regions::COMMANDS | regions::BRUSH; }
-                    self.hdr_status.set_label(if preview && headroom > 1. { "SDR preview" } else if headroom > 1. { "HDR" } else { "Showing SDR" });
-                    self.hdr_status.set_tooltip_text(Some("Display details"));
+                    self.screen.sync(self, g);
                     if let Err(e) = g.session.renderer_mut().set_hdr_view(rendition, preview) { eprintln!("HDR viewing: {e}"); }
 
                 }

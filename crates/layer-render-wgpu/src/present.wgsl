@@ -209,7 +209,7 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
     let paint = proof_artwork(artwork_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint),p);
     let checker = select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0);
-    var rgb = view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a);
+    var rgb = screen_marked(paint, view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a), checker);
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}
     // Raster-selection outlines are sampled at display resolution, never
     // traced/tessellated on the CPU or baked into the document composition.

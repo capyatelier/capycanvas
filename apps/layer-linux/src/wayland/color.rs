@@ -145,6 +145,7 @@ impl Child {
                                 "piecewise sRGB (TF 14)"
                             }
                         );
+                        self.watch_display();
                         return Ok(view);
                     }
                     Err(error) => {

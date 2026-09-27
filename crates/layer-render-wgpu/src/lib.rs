@@ -85,6 +85,7 @@ mod placement_drag;
 mod preparation;
 use preparation::Work;
 mod present_damage;
+mod present_screen;
 mod region_requests;
 mod region_sources;
 mod scene;
@@ -100,6 +101,7 @@ mod thumbnails;
 #[cfg(not(target_arch = "wasm32"))]
 mod source_thumbnails;
 pub use present::{OverviewPlacement, ViewportPresenter};
+pub use present_screen::ScreenCheck;
 
 // RGB stores encode(linear RGB * alpha); sampling/blending uses Float32 linear
 // premultiplied values. Alpha is ordinary, unencoded UNORM8 coverage.

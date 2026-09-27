@@ -127,6 +127,7 @@ pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
 pub use session::{Notice, NoticeAction};
+pub use session::{ScreenChip, ScreenDetails, ScreenState};
 pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionMenu, SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
     ChoicePresentation, HostRequest, HostRequestKind, Platform,
@@ -913,6 +914,7 @@ pub struct UiState {
     pub soft_proof: bool,
     pub preview_sdr: bool,
     pub hdr_display_available: bool,
+    pub screen: ScreenState,
     pub gamut_warning: bool,
     pub revision: u64,
     /// Observed native/browser window state; never stored in workspace preferences.
@@ -977,6 +979,9 @@ pub enum UiAction {
     },
     WindowFullscreen {
         fullscreen: bool,
+    },
+    ShowClippedColors {
+        visible: bool,
     },
     Navigator {
         phase: ContactPhase,

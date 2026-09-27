@@ -87,7 +87,6 @@ pub struct Preferences {
     empty: gtk::Label,
     error: gtk::Label,
     fields: RefCell<BTreeMap<PreferenceId, Field>>,
-    display: RefCell<Option<adw::ActionRow>>,
     groups: RefCell<Vec<(SettingsPage, usize, adw::PreferencesGroup)>>,
     shortcut_page: shortcut_page::ShortcutPage,
     shown: Cell<bool>,
@@ -451,7 +450,6 @@ impl Preferences {
             empty,
             error,
             fields: RefCell::new(BTreeMap::new()),
-            display: RefCell::new(None),
             groups: RefCell::default(),
             shortcut_page,
             shown: Cell::new(false),
@@ -900,10 +898,6 @@ impl Preferences {
                 row.add_suffix(&button);
                 row.set_activatable_widget(Some(&button));
                 group.add(&row);
-                let display = text_row("Canvas display", &w.display_description());
-                display.set_widget_name("color-display-details");
-                group.add(&display);
-                *self.display.borrow_mut() = Some(display);
                 content.add(&group);
             }
             self.stack.add_titled_with_icon(
@@ -938,7 +932,6 @@ impl Preferences {
             );
         }
         self.updating.set(true);
-        if let Some(row) = self.display.borrow().as_ref() { row.set_subtitle(&w.display_description()); }
         let open = view.is_some();
         let was_open = self.shown.replace(open);
         if !open {

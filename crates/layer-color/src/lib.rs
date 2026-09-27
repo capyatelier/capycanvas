@@ -3,6 +3,7 @@
 mod icc;
 pub use icc::*;
 pub mod photo;
+pub mod screen;
 mod photo_project;
 pub use photo_project::{assume_source_profile, photo_project};
 mod resize;

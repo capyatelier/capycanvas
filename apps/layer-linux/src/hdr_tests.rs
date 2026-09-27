@@ -153,11 +153,13 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     let photo = Workspace::with_project(&app, Some((p, None)));
     photo.window.present();
     ready(&photo);
-    assert!(photo.hdr_status.is_visible());
-    let status_bounds = photo.hdr_status.compute_bounds(&photo.window).unwrap();
+    assert!(photo.screen.button.is_visible());
+    let status_bounds = photo.screen.button.compute_bounds(&photo.window).unwrap();
     assert!(status_bounds.height() >= 24.);
     assert!(status_bounds.y() >= 0. && status_bounds.y() + status_bounds.height() <= photo.window.height() as f32);
-    photo.hdr_status.emit_clicked(); pump(100); response(&photo, "close");
+    photo.screen.button.emit_clicked(); pump(100);
+    assert!(photo.screen.popover().is_visible());
+    photo.screen.popover().popdown(); pump(50);
     let before = pixels(&photo);
     assert!(before.iter().any(|p| p[0] > 1.));
     assert!(before.iter().all(|p| p[3] == 1.));
@@ -441,14 +443,14 @@ fn native_hdr_display_negotiation_and_export_navigation() {
         let gpu = w.gpu.borrow();
         let backend = gpu.as_ref().unwrap().session.engine().backend();
         if backend.display_encoding.is_some() && (!expected_hdr || backend.display_headroom > 1.) {
-            eprintln!("HDR_DISPLAY_QUALIFICATION encoding={:?} headroom={:.4} label={:?}", backend.display_encoding, backend.display_headroom, w.hdr_status.label());
+            eprintln!("HDR_DISPLAY_QUALIFICATION encoding={:?} headroom={:.4} label={:?}", backend.display_encoding, backend.display_headroom, w.screen.chip_label());
             break;
         }
         assert!(Instant::now() < deadline, "HDR negotiation: {:?}, {}", backend.display_encoding, backend.display_headroom);
     }
     if expected_hdr {
         let deadline = Instant::now() + Duration::from_secs(2);
-        while w.hdr_status.label().as_deref() != Some("HDR") { pump(20); assert!(Instant::now() < deadline, "HDR feedback did not refresh idle UI"); }
+        while w.screen.chip_label().as_deref() != Some("HDR") { pump(20); assert!(Instant::now() < deadline, "HDR feedback did not refresh idle UI"); }
     }
     let output = std::env::var_os("LAYER_HDR_OUTPUT").map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("../../artifacts/color-m4/feedback-navigation"));
@@ -456,9 +458,9 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     capture_ui(&w, &output, "hdr-display.png");
     if expected_hdr {
         invoke(&w, CommandId::PreviewSdr); ready(&w);
-        assert_eq!(w.hdr_status.label().as_deref(), Some("SDR preview"));
+        assert_eq!(w.screen.chip_label().as_deref(), Some("SDR preview"));
         invoke(&w, CommandId::PreviewSdr); ready(&w);
-        assert_eq!(w.hdr_status.label().as_deref(), Some("HDR"));
+        assert_eq!(w.screen.chip_label().as_deref(), Some("HDR"));
     }
     let before = snapshot(&w);
     invoke(&w, CommandId::ExportDocument);

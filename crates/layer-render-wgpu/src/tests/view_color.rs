@@ -360,6 +360,49 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
 }
 
 #[test]
+fn screen_check_counts_and_marks_only_colors_the_screen_cannot_show() {
+    use layer_color::screen::Chromaticities;
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 }).unwrap();
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = texture(&r, format);
+    let target_view = target.create_view(&Default::default());
+    let srgb_screen = Chromaticities::of(RgbSpace::Srgb).from_space(RgbSpace::DisplayP3);
+    let check = crate::ScreenCheck { from_view: Some(srgb_screen), surface_clips: true, bounded: true, mark: false };
+    let mark = bytes(rgb::apply(RgbSpace::Srgb.linear_transform(RgbSpace::DisplayP3), [0., 0.17, 1.]), 1.);
+    for (codes, outside) in [([0, 65535, 0, 65535], true), ([30000, 30000, 30000, 65535], false)] {
+        frame(&mut r, &source(RgbSpace::DisplayP3, codes));
+        let mut presenter = ViewportPresenter::for_surface(&r, format, SdrSurfaceColor::DisplayP3).unwrap();
+        assert!(!presenter.check_screen(&r), "nothing to count before a check is configured");
+        presenter.set_screen_check(&r, Some(check));
+        presenter.present(&r, &target_view, view(), [0.; 4]).unwrap();
+        let plain = crate::layer_tests::page_bytes(&r, &target);
+        assert!(presenter.check_screen(&r));
+        assert!(!presenter.check_screen(&r), "one count per unchanged view");
+        let clipped = loop {
+            complete(&r);
+            if let Some(result) = presenter.screen_check_result() {
+                break result.unwrap();
+            }
+        };
+        assert_eq!(clipped, outside, "{codes:?}");
+        assert!(!presenter.check_screen(&r), "the counted view is current");
+        presenter.set_screen_check(&r, Some(crate::ScreenCheck { mark: true, ..check }));
+        presenter.present(&r, &target_view, view(), [0.; 4]).unwrap();
+        let marked = crate::layer_tests::page_bytes(&r, &target);
+        let i = (16 * 256 + 16) * 4;
+        if outside {
+            close(&marked[i..i + 4], mark, "marked clipped color");
+        } else {
+            assert_eq!(marked, plain, "colors on the screen stay unmarked");
+        }
+    }
+    let mut presenter = ViewportPresenter::for_surface(&r, format, SdrSurfaceColor::DisplayP3).unwrap();
+    presenter.set_screen_check(&r, Some(crate::ScreenCheck { from_view: None, surface_clips: false, bounded: true, mark: true }));
+    presenter.present(&r, &target_view, view(), [0.; 4]).unwrap();
+    assert!(!presenter.check_screen(&r), "an unknown screen gamut is never counted");
+}
+
+#[test]
 fn native_paint_thumbnail_converts_the_same_color_as_export() {
     use layer_core::raster::*;
     for space in RgbSpace::ALL {

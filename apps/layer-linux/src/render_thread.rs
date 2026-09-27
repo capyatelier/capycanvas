@@ -85,6 +85,7 @@ impl Frame {
 enum Command {
     LocalTone(Option<Arc<layer_render_wgpu::local_tone::GpuToneGuide>>, mpsc::Sender<Result<(),String>>),
     Proof(Option<Arc<layer_color::ProofLut>>, bool, bool, mpsc::Sender<Result<(), String>>),
+    Screen(u64, f32, Option<layer_render_wgpu::ScreenCheck>),
     HdrView(Option<layer_core::color::hdr::SdrRendition>, bool),
     PrepareColor(Box<color::Request>),
     AdoptColor(u64),
@@ -134,8 +135,12 @@ enum Reply {
     ColorSample(Result<layer_render::ColorSample, String>),
     FilterPreviews(u64, Result<layer_render::FilterPreviewImage, String>),
     DisplayHeadroom(f32, Option<layer_render_wgpu::SdrSurfaceColor>),
+    Screen(layer_color::screen::ScreenColor),
+    ScreenClipped(u64, Option<bool>),
     Error(String),
 }
+
+const SCREEN_CHECK_DELAY: Duration = Duration::from_millis(250);
 
 #[cfg(test)]
 static NEXT_STARTUP_PAUSE: std::sync::Mutex<Option<Arc<AtomicBool>>> = std::sync::Mutex::new(None);
@@ -160,6 +165,10 @@ pub struct RenderWorker {
     initialized: bool,
     pub(crate) display_headroom: f32,
     pub(crate) display_encoding: Option<layer_render_wgpu::SdrSurfaceColor>,
+    pub(crate) screen_color: layer_color::screen::ScreenColor,
+    pub(crate) screen_clipped: Option<bool>,
+    screen: Option<(f32, Option<layer_render_wgpu::ScreenCheck>)>,
+    screen_generation: u64,
     snapshot_gpu: Option<layer_render_wgpu::snapshot::SnapshotGpu>,
     pub(crate) view_color: crate::display_color::ViewColor,
     first_frame_sent: bool,
@@ -224,6 +233,20 @@ impl RenderWorker {
             self.send(Command::HdrView(rendition, preview_sdr)).map_err(error)?;
             self.hdr_view = Some((rendition, preview_sdr));
         }
+        Ok(())
+    }
+
+    pub(crate) fn set_screen(&mut self, headroom: f32, check: Option<layer_render_wgpu::ScreenCheck>) -> Result<(), String> {
+        if self.screen == Some((headroom, check)) {
+            return Ok(());
+        }
+        let unmarked = |c: Option<layer_render_wgpu::ScreenCheck>| c.map(|c| layer_render_wgpu::ScreenCheck { mark: false, ..c });
+        if self.screen.is_none_or(|(_, previous)| unmarked(previous) != unmarked(check)) {
+            self.screen_generation += 1;
+            self.screen_clipped = None;
+        }
+        self.send(Command::Screen(self.screen_generation, headroom, check)).map_err(error)?;
+        self.screen = Some((headroom, check));
         Ok(())
     }
 
@@ -332,6 +355,10 @@ impl RenderWorker {
             initialized: false,
             display_headroom: 1.,
             display_encoding: None,
+            screen_color: Default::default(),
+            screen_clipped: None,
+            screen: None,
+            screen_generation: 0,
             snapshot_gpu: None,
             view_color: Default::default(),
             first_frame_sent: false,
@@ -444,6 +471,8 @@ impl RenderWorker {
                         self.snapshot_gpu = Some(gpu);
                     }
                     Reply::DisplayHeadroom(headroom, encoding) => { self.display_headroom = headroom; self.display_encoding = encoding; },
+                    Reply::Screen(color) => self.screen_color = color,
+                    Reply::ScreenClipped(generation, clipped) => if generation == self.screen_generation { self.screen_clipped = clipped },
                 Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
                     _ => (),
                 }
@@ -491,6 +520,8 @@ impl RenderWorker {
                     }
                 }
                 Reply::DisplayHeadroom(headroom, encoding) => { self.display_headroom = headroom; self.display_encoding = encoding; },
+                Reply::Screen(color) => self.screen_color = color,
+                Reply::ScreenClipped(generation, clipped) => if generation == self.screen_generation { self.screen_clipped = clipped },
                 Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
             }
         }
@@ -817,6 +848,12 @@ struct Worker {
     hdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
     preview_sdr: bool,
     display_headroom: f32,
+    screen_headroom: f32,
+    screen_check: Option<layer_render_wgpu::ScreenCheck>,
+    screen_generation: u64,
+    checked_generation: u64,
+    screen_reported: Option<u64>,
+    last_publish: std::time::Instant,
 }
 impl Worker {
     #[cfg(test)]
@@ -892,7 +929,18 @@ impl Worker {
                 .poll(wgpu::PollType::Poll)
                 .map_err(error)?;
             self.child.dispatch()?;
-            let headroom = if self.hdr_encoding.is_some() { self.child.hdr_headroom() } else { 1. };
+            let (revision, screen) = self.child.screen_color();
+            if self.screen_reported != Some(revision) {
+                self.screen_reported = Some(revision);
+                reply.send(Reply::Screen(screen)).map_err(error)?;
+                wake_canvas(&self.area);
+            }
+            if let Some(result) = self.presenter.screen_check_result() {
+                if let Err(e) = &result { eprintln!("Screen gamut check: {e}"); }
+                reply.send(Reply::ScreenClipped(self.checked_generation, result.ok())).map_err(error)?;
+                wake_canvas(&self.area);
+            }
+            let headroom = if self.hdr_encoding.is_some() { self.screen_headroom } else { 1. };
             if headroom != self.display_headroom {
                 self.display_headroom = headroom;
                 self.update_hdr_view()?;
@@ -996,11 +1044,14 @@ impl Worker {
                 || self.renderer.selection_paint_pending()
                 || self.renderer.region_pending()
                 || self.child.feedback_pending()
+                || self.presenter.screen_check_busy()
             {
                 receiver.recv_timeout(Duration::from_millis(if thumbnail_ready { 1 } else { 8 }))
             } else if self.hdr_encoding.is_some() {
                 // Display changes arrive on Wayland even when artwork is idle.
                 receiver.recv_timeout(Duration::from_millis(100))
+            } else if self.child.watching_display() || self.screen_check.is_some() {
+                receiver.recv_timeout(SCREEN_CHECK_DELAY)
             } else {
                 receiver
                     .recv()
@@ -1018,6 +1069,14 @@ impl Worker {
                             #[cfg(test)]
                             None,
                         )?;
+                    }
+                    if !self.pending_present
+                        && pending_frames.is_empty()
+                        && count.load(Ordering::Acquire) == 0
+                        && self.last_publish.elapsed() >= SCREEN_CHECK_DELAY
+                        && self.presenter.check_screen(&self.renderer)
+                    {
+                        self.checked_generation = self.screen_generation;
                     }
                     // Visible canvas work wins over background layer artwork.
                     // A whole-photo thumbnail scan used to block this owner for
@@ -1066,6 +1125,13 @@ impl Worker {
                     self.renderer.set_ui_rendition(rendition).map_err(error)?;
                     self.preview_sdr = preview_sdr;
                     self.update_hdr_view()?;
+                    self.pending_present = self.last_view.is_some();
+                }
+                Command::Screen(generation, headroom, check) => {
+                    self.screen_generation = generation;
+                    self.screen_headroom = headroom;
+                    self.screen_check = check;
+                    self.presenter.set_screen_check(&self.renderer, check);
                     self.pending_present = self.last_view.is_some();
                 }
                 Command::Proof(lut, enabled, gamut, reply) => {
@@ -1359,6 +1425,12 @@ impl Worker {
             hdr_rendition: color.depth.is_float().then_some(Default::default()),
             preview_sdr: false,
             display_headroom: 1.,
+            screen_headroom: 1.,
+            screen_check: None,
+            screen_generation: 0,
+            checked_generation: 0,
+            screen_reported: None,
+            last_publish: std::time::Instant::now(),
         })
     }
     /// Publish whether the renderer has work for later frames, and wake an
@@ -1382,6 +1454,7 @@ impl Worker {
         let mut presenter = ViewportPresenter::for_surface(&self.renderer, wgpu::TextureFormat::Rgba16Float, encoding).map_err(error)?;
         presenter.inherit_proof(&self.renderer, &self.presenter);
         presenter.prepare_overviews(&self.renderer);
+        presenter.set_screen_check(&self.renderer, self.screen_check);
         self.presenter = presenter;
         self.hdr_encoding = Some(encoding);
         self.config.format = wgpu::TextureFormat::Rgba16Float;
@@ -1531,6 +1604,7 @@ impl Worker {
         #[cfg(test)] timing: Option<&mut crate::timing::Timing>,
     ) -> Result<(), String> {
         let _presentation = self.renderer.prioritize_raster_presentation();
+        self.last_publish = std::time::Instant::now();
         let (camera, surround) = self.last_view.expect("rendered document");
         #[cfg(test)]
         if let Some(timing) = &timing {
@@ -1611,6 +1685,7 @@ impl Worker {
         let mut presenter = ViewportPresenter::for_surface(&self.renderer, texture.format(), color.surface()).map_err(error)?;
         presenter.inherit_proof(&self.renderer, &self.presenter);
         presenter.inherit_backdrop(&self.renderer, &self.presenter);
+        presenter.set_screen_check(&self.renderer, self.screen_check);
         presenter.set_hdr_view(&self.renderer, self.hdr_rendition, 1.).map_err(error)?;
         presenter.set_color_picker(&self.renderer, self.picker);
         presenter.set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);

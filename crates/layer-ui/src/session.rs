@@ -20,6 +20,9 @@ pub(crate) mod source_edit;
 #[path = "document_color_edit.rs"]
 mod document_color_edit;
 pub use document_color_edit::ProofMode;
+#[path = "screen_status.rs"]
+mod screen_status;
+pub use screen_status::{ScreenChip, ScreenDetails, ScreenState};
 #[path = "figures.rs"]
 pub(crate) mod figures;
 #[path = "operation.rs"]
@@ -264,6 +267,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 soft_proof: false,
                 preview_sdr: false,
                 hdr_display_available: false,
+                screen: Default::default(),
                 gamut_warning: false,
                 revision: 0,
                 fullscreen: false,
@@ -3116,6 +3120,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.settings.theme = theme;
                 (SETTINGS, true)
             }
+            UiAction::ShowClippedColors { visible } => (self.show_clipped_colors(visible), true),
             UiAction::WindowFullscreen { fullscreen } => {
                 let changed = self.state.fullscreen != fullscreen;
                 self.state.fullscreen = fullscreen;
@@ -5089,6 +5094,7 @@ mod tests {
     use layer_engine::{SampleFlags, ToolKind};
 
     include!("session_color_tests.rs");
+    include!("screen_status_tests.rs");
     include!("command_catalog_tests.rs");
     include!("palette_tests.rs");
     include!("color_picker_tests.rs");

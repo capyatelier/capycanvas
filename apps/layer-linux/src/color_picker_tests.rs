@@ -695,9 +695,9 @@ fn native_color_picker_preview_pacing() {
         .unwrap();
     checkbox.set_active(true);
     pump(100);
-    assert!(d.w.hdr_status.is_visible());
+    assert!(d.w.screen.button.is_visible());
     d.click(checkbox.upcast_ref());
-    assert!(!d.w.hdr_status.is_visible());
+    assert!(!d.w.screen.button.is_visible());
     assert!(!d.w.view_info.root.is_visible());
     crate::snapshot(&d.w)
         .save_to_png(d.input.dir.join("color-picker-footer-hidden.png"))
@@ -706,11 +706,11 @@ fn native_color_picker_preview_pacing() {
         rgba: [0.4, 0.3, 0.8, 1.],
     });
     assert!(
-        !d.w.hdr_status.is_visible(),
+        !d.w.screen.button.is_visible(),
         "color updates must respect the footer preference"
     );
     d.click(checkbox.upcast_ref());
-    assert!(d.w.hdr_status.is_visible());
+    assert!(d.w.screen.button.is_visible());
     crate::snapshot(&d.w)
         .save_to_png(d.input.dir.join("color-picker-footer-visible.png"))
         .unwrap();
