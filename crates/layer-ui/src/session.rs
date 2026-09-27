@@ -1292,8 +1292,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (released_chrome_pin && self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
-        reply.canvas_bar_hidden = self.canvas_bar_contact()
-            && self.state.canvas_bar.as_ref().is_none_or(|b| b.placement == CanvasBarPlacement::NearObject);
         reply.keep_zen_button = self.interaction.hidden && self.state.settings.zen_show_capy;
         reply.pan_cursor = self.interaction.pan_key.is_some()
             || self.layer_interaction.tool == LayerCanvasTool::Hand;
@@ -4733,6 +4731,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let regions = regions
             | if self.update_canvas_bar() { regions::CANVAS_BAR } else { 0 }
             | self.notice_regions();
+        if regions & regions::CAMERA != 0 {
+            self.canvas_bar_camera_moved();
+        }
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
             self.sync_renderer_telemetry();
         }

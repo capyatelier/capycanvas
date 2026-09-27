@@ -41,8 +41,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal val proof=ProofController(this)
     internal val hdr=HdrController(this)
     companion object {
-        internal const val CanvasBarContact = 1
-        internal const val CanvasBarWorkspaceDrag = 2
         /** Instrumentation can hold device creation while checking the real UI. */
         @Volatile internal var beforeGpuAttachForTest: (() -> Unit)? = null
         @Volatile internal var workspaceDirectoryForTest: String? = null
@@ -123,33 +121,24 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     internal var cameraReadout by mutableStateOf(CameraReadout(100, 0))
         private set
-    internal var cameraState by mutableStateOf(JSONObject())
-        private set
     internal val canvasBar: JSONObject? get() = snapshot?.objectOrNull("state")?.objectOrNull("canvas_bar")
     internal var canvasBarVisible by mutableStateOf(true)
         private set
-    private var canvasBarHolds = 0
-    private var canvasBarContact = false
-    private val canvasBarReturn = Runnable { if (canvasBarHolds == 0) canvasBarVisible = true }
-    internal fun holdCanvasBar(source: Int, held: Boolean) {
-        canvasBarHolds = if (held) canvasBarHolds or source else canvasBarHolds and source.inv()
+    private var canvasBarHold = 0 // Native owner only.
+    private val canvasBarReturn = Runnable { canvasBarVisible = true }
+    internal fun holdCanvasBar(hold: Int) {
         main.removeCallbacks(canvasBarReturn)
-        if (canvasBarHolds != 0) canvasBarVisible = false
-        else if (!canvasBarVisible) main.postDelayed(canvasBarReturn, catalog.optLong("canvas_bar_reappear_ms"))
-    }
-    private fun deferCanvasBar() {
-        if (canvasBar?.optString("placement") != "near_object") return
         canvasBarVisible = false
-        holdCanvasBar(0, false)
+        if (hold % 2 == 0) main.postDelayed(canvasBarReturn, catalog.optLong("canvas_bar_reappear_ms"))
     }
     internal suspend fun glassPresented() = kotlinx.coroutines.suspendCancellableCoroutine<Unit> { continuation ->
         main.post { worker.post { worker.post { main.post { if (continuation.isActive) continuation.resumeWith(Result.success(Unit)) } } } }
     }
-    private fun syncCanvasBarContact() {
-        val hidden = Native.canvasBarHidden(handle)
-        if (hidden == canvasBarContact) return
-        canvasBarContact = hidden
-        main.post { holdCanvasBar(CanvasBarContact, hidden) }
+    private fun syncCanvasBar() {
+        val hold = Native.canvasBarHold(handle)
+        if (hold == canvasBarHold) return
+        canvasBarHold = hold
+        main.post { holdCanvasBar(hold) }
     }
     internal var surfaceOrigin = androidx.compose.ui.geometry.Offset.Zero
     private val overviewSlots = linkedMapOf<Any, JSONObject>() // UI thread; native owner receives immutable JSON.
@@ -440,7 +429,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     fun input(input: JSONObject, reply: ((JSONObject) -> Unit)? = null) = post {
         if(documentInputBlocked && input.optString("type") in listOf("key_down", "scroll")) return@post
         val value = JSONObject(Native.input(handle, input.toString()))
-        syncCanvasBarContact()
         if (reply != null) main.post { reply(value) }
         // Discrete key actions must publish immediately even when the previous
         // focus event was inside the camera/pointer publication interval.
@@ -456,7 +444,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     fun chrome(event: JSONObject, facts: JSONObject? = null, reply: ((JSONObject) -> Unit)? = null) = post {
         if (facts != null) chromeFacts = facts
         val result = JSONObject(Native.input(handle, chromeInput(event).toString()))
-        syncCanvasBarContact()
         if (reply != null) main.post { reply(result) }
         publish(true)
     }
@@ -570,7 +557,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                         if (reply.optBoolean("handled")) suppressedContacts.add(id)
                     }
                     if (id !in suppressedContacts) Native.pointer(handle, id, tool, button, samples, count, predicted)
-                    if (!predicted) syncCanvasBarContact()
+                    if (!predicted) syncCanvasBar()
                     if (phase == 3 || phase == 4) suppressedContacts.remove(id)
                     if (!predicted && measuredInputs != null && inputCount < 8192) {
                         val offset = inputCount++ * 5
@@ -694,6 +681,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
     }
     private fun publish(force: Boolean) {
+        syncCanvasBar()
         val now = SystemClock.uptimeMillis()
         if (!force && now - snapshotAt < 33) return
         snapshotAt = now
@@ -872,8 +860,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         return result
     }
     private fun updateCameraReadout(camera: JSONObject) {
-        if (cameraState.length() > 0 && camera.toString() != cameraState.toString()) deferCanvasBar()
-        cameraState = camera
         cameraReadout = CameraReadout((camera.number("zoom", 1.0) * 100).roundToInt(),
             (camera.number("rotation") * 180 / Math.PI).roundToInt())
     }

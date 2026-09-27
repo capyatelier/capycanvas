@@ -254,6 +254,7 @@ function dispatch(action) {
   }
 }
 function applyChange(change) {
+  canvasBar?.hold(app.canvas_bar_hold());
   if (change.regions & 512) {
     state.command_search = app.command_search();
     commandBar?.refresh(state.command_search);
@@ -832,7 +833,6 @@ function update(regions) {
   if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); selectionUi.refresh(); workspaceChrome?.refresh(); }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (1 | 8 | 1024)) canvasBar?.refresh(state.canvas_bar);
-  if (regions & 32) canvasBar?.defer();
   if (regions & (1 | 128)) persistWorkspace();
   if (regions & (1 | 4 | 8 | 128)) refreshWorkspaceMenu();
   if (regions & (4 | 8))
@@ -1052,7 +1052,6 @@ function flushWorkspacePresentation() {
   workspacePresentation = null;
   if (!update || update.model_revision !== workspaceModelRevision) return false;
   const drag = update.drag, moving = drag?.group;
-  canvasBar?.hold(!!moving);
   if (moving) {
     const group = layout.groups.find(g => g.id === moving.id), base = group?.bounds;
     if (base) {
@@ -1228,7 +1227,6 @@ function input(event) {
   try {
     const reply = app.input(event);
     workspace.classList.toggle("zen-hidden", reply.chrome_hidden);
-    canvasBar?.suppress(!!reply.canvas_bar_hidden);
     const capy = $("zen-capy");
     if (capy && capy.hidden !== !reply.keep_zen_button)
       capy.hidden = !reply.keep_zen_button;

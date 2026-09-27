@@ -21,6 +21,7 @@ Status: shared model, GTK, Web, Android, Windows, macOS and iPadOS hosts impleme
   - A tool change ends the visibility that a selection command started.
 - **Bottom-edge placement:** inverted, tonal and painted selections use the bottom edge.
 - **Compact items:** flips and quarter turns show only their icons; their names are in tooltips, accessibility labels and More.
+- **Accent:** Apply and Finish are drawn in the accent color.
 - **Dropdowns:** a choice that is not segmented, such as Interpolation, opens its items from the bar.
 - **More:** lists the items that did not fit, then the context's own menu (the full Select menu for selections), then the bar toggle.
 - **Distort on photo placements:** refused with the route that works: select all, then transform the pixels.
@@ -38,9 +39,10 @@ Status: shared model, GTK, Web, Android, Windows, macOS and iPadOS hosts impleme
 
 - **Panel layer:** the bar is a glass surface in the panel layer: above floating panels, below drawers, the header and menus. It follows the transparency setting and stays visible in Zen. Menus opened from it stay opaque.
 - **Hiding:**
-  - A bar beside an object hides while a canvas contact is in progress; the input reply reports this, so no state is published at pen-down.
-  - It also hides while the camera moves.
-  - It returns 180 ms after input settles, at its new place. Bottom-edge bars stay put.
+  - A bar beside an object hides while a canvas contact is in progress and while the camera moves. Bottom-edge bars stay put.
+  - Every bar hides while a floating panel group is dragged.
+  - It returns 180 ms after input settles, at its new place.
+  - The session decides: `canvas_bar_hold()` changes whenever the bar must hide and is odd while it must stay hidden. Hosts read it after input and changes, so no state is published at pen-down, and keep only the reappear timer.
 - **Input:** taps on the bar are chrome contacts and never paint.
 - **Focus:** its controls do not take keyboard focus, and it never opens a window of its own. Losing window focus leaves an open transform intact.
 - **Availability:** item availability holds its previous value while the canvas is busy, as Tool Options does. Polygon construction commands follow the path live.
@@ -76,7 +78,7 @@ Status: shared model, GTK, Web, Android, Windows, macOS and iPadOS hosts impleme
 - **Disabled items** carry the command's `disabled_reason`, steady during a contact like `enabled`. GTK shows it as the item's tooltip; Web shows it as the item's hover tooltip and reveals the same tooltip when a disabled item is tapped with any device.
 - **GTK host:** `apps/layer-linux/src/canvas_bar.rs` is a `DockSurface` slot.
 - **Web host:** `apps/layer-web/canvas-bar.js` is a glass toolbar in `#workspace`, built from the Tool Options field builders in `toolbar-components.js`. It measures its controls once per bar and moves with a transform.
-- **Android host:** `apps/layer-android/app/src/main/java/art/capycanvas/CanvasBar.kt` is a glass Compose surface in the workspace, above floating groups and below drawers, built from the Tool Options `ToolOptionField` and `toolOptionSize` builders. `NativeHost::query` answers `canvas_bar_layout`, `canvas_bar_menu` and `canvas_bar_choice_menu`. A disabled item shows its published `disabled_reason` when tapped, held or hovered, and a hold opens nothing else. The bar registers its glass region before its first visible frame, and draws in its own layer sized to the bar and its shadow, so showing, hiding and moving it re-records only that layer. While hidden it stays composed but unplaced: it draws nothing, takes no input, registers no glass or chrome region and exposes no semantics, so returning it only places it again. Its menus, and the Tool Options choice and value menus, open without taking window focus; the value popup takes focus only while its number field is edited.
+- **Android host:** `apps/layer-android/app/src/main/java/art/capycanvas/CanvasBar.kt` is a glass Compose surface in the workspace, above floating groups and below drawers, built from the Tool Options `ToolOptionField` and `toolOptionSize` builders. `NativeHost::query` answers `canvas_bar_layout`, `canvas_bar_menu` and `canvas_bar_choice_menu`, and `Native.canvasBarHold` reads the hold. A disabled item shows its published `disabled_reason` when tapped, held or hovered, and a hold opens nothing else. The bar registers its glass region before its first visible frame, and draws in its own layer sized to the bar and its shadow, so showing, hiding and moving it re-records only that layer. While hidden it stays composed but unplaced: it draws nothing, takes no input, registers no glass or chrome region and exposes no semantics, so returning it only places it again. Its menus, and the Tool Options choice and value menus, open without taking window focus; the value popup takes focus only while its number field is edited.
 - **Apple host:** `apps/layer-apple/Shared/Editor/CanvasBar.swift` is a glass SwiftUI row inside the `WorkspacePanels` stack, above floating groups and collapsed columns and below drawers. It reuses the Tool Options `ToolOptionField` and `toolOptionSize` builders with captions, places itself through `canvas_bar_layout`, and opens More as the shared editor menu from `canvas_bar_menu`. The serial owner reads `capy_apple_canvas_bar_hidden` after each canvas pointer batch; camera changes hide a bar beside an object until the shared delay has passed.
 - **Windows host:** `apps/layer-windows/CanvasActionBar.h` is a glass squircle in the workspace canvas. It places itself through the `canvas_bar_layout` native host query and opens More and dropdown choices through `canvas_bar_menu` and `canvas_bar_choice_menu`. The canvas input thread reports the first and last canvas contact, so the bar hides without a published state change.
 - **Narrow windows:** when docks leave the work area narrower than the smallest bar, placement uses the window width.

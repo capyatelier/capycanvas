@@ -302,7 +302,7 @@ impl NativeHost {
         let previous = self.session.state().revision;
         let reply = self.session.input(input)?;
         self.chrome_hidden = reply.chrome_hidden;
-        self.canvas_bar_hidden = reply.canvas_bar_hidden;
+        self.canvas_bar_hidden = self.session.canvas_bar_hold() % 2 == 1;
         self.keep_zen_button = reply.keep_zen_button;
         self.pan_cursor = reply.pan_cursor;
         self.apply_change(previous, reply.change);

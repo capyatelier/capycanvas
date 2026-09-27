@@ -69,7 +69,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
     await evaluate(`window.barProbe={set:layerApp.app.set_glass,pen:layerApp.app.pen,input:layerApp.app.input,boxes:[],pens:0,pointers:0,shown:0};
       layerApp.app.set_glass=(boxes,...rest)=>{barProbe.boxes=Array.from(boxes);barProbe.glassSets=(barProbe.glassSets??0)+1;return barProbe.set.call(layerApp.app,boxes,...rest);};
       layerApp.app.pen=(...args)=>{barProbe.pens++;return barProbe.pen.apply(layerApp.app,args);};
-      layerApp.app.input=event=>{if(event.type==='pointer')barProbe.pointers++;const r=barProbe.input.call(layerApp.app,event);if(event.type==='pointer')(barProbe.log??=[]).push([event.kind,event.phase,r.canvas_bar_hidden,r.handled,r.paint]);return r;};
+      layerApp.app.input=event=>{if(event.type==='pointer')barProbe.pointers++;const r=barProbe.input.call(layerApp.app,event);if(event.type==='pointer')(barProbe.log??=[]).push([event.kind,event.phase,layerApp.app.canvas_bar_hold(),r.handled,r.paint]);return r;};
       barProbe.observer=new MutationObserver(()=>{const b=document.querySelector('${bar}'),on=!b.hidden&&!b.classList.contains('suppressed');if(on&&!barProbe.on)barProbe.shown++;barProbe.on=on;});
       barProbe.observer.observe(document.querySelector('${bar}'),{attributes:true,attributeFilter:['class','hidden']});`);
     await invoke('fit_canvas');

@@ -55,15 +55,15 @@ class FakeElement {
   }
 }
 
-function action(id, label, { enabled = true, selected = false, checkable = false } = {}) {
+function action(id, label, { enabled = true, selected = false, checkable = false, accent = false } = {}) {
   return { option: { Action: { state: { id, icon: id, label, tooltip: `${label} tooltip`, enabled,
-    disabled_reason: enabled ? null : `${id} is unavailable`, selected }, checkable } }, label };
+    disabled_reason: enabled ? null : `${id} is unavailable`, selected }, checkable } }, label, accent };
 }
 function view({ kind = "transform", generation = 1n, items, completion, placement = "near_object", label = null } = {}) {
   return {
     context: { generation, kind }, label, placement, anchor: [0, 0, 100, 100],
     items: items ?? [action("transform_uniform", "Uniform", { checkable: true }), action("transform_flip_horizontal", "Flip H"), action("reset_transform", "Reset")],
-    completion: completion ?? [action("cancel_transform", "Cancel"), action("apply_transform", "Apply")],
+    completion: completion ?? [action("cancel_transform", "Cancel"), action("apply_transform", "Apply", { accent: true })],
   };
 }
 function harness({ layout = measure => ({ bounds: { x: 100.2, y: 50, width: 300, height: measure.height }, items: measure.items.length, side: "below" }) } = {}) {
@@ -206,19 +206,20 @@ test("dropdown choices list their items beside the bar and dispatch the chosen o
   assert.deepEqual(h.dispatched, [{ type: "canvas_bar_edit", context: v.context, action: { type: "invoke", command: "transform_nearest" } }]);
 });
 
-test("contacts hide the bar at once and it returns once after the debounce", () => {
+test("each new hold hides the bar at once and it returns once after the debounce", () => {
   const h = harness();
   h.bar.refresh(view());
   const queued = h.glass();
-  h.bar.suppress(true);
+  h.bar.hold(1);
   assert.ok(h.bar.root.classList.contains("suppressed"));
   assert.equal(h.bar.bounds(), null);
   assert.equal(h.glass(), queued + 1, "Hiding republishes glass");
   const presented = h.presented.length;
-  for (let i = 0; i < 20; i++) h.bar.suppress(true);
+  for (let i = 0; i < 20; i++) h.bar.hold(1);
   assert.equal(h.glass(), queued + 1, "Samples during a stroke do not touch the DOM");
-  h.bar.suppress(false);
-  h.bar.suppress(false);
+  assert.equal(h.pending().length, 0, "An odd hold keeps the bar hidden");
+  h.bar.hold(0);
+  h.bar.hold(0);
   assert.equal(h.pending().length, 1, "Hover replies do not restart the debounce");
   h.advance(179);
   assert.ok(h.bar.root.classList.contains("suppressed"));
@@ -228,33 +229,10 @@ test("contacts hide the bar at once and it returns once after the debounce", () 
   assert.equal(h.presented.length, presented + 1, "Reappearing lets the notice move above the bar");
   assert.equal(h.measures.length, 2, "Reappearing re-places the bar");
   assert.ok(h.bar.bounds());
-});
-
-test("camera changes defer near-object bars only, and not while a contact holds them", () => {
-  const h = harness();
-  h.bar.refresh(view());
-  h.bar.defer();
-  assert.ok(h.bar.root.classList.contains("suppressed"));
-  h.advance(100); h.bar.defer(); h.advance(100);
+  h.bar.hold(2);
+  h.advance(100); h.bar.hold(4); h.advance(100);
   assert.ok(h.bar.root.classList.contains("suppressed"), "Each camera change restarts the debounce");
   h.advance(80);
-  assert.ok(!h.bar.root.classList.contains("suppressed"));
-  h.bar.suppress(true); h.bar.defer();
-  assert.equal(h.pending().length, 0, "A pinch in progress keeps the bar hidden");
-  h.bar.suppress(false); h.advance(180);
-  assert.ok(!h.bar.root.classList.contains("suppressed"));
-  h.bar.refresh(view({ placement: "bottom_edge" }));
-  h.bar.defer();
-  assert.ok(!h.bar.root.classList.contains("suppressed"), "Bottom-edge bars stay during navigation");
-});
-
-test("workspace drags hold the bar hidden until they end", () => {
-  const h = harness();
-  h.bar.refresh(view());
-  h.bar.hold(true);
-  h.bar.suppress(true); h.bar.suppress(false); h.advance(500);
-  assert.ok(h.bar.root.classList.contains("suppressed"));
-  h.bar.hold(false); h.advance(180);
   assert.ok(!h.bar.root.classList.contains("suppressed"));
 });
 
@@ -283,7 +261,7 @@ test("More opens the shared menu for the shown count, toggles closed, and closes
   more.dispatch("pointerdown"); more.click();
   assert.equal(h.menus.length, 2);
   assert.ok(h.menu.open);
-  h.bar.suppress(true);
+  h.bar.hold(1);
   assert.equal(h.menu.open, false, "Hiding the bar closes its menu");
 });
 

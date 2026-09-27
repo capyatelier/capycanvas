@@ -144,6 +144,8 @@ fn transform_publishes_a_bar_whose_edits_expire_with_the_transform() {
     assert_eq!(mode_choice(&bar), [CommandId::TransformFree, CommandId::TransformUniform, CommandId::TransformDistort, CommandId::TransformWarp]);
     assert_eq!(bar_commands(&bar.items), [CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft, CommandId::TransformRotateRight, CommandId::ResetTransform]);
     assert_eq!(bar_commands(&bar.completion), [CommandId::CancelTransform, CommandId::ApplyTransform]);
+    assert!(bar.items.iter().all(|item| !item.accent));
+    assert_eq!(bar.completion.iter().map(|item| item.accent).collect::<Vec<_>>(), [false, true], "Apply is the accented step");
     assert_eq!(bar.placement, CanvasBarPlacement::NearObject);
     assert_eq!(bar.anchor, s.transform_document_bounds());
     assert!(s
@@ -193,7 +195,7 @@ fn canvas_bar_keeps_its_view_during_a_handle_drag_and_follows_the_object_after()
 }
 
 #[test]
-fn canvas_bar_input_reply_hides_the_bar_during_canvas_contacts() {
+fn the_canvas_bar_hold_covers_contacts_camera_moves_and_floating_drags() {
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
     let pointer = |phase| UiInput::Pointer {
@@ -204,8 +206,36 @@ fn canvas_bar_input_reply_hides_the_bar_during_canvas_contacts() {
         position: [500., 500.],
         time_ns: 0,
     };
-    assert!(s.input(pointer(ContactPhase::Down)).unwrap().canvas_bar_hidden);
-    assert!(!s.input(pointer(ContactPhase::Up)).unwrap().canvas_bar_hidden);
+    let idle = s.canvas_bar_hold();
+    assert_eq!(idle % 2, 0);
+    s.input(pointer(ContactPhase::Down)).unwrap();
+    assert_eq!(s.canvas_bar_hold(), idle + 1, "a canvas contact holds the bar hidden");
+    s.input(pointer(ContactPhase::Up)).unwrap();
+    assert_eq!(s.canvas_bar_hold() % 2, 0, "it returns once the contact ends");
+    let settled = s.canvas_bar_hold();
+    invoke(&mut s, CommandId::ZoomIn);
+    let zoomed = s.canvas_bar_hold();
+    assert!(zoomed != settled && zoomed.is_multiple_of(2), "a camera move hides a bar beside the object until it settles");
+
+    let viewport = [1600., 1000.];
+    let group = s.layout(viewport).groups[0].id;
+    s.dispatch(UiAction::MoveGroup { group, target: DockTarget::Float { position: [900., 300.] }, viewport }).unwrap();
+    let float = s.layout(viewport).groups.into_iter().find(|g| g.id == group && g.floating).unwrap().bounds;
+    let grab = [float.x + 20., float.y + 10.];
+    let before = s.canvas_bar_hold();
+    drag(&mut s, DockItem::Group { group }, ContactPhase::Down, grab, viewport);
+    drag(&mut s, DockItem::Group { group }, ContactPhase::Move, [grab[0] + 40., grab[1]], viewport);
+    assert_eq!(s.canvas_bar_hold(), before | 1, "moving a floating group holds the bar hidden");
+    drag(&mut s, DockItem::Group { group }, ContactPhase::Up, [grab[0] + 40., grab[1]], viewport);
+    assert_eq!(s.canvas_bar_hold() % 2, 0);
+
+    invoke(&mut s, CommandId::ShowCanvasActionBar);
+    assert_eq!(s.state.canvas_bar.as_ref().unwrap().placement, CanvasBarPlacement::BottomEdge);
+    let edge = s.canvas_bar_hold();
+    invoke(&mut s, CommandId::ZoomIn);
+    s.input(pointer(ContactPhase::Down)).unwrap();
+    assert_eq!(s.canvas_bar_hold(), edge, "a bar on the bottom edge stays through contacts and camera moves");
+    s.input(pointer(ContactPhase::Up)).unwrap();
 }
 
 #[test]

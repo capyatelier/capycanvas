@@ -31,6 +31,8 @@ pub struct CanvasBarItem {
     pub option: ToolOption,
     /// Short text shown beside the icon where space allows.
     pub label: &'static str,
+    /// The step that finishes the edit, drawn in the accent color.
+    pub accent: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -105,6 +107,7 @@ pub(super) struct CanvasBarState {
     tool: Option<LayerCanvasTool>,
     armed: bool,
     history: bool,
+    hides: u32,
 }
 impl CanvasBarState {
     pub(super) fn history_step(&mut self) {
@@ -280,6 +283,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         items: vec![state.choice_item(short_label(id))],
                     },
                     label: group.label(),
+                    accent: false,
                 }),
                 (None, _) => items.push(self.canvas_bar_action(id)),
             }
@@ -310,7 +314,27 @@ impl<R: CanvasRenderer> UiSession<R> {
                 state,
             },
             label: short_label(id),
+            accent: matches!(id, CommandId::ApplyTransform | CommandId::CompleteSelection),
         }
+    }
+
+    fn near_object_bar(&self) -> bool {
+        self.state.canvas_bar.as_ref().is_some_and(|b| b.placement == CanvasBarPlacement::NearObject)
+    }
+
+    pub(super) fn canvas_bar_camera_moved(&mut self) {
+        if self.near_object_bar() {
+            self.canvas_bar.hides = self.canvas_bar.hides.wrapping_add(1);
+        }
+    }
+
+    /// Changes whenever hosts must hide the canvas bar, and is odd while it
+    /// must stay hidden. A hidden bar returns once an even value has held for
+    /// `CANVAS_BAR_REAPPEAR_MS`.
+    pub fn canvas_bar_hold(&self) -> u32 {
+        let contact = self.canvas_bar_contact() && (self.state.canvas_bar.is_none() || self.near_object_bar());
+        let floating = self.workspace_drag.as_ref().is_some_and(|drag| drag.floating.is_some());
+        self.canvas_bar.hides.wrapping_mul(2) | u32::from(contact || floating)
     }
 
     pub(super) fn canvas_bar_edit(&mut self, context: CanvasBarContext, action: UiAction) -> Result<UiChange, String> {

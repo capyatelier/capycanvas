@@ -201,8 +201,6 @@ pub struct InputReply {
     pub cancel_paint: bool,
     pub dismiss_popups: bool,
     pub chrome_hidden: bool,
-    /// The canvas action bar hides while a canvas contact is in progress.
-    pub canvas_bar_hidden: bool,
     /// Whether to show the standalone top-left Capy while chrome is hidden.
     pub keep_zen_button: bool,
     pub pan_cursor: bool,

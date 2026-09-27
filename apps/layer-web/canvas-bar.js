@@ -2,7 +2,6 @@ import { actionField, choiceField } from "./toolbar-components.js";
 import { revealTooltip } from "./tooltips.js";
 
 export const GAP = 4, PADDING = 6;
-const accent = new Set(["apply_transform", "complete_selection"]);
 const text = value => JSON.stringify(value, (_, v) => typeof v === "bigint" ? String(v) : v);
 export const barSchema = view => text([view.context, view.label ?? null,
   ...[view.items, view.completion].map(items => items.map(({ option, label }) => option.Action
@@ -24,7 +23,7 @@ export function createCanvasBar({ app, workspace, element, button, icon, dispatc
   root.addEventListener("contextmenu", e => e.preventDefault());
   root.addEventListener("mousedown", e => { if (!e.target.closest?.("input,select,textarea")) e.preventDefault(); });
   let view = null, schema = "", fields = [], sizes = null, layout = null, popup = null;
-  let suppressed = false, contact = false, held = false, timer = 0;
+  let suppressed = false, held = 0, timer = 0;
   let menu = null, menuOpen = false, reopen = false;
   const shown = { visible: false, transform: "", items: -1 };
   more.addEventListener("pointerdown", () => { reopen = menuOpen && menu?.menuOwner === more; });
@@ -64,7 +63,7 @@ export function createCanvasBar({ app, workspace, element, button, icon, dispatc
     if (option.Action) {
       field = actionField({ element, button, icon }, option.Action, send, { label: item.label, ariaDisabled: true, explain });
       field.button.dataset.command = option.Action.state.id;
-      if (completion && accent.has(option.Action.state.id)) field.button.classList.add("suggested-action");
+      if (item.accent) field.button.classList.add("suggested-action");
     } else if (option.Choice) {
       field = choiceField({ element, button, icon, openPopup, closePopup }, option.Choice, send, { labels: true });
     } else field = { row: element("div", "toolbar-option"), update() {} };
@@ -129,37 +128,14 @@ export function createCanvasBar({ app, workspace, element, button, icon, dispatc
     }
     place();
   }
-  function hide() {
-    clearTimer(timer); timer = 0;
-    if (suppressed) return;
-    suppressed = true; closeMenu(); closePopup(); present();
-  }
-  function settle() {
-    clearTimer(timer);
-    timer = setTimer(() => {
-      timer = 0;
-      if (contact || held) return;
-      suppressed = false; place();
-    }, reappearMs);
-  }
-  function suppress(hidden) {
-    if (hidden) { contact = true; hide(); return; }
-    const cleared = contact; contact = false;
-    if (cleared && suppressed && !held && !timer) settle();
-  }
-  function defer() {
-    if (view?.placement !== "near_object") return;
-    hide();
-    if (!contact && !held) settle();
-  }
-  function hold(active) {
-    if (held === active) return;
-    held = active;
-    if (active) hide();
-    else if (suppressed && !contact) settle();
+  function hold(value) {
+    if (value === held) return;
+    held = value; clearTimer(timer); timer = 0;
+    if (!suppressed) { suppressed = true; closeMenu(); closePopup(); present(); }
+    if (value % 2 === 0) timer = setTimer(() => { timer = 0; suppressed = false; place(); }, reappearMs);
   }
   return {
-    root, refresh, place, suppress, defer, hold,
+    root, refresh, place, hold,
     bounds: () => shown.visible ? layout.bounds : null,
     menuOpen: () => menuOpen,
   };

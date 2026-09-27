@@ -43,8 +43,6 @@ private class BarFrame {
 }
 
 @Composable internal fun CanvasBar(host: CanvasHost, dock: DockInteraction, layout: JSONObject) {
-    val dragging = dock.dragging
-    LaunchedEffect(dragging) { host.holdCanvasBar(CanvasHost.CanvasBarWorkspaceDrag, dragging) }
     val density = LocalDensity.current.density
     val frame = remember { BarFrame() }
     val placement = remember(frame, density) {
@@ -134,9 +132,9 @@ private class BarFrame {
                             Text(it, Modifier.width(labelWidth.dp).padding(horizontal = BarLabelPadding.dp).testTag("canvas-bar-label"),
                                 color = colors.secondary, maxLines = 1, softWrap = false)
                         }
-                        items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], false, ::edit, ::choiceMenu) }
+                        items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], ::edit, ::choiceMenu) }
                         CanvasBarMore(host, context, shown)
-                        completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], true, ::edit, ::choiceMenu) }
+                        completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], ::edit, ::choiceMenu) }
                     }
                 }
             }
@@ -147,14 +145,11 @@ private class BarFrame {
     }
 }
 
-@Composable private fun BarField(item: JSONObject, width: Float, completion: Boolean, edit: (JSONObject) -> Unit,
+@Composable private fun BarField(item: JSONObject, width: Float, edit: (JSONObject) -> Unit,
     choiceMenu: (String, (JSONObject?) -> Unit) -> Unit) {
-    val option = item.getJSONObject("option")
-    val command = option.optJSONObject("Action")?.getJSONObject("state")?.getString("id")
     Box(Modifier.width(width.dp).height(BarItemHeight.dp), contentAlignment = Alignment.Center) {
-        ToolOptionField(option, width, false, "medium", false, BarItemStyle, BarItemHeight, 16, edit,
-            caption = item.getString("label"), prefix = "canvas-bar",
-            accent = completion && command in listOf("apply_transform", "complete_selection"), choiceMenu = choiceMenu)
+        ToolOptionField(item.getJSONObject("option"), width, false, "medium", false, BarItemStyle, BarItemHeight, 16, edit,
+            caption = item.getString("label"), prefix = "canvas-bar", accent = item.optBoolean("accent"), choiceMenu = choiceMenu)
     }
 }
 

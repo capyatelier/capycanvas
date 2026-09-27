@@ -30,6 +30,7 @@ pub struct CanvasBar {
     updating: Cell<bool>,
     layout: Cell<Option<CanvasBarLayout>>,
     suppressed: Cell<bool>,
+    hold: Cell<u32>,
     reappear: RefCell<Option<glib::SourceId>>,
 }
 
@@ -79,6 +80,7 @@ impl CanvasBar {
             updating: Cell::new(false),
             layout: Cell::new(None),
             suppressed: Cell::new(false),
+            hold: Cell::new(0),
             reappear: RefCell::new(None),
         }
     }
@@ -163,12 +165,9 @@ impl CanvasBar {
         };
         self.label.set_label(view.label.as_deref().unwrap_or_default());
         self.label.set_visible(view.label.is_some());
-        for (container, items, completion) in [
-            (&self.items, &view.items, false),
-            (&self.completion, &view.completion, true),
-        ] {
+        for (container, items) in [(&self.items, &view.items), (&self.completion, &view.completion)] {
             for item in items {
-                let field = build(workspace, view.context, item, completion);
+                let field = build(workspace, view.context, item);
                 container.append(&field.0);
                 self.fields.borrow_mut().push(field);
             }
@@ -222,18 +221,18 @@ impl CanvasBar {
         workspace.queue_surface_allocate();
     }
 
-    pub fn suppress(&self, workspace: &Rc<Workspace>, hidden: bool) {
+    pub fn hold(&self, workspace: &Rc<Workspace>, hold: u32) {
+        if self.hold.replace(hold) == hold {
+            return;
+        }
         if let Some(source) = self.reappear.borrow_mut().take() {
             source.remove();
         }
-        if hidden {
-            if !self.suppressed.replace(true) {
-                self.menu.popdown();
-                self.present();
-            }
-            return;
+        if !self.suppressed.replace(true) {
+            self.menu.popdown();
+            self.present();
         }
-        if !self.suppressed.get() {
+        if hold % 2 == 1 {
             return;
         }
         let source = glib::timeout_add_local_once(
@@ -251,26 +250,12 @@ impl CanvasBar {
         );
         *self.reappear.borrow_mut() = Some(source);
     }
-
-    /// The camera moved: hide now and reappear at the new place once it settles.
-    pub fn defer(&self, workspace: &Rc<Workspace>) {
-        if self
-            .view
-            .borrow()
-            .as_ref()
-            .is_some_and(|v| v.placement == layer_ui::CanvasBarPlacement::NearObject)
-        {
-            self.suppress(workspace, true);
-            self.suppress(workspace, false);
-        }
-    }
 }
 
 fn build(
     workspace: &Rc<Workspace>,
     context: layer_ui::CanvasBarContext,
     item: &CanvasBarItem,
-    completion: bool,
 ) -> (gtk::Widget, Option<Field>) {
     let send = glib::clone!(
         #[weak]
@@ -290,9 +275,7 @@ fn build(
             let button = action_button(state, *checkable, Some(item.label), send);
             button.set_widget_name(&format!("canvas-bar-{:?}", state.id));
             unfocused(button.upcast_ref());
-            let accent = completion
-                && matches!(state.id, layer_ui::CommandId::ApplyTransform | layer_ui::CommandId::CompleteSelection);
-            button.add_css_class(if accent { "suggested-action" } else { "flat" });
+            button.add_css_class(if item.accent { "suggested-action" } else { "flat" });
             (button.clone().upcast(), Some(Field::Action(button)))
         }
         ToolOption::Choice { id, label, segmented: true, items } => {

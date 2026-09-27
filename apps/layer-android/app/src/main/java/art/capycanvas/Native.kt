@@ -23,7 +23,7 @@ internal object Native {
     @JvmStatic external fun predictionAvailability(handle: Long, available: Boolean)
     @JvmStatic external fun touchPolicy(handle: Long, tapMs: Int, slop: Float)
     @JvmStatic external fun pointer(handle: Long, id: Long, tool: Int, button: Int, records: DoubleArray, count: Int, predicted: Boolean)
-    @JvmStatic external fun canvasBarHidden(handle: Long): Boolean
+    @JvmStatic external fun canvasBarHold(handle: Long): Int
     @JvmStatic external fun frame(handle: Long, now: Long, presentation: Long): Boolean
     /** First buffer on the current surface has completed GPU work. */
     @JvmStatic external fun surfaceReady(handle: Long): Boolean

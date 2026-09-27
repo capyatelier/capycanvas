@@ -496,5 +496,19 @@ fn native_canvas_bar_finger_moves_a_transform() {
         "a finger inside the box moves the transform",
     );
     assert!(transforming(&w), "the finger keeps the transform open");
+    until(|| shown(&w), "the bar returns after the finger drag");
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let group = state(&w).workspace.layout.panel_group(Panel::Layers).unwrap();
+    w.dispatch(UiAction::MoveGroup { group, target: DockTarget::Float { position: [80., 480.] }, viewport });
+    pump(300);
+    let panel = w.groups.borrow().iter().find(|g| g.id == group).unwrap().root.clone();
+    let from = center(&w, &find_css(panel.upcast_ref(), "panel-grip").unwrap());
+    native.perform(json!([
+        {"point": from}, {"down": true}, {"wait_ms": 40},
+        {"point": [from[0] + 30., from[1] + 20.]}, {"wait_ms": 40}
+    ]));
+    assert!(w.canvas_bar.visible_bounds().is_none(), "the bar hides while a floating panel moves");
+    native.perform(json!([{"point": [from[0] + 60., from[1] + 40.]}, {"down": false}]));
+    until(|| shown(&w), "the bar returns after the panel drop");
 }
 

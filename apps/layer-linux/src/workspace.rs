@@ -1838,7 +1838,6 @@ impl Workspace {
         let reply = match result {
             Some(Ok(reply)) => {
                 self.present_interaction(reply);
-                self.canvas_bar.suppress(self, reply.canvas_bar_hidden);
                 self.changed(Ok(reply.change));
                 reply
             }
@@ -2101,6 +2100,10 @@ impl Workspace {
                 if self.color_panel.headroom() != self.picker_headroom() { change.regions |= regions::BRUSH; }
                 self.proof.sync(self);
                 self.local_tone.sync(self);
+                let hold = self.gpu.borrow().as_ref().map(|g| g.session.canvas_bar_hold());
+                if let Some(hold) = hold {
+                    self.canvas_bar.hold(self, hold);
+                }
                 let publication = self
                     .gpu
                     .borrow()
@@ -2712,9 +2715,6 @@ impl Workspace {
         }
         if regions & (regions::CANVAS_BAR | regions::COMMANDS | regions::LAYOUT) != 0 {
             self.canvas_bar.refresh(self, state.canvas_bar.as_ref());
-        }
-        if regions & regions::CAMERA != 0 {
-            self.canvas_bar.defer(self);
         }
         if regions & regions::HOST != 0 {
             self.notice.publish(self, state.notice.as_ref(), self.notice_clearance());

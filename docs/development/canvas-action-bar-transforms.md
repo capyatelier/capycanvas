@@ -8,9 +8,10 @@ Status: **done** (2026-09-27). Every step shipped: A1–A3, B1–B3, C1 (GTK), D
 - **Follow-ups, on Android:** Rust still builds and serializes the full model before diffing each publication (about 9 ms on the MovinkPad 11; see [the Android guide](android.md)).
 - **Later:** adjustment layers above a transformed layer. The current behavior is documented in [the canvas action bar guide](../ui/canvas-action-bar.md).
 
-Two refinements made during implementation:
+Three refinements made during implementation:
 - **More opens a menu,** not the Tool Options drawer: the items that did not fit (mode choices as submenus), then the context's own menu and the bar toggle. Bar items are commands and choices that menus can represent, so no new drawer anchor was needed on any host.
 - **Flips and quarter turns act in the layer's axes** about the centre of the transformed box. These are the document axes unless the layer itself is rotated.
+- **Rust decides when the bar hides:** `UiSession::canvas_bar_hold()` covers contacts, camera moves and floating-group drags, so the GTK, Web and Android hosts keep only the reappear timer. `InputReply.canvas_bar_hidden` below was removed; `NativeHost.canvas_bar_hidden` remains for the Apple ABI.
 
 The original plan follows. Written 2026-09-26 against `origin/main` at `5eb45a47`; citations re-checked at `b7a73e07`. Verify the cited lines before relying on them; later commits move code.
 
