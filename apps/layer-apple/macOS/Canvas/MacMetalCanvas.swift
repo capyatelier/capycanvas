@@ -18,6 +18,7 @@ final class MacCanvasView: NSView {
     private lazy var input = MacInput(view: self, store: store)
     private var tracking: NSTrackingArea?
     private var windowObservers: [NSObjectProtocol] = []
+    private var shaderInputMonitor: Any?
     private lazy var documentDelegate = DocumentWindowDelegate(store: store)
     private var extent = CGSize.zero
     override var isFlipped: Bool { true }
@@ -55,7 +56,14 @@ final class MacCanvasView: NSView {
         store.cursorChanged = { [weak self] in self?.input.applyCursor() }
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers.removeAll()
+        if let shaderInputMonitor { NSEvent.removeMonitor(shaderInputMonitor) }
+        shaderInputMonitor = nil
         if let window {
+            shaderInputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp,
+                .rightMouseDown, .otherMouseDown, .mouseMoved, .scrollWheel, .magnify, .rotate, .keyDown, .keyUp, .tabletPoint]) { [weak self, weak window] event in
+                if event.window === window { self?.store.native?.shaderInput() }
+                return event
+            }
             windowObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.updateHeadroom() }
             })
@@ -132,6 +140,8 @@ final class MacCanvasView: NSView {
         frames.deactivate(); store.input(["type": "blur"])
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers.removeAll()
+        if let shaderInputMonitor { NSEvent.removeMonitor(shaderInputMonitor) }
+        shaderInputMonitor = nil
         displayLink?.invalidate(); displayLink = nil
         if attached { store.native?.detach(); attached = false }
     }

@@ -132,8 +132,9 @@ an explicit override, and identical library refreshes are no-ops.
 ## Apple integration
 
 Apple builds its live, file-open and resumed-tab renderers with the same shared
-factory. Native window input reaches the shared `UiSession`, which forwards
-`shader_input()`. Removing Apple's duplicate startup catalog loading and
-extending the identical-library no-op remain open. First-use effects/tools,
-failed compilation/restart, held contacts, rapid edits, document restoration and
-cache reuse still need validation on Apple and Windows devices.
+factory. SwiftUI panels and native controls handle input that never reaches the
+shared session, so Apple also forwards window activity to
+`capy_apple_shader_input` through an AppKit local event monitor and a UIKit
+window recognizer that only observes touches, coalesced onto the owner queue.
+The bundled filter package is no longer copied into the app or reloaded at
+startup.

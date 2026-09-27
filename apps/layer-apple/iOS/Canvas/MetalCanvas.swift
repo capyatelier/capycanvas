@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 import QuartzCore
 
 struct MetalCanvas: UIViewRepresentable {
@@ -18,6 +19,7 @@ final class CanvasView: UIView {
     private var drawableExtent = CGSize.zero
     private var sceneGeometry: NSKeyValueObservation?
     private var keyboardCoversField = false
+    private let shaderActivity = ShaderActivityRecognizer()
     private var workspaceBottom: CGFloat = -1
     var contacts: [ObjectIdentifier: PencilContact] = [:]
     var nextContact: UInt64 = 0
@@ -75,8 +77,11 @@ final class CanvasView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         sceneGeometry = nil
+        shaderActivity.view?.removeGestureRecognizer(shaderActivity)
         if window == nil { cancelPickerHold() }
         if let window {
+            shaderActivity.activity = { [weak store] in store?.native?.shaderInput() }
+            window.addGestureRecognizer(shaderActivity)
             measureWorkspaceBottom()
             store.systemSceneID = window.windowScene?.session.persistentIdentifier
             store.focusWindow = { [weak window] in
@@ -169,9 +174,7 @@ final class CanvasView: UIView {
         return keyboard.isNull || keyboard.height <= safeAreaInsets.bottom + 0.5 ? nil : keyboard
     }
     private var focusedFieldBottom: CGFloat? {
-        FocusedResponder.current = nil
-        UIApplication.shared.sendAction(#selector(UIResponder.captureFocusedResponder), to: nil, from: nil, for: nil)
-        guard let field = FocusedResponder.current as? UIView, field.window === window else { return nil }
+        guard let field = FocusedResponder.find() as? UIView, field.window === window else { return nil }
         return field.convert(field.bounds, to: self).maxY
     }
     private func measureWorkspaceBottom() {
@@ -205,6 +208,7 @@ final class CanvasView: UIView {
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { route(touches, event: event, phase: 4) }
     override func touchesEstimatedPropertiesUpdated(_ touches: Set<UITouch>) { updateEstimates(touches) }
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        store.native?.shaderInput()
         routeKeys(presses, pressed: true)
         super.pressesBegan(presses, with: event)
     }
@@ -218,7 +222,28 @@ final class CanvasView: UIView {
     }
 }
 
-private enum FocusedResponder { static weak var current: UIResponder? }
+enum FocusedResponder {
+    fileprivate static weak var current: UIResponder?
+    static func find() -> UIResponder? {
+        current = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.captureFocusedResponder), to: nil, from: nil, for: nil)
+        return current
+    }
+}
 private extension UIResponder {
     @objc func captureFocusedResponder() { FocusedResponder.current = self }
+}
+
+private final class ShaderActivityRecognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    var activity: (() -> Void)?
+    init() {
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false; delaysTouchesBegan = false; delaysTouchesEnded = false
+        delegate = self
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) { activity?() }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) { activity?() }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { state = .failed }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { state = .failed }
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }

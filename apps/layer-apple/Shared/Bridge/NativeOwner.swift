@@ -1,6 +1,7 @@
 import Foundation
 import QuartzCore
 import Metal
+import Synchronization
 
 /// ARC lease crossing the queue boundary. UIKit/AppKit owns view geometry;
 /// only the render owner uses the layer's Metal surface and drawable APIs.
@@ -37,7 +38,6 @@ final class NativeOwner: @unchecked Sendable {
         perform { [self] in try check(capy_apple_redraw(handle)) }
     }
     private var lastSnapshotTime: UInt64 = 0
-    private var bundledFiltersLoaded = false
     private var canvasReady = false
     private var shadersReady = false
     private let trace: FrameTrace?
@@ -546,20 +546,13 @@ final class NativeOwner: @unchecked Sendable {
             }
         }
     }
-    private func loadBundledFilters() throws {
-        // Submit the optional catalog after paper/document readiness, allowing
-        // priority document and brush shaders to enter the compiler queue first.
-        if let url = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "filters") {
-            let manifest = try String(contentsOf: url, encoding: .utf8)
-            let names = try request(2, JSON(["type": "filter_package_modules", "manifest": manifest]))?.array ?? []
-            var modules: [String: String] = [:]
-            for name in names {
-                modules[name.string] = try String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(name.string), encoding: .utf8)
-            }
-            _ = try request(2, JSON(["type": "load_filter_package", "manifest": manifest, "modules": modules, "mode": "merge", "library": true]))
+    private let shaderInputPending = Atomic<Bool>(false)
+    func shaderInput() {
+        guard shaderInputPending.compareExchange(expected: false, desired: true, ordering: .acquiringAndReleasing).exchanged else { return }
+        queue.async { [self] in
+            shaderInputPending.store(false, ordering: .releasing)
+            capy_apple_shader_input(handle)
         }
-        bundledFiltersLoaded = true
-        try publish()
     }
     func resize(width: UInt32, height: UInt32, scale: Float) {
         perform { [self] in
@@ -576,8 +569,8 @@ final class NativeOwner: @unchecked Sendable {
         guard workspaceInitialized && surfaceSized && canvasReady else { return }
         if initialActions.contains(where: { $0["type"].string == "workspace_manager" }) {
             // Workspace fixture commands have the same idle requirement as
-            // their UI entries. Bundled filter preparation can outlive launch.
-            guard canvasReady && shadersReady && bundledFiltersLoaded,
+            // their UI entries.
+            guard canvasReady && shadersReady,
                 try request(6, JSON(["type": "tick"]))?["view"]["busy"].bool == false else { return }
         }
         // Fixture actions can collapse or resize columns. Apply them once,
@@ -730,14 +723,9 @@ final class NativeOwner: @unchecked Sendable {
                     if initialActions.isEmpty { try publish() }
                 }
                 #endif
-                if canvasReady && !bundledFiltersLoaded { try loadBundledFilters() }
-                // Catalog ownership survives GPU replacement. Finish each new
-                // device's startup gate without loading that catalog again;
-                // the native operation is idempotent while shaders finish.
                 if canvasReady && !shadersReady { try check(capy_apple_finish_startup_cache(handle)) }
                 if let observation {
-                    let state: UInt64 = (canvasReady ? 1 : 0) | (bundledFiltersLoaded ? 2 : 0)
-                        | (result == 1 ? 4 : 0) | (shadersReady ? 8 : 0)
+                    let state: UInt64 = (canvasReady ? 1 : 0) | (result == 1 ? 4 : 0) | (shadersReady ? 8 : 0)
                     if state != lastTraceState {
                         observation.record(FrameTraceEvent(kind: .state, a: FrameTrace.now(), b: now, c: state))
                         lastTraceState = state

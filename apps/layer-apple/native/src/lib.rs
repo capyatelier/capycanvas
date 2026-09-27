@@ -390,7 +390,7 @@ pub unsafe extern "C" fn capy_apple_attach(
     .map_or(-1, |_| 0)
 }
 /// # Safety
-/// Valid exclusively owned handle. Call after submitting the bundled filters.
+/// Valid exclusively owned handle. Call once the canvas is ready.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_finish_startup_cache(app: *mut CapyApple) -> i32 {
     let Some(app) = (unsafe { app.as_mut() }) else {
@@ -673,6 +673,15 @@ pub unsafe extern "C" fn capy_apple_frame(
     })
     .unwrap_or(-1)
 }
+/// # Safety
+/// Valid handle on its serial owner.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_shader_input(app: *const CapyApple) {
+    if let Some(gpu) = unsafe { app.as_ref() }.and_then(|a| a.host.session.engine().backend().0.as_ref()) {
+        gpu.shader_input();
+    }
+}
+
 /// # Safety
 /// Valid handle, read on its serial owner.
 #[unsafe(no_mangle)]

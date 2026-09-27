@@ -172,9 +172,18 @@ impl MetalHost {
                     ..Default::default()
                 }))
                 .map_err(error)?;
-            let renderer = layer_host::GpuContext { adapter, device, queue }.rasterizer(
-                host.session.engine().document().color, &host.renderer_options(self.cache.clone()), false)?;
-            self.install_renderer(host, renderer.into())?;
+            let context = layer_host::GpuContext { adapter, device, queue };
+            let (color, options) = (host.session.engine().document().color, host.renderer_options(self.cache.clone()));
+            let renderer = std::thread::scope(|scope| -> Result<Box<WgpuRasterizer>, String> {
+                std::thread::Builder::new()
+                    .name("capy-renderer".into())
+                    .stack_size(8 * 1024 * 1024)
+                    .spawn_scoped(scope, || context.rasterizer(color, &options, false).map(Box::new))
+                    .map_err(|e| e.to_string())?
+                    .join()
+                    .map_err(|_| "Renderer creation failed".to_string())?
+            })?;
+            self.install_renderer(host, renderer)?;
         }
         let [width, height] = host.session.state().camera.viewport;
         let gpu = host.session.renderer_mut().0.as_ref().unwrap();

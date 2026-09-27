@@ -111,15 +111,25 @@ pub unsafe extern "C" fn capy_document_prepare(
     let Some(task) = (unsafe { task.as_ref() }) else {
         return -1;
     };
+    let path = unsafe { project::read_title(directory) }.map(str::to_owned);
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("capy-drawing".into())
+            .stack_size(8 * 1024 * 1024)
+            .spawn_scoped(scope, || prepare_document(task, path))
+            .map_or(-1, |worker| worker.join().unwrap_or(-1))
+    })
+}
+fn prepare_document(task: &CapyDocumentTask, path: Result<String, String>) -> i32 {
     let mut job = task.0.lock().unwrap_or_else(|e| e.into_inner());
     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
-        let path = unsafe { project::read_title(directory) }?;
+        let path = path?;
         for tiles in &job.tiles {
             if layer_core::raster_storage::resident_tile_bytes(job.tiles.iter()) <= job.budget {
                 break;
             }
             if let Err(e) =
-                layer_core::raster_storage::spill_to_directory(tiles, std::path::Path::new(path))
+                layer_core::raster_storage::spill_to_directory(tiles, std::path::Path::new(&path))
             {
                 job.storage_error = Some(e);
                 break;

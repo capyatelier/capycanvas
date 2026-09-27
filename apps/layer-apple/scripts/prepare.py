@@ -58,7 +58,6 @@ for source in sorted((ROOT / "apps/layer-web/brush-previews").glob("*.png")):
     shutil.copy2(source, dest / source.name)
     write_json(dest / "Contents.json", {"images": [{"filename": source.name, "idiom": "universal"}],
         "info": {"version": 1, "author": "xcode"}})
-shutil.copytree(ROOT / "assets/filters", GENERATED / "filters", dirs_exist_ok=True)
 notices = GENERATED / "licenses"
 notices.mkdir(exist_ok=True)
 for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "BRANDING.md", "THIRD_PARTY_NOTICES.md"]:

@@ -41,7 +41,7 @@ refs = {}
 for path in sources:
     name = str(path.relative_to(APP))
     refs[name] = obj(name, "PBXFileReference", lastKnownFileType="sourcecode.swift", path=name, sourceTree="<group>")
-for name, kind in [("Generated/SharedAssets.xcassets", "folder.assetcatalog"), ("Generated/filters", "folder"), ("Generated/licenses", "folder")]:
+for name, kind in [("Generated/SharedAssets.xcassets", "folder.assetcatalog"), ("Generated/licenses", "folder")]:
     refs[name] = obj(name, "PBXFileReference", lastKnownFileType=kind, path=name, sourceTree="<group>")
 
 targets, products = [], []

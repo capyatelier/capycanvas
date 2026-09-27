@@ -256,7 +256,7 @@ corners, which otherwise lie beneath docked controls. This simulator check does
 not establish physical finger/Pencil, cancellation or performance acceptance.
 
 `tests/canvas-modifiers.swift` is a standalone UIKit scene application built
-with the production Shared/iOS sources, Rust bridge and bundled filters. Its
+with the production Shared/iOS sources and Rust bridge. Its
 eighty groups cover mouse/Pencil modifier flags, stale control flags, interruption,
 touch identity reuse and palm rejection; saved ruler geometry; all figure and
 gradient variants; constrained/free painting with all three ruler types; and
@@ -1017,12 +1017,13 @@ selection controls and numeric transforms, with full editor captures retained.
 Use a fresh result-bundle path. The iPad and Mac targets share frame admission,
 including wake preservation while a frame is queued, and flush final UI state
 before going idle. Each window owns its own session. Reattaching a Metal layer
-does not reload bundled filters over a session's edited filter library.
-Both Apple targets now use the same staged GPU frame preparation as Android:
-paper first without consuming document replay, then document and active-brush
-dependencies, followed by remaining shaders. The editor uses its shared theme
-background until the first Metal viewport submission. Bundled filters merge
-after document readiness, and shader caches remain in the app's local caches
+does not reload the filter library over a session's edits.
+Both Apple targets use the shared [demand shader preparation](../../docs/development/shared-shader-readiness.md):
+paper first without consuming document replay, then the document and the active
+brush and eraser. Other brushes, masks, tools and filters compile when first
+used, after 200 ms without window input. The editor uses its shared theme
+background until the first Metal viewport submission. The filter catalog is
+embedded in the shared core, and shader caches remain in the app's local caches
 directory. Submission is distinct from GPU completion and on-screen presentation;
 cold/warm startup latency and hardware frame cadence still require measurement.
 Use direct window captures and editor action/state/output checks for routine

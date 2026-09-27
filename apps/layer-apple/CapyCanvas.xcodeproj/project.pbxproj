@@ -1139,12 +1139,6 @@
 			"path" = "Generated/SharedAssets.xcassets";
 			"sourceTree" = "<group>";
 		};
-		"27C0622449FF617E92B72BB6" = {
-			"isa" = "PBXFileReference";
-			"lastKnownFileType" = "folder";
-			"path" = "Generated/filters";
-			"sourceTree" = "<group>";
-		};
 		"915157684DB88C8E3DCE8F38" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "folder";
@@ -1669,10 +1663,6 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "A6D47918270966E6019BC1D8";
 		};
-		"5F0DAEC14C353B3ECD714DB6" = {
-			"isa" = "PBXBuildFile";
-			"fileRef" = "27C0622449FF617E92B72BB6";
-		};
 		"62EFFDE19D42A5ADCE4A29E8" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "915157684DB88C8E3DCE8F38";
@@ -1846,7 +1836,6 @@
 			"buildActionMask" = "2147483647";
 			"files" = (
 				"E419FFD16A5C419DBEC65B97",
-				"5F0DAEC14C353B3ECD714DB6",
 				"62EFFDE19D42A5ADCE4A29E8",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
@@ -2813,10 +2802,6 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "A6D47918270966E6019BC1D8";
 		};
-		"C219365362741A2868BBCC65" = {
-			"isa" = "PBXBuildFile";
-			"fileRef" = "27C0622449FF617E92B72BB6";
-		};
 		"9C5DAB521961785962A358E7" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "915157684DB88C8E3DCE8F38";
@@ -2992,7 +2977,6 @@
 			"buildActionMask" = "2147483647";
 			"files" = (
 				"95DEBB7584B28DACAD448AC8",
-				"C219365362741A2868BBCC65",
 				"9C5DAB521961785962A358E7",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
@@ -3628,7 +3612,6 @@
 				"692C302C46D7D2304E6304E9",
 				"C15727CDA237AEFEEB099692",
 				"A6D47918270966E6019BC1D8",
-				"27C0622449FF617E92B72BB6",
 				"915157684DB88C8E3DCE8F38",
 				"0A3E27B8CA818264D75C8D81",
 			);

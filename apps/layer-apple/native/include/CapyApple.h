@@ -151,6 +151,7 @@ int32_t capy_apple_gesture(CapyApple *app, float x, float y, float scale, float 
 int32_t capy_apple_frame(CapyApple *app, uint64_t now_ns, uint64_t presentation_ns,
                         uint64_t *costs);
 uint64_t capy_apple_camera_revision(const CapyApple *app);
+void capy_apple_shader_input(const CapyApple *app);
 /* Optional GPU queue span (includes submission gaps, not GPU busy time or
    presentation latency). No timestamp submissions when disabled (default).
    Sample status: 1 valid, 2 map/read failure, 3 invalid timestamps.
