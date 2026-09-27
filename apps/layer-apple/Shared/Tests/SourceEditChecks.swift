@@ -38,6 +38,8 @@ extension XCTestCase {
             XCTAssertTrue(open.waitForNonExistence(timeout:15))
         }
         workspaceActivate(app.buttons["layer-Import image as layer"]);chooseFile(photo)
+        let place=app.buttons["canvas-bar-action-apply_transform"]
+        XCTAssertTrue(place.waitForExistence(timeout:20));workspaceActivate(place);XCTAssertTrue(place.waitForNonExistence(timeout:10))
         expectation(for:NSPredicate(format:"count == 3"),evaluatedWith:rows);waitForExpectations(timeout:30)
         let original=editorPixels(in:app)
         func command(_ label:String) {

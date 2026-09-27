@@ -67,7 +67,10 @@ extension XCTestCase {
             capture(shape, wheel.frame, accepted)
         }
         XCTAssertTrue(wheel.waitForExistence(timeout: 10))
-        XCTAssertEqual(wheel.frame.width, wheel.frame.height, accuracy: 1)
+        expectation(for: NSPredicate { _, _ in state()["rgba"] as? [Double] == [1, 0, 0, 1] }, evaluatedWith: wheel)
+        waitForExpectations(timeout: 30)
+        expectation(for: NSPredicate { _, _ in abs(wheel.frame.width - wheel.frame.height) <= 1 }, evaluatedWith: wheel)
+        waitForExpectations(timeout: 10)
         XCTAssertEqual(app.buttons["color-readout"].value as? String, "OKLCH")
         captureColor("circle")
         let paint = state()["rgba"] as? [Double]

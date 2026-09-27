@@ -450,7 +450,7 @@ extension XCTestCase {
         waitForExpectations(timeout: 15)
         XCTAssertEqual(editorPixels(in: app), paper, "Cancel removes the complete provisional batch")
         chooseBatch()
-        workspaceActivate(app.buttons["canvas-bar-action-placement_original_size"])
+        activateCanvasBarAction("placement_original_size", label: "Original Size (100%)", in: app)
         workspaceActivate(apply)
         XCTAssertTrue(apply.waitForNonExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts[url.deletingPathExtension().lastPathComponent].firstMatch.exists, "Use the selected photo name for its layer")

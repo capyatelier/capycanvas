@@ -1,6 +1,16 @@
 import XCTest
 
 extension XCTestCase {
+    @MainActor func activateCanvasBarAction(_ id: String, label: String, in app: XCUIApplication) {
+        let action = app.buttons["canvas-bar-action-" + id]
+        if action.waitForExistence(timeout: 5) { workspaceActivate(action); return }
+        let menu = app.descendants(matching: .any)["canvas-bar-menu"].firstMatch
+        workspaceActivate(app.buttons["canvas-bar-more"])
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        let item = menu.buttons["menu-action-" + label]
+        revealEditorControl(item, in: menu); workspaceActivate(item)
+        XCTAssertTrue(menu.waitForNonExistence(timeout: 10))
+    }
     @MainActor func checkCanvasActionBar(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)

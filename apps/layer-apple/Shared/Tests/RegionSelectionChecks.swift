@@ -40,7 +40,10 @@ extension XCTestCase {
             workspaceActivate(app.buttons["layer-Import image as layer"])
             XCTAssertTrue(accept.waitForExistence(timeout: 15)); goToFolder(url, in: app); workspaceActivate(accept)
             XCTAssertTrue(accept.waitForNonExistence(timeout: 15))
-            XCTAssertTrue(app.staticTexts[url.lastPathComponent].firstMatch.waitForExistence(timeout: 15))
+            let place = app.buttons["canvas-bar-action-apply_transform"]
+            XCTAssertTrue(place.waitForExistence(timeout: 20)); workspaceActivate(place)
+            XCTAssertTrue(place.waitForNonExistence(timeout: 10))
+            XCTAssertTrue(app.staticTexts[url.deletingPathExtension().lastPathComponent].firstMatch.waitForExistence(timeout: 15))
             return try pixels()
         }
         var exportIndex = 0
@@ -67,6 +70,15 @@ extension XCTestCase {
             }
             return bytes
         }
+        func selectTool(_ label: String) {
+            let tile = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-toolbar-", label)).firstMatch
+            for _ in 0..<3 {
+                workspaceActivate(tile)
+                let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == YES"), object: tile)
+                if XCTWaiter.wait(for: [selected], timeout: 3) == .completed { return }
+            }
+            XCTFail("\(label) must become the active tool")
+        }
         func setting(_ id: String, _ value: Int) {
             let entry = app.textFields["number-entry-tool-" + id]
             if entry.exists {
@@ -88,7 +100,14 @@ extension XCTestCase {
         }
         let closed = try outline(gap: false)
         for tool in ["Fill", "Auto select"] {
-            editorTool(tool, in: app); editorChoice("Visible artwork", in: app)
+            selectTool(tool)
+            if tool == "Fill" { editorChoice("Visible artwork", in: app) } else {
+                let visible = app.buttons["tool-action-selection_visible"]
+                revealEditorControl(visible, in: app.scrollViews.containing(.button, identifier: visible.identifier).firstMatch)
+                workspaceActivate(visible)
+                expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: visible)
+                waitForExpectations(timeout: 5)
+            }
             setting("tolerance", 0); setting("gap_closing", 0)
             for (expansion, smoothing) in [(0, 0), (2, 0), (-2, 0), (0, 100)] {
                 setting("expansion", expansion); setting("smoothing", smoothing)
@@ -116,7 +135,7 @@ extension XCTestCase {
             }
         }
         let broken = try outline(gap: true)
-        editorTool("Fill", in: app); setting("expansion", 0); setting("smoothing", 0)
+        selectTool("Fill"); setting("expansion", 0); setting("smoothing", 0)
         for distance in [0, 4] {
             setting("gap_closing", distance)
             let painted = try paint("Fill")

@@ -293,7 +293,10 @@ extension XCTestCase {
         workspaceActivate(app.buttons["number-value-gradient-position"])
         XCTAssertTrue(position.waitForExistence(timeout: 5))
         position.typeText("25\n"); expect(app.buttons["number-value-gradient-position"], "25.0 %")
-        workspaceActivate(app.buttons["gradient-reset"]); expectGraphic(gradient, "2 stops")
+        let gradientReset = app.buttons["gradient-reset"]
+        XCTAssertTrue(gradientReset.waitForExistence(timeout: 10))
+        revealEditorControl(gradientReset, in: app.scrollViews.containing(.button, identifier: "gradient-reset").firstMatch)
+        workspaceActivate(gradientReset); expectGraphic(gradient, "2 stops")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         #if os(macOS)
         let screenshot = app.windows.firstMatch.screenshot()
