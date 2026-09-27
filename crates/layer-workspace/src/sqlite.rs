@@ -90,13 +90,21 @@ impl SqliteStore {
         connection.pragma_update(None, "wal_autocheckpoint", 1000)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version == 0 {
-            let tables: u32 = tx.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'", [], |r| r.get(0))?;
-            if tables != 0 {
-                return Err(StoreError::new(
-                    ErrorKind::UnsupportedSchema,
-                    "Unrecognized workspace database. The original data has been preserved.",
-                ));
+        if version > SCHEMA_VERSION {
+            return Err(newer_schema());
+        }
+        if version < SCHEMA_VERSION {
+            // A new, unversioned or older store becomes an empty current one;
+            // older workspaces are discarded, not migrated (see newer_schema).
+            let tables = tx
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")?
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for table in tables {
+                tx.execute(
+                    &format!("DROP TABLE \"{}\"", table.replace('"', "\"\"")),
+                    [],
+                )?;
             }
             tx.execute_batch("CREATE TABLE items (
                 id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, name_key TEXT NOT NULL,
@@ -115,11 +123,6 @@ impl SqliteStore {
                 CREATE TABLE workspace_switcher (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);
                 CREATE TABLE workspace_order (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);")?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        } else if version != SCHEMA_VERSION {
-            return Err(StoreError::new(
-                ErrorKind::UnsupportedSchema,
-                "This workspace database uses an unsupported version. Its data has been preserved.",
-            ));
         }
         tx.commit()?;
         Ok(Self {

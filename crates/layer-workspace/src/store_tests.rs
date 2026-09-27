@@ -758,26 +758,37 @@ fn newer_schemas_and_corrupt_items_are_preserved() {
 }
 
 #[test]
-fn older_schema_is_rejected_and_preserved() {
-    let mut f = Fixture::new();
-    f.create("Older");
-    f.store
-        .connection
-        .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
-        .unwrap();
-    assert_eq!(
-        SqliteStore::open(&f.directory.join("workspaces.sqlite3"))
-            .err()
-            .unwrap()
-            .kind,
-        ErrorKind::UnsupportedSchema
-    );
-    let version: u32 = f
-        .store
-        .connection
-        .pragma_query_value(None, "user_version", |r| r.get(0))
-        .unwrap();
-    assert_eq!(version, SCHEMA_VERSION - 1);
+fn older_and_unversioned_stores_are_replaced_by_empty_current_ones() {
+    for version in [SCHEMA_VERSION - 1, 0] {
+        let mut f = Fixture::new();
+        f.create("Older");
+        f.store
+            .connection
+            .execute_batch("CREATE TABLE retired (id TEXT PRIMARY KEY)")
+            .unwrap();
+        f.store
+            .connection
+            .pragma_update(None, "user_version", version)
+            .unwrap();
+        let mut store = f.connection();
+        assert!(store.list().unwrap().is_empty(), "version {version}");
+        let retired: u32 = store
+            .connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='retired'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(retired, 0);
+        let current: u32 = store
+            .connection
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(current, SCHEMA_VERSION);
+        let saved = f.create("Current");
+        assert_eq!(store.load(&saved.entity.id).unwrap(), saved);
+    }
 }
 
 #[test]

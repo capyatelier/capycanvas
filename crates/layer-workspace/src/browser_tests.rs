@@ -475,6 +475,32 @@ fn browser_transactions_match_sqlite_contract() {
 }
 
 #[test]
+fn browser_replaces_older_and_unversioned_snapshots() {
+    let owner = Owner::fresh();
+    let mut db = BrowserDatabase::default();
+    let batch = CommitBatch::prepare(owner.clone(), vec![create(workspace("Older"))]).unwrap();
+    db.execute(StoreRequest::Commit { batch }, 1).unwrap();
+    let mut encoded: serde_json::Value = serde_json::from_str(&db.encoded().unwrap()).unwrap();
+    for schema in [
+        serde_json::json!(SCHEMA_VERSION - 1),
+        serde_json::Value::Null,
+    ] {
+        encoded["schema"] = schema;
+        let mut db = BrowserDatabase::decode(&encoded.to_string()).unwrap();
+        let StoreResponse::List(items) = db.execute(StoreRequest::List, 2).unwrap() else {
+            panic!()
+        };
+        assert!(items.is_empty());
+        let batch =
+            CommitBatch::prepare(owner.clone(), vec![create(workspace("Current"))]).unwrap();
+        db.execute(StoreRequest::Commit { batch }, 3).unwrap();
+        let written: serde_json::Value = serde_json::from_str(&db.encoded().unwrap()).unwrap();
+        assert_eq!(written["schema"], SCHEMA_VERSION);
+        assert_eq!(written["items"].as_object().unwrap().len(), 1);
+    }
+}
+
+#[test]
 fn browser_preserves_newer_schemas_and_exact_large_counters() {
     let owner = Owner::fresh();
     let entity = workspace("Drawing");

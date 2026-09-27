@@ -33,6 +33,15 @@ pub(crate) fn already_saved() -> StoreError {
         "The interrupted changes already finished saving. Refresh the manager to view them.",
     )
 }
+/// Stores older than SCHEMA_VERSION are replaced, not migrated, while the
+/// format is unstable. A newer store is kept: replacing it from a window still
+/// running an older build would discard the newer build's workspaces.
+pub(crate) fn newer_schema() -> StoreError {
+    StoreError::new(
+        ErrorKind::UnsupportedSchema,
+        "A newer version of Capy Canvas updated workspace storage. Reload or update Capy Canvas to continue.",
+    )
+}
 pub(crate) fn owned_elsewhere() -> StoreError {
     StoreError::new(
         ErrorKind::OwnedElsewhere,

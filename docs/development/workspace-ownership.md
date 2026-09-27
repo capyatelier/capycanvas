@@ -33,9 +33,12 @@ the owning GTK window where available. A stale SwitchToWindow menu action uses
 the same path; if the external owner disappeared during the attempt, it retries
 the claim rather than retaining the stale error.
 
-SQLite and browser stores share `SCHEMA_VERSION`; any other version is rejected
-with its data preserved. Lock failures fail closed; database export refuses
-paths inside the lock store.
+SQLite and browser stores share `SCHEMA_VERSION`. Until the format is stable, an
+unversioned or older store is replaced by an empty current one on open, with no
+migration, so every platform starts on the current version without asking. A
+newer store is rejected with its data preserved, so a window still running an
+older build cannot discard it. Lock failures fail closed; database export
+refuses paths inside the lock store.
 
 ## Verification
 

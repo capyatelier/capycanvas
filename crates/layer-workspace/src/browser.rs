@@ -91,15 +91,16 @@ fn update_ids(
     Ok(field.clone())
 }
 impl BrowserDatabase {
+    /// An unversioned or older snapshot decodes as an empty current database,
+    /// like a first start; the next write replaces it (see newer_schema).
     pub fn decode(text: &str) -> Result<Self> {
         let value: serde_json::Value = serde_json::from_str(text)?;
-        if value.get("schema").and_then(|v| v.as_u64()) != Some(SCHEMA_VERSION.into()) {
-            return Err(StoreError::new(
-                ErrorKind::UnsupportedSchema,
-                "This workspace database uses an unsupported version. Its data has been preserved.",
-            ));
+        let current = u64::from(SCHEMA_VERSION);
+        match value.get("schema").and_then(|v| v.as_u64()) {
+            Some(schema) if schema > current => Err(newer_schema()),
+            Some(schema) if schema == current => Ok(serde_json::from_value(value)?),
+            _ => Ok(Self::default()),
         }
-        Ok(serde_json::from_value(value)?)
     }
     pub fn encoded(&self) -> Result<String> {
         Ok(serde_json::to_string(self)?)
