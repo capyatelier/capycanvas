@@ -422,7 +422,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         t.request.transform.map = t.map();
         t.request.transform.interpolation = t.interpolation(chosen);
-        t.request.moving = t.drag.is_some();
+        let moving = t.drag.is_some();
+        t.request.moving = moving;
         let affine = t.pose_affine();
         if let Some(placement) = &t.placement {
             let mut edits = Vec::new();
@@ -444,8 +445,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .set_transform_preview(Some(t.request.clone()))
                 .map_err(error)?;
         }
-        self.refresh_tools();
-        self.operation.changed = true;
+        if !moving {
+            self.refresh_tools();
+            self.operation.changed = true;
+        }
         Ok(())
     }
     pub(super) fn transform_controls(&self) -> Vec<tool_settings::ToolSetting> {

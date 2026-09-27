@@ -435,6 +435,28 @@ fn selection_bar_masks_the_active_layer_in_one_step() {
 }
 
 #[test]
+fn transform_values_publish_when_a_handle_drag_ends() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    s.frame(2, 2).unwrap();
+    let value = |s: &UiSession<Recorder>| s.state.tool_settings.iter().find(|c| c.id == "transform_x").unwrap().value;
+    let before = value(&s);
+    let quad = s.operation.quad();
+    let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
+    let moved = Point { x: centre.x + 40., y: centre.y + 20. };
+    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), centre).unwrap();
+    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), moved).unwrap();
+    let change = s.frame(3, 3).unwrap();
+    assert_eq!(change.regions & regions::BRUSH, 0, "drag samples leave Tool Options alone");
+    assert_eq!(value(&s), before);
+    assert!(s.renderer_mut().transform.clone().unwrap().moving);
+    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), moved).unwrap();
+    let change = s.frame(4, 4).unwrap();
+    assert_ne!(change.regions & regions::BRUSH, 0, "release publishes the new values");
+    assert!((value(&s) - before - 40.).abs() < 0.01, "{} -> {}", before, value(&s));
+}
+
+#[test]
 fn a_finger_reaches_the_handles_of_every_transform() {
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
