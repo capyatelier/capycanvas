@@ -1723,6 +1723,47 @@ mod tests {
     }
 
     #[test]
+    fn warp_opens_over_a_large_filled_selection() {
+        let reference = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
+        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        host.session = UiSession::from_project(
+            Renderer(Some(gpu.into())),
+            layer_ui::new_drawing(6000, 4000).unwrap(),
+            None,
+            [640, 480],
+            layer_ui::Platform::Android,
+        )
+        .unwrap();
+        host.startup = Default::default();
+        host.resize(640, 480, 1.).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let clock = std::cell::Cell::new(0);
+        let frame = |host: &mut NativeHost| {
+            clock.set(clock.get() + 8_000_000);
+            host.prepare_canvas_frame(clock.get(), clock.get(), true).unwrap();
+            assert!(std::time::Instant::now() < deadline, "startup timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        while !host.startup.complete {
+            frame(&mut host);
+        }
+        for command in [
+            layer_ui::CommandId::SelectAll,
+            layer_ui::CommandId::FillSelection,
+            layer_ui::CommandId::ScaleRotate,
+            layer_ui::CommandId::TransformWarp,
+        ] {
+            host.dispatch(UiAction::Invoke { command }).unwrap();
+            for _ in 0..8 {
+                frame(&mut host);
+            }
+        }
+        let preview = host.session.engine().transform_preview().unwrap();
+        assert!(matches!(preview.transform.map, layer_core::TransformMap::Mesh(_)), "Warp draws its mesh");
+    }
+
+    #[test]
     fn a_contact_begun_as_a_transform_opens_is_replayed_whole_once_it_is_prepared() {
         let reference = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();

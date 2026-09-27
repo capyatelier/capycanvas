@@ -19,8 +19,6 @@ pub(crate) struct MeshGeometry {
     quads: [u32; 2],
     /// Destination bounds of each quad, as min x, min y, max x, max y.
     destination: Vec<[f32; 4]>,
-    /// Source bounds of each quad.
-    source: Vec<[f32; 4]>,
     pages: Bins,
     windows: Option<Bins>,
     /// Triangles of every window in turn, or of the whole mesh when the
@@ -33,27 +31,21 @@ impl MeshGeometry {
         let (vertices, quads) = Self::surface(mesh, TOLERANCE);
         let width = quads[0] + 1;
         let mut destination = Vec::with_capacity(quads[0] * quads[1]);
-        let mut source = Vec::with_capacity(quads[0] * quads[1]);
         for j in 0..quads[1] {
             for i in 0..quads[0] {
                 let a = j * width + i;
-                let corners = [a, a + 1, a + width, a + width + 1].map(|v| vertices[v]);
-                let bounds = |k: usize| {
-                    corners.iter().fold(
-                        [
-                            f32::INFINITY,
-                            f32::INFINITY,
-                            f32::NEG_INFINITY,
-                            f32::NEG_INFINITY,
-                        ],
-                        |b, v| {
-                            let [x, y] = [v[k], v[k + 1]];
-                            [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]
-                        },
-                    )
-                };
-                destination.push(bounds(0));
-                source.push(bounds(2));
+                destination.push([a, a + 1, a + width, a + width + 1].iter().fold(
+                    [
+                        f32::INFINITY,
+                        f32::INFINITY,
+                        f32::NEG_INFINITY,
+                        f32::NEG_INFINITY,
+                    ],
+                    |b, v| {
+                        let [x, y, ..] = vertices[*v];
+                        [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]
+                    },
+                ));
             }
         }
         let pages = (PAGE_SIZE.trailing_zeros()..u32::BITS)
@@ -66,7 +58,6 @@ impl MeshGeometry {
             vertices,
             quads,
             destination,
-            source,
             pages,
             windows,
             indices: Vec::new(),
@@ -90,7 +81,6 @@ impl MeshGeometry {
             vertices,
             quads: quads.map(|n| n as u32),
             destination: Vec::new(),
-            source: Vec::new(),
             pages: Bins::default(),
             windows: None,
             indices: Vec::new(),
@@ -168,8 +158,9 @@ impl MeshGeometry {
         items.start * 6..items.end * 6
     }
 
-    /// Source bounds of every quad within a destination pixel of the region,
-    /// or None when no quad reaches it.
+    /// Source bounds of the triangles' parts within a destination pixel of
+    /// the region, or None when no triangle reaches it. Positions interpolate
+    /// linearly across each triangle, so its clipped corners bound them.
     pub fn footprint(&self, region: PixelRect) -> Option<[f64; 4]> {
         let near = [
             region.min_x() as f32 - 1.,
@@ -184,19 +175,61 @@ impl MeshGeometry {
             f32::NEG_INFINITY,
         ];
         for quad in self.pages.reaching(near) {
-            let [dest, source] = [self.destination[quad as usize], self.source[quad as usize]];
-            if dest[0] <= near[2] && dest[2] >= near[0] && dest[1] <= near[3] && dest[3] >= near[1]
-            {
-                found = [
-                    found[0].min(source[0]),
-                    found[1].min(source[1]),
-                    found[2].max(source[2]),
-                    found[3].max(source[3]),
-                ];
+            let dest = self.destination[quad as usize];
+            if dest[0] > near[2] || dest[2] < near[0] || dest[1] > near[3] || dest[3] < near[1] {
+                continue;
+            }
+            for triangle in self.quad(quad) {
+                let (corners, count) = clip(triangle.map(|v| self.vertices[v as usize]), near);
+                for v in &corners[..count] {
+                    found = [
+                        found[0].min(v[2]),
+                        found[1].min(v[3]),
+                        found[2].max(v[2]),
+                        found[3].max(v[3]),
+                    ];
+                }
             }
         }
         (found[0] <= found[2]).then(|| found.map(f64::from))
     }
+}
+
+/// The part of a triangle of destination x, y and source x, y vertices within
+/// `rect` in destination space, with sources interpolated along cut edges. A
+/// triangle clipped by four edges has at most seven corners.
+fn clip(triangle: [[f32; 4]; 3], rect: [f32; 4]) -> ([[f32; 4]; 7], usize) {
+    let mut polygon = [[0f32; 4]; 7];
+    polygon[..3].copy_from_slice(&triangle);
+    let mut count = 3;
+    for (axis, edge, sign) in [
+        (0, rect[0], 1.),
+        (1, rect[1], 1.),
+        (0, rect[2], -1.),
+        (1, rect[3], -1.),
+    ] {
+        let inside = |v: &[f32; 4]| (v[axis] - edge) * sign >= 0.;
+        let mut clipped = [[0f32; 4]; 7];
+        let mut kept = 0;
+        for n in 0..count {
+            let [previous, current] = [polygon[(n + count - 1) % count], polygon[n]];
+            if inside(&current) != inside(&previous) && kept < 7 {
+                let t = (edge - previous[axis]) / (current[axis] - previous[axis]);
+                clipped[kept] =
+                    std::array::from_fn(|k| previous[k] + (current[k] - previous[k]) * t);
+                kept += 1;
+            }
+            if inside(&current) && kept < 7 {
+                clipped[kept] = current;
+                kept += 1;
+            }
+        }
+        (polygon, count) = (clipped, kept);
+        if count == 0 {
+            break;
+        }
+    }
+    (polygon, count)
 }
 
 /// Items binned by the square destination cells, `1 << shift` pixels wide,
@@ -699,38 +732,66 @@ mod tests {
     }
 
     #[test]
-    fn footprints_match_every_quad_near_the_region() {
+    fn footprints_bound_the_source_sampled_in_the_region() {
         let g = warped(0.);
         for (x, y, w, h) in [
             (0, 0, 256, 256),
             (512, 768, 512, 256),
             (1800, 1900, 37, 300),
+            (1111, 777, 1, 1),
             (5000, 5000, 64, 64),
         ] {
             let region = PixelRect::new(x, y, x + w, y + h);
-            let near = [
-                x as f32 - 1.,
-                y as f32 - 1.,
-                (x + w) as f32 + 1.,
-                (y + h) as f32 + 1.,
-            ];
-            let mut expected: Option<[f32; 4]> = None;
-            for (dest, source) in g.destination.iter().zip(&g.source) {
-                if dest[0] <= near[2]
-                    && dest[2] >= near[0]
-                    && dest[1] <= near[3]
-                    && dest[3] >= near[1]
-                {
-                    let e = expected.get_or_insert(*source);
-                    *e = [
-                        e[0].min(source[0]),
-                        e[1].min(source[1]),
-                        e[2].max(source[2]),
-                        e[3].max(source[3]),
+            let footprint = g.footprint(region);
+            let mut sampled = 0;
+            for j in 0..=16 {
+                for i in 0..=16 {
+                    let p = [
+                        x as f32 - 1. + (w + 2) as f32 * i as f32 / 16.,
+                        y as f32 - 1. + (h + 2) as f32 * j as f32 / 16.,
                     ];
+                    for [a, b, c] in g.triangles().map(|t| t.map(|v| g.vertices[v as usize])) {
+                        let area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+                        if area.abs() < 1e-3 {
+                            continue;
+                        }
+                        let u =
+                            ((p[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (p[1] - a[1])) / area;
+                        let v =
+                            ((b[0] - a[0]) * (p[1] - a[1]) - (p[0] - a[0]) * (b[1] - a[1])) / area;
+                        if u < 0. || v < 0. || u + v > 1. {
+                            continue;
+                        }
+                        let source = [0, 1].map(|k| {
+                            a[k + 2] + (b[k + 2] - a[k + 2]) * u + (c[k + 2] - a[k + 2]) * v
+                        });
+                        let f = footprint.expect("a sampled region has a footprint");
+                        assert!(
+                            f[0] - 0.05 <= source[0] as f64
+                                && source[0] as f64 <= f[2] + 0.05
+                                && f[1] - 0.05 <= source[1] as f64
+                                && source[1] as f64 <= f[3] + 0.05,
+                            "{source:?} sampled at {p:?} lies in {f:?}"
+                        );
+                        sampled += 1;
+                    }
                 }
             }
-            assert_eq!(g.footprint(region), expected.map(|e| e.map(f64::from)));
+            assert_eq!(footprint.is_some(), sampled > 0, "region {x},{y}");
+        }
+    }
+
+    #[test]
+    fn a_pixel_on_a_patch_seam_reads_only_its_neighborhood() {
+        let bounds = Rect {
+            min: Point { x: 0., y: 0. },
+            max: Point { x: 2048., y: 1536. },
+        };
+        let mesh = MeshMap::identity(bounds, [3, 3]).unwrap();
+        let g = MeshGeometry::new(&mesh);
+        let f = g.footprint(PixelRect::new(681, 0, 682, 1)).unwrap();
+        for (actual, expected) in f.into_iter().zip([680., -1., 683., 2.]) {
+            assert!((actual - expected).abs() < 0.01, "{f:?}");
         }
     }
 

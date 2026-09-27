@@ -130,7 +130,9 @@ time: the mesh, tessellated within half a pixel and extended by a skirt past
 its edges, is first rasterized into a texture of the source position at each
 destination pixel, and the transform pass samples the original there,
 averaging a pixel's footprint from its neighbors' positions where the mesh
-shrinks it. Paint, masks and a selection's moved pixels draw this way in the
+shrinks it. A region job binds only the source under the part of each
+tessellated triangle it covers, so the large flat triangles of an unbent patch
+still split into jobs within the pass's texture bindings. Paint, masks and a selection's moved pixels draw this way in the
 preview and when applied. A drag rasterizes the mesh at the display level's
 texels instead, tessellated within half a texel, and resamples the reduced copy
 at those positions, still or moving; the still preview then settles its pages
