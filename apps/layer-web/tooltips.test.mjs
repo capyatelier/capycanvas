@@ -27,8 +27,8 @@ export async function checkTooltips({call,evaluate,settle}) {
         assert.ok(Math.abs(t.y-r.bottom-4)<1,"Tooltip is below the element with a 4px gap");
         const center=r.x+r.width/2-t.width/2;
         assert.ok(Math.abs(t.x-Math.max(8,Math.min(center,viewportWidth-t.width-8)))<1,"Centered where possible, clamped near side edges");
-        const style=await evaluate("(()=>{const s=getComputedStyle(document.querySelector('#hover-tooltip'));return [s.color,s.backgroundColor,s.padding,s.borderRadius,s.fontSize,s.fontWeight,s.pointerEvents]})()");
-        assert.deepEqual(style.slice(0,4),["rgb(255, 255, 255)","rgba(0, 0, 6, 0.8)","6px 10px","9px"]);
+        const style=await evaluate("(()=>{const s=getComputedStyle(document.querySelector('#hover-tooltip')),squircle=CSS.supports('corner-shape','squircle');return [s.color,s.backgroundColor,s.padding,Math.abs(parseFloat(s.borderRadius)-9/(squircle?.54:1))<.01&&(!squircle||['squircle','superellipse(2)'].includes(s.cornerShape)),s.fontSize,s.fontWeight,s.pointerEvents]})()");
+        assert.deepEqual(style.slice(0,4),["rgb(255, 255, 255)","rgba(0, 0, 6, 0.8)","6px 10px",true]);
         assert.equal(style[4],await evaluate("getComputedStyle(document.body).fontSize"));
         assert.deepEqual(style.slice(5),["400","none"]);
         assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).title`),"","Native title cannot overlap the custom tooltip");

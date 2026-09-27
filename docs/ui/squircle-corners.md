@@ -40,10 +40,19 @@ and connector shrink; they round again only once the drawer is removed.
 
 Squircles cover the workspace: the title bar, toolbars, panels, tabs, drawers,
 collapsed columns, status notices, the brush-size preview and the controls
-inside them. Settings, dialogs, menus, tooltips and other popovers keep
-platform styling. True circles stay round: color swatches and wheel buttons,
-wheel markers, dials, radio indicators, gradient stops and native window
-controls.
+inside them. Native hosts keep platform styling for settings, dialogs, menus,
+tooltips and other popovers.
+
+Web squircles those as well. Menus and popovers use `SURFACE_RADIUS` with
+12px items, concentric at their 6px inset like panels, and 6px controls use
+the 12px control radius. Other dialogs, cards, list highlights and tooltips
+keep their former visual rounding: `--squircle-scale` divides the former
+circular radius by the corner fit. Circular icon buttons, such as dialog close
+buttons, become full squircles.
+
+True circles stay round: color swatches and wheel buttons, wheel markers,
+dials, radio indicators, gradient stops, circular range and switch knobs and native
+window controls.
 
 ## Corner fit
 

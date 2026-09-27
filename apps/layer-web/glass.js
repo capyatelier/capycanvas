@@ -29,7 +29,7 @@ export function createGlass({ app, canvas, workspace, connections, enabled, wake
           boxes.push(r.x - origin.x, r.y - origin.y, r.width, r.height, ...corners.map(corner => parseFloat(style[corner]) || 0), shape);
       };
       for (const node of workspace.querySelectorAll(surfaces)) if (!node.closest(zen)) measure(node, squircle);
-      for (const node of document.querySelectorAll(dialogs)) measure(node, 0);
+      for (const node of document.querySelectorAll(dialogs)) measure(node, squircle);
     }
     app.set_glass(new Float32Array(boxes), enabled() ? connections() : []);
   }

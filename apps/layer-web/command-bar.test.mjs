@@ -136,6 +136,7 @@ async function checkGlass({call, evaluate, settle, key, open, query, wait, settl
   const luma = p => .2126 * p[0] + .7152 * p[1] + .0722 * p[2];
   const sharpness = row => row.slice(1).reduce((sum, p, i) => sum + Math.abs(luma(p) - luma(row[i])), 0) / (row.length - 1);
   const close = (a, b, tolerance) => a.every((v, i) => Math.abs(v - b[i]) <= tolerance);
+  const squircle = await evaluate("CSS.supports('corner-shape','squircle')"), radius = style.radius / (squircle ? .54 : 1);
   for (const [theme, level] of [['dark','off'],['dark','low'],['dark','high'],['light','medium'],['light','high'],['light','off']]) {
     const name = `command-bar-glass-${theme}-${level}`;
     await send({type:'set_theme',theme});
@@ -149,11 +150,14 @@ async function checkGlass({call, evaluate, settle, key, open, query, wait, settl
         radius:getComputedStyle(document.querySelector('#command-bar')).borderTopLeftRadius};probe.remove();return r;})()`);
     assert.equal(colors.bar, colors.glass, `${name}: the bar uses the panel glass fill`);
     assert.equal(colors.field, colors.input, `${name}: the search field stays opaque`);
-    assert.equal(colors.radius, `${style.radius}px`);
+    assert.ok(Math.abs(parseFloat(colors.radius) - radius) < .01, `${name}: the bar keeps its rounding as a squircle`);
     if (level === 'off') {
       assert.equal(colors.bar, colors.panel, `${name}: Off is the opaque panel color`);
       assert.equal(await region(body), undefined, `${name}: Off publishes no glass`);
-    } else assert.deepEqual((await region(body))?.slice(4), [...Array(4).fill(style.radius), 0], `${name}: the open bar publishes a round glass region`);
+    } else {
+      const corners = (await region(body))?.slice(4);
+      assert.ok(corners?.slice(0, 4).every(r => Math.abs(r - radius) < .01) && corners[4] === Number(squircle), `${name}: the open bar publishes a glass region with its corner shape`);
+    }
     const [behind, ...inside] = await rows(await capture(name), [body.y - 60, body.y + 6, body.y + body.height - 6], span);
     assert.ok(sharpness(behind) > .05, `${name}: stripes surround the bar`);
     const glass = await evaluate('layerApp.state().palette.glass.panel');

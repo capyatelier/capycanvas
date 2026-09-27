@@ -352,7 +352,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), true);
   await click('#setting-feedback');
   await click('#setting-pressure .number-value');
-  assert.ok(await evaluate(`(() => { const field=document.querySelector('#setting-pressure .number-entry'), css=getComputedStyle(field); return field.getBoundingClientRect().height===34 && css.paddingLeft==='9px' && css.paddingRight==='9px' && css.borderRadius==='6px'; })()`), 'settings editors use full-size Adwaita spacing');
+  assert.ok(await evaluate(`(() => { const field=document.querySelector('#setting-pressure .number-entry'), css=getComputedStyle(field); return field.getBoundingClientRect().height===34 && css.paddingLeft==='9px' && css.paddingRight==='9px' && parseFloat(css.borderRadius)===(CSS.supports('corner-shape','squircle')?12:6.48); })()`), 'settings editors use full-size Adwaita spacing with control squircles');
   await evaluate("document.querySelector('#setting-pressure .number-entry').value='1.5'");
   await key("Enter");
   await click('#setting-pressure .number-value');
