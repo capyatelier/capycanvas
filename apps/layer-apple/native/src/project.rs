@@ -753,7 +753,16 @@ pub unsafe extern "C" fn capy_apple_export_task(
         }) {
             return Err("No export request is pending".into());
         }
-        app.host.prepare_canvas_frame(now, now, true)?;
+        let host = &mut app.host;
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("capy-export".into())
+                .stack_size(8 * 1024 * 1024)
+                .spawn_scoped(scope, || host.prepare_canvas_frame(now, now, true))
+                .map_err(|e| e.to_string())?
+                .join()
+                .map_err(|_| "Export preparation failed".to_string())?
+        })?;
         if !app.host.startup.canvas_ready || app.host.session.engine().has_pending_document_edits()
         {
             return Ok(0);
