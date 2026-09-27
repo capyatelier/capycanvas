@@ -26,6 +26,23 @@ pub fn target_offset(layers: &[Layer], id: LayerId) -> Point {
     offset
 }
 
+/// Why the active layer has no target for brushes or content tools.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawingRefusal {
+    NoLayer,
+    Locked,
+    /// An effect layer draws on the layer below it, and that layer is locked.
+    BaseLocked,
+    Group,
+    Paper,
+    SelectionLayer,
+    EffectWithoutBase,
+    /// Content tools draw on artwork, and the layer's mask is being edited.
+    Mask,
+    /// Content tools draw on artwork, and an effect layer draws on its mask.
+    EffectMask,
+}
+
 /// Paint/mask-local pixels to document pixels. Groups retain their existing
 /// translation semantics. A linked mask follows the owner's placement while an
 /// unlinked mask stays in its independently translated document position.
@@ -943,30 +960,59 @@ impl Document {
     /// Drawing can pass through filters while selection and property editing
     /// stay on the selected layer. Only that layer's own mask takes precedence.
     pub fn drawing_target(&self) -> Option<LayerId> {
-        let mut layer = self.layer(self.active_layer)?;
+        self.try_drawing_target().ok()
+    }
+
+    /// The brush target, or why the active layer has none.
+    pub fn try_drawing_target(&self) -> Result<LayerId, DrawingRefusal> {
+        let mut layer = self.layer(self.active_layer).ok_or(DrawingRefusal::NoLayer)?;
         if self.is_locked(layer.id) {
-            return None;
+            return Err(DrawingRefusal::Locked);
         }
         if let Some(mask) = &layer.mask
             && (self.active_mask || layer.kind == LayerKind::Effect)
         {
-            return Some(mask.id);
+            return Ok(mask.id);
         }
         while layer.kind == LayerKind::Effect {
-            layer = if layer.properties.clipped {
-                self.layer(self.clipping_base(layer.id)?)?
+            let base = if layer.properties.clipped {
+                self.clipping_base(layer.id).and_then(|id| self.layer(id))
             } else {
                 self.layers.iter()
                     .skip_while(|next| next.id != layer.id).skip(1)
-                    .find(|next| next.is_artwork() && next.properties.parent == layer.properties.parent)?
+                    .find(|next| next.is_artwork() && next.properties.parent == layer.properties.parent)
             };
+            layer = base.ok_or(DrawingRefusal::EffectWithoutBase)?;
         }
-        (layer.kind == LayerKind::Paint && !self.is_locked(layer.id)).then_some(layer.id)
+        match layer.kind {
+            LayerKind::Paint if self.is_locked(layer.id) => Err(DrawingRefusal::BaseLocked),
+            LayerKind::Paint => Ok(layer.id),
+            LayerKind::Group => Err(DrawingRefusal::Group),
+            LayerKind::Background => Err(DrawingRefusal::Paper),
+            LayerKind::Selection => Err(DrawingRefusal::SelectionLayer),
+            LayerKind::Effect => Err(DrawingRefusal::EffectWithoutBase),
+        }
     }
 
     /// Fill/figure tools currently operate on ordinary content, not masks.
     pub fn drawing_content(&self) -> Option<LayerId> {
-        self.drawing_target().filter(|id| self.layer(*id).is_some())
+        self.try_drawing_content().ok()
+    }
+
+    /// The content target, or why fill, gradient, figure and lasso-fill tools
+    /// have none.
+    pub fn try_drawing_content(&self) -> Result<LayerId, DrawingRefusal> {
+        let target = self.try_drawing_target()?;
+        match self.layer(target) {
+            Some(_) => Ok(target),
+            None if self.active_mask => Err(DrawingRefusal::Mask),
+            None => Err(DrawingRefusal::EffectMask),
+        }
+    }
+
+    /// Why the content tools cannot draw on the active layer.
+    pub fn drawing_refusal(&self) -> Option<DrawingRefusal> {
+        self.try_drawing_content().err()
     }
     pub fn target_raster(&self, target: LayerId) -> Option<&raster::RasterRevision> {
         let owner = self.target_owner(target)?;

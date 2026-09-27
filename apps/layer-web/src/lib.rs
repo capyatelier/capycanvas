@@ -185,10 +185,6 @@ impl WebApp {
         let context = serde_wasm_bindgen::from_value(context).map_err(js)?;
         serialize(&self.session.canvas_bar_menu(context, shown))
     }
-    pub fn command_disabled_reason(&self, command: JsValue) -> Result<Option<String>, JsValue> {
-        let command = serde_wasm_bindgen::from_value(command).map_err(js)?;
-        Ok(self.session.command_disabled_reason(command))
-    }
     pub fn canvas_bar_reappear_ms(&self) -> u32 {
         layer_ui::CANVAS_BAR_REAPPEAR_MS
     }
@@ -613,6 +609,7 @@ impl WebApp {
             platform,
             requests,
             host_error,
+            notice,
             camera,
             toolbar_context_generation,
         } = state;
@@ -664,6 +661,7 @@ impl WebApp {
         field!(platform);
         field!(requests);
         field!(host_error);
+        field!(notice);
         field!(camera);
         Ok(result.into())
     }

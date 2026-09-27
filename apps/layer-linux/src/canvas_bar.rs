@@ -215,6 +215,7 @@ impl CanvasBar {
         self.layout.set(layout);
         self.root.set_visible(layout.is_some());
         self.present();
+        workspace.place_notice();
         workspace.queue_surface_allocate();
     }
 
@@ -290,7 +291,6 @@ fn build(
             }
             button.set_child(Some(&content));
             button.update_property(&[gtk::accessible::Property::Label(state.label)]);
-            button.set_tooltip_text(Some(&state.tooltip));
             button.set_widget_name(&format!("canvas-bar-{:?}", state.id));
             button.set_focus_on_click(false);
             button.set_can_focus(false);
@@ -372,6 +372,7 @@ fn update(field: &gtk::Widget, option: &ToolOption) {
     match option {
         ToolOption::Action { state, .. } => {
             field.set_sensitive(state.enabled);
+            field.set_tooltip_text(Some(state.disabled_reason.as_deref().unwrap_or(&state.tooltip)));
             if let Some(toggle) = field.downcast_ref::<gtk::ToggleButton>()
                 && toggle.is_active() != state.selected
             {

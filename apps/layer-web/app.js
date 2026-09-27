@@ -8,6 +8,7 @@ import { createCommandBar } from "./command-bar.js";
 import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
 import { createCanvasBar } from "./canvas-bar.js";
+import { createNotice } from "./notice.js";
 import { createEditorPanels } from "./editor-panels.js";
 import { createWorkspaceChrome } from "./workspace-chrome.js";
 import { createGlass } from "./glass.js";
@@ -50,8 +51,9 @@ let app,
   lastPenEvent = null,
   chromeHeld = false,
   dragItem = null,
-  statusTimer;
-let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar;
+  statusTimer,
+  shownHostError = null;
+let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice;
 let commandBar;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
@@ -100,6 +102,10 @@ function message(error) {
   statusTimer = setTimeout(() => {
     $("status").textContent = "";
   }, 7000);
+}
+function answerNotice(id, accept) {
+  if (accept) return dispatch({ type: "notice", id, accept });
+  try { applyChange(app.dispatch({ type: "notice", id, accept })); } catch {}
 }
 function button(text, action, className = "") {
   const node = element("button", className, text);
@@ -627,6 +633,7 @@ function arrange(nextLayout, layoutOnly = false) {
     updateZen();
   }
   canvasBar?.place();
+  notice?.place();
   queuePanelMeasurements();
 }
 // Measure intrinsic widget content only when its width/copy changes. Rust owns
@@ -865,7 +872,9 @@ function update(regions) {
   editor.flushPaint();
   if (regions & 64) {
     documents?.refresh();
-    if (state.host_error) message(state.host_error);
+    notice?.publish(state.notice);
+    if (state.host_error && state.host_error !== shownHostError) message(state.host_error);
+    shownHostError = state.host_error;
     // Small applied-settings snapshots only, never per-input/frame writes.
     if (!servicingRequests) {
       servicingRequests = true;
@@ -1491,6 +1500,7 @@ function canvasPointer(e, stage) {
   if (stage === 1) {
     canvas.focus();
     canvas.setPointerCapture(e.pointerId);
+    notice?.hide();
   }
   let sample = e;
   const activePen = lastPenEvent?.pointerType === "pen"
@@ -1750,7 +1760,9 @@ try {
   capy.id = "zen-capy"; capy.hidden = true;
   customization.target(capy, {kind:"zen_mode"});
   workspace.append(capy);
-  canvasBar = createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, openMenu: node => customization.openMenu(node) });
+  canvasBar = createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, openMenu: node => customization.openMenu(node),
+    presented: () => notice?.place() });
+  notice = createNotice({ workspace, element, button, answer: answerNotice, layout: () => layout, bar: () => canvasBar.bounds() });
   performance.mark("capy.startup.controls");
   update(255);
   systemStatus.sync();

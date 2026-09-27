@@ -264,7 +264,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.queue_tonal(None)?;
             } else {
                 self.cancel_tonal();
-                self.state.host_error = Some("No visible pixels in the sampled region".into());
+                self.notify("No visible pixels in the sampled region");
             }
         } else {
             let selection = Selection::pixels(result.pixels);

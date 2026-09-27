@@ -1,4 +1,5 @@
 import { actionField, choiceField } from "./toolbar-components.js";
+import { revealTooltip } from "./tooltips.js";
 
 export const GAP = 4, PADDING = 6;
 const accent = new Set(["apply_transform", "complete_selection"]);
@@ -10,8 +11,8 @@ export const barSchema = view => text([view.context, view.label ?? null,
       ? ["choice", label, option.Choice.id, option.Choice.label, option.Choice.segmented, option.Choice.items.map(i => [i.label, i.icon])]
       : ["other", label]))]);
 
-export function createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, openMenu,
-  reappearMs = app.canvas_bar_reappear_ms(), setTimer = setTimeout, clearTimer = clearTimeout }) {
+export function createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, openMenu, presented,
+  reappearMs = app.canvas_bar_reappear_ms(), setTimer = setTimeout, clearTimer = clearTimeout, explain = revealTooltip }) {
   const root = element("section", "canvas-action-bar suppressed");
   root.setAttribute("role", "toolbar"); root.setAttribute("aria-label", "Canvas actions");
   root.style.gap = `${GAP}px`; root.style.padding = `${PADDING}px`; root.hidden = true;
@@ -61,7 +62,7 @@ export function createCanvasBar({ app, workspace, element, button, icon, dispatc
     const { option } = item;
     let field;
     if (option.Action) {
-      field = actionField({ element, button, icon }, option.Action, send, { label: item.label, ariaDisabled: true, reason: id => app.command_disabled_reason(id) });
+      field = actionField({ element, button, icon }, option.Action, send, { label: item.label, ariaDisabled: true, explain });
       field.button.dataset.command = option.Action.state.id;
       if (completion && accent.has(option.Action.state.id)) field.button.classList.add("suggested-action");
     } else if (option.Choice) {
@@ -110,7 +111,7 @@ export function createCanvasBar({ app, workspace, element, button, icon, dispatc
       if (transform !== shown.transform) { root.style.transform = shown.transform = transform; changed = true; }
     }
     if (visible !== shown.visible) { root.classList.toggle("suppressed", !visible); shown.visible = visible; }
-    if (changed) glass?.queue();
+    if (changed) { glass?.queue(); presented?.(); }
   }
   function place() {
     if (suppressed) { present(); return; }

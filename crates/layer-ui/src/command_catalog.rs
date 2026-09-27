@@ -2,6 +2,7 @@
 //! existing command/menu/tool schemas; execution always returns to dispatch.
 use super::*;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 /// Shared rhythm for native search surfaces; toolkit themes supply colors,
 /// typography and motion. Touch hosts may increase row_height.
@@ -309,6 +310,7 @@ fn entry(
                 | CommandId::ClearLayer
                 | CommandId::FillSelection
                 | CommandId::MaskSelection
+                | CommandId::UseReferenceBelow
                 | CommandId::SelectAll
                 | CommandId::Deselect
                 | CommandId::InvertSelection,
@@ -423,6 +425,7 @@ fn action_description(action: &UiAction) -> &'static str {
             TransformNearest | TransformBilinear | TransformBicubic => "Choose how transformed pixels are resampled: hard-edged, smooth, or smooth and sharp.",
             TransformWarp => "Bend the content with a mesh of curved patches, dragging its nodes and their tangent handles.",
             WarpGridThree | WarpGridFour | WarpGridFive => "Choose how many patches the warp mesh has, keeping its current shape.",
+            UseReferenceBelow => "Mark the nearest visible photo or paint layer below as a reference for Wand and Fill.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -920,18 +923,20 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn command_disabled_reason(&self, command: CommandId) -> Option<String> {
+        (!self.command_flags(command).0).then(|| self.disabled_reason_unchecked(command).into_owned())
+    }
+
+    /// The reason for a command that `command_flags` reports disabled.
+    pub(super) fn disabled_reason_unchecked(&self, command: CommandId) -> Cow<'static, str> {
         use CommandId as C;
-        if self.command_flags(command).0 {
-            return None;
-        }
         if !command.available_on(self.state.platform) {
-            return Some("Not available on this platform".into());
+            return "Not available on this platform".into();
         }
         if self.state.document_file.close_ready {
-            return Some("This drawing is closing".into());
+            return "This drawing is closing".into();
         }
         if self.rendering_suspended && !Self::command_without_renderer(command) {
-            return Some("Painting is unavailable. Save the drawing and reopen it.".into());
+            return "Painting is unavailable. Save the drawing and reopen it.".into();
         }
         let gate = match command {
             C::SdrRendition
@@ -949,6 +954,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::NewDocument
             | C::OpenDocument
             | C::ExportDocument
+            | C::UseReferenceBelow
             | C::SelectAll
             | C::Deselect
             | C::InvertSelection
@@ -961,14 +967,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => self.require_idle(),
         };
         if let Err(reason) = gate {
-            return Some(reason);
+            return reason.into();
         }
         let document = self.engine.document();
         let active = document.layer(document.active_layer);
         let paint = active.is_some_and(|l| l.kind == LayerKind::Paint);
         let locked = document.is_locked(document.active_layer);
         let mask_target = self.selection_masks.target();
-        let selection = self.current_selection().is_some();
+        let selection = self.has_selection();
         let reason = match command {
             C::Undo => "Nothing to undo",
             C::Redo => "Nothing to redo",
@@ -1014,12 +1020,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             C::DeleteLayer if self.selection_masks.quick() => "Leave Quick Mask first",
             C::DeleteLayer => {
-                return Some(
-                    document
-                        .delete_layers_edit(&[document.active_layer])
-                        .err()
-                        .map_or_else(|| "This layer can't be deleted".into(), layer_error),
-                );
+                return document
+                    .delete_layers_edit(&[document.active_layer])
+                    .err()
+                    .map_or("This layer can't be deleted".into(), |e| layer_error(e).into());
             }
             C::SdrRendition | C::PreviewSdr if !document.color.depth.is_float() => {
                 "Requires a high dynamic range drawing"
@@ -1061,6 +1065,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::CompleteSelection => "Place at least three points first",
             C::CancelSelection => "No selection path to cancel",
             C::RemoveSelectionPoint => "Place a polygon point first",
+            C::UseReferenceBelow => self.use_reference_below_reason().unwrap_or(super::notices::NO_REFERENCE_BELOW),
             C::MaskSelection if self.engine.document().selection.is_none() => "Make a selection first",
             C::MaskSelection => "Select an unlocked artwork layer",
             C::SelectionVisible | C::SelectionEditing | C::SelectionReference => "Choose a selection tool first",
@@ -1076,7 +1081,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::LowerLayer => "The layer is already at the bottom",
             _ => "Unavailable in the current tool or edit target",
         };
-        Some(reason.into())
+        reason.into()
     }
 
     fn action_disabled_reason(&self, action: &UiAction) -> String {
@@ -1095,6 +1100,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let document = self.engine.document();
         let roots = document.layer_roots(&self.layer_interaction.selected);
+        let apply_mask_refusal = document
+            .layer(document.active_layer)
+            .and_then(|l| art_layers::apply_mask_refusal(l.kind));
         let reason = match action {
             UiAction::Layer { action: LayerAction::GroupSelected } => {
                 document.group_layers_edit(&roots, LayerId(0)).err().map(layer_error)
@@ -1129,6 +1137,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if document.layer(document.active_layer).is_some_and(|l| l.mask.is_none()) =>
             {
                 Some("The layer has no mask".into())
+            }
+            UiAction::Layer { action: LayerAction::ApplyMask { .. } } if apply_mask_refusal.is_some() => {
+                apply_mask_refusal.map(Into::into)
             }
             UiAction::Layer { action: LayerAction::ReferenceSelection } => {
                 Some("Mark layers as references first".into())

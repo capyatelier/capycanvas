@@ -184,7 +184,26 @@ More with the transform intact, Apply and Cancel, the completion-only bar,
 Zen and the bar's glass region. It writes light and dark screenshots and stroke
 style/layout counts to `artifacts/canvas-bar/web`. `device.test.mjs --canvas-bar`
 runs the same journey on a tablet. `--image-placement` uses the bar's Original
-Size, Cancel and Apply.
+Size, Cancel and Apply. Disabled bar items and Tool Options actions take their
+hover text from each command's published `disabled_reason`, and a tap on a
+disabled bar item reveals the same tooltip with mouse, touch and pen.
+
+The shared canvas notice (see [shared UI](../ui/shared-ui.md#actions-and-observation))
+is [`notice.js`](../../apps/layer-web/notice.js): a bubble in `#workspace`,
+centred above the canvas status strip, or above a canvas action bar along the
+bottom edge. It shows each notice id once, with an action button when the core
+offers one. The button never takes focus from the canvas and the bubble is not a
+popover, so it never counts as an open popup. The bubble hides at the next
+canvas contact, and after 4 s it hides and declines the notice. `#status` keeps
+showing file and renderer errors (`host_error`), once per new error. Run
+`node --test apps/layer-web/notice.test.mjs` for showing, the action, the timeout,
+contact dismissal, replacement by a newer id and placement, then
+`node apps/layer-web/test.mjs --headless --notices`. The journey clicks the Wand
+with the Reference source and no marked reference, and checks that the canvas
+keeps rendering and that the notice's **Use *layer* as Reference** button marks
+the layer below in one undo step, with pen, touch and mouse. It also checks stale
+ids, dismissal by a navigating touch, the timeout, Move on a locked layer, and
+the reason on a disabled bar item. `device.test.mjs --notices` runs it on a tablet.
 
 For clipped workspace drags and content-aware release, run
 `bash tools/performance/workspace-motion.sh web --workspace-rendering` on Linux,

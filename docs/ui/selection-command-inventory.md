@@ -158,7 +158,7 @@ immediately after slop, and the bar never moves during a stroke.
 | Geometric/freehand selection tools | New / Add / Subtract / Intersect; anti-aliasing; incoming feather | Existing. Do not confuse incoming feather with Modify → Feather. |
 | Rectangle/Ellipse | Free / Fixed Ratio / Fixed Size; dimensions; From Center | Existing; retain shape-specific visibility. |
 | Polygon | Constrain Angles; Complete Selection; Cancel Selection | Existing. Escape/cancel retains the previously committed selection. |
-| Auto Select/Color Select | Sampling source: editing layer / visible artwork / reference layers; relevant tolerance and region settings | Existing. Saved masks and overlays are excluded from artwork sampling. |
+| Auto Select/Color Select | Sampling source: editing layer / visible artwork / reference layers; relevant tolerance and region settings | Existing. Saved masks and overlays are excluded from artwork sampling. With the reference source and no reference marked, a click raises a notice whose action, **Use *layer* as Reference** (`UseReferenceBelow`, also in Layer ▸ Layer Settings and command search), marks the nearest visible paint or photo layer below in one step. |
 | Paint selection | Add / Subtract; Size; Hardness; Opacity; pressure-for-size option; overlay settings | Core. No New/Intersect row or generic feather toggle. |
 | Quick Mask / Selection Layer editing | Supported brush, eraser, fill and gradient settings | Core. Painting convention and overlay settings stay in Properties; ordinary color controls provide swap/reset. |
 | Mask editing indicator | Paintbrush in the active layer row; Quick Mask command checked while active | Core. Layer indicator remains visible when its overlay is hidden. |

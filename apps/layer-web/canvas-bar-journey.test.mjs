@@ -101,6 +101,8 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
         assert.equal(await evaluate(`document.querySelector('${transform}').title`),'Select unlocked paint content or a layer mask','A disabled item shows its reason');
         await tap(await middle(transform),device);
         assert.equal(await kind(),'selection','A disabled item does nothing');
+        assert.equal(await evaluate(`(t=>t.matches(':popover-open')?t.textContent:null)(document.querySelector('#hover-tooltip'))`),
+          'Select unlocked paint content or a layer mask',`${device}: a tap on a disabled item reveals its reason`);
         await press('fill_selection',device);
         await wait(`document.querySelector('${transform}')?.getAttribute('aria-disabled')==='false' && ${visible}`);
       }

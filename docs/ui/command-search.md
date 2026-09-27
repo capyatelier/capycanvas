@@ -32,10 +32,13 @@ same way.
 
 Every unavailable entry carries a specific reason. Commands use the same gates
 as dispatch: document, snapshot, workspace and canvas idleness, selection and
-mask targets, locks, transform state, proofing, HDR and zoom limits. Menu
-actions report layer grouping and deletion errors, missing selections or masks,
-filters while editing a mask, and locked layers. The generic "Unavailable in
-the current tool or edit target" text remains only a fallback.
+mask targets, locks, transform state, proofing, HDR and zoom limits. The same
+text is published on each retained command as `disabled_reason` (see
+[shared UI](shared-ui.md#actions-and-observation)). Menu actions report layer
+grouping and deletion errors, missing selections or masks, filters while
+editing a mask, locked layers, and Apply Mask on a group or effect layer, whose
+masks stay live. The generic "Unavailable in the current tool or edit target"
+text remains only a fallback.
 
 Search execution accepts only an ID found in a newly evaluated catalog. It
 cannot execute arbitrary serialized internal events. Search invocation also

@@ -207,7 +207,7 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
 
 @Composable internal fun ToolOptionField(option: JSONObject, width: Float, vertical: Boolean, style: String, labeled: Boolean,
     preferences: JSONObject, tileWidth: Float, iconSize: Int, edit: (JSONObject) -> Unit,
-    caption: String? = null, prefix: String = "toolbar", accent: Boolean = false, reason: ((String, (String) -> Unit) -> Unit)? = null,
+    caption: String? = null, prefix: String = "toolbar", accent: Boolean = false,
     choiceMenu: ((String, (JSONObject?) -> Unit) -> Unit)? = null) {
     when {
         option.has("Range") -> option.getJSONObject("Range").let { range ->
@@ -221,25 +221,28 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
             ToolbarChoice(choice, vertical, labeled, caption == null && width < tileWidth * choice.array("items").length(),
                 iconSize, edit, prefix = prefix, height = if (caption != null) 32f else 24f, captions = caption != null, menu = choiceMenu)
         }
-        else -> ToolOptionAction(option.getJSONObject("Action").getJSONObject("state"), iconSize, caption, accent, prefix, reason) {
+        else -> ToolOptionAction(option.getJSONObject("Action").getJSONObject("state"), iconSize, caption, accent, prefix) {
             edit(obj("type" to "invoke", "command" to it))
         }
     }
 }
 
+/** A disabled captioned action shows its published reason on tap, hold or hover. */
 @Composable private fun ToolOptionAction(command: JSONObject, iconSize: Int, caption: String?, accent: Boolean, prefix: String,
-    reason: ((String, (String) -> Unit) -> Unit)?, invoke: (String) -> Unit) {
+    invoke: (String) -> Unit) {
     val colors = LocalPalette.current
     val id = command.getString("id")
     val enabled = command.getBoolean("enabled")
     var reveal by remember { mutableIntStateOf(0) }
-    val explained = caption != null && !enabled && reason != null
+    val reason = command.optString("disabled_reason").takeIf { caption != null && !enabled && !command.isNull("disabled_reason") }
+    val explained = reason != null
     val face = @Composable {
         Row(Modifier.fillMaxSize().testTag("$prefix-action-$id").clip(if (caption == null) TileShape else ControlShape)
             .background(when { accent && enabled -> colors.accent; command.getBoolean("selected") -> colors.active; else -> Color.Transparent })
             .alpha(if (enabled || caption == null) 1f else .4f)
             .then(if (caption == null) Modifier else Modifier.focusProperties { canFocus = false })
-            .clickable(enabled = enabled || explained, role = Role.Button, onClickLabel = command.getString("label")) { if (enabled) invoke(id) else reveal++ }
+            .combinedClickable(enabled = enabled || explained, role = Role.Button, onClickLabel = command.getString("label"),
+                onLongClick = if (explained) {{ reveal++ }} else null) { if (enabled) invoke(id) else reveal++ }
             .semantics { if (!enabled) disabled() }
             .padding(horizontal = if (caption.isNullOrEmpty()) 0.dp else CaptionPadding.dp),
             horizontalArrangement = Arrangement.spacedBy(CaptionGap.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
@@ -251,8 +254,7 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
         }
     }
     if (caption == null) face()
-    else HoverTip(command.getString("tooltip"), Modifier.fillMaxSize(), reveal = reveal,
-        resolve = if (explained) { reply -> reason!!(id, reply) } else null, content = face)
+    else HoverTip(reason ?: command.getString("tooltip"), Modifier.fillMaxSize(), reveal = reveal, content = face)
 }
 
 @Composable private fun ToolbarNumber(field: JSONObject, vertical: Boolean, style: String,

@@ -111,6 +111,8 @@ internal class DockInteraction(val host: CanvasHost) {
         refresh()
     }
     var canvasBar: Rect? = null
+    /** The canvas bar's place, kept while a canvas contact hides the bar. */
+    var canvasBarSlot by mutableStateOf<Rect?>(null)
     private var active: JSONObject? = null
     private var position = Offset.Zero
     private var generation = 0

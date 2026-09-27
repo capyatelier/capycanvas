@@ -322,3 +322,190 @@ fn stick_axes_navigate_with_dead_zones_and_stop_on_blur() {
     s.frame(3_050_000_000, 3_050_000_000).unwrap();
     assert_eq!(s.state.camera.translation, stopped.translation, "a stroke keeps the view still");
 }
+
+fn stroke(s: &mut UiSession<Recorder>, first: u64) {
+    s.pen(event(s, first, PenPhase::Down, 1.)).unwrap();
+    s.pen(event(s, first + 1, PenPhase::Move, 1.)).unwrap();
+    s.pen(event(s, first + 2, PenPhase::Up, 1.)).unwrap();
+    s.frame(first + 3, first + 3).unwrap();
+}
+
+fn notice_text(s: &UiSession<Recorder>) -> Option<&str> {
+    s.state.notice.as_ref().map(|n| n.text.as_str())
+}
+
+fn layer(s: &mut UiSession<Recorder>, action: LayerAction) {
+    s.dispatch(UiAction::Layer { action }).unwrap();
+}
+
+#[test]
+fn refused_brush_strokes_raise_a_notice_and_paint_nothing() {
+    let mut s = session(Platform::Gtk);
+    layer(&mut s, LayerAction::Lock { id: 1, value: true });
+    let revision = s.engine.document().revision;
+    stroke(&mut s, 1);
+    assert_eq!(notice_text(&s), Some("The active layer is locked"));
+    assert_eq!(s.engine.document().revision, revision, "no stroke and no history");
+    let first = s.state.notice.as_ref().unwrap().id;
+    stroke(&mut s, 10);
+    assert!(s.state.notice.as_ref().unwrap().id > first, "a repeated refusal is shown again");
+    layer(&mut s, LayerAction::Lock { id: 1, value: false });
+    s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+    stroke(&mut s, 20);
+    assert_eq!(notice_text(&s), Some("The paper can't be drawn on. Add a layer above it."));
+    layer(&mut s, LayerAction::New { group: true, clipped: false });
+    stroke(&mut s, 30);
+    assert_eq!(notice_text(&s), Some("A group has no pixels of its own. Select a layer inside it."));
+    s.dispatch(UiAction::SelectLayer { id: 1 }).unwrap();
+    let revision = s.engine.document().revision;
+    stroke(&mut s, 40);
+    assert_eq!(s.state.notice, None, "a stroke that paints clears the notice");
+    assert_ne!(s.engine.document().revision, revision);
+}
+
+#[test]
+fn erasing_under_alpha_lock_is_refused_with_a_notice() {
+    let mut s = session(Platform::Gtk);
+    layer(&mut s, LayerAction::AlphaLock { id: 1, value: true });
+    invoke(&mut s, CommandId::Eraser);
+    let revision = s.engine.document().revision;
+    stroke(&mut s, 1);
+    assert_eq!(notice_text(&s), Some("Alpha lock keeps this layer's transparency, so erasing has no effect"));
+    assert_eq!(s.engine.document().revision, revision);
+    invoke(&mut s, CommandId::Pen);
+    let mut down = event(&s, 10, PenPhase::Down, 1.);
+    down.tool = ToolKind::Eraser;
+    s.pen(down).unwrap();
+    assert_eq!(s.engine.stroke_refusal(&down), Some(layer_engine::StrokeRefusal::AlphaLocked));
+    s.pen(PenEvent { phase: PenPhase::Up, ..down }).unwrap();
+    s.frame(11, 11).unwrap();
+    assert_eq!(s.engine.document().revision, revision, "a pen's eraser end is refused too");
+    stroke(&mut s, 20);
+    assert_eq!(s.state.notice, None);
+    assert_ne!(s.engine.document().revision, revision, "painting keeps working under alpha lock");
+}
+
+#[test]
+fn mask_strokes_explain_dry_coverage_once_per_mask_session() {
+    let mut s = session(Platform::Gtk);
+    layer(&mut s, LayerAction::AddMask { id: 1, replace: false });
+    layer(&mut s, LayerAction::Select { id: 1, mask: true });
+    stroke(&mut s, 1);
+    assert_eq!(s.state.notice, None, "a dry brush paints masks as configured");
+    let mut brush = s.engine.configured_brush().clone();
+    brush.execution = layer_core::BrushExecution::Wet;
+    s.engine.set_brush(brush).unwrap();
+    let revision = s.engine.document().revision;
+    stroke(&mut s, 10);
+    assert_eq!(
+        notice_text(&s),
+        Some("Masks take dry coverage, so this brush paints without its wet or blending behavior")
+    );
+    assert_ne!(s.engine.document().revision, revision, "the mask stroke still paints");
+    stroke(&mut s, 20);
+    assert_eq!(s.state.notice, None, "shown once per mask-editing session");
+    layer(&mut s, LayerAction::Select { id: 1, mask: false });
+    layer(&mut s, LayerAction::Select { id: 1, mask: true });
+    stroke(&mut s, 30);
+    assert!(notice_text(&s).is_some_and(|t| t.starts_with("Masks take dry coverage")));
+}
+
+#[test]
+fn move_and_content_tools_explain_what_they_cannot_change() {
+    let mut s = session(Platform::Gtk);
+    invoke(&mut s, CommandId::Move);
+    layer(&mut s, LayerAction::Lock { id: 1, value: true });
+    stroke(&mut s, 1);
+    assert_eq!(notice_text(&s), Some("The active layer is locked"));
+    assert!(s.layer_interaction.path.is_empty());
+    s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+    stroke(&mut s, 10);
+    assert_eq!(notice_text(&s), Some("The paper can't be moved"));
+    s.dispatch(UiAction::SelectLayer { id: 1 }).unwrap();
+    for (command, text) in [
+        (CommandId::Gradient, "The active layer is locked"),
+        (CommandId::Figure, "The active layer is locked"),
+    ] {
+        invoke(&mut s, command);
+        s.dismiss_notice();
+        stroke(&mut s, 20);
+        assert_eq!(notice_text(&s), Some(text), "{command:?}");
+    }
+    layer(&mut s, LayerAction::Lock { id: 1, value: false });
+    layer(&mut s, LayerAction::Tool { tool: LayerCanvasTool::LassoFill });
+    layer(&mut s, LayerAction::New { group: true, clipped: false });
+    stroke(&mut s, 30);
+    assert_eq!(notice_text(&s), Some("A group has no pixels of its own. Select a layer inside it."));
+    s.dispatch(UiAction::SelectLayer { id: 1 }).unwrap();
+    layer(&mut s, LayerAction::AddMask { id: 1, replace: false });
+    layer(&mut s, LayerAction::Select { id: 1, mask: true });
+    invoke(&mut s, CommandId::Gradient);
+    stroke(&mut s, 40);
+    assert_eq!(notice_text(&s), Some("Return to the layer's artwork first"));
+}
+
+#[test]
+fn a_fill_click_without_content_raises_a_notice_at_release_but_not_outside_the_canvas() {
+    let mut s = session(Platform::Gtk);
+    invoke(&mut s, CommandId::Fill);
+    layer(&mut s, LayerAction::New { group: true, clipped: false });
+    s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+    assert_eq!(s.state.notice, None);
+    s.pen(event(&s, 1, PenPhase::Up, 1.)).unwrap();
+    let change = s.frame(2, 2).unwrap();
+    assert_ne!(change.regions & regions::HOST, 0);
+    assert_eq!(notice_text(&s), Some("A group has no pixels of its own. Select a layer inside it."));
+    assert!(s.renderer_mut().region_requests.is_empty());
+    let outside = PenEvent { surface_position: Point { x: -500., y: -500. }, ..event(&s, 3, PenPhase::Down, 1.) };
+    s.pen(outside).unwrap();
+    s.pen(PenEvent { phase: PenPhase::Up, ..outside }).unwrap();
+    s.frame(4, 4).unwrap();
+    assert_eq!(s.state.notice, None, "a click outside the canvas stays silent");
+}
+
+#[test]
+fn notices_reject_stale_answers_and_clear_at_the_next_contact() {
+    let mut s = session(Platform::Gtk);
+    invoke(&mut s, CommandId::Move);
+    layer(&mut s, LayerAction::Lock { id: 1, value: true });
+    stroke(&mut s, 1);
+    let id = s.state.notice.as_ref().unwrap().id;
+    assert_eq!(s.state.notice.as_ref().unwrap().action, None);
+    assert!(s.dispatch(UiAction::Notice { id: id + 1, accept: false }).is_err());
+    assert!(s.dispatch(UiAction::Notice { id: id - 1, accept: true }).is_err());
+    assert!(s.state.notice.is_some());
+    let change = s.dispatch(UiAction::Notice { id, accept: false }).unwrap();
+    assert_ne!(change.regions & regions::HOST, 0);
+    assert_eq!(s.state.notice, None);
+    assert!(s.dispatch(UiAction::Notice { id, accept: false }).is_err(), "a dismissed notice is stale");
+
+    stroke(&mut s, 10);
+    assert!(s.state.notice.is_some());
+    let reply = s
+        .input(UiInput::Pointer {
+            id: 7,
+            phase: ContactPhase::Down,
+            kind: PointerKind::Touch,
+            button: PointerButton::Primary,
+            position: [300., 300.],
+            time_ns: 0,
+        })
+        .unwrap();
+    assert_ne!(reply.change.regions & regions::HOST, 0);
+    assert_eq!(s.state.notice, None, "a canvas contact clears the notice");
+    finger(&mut s, 7, ContactPhase::Up, [300., 300.], 1);
+
+    stroke(&mut s, 20);
+    layer(&mut s, LayerAction::Lock { id: 1, value: false });
+    assert!(s.state.notice.is_some(), "an unrelated edit keeps the notice");
+    stroke(&mut s, 30);
+    assert_eq!(s.state.notice, None, "a pen-down that raises nothing new clears it");
+
+    layer(&mut s, LayerAction::Lock { id: 1, value: true });
+    stroke(&mut s, 40);
+    assert!(s.state.notice.is_some());
+    s.state.document_file.epoch += 1;
+    let change = s.frame(50, 50).unwrap();
+    assert_ne!(change.regions & regions::HOST, 0);
+    assert_eq!(s.state.notice, None, "a document switch clears the notice");
+}

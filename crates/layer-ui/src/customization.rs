@@ -1075,6 +1075,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::ResetTransform => "Return the transform box to where it started",
                 CommandId::RemoveSelectionPoint => "Remove the polygon point placed last (Backspace)",
                 CommandId::MaskSelection => "Hide the active layer outside the selection with a mask",
+                CommandId::UseReferenceBelow => "Mark the nearest visible layer below as a reference",
                 CommandId::TransformFree => "Scale, rotate and skew with the box handles",
                 CommandId::TransformUniform => "Scale, rotate and skew, keeping proportions",
                 CommandId::TransformDistort => "Move each corner of the box independently",

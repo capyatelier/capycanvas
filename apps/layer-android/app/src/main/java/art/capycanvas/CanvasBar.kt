@@ -113,12 +113,9 @@ private class BarFrame {
         frame.bounds = placed?.getJSONObject("bounds") ?: bounds
         revealed = true
     }
-    DisposableEffect(dock) { onDispose { dock.canvasBar = null; dock.refresh() } }
+    DisposableEffect(dock) { onDispose { dock.canvasBar = null; dock.canvasBarSlot = null; dock.refresh() } }
     val shown = placement.optInt("items").coerceIn(0, items.size)
     fun edit(action: JSONObject) = host.dispatch(obj("type" to "canvas_bar_edit", "context" to context, "action" to action))
-    fun reason(command: String, reply: (String) -> Unit) = host.query(obj("type" to "canvas_bar_reason", "context" to context, "command" to command)) {
-        (it as? String)?.let(reply)
-    }
     fun choiceMenu(id: String, load: (JSONObject?) -> Unit) = host.query(obj("type" to "canvas_bar_choice_menu", "context" to context, "id" to id)) {
         load(it as? JSONObject)
     }
@@ -126,7 +123,7 @@ private class BarFrame {
         Box(Modifier.padding(BarShadowMargin).fillMaxSize().testTag("canvas-action-bar")
             .then(if (revealed) Modifier.chromeRegion(dock) else Modifier).onGloballyPositioned {
                 val bounds = it.boundsInRoot().translate(-dock.origin)
-                if (dock.canvasBar != bounds) { dock.canvasBar = bounds; dock.refresh() }
+                if (dock.canvasBar != bounds) { dock.canvasBar = bounds; dock.canvasBarSlot = bounds; dock.refresh() }
             }
             .panelSurface(BarElevation, shape).glass(shape, key = glass)
             .semantics { contentDescription = "Canvas actions" }) {
@@ -138,9 +135,9 @@ private class BarFrame {
                             Text(it, Modifier.width(labelWidth.dp).padding(horizontal = BarLabelPadding.dp).testTag("canvas-bar-label"),
                                 color = colors.secondary, maxLines = 1, softWrap = false)
                         }
-                        items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], false, ::edit, ::reason, ::choiceMenu) }
+                        items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], false, ::edit, ::choiceMenu) }
                         CanvasBarMore(host, context, shown)
-                        completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], true, ::edit, ::reason, ::choiceMenu) }
+                        completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], true, ::edit, ::choiceMenu) }
                     }
                 }
             }
@@ -152,13 +149,13 @@ private class BarFrame {
 }
 
 @Composable private fun BarField(item: JSONObject, width: Float, completion: Boolean, edit: (JSONObject) -> Unit,
-    reason: (String, (String) -> Unit) -> Unit, choiceMenu: (String, (JSONObject?) -> Unit) -> Unit) {
+    choiceMenu: (String, (JSONObject?) -> Unit) -> Unit) {
     val option = item.getJSONObject("option")
     val command = option.optJSONObject("Action")?.getJSONObject("state")?.getString("id")
     Box(Modifier.width(width.dp).height(BarItemHeight.dp), contentAlignment = Alignment.Center) {
         ToolOptionField(option, width, false, "medium", false, BarItemStyle, BarItemHeight, 16, edit,
             caption = item.getString("label"), prefix = "canvas-bar",
-            accent = completion && command in listOf("apply_transform", "complete_selection"), reason = reason, choiceMenu = choiceMenu)
+            accent = completion && command in listOf("apply_transform", "complete_selection"), choiceMenu = choiceMenu)
     }
 }
 

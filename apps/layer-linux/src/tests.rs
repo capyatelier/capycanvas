@@ -35,6 +35,8 @@ mod place_source;
 mod photo_drop;
 #[path = "canvas_bar_tests.rs"]
 mod canvas_bar_tests;
+#[path = "notice_tests.rs"]
+mod notice;
 #[path = "file_launch_tests.rs"]
 mod file_launch;
 #[path = "document_tab_tests.rs"]

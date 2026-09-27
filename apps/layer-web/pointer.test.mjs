@@ -40,7 +40,7 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true } =
       focus() {}, setPointerCapture() {},
       addEventListener: (name, fn) => listeners.set(name, fn),
     },
-    lastPenEvent: null, pending: [], state: { camera: { revision: 1 }, settings: { feedback: prediction, platform_prediction: prediction } },
+    lastPenEvent: null, pending: [], notice: null, state: { camera: { revision: 1 }, settings: { feedback: prediction, platform_prediction: prediction } },
     app: { pen(batch) { records.push(...batch); return batch.length / 11; } },
     input(event) {
       phases.push(event);

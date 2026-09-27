@@ -450,3 +450,131 @@ fn equivalent_menu_actions_share_command_identities_and_explain_unavailability()
     );
     assert!(s.command_catalog().iter().filter(|d| d.disabled_reason.as_deref() == Some(generic)).count() < 3);
 }
+
+#[test]
+fn refresh_commands_stays_cheap_when_idle_transforming_and_painting() {
+    fn mean(s: &mut UiSession<Recorder>) -> std::time::Duration {
+        s.refresh_commands();
+        let start = std::time::Instant::now();
+        for _ in 0..2000 {
+            assert!(!s.refresh_commands());
+        }
+        start.elapsed() / 2000
+    }
+    let mut s = filled_selection_session();
+    let idle = mean(&mut s);
+    invoke(&mut s, CommandId::ScaleRotate);
+    let transforming = mean(&mut s);
+    invoke(&mut s, CommandId::CancelTransform);
+    s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
+    s.frame(2, 2).unwrap();
+    assert!(s.require_idle().is_err());
+    let painting = mean(&mut s);
+    eprintln!("refresh_commands mean: idle {idle:?}, transforming {transforming:?}, painting {painting:?}");
+}
+
+fn assert_published_reasons(s: &mut UiSession<Recorder>, state: &str) {
+    s.refresh_commands();
+    for (published, id) in s.state.commands.iter().zip(CommandId::ALL) {
+        let live = s.command_disabled_reason(id);
+        assert_eq!(published.disabled_reason.as_deref(), live.as_deref(), "{state}: {id:?}");
+        assert_eq!(published.enabled, live.is_none(), "{state}: {id:?}");
+        assert_eq!(s.command(id).disabled_reason, published.disabled_reason, "{state}: {id:?}");
+    }
+}
+
+#[test]
+fn published_disabled_reasons_match_command_disabled_reason() {
+    let mut s = session(Platform::Android);
+    assert_published_reasons(&mut s, "android");
+    let mut s = filled_selection_session();
+    assert_published_reasons(&mut s, "selection");
+    invoke(&mut s, CommandId::ScaleRotate);
+    assert_published_reasons(&mut s, "transform");
+    invoke(&mut s, CommandId::CancelTransform);
+    invoke(&mut s, CommandId::QuickMask);
+    assert_published_reasons(&mut s, "quick mask");
+    let mut s = distorted_pixel_selection();
+    invoke(&mut s, CommandId::ApplyTransform);
+    assert!(s.region_tools.applying_transform());
+    assert_published_reasons(&mut s, "applying a distortion");
+    let mut s = session(Platform::Gtk);
+    s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+    assert_published_reasons(&mut s, "paper");
+    let reasons: Vec<_> = s.state.commands.iter().filter_map(|c| c.disabled_reason.as_deref()).collect();
+    assert!(reasons.contains(&"Nothing to undo"));
+    assert!(reasons.contains(&super::notices::NO_REFERENCE_BELOW));
+    s.dispatch(UiAction::SelectLayer { id: 1 }).unwrap();
+    s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: 1, value: true } }).unwrap();
+    assert_published_reasons(&mut s, "locked");
+}
+
+#[test]
+fn disabled_reasons_stay_steady_during_a_canvas_contact() {
+    let mut s = session(Platform::Gtk);
+    s.frame(1, 1).unwrap();
+    let before = s.state.commands.clone();
+    let undo = CommandId::ALL.iter().position(|c| *c == CommandId::Undo).unwrap();
+    assert_eq!(before[undo].disabled_reason.as_deref(), Some("Nothing to undo"));
+    s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+    s.pen(event(&s, 2, PenPhase::Move, 1.)).unwrap();
+    s.frame(2, 2).unwrap();
+    assert!(s.require_idle().is_err());
+    assert_eq!(
+        s.command_disabled_reason(CommandId::AddLayer).as_deref(),
+        Some("Finish the canvas interaction first")
+    );
+    assert!(!s.refresh_commands(), "the contact publishes no availability change");
+    for ((published, previous), id) in s.state.commands.iter().zip(&before).zip(CommandId::ALL) {
+        assert_eq!(published.enabled, previous.enabled, "{id:?}");
+        assert_eq!(published.disabled_reason, previous.disabled_reason, "{id:?}");
+    }
+    s.pen(event(&s, 3, PenPhase::Up, 1.)).unwrap();
+    s.frame(3, 3).unwrap();
+    assert!(s.state.commands[undo].enabled);
+    assert_eq!(s.state.commands[undo].disabled_reason, None);
+}
+
+#[test]
+fn canvas_bar_items_carry_the_reason_they_are_disabled() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::Lasso);
+    s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: 1, value: true } }).unwrap();
+    let bar = s.state.canvas_bar.clone().expect("selection bar");
+    let fill = bar
+        .items
+        .iter()
+        .find_map(|i| match &i.option {
+            ToolOption::Action { state, .. } if state.id == CommandId::FillSelection => Some(state),
+            _ => None,
+        })
+        .unwrap();
+    assert!(!fill.enabled);
+    assert_eq!(fill.disabled_reason.as_deref(), Some("The active layer is locked"));
+    let deselect = bar.items.iter().find_map(|i| match &i.option {
+        ToolOption::Action { state, .. } if state.id == CommandId::Deselect => Some(state),
+        _ => None,
+    });
+    assert_eq!(deselect.unwrap().disabled_reason, None);
+}
+
+#[test]
+fn apply_mask_explains_group_and_effect_masks() {
+    let mut s = session(Platform::Gtk);
+    s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
+    let group = s.engine.document().active_layer.0;
+    s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id: group, replace: false } }).unwrap();
+    let apply = UiAction::Layer { action: LayerAction::ApplyMask { id: group } };
+    let error = s.dispatch(apply.clone()).unwrap_err();
+    assert_eq!(error, "A group's mask can't be applied; it stays live on the group");
+    let entry = s
+        .command_catalog()
+        .into_iter()
+        .find(|d| d.id == command_catalog::identity(&apply))
+        .unwrap();
+    assert_eq!(entry.disabled_reason.as_deref(), Some(error.as_str()));
+    assert_eq!(
+        art_layers::apply_mask_refusal(LayerKind::Effect),
+        Some("An effect layer's mask sets where the effect shows; it can't be applied")
+    );
+}

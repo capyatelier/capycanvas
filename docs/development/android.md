@@ -88,6 +88,22 @@ Rust processes projects using file descriptors and background work. Providers
 control their own destination behavior, so local-filesystem atomic replacement
 cannot be assumed for every URI.
 
+[`NoticeBubble.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/NoticeBubble.kt)
+shows the shared canvas notice (`UiState.notice`, see
+[shared UI](../ui/shared-ui.md)) as a Compose surface over the canvas. It is
+centred above the status strip, or above a canvas action bar along the bottom
+edge, and keeps that place while a contact hides the bar. It is not a popup, so it never takes window focus or cancels a transform.
+Its action button answers `accept: true`. The host hides it after 4 s, answering
+`accept: false`, and at the next canvas contact. When the core refuses a
+command, action, query or input, the refusal appears in the same surface as a
+host-local notice without an action. Only errors that need acknowledgement open
+a dialog: the core's `host_error` (file and renderer errors), shown once each
+time its published value changes, and file or platform errors that Kotlin
+reports through `reportActionError`. `CanvasHost.actionError`, which tests check,
+is the open dialog's error or the refusal being shown. Disabled canvas action
+bar items show the command's published `disabled_reason` on a tap, a touch or
+pen hold, or mouse hover.
+
 ## Validation status
 
 The [feature-parity record](../history/android-feature-parity.md) and
@@ -285,6 +301,14 @@ and UI `FrameMetrics` percentiles.
 `AndroidInteractionTest#canvasActionBarJourneysAcrossDevices` covers the bar's
 mouse, finger and stylus behavior and saves light and dark captures in
 `validation/canvas-bar`.
+`AndroidInteractionTest#canvasNoticesExplainRefusalsAcrossDevices` covers the
+notice with mouse, finger and stylus. Fingers navigate the canvas, so the finger
+pass makes its tool gestures with the pen and uses the finger for the notice.
+It checks the Wand's reference offer and its action, the canvas rendering
+afterwards, Move on a locked layer without a dialog or focus change, a repeated
+refusal, dismissal by contact and by timeout, clearance above a bottom-edge bar,
+and a disabled bar item's reason on tap and hold. It saves light and dark
+captures in `validation/canvas-notice`.
 
 The [61 MP Filters memory investigation](../history/filter-preview-tablet-memory-2026-09-17.md)
 records the shared source-probe texture reuse fix, tablet measurements, and

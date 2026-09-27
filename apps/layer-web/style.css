@@ -462,6 +462,9 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .zen-hidden #canvas { outline: none; }
 #status { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: var(--surface-radius); background: var(--popover); box-shadow: 0 2px 8px #0004; z-index: 10; max-width: 80vw; }
 #status:empty { display: none; }
+.canvas-notice { position: absolute; left: 0; top: 0; z-index: 900; display: flex; align-items: center; gap: 12px; box-sizing: border-box; width: max-content; padding: 8px 14px; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 2px 8px #0004; pointer-events: none; user-select: none; -webkit-user-select: none; }
+.canvas-notice[hidden], .canvas-notice [hidden] { display: none; }
+.canvas-notice-action { flex: none; margin: -6px -8px -6px 0; padding: 5px 12px; white-space: nowrap; pointer-events: auto; -webkit-tap-highlight-color: transparent; }
 dialog { border: 0; border-radius: calc(16px * var(--squircle-scale)); background: var(--settings); color: var(--text); padding: 0; width: 800px; height: 620px; max-width: calc(100vw - 60px); max-height: calc(100dvh - 40px); box-shadow: 0 2px 8px #0004, 0 0 0 1px #0001; }
 #settings { width: 1000px; height: 744px; }
 dialog::backdrop { background: #0008; }

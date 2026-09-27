@@ -329,6 +329,33 @@ and dispatch use live availability, including the temporary canvas lock, so a
 shortcut or second contact cannot execute an unsafe action during a stroke.
 Menus requested during a stroke also use live availability.
 
+Each command also publishes `disabled_reason`: the text
+`command_disabled_reason` returns, or null while the command is enabled. The key
+is always present, so a retained-model diff changes one field rather than
+replacing the command object. The reason stays steady with `enabled` during a
+contact. Hosts show it as the tooltip, hover text or tap response of a disabled
+control; the native hosts' lazy `canvas_bar_reason` query returns the same text.
+
+Canvas gestures that would change nothing say why through `UiState.notice`,
+published under `regions::HOST`:
+- Move on a locked layer or the paper;
+- Fill, Gradient, Figure and Lasso Fill with no paint content to act on;
+- brushes with no paint target, and erasing under alpha lock;
+- a layer-mask stroke that paints dry coverage instead of the brush's wet or
+  blending behavior, once per mask-editing session;
+- Wand and Fill sampling reference layers when none is marked. The notice offers
+  **Use *layer* as Reference**, which marks the nearest visible paint or photo
+  layer below the active layer.
+
+The core writes the text and the action's label, and keeps the action. Every
+notice has a new `id`, so a repeated refusal shows again.
+`UiAction::Notice { id, accept }` runs the action or dismisses the notice; a
+replaced or cleared id is rejected. The core clears the notice at the next
+canvas contact that raises nothing new, and when another document becomes
+active. Hosts show each id once, in a bubble over the canvas that never takes
+focus, and hide it after about 4 s (answering `accept: false`) or at the next
+canvas contact. `host_error` is kept for file and renderer errors.
+
 Brush picker labels, preset identities, and size choices have one Rust source.
 Picker colors are display-encoded sRGB; Rust converts them to linear brush
 color. Tool selection and brush parameters apply to subsequent strokes. Layer

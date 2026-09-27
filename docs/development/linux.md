@@ -483,6 +483,14 @@ mouse, touch, and keyboard input during a pause. Routine workspace operations
 pause input without disabling/restyling the editor. Notices overlay the canvas
 so they cannot resize its viewport or GPU surface.
 
+For the shared canvas notice, run
+`bash tools/performance/workspace-motion.sh gtk --native-test=native_notice_move_on_locked_layer`
+and `--native-test=native_notice_wand_offers_a_reference`. With real mouse input
+they check that a refusal shows the bubble again when repeated, that the next
+canvas contact and the 4 s timeout dismiss it, that its action marks the layer
+below as a reference without taking focus from the canvas, and that a disabled
+canvas-bar item shows its reason as the tooltip.
+
 For [stacked columns](../ui/stacked-columns.md), run
 `bash tools/performance/workspace-motion.sh gtk --column-stacks`.
 This uses real mouse/touch and private SQLite storage. It checks handle stacking

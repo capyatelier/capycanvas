@@ -154,7 +154,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                     Box(if (snapshot?.objectOrNull("preferences") != null) Modifier.clearAndSetSemantics {} else Modifier) {
                         Workspace(host, snapshot)
                     }
-                    host.actionError?.takeIf { snapshot?.objectOrNull("preferences") == null }?.let { message ->
+                    host.dialogError?.takeIf { snapshot?.objectOrNull("preferences") == null }?.let { message ->
                         AlertDialog(onDismissRequest = host::clearActionError, text = { Text(message) },
                             confirmButton = { TextButton(host::clearActionError) { Text("OK") } })
                     }
@@ -352,6 +352,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 }
             }
             CanvasBar(host, dock, layout)
+            NoticeBubble(host, dock, layout.getJSONObject("status"))
             if (!hidden) layout.array("dividers").objects().filterNot { it.optBoolean("fixed") }.forEach { divider ->
                 val rect = divider.getJSONObject("bounds")
                 val horizontal = divider.getString("axis") == "horizontal"

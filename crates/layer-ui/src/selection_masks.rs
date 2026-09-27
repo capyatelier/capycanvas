@@ -564,6 +564,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             })
             .collect()
     }
+    /// `current_selection().is_some()` without copying the selection.
+    pub(super) fn has_selection(&self) -> bool {
+        self.engine.document().selection.is_some() || self.selection_masks.quick()
+    }
     pub(super) fn current_selection(&self) -> Option<Selection> {
         self.engine
             .document()

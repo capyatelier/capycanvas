@@ -483,4 +483,85 @@ mod selection_tools_checks {
         assert_eq!(s.effective_selection_mode(), SelectionMode::Add);
     }
 
+    #[test]
+    fn wand_without_a_reference_offers_the_layer_below_in_one_step() {
+        let mut s = session(Platform::Gtk);
+        s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
+        let top = s.engine.document().active_layer;
+        invoke(&mut s, CommandId::AutoSelect);
+        invoke(&mut s, CommandId::SelectionReference);
+        send(&mut s, PenPhase::Down, [48., 72.]);
+        let mut up = event(&s, 1, PenPhase::Up, 1.);
+        let m = s.state.camera.document_to_surface();
+        up.surface_position = Point { x: m[0] * 48. + m[2] * 72. + m[4], y: m[1] * 48. + m[3] * 72. + m[5] };
+        s.pen(up).unwrap();
+        let change = s.frame(2, 2).unwrap();
+        assert!(s.renderer_mut().region_requests.is_empty());
+        let notice = s.state.notice.clone().expect("a notice instead of a failed frame");
+        assert_ne!(change.regions & regions::HOST, 0);
+        assert_eq!(notice.text, "This tool samples reference layers, and none is marked");
+        assert_eq!(notice.action.as_ref().unwrap().label, "Use Current ink as Reference");
+        assert!(s.command(CommandId::UseReferenceBelow).enabled);
+
+        assert!(s.dispatch(UiAction::Notice { id: notice.id + 1, accept: true }).is_err());
+        let before = s.engine.document().clone();
+        let change = s.dispatch(UiAction::Notice { id: notice.id, accept: true }).unwrap();
+        assert_ne!(change.regions & regions::HOST, 0);
+        assert_eq!(s.state.notice, None);
+        assert_eq!(s.engine.document().reference_layers, [LayerId(1)].into());
+        assert_eq!(s.engine.document().active_layer, top);
+        assert_eq!(
+            s.command_disabled_reason(CommandId::UseReferenceBelow).as_deref(),
+            Some("The layer below is already a reference")
+        );
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().reference_layers, before.reference_layers);
+        assert!(s.engine.document().layer(top).is_some());
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.engine.document().layer(top).is_none(), "accepting was one undo step");
+        invoke(&mut s, CommandId::Redo);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.engine.document().reference_layers, [LayerId(1)].into());
+
+        click(&mut s, [48., 72.]);
+        assert_eq!(s.state.notice, None);
+        assert_eq!(s.renderer_mut().region_requests.len(), 1, "the wand now samples the reference");
+    }
+
+    #[test]
+    fn use_reference_below_needs_a_visible_paint_layer_below() {
+        let mut s = session(Platform::Gtk);
+        assert_eq!(
+            s.command_disabled_reason(CommandId::UseReferenceBelow).as_deref(),
+            Some("No visible photo or paint layer below")
+        );
+        invoke(&mut s, CommandId::AutoSelect);
+        invoke(&mut s, CommandId::SelectionReference);
+        click(&mut s, [48., 72.]);
+        let notice = s.state.notice.clone().unwrap();
+        assert_eq!(notice.action, None, "nothing below to offer");
+        assert_eq!(notice.text, "This tool samples reference layers. Mark one in the Layers panel first.");
+        s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: 1, value: false } }).unwrap();
+        assert!(!s.command(CommandId::UseReferenceBelow).enabled, "a hidden layer is not offered");
+        s.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: 1, value: true } }).unwrap();
+        let menu = s.application_menu(ApplicationMenu::Layer);
+        let settings = menu
+            .sections
+            .iter()
+            .flatten()
+            .find(|i| i.label == "Layer Settings")
+            .unwrap();
+        let item = settings
+            .sections
+            .iter()
+            .flatten()
+            .find(|i| i.action == Some(UiAction::Invoke { command: CommandId::UseReferenceBelow }))
+            .expect("Layer Settings offers the command");
+        assert!(item.enabled);
+        assert!(
+            s.command_catalog().iter().any(|d| d.id == "command.use_reference_below" && d.enabled),
+            "command search offers the command"
+        );
+    }
 }

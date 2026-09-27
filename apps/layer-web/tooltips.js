@@ -1,5 +1,10 @@
 // Hover is presentation only. Keep shared, dynamically updated title text and
 // use one noninteractive top-layer tooltip for mouse and pen (never contact).
+// A disabled control can also reveal its title on tap, for any device, until
+// the next contact or REVEAL_MS.
+export const REVEAL_MS = 4000;
+let reveal = () => {};
+export function revealTooltip(node) { reveal(node); }
 export function installTooltips() {
   const tip = document.createElement("div");
   tip.id = "hover-tooltip"; tip.className = "hover-tooltip"; tip.popover = "manual";
@@ -46,6 +51,20 @@ export function installTooltips() {
     const ids = new Set((source.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
     ids.add(tip.id); source.setAttribute("aria-describedby", [...ids].join(" "));
   }
+  function follow(next) {
+    source = next; parent = next.parentNode; text = next.getAttribute("title");
+    // An empty title also suppresses inherited browser tooltips. Restore the
+    // latest value on exit; the observer preserves pointerenter shortcut updates.
+    source.setAttribute("title", "");
+    observer.observe(source, { attributes: true, attributeFilter: ["title"] });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+  reveal = node => {
+    hide();
+    if (!node.getAttribute("title")) return;
+    follow(node); show();
+    timer = setTimeout(hide, REVEAL_MS);
+  };
   function hover(e) {
     if (e.buttons || !["mouse", "pen"].includes(e.pointerType)) { hide(); return; }
     const next = e.target.closest?.("[title]");
@@ -53,12 +72,7 @@ export function installTooltips() {
     if (next === source) return;
     hide();
     if (!next || next === dismissed || !next.getAttribute("title")) return;
-    source = next; parent = next.parentNode; text = next.getAttribute("title");
-    // An empty title also suppresses inherited browser tooltips. Restore the
-    // latest value on exit; the observer preserves pointerenter shortcut updates.
-    source.setAttribute("title", "");
-    observer.observe(source, { attributes: true, attributeFilter: ["title"] });
-    observer.observe(document.body, { childList: true, subtree: true });
+    follow(next);
     timer = setTimeout(show, 500);
   }
   document.addEventListener("pointerover", hover, true);

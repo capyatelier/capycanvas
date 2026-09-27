@@ -56,7 +56,8 @@ class FakeElement {
 }
 
 function action(id, label, { enabled = true, selected = false, checkable = false } = {}) {
-  return { option: { Action: { state: { id, icon: id, label, tooltip: `${label} tooltip`, enabled, selected }, checkable } }, label };
+  return { option: { Action: { state: { id, icon: id, label, tooltip: `${label} tooltip`, enabled,
+    disabled_reason: enabled ? null : `${id} is unavailable`, selected }, checkable } }, label };
 }
 function view({ kind = "transform", generation = 1n, items, completion, placement = "near_object", label = null } = {}) {
   return {
@@ -66,14 +67,13 @@ function view({ kind = "transform", generation = 1n, items, completion, placemen
   };
 }
 function harness({ layout = measure => ({ bounds: { x: 100.2, y: 50, width: 300, height: measure.height }, items: measure.items.length, side: "below" }) } = {}) {
-  const workspace = new FakeElement("main"), dispatched = [], measures = [], menus = [], timers = [];
+  const workspace = new FakeElement("main"), dispatched = [], measures = [], menus = [], timers = [], explained = [], presented = [];
   const menu = new FakeElement("div", "panel-context-menu");
   let glassQueued = 0, clock = 0;
   const element = (tag, className, text) => { const node = new FakeElement(tag, className); if (text != null) node.textContent = text; return node; };
   const button = (text, click, className = "") => { const node = element("button", className, text); node.addEventListener("click", click); return node; };
   const app = {
     canvas_bar_reappear_ms: () => 180,
-    command_disabled_reason: id => `${id} is unavailable`,
     canvas_bar_layout: measure => { measures.push(structuredClone(measure)); return layout(measure); },
     canvas_bar_menu: (context, shown) => { menus.push({ context, shown }); return { title: "More", sections: [] }; },
   };
@@ -81,6 +81,7 @@ function harness({ layout = measure => ({ bounds: { x: 100.2, y: 50, width: 300,
     app, workspace, element, button, icon: name => element("svg", name), dispatch: action => dispatched.push(action),
     glass: { queue: () => glassQueued++ },
     openMenu: node => { menu.menuOwner = node; menu.open = true; return menu; },
+    explain: node => explained.push(node.dataset.command), presented: () => presented.push(clock),
     setTimer: (callback, ms) => { const timer = { id: timers.length + 1, callback, at: clock + ms, cleared: false }; timers.push(timer); return timer.id; },
     clearTimer: id => { const timer = timers.find(t => t.id === id); if (timer) timer.cleared = true; },
   });
@@ -90,7 +91,7 @@ function harness({ layout = measure => ({ bounds: { x: 100.2, y: 50, width: 300,
   };
   const pending = () => timers.filter(t => !t.cleared && !t.fired);
   const find = command => bar.root.querySelectorAll("button").find(b => b.dataset.command === command);
-  return { bar, workspace, dispatched, measures, menus, menu, advance, pending, find, glass: () => glassQueued };
+  return { bar, workspace, dispatched, measures, menus, menu, advance, pending, find, explained, presented, glass: () => glassQueued };
 }
 
 test("the bar is a toolbar in the workspace that stays hidden without a view", () => {
@@ -149,20 +150,25 @@ test("state changes update retained controls; schema changes rebuild them", () =
   assert.equal(uniform.getAttribute("aria-pressed"), "true");
   assert.equal(h.find("transform_flip_horizontal").getAttribute("aria-disabled"), "true");
   assert.equal(h.find("transform_flip_horizontal").disabled, false, "Disabled items keep pointer events for their reason tooltip");
-  assert.equal(h.find("transform_flip_horizontal").title, "transform_flip_horizontal is unavailable");
+  assert.equal(h.find("transform_flip_horizontal").title, "transform_flip_horizontal is unavailable", "the title is the published reason");
   assert.equal(h.find("reset_transform").title, "Reset tooltip");
   assert.equal(h.measures.length, 2);
+  h.bar.refresh(view());
+  assert.equal(h.find("transform_flip_horizontal").title, "Flip H tooltip", "an enabled item returns to its tooltip");
   h.bar.refresh(view({ generation: 2n }));
   assert.notEqual(h.find("transform_aspect"), uniform, "A new context rebuilds the controls");
 });
 
-test("every item dispatches a canvas bar edit for its context; disabled items do nothing", () => {
+test("every item dispatches a canvas bar edit for its context; disabled items explain themselves on tap", () => {
   const h = harness(), v = view({ items: [action("transform_flip_vertical", "Flip V", { enabled: false })] });
   h.bar.refresh(v);
   h.find("apply_transform").click();
   assert.deepEqual(h.dispatched, [{ type: "canvas_bar_edit", context: v.context, action: { type: "invoke", command: "apply_transform" } }]);
+  assert.deepEqual(h.explained, []);
   h.find("transform_flip_vertical").click();
   assert.equal(h.dispatched.length, 1);
+  assert.deepEqual(h.explained, ["transform_flip_vertical"], "a tap reveals the published reason");
+  assert.equal(h.find("transform_flip_vertical").title, "transform_flip_vertical is unavailable");
   assert.ok(h.bar.root.querySelectorAll("button").every(b => b.tabIndex === -1), "Controls do not join the tab order");
 });
 
@@ -209,6 +215,7 @@ test("contacts hide the bar at once and it returns once after the debounce", () 
   assert.ok(h.bar.root.classList.contains("suppressed"));
   assert.equal(h.bar.bounds(), null);
   assert.equal(h.glass(), queued + 1, "Hiding republishes glass");
+  const presented = h.presented.length;
   for (let i = 0; i < 20; i++) h.bar.suppress(true);
   assert.equal(h.glass(), queued + 1, "Samples during a stroke do not touch the DOM");
   h.bar.suppress(false);
@@ -216,8 +223,10 @@ test("contacts hide the bar at once and it returns once after the debounce", () 
   assert.equal(h.pending().length, 1, "Hover replies do not restart the debounce");
   h.advance(179);
   assert.ok(h.bar.root.classList.contains("suppressed"));
+  assert.equal(h.presented.length, presented, "Stroke samples do not re-place the notice");
   h.advance(1);
   assert.ok(!h.bar.root.classList.contains("suppressed"));
+  assert.equal(h.presented.length, presented + 1, "Reappearing lets the notice move above the bar");
   assert.equal(h.measures.length, 2, "Reappearing re-places the bar");
   assert.ok(h.bar.bounds());
 });

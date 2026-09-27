@@ -1866,18 +1866,129 @@ class AndroidInteractionTest {
         hold()
         event(MotionEvent.ACTION_UP)
     }
-    private fun captureCanvasBar(name: String, check: (android.graphics.Bitmap, Offset) -> Unit = { _, _ -> }) {
+    private fun captureCanvasBar(name: String, directory: String = "canvas-bar", check: (android.graphics.Bitmap, Offset) -> Unit = { _, _ -> }) {
         SystemClock.sleep(400); settle()
         val image = instrumentation.uiAutomation.takeScreenshot()
         val origin = IntArray(2)
         instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
         try {
-            val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/canvas-bar/$name.png")
+            val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/$directory/$name.png")
             file.parentFile!!.mkdirs(); file.outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
             check(image, Offset(origin[0].toFloat(), origin[1].toFloat()))
         } finally { image.recycle() }
     }
 
+    @Test fun canvasNoticesExplainRefusalsAcrossDevices() {
+        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+        fun layer(value: JSONObject) = action(obj("type" to "layer", "action" to value))
+        fun notice() = state().optJSONObject("notice")
+        fun active() = state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+        fun layers() = state().array("layers").objects()
+        fun idle(label: String) = waitFor("$label: the canvas interaction finishes", 5_000) {
+            state().array("commands").objects().any { it.getString("id") == "add_layer" && it.getBoolean("enabled") }
+        }
+        fun modeless(label: String) = onMain {
+            assertNull("$label opens no dialog", host.dialogError); assertNull("$label opens no dialog", host.hostError)
+            assertTrue("$label leaves window focus with the canvas", owner.view.hasWindowFocus())
+        }
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        try {
+            for (device in pointerTools) {
+                val name = listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]
+                restore()
+                layer(obj("op" to "new", "group" to false, "clipped" to false))
+                val top = active()
+                invoke("fit_canvas")
+                val work = bounds("workspace")
+                val point = Offset(work.left + 720 * density, work.top + 300 * density)
+                tool = device
+                val drawing = if (device == MotionEvent.TOOL_TYPE_FINGER) MotionEvent.TOOL_TYPE_STYLUS else device
+                fun onCanvas(gesture: () -> Unit) { tool = drawing; try { gesture() } finally { tool = device } }
+                invoke("auto_select"); invoke("selection_reference")
+                for (theme in if (device == MotionEvent.TOOL_TYPE_STYLUS) listOf("light", "dark") else listOf(null)) {
+                    theme?.let { action(obj("type" to "set_theme", "theme" to it)) }
+                    val before = notice()?.optLong("id") ?: 0L
+                    onCanvas { tap(point) }
+                    waitFor("$name Wand offers a reference", 5_000) {
+                        (notice()?.optLong("id") ?: 0L) > before && notice()!!.optJSONObject("action") != null && shown("canvas-notice-action")
+                    }
+                    theme?.let { captureCanvasBar("wand-$it", "canvas-notice") }
+                }
+                val offer = notice()!!
+                assertEquals("This tool samples reference layers, and none is marked", offer.getString("text"))
+                assertNotNull("$name the notice shows the core's text", textBounds(offer.getString("text")))
+                val label = offer.getJSONObject("action").getString("label")
+                assertNotNull("$name the notice shows its action", textBounds(label))
+                val below = layers().first { "Use ${it.getString("label")} as Reference" == label }.getLong("id")
+                modeless("$name Wand notice")
+                tap(bounds("canvas-notice-action").center)
+                waitFor("$name the action marks the layer below as a reference", 5_000) {
+                    notice() == null && !shown("canvas-notice") && layers().first { it.getLong("id") == below }.getBoolean("reference")
+                }
+                assertEquals("$name the active layer stays", top, active())
+                modeless("$name accepted notice")
+                onCanvas { tap(point) }
+                waitFor("$name the canvas keeps rendering and the Wand samples the reference", 10_000) { barKind() == "selection" && shown("canvas-action-bar") }
+                assertNull("$name sampling a reference raises nothing", notice())
+
+                idle(name)
+                layer(obj("op" to "lock", "id" to top, "value" to true))
+                invoke("move")
+                val shift = Offset(40 * density, 24 * density)
+                onCanvas { drag(point, point + shift) }
+                waitFor("$name Move on a locked layer explains", 5_000) { notice()?.optString("text") == "The active layer is locked" && shown("canvas-notice") }
+                val raised = bounds("canvas-notice")
+                assertTrue("$name the refusal has no action", notice()!!.isNull("action") && !exists("canvas-notice-action"))
+                modeless("$name Move notice")
+                waitFor("$name the selection bar returns beside the notice", 3_000) { shown("canvas-action-bar") }
+                val bar = bounds("canvas-action-bar"); val bubble = bounds("canvas-notice")
+                assertEquals("$name the notice keeps its place when the bar returns", raised, bubble)
+                assertFalse("$name the notice never covers the bar: $bubble vs $bar", bubble.overlaps(bar))
+                if (bar.bottom > work.bottom - 120 * density) assertTrue("$name the notice sits above a bottom-edge bar: $bubble vs $bar", bubble.bottom <= bar.top)
+                if (device == MotionEvent.TOOL_TYPE_STYLUS) captureCanvasBar("move-locked-dark", "canvas-notice")
+                val disabled = (canvasBar()!!.array("items").objects() + canvasBar()!!.array("completion").objects())
+                    .mapNotNull { it.getJSONObject("option").optJSONObject("Action")?.getJSONObject("state") }
+                    .firstOrNull { !it.getBoolean("enabled") && shown("canvas-bar-action-${it.getString("id")}") }
+                    ?: throw AssertionError("$name a locked layer disables a bar item: ${canvasBar()}")
+                val reason = disabled.getString("disabled_reason")
+                val item = bounds("canvas-bar-action-${disabled.getString("id")}")
+                fun reasonShown() = findTag("hover-tooltip") != null && textBounds(reason) != null
+                tap(item.center)
+                waitFor("$name a tap shows why ${disabled.getString("id")} is disabled", 3_000, ::reasonShown)
+                if (device != MotionEvent.TOOL_TYPE_MOUSE) {
+                    waitFor("$name the reason hides", 5_000) { findTag("hover-tooltip") == null }
+                    event(MotionEvent.ACTION_DOWN, item.center)
+                    waitFor("$name a hold shows the reason", 3_000, ::reasonShown)
+                    event(MotionEvent.ACTION_UP)
+                    assertEquals("$name a hold opens nothing else", 0, popupCount())
+                    modeless("$name disabled item hold")
+                }
+                val first = notice()?.optLong("id") ?: 0L
+                onCanvas { drag(point, point + shift) }
+                waitFor("$name a repeated refusal shows again", 5_000) { (notice()?.optLong("id") ?: 0) > first && shown("canvas-notice") }
+
+                invoke("hand")
+                tap(point)
+                waitFor("$name the next canvas contact hides the notice", 3_000) { notice() == null && !shown("canvas-notice") }
+
+                invoke("move")
+                onCanvas { drag(point, point + shift) }
+                waitFor("$name the refusal shows before its timeout", 5_000) { shown("canvas-notice") }
+                val shownAt = SystemClock.uptimeMillis()
+                waitFor("$name the notice times out", 8_000) { notice() == null && !shown("canvas-notice") }
+                assertTrue("$name the notice stays about 4 s", SystemClock.uptimeMillis() - shownAt in 3_000..6_000)
+
+                idle(name)
+                layer(obj("op" to "lock", "id" to top, "value" to false))
+                layer(obj("op" to "reference", "id" to below))
+                invoke("deselect")
+                println("PASS canvas notice device=$name")
+            }
+        } finally {
+            action(obj("type" to "set_theme", "theme" to originalTheme))
+        }
+        println("PASS canvas notices: Wand reference offer and action, Move on a locked layer, repeat, contact and timeout dismissal, bar clearance, no dialog or focus change")
+    }
     @Test fun canvasActionBarJourneysAcrossDevices() {
         fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
         fun enabled(command: String) = state().array("commands").objects().any { it.getString("id") == command && it.getBoolean("enabled") }

@@ -954,6 +954,7 @@ pub struct Workspace {
     pub(crate) layer_panel: crate::layers::LayerPanel,
     pub(crate) effects: Rc<crate::effects::EffectPanels>,
     view_info: gtk::Label,
+    notice: Rc<crate::notice::NoticeBubble>,
     status: gtk::Label,
     restart_canvas: gtk::Button,
     pub(crate) preferences: crate::preferences::Preferences,
@@ -977,6 +978,7 @@ pub struct Workspace {
 impl Drop for Workspace {
     fn drop(&mut self) {
         if let Some(timer) = self.color_preview_timer.get_mut().take() { timer.remove(); }
+        self.notice.cancel_timeout();
         // Weak unrealize callbacks cannot upgrade once the final Rc is gone.
         // Join the GPU worker before any native window/surface fields drop.
         self.local_tone.suspend();
@@ -1138,6 +1140,8 @@ impl Workspace {
         notices.append(&restart_canvas);
         notices.append(&workspaces.root);
         content.add_overlay(&notices);
+        let notice = crate::notice::NoticeBubble::new();
+        content.add_overlay(&notice.root);
         let image_drop_label = gtk::Label::new(Some("Add image as layer"));
         image_drop_label.set_halign(gtk::Align::Center);
         image_drop_label.set_valign(gtk::Align::Center);
@@ -1216,6 +1220,7 @@ impl Workspace {
             layer_panel,
             effects,
             view_info,
+            notice,
             status,
             restart_canvas,
             preferences: crate::preferences::Preferences::new(),
@@ -1242,6 +1247,7 @@ impl Workspace {
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes);
         this.canvas_bar.bind(&this);
+        this.notice.bind(&this);
         this.selection_resize.bind(&this);
         this.color_panel.bind(&this);
         this.palette_panel.bind(&this);
@@ -1782,6 +1788,7 @@ impl Workspace {
 
     pub fn interact(self: &Rc<Self>, input: UiInput) -> InputReply {
         if matches!(input, UiInput::Key { pressed: true, .. } | UiInput::Pointer { phase: ContactPhase::Down, .. }) { self.remember_command_focus(); }
+        if matches!(input, UiInput::Pointer { phase: ContactPhase::Down, .. }) { self.notice.hide(); }
         let finishing = matches!(
             &input,
             UiInput::Blur
@@ -2184,6 +2191,30 @@ impl Workspace {
     }
     pub fn wake(self: &Rc<Self>) {
         self.wake_frame(false, false);
+    }
+    /// The notice timed out; an answer to a notice already replaced is ignored.
+    pub(crate) fn decline_notice(self: &Rc<Self>, id: u64) {
+        let result = self
+            .gpu
+            .borrow_mut()
+            .as_mut()
+            .map(|g| g.session.dispatch(UiAction::Notice { id, accept: false }));
+        if let Some(Ok(change)) = result {
+            self.changed(Ok(change));
+        }
+    }
+    /// Keep a shown notice above the canvas bar after the bar moves or returns.
+    pub(crate) fn place_notice(&self) {
+        self.notice.place(self.notice_clearance());
+    }
+    /// Keep the notice above a canvas bar placed along the bottom edge.
+    fn notice_clearance(&self) -> i32 {
+        const MARGIN: f32 = 36.;
+        let height = self.surface.height() as f32;
+        self.canvas_bar
+            .visible_bounds()
+            .filter(|bar| bar.y + bar.height > height - MARGIN * 2.)
+            .map_or(MARGIN, |bar| height - bar.y + 12.) as i32
     }
     pub(crate) fn wake_stroke_end(self: &Rc<Self>) {
         self.wake_frame(true, false);
@@ -2694,6 +2725,9 @@ impl Workspace {
         }
         if regions & regions::CAMERA != 0 {
             self.canvas_bar.defer(self);
+        }
+        if regions & regions::HOST != 0 {
+            self.notice.publish(self, state.notice.as_ref(), self.notice_clearance());
         }
         if regions & regions::LAYOUT != 0 {
             self.reconcile_layout(&state.workspace.layout);

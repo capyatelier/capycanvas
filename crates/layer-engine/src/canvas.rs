@@ -16,8 +16,8 @@ use crate::input::{
     ViewTransform,
 };
 use layer_core::{
-    BrushError, BrushExecution, BrushSnapshot, Document, DocumentError, Edit, Editor, LayerId,
-    Rect, Stroke, StrokeId, StrokeTool,
+    BrushError, BrushExecution, BrushSnapshot, Document, DocumentError, DrawingRefusal, Edit,
+    Editor, LayerId, Rect, Stroke, StrokeId, StrokeTool,
 };
 use layer_render::{
     CanvasRenderer, Dab, DabBatch, DabBatchKind, DabStyle, FramePacket, ViewState,
@@ -61,6 +61,26 @@ pub struct EngineMetrics {
     pub maximum_endpoint_correction_surface_px: f32,
     pub corrected_input_samples: u64,
     pub expired_input_estimates: u64,
+}
+
+/// Why a stroke starting now would not paint as the brush is configured.
+/// Every refusal except `DryMask` stops the stroke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrokeRefusal {
+    Target(DrawingRefusal),
+    /// Erasing keeps an alpha-locked layer's transparency, so it changes nothing.
+    AlphaLocked,
+    /// Masks take dry coverage; the stroke paints without its wet, smudge or
+    /// liquify behavior.
+    DryMask,
+}
+
+#[derive(Clone, Copy)]
+struct StrokeTarget {
+    layer: LayerId,
+    mask: bool,
+    alpha_locked: bool,
+    inverted: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -665,6 +685,47 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.tool = tool;
     }
 
+    /// Why a stroke that starts with `event` would not paint as configured.
+    /// Pen-down in `process_event` applies the same rule.
+    pub fn stroke_refusal(&self, event: &PenEvent) -> Option<StrokeRefusal> {
+        match self.stroke_target(self.stroke_tool(event)) {
+            Err(refusal) => Some(refusal),
+            Ok(target)
+                if target.mask && self.brush.execution_class() != BrushExecution::Dry =>
+            {
+                Some(StrokeRefusal::DryMask)
+            }
+            Ok(_) => None,
+        }
+    }
+
+    fn stroke_tool(&self, event: &PenEvent) -> StrokeTool {
+        if matches!(event.tool, ToolKind::Eraser) || event.flags.contains(SampleFlags::INVERTED) {
+            StrokeTool::Eraser
+        } else {
+            self.tool
+        }
+    }
+
+    fn stroke_target(&self, tool: StrokeTool) -> Result<StrokeTarget, StrokeRefusal> {
+        let document = self.document();
+        let layer = document.try_drawing_target().map_err(StrokeRefusal::Target)?;
+        let owner = document
+            .target_owner(layer)
+            .ok_or(StrokeRefusal::Target(DrawingRefusal::NoLayer))?;
+        let mask = owner.id != layer;
+        let alpha_locked = !mask && owner.properties.alpha_locked;
+        if alpha_locked && tool == StrokeTool::Eraser {
+            return Err(StrokeRefusal::AlphaLocked);
+        }
+        Ok(StrokeTarget {
+            layer,
+            mask,
+            alpha_locked,
+            inverted: mask && owner.mask.as_ref().is_some_and(|m| m.inverted),
+        })
+    }
+
     pub fn record_raw_input(&mut self, event: PenEvent, transform: ViewTransform) {
         let transform = self
             .transforms
@@ -1250,28 +1311,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 if self.active_stroke.is_some() {
                     self.cancel_active();
                 }
-                let Some(layer_id) = self.document().drawing_target() else {
+                let mut tool = self.stroke_tool(&event);
+                let Ok(StrokeTarget {
+                    layer: layer_id,
+                    mask: is_mask,
+                    alpha_locked,
+                    inverted,
+                }) = self.stroke_target(tool)
+                else {
                     return Ok(());
                 };
-                let Some(owner) = self.document().target_owner(layer_id) else {
-                    return Ok(());
-                };
-                let is_mask = owner.id != layer_id;
-                if self.document().is_locked(layer_id)
-                    || (!is_mask && owner.kind != layer_core::LayerKind::Paint)
-                {
-                    return Ok(());
-                }
-                let alpha_locked = !is_mask && owner.properties.alpha_locked;
-                let inverted = is_mask && owner.mask.as_ref().is_some_and(|m| m.inverted);
                 let id = self.editor.allocate_stroke_id();
-                let mut tool = if matches!(event.tool, ToolKind::Eraser)
-                    || event.flags.contains(SampleFlags::INVERTED)
-                {
-                    StrokeTool::Eraser
-                } else {
-                    self.tool
-                };
                 let mut brush = self.brush.clone();
                 if !matches!(
                     event.tool,

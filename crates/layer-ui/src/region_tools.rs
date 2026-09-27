@@ -13,7 +13,6 @@ pub(super) struct RegionTools {
     queued: Option<RegionRequest>,
     pending: bool,
     target: Option<Target>,
-    failure: Option<&'static str>,
 }
 struct Target {
     generation: u64,
@@ -39,7 +38,6 @@ impl Default for RegionTools {
             queued: None,
             pending: false,
             target: None,
-            failure: None,
         }
     }
 }
@@ -111,14 +109,13 @@ impl RegionTools {
         self.contact = None;
         self.queued = None;
         self.target = None;
-        self.failure = None;
     }
     pub fn renderer_replaced(&mut self) {
         self.cancel();
         self.pending = false;
     }
     pub fn busy(&self) -> bool {
-        self.pending || self.queued.is_some() || self.failure.is_some()
+        self.pending || self.queued.is_some()
     }
     pub fn applying_transform(&self) -> bool {
         self.target.as_ref().is_some_and(|t| t.transform)
@@ -148,9 +145,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 let doc = self.engine.document();
                 let mask_target = self.selection_masks.target().filter(|_| fill);
-                if fill && mask_target.is_none() && doc.drawing_content().is_none() {
-                    return;
-                }
                 let source_layer = if mask_target.is_some() { self.selection_masks.artwork().unwrap_or(doc.active_layer) }
                     else { doc.drawing_target().unwrap_or(doc.active_target()) };
                 let (basis, extent) = if source == RegionSource::Editing {
@@ -167,6 +161,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     return;
                 }
+                if fill && mask_target.is_none() && doc.drawing_content().is_none() {
+                    self.notify_drawing_refusal();
+                    return;
+                }
                 let request = RegionRequest {
                     request_id: self.region_tools.generation,
                     contiguous,
@@ -178,8 +176,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                         RegionSource::Reference => {
                             if doc.reference_layers.is_empty() {
-                                self.region_tools.failure =
-                                    Some("Mark a reference layer with the lighthouse button.");
+                                self.notify_missing_reference();
                                 return;
                             }
                             layer_render::RegionSource::Layers(doc.reference_snapshot())
@@ -199,7 +196,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     },
                 };
                 if let Some(target) = mask_target {
-                    if let Err(error) = self.queue_mask_region(target, request, basis, true) { self.state.host_error = Some(error); }
+                    if let Err(error) = self.queue_mask_region(target, request, basis, true) { self.notify(error); }
                     return;
                 }
                 self.region_tools.queued = Some(request);
@@ -267,9 +264,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.region_tools.queued=Some(request);
     }
     pub(super) fn poll_region_tool(&mut self) -> Result<(), String> {
-        if let Some(error) = self.region_tools.failure.take() {
-            return Err(error.into());
-        }
         if self.region_tools.pending
             && let Some(result) = self.engine.backend_mut().take_region()
         {

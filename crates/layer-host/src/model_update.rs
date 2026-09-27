@@ -327,6 +327,72 @@ mod tests {
     }
 
     #[test]
+    fn a_notice_appears_and_clears_as_one_model_field() {
+        use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
+        use layer_ui::{CommandId, LayerAction, Platform, UiAction, UiInput};
+        let mut host = NativeHost::new(Platform::Android).unwrap();
+        host.resize(2200, 1440, 1.75).unwrap();
+        host.dispatch(UiAction::Invoke { command: CommandId::Move }).unwrap();
+        host.dispatch(UiAction::Layer { action: LayerAction::Lock { id: 1, value: true } }).unwrap();
+        let read = |host: &mut NativeHost| {
+            serde_json::from_slice::<Value>(&host.take_model_update_bytes().unwrap().unwrap())
+                .unwrap()
+        };
+        let mut retained = read(&mut host);
+        assert_eq!(retained["state"]["notice"], Value::Null);
+        let expected = |host: &NativeHost| {
+            let mut expected = host.snapshot();
+            expected["workspace_update"] =
+                serde_json::to_value(host.session.workspace_update()).unwrap();
+            serde_json::from_slice::<Value>(&serde_json::to_vec(&expected).unwrap()).unwrap()
+        };
+        let notice_paths = |patch: &Value| {
+            patch["model_update"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|change| change[0].as_array().unwrap().iter().any(|key| key == "notice"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        host.session
+            .pen(PenEvent {
+                device_id: 1,
+                sequence: 1,
+                timestamp_ns: 1,
+                view_revision: host.session.state().camera.revision,
+                surface_position: layer_core::Point { x: 1100., y: 700. },
+                pressure: 1.,
+                tilt_radians: [0.; 2],
+                twist_radians: 0.,
+                distance: 0.,
+                phase: PenPhase::Down,
+                tool: ToolKind::Mouse,
+                flags: SampleFlags::PRIMARY,
+            })
+            .unwrap();
+        host.input(UiInput::CursorLeave).unwrap();
+        let patch = read(&mut host);
+        let changes = notice_paths(&patch);
+        assert_eq!(changes.len(), 1, "{patch}");
+        assert_eq!(changes[0][0], json!(["state", "notice"]));
+        assert_eq!(changes[0][1]["text"], "The active layer is locked");
+        assert_eq!(changes[0][1]["action"], Value::Null);
+        assert!(
+            !patch["model_update"].as_array().unwrap().iter().any(|c| c[0] == json!(["state", "commands"])),
+            "command objects keep their keys"
+        );
+        apply(&mut retained, patch);
+        assert_eq!(retained, expected(&host));
+        let id = retained["state"]["notice"]["id"].as_u64().unwrap();
+        host.dispatch(UiAction::Notice { id, accept: false }).unwrap();
+        let patch = read(&mut host);
+        assert_eq!(notice_paths(&patch), [json!([["state", "notice"], null])], "{patch}");
+        apply(&mut retained, patch);
+        assert_eq!(retained, expected(&host));
+    }
+
+    #[test]
     fn retained_models_match_full_snapshots_and_recover_after_legacy_reads() {
         use layer_ui::{Platform, UiAction};
         for platform in [

@@ -192,9 +192,19 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     var failure by mutableStateOf<String?>(null)
         private set
-    private var actionErrorFromCanvasFailure = false
-    var actionError by mutableStateOf<String?>(null)
+    /** Host file and platform errors, shown in a dialog until acknowledged. */
+    internal var dialogError by mutableStateOf<String?>(null)
         private set
+    /** The core's file and renderer error, shown once for each value it publishes. */
+    internal var hostError by mutableStateOf<String?>(null)
+        private set
+    private var publishedHostError: String? = null
+    internal var notice by mutableStateOf<CanvasNotice?>(null)
+        private set
+    private var publishedNotice: Long? = null
+    private val hideNotice = Runnable { notice = null }
+    /** The failure the user is shown: a dialog, or a refused command's notice. */
+    val actionError: String? get() = dialogError ?: notice?.takeIf { it.id == null }?.text
     // Native focus, not application state; prevents typing from invoking tools.
     var editingText = false
     internal var toolbarEditorBounds: androidx.compose.ui.geometry.Rect? = null
@@ -291,7 +301,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             Log.e("CapyCanvas", "Native canvas operation failed", e)
             main.post {
                 if (canvas) failure = e.message ?: "Could not initialize canvas"
-                else { actionError = e.message ?: "Could not complete this action"; actionErrorFromCanvasFailure = failure != null }
+                else notice = CanvasNotice(null, e.message ?: "Could not complete this action", null)
             }
         }
     }
@@ -315,8 +325,30 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal fun documentChanged(complete: () -> Unit = {}) = post {
         refreshChrome(); publish(true); wake(); main.post { drawingTabs.refresh(); complete() }
     }
-    internal fun reportActionError(message: String) { actionError = message; actionErrorFromCanvasFailure = false }
-    fun clearActionError() { actionError = null; actionErrorFromCanvasFailure = false }
+    internal fun reportActionError(message: String) { dialogError = message }
+    fun clearActionError() { dialogError = null }
+    internal fun dismissHostError() { hostError = null }
+    /** Accept runs the core's action; declining, or the timeout, dismisses it. */
+    internal fun answerNotice(shown: CanvasNotice, accept: Boolean) {
+        if (notice !== shown) return
+        notice = null
+        val id = shown.id ?: return
+        val answer = obj("type" to "notice", "id" to id, "accept" to accept)
+        if (accept) dispatch(answer)
+        else post { runCatching { Native.dispatch(handle, answer.toString()) }; publish(true) }
+    }
+    private fun publishNotice(published: JSONObject?) {
+        val id = published?.getLong("id")
+        if (id == publishedNotice) return
+        publishedNotice = id
+        notice = published?.let { CanvasNotice(id, it.getString("text"), it.optJSONObject("action")?.getString("label")) }
+            ?: notice?.takeIf { it.id == null }
+    }
+    private fun publishHostError(error: String?) {
+        if (error == publishedHostError) return
+        publishedHostError = error
+        hostError = error
+    }
     internal fun commandFocus() = if (editingText) "text" else if (palettes.focus != null) "palette" else "canvas"
     fun dispatch(action: JSONObject) {
         // Capture the editor owner before a menu action opens a native dialog.
@@ -464,7 +496,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             Native.attach(handle, surface, java.io.File(getApplication<Application>().cacheDir, "shader-pipelines").absolutePath)
             attached = true
             awaitingSurfaceFrame = true
-            main.post { failure = null; if (actionErrorFromCanvasFailure) clearActionError() }
+            main.post { failure = null }
             publish(true)
             wake()
         }
@@ -477,7 +509,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             check(surface.isValid) { "The canvas surface is unavailable" }
             Native.attach(handle, surface, java.io.File(getApplication<Application>().cacheDir, "shader-pipelines").absolutePath)
             attached = true; awaitingSurfaceFrame = true; startupCacheFinished = false
-            main.post { failure = null; if (actionErrorFromCanvasFailure) clearActionError() }
+            main.post { failure = null }
             publish(true); wake()
         }
     }
@@ -531,6 +563,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     android.os.Trace.setCounter("Capy input age ns", started - samples[count - 2].toLong())
                     android.os.Trace.setCounter("Capy input samples", (count / 9).toLong())
                     val phase = samples[count - 1].toInt()
+                    if (phase == 1 && !predicted) main.post(hideNotice)
                     if (phase == 1 && !predicted && documentInputBlocked) suppressedContacts.add(id)
                     if (phase == 1 && !predicted && !documentInputBlocked) {
                         val event = obj("kind" to "contact", "canvas" to true,
@@ -791,6 +824,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             val bar = state.optJSONObject("canvas_bar")
             if (bar !== canvasBar) canvasBar = bar
             (snapshot as? ObservedModel ?: ObservedModel(listOf("state", "state.document_file")).also { snapshot = it }).assign(next)
+            publishNotice(state.optJSONObject("notice"))
+            publishHostError(state.optString("host_error").takeUnless { state.isNull("host_error") })
             drawingTabs.refresh()
             workspaceContentRevision = next.objectOrNull("workspace_update")?.optLong("content_revision", -1L) ?: -1L
             workspaceModelRevision = geometry?.modelRevision ?: -1L

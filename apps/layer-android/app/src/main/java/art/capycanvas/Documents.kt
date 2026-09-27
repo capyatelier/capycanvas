@@ -351,10 +351,9 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     // Registered before workspace/popup handlers, which get first refusal.
     BackHandler { host.drawingTabs.closeSelected() }
     ImagePlacementControls(host, state)
-    state.optString("host_error").takeIf { it.isNotEmpty() && it != "null" }?.let { message ->
-        var dismissed by remember(message) { mutableStateOf(false) }
-        if (!dismissed) AlertDialog(onDismissRequest = { dismissed = true }, title = { Text("Could not complete action") }, text = { Text(message) },
-            confirmButton = { TextButton({ dismissed = true }) { Text("OK") } })
+    host.hostError?.let { message ->
+        AlertDialog(onDismissRequest = host::dismissHostError, title = { Text("Could not complete action") }, text = { Text(message) },
+            confirmButton = { TextButton(host::dismissHostError) { Text("OK") } })
     }
     if (request != null && !controller.working) {
         val id = request.getInt("id")

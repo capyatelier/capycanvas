@@ -94,6 +94,15 @@ pub struct LayerControls {
     pub move_layer: bool,
     pub fill: bool,
 }
+/// Only a paint layer's mask can be baked into its pixels.
+pub(super) fn apply_mask_refusal(kind: LayerKind) -> Option<&'static str> {
+    match kind {
+        LayerKind::Paint => None,
+        LayerKind::Group => Some("A group's mask can't be applied; it stays live on the group"),
+        LayerKind::Effect => Some("An effect layer's mask sets where the effect shows; it can't be applied"),
+        LayerKind::Background | LayerKind::Selection => Some("Only a paint layer's mask can be applied"),
+    }
+}
 impl LayerControls {
     pub(super) fn for_layer(doc: &Document, l: &Layer) -> Self {
         let unlocked = !doc.is_locked(l.id);
@@ -524,6 +533,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             && self.layer_interaction.selected.contains(&doc.active_layer)
             && doc.reference_layers.contains(&doc.active_layer)
     }
+    /// One undo step, and none when the marked set is unchanged.
+    pub(super) fn set_references(&mut self, references: BTreeSet<LayerId>) -> Result<(), String> {
+        if references == self.engine.document().reference_layers {
+            return Ok(());
+        }
+        self.layer_edit(Edit::SetReferences(references))
+    }
     pub(super) fn reference_selection(&self) -> BTreeSet<LayerId> {
         self.layer_interaction
             .selected
@@ -910,9 +926,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.layer_interaction.selected =
                         BTreeSet::from([self.engine.document().active_layer]);
                 }
-                if references != self.engine.document().reference_layers {
-                    self.layer_edit(Edit::SetReferences(references))?;
-                }
+                self.set_references(references)?;
             }
             LayerAction::Tool { tool } => {
                 if tool.selection_tool().is_some() && tool.selection_tool()!=Some(SelectionTool::Tonal) { self.return_to_artwork()?; }
@@ -994,7 +1008,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !references.remove(&LayerId(id)) {
                     references.insert(LayerId(id));
                 }
-                self.layer_edit(Edit::SetReferences(references))?;
+                self.set_references(references)?;
             }
             LayerAction::SoloSelected => {
                 let next: Vec<_> = if let Some(previous) = self.layer_interaction.solo.take() {
@@ -1225,8 +1239,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                         layer.mask = None;
                     }
                     LayerAction::ApplyMask { .. } => {
-                        if layer.kind != LayerKind::Paint {
-                            return Err("Apply a group mask by flattening the group first".into());
+                        if let Some(reason) = apply_mask_refusal(layer.kind) {
+                            return Err(reason.into());
                         }
                         let mut mask = layer.mask.take().ok_or("No mask")?;
                         if !mask.enabled {
@@ -1568,6 +1582,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                 },
             ]);
+            if l.id == doc.active_layer {
+                let state = self.command(CommandId::UseReferenceBelow);
+                let mut below = ContextMenuItem::command(state.label, UiAction::Invoke { command: state.id });
+                below.enabled = state.enabled;
+                protection.push(below);
+            }
             if l.source.as_ref().is_some_and(|s| s.is_original()) {
                 protection.push(item("Repair Source Profile…", A::RepairSourceProfile { id }));
                 protection.push(item("Rasterize Source…", A::RasterizeSource { id }));
@@ -1684,10 +1704,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let layer = doc.layer(doc.active_layer).ok_or("Unknown layer")?;
                 let controls = LayerControls::for_layer(doc, layer);
                 match self.layer_interaction.tool {
-                    LayerCanvasTool::Move if !controls.move_layer => return Ok(()),
+                    LayerCanvasTool::Move if !controls.move_layer => {
+                        self.notify(if layer.kind == LayerKind::Background {
+                            "The paper can't be moved"
+                        } else {
+                            "The active layer is locked"
+                        });
+                        return Ok(());
+                    }
                     LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. } | LayerCanvasTool::Figure { .. }
                         if doc.drawing_content().is_none() && self.selection_masks.target().is_none() =>
                     {
+                        self.notify_drawing_refusal();
                         return Ok(());
                     }
                     _ => (),

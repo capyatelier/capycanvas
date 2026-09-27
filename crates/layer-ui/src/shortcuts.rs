@@ -554,7 +554,8 @@ fn command_section(command: CommandId) -> &'static str {
         | C::SelectionFixedRatio | C::SelectionFixedSize | C::SelectionFromCenter | C::CompleteSelection
         | C::CancelSelection | C::SelectionVisible | C::SelectionEditing | C::SelectionReference | C::SelectAll
         | C::Deselect | C::InvertSelection | C::RemoveSelectionPoint | C::MaskSelection => "Select",
-        C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RepairSourceProfile => "Layer",
+        C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RepairSourceProfile
+        | C::UseReferenceBelow => "Layer",
         C::FitCanvas | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
         | C::ZenMode | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
         | C::ToggleTheme => "View",

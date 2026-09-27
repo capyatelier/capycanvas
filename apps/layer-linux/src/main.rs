@@ -24,6 +24,7 @@ mod selection_masks;
 mod swatch_selector;
 mod swipe_row;
 mod navigator;
+mod notice;
 mod number_control;
 mod range_control;
 mod palette_grid;

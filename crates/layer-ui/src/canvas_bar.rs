@@ -105,7 +105,15 @@ pub(super) struct CanvasBarKey {
     toolbar: ToolbarContext,
     transaction: u64,
     anchor: Option<[f32; 4]>,
-    flags: Vec<(CommandId, bool, bool)>,
+    flags: Vec<CanvasBarFlags>,
+}
+
+#[derive(Clone, PartialEq)]
+struct CanvasBarFlags {
+    id: CommandId,
+    enabled: bool,
+    selected: bool,
+    disabled_reason: Option<std::borrow::Cow<'static, str>>,
 }
 
 type SelectionIdentity = (usize, [u32; 6], bool);
@@ -335,9 +343,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let (enabled, selected) = self.command_flags(id);
                     let steady = previous_flags
                         .iter()
-                        .find(|f| f.0 == id)
+                        .find(|f| f.id == id)
                         .filter(|_| !idle && !id.follows_construction());
-                    (id, steady.map_or(enabled, |f| f.1), selected)
+                    let (enabled, disabled_reason) = match steady {
+                        Some(flags) => (flags.enabled, flags.disabled_reason.clone()),
+                        None => (enabled, (!enabled).then(|| self.disabled_reason_unchecked(id))),
+                    };
+                    CanvasBarFlags { id, enabled, selected, disabled_reason }
                 })
                 .collect(),
         };
@@ -350,7 +362,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let item = |id: CommandId, checkable: bool| {
             let mut state = self.command(id);
-            state.enabled = key.flags.iter().find(|f| f.0 == id).is_some_and(|f| f.1);
+            let flags = key.flags.iter().find(|f| f.id == id);
+            state.enabled = flags.is_some_and(|f| f.enabled);
+            state.disabled_reason = flags.and_then(|f| f.disabled_reason.clone());
             CanvasBarItem {
                 option: ToolOption::Action {
                     state,

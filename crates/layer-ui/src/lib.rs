@@ -126,6 +126,7 @@ pub use layout::{
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
+pub use session::{Notice, NoticeAction};
 pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionMenu, SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
     ChoicePresentation, HostRequest, HostRequestKind, Platform,
@@ -473,6 +474,7 @@ command_ids! {
     WarpGridThree,
     WarpGridFour,
     WarpGridFive,
+    UseReferenceBelow,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -630,6 +632,7 @@ impl CommandId {
             Self::About => "info",
             Self::Website => "website",
             Self::SourceCode => "source-code",
+            Self::UseReferenceBelow => "reference",
         })
     }
     pub const TOOLS: [Self; 25] = [
@@ -804,6 +807,7 @@ impl CommandId {
             Self::About => "About Capy Canvas",
             Self::Website => ApplicationLink::Website.label(),
             Self::SourceCode => ApplicationLink::SourceCode.label(),
+            Self::UseReferenceBelow => "Use layer below as reference",
         }
     }
 }
@@ -816,6 +820,10 @@ pub struct CommandState {
     pub icon: Option<&'static str>,
     pub label: &'static str,
     pub enabled: bool,
+    /// Why a disabled command is unavailable; always serialized, as null when
+    /// enabled. Retained controls keep it steady during canvas input, as they
+    /// keep `enabled`.
+    pub disabled_reason: Option<std::borrow::Cow<'static, str>>,
     pub selected: bool,
     pub shortcut: String,
     pub tooltip: String,
@@ -927,7 +935,10 @@ pub struct UiState {
     pub customization: CustomizationState,
     pub platform: Platform,
     pub requests: Vec<HostRequest>,
+    /// File and renderer errors. Canvas gesture refusals use `notice`.
     pub host_error: Option<String>,
+    /// A transient refusal or hint, published under `regions::HOST`.
+    pub notice: Option<Notice>,
     pub camera: Camera,
 }
 
@@ -1073,6 +1084,12 @@ pub enum UiAction {
     CanvasBarEdit {
         context: CanvasBarContext,
         action: Box<UiAction>,
+    },
+    /// Accept runs the notice's action; decline dismisses it. A notice that
+    /// was replaced or cleared is rejected.
+    Notice {
+        id: u64,
+        accept: bool,
     },
     ColorPicker {
         action: ColorPickerAction,

@@ -2,9 +2,12 @@ import { createNumberField } from './numeric.js';
 import { createRangeControl } from './range-control.js';
 const key = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v);
 
-export function actionField({ element, button, icon }, spec, send, { label, ariaDisabled = false, reason } = {}) {
+export function actionField({ element, button, icon }, spec, send, { label, ariaDisabled = false, explain } = {}) {
   const row = element('div', 'toolbar-option toolbar-action'); row.dataset.toolbarField = '';
-  const b = button('', () => { if (b.getAttribute('aria-disabled') !== 'true') send({ type: 'invoke', command: spec.state.id }); });
+  const b = button('', () => {
+    if (b.getAttribute('aria-disabled') !== 'true') send({ type: 'invoke', command: spec.state.id });
+    else explain?.(b);
+  });
   b.append(icon(spec.state.icon || 'settings'));
   if (label) b.append(element('span', 'toolbar-action-label', label));
   row.append(b); b.setAttribute('aria-label', spec.state.label);
@@ -16,7 +19,7 @@ export function actionField({ element, button, icon }, spec, send, { label, aria
       if (ariaDisabled) b.setAttribute('aria-disabled', String(disabled)); else b.disabled = disabled;
     }
     if (spec.checkable && pressed !== state.selected) b.setAttribute('aria-pressed', String(pressed = state.selected));
-    const text = !state.enabled && reason ? reason(state.id) ?? state.tooltip : state.tooltip;
+    const text = state.enabled ? state.tooltip : state.disabled_reason ?? state.tooltip;
     if (tooltip !== text) b.title = tooltip = text;
   }
   update({ Action: spec });

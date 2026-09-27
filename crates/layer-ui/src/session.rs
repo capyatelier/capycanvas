@@ -43,6 +43,9 @@ mod region_tools;
 pub(crate) mod rulers;
 #[path = "canvas_bar.rs"]
 mod canvas_bar;
+#[path = "notices.rs"]
+mod notices;
+pub use notices::{Notice, NoticeAction};
 pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
     ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
@@ -112,6 +115,7 @@ pub struct UiSession<R: CanvasRenderer> {
     state: UiState,
     last_toolbar_context: Option<ToolbarContext>,
     canvas_bar: canvas_bar::CanvasBarState,
+    notices: notices::Notices,
     pen: InputProducer<PenEvent>,
     input_pending: bool,
     rendering_suspended: bool,
@@ -285,11 +289,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 platform,
                 requests: Vec::new(),
                 host_error: None,
+                notice: None,
                 camera,
             },
             effect_catalog,
             last_toolbar_context: None,
             canvas_bar: Default::default(),
+            notices: Default::default(),
             pending_filters: None,
         };
         session.state.colors.library.ensure_starters();
@@ -1158,6 +1164,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !position.into_iter().all(f32::is_finite) {
                     return Err("Invalid pointer position".into());
                 }
+                if phase == ContactPhase::Down {
+                    self.dismiss_notice();
+                }
                 if phase == ContactPhase::Down
                     && let Some(spring) = &mut self.interaction.spring
                 {
@@ -1258,6 +1267,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.perform_tap(fingers, &mut reply)?;
         }
         self.settle_holds_into(&mut reply)?;
+        if self.notices.publishing() {
+            reply.change = merge_change(reply.change, self.changed(0, false));
+        }
         self.refresh_chrome();
         if let Some((was_hidden, popup_open)) = contact {
             reply.dismiss_popups = popup_open;
@@ -1926,6 +1938,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.platform,
             ),
             enabled,
+            disabled_reason: (!enabled).then(|| self.disabled_reason_unchecked(id)),
             selected,
             bindings: self.state.settings.command_keys(id),
             shortcut: self
@@ -1975,13 +1988,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         let enabled = match id {
             CommandId::SearchCommands => idle && !self.state.settings_open && !self.state.customization.blocks_shortcuts() && !self.state.customization.header_editing,
             CommandId::QuickMask | CommandId::NewSelectionLayer => idle && !self.operation.active(),
-            CommandId::SaveSelectionLayer => idle && self.current_selection().is_some(),
+            CommandId::SaveSelectionLayer => idle && self.has_selection(),
             CommandId::ReturnToArtwork | CommandId::ResetMaskColors | CommandId::SwapMaskColors => idle && self.selection_masks.target().is_some(),
             CommandId::MaskOverlayProtected | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => idle && self.selection_masks.target().is_some_and(|t| match t {
                 layer_core::SelectionTarget::Current => true,
                 layer_core::SelectionTarget::Saved(id) => !document.is_locked(id),
             }),
-            CommandId::Reselect => idle && self.current_selection().is_none() && self.selection_masks.reselect.is_some(),
+            CommandId::Reselect => idle && !self.has_selection() && self.selection_masks.reselect.is_some(),
             CommandId::ScaleRotate | CommandId::ClearLayer | CommandId::Figure | CommandId::Move | CommandId::FillSelection | CommandId::RepairSourceProfile | CommandId::RasterizeSource
                 if self.selection_masks.target().is_some() => false,
             CommandId::DeleteLayer if self.selection_masks.quick() => false,
@@ -2066,7 +2079,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::Redo => idle && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
             CommandId::Deselect | CommandId::InvertSelection => {
-                self.require_document_idle().is_ok() && self.current_selection().is_some()
+                self.require_document_idle().is_ok() && self.has_selection()
             }
             CommandId::ClearLayer | CommandId::FillSelection => {
                 self.require_document_idle().is_ok()
@@ -2082,6 +2095,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 !self.state.customization.header_editing && self.workspace_history.can_redo()
             }
             CommandId::AddLayer => idle,
+            CommandId::UseReferenceBelow => {
+                self.require_document_idle().is_ok() && self.use_reference_below_reason().is_none()
+            }
             CommandId::DeleteLayer => idle && document.can_delete_layers(&[document.active_layer]),
             CommandId::RaiseLayer => idle && editable && index > 0,
             CommandId::LowerLayer => {
@@ -2198,6 +2214,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if let UiAction::CanvasBarEdit { context, action } = action {
             return self.canvas_bar_edit(context, *action);
+        }
+        if let UiAction::Notice { id, accept } = action {
+            return self.notice_action(id, accept);
         }
         if self.defer_selection_action(&action) {
             return Ok(self.changed(0, true));
@@ -2332,7 +2351,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
         let (mut changed, wake) = match action {
             UiAction::CommandSearch { .. } => unreachable!("handled above"),
-            UiAction::ToolbarEdit { .. } | UiAction::CanvasBarEdit { .. } => unreachable!("validated before dispatch"),
+            UiAction::ToolbarEdit { .. } | UiAction::CanvasBarEdit { .. } | UiAction::Notice { .. } => {
+                unreachable!("validated before dispatch")
+            }
             UiAction::ToggleSliderBookmark { control } => {
                 let binding = control.slider().ok_or("Not a brush slider")?;
                 let field = binding.field(&self.state).ok_or("This slider is unavailable")?;
@@ -3385,7 +3406,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.selection_tools.gesture_mode = Some(self.effective_selection_mode());
             self.selection_tools.start_modifiers = self.interaction.modifiers;
         }
+        let notice = self.notice_id();
         let result = self.pen_inner(event);
+        if result.is_ok() && event.phase == PenPhase::Down {
+            self.dismiss_notice_unless_raised(notice);
+        }
         if result.is_ok() && (event.phase == PenPhase::Cancel || (event.phase == PenPhase::Up && self.layer_interaction.path.is_empty())) {
             self.selection_tools.gesture_mode = None;
             self.selection_tools.start_modifiers = Modifiers::default();
@@ -3412,12 +3437,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         }
         if self.selection_brush_active() || (self.selection_masks.target().is_some() && self.layer_interaction.tool == LayerCanvasTool::Paint) {
-            if let Err(error) = self.selection_brush_pen(event) { self.state.host_error = Some(error); }
+            if let Err(error) = self.selection_brush_pen(event) { self.notify(error); }
             return Ok(());
         }
         if self.selection_masks.target().is_some() && !self.tonal_active()
             && !matches!(self.layer_interaction.tool, LayerCanvasTool::Hand | LayerCanvasTool::Region { fill: true, .. } | LayerCanvasTool::Gradient { .. }) {
-            if event.phase == PenPhase::Down { self.state.host_error = Some("Choose a dry brush, eraser, fill, gradient, or Hand for selection mask editing".into()); }
+            if event.phase == PenPhase::Down { self.notify("Choose a dry brush, eraser, fill, gradient, or Hand for selection mask editing"); }
             return Ok(());
         }
         if self.layer_interaction.tool.region().is_some() {
@@ -3449,10 +3474,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.layer_interaction.tool != LayerCanvasTool::Paint {
             if let Err(error) = self.layer_pen(event) {
                 let _ = self.cancel_layer_gesture();
-                self.state.host_error = Some(error);
+                self.notify(error);
             }
             self.input_pending = true;
             return Ok(());
+        }
+        if event.phase == PenPhase::Down {
+            self.notify_stroke_refusal(&event);
         }
         self.pen.push(event)?;
         self.initial_fit = false;
@@ -3774,6 +3802,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.eyedropper.busy()
             || self.region_tools.busy()
             || self.painted_selections.busy()
+            || self.notices.publishing()
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
         self.update_shader_idle();
@@ -4058,6 +4087,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let id = self.engine.document().active_layer.0;
                 self.layer_action(LayerAction::MaskSelection { id, hide: false })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::UseReferenceBelow => {
+                self.use_reference_below()?;
+                Ok((DOCUMENT | COMMANDS, true))
             }
             CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect
             | CommandId::SelectionAntialias | CommandId::SelectionConstrainAngles => {
@@ -4703,7 +4736,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.update_shader_idle();
         self.update_toolbar_context();
-        let regions = regions | if self.update_canvas_bar() { regions::CANVAS_BAR } else { 0 };
+        let regions = regions
+            | if self.update_canvas_bar() { regions::CANVAS_BAR } else { 0 }
+            | self.notice_regions();
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
             self.sync_renderer_telemetry();
         }
@@ -4743,18 +4778,27 @@ impl<R: CanvasRenderer> UiSession<R> {
             let (enabled, selected) = self.command_flags(id);
             let icon = self.command_icon(id);
             let label = self.command_label(id);
-            if let Some(previous) = self.state.commands.get_mut(index) {
+            if let Some(previous) = self.state.commands.get(index) {
                 // A canvas contact must not flash disabled styling across the
-                // editor. Keep the published availability until it finishes;
-                // selection, icons and labels still follow live state. This is
-                // presentation only: command()/dispatch retain the stroke lock.
-                let enabled = if !canvas_idle && !id.follows_construction() {
+                // editor. Keep the published availability and its reason until
+                // it finishes; selection, icons and labels still follow live
+                // state. This is presentation only: command()/dispatch retain
+                // the stroke lock.
+                let steady = !canvas_idle && !id.follows_construction();
+                let enabled = if steady {
                     previous.enabled
                         && id.available_on(self.state.platform)
                         && !self.state.document_file.close_ready
                 } else {
                     enabled
                 };
+                let steady_reason = steady && !previous.enabled;
+                let reason = (!enabled && !steady_reason).then(|| self.disabled_reason_unchecked(id));
+                let previous = &mut self.state.commands[index];
+                if !steady_reason && previous.disabled_reason != reason {
+                    previous.disabled_reason = reason;
+                    changed = true;
+                }
                 if previous.enabled != enabled
                     || previous.selected != selected
                     || previous.icon != icon
@@ -4828,6 +4872,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         interaction.selected.retain(|id| doc.layer(*id).is_some());
         let drawing_target = doc.drawing_target();
+        self.end_dry_mask_session(drawing_target);
+        let doc = self.engine.document();
         let drawing_owner = if self.selection_masks.target().is_some() { None } else { drawing_target.and_then(|id| doc.target_owner(id)) };
         let layer_state = |l: &layer_core::Layer| LayerState {
             id: l.id.0,
@@ -6713,7 +6759,8 @@ mod tests {
         invoke(&mut s, CommandId::SelectionReference);
         send(&mut s, PenPhase::Down);
         send(&mut s, PenPhase::Up);
-        assert!(s.frame(11, 11).unwrap_err().contains("reference layer"));
+        assert_ne!(s.frame(11, 11).unwrap().regions & regions::HOST, 0);
+        assert!(s.state.notice.as_ref().unwrap().text.contains("reference layers"));
         s.layer_edit(Edit::SetReferences([id].into())).unwrap();
         send(&mut s, PenPhase::Down);
         send(&mut s, PenPhase::Up);
