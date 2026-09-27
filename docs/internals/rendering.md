@@ -119,9 +119,9 @@ above or below, the
 [layered display](../../crates/layer-render-wgpu/src/paint_transform/layers.rs)
 composes the static layers once at that level, then places the moving layer
 between them with its blend. A drag waits for them and the reduced copy. After
-release, the still preview of an unplaced
-layer is drawn as the exact area mean; a placed layer keeps its resampled
-preview. Later frames draw the preview's pages and recompose what the drag
+release, the still preview of an unplaced layer is first resampled, then drawn
+as the exact area mean a page at a time from the next frame; a placed layer
+keeps its resampled preview. Later frames draw the preview's pages and recompose what the drag
 touched a few tiles at a time, reporting pending work so hosts keep drawing.
 
 A Warp transform is a [mesh](../../crates/layer-render-wgpu/src/paint_transform/mesh.rs)
@@ -155,10 +155,12 @@ for them.
 [Preparation](../../crates/layer-render-wgpu/src/preparation.rs) for a drag and
 the work after one, including the layer's copy, the static layers around it, a
 still preview's exact display and settled pages, and the recomposition, is
-spread over frames by the GPU time that earlier such work took, measured with
-timestamps where the device has them. A drag that starts meanwhile waits behind
-at most a frame of that work. Drag frames allocate no pages; the pages a still
-preview settles into are allocated a few per still frame.
+spread over frames by the GPU time that earlier work of the same kind took,
+measured with timestamps where the device has them. A drag that starts
+meanwhile waits behind at most a frame of that work. Neither drag frames nor
+the frame that ends a drag allocate pages: the pages a still preview settles
+into are reserved a few per still frame, from the layer's reduction until its
+first drag and then as settling needs them, and settling waits for them.
 
 Only drag frames and placed still previews resample, and a still display is
 otherwise approximate only at the edges of partly transparent layers; pages,

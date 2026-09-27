@@ -4336,7 +4336,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 Some(layers) if stack.is_some() => layers.moving().clone(),
                 _ => level_view.clone(),
             };
-            if !preview.moving {
+            if !preview.moving && transforms.exacts(&preview) {
                 self.preparation.start(&mut encoder, Work::Display);
             }
             let blocks = self.preparation.units(Work::Display);
@@ -4379,8 +4379,12 @@ impl CanvasRenderer for WgpuRasterizer {
                 self.preparation.start(&mut encoder, Work::Settle);
                 let pages = self.preparation.units(Work::Settle);
                 let settled = transforms.settle(self, &mut encoder, &preview, packet.layers, pages);
-                self.preparation.end(&mut encoder);
-                settled
+                if settled.as_ref().is_ok_and(|(drawn, damage)| damage.is_none() && *drawn < pages) {
+                    self.preparation.end_short(&mut encoder);
+                } else {
+                    self.preparation.end(&mut encoder);
+                }
+                settled.map(|(_, damage)| damage)
             } else {
                 Ok(None)
             };

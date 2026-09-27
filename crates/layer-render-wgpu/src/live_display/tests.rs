@@ -1449,10 +1449,16 @@ fn drags_resample_the_layer_reduced_to_the_display_level() {
             Some(all.clone()),
             layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 21.5, y: 3.25 })),
         );
+        let spares = direct.transforms.as_ref().unwrap().spares_created();
         for r in [&mut direct, &mut reference] {
             r.set_transform_preview(Some(&still)).unwrap();
             submit(r, &doc, v, false);
         }
+        assert_eq!(
+            direct.transforms.as_ref().unwrap().spares_created(),
+            spares,
+            "level {level}: the frame that ends a drag allocates no pages"
+        );
         let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
         assert!(largest <= 0.35 && mean <= 5e-4, "level {level}: the first still frame resamples: largest {largest}, mean {mean}");
         for _ in 0..2 {
