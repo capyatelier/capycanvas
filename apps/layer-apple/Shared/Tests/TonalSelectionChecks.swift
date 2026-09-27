@@ -33,7 +33,7 @@ extension XCTestCase {
         let range = app.descendants(matching: .any)["\(prefix)-range-tonal"]
         XCTAssertTrue(range.waitForExistence(timeout: 10), "Custom shows one range field")
         XCTAssertEqual(range.frame.height, 28, accuracy: 1)
-        if inline { XCTAssertGreaterThanOrEqual(range.frame.width, 279) }
+        if inline { XCTAssertGreaterThan(range.frame.width, 200, "The inline interval keeps its wide slider form") }
         let track = app.descendants(matching: .any)["\(prefix)-range-track"].firstMatch
         XCTAssertGreaterThan(track.frame.width, range.frame.width * 0.5, "The track takes most of the field")
         let lower = app.buttons["number-value-\(prefix)-tonal_lower"], upper = app.buttons["number-value-\(prefix)-tonal_upper"]

@@ -524,7 +524,7 @@ extension XCTestCase {
         let artwork = editorPixels(in: app)
         fileCommand("save_document_as", "Save As…", in: app); savePanel(to: project)
         let firstSave = try Data(contentsOf: project)
-        editorMenu(in: app, menu: "Layer", id: "add_layer", label: "New layer")
+        editorMenu(in: app, menu: "Layer", id: "add_layer", label: "New layer", submenu: "New")
         expectation(for: NSPredicate(format: "count == 3"), evaluatedWith: layers)
         waitForExpectations(timeout: 10)
         fileCommand("save_document", "Save", in: app)

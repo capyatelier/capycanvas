@@ -473,7 +473,7 @@ command_ids! {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::SearchCommands => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows),
+            Self::SearchCommands => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::ShowCanvasActionBar
             | Self::TransformFlipHorizontal
             | Self::TransformFlipVertical

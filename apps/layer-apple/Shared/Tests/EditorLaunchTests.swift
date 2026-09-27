@@ -21,6 +21,7 @@ final class EditorLaunchTests: XCTestCase {
     }
 
     @MainActor func testEditorKeyboardFocus() { checkEditorKeyboardFocus(in: editorCaptureApplication()) }
+    @MainActor func testCommandSearch() { checkCommandSearch(in: ignoringSavedWindows(editorCaptureApplication())) }
     @MainActor func testNumericTextHistory() { checkNumericTextHistory(in: editorCaptureApplication()) }
     @MainActor func testNumericSettingsDone() { checkNumericSettingsDone(in: editorCaptureApplication()) }
     @MainActor func testSettingsNumericReset() { checkSettingsNumericReset(in: editorCaptureApplication()) }

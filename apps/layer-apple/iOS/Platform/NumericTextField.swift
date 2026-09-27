@@ -12,22 +12,33 @@ struct NumericTextField: UIViewRepresentable {
     let submit: (_ returnToCanvas: Bool) -> Bool
     let cancel: () -> Void
     let step: (Int) -> Void
+    var placeholder: String?
+    var alignment: NSTextAlignment = .right
+    var returnKey: UIReturnKeyType = .done
+    var selectsReplacedText = false
     @Environment(\.isEnabled) private var enabled
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> Field {
         let field = Field()
-        field.borderStyle = .none; field.textAlignment = .right
+        field.borderStyle = .none
         field.autocorrectionType = .no; field.spellCheckingType = .no
         field.autocapitalizationType = .none; field.smartDashesType = .no; field.smartQuotesType = .no
-        field.returnKeyType = .done; field.delegate = context.coordinator
+        field.delegate = context.coordinator
         field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return field
     }
     func updateUIView(_ field: Field, context: Context) {
         context.coordinator.parent = self
-        if field.text != text { field.text = text }
-        field.placeholder = label; field.font = .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+        if field.text != text {
+            field.text = text
+            if selectsReplacedText && field.isFirstResponder { field.selectAll(nil) }
+        }
+        if field.textAlignment != alignment { field.textAlignment = alignment }
+        if field.returnKeyType != returnKey { field.returnKeyType = returnKey }
+        if field.placeholder != placeholder ?? label { field.placeholder = placeholder ?? label }
+        let font = UIFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+        if field.font != font { field.font = font }
         field.textColor = UIColor(color); field.isEnabled = enabled
         field.accessibilityLabel = label; field.accessibilityIdentifier = identifier
         field.cancel = cancel; field.step = step; field.submit = submit

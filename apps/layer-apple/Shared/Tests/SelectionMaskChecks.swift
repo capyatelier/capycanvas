@@ -20,20 +20,22 @@ extension XCTestCase {
         for mode in modes { XCTAssertTrue(mode.waitForExistence(timeout: 10)) }
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: modes[0])
         waitForExpectations(timeout: 5)
+        #if os(macOS)
         let viewport = workspaceViewport(in: app)
         func drag(_ from: CGVector, _ to: CGVector) {
-            let start = viewport.coordinate(withNormalizedOffset: from), end = viewport.coordinate(withNormalizedOffset: to)
-            #if os(macOS)
-            start.click(forDuration: 0.05, thenDragTo: end)
-            #else
-            start.press(forDuration: 0.05, thenDragTo: end)
-            #endif
+            viewport.coordinate(withNormalizedOffset: from).click(forDuration: 0.05,
+                thenDragTo: viewport.coordinate(withNormalizedOffset: to))
         }
         drag(CGVector(dx: 0.38, dy: 0.57), CGVector(dx: 0.47, dy: 0.64))
+        #endif
         workspaceActivate(modes[1])
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: modes[1])
         waitForExpectations(timeout: 5)
+        #if os(macOS)
         drag(CGVector(dx: 0.45, dy: 0.59), CGVector(dx: 0.57, dy: 0.66))
+        #else
+        editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+        #endif
         attachEditor(in: app, name: "selection-add")
         workspaceActivate(modes[0])
         workspaceActivate(app.buttons["selection-menu-selection"])

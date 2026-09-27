@@ -109,7 +109,9 @@ struct EditorView<Canvas: View>: View {
             }
         }
         .onPreferenceChange(WorkspaceTabFrames.self) { store.workspace.tabFrames = $0 }
-        .ignoresSafeArea().foregroundStyle(palette["text"])
+        .ignoresSafeArea()
+        .overlay { CommandSearchLayer(store: store).ignoresSafeArea(.container) }
+        .foregroundStyle(palette["text"])
         .font(.system(size: store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3))
         .tint(palette.accent)
         .modifier(StorageAlert(store: store, active: store.snapshot["preferences"].isNull))

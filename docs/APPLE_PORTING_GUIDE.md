@@ -60,6 +60,13 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
   Paint or Photo defaults. Before changing shared code, serialize
   `WorkspacePreset::layout(platform)` for every preset and platform, then make
   sure other platforms' defaults are unchanged.
+- **Superseded Apple paths.** When main consolidates a subsystem that Apple
+  previously duplicated (for example shared demand shader preparation replacing
+  the bundled filter package reload), delete the Apple copy in the same port.
+- **Separate publications.** `layer-host` can publish small packets beside the
+  full state and geometry updates (for example `{command_search, revision}`).
+  Handle each in `EditorSnapshotState.receive` without promoting the content
+  revision, so retained panels and thumbnails do not refresh.
 - **Coverage audit.** Keep `apps/layer-apple/command-coverage.json` in sync and
   run `cargo run --locked -p layer-host --example inventory -- --gpu` followed by
   `apps/layer-apple/scripts/audit-commands.py`.
@@ -75,6 +82,17 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
   activating them, and wait for published state instead of reading it right
   after a click. When a journey fails, first check whether the reference hosts
   changed the rule; fix Apple only when it disagrees with them.
+- **iPad automation limits.** Finger drags on the iPad canvas navigate; only
+  Pencil draws, and XCTest cannot synthesize Pencil. Create selections and
+  artwork through menus in iPad journeys. XCTest's Escape never reaches an iPad
+  app, so assert Escape on macOS and use visible controls on iPad. iOS reports a
+  SwiftUI accessibility container's frame as the union of its children, so do not
+  compare iPad widths against values measured on macOS. The software keyboard
+  covers the lower part of the window; keep taps above it.
+- **UIKit fields in SwiftUI.** iPadOS consumes Escape before SwiftUI key
+  handlers; use the UIKit text field with priority key commands. Give it an
+  explicit height and assign fonts and placeholders only when they change, or
+  size invalidation can loop.
 - **Exact history.** Displayed Undo/Redo pixels must match exactly; the shared
   renderer redraws rounded pages at pen-up. Compare against a stroke only after
   it stops changing, and do not add tolerances for display differences.

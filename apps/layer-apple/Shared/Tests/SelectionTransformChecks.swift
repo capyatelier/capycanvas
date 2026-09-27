@@ -2,10 +2,15 @@ import XCTest
 import CoreGraphics
 
 extension XCTestCase {
-    @MainActor func editorMenu(in app: XCUIApplication, menu: String, id: String, label: String) {
+    @MainActor func editorMenu(in app: XCUIApplication, menu: String, id: String, label: String, submenu: String? = nil) {
         #if os(macOS)
-        workspaceActivate(app.menuBars.menuBarItems[menu])
-        workspaceActivate(app.menuItems[label].firstMatch)
+        let bar = app.menuBars.menuBarItems[menu]
+        workspaceActivate(bar)
+        if let submenu {
+            let parent = bar.descendants(matching: .menuItem)[submenu]
+            XCTAssertTrue(parent.waitForExistence(timeout: 5)); parent.hover()
+        }
+        workspaceActivate(bar.descendants(matching: .menuItem)[label].firstMatch)
         #else
         let button = app.buttons["menu-" + menu]
         XCTAssertTrue(button.waitForExistence(timeout: 5))

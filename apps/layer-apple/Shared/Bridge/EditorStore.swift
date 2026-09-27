@@ -152,6 +152,7 @@ import SwiftUI
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
                 contentDrawers.refresh()
                 workspace.refresh()
+            case .search: break
             case .workspace, .camera:
                 // Camera patches update the readout alone; dragging the canvas
                 // must not rebuild every panel and brush preview at input rate.
@@ -280,7 +281,21 @@ import SwiftUI
         }
         next()
     }
-    func dispatch(_ action: JSON) { native?.submit(0, action); wake?() }
+    func dispatch(_ action: JSON) {
+        if action["type"].string == "invoke" && action["command"].string == "search_commands" { reportCommandFocus() }
+        native?.submit(0, action); wake?()
+    }
+    func commandFocus() -> String {
+        #if os(macOS)
+        let editingText = NSApp.keyWindow?.firstResponder is NSText
+        #else
+        let editingText = FocusedResponder.find() is UITextInput
+        #endif
+        return editingText ? "text" : palettes.focused ? "palette" : "canvas"
+    }
+    private func reportCommandFocus() {
+        native?.submit(0, JSON(["type": "command_search", "action": ["type": "focus", "focus": commandFocus()]]))
+    }
     func dispatch(_ value: [String: Any]) { dispatch(JSON(value)) }
     func edit(_ value: [String: Any], completion: @escaping @MainActor (String?) -> Void) {
         guard let native else { completion("The canvas session is unavailable"); return }
@@ -306,6 +321,8 @@ import SwiftUI
         if value["type"] as? String == "key", value["key"] as? String == "Escape", value["pressed"] as? Bool == true {
             workspace.dismissTransients(at: nil)
         }
+        if value["type"] as? String == "key", value["pressed"] as? Bool == true,
+           (value["modifiers"] as? [String: Any])?["command"] as? Bool == true { reportCommandFocus() }
         native?.submit(1, JSON(value)) { [weak self] reply in
             guard let pan = reply?["pan_cursor"], !pan.isNull else { return }
             DispatchQueue.main.async {

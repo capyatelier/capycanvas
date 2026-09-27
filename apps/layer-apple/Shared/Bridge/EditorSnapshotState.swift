@@ -9,7 +9,7 @@ import Foundation
     private let panels = SnapshotProjection()
     private let menus = SnapshotProjection()
     let workspace = WorkspaceMotion()
-    enum Update { case full, reflow, workspace, camera, ignored }
+    enum Update { case full, reflow, workspace, camera, search, ignored }
     var state: SnapshotProjection { stateFields }
     var snapshot: SnapshotProjection { snapshotFields }
     func command(_ id: String) -> JSON { commands[id] }
@@ -29,6 +29,10 @@ import Foundation
             changes += menus.stage(SnapshotProjection.indexed(next["application_menus"]))
             changes += workspace.stage(motion)
             kind = .full
+        } else if (next.raw as? NSDictionary)?["command_search"] != nil {
+            changes = stateFields.stagePatch(["command_search": next["command_search"]])
+            changes += snapshotFields.stagePatch(["state": stateFields.unobserved])
+            kind = .search
         } else if !motion.isNull {
             if !next["layout"].isNull || !next["workspace_layout"].isNull {
                 guard workspace.accepts(motion, full: false, reflow: true),

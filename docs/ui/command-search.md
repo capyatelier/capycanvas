@@ -109,12 +109,26 @@ changes under the window root report canvas, palette or text scope. Search
 packets use their own latest-value slot beside workspace motion and camera,
 so opening, typing and closing never rebuild the workspace.
 
+macOS and iPadOS present a SwiftUI card above the editor with the shared
+width, inset, gap, radius and row height; iPadOS rows are at least 48pt. It
+opens at `CommandSearchStyle::top` of the height the software keyboard leaves
+visible, shows the shared `detail` footer, uses the panel glass fill with an
+opaque search field, and enters over 120ms unless Reduce Motion is on. A
+transparent layer beneath it takes outside contacts, so dismissal never reaches
+the canvas. Escape, arrows and Return are handled on the focused native field
+(on iPadOS a UIKit field with priority key commands, because the system
+consumes Escape first); entering the parameter step selects its value. Edit → Search Commands… and Command-key canvas chords
+report the origin focus (text, palette or canvas) before opening, and closing
+returns keyboard focus to the canvas unless search began from a text field.
+
 Native transports distinguish search revisions from workspace revisions and
 publish a small `command_search` packet (including explicit null on close).
-Android observes it separately from the retained workspace. Keyboard actions
+Android and Apple observe it separately from the retained workspace. Keyboard actions
 publish immediately instead of waiting for the continuous-input throttle.
 `Back` resolves the current search/parameter phase in Rust; delayed query
-events cannot discard the parameter step.
+events cannot discard the parameter step. Query, move and selection events
+that arrive after the search closes (for example a native field reporting its
+final text as it resigns) are ignored rather than reported as errors.
 
 ## Coverage and subsequent input work
 
@@ -187,6 +201,13 @@ adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w \
   -e class art.capycanvas.AndroidCommandSearchTest \
   art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
 ```
+
+For macOS and a physical iPad, run `EditorLaunchTests/testCommandSearch` from the
+`CapyCanvas-Mac` and `CapyCanvas-iPad` schemes (see
+[macOS and iPadOS development](../development/apple.md)). The journey uses real
+AppKit or hardware-keyboard and touch input for both shortcuts, the Edit menu,
+Return, arrows, disabled explanations, numeric validation, Back, row activation,
+Escape and non-painting outside dismissal.
 
 The instrumentation uses isolated workspace/recovery/color storage, real native
 windows, injected keyboard/finger/stylus events, the device IME, menu activation,
