@@ -97,14 +97,21 @@ single brush mark. Animated effects also need updates without new pen input.
 The [clipping regression record](../history/filter-clipping-regression.md)
 provides a concrete example of a cache invalidation bug and the work it caused.
 
-A moving transform of the only visible layer over the paper skips both the
-full-resolution pages and composition. When a native document keeps a complete
-display pyramid, [`render_display`](../../crates/layer-render-wgpu/src/paint_transform.rs)
-draws the preview into the level the view samples, at most four layer pixels per
-texel side, and the coarser levels are reduced from it. Full-resolution levels
-are drawn exactly; reduced levels sample moved pixels once per 2x2 block. The
-first still frame redraws the pages and recomposes every region the drag drew,
-so still frames, Apply and commits never depend on the reduced preview.
+A transform drag skips both the full-resolution pages and composition when a
+native document keeps a complete display pyramid and the moving layer is an
+unmasked top-level layer under normal static layers.
+[`render_display`](../../crates/layer-render-wgpu/src/paint_transform.rs) draws the
+moving layer into the level the view samples, at most four layer pixels per texel
+side, as the exact area mean of its full-resolution pixels, and the coarser levels
+are reduced from it. With content above or below, the
+[layered display](../../crates/layer-render-wgpu/src/paint_transform/layers.rs)
+composes the static layers once per transaction at that level, while the
+Transform is still, then places the moving layer between them with its blend.
+A drag waits for them and for the moving photo's decoded tiles. After release,
+the still preview is drawn the same way and later frames draw its pages and
+recompose what the drag touched a few tiles at a time, reporting pending work
+so hosts keep drawing. Only the display is ever approximate, and only at the
+edges of partly transparent layers; pages, Apply and commits are exact.
 
 ## Filters
 

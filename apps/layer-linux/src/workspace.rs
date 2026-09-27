@@ -2380,6 +2380,9 @@ impl Workspace {
         let display = gtk::gio::SimpleAction::new("display-changed", None);
         display.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, _| this.wake()));
         actions.add_action(&display);
+        let pending = gtk::gio::SimpleAction::new("pending-work", None);
+        pending.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, _| this.wake()));
+        actions.add_action(&pending);
         self.area.insert_action_group("canvas", Some(&actions));
         self.area.connect_realize(glib::clone!(
             #[weak(rename_to = this)]

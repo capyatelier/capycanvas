@@ -1332,7 +1332,7 @@ fn preview(
 }
 
 #[test]
-fn moving_transforms_drawn_into_the_display_approximate_recomposition_and_release_exactly() {
+fn moving_transforms_drawn_into_the_display_match_recomposition_and_release_exactly() {
     let mut doc = document([1537, 1025]);
     doc.layers[0].opacity = 0.8;
     let [mut direct, mut reference] = complete_pair(&doc);
@@ -1373,31 +1373,36 @@ fn moving_transforms_drawn_into_the_display_approximate_recomposition_and_releas
                     .unwrap();
                 submit(r, &doc, v, false);
             }
-            if moving {
-                assert_eq!(
-                    direct.metrics.composited_pixels == composed,
-                    step > 0,
-                    "later moving frames draw into the display"
-                );
+            assert_eq!(
+                direct.metrics.composited_pixels == composed,
+                step > 0,
+                "later frames of the drag draw into the display"
+            );
+            {
                 let shown = display_levels(&direct, level);
                 let expected = display_levels(&reference, level);
-                let (mut largest, mut total, mut count) = (0f32, 0f64, 0usize);
-                for (a, b) in shown.iter().zip(&expected) {
-                    for (a, b) in a.iter().zip(b) {
-                        for c in 0..4 {
-                            largest = largest.max((a[c] - b[c]).abs());
-                            total += f64::from((a[c] - b[c]).abs());
-                            count += 1;
-                        }
-                    }
+                let differences: Vec<f32> = shown
+                    .iter()
+                    .zip(&expected)
+                    .flat_map(|(a, b)| a.iter().zip(b))
+                    .flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs()))
+                    .collect();
+                let largest = differences.iter().copied().fold(0f32, f32::max);
+                let mean = differences.iter().map(|d| f64::from(*d)).sum::<f64>() / differences.len() as f64;
+                assert!(
+                    largest <= 1e-3 && mean <= 1e-6,
+                    "level {level} scale {scale} step {step}: largest {largest}, mean {mean}"
+                );
+            }
+            if !moving {
+                let still = preview(layer, moving, Some(selection.clone()), map.clone());
+                let mut frames = 0;
+                while direct.has_pending_work() {
+                    frames += 1;
+                    assert!(frames < 16, "the still preview settles within a few frames");
+                    direct.set_transform_preview(Some(&still)).unwrap();
+                    submit(&mut direct, &doc, v, false);
                 }
-                if level == 0 {
-                    assert!(largest <= 2e-5, "scale {scale} step {step}: full resolution differs by {largest}");
-                } else {
-                    let mean = total / count as f64;
-                    assert!(mean <= 5e-4, "level {level} step {step}: mean difference {mean}");
-                }
-            } else {
                 assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
             }
         }
@@ -1450,4 +1455,173 @@ fn display_previews_skip_recomposition_only_for_a_lone_unmasked_layer() {
     hidden.layers[1].opacity = 0.5;
     assert!(frame(&mut direct, &hidden, 10.) > 0, "a changed opacity recomposes");
     assert_eq!(frame(&mut direct, &hidden, 11.), 0, "opacity folds into the display");
+}
+
+fn photo(extent: [u32; 2], seed: u32, alpha: impl Fn(u32, u32) -> u16) -> Arc<SourceImage> {
+    let mut builder = SourceBuilder::new(
+        extent,
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: SampleDepth::U16,
+            profile: ColorProfile::Builtin(RgbSpace::DisplayP3),
+            profile_assumed: false,
+        },
+        64 * 1024 * 1024,
+    )
+    .unwrap();
+    for y in 0..extent[1] {
+        let mut row = Vec::with_capacity(extent[0] as usize * 8);
+        for x in 0..extent[0] {
+            for v in [
+                ((x * 31 + y * seed) % 50000) as u16,
+                ((x * seed + y * 11) % 60000) as u16,
+                (8000 + (x * 5 + y * 3 + seed) % 40000) as u16,
+                alpha(x, y),
+            ] {
+                row.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        builder.push_row(&row).unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}
+
+fn largest_and_mean(a: &[Vec<[f32; 4]>], b: &[Vec<[f32; 4]>]) -> (f32, f64) {
+    let differences: Vec<f32> = a
+        .iter()
+        .zip(b)
+        .flat_map(|(a, b)| a.iter().zip(b))
+        .flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs()))
+        .collect();
+    let largest = differences.iter().copied().fold(0f32, f32::max);
+    (largest, differences.iter().map(|d| f64::from(*d)).sum::<f64>() / differences.len() as f64)
+}
+
+#[test]
+fn layered_transforms_draw_between_static_display_layers_and_settle_exactly() {
+    let mut doc = document([1537, 1025]);
+    let extent = [doc.width, doc.height];
+    let moving = doc.layers[0].id;
+    let mut above = Layer::paint(doc.allocate_layer_id(), "above");
+    above.source = Some(photo(extent, 7, |x, y| if (x / 97 + y / 61) % 3 == 0 { 50000 } else { 0 }));
+    let mut below = Layer::paint(doc.allocate_layer_id(), "below");
+    below.source = Some(photo(extent, 13, |_, _| 65535));
+    doc.layers.insert(0, above);
+    doc.layers.insert(2, below);
+    for blend in [layer_core::LayerBlend::Normal, layer_core::LayerBlend::Multiply] {
+        doc.layers[1].properties.blend = blend;
+        let [mut direct, mut reference] = complete_pair(&doc);
+        let v = centered_view(extent, [320, 240], 0.2, 0.);
+        for r in [&mut direct, &mut reference] {
+            submit(r, &doc, v, true);
+        }
+        let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap();
+        assert_eq!(level, 2);
+        let start = preview(moving, false, None, layer_core::TransformMap::Affine(layer_core::Affine::IDENTITY));
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&start)).unwrap();
+            submit(r, &doc, v, false);
+        }
+        let mut frames = 0;
+        while direct.has_pending_work() {
+            frames += 1;
+            assert!(frames < 32, "the layers around the transform are prepared within a few frames");
+            submit(&mut direct, &doc, v, false);
+        }
+        let center = Point { x: 700., y: 500. };
+        let mut drawn = 0;
+        for step in 0..8 {
+            let t = step as f32;
+            let map = layer_core::TransformMap::Affine(layer_core::Affine::around(
+                center,
+                [0.8 + t * 0.02; 2],
+                t * 0.05,
+                Point { x: t * 9.5, y: -t * 4.25 },
+            ));
+            let composed = direct.metrics.composited_pixels;
+            for r in [&mut direct, &mut reference] {
+                r.set_transform_preview(Some(&preview(moving, true, None, map.clone()))).unwrap();
+                submit(r, &doc, v, false);
+            }
+            if direct.metrics.composited_pixels == composed {
+                drawn += 1;
+                let (largest, mean) =
+                    largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+                assert!(
+                    largest <= 0.1 && mean <= 1e-3,
+                    "{blend:?} step {step}: largest {largest}, mean {mean}"
+                );
+            }
+        }
+        assert_eq!(drawn, 8, "{blend:?}: every frame of the drag draws into the display");
+        let still = preview(
+            moving,
+            false,
+            None,
+            layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 21.5, y: 3.25 })),
+        );
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&still)).unwrap();
+            submit(r, &doc, v, false);
+        }
+        let mut frames = 0;
+        while direct.has_pending_work() {
+            frames += 1;
+            assert!(frames < 16, "the still preview settles within a few frames");
+            direct.set_transform_preview(Some(&still)).unwrap();
+            submit(&mut direct, &doc, v, false);
+        }
+        assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0), "{blend:?}");
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(None).unwrap();
+            submit(r, &doc, v, false);
+        }
+        assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0), "{blend:?}");
+        assert!(direct.layered_display.is_none());
+    }
+}
+
+#[test]
+fn layered_display_previews_fall_back_for_effects_clips_and_blends_above() {
+    let mut doc = document([1025, 769]);
+    let extent = [doc.width, doc.height];
+    let moving = doc.layers[0].id;
+    let mut above = Layer::paint(doc.allocate_layer_id(), "above");
+    above.source = Some(photo(extent, 5, |x, _| if x % 300 < 100 { 65535 } else { 0 }));
+    doc.layers.insert(0, above);
+    let v = centered_view(extent, [320, 240], 0.2, 0.);
+    let variants: [(&str, Box<dyn Fn(&mut layer_core::Document)>, bool); 4] = [
+        ("normal above", Box::new(|_| {}), true),
+        ("multiply above", Box::new(|d| d.layers[0].properties.blend = layer_core::LayerBlend::Multiply), false),
+        ("clipped above", Box::new(|d| d.layers[0].properties.clipped = true), false),
+        (
+            "adjustment above",
+            Box::new(|d| {
+                d.layers[0].kind = LayerKind::Effect;
+                d.layers[0].source = None;
+                d.layers[0].effect = Some(Arc::new(layer_core::EffectInstance::new(
+                    layer_core::bundled_effect_catalog().get("exposure").unwrap().program(),
+                )));
+            }),
+            false,
+        ),
+    ];
+    for (name, change, eligible) in variants {
+        let mut variant = doc.clone();
+        change(&mut variant);
+        let [mut direct, _] = complete_pair(&variant);
+        submit(&mut direct, &variant, v, true);
+        let mut skipped = 0;
+        for step in 0..6 {
+            let composed = direct.metrics.composited_pixels;
+            let map = layer_core::TransformMap::Affine(layer_core::Affine::translation(Point {
+                x: step as f32 * 3.,
+                y: 1.,
+            }));
+            direct.set_transform_preview(Some(&preview(moving, true, None, map))).unwrap();
+            submit(&mut direct, &variant, v, false);
+            skipped += usize::from(direct.metrics.composited_pixels == composed);
+        }
+        assert_eq!(skipped > 0, eligible, "{name}");
+    }
 }

@@ -248,6 +248,7 @@ pub(super) fn encode(
                 target: job.tile,
                 sources: &coordinates,
                 source_size: job.source_size,
+                texels: [0; 4],
             }],
             None,
         )

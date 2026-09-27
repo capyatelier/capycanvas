@@ -599,6 +599,11 @@ pub trait CanvasRenderer {
     fn raster_dependencies_ready(&self, _packet: FramePacket<'_>) -> bool {
         true
     }
+    /// Work that later frames finish without new input, such as the
+    /// full-resolution result of a preview first drawn at display resolution.
+    fn has_pending_work(&self) -> bool {
+        false
+    }
     /// Applied by the next submit. None restores the captured original before
     /// subsequent paint/operations. This performs no readback or blocking wait.
     fn set_transform_preview(

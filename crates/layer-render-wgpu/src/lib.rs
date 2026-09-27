@@ -105,6 +105,21 @@ const INITIAL_TARGET_RECORDS: usize = 257;
 const READBACK_TIMEOUT: Duration = Duration::from_secs(30);
 const WHITE_MASK_ASSET: &str = "builtin:brush-tip/solid-white-v1";
 const PAGE_SIZE: u32 = 256;
+/// Original photo tiles a transform preview decodes per frame before its
+/// drag draws into the display. A drag waits for them and for the layers
+/// around it.
+const WARM_TILES: usize = 48;
+/// Pages a still transform preview first drawn at display resolution
+/// completes per frame.
+const SETTLE_PAGES: usize = 64;
+/// Tiles of a settled display preview recomposed per frame: at first, and
+/// at most. The count grows by one while composition takes under
+/// RECOMPOSE_MS and halves when it takes longer.
+const RECOMPOSE_TILES: usize = 64;
+const RECOMPOSE_FIRST_TILES: usize = 4;
+/// Source tiles one frame of recomposition may decode.
+const RECOMPOSE_DECODES: usize = 3;
+const RECOMPOSE_MS: f64 = 2.;
 
 // Queries consume each group before its source slots can be reused. This also
 // fits the portable sixteen sampled-texture bindings per shader stage.
@@ -851,6 +866,15 @@ pub struct WgpuRasterizer {
     displayed_transform: Option<(LayerId, PixelRect)>,
     /// Draw eligible moving transform previews into the sampled display level.
     display_previews: bool,
+    /// The static layers around a transformed layer at a display level.
+    layered_display: Option<paint_transform::layers::LayeredDisplay>,
+    /// Whether a transform's original photo tiles are still being decoded
+    /// before its drag.
+    warming: bool,
+    /// Tiles of a settled display preview still to recompose, a few per frame,
+    /// and how many to recompose in the next frame.
+    recompose: Option<(LayerId, Vec<[u32; 2]>)>,
+    recompose_tiles: usize,
     thumbnails: thumbnails::Thumbnails,
     ui_preview_space: layer_core::color::RgbSpace,
     ui_rendition: Option<layer_core::color::hdr::SdrRendition>,
@@ -1157,6 +1181,10 @@ impl WgpuRasterizer {
             transform_damage: Vec::with_capacity(2),
             displayed_transform: None,
             display_previews: true,
+            layered_display: None,
+            warming: false,
+            recompose: None,
+            recompose_tiles: RECOMPOSE_TILES,
             filter_previews: None,
             effect_validation: None,
             validated_effects: None,
@@ -1244,7 +1272,10 @@ impl WgpuRasterizer {
             renderer.layer_masks.compile_all();
             for pipeline in renderer.selection_clip.pipelines() { pipeline.compile(); }
             let transforms = renderer.transforms.as_ref().unwrap();
-            for pipeline in transforms.pipelines().into_iter().chain([transforms.display_pipeline()]) {
+            for pipeline in transforms.pipelines() {
+                pipeline.compile();
+            }
+            for pipeline in transforms.display_pipelines() {
                 pipeline.compile();
             }
         }
@@ -1489,21 +1520,26 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    /// A moving transform of the only visible content, over the constant
-    /// paper, draws straight into the display level the view samples, at
-    /// most four layer pixels per texel side, rather than into full-resolution
-    /// pages that are then recomposed. Returns that level and its compositing.
+    /// A transform of an unmasked top-level layer, between static layers below
+    /// and normal static layers above, can draw straight into the display
+    /// level the view samples, at most four layer pixels per texel side,
+    /// rather than into full-resolution pages that are then recomposed.
+    /// Returns that level, its compositing and, unless the layer is the only
+    /// content over the paper, the layer's index, whether content lies above
+    /// it, and its blend.
+    #[allow(clippy::type_complexity)]
     fn display_preview(
         &self,
         packet: &FramePacket<'_>,
         preview: &layer_render::TransformPreview,
         background: [f32; 4],
-    ) -> Option<(u32, pixel_transform::DisplayLevel)> {
+    ) -> Option<(u32, pixel_transform::DisplayLevel, Option<(usize, bool, layer_core::LayerBlend)>)> {
         let cache = self.live_display.as_ref()?;
         if !self.artwork_frame.as_ref()?.same_artwork(*packet, background) {
             return None;
         }
-        let layer = packet.layers.iter().find(|l| l.id == preview.layer)?;
+        let index = packet.layers.iter().position(|l| l.id == preview.layer)?;
+        let layer = &packet.layers[index];
         let empty = |l: &Layer| {
             !l.visible
                 || !l.is_artwork()
@@ -1513,12 +1549,21 @@ impl WgpuRasterizer {
                     && self.native_color_coordinates(l.id).next().is_none()
                     && self.paint_layers.iter().all(|p| p.id != l.id || p.pages.is_empty()))
         };
+        let above = packet.layers[..index].iter().any(|l| !empty(l));
+        let below = packet.layers[index + 1..].iter().any(|l| !empty(l));
+        let stackable = packet.layers[..index].iter().all(|l| {
+            !l.visible
+                || (l.kind != LayerKind::Effect
+                    && (l.properties.parent.is_some() || l.properties.blend == layer_core::LayerBlend::Normal))
+        }) && packet.layers[..index]
+            .iter()
+            .rev()
+            .find(|l| l.properties.parent.is_none())
+            .is_none_or(|l| !l.properties.clipped);
         let alone = self.display_previews
-            && preview.moving
-            && self
-                .transforms
-                .as_ref()
-                .is_some_and(|t| self.startup.is_none() || t.display_pipeline().ready())
+            && self.transforms.as_ref().is_some_and(|t| {
+                self.startup.is_none() || t.display_pipelines().iter().all(|p| p.ready())
+            })
             && self.native_edit.is_some()
             && packet.dabs.is_empty()
             && packet.dab_batches.is_empty()
@@ -1532,14 +1577,13 @@ impl WgpuRasterizer {
             && layer.pending_operations.is_empty()
             && layer.properties.parent.is_none()
             && !layer.properties.clipped
-            && layer.properties.blend == layer_core::LayerBlend::Normal
             && layer_core::target_transform(packet.layers, layer.id) == layer_core::Affine::IDENTITY
             && self
                 .paint_layers
                 .iter()
                 .find(|p| p.id == layer.id)
                 .is_none_or(|p| p.watercolor.is_none())
-            && packet.layers.iter().all(|l| l.id == layer.id || empty(l))
+            && stackable
             && packet
                 .layers
                 .iter()
@@ -1548,6 +1592,10 @@ impl WgpuRasterizer {
             return None;
         }
         let level = cache.sampled_level()?.min(2);
+        let lone = !above && !below && layer.properties.blend == layer_core::LayerBlend::Normal;
+        if !lone && level == 0 {
+            return None;
+        }
         let [r, g, b, a] = packet.view.background_rgba_linear;
         Some((
             level,
@@ -1555,8 +1603,9 @@ impl WgpuRasterizer {
                 side: 1 << level,
                 opacity: layer.opacity,
                 extent: packet.document_extent,
-                backdrop: [r * a, g * a, b * a, a],
+                backdrop: if lone { [r * a, g * a, b * a, a] } else { [0.; 4] },
             },
+            (!lone).then_some((index, above, layer.properties.blend)),
         ))
     }
 
@@ -2173,7 +2222,11 @@ impl WgpuRasterizer {
             .saturating_add(self.regions.as_ref().map_or(0, |r| r.storage_bytes()));
         self.metrics.composite_storage_bytes =
             self.composite_texture.as_ref().map_or(0, texture_bytes)
-                + self.live_display.as_ref().map_or(0, live_display::Cache::storage_bytes);
+                + self.live_display.as_ref().map_or(0, live_display::Cache::storage_bytes)
+                + self
+                    .layered_display
+                    .as_ref()
+                    .map_or(0, paint_transform::layers::LayeredDisplay::storage_bytes);
     }
 
     fn ensure_upload_capacity(&mut self, dabs: usize, styles: usize) -> Result<(), GpuRasterError> {
@@ -3118,6 +3171,12 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn can_capture_raster(&self) -> bool {
         self.raster_ready()
+    }
+    fn has_pending_work(&self) -> bool {
+        self.displayed_transform.is_some()
+            || self.warming
+            || self.recompose.is_some()
+            || self.layered_display.as_ref().is_some_and(|layers| !layers.ready())
     }
     fn set_transform_preview(
         &mut self,
@@ -4116,39 +4175,124 @@ impl CanvasRenderer for WgpuRasterizer {
         self.preview_requires_base = new_preview_requires_base;
 
         let mut displayed = false;
-        if let Some(preview) = self.transform_preview.clone() {
-            if dirty.is_empty() && self.transform_damage.is_empty()
-                && let Some((level, display)) =
-                    self.display_preview(&packet, &preview, requested_view.background_rgba_linear)
-            {
-                let mut transforms = self.transforms.take().expect("retained transform renderer");
-                let mut cache = self.live_display.take().expect("complete display");
-                cache.make_writable(self, self.display_pipelines.as_ref().unwrap(), &mut encoder);
-                let target = cache.level_view(level).expect("sampled level").clone();
-                let result = transforms.render_display(self, &mut encoder, &preview, packet.layers, &target, display);
-                self.transforms = Some(transforms);
-                if let Ok(Some(drawn)) = &result && !drawn.is_empty() {
-                    let tiles: Vec<_> = page_coordinates(*drawn).collect();
-                    cache.tiles_written_at(&mut encoder, level, &tiles);
-                    let region = self.displayed_transform.map_or(*drawn, |(_, shown)| shown.union(*drawn));
-                    self.displayed_transform = Some((preview.layer, region));
-                    self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
-                    self.composite_revision = self.composite_revision.wrapping_add(1);
-                }
-                self.live_display = Some(cache);
-                displayed = result?.is_some();
-            }
-            if !displayed {
+        let mut drew = false;
+        let mut recomposing = 0;
+        let eligible = self.transform_preview.clone().and_then(|preview| {
+            (dirty.is_empty() && self.transform_damage.is_empty())
+                .then(|| self.display_preview(&packet, &preview, requested_view.background_rgba_linear))
+                .flatten()
+                .map(|eligible| (preview, eligible))
+        });
+        let layered = eligible.as_ref().and_then(|(preview, (level, _, stack))| {
+            stack.map(|(index, above, _)| ((preview.transaction, preview.layer, *level), index, above))
+        });
+        if layered.is_none_or(|(key, _, _)| self.layered_display.as_ref().is_some_and(|l| l.key != key)) {
+            self.layered_display = None;
+        }
+        if let Some((key, index, above)) = layered {
+            let mut layers = self
+                .layered_display
+                .take()
+                .unwrap_or_else(|| paint_transform::layers::LayeredDisplay::new(self, packet.document_extent, key, above));
+            let built = if layers.ready() { Ok(()) } else { layers.build(self, packet, index, &mut encoder) };
+            self.layered_display = Some(layers);
+            built?;
+        }
+        let built = |r: &Self, stack: &Option<(usize, bool, layer_core::LayerBlend)>| {
+            stack.is_none() || r.layered_display.as_ref().is_some_and(|l| l.ready())
+        };
+        if let Some((preview, (_, _, stack))) = &eligible
+            && (!preview.moving || self.warming)
+            && built(self, stack)
+        {
             let mut transforms = self.transforms.take().expect("retained transform renderer");
-            let result = transforms.update_preview(
-                self,
-                &mut encoder,
-                &preview,
-                packet.document_extent,
-                packet.layers,
-            );
+            let warmed = transforms.warm_originals(self, &mut encoder, preview, WARM_TILES);
             self.transforms = Some(transforms);
-            self.transform_damage.extend(result?);
+            self.warming = warmed?;
+        } else {
+            self.warming = false;
+        }
+        if let Some((preview, (_, _, stack))) = &eligible
+            && preview.moving
+            && (!built(self, stack) || self.warming)
+        {
+            displayed = true;
+        }
+        if let Some((preview, (level, display, stack))) = eligible
+            && !displayed
+            && (preview.moving
+                || self.displayed_transform.is_some_and(|(id, _)| id == preview.layer)
+                || self.recompose.as_ref().is_some_and(|(id, _)| *id == preview.layer))
+            && (stack.is_none() || self.layered_display.as_ref().is_some_and(|l| l.ready()))
+        {
+            let mut transforms = self.transforms.take().expect("retained transform renderer");
+            let mut cache = self.live_display.take().expect("complete display");
+            cache.make_writable(self, self.display_pipelines.as_ref().unwrap(), &mut encoder);
+            let level_view = cache.level_view(level).expect("sampled level").clone();
+            let target = match &self.layered_display {
+                Some(layers) if stack.is_some() => layers.moving().clone(),
+                _ => level_view.clone(),
+            };
+            let result = transforms.render_display(self, &mut encoder, &preview, packet.layers, &target, display);
+            if let Ok(Some(drawn)) = &result && !drawn.is_empty() {
+                drew = true;
+                if let Some((_, _, blend)) = stack {
+                    let side = display.side;
+                    let low = [drawn.min_x() / side, drawn.min_y() / side];
+                    let texels = [
+                        low[0],
+                        low[1],
+                        drawn.max_x().div_ceil(side) - low[0],
+                        drawn.max_y().div_ceil(side) - low[1],
+                    ];
+                    let mut layers = self.layered_display.take().unwrap();
+                    let composited = layers.composite(self, transforms.composite(), &mut encoder, &level_view, texels, blend);
+                    self.layered_display = Some(layers);
+                    if let Err(error) = composited {
+                        self.transforms = Some(transforms);
+                        self.live_display = Some(cache);
+                        return Err(error);
+                    }
+                }
+                let tiles: Vec<_> = page_coordinates(*drawn).collect();
+                cache.tiles_written_at(&mut encoder, level, &tiles);
+                let region = self.displayed_transform.map_or(*drawn, |(_, shown)| shown.union(*drawn));
+                self.displayed_transform = Some((preview.layer, region));
+                self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
+                self.composite_revision = self.composite_revision.wrapping_add(1);
+            }
+            self.live_display = Some(cache);
+            displayed = result.as_ref().is_ok_and(Option::is_some);
+            let settled = if displayed
+                && !preview.moving
+                && self.recompose.is_none()
+                && result.as_ref().is_ok_and(|drawn| drawn.is_some_and(|d| d.is_empty()))
+            {
+                transforms.settle(self, &mut encoder, &preview, SETTLE_PAGES)
+            } else {
+                Ok(None)
+            };
+            self.transforms = Some(transforms);
+            result?;
+            if let Some(damage) = settled? {
+                let shown = self.displayed_transform.take().map_or(PixelRect::EMPTY, |(_, shown)| shown);
+                let region = damage.into_iter().fold(shown, |region, (_, damage)| region.union(damage));
+                self.recompose = Some((preview.layer, page_coordinates(region).collect()));
+                self.recompose_tiles = self.recompose_tiles.min(RECOMPOSE_FIRST_TILES);
+            }
+        }
+        if let Some(preview) = self.transform_preview.clone() {
+            if !displayed {
+                let mut transforms = self.transforms.take().expect("retained transform renderer");
+                let result = transforms.update_preview(
+                    self,
+                    &mut encoder,
+                    &preview,
+                    packet.document_extent,
+                    packet.layers,
+                );
+                self.transforms = Some(transforms);
+                self.transform_damage.extend(result?);
             }
             if self.transform_damage.iter().any(|(_, damage)| !damage.is_empty()) {
                 scene::Scene::submit_commands(self, &mut encoder, "transform preview");
@@ -4156,6 +4300,36 @@ impl CanvasRenderer for WgpuRasterizer {
         }
         if !displayed && let Some(shown) = self.displayed_transform.take() {
             self.transform_damage.push(shown);
+        }
+        if let Some((layer, mut tiles)) = self.recompose.take() {
+            let full = PixelRect::full(packet.document_extent);
+            if drew {
+                let region = tiles.iter().fold(PixelRect::EMPTY, |region, c| region.union(page_rect(*c).intersect(full)));
+                let shown = self.displayed_transform.map_or(region, |(_, shown)| shown.union(region));
+                self.displayed_transform = Some((layer, shown));
+            } else {
+                let count = if displayed {
+                    let mut decodes = 0;
+                    let scene = self.scene.as_ref();
+                    tiles
+                        .iter()
+                        .take(self.recompose_tiles)
+                        .take_while(|c| {
+                            decodes += scene.map_or(0, |scene| scene.source_decodes(self, packet.layers, **c));
+                            decodes <= RECOMPOSE_DECODES
+                        })
+                        .count()
+                        .max(1)
+                } else {
+                    tiles.len()
+                };
+                recomposing = count;
+                self.transform_damage
+                    .extend(tiles.drain(..count).map(|c| (layer, page_rect(c).intersect(full))));
+                if !tiles.is_empty() {
+                    self.recompose = Some((layer, tiles));
+                }
+            }
         }
         // Pointwise edits need only their touched tiles, not the rectangle
         // enclosing a fast curved stroke. Global effects and full rebuilds
@@ -4265,7 +4439,15 @@ impl CanvasRenderer for WgpuRasterizer {
                     dirty = dirty.union(pixel_rect(rect, packet.document_extent));
                 }
             }
+            let started = web_time::Instant::now();
             scene.compose(self, packet, dirty, &mut encoder, true, composite_tiles.as_ref())?;
+            if recomposing > 0 && self.recompose.is_some() {
+                self.recompose_tiles = if started.elapsed().as_secs_f64() * 1000. > RECOMPOSE_MS {
+                    (recomposing / 2).max(1)
+                } else {
+                    (recomposing + 1).min(RECOMPOSE_TILES)
+                };
+            }
             self.scene = Some(scene);
             let pointwise_scene = packet.layers.iter().all(|layer| {
                 matches!(layer.kind, LayerKind::Paint | LayerKind::Background)

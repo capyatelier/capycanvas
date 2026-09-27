@@ -273,39 +273,68 @@ fn large_photo_transform_latency() {
 }
 
 /// The GTK photo24 workload without its adjustment layers: a 16-bit ProPhoto
-/// photo in a native document.
-fn native_photo_document() -> layer_core::Document {
+/// photo in a native document, alone or with painted strokes above it and a
+/// second photo below.
+fn native_photo_document(layered: bool) -> layer_core::Document {
     let mut document = layer_core::Document::new("photo", EXTENT[0], EXTENT[1]);
     document.color = layer_core::color::DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    let mut builder = SourceBuilder::new(
-        EXTENT,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::U16,
-            profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
-            profile_assumed: false,
-        },
-        512 * 1024 * 1024,
-    )
-    .unwrap();
-    for y in 0..EXTENT[1] {
-        let row: Vec<_> = (0..EXTENT[0])
-            .flat_map(|x| {
-                [
-                    ((x * 55000 / EXTENT[0] + (x * 7 + y * 13) % 1024) % 65536) as u16,
-                    ((y * 55000 / EXTENT[1] + (x * 11 + y * 5) % 1024) % 65536) as u16,
-                    (((x + y) * 13 % 60000) + (x ^ y) % 1024) as u16,
-                    65535,
-                ]
-            })
-            .flat_map(u16::to_le_bytes)
-            .collect();
-        builder.push_row(&row).unwrap();
+    let source = |pixel: &dyn Fn(u32, u32) -> [u16; 4]| {
+        let mut builder = SourceBuilder::new(
+            EXTENT,
+            SourceInterpretation {
+                channels: SourceChannels::Rgba,
+                depth: SampleDepth::U16,
+                profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
+                profile_assumed: false,
+            },
+            512 * 1024 * 1024,
+        )
+        .unwrap();
+        for y in 0..EXTENT[1] {
+            let row: Vec<_> = (0..EXTENT[0])
+                .flat_map(|x| pixel(x, y))
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            builder.push_row(&row).unwrap();
+        }
+        std::sync::Arc::new(builder.finish().unwrap())
+    };
+    document.layers[0].source = Some(source(&|x, y| {
+        [
+            ((x * 55000 / EXTENT[0] + (x * 7 + y * 13) % 1024) % 65536) as u16,
+            ((y * 55000 / EXTENT[1] + (x * 11 + y * 5) % 1024) % 65536) as u16,
+            (((x + y) * 13 % 60000) + (x ^ y) % 1024) as u16,
+            65535,
+        ]
+    }));
+    if layered {
+        let mut strokes = Layer::paint(document.allocate_layer_id(), "strokes");
+        strokes.source = Some(source(&|x, y| {
+            let band = (x + 2 * y) % 900;
+            let alpha = if band < 60 {
+                65535
+            } else if band < 80 {
+                ((80 - band) * 3276) as u16
+            } else {
+                0
+            };
+            [52000, 21000, 9000, alpha]
+        }));
+        let mut backdrop = Layer::paint(document.allocate_layer_id(), "backdrop");
+        backdrop.source = Some(source(&|x, y| {
+            [
+                (x * 11 % 50000) as u16,
+                (y * 13 % 50000) as u16,
+                ((x ^ y) % 40000) as u16,
+                65535,
+            ]
+        }));
+        document.layers.insert(0, strokes);
+        document.layers.insert(2, backdrop);
     }
-    document.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
     document
 }
 
@@ -336,8 +365,7 @@ fn native_submit(r: &mut WgpuRasterizer, layers: &[Layer], reset: bool) {
 }
 
 /// Free drags translate the selected photo; Distort drags one corner.
-fn native_photo_drag(r: &mut WgpuRasterizer, layers: &[Layer], label: &str) -> f64 {
-    let photo = layers.iter().find(|l| l.source.is_some()).unwrap().id;
+fn native_photo_drag(r: &mut WgpuRasterizer, layers: &[Layer], photo: LayerId, label: &str) -> f64 {
     let selection = Selection::polygon(vec![
         Point { x: 0., y: 0. },
         Point {
@@ -408,6 +436,28 @@ fn native_photo_drag(r: &mut WgpuRasterizer, layers: &[Layer], label: &str) -> f
                 interpolation: Interpolation::Bicubic,
             },
         };
+        let mut idle = Vec::new();
+        let still = layer_render::TransformPreview {
+            moving: false,
+            transform: ImageTransform::default(),
+            ..preview.clone()
+        };
+        loop {
+            let start = Instant::now();
+            r.set_transform_preview(Some(&still)).unwrap();
+            native_submit(r, layers, false);
+            r.wait_idle().unwrap();
+            idle.push(start.elapsed().as_secs_f64() * 1000.);
+            if !r.has_pending_work() || idle.len() > 64 {
+                break;
+            }
+        }
+        eprintln!(
+            "{label} {name}: transform start {} frames, {:.3}ms in all, longest {:.3}ms",
+            idle.len(),
+            idle.iter().sum::<f64>(),
+            idle.iter().copied().fold(0f64, f64::max)
+        );
         for i in 0..FRAMES {
             preview.transform.map = map(i as f32 / 120. * 2.);
             let start = Instant::now();
@@ -432,15 +482,23 @@ fn native_photo_drag(r: &mut WgpuRasterizer, layers: &[Layer], label: &str) -> f
             .collect();
         let (cpu, gpu, completed) = (percentiles(cpu), percentiles(gpu), percentiles(completed));
         preview.moving = false;
-        let start = Instant::now();
-        r.set_transform_preview(Some(&preview)).unwrap();
-        native_submit(r, layers, false);
-        r.wait_idle().unwrap();
-        let settled = start.elapsed().as_secs_f64() * 1000.;
+        let mut release = Vec::new();
+        loop {
+            let start = Instant::now();
+            r.set_transform_preview(Some(&preview)).unwrap();
+            native_submit(r, layers, false);
+            r.wait_idle().unwrap();
+            release.push(start.elapsed().as_secs_f64() * 1000.);
+            if !r.has_pending_work() {
+                break;
+            }
+        }
+        let settled = release.iter().copied().fold(0f64, f64::max);
         eprintln!(
-            "{label} {name}: CPU submit p50/p95/p99 {cpu:.3?}ms, GPU execution {gpu:.3?}ms, completion {completed:.3?}ms; release {settled:.3}ms"
+            "{label} {name}: CPU submit p50/p95/p99 {cpu:.3?}ms, GPU execution {gpu:.3?}ms, completion {completed:.3?}ms; release {} frames, longest {settled:.3}ms",
+            release.len()
         );
-        worst = worst.max(completed[2]);
+        worst = worst.max(completed[2]).max(settled);
         r.set_transform_preview(None).unwrap();
         native_submit(r, layers, false);
         r.wait_idle().unwrap();
@@ -451,18 +509,22 @@ fn native_photo_drag(r: &mut WgpuRasterizer, layers: &[Layer], label: &str) -> f
 #[test]
 #[ignore = "hardware 24-megapixel native photo transform benchmark; release, serial"]
 fn native_photo_transform_latency() {
-    let document = native_photo_document();
-    let mut r = WgpuRasterizer::new_native_headless(document.color).unwrap();
-    native_submit(&mut r, &document.layers, true);
-    r.wait_idle().unwrap();
-    for _ in 0..3 {
-        native_submit(&mut r, &document.layers, false);
+    let mut worst = 0f64;
+    for layered in [false, true] {
+        let document = native_photo_document(layered);
+        let mut r = WgpuRasterizer::new_native_headless(document.color).unwrap();
+        native_submit(&mut r, &document.layers, true);
         r.wait_idle().unwrap();
+        for _ in 0..3 {
+            native_submit(&mut r, &document.layers, false);
+            r.wait_idle().unwrap();
+        }
+        let label = if layered { "layered photo" } else { "photo" };
+        let photo = document.layers[usize::from(layered)].id;
+        worst = worst.max(native_photo_drag(&mut r, &document.layers, photo, label));
     }
-    let worst = native_photo_drag(&mut r, &document.layers, "photo");
     assert!(
         worst < 8.333,
         "a native photo transform drag exceeds the 120 Hz budget"
     );
 }
-

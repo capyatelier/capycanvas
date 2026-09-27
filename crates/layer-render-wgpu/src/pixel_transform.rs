@@ -8,8 +8,8 @@ use std::hash::{Hash, Hasher};
 pub(super) const TRANSFORM_SLOTS: usize = 16;
 const SOURCE_RECORD_BYTES: u64 = (1 + TRANSFORM_SLOTS as u64) * 16;
 /// Destination-to-source rows, attachment origin and options of one region,
-/// and how a reduced display level composites it.
-const REGION_BYTES: u64 = 96;
+/// and how a display level composites it.
+const REGION_BYTES: u64 = 112;
 /// Enough source neighborhoods for every job of a large layer's frame, so a
 /// continuous drag reuses them instead of cycling through a smaller cache.
 const BINDING_CAPACITY: usize = 4096;
@@ -39,10 +39,12 @@ pub(super) struct TiledTransformRecord<'a> {
     pub target: [u32; 2],
     pub sources: &'a [[u32; 2]],
     pub source_size: [u32; 2],
+    /// x, y, width, height of the display level texels a job draws.
+    pub texels: [u32; 4],
 }
-/// Draw a reduced display level: each texel is the mean of `side` x `side`
-/// layer pixels within `extent`, times `opacity`, over the premultiplied
-/// `backdrop`.
+/// Draw a display level: each texel is the mean of `side` x `side` layer
+/// pixels within `extent`, times `opacity`, over the premultiplied
+/// `backdrop`. `side` divides 16.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct DisplayLevel {
     pub side: u32,
@@ -70,8 +72,10 @@ pub struct PixelTransform {
     scalar: bool,
     visibility: bool,
     pub(super) pipeline: Deferred<wgpu::RenderPipeline>,
-    /// Color transforms drawn straight into a reduced display level.
-    pub(super) display: Option<Deferred<wgpu::RenderPipeline>>,
+    /// Color transforms drawn straight into a display level.
+    pub(super) display: Option<Deferred<wgpu::ComputePipeline>>,
+    display_layout: wgpu::BindGroupLayout,
+    display_target: Option<(wgpu::TextureView, wgpu::BindGroup)>,
     layout: wgpu::BindGroupLayout,
     source_layout: wgpu::BindGroupLayout,
     empty_selection: wgpu::Buffer,
@@ -101,7 +105,7 @@ impl PixelTransform {
             label: Some("affine transform parameters"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
@@ -113,7 +117,7 @@ impl PixelTransform {
         let mut entries: Vec<_> = (0..TRANSFORM_SLOTS as u32)
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: false },
                     view_dimension: wgpu::TextureViewDimension::D2,
@@ -125,7 +129,7 @@ impl PixelTransform {
         entries.extend([
             wgpu::BindGroupLayoutEntry {
                 binding: 16,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
@@ -135,7 +139,7 @@ impl PixelTransform {
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 17,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
@@ -149,14 +153,29 @@ impl PixelTransform {
             entries: &entries,
         });
         let pipeline = transform_pipeline(device, &layout, &source_layout, scalar, visibility, "fragment_main");
+        let display_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("transform display level"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: wgpu::TextureFormat::Rgba32Float,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            }],
+        });
         let display = (!scalar && !visibility)
-            .then(|| transform_pipeline(device, &layout, &source_layout, false, false, "display_main"));
+            .then(|| display_pipeline(device, &layout, &source_layout, &display_layout));
         Self {
             placement: false,
             scalar,
             visibility,
             pipeline,
             display,
+            display_layout,
+            display_target: None,
             layout,
             source_layout,
             empty_selection: device.create_buffer(&wgpu::BufferDescriptor {
@@ -196,6 +215,8 @@ impl PixelTransform {
             visibility: self.visibility,
             pipeline: self.pipeline.clone(),
             display: self.display.clone(),
+            display_layout: self.display_layout.clone(),
+            display_target: None,
             layout: self.layout.clone(),
             source_layout: self.source_layout.clone(),
             empty_selection: self.empty_selection.clone(),
@@ -449,6 +470,7 @@ impl PixelTransform {
                         + 4. * f32::from(self.placement),
                     background,
                     display,
+                    job.texels.map(|v| v as f32),
                 );
                 let offset = (i * 2 + usize::from(unmoved)) * self.stride as usize;
                 for (dst, value) in self.records[offset..][..REGION_BYTES as usize]
@@ -566,32 +588,36 @@ impl PixelTransform {
             pass.draw(0..3, 0..1);
         }
     }
-    /// Draw prepared regions straight into a reduced display level, keeping
-    /// its other texels. Each draw's scissor is in that level's texels.
+    /// Draw prepared jobs straight into a display level, `side` layer pixels
+    /// per texel, keeping its other texels. Each draw's scissor holds the
+    /// job's texels.
     pub(super) fn encode_display(
-        &self,
+        &mut self,
+        device: &wgpu::Device,
         encoder: &mut crate::submission::CommandEncoder,
         level: &wgpu::TextureView,
+        side: u32,
         offsets: [u32; 2],
         draws: &[BatchDraw<'_>],
     ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        if self.display_target.as_ref().is_none_or(|(view, _)| view != level) {
+            let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("transform display level"),
+                layout: &self.display_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(level),
+                }],
+            });
+            self.display_target = Some((level.clone(), binding));
+        }
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("transform into display level"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: level,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
             timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
         });
         pass.set_pipeline(self.display.as_ref().expect("color transform"));
+        pass.set_bind_group(2, &self.display_target.as_ref().unwrap().1, &[]);
+        let texels = 16 / side;
         for draw in draws {
             let region = offsets[0] + (draw.job as u32 * 2 + u32::from(draw.identity)) * self.stride;
             pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[region]);
@@ -600,9 +626,8 @@ impl PixelTransform {
                 &draw.source.binding,
                 &[offsets[1] + draw.job as u32 * self.source_stride],
             );
-            let [x, y, w, h] = draw.scissor;
-            pass.set_scissor_rect(x, y, w, h);
-            pass.draw(0..3, 0..1);
+            let [_, _, w, h] = draw.scissor;
+            pass.dispatch_workgroups(w.div_ceil(texels), h.div_ceil(texels), 1);
         }
     }
     /// Retained scratch only; source/targets are owned by the transaction host.
@@ -643,6 +668,7 @@ fn region_record(
     flags: f32,
     background: f32,
     display: Option<DisplayLevel>,
+    texels: [f32; 4],
 ) -> [f32; REGION_BYTES as usize / 4] {
     let level = display.unwrap_or(DisplayLevel {
         side: 1,
@@ -654,7 +680,7 @@ fn region_record(
     [
         x[0], x[1], x[2], 0., y[0], y[1], y[2], 0., w[0], w[1], w[2], 0., target[0], target[1],
         flags, background, level.side as f32, level.opacity, level.extent[0] as f32,
-        level.extent[1] as f32, r, g, b, a,
+        level.extent[1] as f32, texels[0], texels[1], texels[2], texels[3], r, g, b, a,
     ]
 }
 
@@ -718,6 +744,44 @@ fn transform_pipeline(
             depth_stencil: None,
             multisample: Default::default(),
             multiview_mask: None,
+            cache: None,
+        })
+    })
+}
+
+fn display_pipeline(
+    device: &PipelineDevice,
+    layout: &wgpu::BindGroupLayout,
+    source_layout: &wgpu::BindGroupLayout,
+    display_layout: &wgpu::BindGroupLayout,
+) -> Deferred<wgpu::ComputePipeline> {
+    let compile_device = device.clone();
+    let layouts = [layout.clone(), source_layout.clone(), display_layout.clone()];
+    Deferred::pipeline(move |mode| {
+        let device = &compile_device;
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("transform display level"),
+            source: wgpu::ShaderSource::Wgsl(super::compose_wgsl(&[
+                include_str!("pixel_transform.wgsl"),
+                &source_shader(),
+                &include_str!("selection_clip.wgsl")
+                    .replace("@group(1) @binding(1)", "@group(1) @binding(17)"),
+            ])),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("transform display level"),
+            bind_group_layouts: &[Some(&layouts[0]), Some(&layouts[1]), Some(&layouts[2])],
+            immediate_size: 0,
+        });
+        mode.compute(device, &wgpu::ComputePipelineDescriptor {
+            label: Some("transform display level"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("display_main"),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &[("scalar", 0.), ("visibility", 0.)],
+                ..Default::default()
+            },
             cache: None,
         })
     })

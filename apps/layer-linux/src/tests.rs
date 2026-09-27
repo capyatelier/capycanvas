@@ -9456,8 +9456,10 @@ fn native_frame_pacing() {
         Ok("fixture") => fixture_workspace(&app),
         Ok("photo24") => {
             let mut project = native_navigation::photo([6000, 4000]);
-            if std::env::var("LAYER_PACING_PHOTO_LAYERS").as_deref() == Ok("photo") {
-                project.document.layers.retain(|layer| layer.source.is_some());
+            match std::env::var("LAYER_PACING_PHOTO_LAYERS").as_deref() {
+                Ok("photo") => project.document.layers.retain(|layer| layer.source.is_some()),
+                Ok("layered") => native_navigation::layered(&mut project),
+                _ => {}
             }
             let w = Workspace::with_project(&app, Some((project, None)));
             w.window.maximize();

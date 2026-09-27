@@ -171,6 +171,7 @@ pub struct RenderWorker {
     replies: mpsc::Receiver<Reply>,
     failure: Arc<std::sync::OnceLock<String>>,
     in_flight: Arc<AtomicUsize>,
+    pending_work: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     color: layer_core::color::DocumentColor,
     next_color_request: u64,
@@ -254,6 +255,8 @@ impl RenderWorker {
         let worker_clock = clock.clone();
         let in_flight = Arc::new(AtomicUsize::new(0));
         let count = in_flight.clone();
+        let pending_work = Arc::new(AtomicBool::new(false));
+        let worker_pending = pending_work.clone();
         let telemetry = Arc::new(std::sync::Mutex::new(
             layer_render::RendererTelemetry::default(),
         ));
@@ -280,6 +283,7 @@ impl RenderWorker {
                         &reply,
                         &worker_telemetry,
                         &count,
+                        &worker_pending,
                         #[cfg(test)]
                         worker_stats,
                     )
@@ -345,6 +349,7 @@ impl RenderWorker {
             replies,
             failure,
             in_flight,
+            pending_work,
             thread: Some(thread),
             color,
             next_color_request: 0,
@@ -543,6 +548,9 @@ impl CanvasRenderer for RenderWorker {
     fn supports_raster_damage(&self) -> bool { true }
     fn can_submit(&self) -> bool {
         self.in_flight.load(Ordering::Acquire) < 2
+    }
+    fn has_pending_work(&self) -> bool {
+        self.pending_work.load(Ordering::Acquire)
     }
     fn set_transform_preview(
         &mut self,
@@ -855,6 +863,7 @@ impl Worker {
         reply: &mpsc::Sender<Reply>,
         worker_telemetry: &std::sync::Mutex<layer_render::RendererTelemetry>,
         count: &AtomicUsize,
+        pending_work: &AtomicBool,
         #[cfg(test)] worker_stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
     ) -> Result<(), String> {
         if reply.send(Reply::Initialized(self.view_color, self.renderer.snapshot_gpu(), self.renderer.shader_activity())).is_err() {
@@ -925,6 +934,7 @@ impl Worker {
                     )?;
                     document_drawn = true;
                     last_canvas_frame = std::time::Instant::now();
+                    self.report_pending_work(pending_work);
                     count.fetch_sub(1, Ordering::Release);
                 }
                 if progress.complete {
@@ -1186,6 +1196,7 @@ impl Worker {
                         pending_frames.push_back(frame);
                     } else {
                         document_drawn = true;
+                        self.report_pending_work(pending_work);
                         count.fetch_sub(1, Ordering::Release);
                     }
                 }
@@ -1342,6 +1353,20 @@ impl Worker {
             preview_sdr: false,
             display_headroom: 1.,
         })
+    }
+    /// Publish whether the renderer has work for later frames, and wake an
+    /// idle canvas when it newly does.
+    fn report_pending_work(&self, pending_work: &AtomicBool) {
+        let pending = self.renderer.has_pending_work();
+        if pending && !pending_work.swap(pending, Ordering::AcqRel) {
+            let area = self.area.clone();
+            gtk::glib::idle_add_once(move || {
+                if let Some(area) = area.upgrade() {
+                    let _ = area.activate_action("canvas.pending-work", None);
+                }
+            });
+        }
+        pending_work.store(pending, Ordering::Release);
     }
     fn report_display(&self, reply: &mpsc::Sender<Reply>) -> Result<(), String> {
         reply.send(Reply::DisplayHeadroom(self.display_headroom, self.hdr_encoding)).map_err(error)?;

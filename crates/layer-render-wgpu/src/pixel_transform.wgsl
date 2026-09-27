@@ -2,11 +2,12 @@
 // Sample color * selection together, never filter them independently (halos).
 // Rows x, y and w map a destination pixel to homogeneous source coordinates.
 // attachment holds its origin in layer pixels, the flags and the background.
-// A reduced display level reads display: layer pixels per texel side, layer
-// opacity and the layer extent, and composites over the backdrop.
+// A display level reads display: layer pixels per texel side, layer opacity
+// and the layer extent; texels: the region of its texels drawn; and
+// composites over the backdrop.
 struct Transform {
     x:vec4<f32>, y:vec4<f32>, w:vec4<f32>, attachment:vec4<f32>,
-    display:vec4<f32>, backdrop:vec4<f32>,
+    display:vec4<f32>, texels:vec4<f32>, backdrop:vec4<f32>,
 }
 override scalar:bool=false;
 override visibility:bool=false;
@@ -167,52 +168,35 @@ fn layer_pixel(world:vec2<f32>)->vec4<f32> {
 @fragment fn fragment_main(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
     return layer_pixel(position.xy+transform.attachment.xy);
 }
-// The mean layer value over the pixels of a 2x2 block around the pixel
-// corner `center`, within the layer extent. Unmoved pixels are exact; moved
-// ones sample their source once at the block center, a bilinear filter over
-// the block's footprint.
-fn layer_block(center:vec2<f32>)->vec4<f32> {
-    let moved=transformed(center);
-    if moved.a>=1. {return moved;}
-    var remainder=vec4(0.);
+@group(2) @binding(0) var display_level:texture_storage_2d<rgba32float,write>;
+var<workgroup> display_pixels:array<vec4<f32>,256>;
+// Texels of a display level, `side` layer pixels across: one invocation per
+// layer pixel, then the area mean of each texel's pixels over the backdrop,
+// as reducing the full-resolution composite would give.
+@compute @workgroup_size(16,16)
+fn display_main(@builtin(workgroup_id) group:vec3<u32>,@builtin(local_invocation_id) local:vec3<u32>) {
+    let side=u32(transform.display.x);
+    let first=vec2<u32>(transform.texels.xy)+group.xy*(16u/side);
+    let end=vec2<u32>(transform.texels.xy+transform.texels.zw);
+    let world=vec2<f32>(first*side+local.xy)+.5+transform.attachment.xy;
+    let inside=all(world<transform.display.zw);
+    var value=vec4(0.);
+    if inside && all(first+local.xy/side<end) {value=layer_pixel(world);}
+    display_pixels[local.y*16u+local.x]=select(vec4(-1.),value,inside);
+    workgroupBarrier();
+    let texel=first+local.xy/side;
+    if any(local.xy%side!=vec2(0u)) || any(texel>=end) {return;}
+    var sum=vec4(0.);
     var count=0.;
-    for (var j=0;j<2;j++) {
-        for (var i=0;i<2;i++) {
-            let world=center+vec2(f32(i),f32(j))-.5;
-            if all(world<transform.display.zw) {
-                let kept=1.-brush_selection_at(world);
-                if kept>0. {remainder+=original(vec2<i32>(floor(world)))*kept;}
+    for (var j=0u;j<side;j++) {
+        for (var i=0u;i<side;i++) {
+            let pixel=display_pixels[(local.y+j)*16u+local.x+i];
+            if pixel.a>=0. {
+                sum+=pixel;
                 count+=1.;
             }
         }
     }
-    return moved+remainder/max(count,1.)*(1.-moved.a);
-}
-// One texel of a reduced display level, `side` layer pixels across, over a
-// constant backdrop: the mean of its layer pixels, sampling moved pixels once
-// per 2x2 block. A full-resolution level draws each layer pixel exactly.
-@fragment fn display_main(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
-    let side=transform.display.x;
-    let corner=floor(position.xy)*side+transform.attachment.xy;
-    var layer=vec4(0.);
-    if side<2. {
-        layer=layer_pixel(corner+.5);
-    } else {
-        let blocks=u32(side*.5);
-        var count=0.;
-        for (var j=0u;j<blocks;j++) {
-            for (var i=0u;i<blocks;i++) {
-                let low=corner+vec2(f32(i),f32(j))*2.;
-                if all(low<transform.display.zw) {
-                    let pixels=min(transform.display.zw-low,vec2(2.));
-                    let weight=pixels.x*pixels.y;
-                    layer+=layer_block(low+1.)*weight;
-                    count+=weight;
-                }
-            }
-        }
-        layer/=max(count,1.);
-    }
-    layer*=transform.display.y;
-    return layer+transform.backdrop*(1.-layer.a);
+    let layer=sum*(transform.display.y/max(count,1.));
+    textureStore(display_level,vec2<i32>(texel),layer+transform.backdrop*(1.-layer.a));
 }

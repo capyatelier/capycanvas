@@ -31,6 +31,14 @@ impl Plan {
             level,
         })
     }
+    /// The image of `extent` reduced to exactly `level`.
+    pub fn at_level(extent: [u32; 2], level: u32) -> Self {
+        Self {
+            extent,
+            size: extent.map(|v| v.div_ceil(1 << level)),
+            level,
+        }
+    }
     pub fn pixel_bytes(self) -> u64 {
         self.pixel_bytes_through(self.level)
     }

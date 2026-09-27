@@ -580,6 +580,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             || self.has_active_stroke()
             || self.has_pending_document_edits()
             || self.editor.document().has_animated_effects()
+            || self.backend.has_pending_work()
     }
     pub fn has_pending_input(&self) -> bool {
         !self.input.is_empty()

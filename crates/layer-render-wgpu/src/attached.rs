@@ -38,6 +38,9 @@ impl CanvasRenderer for AttachedRenderer {
     fn can_capture_raster(&self) -> bool {
         self.0.as_ref().is_none_or(|gpu| gpu.can_capture_raster())
     }
+    fn has_pending_work(&self) -> bool {
+        self.0.as_ref().is_some_and(|gpu| gpu.has_pending_work())
+    }
 
     fn set_transform_preview(
         &mut self,

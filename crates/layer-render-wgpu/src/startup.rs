@@ -306,7 +306,9 @@ impl WgpuRasterizer {
             }
             if shader.key.transform {
                 required.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
-                startup.compiler.pipeline(self.transforms.as_ref().unwrap().display_pipeline(), OTHER);
+                for pipeline in self.transforms.as_ref().unwrap().display_pipelines() {
+                    startup.compiler.pipeline(pipeline, OTHER);
+                }
             }
             required.enqueue(&startup.compiler, DOCUMENT);
             startup.document = required;
@@ -392,7 +394,9 @@ impl WgpuRasterizer {
         if transform {
             current.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
             current.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
-            startup.compiler.pipeline(self.transforms.as_ref().unwrap().display_pipeline(), OTHER);
+            for pipeline in self.transforms.as_ref().unwrap().display_pipelines() {
+                startup.compiler.pipeline(pipeline, OTHER);
+            }
         }
         current.enqueue(&startup.compiler, BRUSH);
         startup.current = current;
@@ -602,6 +606,12 @@ mod gpu_tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(renderer.transforms.as_ref().unwrap().pipelines().iter().all(|p| p.ready()));
+        while !renderer.poll_startup().unwrap().complete {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(renderer.transforms.as_ref().unwrap().display_pipelines().iter().all(|p| p.ready()),
+            "display previews compile after input is enabled");
         renderer.prepare_startup(&document, &brush, false).unwrap();
         assert!(renderer.poll_startup().unwrap().brush_ready, "cached dependencies resume immediately");
 

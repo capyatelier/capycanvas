@@ -104,6 +104,54 @@ pub(super) fn photo(extent: [u32; 2]) -> layer_core::Project {
     project
 }
 
+/// Keep the photo with painted strokes above it and a second photo below,
+/// the photo active.
+pub(super) fn layered(project: &mut layer_core::Project) {
+    let document = &mut project.document;
+    document.layers.retain(|layer| layer.source.is_some());
+    let photo = document.layers[0].id;
+    let extent = [document.width, document.height];
+    let depth = document.color.depth;
+    let source = |pixel: &dyn Fn(u32, u32) -> [u16; 4]| {
+        let mut builder = SourceBuilder::new(
+            extent,
+            SourceInterpretation {
+                channels: SourceChannels::Rgba,
+                depth: SampleDepth::U16,
+                profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
+                profile_assumed: false,
+            },
+            512 * 1024 * 1024,
+        )
+        .unwrap();
+        let mut row = Vec::with_capacity(extent[0] as usize * 8);
+        for y in 0..extent[1] {
+            row.clear();
+            for x in 0..extent[0] {
+                for code in pixel(x, y) {
+                    row.extend_from_slice(&code.to_le_bytes());
+                }
+            }
+            builder.push_row(&row).unwrap();
+        }
+        Arc::new(builder.finish().unwrap())
+    };
+    assert_eq!(depth, SampleDepth::U16, "the layered fixture paints 16-bit sources");
+    let mut strokes = layer_core::Layer::paint(document.allocate_layer_id(), "strokes");
+    strokes.source = Some(source(&|x, y| {
+        let band = (x + 2 * y) % 900;
+        let alpha = if band < 60 { 65535 } else if band < 80 { ((80 - band) * 3276) as u16 } else { 0 };
+        [52000, 21000, 9000, alpha]
+    }));
+    let mut backdrop = layer_core::Layer::paint(document.allocate_layer_id(), "backdrop");
+    backdrop.source = Some(source(&|x, y| {
+        [(x * 11 % 50000) as u16, (y * 13 % 50000) as u16, ((x ^ y) % 40000) as u16, 65535]
+    }));
+    document.layers.insert(0, strokes);
+    document.layers.push(backdrop);
+    document.active_layer = photo;
+}
+
 #[test]
 #[ignore = "private 120 Hz Wayland display; release hardware navigation qualification"]
 fn native_large_photo_navigation() {
