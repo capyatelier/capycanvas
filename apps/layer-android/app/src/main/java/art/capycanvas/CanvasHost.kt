@@ -692,7 +692,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             }
         }
         if (!next.has("state") && next.has("command_search")) {
-            updateModelState("command_search" to next.get("command_search"), "revision" to next.getLong("revision"))
             recordPublication()
             main.post {
                 commandSearch = next.objectOrNull("command_search")
@@ -707,7 +706,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (!next.has("state") && next.has("layout") && geometry != null) {
             workspaceUpdatesPublished++
             val contentRevision = next.getJSONObject("workspace_update").getLong("content_revision")
-            updateModelState("camera" to next.getJSONObject("camera"), "revision" to geometry.revision)
             recordPublication()
             main.post {
                 val model = snapshot ?: return@post
@@ -732,7 +730,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
         if (!next.has("state") && geometry != null) {
             workspaceUpdatesPublished++
-            next.objectOrNull("camera")?.let { updateModelState("camera" to it) }
             recordPublication()
             main.post {
                 next.objectOrNull("color_preview")?.let { colorPreview = it }
@@ -746,7 +743,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
         next.objectOrNull("camera")?.let { camera ->
             if (BuildConfig.DEBUG) cameraUpdatesPublished++
-            updateModelState("camera" to camera, "revision" to next.getLong("revision"))
             recordPublication()
             main.post {
                 snapshot?.getJSONObject("state")?.apply {
@@ -806,12 +802,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (next.modelRevision != workspaceModelRevision || next.revision < (workspaceGeometry?.revision ?: -1L)) return
         workspaceGeometry = next
         if (next.group != null && next.bounds != null) lastWorkspaceGroup = next.group to next.bounds
-    }
-    private fun updateModelState(vararg values: Pair<String, Any>) {
-        val model = modelSnapshot ?: return
-        val state = model.getJSONObject("state").copy()
-        values.forEach { (name, value) -> state.put(name, value) }
-        modelSnapshot = model.copy().put("state", state)
     }
     private fun contentChanged(previous: JSONObject?, next: JSONObject): Boolean {
         val before = previous?.optJSONObject("state") ?: return true

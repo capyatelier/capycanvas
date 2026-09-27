@@ -27,19 +27,14 @@ fn difference<'a>(
         // Borrow raw fields: unchanged catalogs are compared as bytes, without
         // allocating or traversing their nested values on the render owner.
         let previous: Fields = serde_json::from_str(previous)?;
-        let next: Fields = serde_json::from_str(next.get())?;
-        for (&key, &value) in &next {
-            path.push(key.to_owned());
-            if let Some(old) = previous.get(key) {
-                difference(old.get(), value, path, update)?;
-            } else {
-                update.model_update.push((path.clone(), value));
-            }
-            path.pop();
+        let fields: Fields = serde_json::from_str(next.get())?;
+        if previous.len() != fields.len() || previous.keys().any(|key| !fields.contains_key(key)) {
+            update.model_update.push((path.clone(), next));
+            return Ok(());
         }
-        for key in previous.keys().filter(|key| !next.contains_key(*key)) {
-            path.push((*key).to_owned());
-            update.removed.push(path.clone());
+        for (&key, &value) in &fields {
+            path.push(key.to_owned());
+            difference(previous[key].get(), value, path, update)?;
             path.pop();
         }
     } else if previous.starts_with('[') && next.get().starts_with('[') {
@@ -73,8 +68,12 @@ impl NativeHost {
     /// `removed` (paths). Apply them to the last full model before consuming it.
     /// Null is a value, distinct from removal. Paths contain literal object keys,
     /// and a segment under an array is a decimal index. Arrays whose length
-    /// changes are replaced whole. The header's primary menu carries only its
+    /// changes and objects whose keys change are replaced whole, so every
+    /// object keeps the key order of a full model. Only top-level fields are
+    /// listed in `removed`. The header's primary menu carries only its
     /// title: its sections are the application menus, in order, as submenus.
+    /// Camera, search and workspace layout messages leave the baseline alone,
+    /// so updates stay relative to the last full model, not to those messages.
     pub fn take_model_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
         let previous = self.last_model_snapshot.take();
         self.model_transport = true;
@@ -85,8 +84,7 @@ impl NativeHost {
         let text = String::from_utf8(next).map_err(serde::de::Error::custom)?;
         let fields: Fields = serde_json::from_str(&text)?;
         if !fields.contains_key("state") {
-            // Camera/layout messages have their existing host-specific retained
-            // model handling. Reestablish a full baseline after those messages.
+            self.last_model_snapshot = previous;
             return Ok(Some(text.into_bytes()));
         }
         let ranges = fields
@@ -198,12 +196,12 @@ mod tests {
     #[test]
     fn model_updates_change_array_elements_in_place() {
         let mut previous = json!({
-            "commands": [{"id": "a", "enabled": true}, {"id": "b", "enabled": false, "gone": 1}],
+            "commands": [{"id": "a", "enabled": false}, {"id": "b", "enabled": false, "gone": 1}],
             "rows": [[1, 2], [3, 4]],
             "grown": [1],
         });
         let next = json!({
-            "commands": [{"id": "a", "enabled": true}, {"id": "b", "enabled": true}],
+            "commands": [{"id": "a", "enabled": true}, {"enabled": false, "id": "b"}],
             "rows": [[1, 2], [3, 5]],
             "grown": [1, 2],
         });
@@ -211,14 +209,30 @@ mod tests {
         assert_eq!(
             patch["model_update"],
             json!([
-                [["commands", "1", "enabled"], true],
+                [["commands", "0", "enabled"], true],
+                [["commands", "1"], {"enabled": false, "id": "b"}],
                 [["grown"], [1, 2]],
                 [["rows", "1", "1"], 5]
             ])
         );
-        assert_eq!(patch["removed"], json!([["commands", "1", "gone"]]));
+        assert_eq!(patch["removed"], json!([]));
         apply(&mut previous, patch);
         assert_eq!(previous, next);
+    }
+
+    #[test]
+    fn a_variant_change_replays_in_the_full_model_key_order() {
+        let tabs = r#"{"kind":"tabs","id":44,"panels":["navigator"],"active":"navigator"}"#;
+        let split = r#"{"kind":"split","axis":"vertical","first":{"kind":"tabs","id":44,"panels":["navigator"],"active":"navigator"},"fraction":0.5,"second":{"kind":"tabs","id":45,"panels":["layers"],"active":"layers"}}"#;
+        let previous = format!(r#"{{"root":{tabs},"size":1}}"#);
+        let next = format!(r#"{{"root":{split},"size":1}}"#);
+        let next: &RawValue = serde_json::from_str(&next).unwrap();
+        let mut update = Update::default();
+        difference(&previous, next, &mut Vec::new(), &mut update).unwrap();
+        assert!(update.removed.is_empty());
+        assert_eq!(update.model_update.len(), 1);
+        assert_eq!(update.model_update[0].0, ["root"]);
+        assert_eq!(update.model_update[0].1.get(), split);
     }
 
     #[test]
@@ -276,6 +290,40 @@ mod tests {
             json!({"title": compact["title"], "sections": [submenus]}),
             serde_json::to_value(host.session.application_menu(ApplicationMenu::Primary)).unwrap()
         );
+    }
+
+    #[test]
+    fn camera_messages_between_models_keep_the_update_baseline() {
+        use layer_ui::{CommandId, Platform, UiAction};
+        let mut host = NativeHost::new(Platform::Android).unwrap();
+        host.resize(2200, 1440, 1.75).unwrap();
+        let read = |host: &mut NativeHost| {
+            serde_json::from_slice::<Value>(&host.take_model_update_bytes().unwrap().unwrap())
+                .unwrap()
+        };
+        let mut retained = read(&mut host);
+        for command in [CommandId::SelectAll, CommandId::Deselect] {
+            host.scroll([600., 400.], [0., 40.], 1.75, false, false)
+                .unwrap();
+            let camera = read(&mut host);
+            assert!(
+                camera.get("state").is_none() && camera.get("camera").is_some(),
+                "{camera}"
+            );
+            host.dispatch(UiAction::Invoke { command }).unwrap();
+            let patch = read(&mut host);
+            assert!(
+                patch.get("model_update").is_some(),
+                "{command:?} sent a full model"
+            );
+            apply(&mut retained, patch);
+            let mut expected = host.snapshot();
+            expected["workspace_update"] =
+                serde_json::to_value(host.session.workspace_update()).unwrap();
+            let expected: Value =
+                serde_json::from_slice(&serde_json::to_vec(&expected).unwrap()).unwrap();
+            assert_eq!(retained, expected);
+        }
     }
 
     #[test]

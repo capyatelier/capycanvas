@@ -165,14 +165,15 @@ take an active workspace and can acquire it after its owner closes.
 `Native.modelUpdate` sends the paths that changed since the last full model
 ([`model_update.rs`](../../crates/layer-host/src/model_update.rs)). Arrays of
 unchanged length are diffed element by element, with a decimal index as the path
-segment. The header's primary menu carries only its title, and `primaryMenu()`
-in `WorkspaceHeader.kt` rebuilds its sections from `application_menus`. A single
-command-availability change, such as Select All, is about 1.5 KB. On the owner
-thread, Rust still builds and serializes the full 178 KB snapshot and splits it
-by top-level field before diffing. That takes about 0.7 ms per publication on a
-desktop and 6–8.5 ms on the MovinkPad 11, where a drag release previously cost
-15–18 ms. The follow-up is to rebuild and re-serialize only the entries whose
-input revisions changed.
+segment. An object whose keys change, such as a layout node switching variant,
+is sent whole, so every object keeps a full model's key order. The header's
+primary menu carries only its title, and `primaryMenu()` in `WorkspaceHeader.kt`
+rebuilds its sections from `application_menus`. A single command-availability
+change, such as Select All, is about 1.5 KB. On the owner thread, Rust still
+builds and serializes the full 178 KB snapshot and splits it by top-level field
+before diffing. That takes about 0.7 ms per publication on a desktop and 6–9 ms
+on the MovinkPad 11. The follow-up is to rebuild and re-serialize only the
+entries whose input revisions changed.
 
 `CanvasHost` applies each model update on the native owner thread. Replaced
 values reuse every part the previous model repeats, so unchanged objects and
@@ -180,9 +181,13 @@ array elements keep their identity. The main thread then assigns the model into
 [`ObservedModel`](../../apps/layer-android/app/src/main/java/art/capycanvas/ObservedModel.kt).
 Compose observes the published root, `state` and `state.document_file` one key
 at a time, so a publication recomposes only the scopes that read a changed
-key. Composables with unchanged arguments skip. Camera, layout and command
-search packets update the owner's model as well as the observed one, so a later
-full publication cannot restore an older value.
+key. Composables with unchanged arguments skip.
+
+Camera, workspace layout and command search messages leave the update baseline
+alone on both sides. Rust keeps diffing against its last full model. The owner's
+model in `CanvasHost` stays equal to that baseline, and those messages patch
+only the observed model. The next model update therefore carries every value
+that differs from the baseline, including ones a message changed in between.
 
 Interaction tests dispatch typed mouse/touch/stylus `MotionEvent`s through native
 views; `AndroidInteractionTest` optionally accepts `-e systemInput true` where OS

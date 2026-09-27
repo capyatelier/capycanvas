@@ -365,7 +365,8 @@ mod tests {
         assert!(host.take_model_update_bytes().unwrap().is_none());
         host.dispatch(UiAction::Invoke { command: CommandId::Eraser }).unwrap();
         let changed = decoded(host.take_model_update_bytes().unwrap()).unwrap();
-        assert!(changed.get("state").is_some(), "Reestablish the full model baseline after a search packet");
+        assert!(changed.get("model_update").is_some(), "Search packets keep the model baseline: {changed}");
+        assert!(!changed.to_string().contains("\"command_search\""), "The closed search matches the baseline: {changed}");
     }
 
     fn host(platform: Platform) -> NativeHost {
