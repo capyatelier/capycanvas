@@ -383,7 +383,7 @@ pub(crate) enum Field {
     Numeric(NumberControl),
     Range(Rc<RangeControl>),
     Choice(gtk::DropDown),
-    Menu(gtk::Image, gtk::Label),
+    Menu(gtk::MenuButton, gtk::Image, gtk::Label),
     Segments(Vec<gtk::ToggleButton>),
     Action(gtk::Button),
 }
@@ -400,7 +400,7 @@ impl Field {
                     .position(|i| i.selected)
                     .map_or(gtk::INVALID_LIST_POSITION, |i| i as u32),
             ),
-            (Field::Menu(image, text), ToolOption::Choice { items, .. }) => {
+            (Field::Menu(_, image, text), ToolOption::Choice { items, .. }) => {
                 if let Some(selected) = items.iter().find(|i| i.selected)
                     && text.text() != selected.label
                 {
@@ -413,18 +413,24 @@ impl Field {
                     button.set_active(item.selected);
                 }
             }
+            (Field::Menu(button, ..), ToolOption::Action { state, .. }) => show_availability(button.upcast_ref(), state),
             (Field::Action(b), ToolOption::Action { state, .. }) => {
-                b.set_sensitive(state.enabled);
-                let tooltip = state.disabled_reason.as_deref().unwrap_or(&state.tooltip);
-                if b.tooltip_text().as_deref() != Some(tooltip) {
-                    b.set_tooltip_text(Some(tooltip));
-                }
+                show_availability(b.upcast_ref(), state);
                 if let Some(b) = b.downcast_ref::<gtk::ToggleButton>() {
                     b.set_active(state.selected);
                 }
             }
             _ => (),
         }
+    }
+}
+
+/// Sensitivity, and the disabled reason or the command's tooltip.
+fn show_availability(widget: &gtk::Widget, state: &CommandState) {
+    widget.set_sensitive(state.enabled);
+    let tooltip = state.disabled_reason.as_deref().unwrap_or(&state.tooltip);
+    if widget.tooltip_text().as_deref() != Some(tooltip) {
+        widget.set_tooltip_text(Some(tooltip));
     }
 }
 

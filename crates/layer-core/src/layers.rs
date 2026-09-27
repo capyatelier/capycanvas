@@ -464,6 +464,11 @@ pub struct LayerOperation {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LayerOperationKind {
     ApplyMask,
+    /// Erases where the coverage is set: ApplyMask with complemented coverage.
+    /// Alpha-locked content keeps its transparency, so nothing changes.
+    Erase {
+        alpha_locked: bool,
+    },
     Transform(crate::ImageTransform),
     Figure(Figure),
     Fill {
@@ -538,7 +543,9 @@ impl LayerOperation {
         // coverage is a unit interval; native storage owns quantization/range.
         let color_ok = |c: &[f32; 4]| c.iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(&c[3]);
         let valid = match &self.kind {
-            LayerOperationKind::ApplyMask => self.placement == Affine::IDENTITY,
+            LayerOperationKind::ApplyMask | LayerOperationKind::Erase { .. } => {
+                self.placement == Affine::IDENTITY
+            }
             LayerOperationKind::Transform(transform) => {
                 self.placement == Affine::IDENTITY
                     && transform.validate().is_ok()

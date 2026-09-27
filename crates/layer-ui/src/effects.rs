@@ -735,6 +735,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let doc = self.engine.document();
                 let current = doc.layer(doc.active_layer).ok_or("Select a layer first")?;
                 let replacing = choosing && current.effect.is_some();
+                let masked = !replacing && doc.selection.is_some();
                 if replacing && doc.is_locked(current.id) { return Err("This layer is locked".into()); }
                 if replacing && current.effect.as_ref().is_some_and(|fx| fx.program.id == effect.program.id) {
                     return Ok(());
@@ -757,10 +758,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let mut instance = EffectInstance::new(float32_program(&effect.program(), depth));
                 if hdr && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
                 layer.effect = Some(Arc::new(instance));
-                self.layer_edit(if replacing { Edit::ReplaceLayer(Box::new(layer)) } else { Edit::Batch(vec![
-                    Edit::InsertLayer { index, layer },
-                    Edit::SetActiveLayer { id },
-                ]) })?;
+                if masked {
+                    layer.mask = Some(self.selection_mask(&layer, false)?);
+                }
+                self.layer_edit(if replacing {
+                    Edit::ReplaceLayer(Box::new(layer))
+                } else {
+                    let mut edits = vec![Edit::InsertLayer { index, layer }, Edit::SetActiveLayer { id }];
+                    if masked {
+                        edits.push(Edit::SetSelection(None));
+                    }
+                    Edit::Batch(edits)
+                })?;
                 if !choosing {
                     self.state.customization.expanded = None;
                     self.state.workspace.layout.reveal_after(Panel::Properties, Panel::Adjustments)?;

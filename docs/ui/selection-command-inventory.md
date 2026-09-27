@@ -128,9 +128,9 @@ invocation point falls inside or outside it:
 | Refine | Feather…; Grow…; Shrink…; Border…; Smooth… | Next |
 | Position | Move Selection; Transform Selection… | Next |
 | Artwork | Fill Selection; Transform Selected Pixels… | Existing behavior, with target-aware labels and validation |
-| Artwork | Clear Selected Pixels; Clear Outside Selection | Next; new pixel operations |
+| Artwork | Clear Selected Pixels; Clear Outside Selection | Existing. One erase operation through soft or inverted coverage; a placed photo keeps its original |
 | Clipboard | Copy; Copy Merged; Cut; Paste | Next for selection export/cut; existing Paste Image integration |
-| New layer | Copy Selection to New Layer; Cut Selection to New Layer | Next; preserve document-space placement |
+| New layer | Copy Selection to New Layer; Cut Selection to New Layer | Existing. In place, above the source's clipping stack, one undo step |
 | Document | Crop Canvas to Selection… | Next; explicit document-wide command |
 | Display | Show Selection Outline | Core |
 
@@ -140,10 +140,11 @@ the user opens a menu outside its boundary. During polygon construction, use
 Complete Selection and Cancel Selection, not commands assuming a completed mask.
 
 The selection action bar is now the selection context of the
-[canvas action bar](canvas-action-bar.md): Deselect, Invert, Transform, Mask,
-Fill, Quick Mask and Save as Selection Layer beside the selection, with More
-opening the same Select menu. Refinement, copy and clear items join it as their
-commands ship. It is not customizable yet; any future customization reuses the
+[canvas action bar](canvas-action-bar.md): Deselect, Invert, Copy to Layer ▾,
+Transform, Refine ▾, Mask, Adjust ▾, Fill, Clear ▾, Quick Mask and Save as
+Selection Layer beside the selection, with More opening the same Select menu.
+Adjust ▾ inserts an effect layer masked to the selection. Further refinement and
+clipboard items join it as their commands ship. It is not customizable yet; any future customization reuses the
 workspace command inventory, never a second system. The View toggle is **Show
 canvas action bar**.
 
@@ -277,10 +278,11 @@ direction and must not accidentally call this destructive replacement path.
 | --- | --- | --- |
 | Edit | Undo / Redo | Existing. Saved-mask edits dirty the project; current-selection edits follow existing transient-selection policy. |
 | Edit | Fill Selection | Existing on editable artwork. In mask mode, explicit Fill Mask targets grayscale coverage over its full extent. |
-| Edit | Clear Selected Pixels | Next. New selected-pixel erase operation with soft coverage. |
-| Edit | Clear Outside Selection | Next. Erase through inverse coverage on the active artwork target. |
+| Edit | Clear Selected Pixels | Existing. Delete and Backspace. An erase operation through soft coverage, rewriting only the pages the selection covers. Also in Select and on the bar's Clear ▾. Unavailable, with a reason, under alpha lock, with no selection, and while editing Quick Mask, a Selection Layer or a mask. |
+| Edit | Clear Outside Selection | Existing. No default key. Erase through inverse coverage on the active artwork target. |
+| Edit | Clear Entire Layer | Existing (`ClearLayer`, relabelled). Unbound. Discards a placed photo's original. |
 | Edit | Copy; Cut; Copy Merged; Paste | Next for selection clipboard export/cut. Paste Image exists; text fields keep native clipboard ownership. |
-| Layer | Copy Selection to New Layer; Cut Selection to New Layer | Next. Single undoable operation; do not move contents to the origin. |
+| Layer | Copy Selection to New Layer; Cut Selection to New Layer | Existing. Ctrl+J and Ctrl+Shift+J; Layer › New, Select and the bar's Copy to Layer ▾. One undo step that shares the source's pixels and placed photo, consumes the selection (Reselect restores it) and places the copy unclipped above the source's clipping stack. Without a selection, Copy duplicates the selected layers. Groups, effect, selection and paper layers and masks are refused with a reason. |
 | Edit | Transform Selected Pixels… | Existing Scale/Rotate behavior when a selection and editable content exist. Keep separate from Transform Selection. |
 | Edit | Stroke Selection… | Later. Paint an outline with width/alignment/brush settings; Border Selection changes coverage instead. |
 | Document | Crop Canvas to Selection… | Next. Crop to the bounding rectangle of nonzero coverage; holes/soft edges do not erase artwork. Affects the whole document and stored masks. |
@@ -303,7 +305,10 @@ explicit scalar-mask counterpart is supported; never fall through to artwork.
 ## 8. Shortcuts and non-keyboard access
 
 Keep the existing remappable Ctrl/Cmd+A Select All, Ctrl/Cmd+D Deselect, and
-Ctrl/Cmd+Shift+I Invert bindings. Add Ctrl/Cmd+Shift+D Reselect subject to the
+Ctrl/Cmd+Shift+I Invert bindings. Delete and Backspace clear the selected pixels,
+after text fields and title bar editing, the polygon's last point, and a selected
+guide under the Ruler or Move tool. Ctrl/Cmd+J and Ctrl/Cmd+Shift+J copy and cut
+the selection to a new layer. Add Ctrl/Cmd+Shift+D Reselect subject to the
 existing conflict resolver. The researched applications disagree on Deselect/
 Reselect defaults, so do not silently rebind existing users to another scheme.
 

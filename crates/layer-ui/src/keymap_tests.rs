@@ -19,9 +19,17 @@ fn every_keymap_preset_is_valid_and_conflict_free() {
                 if platform == Platform::Gtk {
                     assert!(ids.iter().any(|i| i == id), "{} binds unknown {id}", preset.id);
                 }
+                let specificity = settings.scope_of(id).specificity();
                 for key in keys {
                     key.validate_for(settings.held_shortcut(id, Platform::Gtk)).unwrap();
-                    assert!(settings.conflict(id, key, Platform::Gtk).is_none(), "{} {id} {key:?}", preset.id);
+                    assert!(
+                        settings
+                            .conflicts(id, key, Platform::Gtk)
+                            .iter()
+                            .all(|other| other.scope.specificity() != specificity),
+                        "{} {id} {key:?}",
+                        preset.id
+                    );
                 }
             }
             for (trigger, id) in preset.gestures {
@@ -324,9 +332,22 @@ fn gimp_and_affinity_keymaps_follow_their_apps() {
         ("a", true, true, Some("command.Deselect")),
         ("d", true, false, None),
         ("z", true, true, None),
+        ("delete", false, false, Some("command.ClearSelected")),
+        ("backspace", false, false, None),
+        ("j", true, false, None),
+        ("j", true, true, Some("command.FitCanvas")),
     ] {
         assert_eq!(bound(&gimp, &chord(key, command, shift, false)).as_deref(), expected, "GIMP {key}");
     }
+    let ruler = |settings: &Settings, key| {
+        settings
+            .shortcut_matches(&chord(key, false, false, false), Platform::Gtk, Some(ToolCategory::ShapesRulers))
+            .into_iter()
+            .map(|d| d.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ruler(&gimp, "delete"), ["command.DeleteRuler", "command.ClearSelected"]);
+    assert_eq!(ruler(&gimp, "backspace"), ["command.DeleteRuler"]);
     let mut affinity = Settings::default();
     crate::keymaps::select(&mut affinity, "affinity").unwrap();
     for (key, command, shift, alt, expected) in [
@@ -336,9 +357,39 @@ fn gimp_and_affinity_keymaps_follow_their_apps() {
         ("z", true, true, false, Some("command.Redo")),
         ("y", true, false, false, None),
         ("f", true, true, true, Some("command.SearchCommands")),
-        ("j", true, false, false, Some("layer.duplicate")),
+        ("j", true, false, false, Some("command.CopySelectionToLayer")),
+        ("j", true, true, false, Some("command.CutSelectionToLayer")),
         ("d", true, false, false, Some("command.Deselect")),
+        ("delete", false, false, false, Some("command.ClearSelected")),
+        ("backspace", false, false, false, Some("command.ClearSelected")),
+        ("backspace", false, false, true, Some("command.FillSelection")),
     ] {
         assert_eq!(bound(&affinity, &chord(key, command, shift, alt)).as_deref(), expected, "Affinity {key}");
+    }
+}
+
+#[test]
+fn selection_to_layer_and_clear_keys_follow_each_preset() {
+    let preset = |id: &str| {
+        let mut settings = Settings::default();
+        crate::keymaps::select(&mut settings, id).unwrap();
+        settings
+    };
+    let key = |key: &str, command, shift| chord(key, command, shift, false);
+    for id in ["capy", "photoshop", "krita", "affinity"] {
+        let settings = preset(id);
+        assert_eq!(bound(&settings, &key("j", true, false)).as_deref(), Some("command.CopySelectionToLayer"), "{id}");
+        assert_eq!(bound(&settings, &key("j", true, true)).as_deref(), Some("command.CutSelectionToLayer"), "{id}");
+        assert!(settings.keys("layer.duplicate").is_empty(), "{id} moves Ctrl+J from Duplicate layer");
+        assert_eq!(bound(&settings, &key("delete", false, false)).as_deref(), Some("command.ClearSelected"), "{id}");
+        assert_eq!(bound(&settings, &key("backspace", false, false)).as_deref(), Some("command.ClearSelected"), "{id}");
+        assert!(settings.keys("command.ClearOutside").is_empty(), "{id}");
+    }
+    for preset in crate::keymaps::KEYMAP_PRESETS.iter().filter(|p| ["photoshop", "krita", "gimp", "affinity"].contains(&p.id)) {
+        assert_eq!(preset.revision, 2, "{} changed its rows", preset.id);
+    }
+    assert!(!crate::keymaps::KEYMAP_PRESETS.iter().any(|p| p.differences.iter().any(|(_, note)| note.contains("clears only the selection"))));
+    for chord in [key("j", true, false), key("j", true, true), key("delete", false, false), key("backspace", false, false)] {
+        assert!(chord.available(Platform::Web), "{chord:?}");
     }
 }

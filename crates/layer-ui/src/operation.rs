@@ -276,7 +276,7 @@ fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
             LayerOperationKind::Transform(t) if op.coverage.initial.is_none() => {
                 t.forward_bounds(bounds)
             }
-            LayerOperationKind::ApplyMask => bounds,
+            LayerOperationKind::ApplyMask | LayerOperationKind::Erase { .. } => bounds,
             _ => bounds.union(op.bounds(extent)),
         };
     }

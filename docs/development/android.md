@@ -276,10 +276,13 @@ and `continuousResizeFrameTiming`.
 canvas with the same benchmark APKs: pen strokes, a 24-megapixel photo placement
 and a full-canvas selection transform, each with stylus handle drags, contact
 taps that hide and return the bar, and bar show/hide alone. Run it with
-`-e canvasBarBenchmark true`; `-e scenarios ui,paint,photo,selection`, `durationMs`,
+`-e canvasBarBenchmark true`; `-e scenarios ui,paint,photo,selection,menus`, `durationMs`,
 `width`, `height` and `transparency` narrow or resize the run. The `ui` scenario
 uses a 2048 × 1536 document to isolate UI frames: bar show/hide, bar moves, show/hide
-in Zen and a plain Tool Options change. The `photo` scenario also repeats short
+in Zen and a plain Tool Options change. The `menus` scenario, also on 2048 × 1536,
+repeats rectangle-selection pen strokes after which the selection bar returns,
+the same strokes with the bar turned off, and opening and closing the Adjust ▾
+menu and More. The `photo` scenario also repeats short
 placement and pixel transform drags, each marked by a `capy-drag` trace section, so a
 Perfetto trace shows every drag start and release. The `capy.publish.native` and
 `capy.publish.parse` trace sections time each publication on the owner thread, and
@@ -290,6 +293,17 @@ and UI `FrameMetrics` percentiles.
 `AndroidInteractionTest#canvasActionBarJourneysAcrossDevices` covers the bar's
 mouse, finger and stylus behavior and saves light and dark captures in
 `validation/canvas-bar`.
+`AndroidInteractionTest#canvasBarSelectionMenusAcrossDevices` chooses Copy to
+Layer, Clear ▾ › Clear Outside Selection and Adjust ▾ › Curves with mouse,
+finger and stylus, from the bar in a wide layout and through More beside wide
+docks. It checks one undo step for each, the new layer's pixels, and the masked
+Curves layer. `#selectionBarOverflowsIntoMoreInBothOrientations` checks in
+landscape and portrait that the selection bar keeps a leading run of items and
+lists the rest in More, then cuts the selection to a new layer through its
+menu. `#hardwareDeleteClearsSelectedPixels` presses the keyboard's Delete and
+Backspace over a selection. A focused text field keeps both keys, and a focused
+drawing tab keeps Delete, which closes that drawing: `MainActivity` does not
+forward that Delete to the core.
 `AndroidInteractionTest#canvasNoticesExplainRefusalsAcrossDevices` covers the
 notice with mouse, finger and stylus. Fingers navigate the canvas, so the finger
 pass makes its tool gestures with the pen and uses the finger for the notice.

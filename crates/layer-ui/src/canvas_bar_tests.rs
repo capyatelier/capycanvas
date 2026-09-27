@@ -418,12 +418,31 @@ fn selection_bar_follows_selection_tools_commands_and_history() {
         [
             CommandId::Deselect,
             CommandId::InvertSelection,
+            CommandId::CopySelectionToLayer,
             CommandId::ScaleRotate,
             CommandId::MaskSelection,
             CommandId::FillSelection,
+            CommandId::ClearSelected,
             CommandId::QuickMask,
             CommandId::SaveSelectionLayer,
         ]
+    );
+    assert_eq!(
+        bar.items.iter().map(|i| (i.label, i.menu)).collect::<Vec<_>>(),
+        [
+            ("Deselect", None),
+            ("Invert", None),
+            ("Copy to Layer", Some(CanvasBarMenu::CopyToLayer)),
+            ("Transform", None),
+            ("Refine", Some(CanvasBarMenu::Refine)),
+            ("Mask", None),
+            ("Adjust", Some(CanvasBarMenu::Adjust)),
+            ("Fill", None),
+            ("Clear", Some(CanvasBarMenu::Clear)),
+            ("Quick Mask", None),
+            ("Save", None),
+        ],
+        "the selection bar follows its priority order"
     );
     let menu = s.canvas_bar_menu(bar.context, bar.items.len()).unwrap();
     assert!(menu.sections.iter().flatten().any(|i| i.label.starts_with("Grow")), "More includes the Select menu");
@@ -865,4 +884,106 @@ fn warp_seeds_from_the_transform_and_bends_through_nodes_and_tangents() {
     invoke(&mut s, CommandId::TransformWarp);
     invoke(&mut s, CommandId::ApplyTransform);
     assert!(!s.operation.active(), "an unbent warp applies at once");
+}
+
+fn menu_labels(menu: &ContextMenu) -> Vec<Vec<&str>> {
+    menu.sections.iter().map(|section| section.iter().map(|i| i.label.as_str()).collect()).collect()
+}
+
+fn find_item<'a>(sections: &'a [Vec<ContextMenuItem>], label: &str) -> Option<&'a ContextMenuItem> {
+    sections.iter().flatten().find_map(|item| {
+        if item.label == label {
+            Some(item)
+        } else {
+            find_item(&item.sections, label)
+        }
+    })
+}
+
+#[test]
+fn selection_bar_menus_list_their_commands_and_refuse_stale_edits() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::Move);
+    let bar = s.state.canvas_bar.clone().unwrap();
+    let wrapped = |command| {
+        Some(UiAction::CanvasBarEdit {
+            context: bar.context,
+            action: Box::new(UiAction::Invoke { command }),
+        })
+    };
+    let copy = s.canvas_bar_choice_menu(bar.context, "copy_to_layer").unwrap();
+    assert_eq!(menu_labels(&copy), [["Copy Selection to New Layer", "Cut Selection to New Layer"]]);
+    assert_eq!(copy.sections[0][0].action, wrapped(CommandId::CopySelectionToLayer));
+    assert_eq!(copy.sections[0][0].hint, "Ctrl+J", "menus show the command's keys");
+    let clear = s.canvas_bar_choice_menu(bar.context, "clear").unwrap();
+    assert_eq!(menu_labels(&clear), [["Clear Selected Pixels", "Clear Outside Selection"]]);
+    assert_eq!(clear.sections[0][1].action, wrapped(CommandId::ClearOutside));
+    let refine = s.canvas_bar_choice_menu(bar.context, "refine").unwrap();
+    assert_eq!(menu_labels(&refine), [["Grow…", "Shrink…"]]);
+    let adjust = s.canvas_bar_choice_menu(bar.context, "adjust").unwrap();
+    assert_eq!(
+        adjust.sections[0].iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
+        s.application_menu(ApplicationMenu::Filter).sections[0].iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
+        "Adjust lists the Filter menu's categories"
+    );
+    let curves = find_item(&adjust.sections, "Curves").expect("Curves in its category");
+    assert!(matches!(
+        curves.action.as_ref(),
+        Some(UiAction::CanvasBarEdit { action, .. }) if matches!(**action, UiAction::Effect { .. })
+    ));
+    assert!(s.canvas_bar_choice_menu(bar.context, "copy").is_none(), "Copy is not on the bar yet");
+    for item in &bar.items {
+        if let (Some(menu), ToolOption::Choice { id, items, segmented, .. }) = (item.menu, &item.option) {
+            assert_eq!((*id, items.is_empty(), *segmented), (menu.id(), true, false), "a menu without a primary command");
+        }
+    }
+
+    let more = s.canvas_bar_menu(bar.context, 0).unwrap();
+    let overflow = find_item(&more.sections, "Clear").expect("an overflowed menu is a submenu of More");
+    assert_eq!(
+        overflow.sections.concat().iter().map(|i| (&i.label, &i.action)).collect::<Vec<_>>(),
+        clear.sections.concat().iter().map(|i| (&i.label, &i.action)).collect::<Vec<_>>()
+    );
+
+    let reject = |s: &mut UiSession<Recorder>, context, action| {
+        s.dispatch(UiAction::CanvasBarEdit { context, action: Box::new(action) }).is_err()
+    };
+    assert!(reject(&mut s, bar.context, UiAction::Invoke { command: CommandId::ClearLayer }), "only the bar's own actions");
+    let stale = CanvasBarContext { generation: bar.context.generation + 1, ..bar.context };
+    assert!(reject(&mut s, stale, UiAction::Invoke { command: CommandId::ClearOutside }), "another bar's menu");
+    assert!(s.canvas_bar_choice_menu(stale, "clear").is_none());
+    let before = s.engine.document().layers.clone();
+    s.dispatch(clear.sections[0][1].action.clone().unwrap()).unwrap();
+    s.frame(3, 3).unwrap();
+    let operations = &s.engine.backend().pending_operations;
+    assert!(matches!(operations[..], [(_, layer_core::LayerOperation { kind: layer_core::LayerOperationKind::Erase { .. }, .. })]));
+    assert!(operations[0].1.coverage.initial.as_ref().unwrap().inverted, "Clear Outside erases the inverse");
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().layers, before);
+    invoke(&mut s, CommandId::Deselect);
+    assert!(s.state.canvas_bar.is_none());
+    assert!(reject(&mut s, bar.context, UiAction::Invoke { command: CommandId::ClearSelected }), "a bar that has gone");
+}
+
+#[test]
+fn adjust_on_the_selection_bar_masks_the_new_effect_to_the_selection() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::Move);
+    let bar = s.state.canvas_bar.clone().unwrap();
+    let before = s.engine.document().clone();
+    let adjust = s.canvas_bar_choice_menu(bar.context, "adjust").unwrap();
+    let curves = find_item(&adjust.sections, "Curves").unwrap().action.clone().unwrap();
+    s.dispatch(curves).unwrap();
+    s.frame(2, 2).unwrap();
+    let doc = s.engine.document();
+    let effect = doc.layer(doc.active_layer).unwrap();
+    assert_eq!(effect.kind, LayerKind::Effect);
+    let mask = effect.mask.as_ref().expect("the selection becomes the effect's mask");
+    assert_eq!(mask.initial, before.selection);
+    assert_eq!(mask.default_coverage, 0.);
+    assert!(doc.selection.is_none(), "the mask consumes the selection");
+    assert!(s.command(CommandId::Reselect).enabled);
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().layers, before.layers, "one undo step removes the masked effect");
+    assert_eq!(s.engine.document().selection, before.selection, "and restores the selection");
 }

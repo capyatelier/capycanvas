@@ -52,6 +52,18 @@ fn anchor_in_window(w: &Workspace) -> [f32; 4] {
     ]
 }
 
+/// Press a bar command, through More when it does not fit.
+fn press_bar_command(w: &Workspace, native: &mut RemoteInput, name: &str, label: &str) {
+    let widget = bar_widget(w, name);
+    if widget.is_mapped() {
+        native.click(center(w, &widget));
+    } else {
+        native.click(center(w, &bar_widget(w, "canvas-bar-more")));
+        let item = until_some(|| mapped_label(w.canvas_bar.root.upcast_ref(), label), label);
+        native.click(center(w, &item));
+    }
+}
+
 fn shown(w: &Workspace) -> bool {
     w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()
 }
@@ -122,8 +134,7 @@ fn native_canvas_bar_input() {
         "the selection bar appears beside the new selection",
     );
     let mut native = remote_input();
-    let transform = bar_widget(&w, "canvas-bar-ScaleRotate");
-    native.click(center(&w, &transform));
+    press_bar_command(&w, &mut native, "canvas-bar-ScaleRotate", CommandId::ScaleRotate.label());
     until(
         || kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && shown(&w),
         "Transform on the selection bar opens the transform bar",
@@ -398,7 +409,7 @@ fn native_canvas_bar_warps_a_selection() {
     let click = |native: &mut RemoteInput, widget: &gtk::Widget| {
         native.click(center(&w, widget));
     };
-    click(&mut native, &bar_widget(&w, "canvas-bar-ScaleRotate"));
+    press_bar_command(&w, &mut native, "canvas-bar-ScaleRotate", CommandId::ScaleRotate.label());
     until(|| kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && shown(&w), "Transform opens the transform bar");
     let modes = bar_widget(&w, "canvas-bar-choice-transform-mode");
     let mut warp = modes.first_child();
@@ -512,3 +523,173 @@ fn native_canvas_bar_finger_moves_a_transform() {
     until(|| shown(&w), "the bar returns after the panel drop");
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Device {
+    Mouse,
+    Touch,
+    Pen,
+}
+
+fn tap(native: &mut RemoteInput, device: Device, point: [f32; 2]) {
+    native.perform(match device {
+        Device::Mouse => json!([{"point": point}, {"down": true}, {"wait_ms": 30}, {"down": false}]),
+        Device::Touch => json!([{"touch": "down", "point": point}, {"wait_ms": 40}, {"touch": "up"}]),
+        Device::Pen => json!([{"pen": "down", "point": point}, {"wait_ms": 40}, {"pen": "up"}, {"pen": "leave"}]),
+    });
+}
+
+/// The action of the item reached through `labels` in a native menu model.
+fn menu_action(model: &gtk::gio::MenuModel, labels: &[&str]) -> Option<String> {
+    let (label, rest) = labels.split_first()?;
+    (0..model.n_items()).find_map(|i| {
+        if let Some(section) = model.item_link(i, "section") {
+            return menu_action(&section, labels);
+        }
+        let text = model.item_attribute_value(i, "label", None)?.get::<String>()?;
+        if text != *label {
+            return None;
+        }
+        match model.item_link(i, "submenu") {
+            Some(submenu) => menu_action(&submenu, rest),
+            None if rest.is_empty() => model.item_attribute_value(i, "action", None)?.get::<String>(),
+            None => None,
+        }
+    })
+}
+
+/// Open a bar menu, or its submenu in More when it does not fit, and choose
+/// `labels` in turn. The isolated tablet's synthetic serials cannot grab a
+/// popup, so a pen opens the menu and its item runs through the menu's action.
+fn choose_from_bar_menu(w: &Workspace, native: &mut RemoteInput, device: Device, menu: layer_ui::CanvasBarMenu, labels: &[&str]) {
+    let button = bar_widget(w, &format!("canvas-bar-menu-{}", menu.id()));
+    let mut path = labels.to_vec();
+    let opener = if button.is_mapped() {
+        button
+    } else {
+        path.insert(0, menu.label());
+        bar_widget(w, "canvas-bar-more")
+    };
+    tap(native, device, center(w, &opener));
+    let popover = until_some(
+        || opener.downcast_ref::<gtk::MenuButton>()?.popover()?.downcast::<gtk::PopoverMenu>().ok().filter(|p| p.is_visible()),
+        &format!("{device:?} opens {}", menu.label()),
+    );
+    if let Device::Pen = device {
+        let action = until_some(|| popover.menu_model().and_then(|m| menu_action(&m, &path)), &path.join(" › "));
+        popover.activate_action(&action, None).unwrap();
+        return;
+    }
+    for label in path {
+        let item = until_some(|| mapped_label(w.canvas_bar.root.upcast_ref(), label), label);
+        tap(native, device, center(w, &item));
+    }
+}
+
+fn document(w: &Workspace) -> layer_core::Document {
+    w.gpu.borrow().as_ref().unwrap().session.engine().document().clone()
+}
+
+/// Fill a lasso selection on `layer` and wait for its bar.
+fn filled_selection(w: &Rc<Workspace>, layer: u64) {
+    w.dispatch(UiAction::SelectLayer { id: layer });
+    w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+    native_pen_path(w, &[[650., 500.], [1150., 500.], [1150., 850.], [650., 850.], [650., 500.]]);
+    w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
+    until(
+        || state(w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Selection) && shown(w),
+        "the selection bar appears beside the new selection",
+    );
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_canvas_bar_selection_menus --tablet"]
+fn native_canvas_bar_selection_menus() {
+    use layer_ui::CanvasBarMenu;
+    let app = native_test_app("art.capycanvas.CanvasBarMenus");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
+    let paint = document(&w).active_layer.0;
+    let curves = {
+        let g = w.gpu.borrow();
+        let filters = g.as_ref().unwrap().session.application_menu(layer_ui::ApplicationMenu::Filter);
+        filters.sections[0]
+            .iter()
+            .find(|category| category.sections.iter().flatten().any(|i| i.label == "Curves"))
+            .expect("Curves has a category")
+            .label
+            .clone()
+    };
+    let mut native = remote_input();
+    for device in [Device::Mouse, Device::Touch, Device::Pen] {
+        filled_selection(&w, paint);
+        let layers = document(&w).layers.len();
+        choose_from_bar_menu(&w, &mut native, device, CanvasBarMenu::CopyToLayer, &["Copy Selection to New Layer"]);
+        until(
+            || {
+                let doc = document(&w);
+                doc.layers.len() == layers + 1 && doc.selection.is_none() && doc.active_layer.0 != paint
+            },
+            &format!("{device:?}: Copy to Layer puts the selection on a new layer"),
+        );
+
+        filled_selection(&w, paint);
+        let pixels = document(&w).layer(layer_core::LayerId(paint)).unwrap().raster.identity();
+        choose_from_bar_menu(&w, &mut native, device, CanvasBarMenu::Clear, &["Clear Outside Selection"]);
+        until(
+            || {
+                let doc = document(&w);
+                doc.layer(layer_core::LayerId(paint)).unwrap().raster.identity() != pixels && doc.selection.is_some()
+            },
+            &format!("{device:?}: Clear Outside erases around the kept selection"),
+        );
+
+        filled_selection(&w, paint);
+        choose_from_bar_menu(&w, &mut native, device, CanvasBarMenu::Adjust, &[&curves, "Curves"]);
+        until(
+            || {
+                let doc = document(&w);
+                let effect = doc.layer(doc.active_layer).unwrap();
+                effect.kind == layer_core::LayerKind::Effect && effect.mask.is_some() && doc.selection.is_none()
+            },
+            &format!("{device:?}: Adjust › Curves masks a new Curves layer to the selection"),
+        );
+    }
+}
+
+#[test]
+#[ignore = "isolated compositor, GPU and native mouse and keyboard delivery"]
+fn native_delete_clears_pixels_unless_a_guide_is_selected() {
+    let app = native_test_app("art.capycanvas.DeleteKey");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    let paint = document(&w).active_layer;
+    filled_selection(&w, paint.0);
+    let mut native = remote_input();
+    let pixels = |w: &Workspace| document(w).layer(paint).unwrap().raster.identity();
+    let filled = pixels(&w);
+    native.key(0xffff);
+    until(|| pixels(&w) != filled, "Delete clears the selected pixels");
+    assert!(document(&w).selection.is_some(), "clearing keeps the selection");
+    w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+    until(|| pixels(&w) == filled, "one undo step restores them");
+
+    w.dispatch(UiAction::Invoke { command: CommandId::Ruler });
+    let [from, to] = [canvas_point(&w, [300., 300.]), canvas_point(&w, [500., 380.])];
+    native.perform(json!([
+        {"point": from}, {"down": true}, {"wait_ms": 40},
+        {"point": [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5]}, {"wait_ms": 20},
+        {"point": to}, {"wait_ms": 20}, {"down": false}
+    ]));
+    until(|| document(&w).rulers.len() == 1, "the drag draws a guide");
+    native.key(0xffff);
+    until(|| document(&w).rulers.is_empty(), "Delete removes the selected guide under the Ruler tool");
+    pump(200);
+    assert_eq!(pixels(&w), filled, "and leaves the pixels alone");
+}

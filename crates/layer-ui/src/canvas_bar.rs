@@ -26,13 +26,75 @@ pub struct CanvasBarContext {
     pub kind: CanvasBarKind,
 }
 
+/// A bar item's dropdown. Hosts open it through `canvas_bar_choice_menu`
+/// with this id; a host that ignores it runs the item's primary command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasBarMenu {
+    CopyToLayer,
+    Clear,
+    Refine,
+    Adjust,
+    /// Reserved for the clipboard commands.
+    Copy,
+}
+impl CanvasBarMenu {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::CopyToLayer => "copy_to_layer",
+            Self::Clear => "clear",
+            Self::Refine => "refine",
+            Self::Adjust => "adjust",
+            Self::Copy => "copy",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CopyToLayer => "Copy to Layer",
+            Self::Clear => "Clear",
+            Self::Refine => "Refine",
+            Self::Adjust => "Adjust",
+            Self::Copy => "Copy",
+        }
+    }
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::CopyToLayer => "copy-to-layer",
+            Self::Clear => "clear-selection",
+            Self::Refine => "feather",
+            Self::Adjust => "adjustments",
+            Self::Copy => "copy-to-layer",
+        }
+    }
+    /// The command a host that does not open the menu runs.
+    fn primary(self) -> Option<CommandId> {
+        match self {
+            Self::CopyToLayer => Some(CommandId::CopySelectionToLayer),
+            Self::Clear => Some(CommandId::ClearSelected),
+            Self::Refine | Self::Adjust | Self::Copy => None,
+        }
+    }
+    fn commands(self) -> &'static [CommandId] {
+        match self {
+            Self::CopyToLayer => &[CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer],
+            Self::Clear => &[CommandId::ClearSelected, CommandId::ClearOutside],
+            Self::Refine | Self::Adjust | Self::Copy => &[],
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CanvasBarItem {
+    /// The primary command, or for a menu without one, an empty choice named
+    /// by the menu id.
     pub option: ToolOption,
     /// Short text shown beside the icon where space allows.
     pub label: &'static str,
     /// The step that finishes the edit, drawn in the accent color.
     pub accent: bool,
+    pub menu: Option<CanvasBarMenu>,
+    /// The menu's icon, for hosts that draw a menu item as a menu button.
+    pub icon: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -124,10 +186,25 @@ fn same_selection(a: &layer_core::Selection, b: &layer_core::Selection) -> bool 
     shape && a.affine.0.map(f32::to_bits) == b.affine.0.map(f32::to_bits) && a.inverted == b.inverted
 }
 
+#[derive(Clone, Copy)]
+enum PlanItem {
+    Command(CommandId),
+    Menu(CanvasBarMenu),
+}
+impl PlanItem {
+    /// The command whose published state the item shows.
+    fn command(self) -> Option<CommandId> {
+        match self {
+            Self::Command(id) => Some(id),
+            Self::Menu(menu) => menu.primary(),
+        }
+    }
+}
+
 struct Plan {
     kind: CanvasBarKind,
     label: Option<String>,
-    items: Vec<CommandId>,
+    items: Vec<PlanItem>,
     completion: Vec<CommandId>,
     placement: Option<CanvasBarPlacement>,
 }
@@ -169,17 +246,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let edge = matches!(tool.selection_tool(), Some(SelectionTool::Tonal | SelectionTool::Brush))
             || self.canvas_bar.selection.as_ref().is_none_or(|s| s.1.is_none());
+        let command = PlanItem::Command;
         Some(Plan {
             kind: CanvasBarKind::Selection,
             label: None,
             items: vec![
-                CommandId::Deselect,
-                CommandId::InvertSelection,
-                CommandId::ScaleRotate,
-                CommandId::MaskSelection,
-                CommandId::FillSelection,
-                CommandId::QuickMask,
-                CommandId::SaveSelectionLayer,
+                command(CommandId::Deselect),
+                command(CommandId::InvertSelection),
+                PlanItem::Menu(CanvasBarMenu::CopyToLayer),
+                command(CommandId::ScaleRotate),
+                PlanItem::Menu(CanvasBarMenu::Refine),
+                command(CommandId::MaskSelection),
+                PlanItem::Menu(CanvasBarMenu::Adjust),
+                command(CommandId::FillSelection),
+                PlanItem::Menu(CanvasBarMenu::Clear),
+                command(CommandId::QuickMask),
+                command(CommandId::SaveSelectionLayer),
             ],
             completion: Vec::new(),
             placement: edge.then_some(CanvasBarPlacement::BottomEdge),
@@ -197,7 +279,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Some(Plan {
                 kind: CanvasBarKind::Polygon,
                 label: None,
-                items: vec![CommandId::RemoveSelectionPoint],
+                items: vec![PlanItem::Command(CommandId::RemoveSelectionPoint)],
                 completion: vec![CommandId::CancelSelection, CommandId::CompleteSelection],
                 placement: Some(CanvasBarPlacement::BottomEdge),
             });
@@ -207,7 +289,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         Some(Plan {
             kind: if self.operation.placing() { CanvasBarKind::Placement } else { CanvasBarKind::Transform },
             label: (count > 1).then(|| format!("{count} images")),
-            items: self.state.tool_actions.iter().map(|a| a.command).filter(|id| !completion.contains(id)).collect(),
+            items: self
+                .state
+                .tool_actions
+                .iter()
+                .map(|a| a.command)
+                .filter(|id| !completion.contains(id))
+                .map(PlanItem::Command)
+                .collect(),
             completion,
             placement: None,
         })
@@ -255,8 +344,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             flags: plan
                 .items
                 .iter()
-                .chain(&plan.completion)
-                .filter_map(|id| self.state.commands.iter().find(|c| c.id == *id))
+                .filter_map(|item| item.command())
+                .chain(plan.completion.iter().copied())
+                .filter_map(|id| self.state.commands.iter().find(|c| c.id == id))
                 .map(|c| (c.id, c.enabled, c.selected, c.disabled_reason.clone()))
                 .collect(),
         };
@@ -268,7 +358,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.canvas_bar.generation += 1;
         }
         let mut items: Vec<CanvasBarItem> = Vec::new();
-        for &id in &plan.items {
+        for &entry in &plan.items {
+            let id = match entry {
+                PlanItem::Command(id) => id,
+                PlanItem::Menu(menu) => {
+                    items.push(self.canvas_bar_menu_item(menu));
+                    continue;
+                }
+            };
             let state = self.published(id);
             let group = ToolSettingAction { command: id, checkable: state.checkable }.group();
             match (group, items.last_mut().map(|item| &mut item.option)) {
@@ -284,6 +381,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     },
                     label: group.label(),
                     accent: false,
+                    menu: None,
+                    icon: None,
                 }),
                 (None, _) => items.push(self.canvas_bar_action(id)),
             }
@@ -315,6 +414,26 @@ impl<R: CanvasRenderer> UiSession<R> {
             },
             label: short_label(id),
             accent: matches!(id, CommandId::ApplyTransform | CommandId::CompleteSelection),
+            menu: None,
+            icon: None,
+        }
+    }
+
+    fn canvas_bar_menu_item(&self, menu: CanvasBarMenu) -> CanvasBarItem {
+        CanvasBarItem {
+            option: match menu.primary() {
+                Some(id) => self.canvas_bar_action(id).option,
+                None => ToolOption::Choice {
+                    id: menu.id(),
+                    label: menu.label(),
+                    segmented: false,
+                    items: Vec::new(),
+                },
+            },
+            label: menu.label(),
+            accent: false,
+            menu: Some(menu),
+            icon: Some(menu.icon()),
         }
     }
 
@@ -339,10 +458,36 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn canvas_bar_edit(&mut self, context: CanvasBarContext, action: UiAction) -> Result<UiChange, String> {
         let current = self.state.canvas_bar.as_ref();
-        if current.is_none_or(|bar| bar.context != context || !bar.allows(&action)) {
+        let allowed = current.is_some_and(|bar| {
+            bar.context == context
+                && (bar.allows(&action)
+                    || bar.items.iter().filter_map(|item| item.menu).any(|menu| {
+                        menu_actions(&self.canvas_bar_menu_sections(menu)).any(|a| *a == action)
+                    }))
+        });
+        if !allowed {
             return Err("This action belongs to a previous canvas selection or transform".into());
         }
         self.dispatch(action)
+    }
+
+    /// A bar item's dropdown, before its actions are tied to a bar context.
+    fn canvas_bar_menu_sections(&self, menu: CanvasBarMenu) -> Vec<Vec<ContextMenuItem>> {
+        let command = |id: CommandId| {
+            let state = self.command(id);
+            ContextMenuItem { enabled: state.enabled, ..ContextMenuItem::command(state.label, UiAction::Invoke { command: id }) }
+        };
+        let sections = match menu {
+            CanvasBarMenu::CopyToLayer | CanvasBarMenu::Clear => {
+                vec![menu.commands().iter().map(|&id| command(id)).collect()]
+            }
+            CanvasBarMenu::Refine => vec![self.selection_resize_items(None)],
+            CanvasBarMenu::Adjust => vec![self.filter_category_items()],
+            CanvasBarMenu::Copy => Vec::new(),
+        };
+        ContextMenu { title: menu.label().into(), sections }
+            .with_shortcuts(&self.state.settings, self.state.platform)
+            .sections
     }
 }
 
@@ -512,10 +657,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         Some(CanvasBarLayout { bounds, items: shown, side })
     }
 
-    /// The menu of a bar choice shown as a dropdown.
+    /// The menu of a bar choice or bar menu shown as a dropdown.
     pub fn canvas_bar_choice_menu(&self, context: CanvasBarContext, id: &str) -> Option<ContextMenu> {
         let bar = self.state.canvas_bar.as_ref().filter(|bar| bar.context == context)?;
         let wrap = |action: UiAction| UiAction::CanvasBarEdit { context, action: Box::new(action) };
+        if let Some(menu) = bar.items.iter().filter_map(|item| item.menu).find(|menu| menu.id() == id) {
+            return Some(ContextMenu {
+                title: menu.label().into(),
+                sections: wrap_sections(self.canvas_bar_menu_sections(menu), &wrap),
+            });
+        }
         bar.items.iter().find_map(|item| match &item.option {
             ToolOption::Choice { id: choice, label, items, .. } if *choice == id => Some(ContextMenu {
                 title: (*label).into(),
@@ -529,16 +680,20 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn canvas_bar_menu(&self, context: CanvasBarContext, shown: usize) -> Option<ContextMenu> {
         let bar = self.state.canvas_bar.as_ref().filter(|bar| bar.context == context)?;
         let wrap = |action: UiAction| UiAction::CanvasBarEdit { context, action: Box::new(action) };
-        let overflow = bar.items.iter().skip(shown).flat_map(|item| match &item.option {
-            ToolOption::Action { state, checkable } => vec![ContextMenuItem {
+        let overflow = bar.items.iter().skip(shown).flat_map(|item| match (&item.option, item.menu) {
+            (_, Some(menu)) => vec![ContextMenuItem::submenu(
+                menu.label(),
+                wrap_sections(self.canvas_bar_menu_sections(menu), &wrap),
+            )],
+            (ToolOption::Action { state, checkable }, None) => vec![ContextMenuItem {
                 selected: checkable.then_some(state.selected),
                 enabled: state.enabled,
                 ..ContextMenuItem::command(state.label, wrap(UiAction::Invoke { command: state.id }))
             }],
-            ToolOption::Choice { label, items, .. } => {
+            (ToolOption::Choice { label, items, .. }, None) => {
                 vec![ContextMenuItem::submenu(label, vec![choice_items(items, &wrap)])]
             }
-            ToolOption::Numeric(_) | ToolOption::Range { .. } => Vec::new(),
+            (ToolOption::Numeric(_) | ToolOption::Range { .. }, None) => Vec::new(),
         });
         let toggle = ContextMenuItem {
             selected: Some(self.state.workspace.layout.canvas_bar),
@@ -560,6 +715,26 @@ impl<R: CanvasRenderer> UiSession<R> {
             .with_shortcuts(&self.state.settings, self.state.platform),
         )
     }
+}
+
+fn wrap_sections(sections: Vec<Vec<ContextMenuItem>>, wrap: &impl Fn(UiAction) -> UiAction) -> Vec<Vec<ContextMenuItem>> {
+    sections
+        .into_iter()
+        .map(|section| {
+            section
+                .into_iter()
+                .map(|item| ContextMenuItem {
+                    action: item.action.map(wrap),
+                    sections: wrap_sections(item.sections, wrap),
+                    ..item
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn menu_actions(sections: &[Vec<ContextMenuItem>]) -> Box<dyn Iterator<Item = &UiAction> + '_> {
+    Box::new(sections.iter().flatten().flat_map(|item| item.action.iter().chain(menu_actions(&item.sections))))
 }
 
 fn choice_items(items: &[ToolSetItem], wrap: &impl Fn(UiAction) -> UiAction) -> Vec<ContextMenuItem> {

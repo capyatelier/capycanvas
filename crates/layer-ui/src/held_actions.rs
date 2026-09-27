@@ -208,17 +208,30 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
-    pub(super) fn held_shortcut_match(&self, key: &str, modifiers: Modifiers, canvas: bool) -> Option<ShortcutDefinition> {
+    /// The bindings of a pressed key, most specific first. Keys with held
+    /// modifiers fall back to the chord without them.
+    pub(super) fn held_shortcut_matches(&self, key: &str, modifiers: Modifiers, canvas: bool) -> Vec<ShortcutDefinition> {
         let context = canvas.then(|| self.binding_category());
         let settings = &self.state.settings;
-        settings
-            .shortcut_match(&KeyChord::new(key, modifiers), self.state.platform, context)
-            .or_else(|| {
-                let released = self.held_modifiers(modifiers);
-                (released != modifiers)
-                    .then(|| settings.shortcut_match(&KeyChord::new(key, released), self.state.platform, context))
-                    .flatten()
-            })
+        let matches = settings.shortcut_matches(&KeyChord::new(key, modifiers), self.state.platform, context);
+        let released = self.held_modifiers(modifiers);
+        if matches.is_empty() && released != modifiers {
+            return settings.shortcut_matches(&KeyChord::new(key, released), self.state.platform, context);
+        }
+        matches
+    }
+
+    /// Whether a key binding would do anything now. Dispatch skips disabled
+    /// bindings so a less specific one can run instead.
+    pub(super) fn binding_enabled(&self, action: &ShortcutAction) -> bool {
+        match action {
+            ShortcutAction::Action { action } => match &**action {
+                UiAction::Invoke { command } => self.command_flags(*command).0,
+                UiAction::StepToolSetting { id, .. } => self.state.tool_settings.iter().any(|c| c.id == *id),
+                _ => true,
+            },
+            ShortcutAction::Pan | ShortcutAction::Hold { .. } | ShortcutAction::Momentary { .. } => true,
+        }
     }
 
     fn hold_active(&self, action: &UiAction) -> bool {

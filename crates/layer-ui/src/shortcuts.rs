@@ -471,6 +471,9 @@ fn key(key: &str, command: bool, shift: bool) -> KeyChord {
 pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
     // Primary+K is also usable in browsers, which reserve Primary+Shift+P.
     if id == "command.SearchCommands" { return vec![key("p", true, true), key("k", true, false)]; }
+    if matches!(id, "command.ClearSelected" | "command.DeleteRuler") {
+        return vec![key("delete", false, false), key("backspace", false, false)];
+    }
     let chord = match id {
         "command.SoftProof" => KeyChord { key: "p".into(), command: true, shift: false, alt: true },
         "command.GamutWarning" => KeyChord { key: "y".into(), command: true, shift: true, alt: false },
@@ -499,6 +502,8 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Undo" => key("z", true, false),
         "command.Redo" => return vec![key("z", true, true), key("y", true, false)],
         "command.FillSelection" => key("backspace", false, true),
+        "command.CopySelectionToLayer" => key("j", true, false),
+        "command.CutSelectionToLayer" => key("j", true, true),
         "command.QuickMask" => key("q", false, false),
         "command.Reselect" => key("d", true, true),
         "command.ResetMaskColors" => key("d", false, false),
@@ -541,7 +546,8 @@ pub const SHORTCUT_SECTIONS: [&str; 13] = [
 fn command_section(command: CommandId) -> &'static str {
     use CommandId as C;
     match command {
-        C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::PasteImage | C::ClearLayer | C::FillSelection => "Edit",
+        C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::PasteImage | C::ClearLayer | C::FillSelection
+        | C::ClearSelected | C::ClearOutside => "Edit",
         C::ApplyTransform | C::CancelTransform | C::PlacementOriginalSize | C::ResetTransform
         | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
@@ -555,7 +561,7 @@ fn command_section(command: CommandId) -> &'static str {
         | C::CancelSelection | C::SelectionVisible | C::SelectionEditing | C::SelectionReference | C::SelectAll
         | C::Deselect | C::InvertSelection | C::RemoveSelectionPoint | C::MaskSelection => "Select",
         C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RepairSourceProfile
-        | C::UseReferenceBelow => "Layer",
+        | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer => "Layer",
         C::FitCanvas | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
         | C::ZenMode | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
         | C::ToggleTheme => "View",
@@ -565,6 +571,16 @@ fn command_section(command: CommandId) -> &'static str {
         | C::ImportImage | C::DocumentProperties | C::NewWindow | C::Drawings => "File",
         C::About | C::Website | C::SourceCode => "Help",
         _ => "Window",
+    }
+}
+
+/// Where a command's keys apply; a more specific scope wins where it is enabled.
+fn command_scope(command: CommandId) -> BindingScope {
+    match command {
+        CommandId::DeleteRuler => BindingScope::Tools {
+            categories: vec![ToolCategory::ShapesRulers, ToolCategory::MoveTransform],
+        },
+        _ => BindingScope::Application,
     }
 }
 
@@ -581,7 +597,7 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                         action: Box::new(UiAction::Invoke { command }),
                     },
                     repeat: matches!(command, CommandId::Undo | CommandId::Redo),
-                    scope: BindingScope::Application,
+                    scope: command_scope(command),
                     target: None,
                 },
                 command_section(command),
@@ -828,15 +844,28 @@ impl Settings {
         platform: Platform,
         canvas: Option<ToolCategory>,
     ) -> Option<ShortcutDefinition> {
+        self.shortcut_matches(chord, platform, canvas).into_iter().next()
+    }
+    /// Every binding of `chord` that applies here, most specific scope first.
+    /// Dispatch runs the first one that is enabled.
+    pub(crate) fn shortcut_matches(
+        &self,
+        chord: &KeyChord,
+        platform: Platform,
+        canvas: Option<ToolCategory>,
+    ) -> Vec<ShortcutDefinition> {
         if !chord.available(platform) {
-            return None;
+            return Vec::new();
         }
-        definitions(platform)
+        let mut matches: Vec<_> = definitions(platform)
             .into_iter()
             .map(|(definition, _)| definition)
             .filter(|definition| definition.target.is_none())
             .filter(|definition| definition.scope.applies(canvas) && self.keys(&definition.id).contains(chord))
-            .max_by_key(|definition| definition.scope.specificity())
+            .collect();
+        matches.reverse();
+        matches.sort_by_key(|definition| std::cmp::Reverse(definition.scope.specificity()));
+        matches
     }
     pub(crate) fn shortcut_scope(&self, id: &str, platform: Platform) -> (String, Vec<String>) {
         let all = definitions(platform);

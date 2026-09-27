@@ -185,6 +185,11 @@ impl WebApp {
         let context = serde_wasm_bindgen::from_value(context).map_err(js)?;
         serialize(&self.session.canvas_bar_menu(context, shown))
     }
+    /// A bar dropdown or bar menu item's menu; undefined for a stale context or id.
+    pub fn canvas_bar_choice_menu(&self, context: JsValue, id: &str) -> Result<JsValue, JsValue> {
+        let context = serde_wasm_bindgen::from_value(context).map_err(js)?;
+        serialize(&self.session.canvas_bar_choice_menu(context, id))
+    }
     pub fn canvas_bar_hold(&self) -> u32 {
         self.session.canvas_bar_hold()
     }

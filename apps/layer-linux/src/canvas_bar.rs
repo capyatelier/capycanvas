@@ -36,7 +36,8 @@ pub struct CanvasBar {
 
 fn same_schema(a: &CanvasBarView, b: &CanvasBarView) -> bool {
     let same = |x: &[CanvasBarItem], y: &[CanvasBarItem]| {
-        x.len() == y.len() && x.iter().zip(y).all(|(x, y)| x.label == y.label && x.option.same_schema(&y.option))
+        x.len() == y.len()
+            && x.iter().zip(y).all(|(x, y)| x.label == y.label && x.menu == y.menu && x.option.same_schema(&y.option))
     };
     a.context == b.context && a.label == b.label && same(&a.items, &b.items) && same(&a.completion, &b.completion)
 }
@@ -270,6 +271,14 @@ fn build(
         widget.set_focus_on_click(false);
         widget.set_can_focus(false);
     };
+    if let Some(menu) = item.menu {
+        let (button, image, text) = menu_button(workspace, context, menu.id(), menu.label());
+        button.set_widget_name(&format!("canvas-bar-menu-{}", menu.id()));
+        unfocused(button.upcast_ref());
+        crate::icons::set(&image, Some(&format!("layer-{}-symbolic", menu.icon())));
+        text.set_text(item.label);
+        return (button.clone().upcast(), Some(Field::Menu(button, image, text)));
+    }
     match &item.option {
         ToolOption::Action { state, checkable } => {
             let button = action_button(state, *checkable, Some(item.label), send);
@@ -286,29 +295,39 @@ fn build(
             (segments.upcast(), Some(Field::Segments(buttons)))
         }
         ToolOption::Choice { id, label, .. } => {
-            let button = gtk::MenuButton::new();
+            let (button, image, text) = menu_button(workspace, context, id, label);
             button.set_widget_name(&format!("canvas-bar-choice-{id}"));
-            button.update_property(&[gtk::accessible::Property::Label(label)]);
-            button.set_tooltip_text(Some(label));
-            button.set_always_show_arrow(true);
-            button.add_css_class("flat");
             unfocused(button.upcast_ref());
-            let (image, text) = (gtk::Image::new(), gtk::Label::new(None));
-            let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            content.append(&image);
-            content.append(&text);
-            button.set_child(Some(&content));
-            let popover = gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>);
-            button.set_popover(Some(&popover));
-            workspace.watch_popover(popover.upcast_ref());
-            let choice = *id;
-            popover.connect_show(glib::clone!(
-                #[weak]
-                workspace,
-                move |popover| workspace.populate_canvas_bar_choice(popover, context, choice)
-            ));
-            (button.upcast(), Some(Field::Menu(image, text)))
+            (button.clone().upcast(), Some(Field::Menu(button, image, text)))
         }
         ToolOption::Numeric(_) | ToolOption::Range { .. } => (gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast(), None),
     }
+}
+
+/// A dropdown whose popover the shared bar menu `id` fills when it opens.
+fn menu_button(
+    workspace: &Rc<Workspace>,
+    context: layer_ui::CanvasBarContext,
+    id: &'static str,
+    label: &str,
+) -> (gtk::MenuButton, gtk::Image, gtk::Label) {
+    let button = gtk::MenuButton::new();
+    button.update_property(&[gtk::accessible::Property::Label(label)]);
+    button.set_tooltip_text(Some(label));
+    button.set_always_show_arrow(true);
+    button.add_css_class("flat");
+    let (image, text) = (gtk::Image::new(), gtk::Label::new(None));
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.append(&image);
+    content.append(&text);
+    button.set_child(Some(&content));
+    let popover = gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>);
+    button.set_popover(Some(&popover));
+    workspace.watch_popover(popover.upcast_ref());
+    popover.connect_show(glib::clone!(
+        #[weak]
+        workspace,
+        move |popover| workspace.populate_canvas_bar_choice(popover, context, id)
+    ));
+    (button, image, text)
 }

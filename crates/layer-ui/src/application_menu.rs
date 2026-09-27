@@ -68,6 +68,25 @@ impl ApplicationMenu {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    /// One submenu per filter category, shared by the Filter menu and the
+    /// selection bar's Adjust menu. It ignores the panel's search and category
+    /// and never requests thumbnails.
+    pub(crate) fn filter_category_items(&self) -> Vec<ContextMenuItem> {
+        let choices = effects::catalog(&self.effect_catalog, &Default::default());
+        let enabled = self.selection_masks.target().is_none() && self.require_document_idle().is_ok();
+        self.effect_catalog
+            .categories()
+            .iter()
+            .map(|category| {
+                let items = choices
+                    .iter()
+                    .filter(|f| f.category == category.id)
+                    .map(|f| ContextMenuItem { enabled, ..ContextMenuItem::command(f.label.to_string(), f.action.clone()) })
+                    .collect();
+                ContextMenuItem::submenu(&category.label, vec![items])
+            })
+            .collect()
+    }
     pub(crate) fn proof_panel_command(&self, id: CommandId) -> bool {
         matches!(id, CommandId::SoftProofSetup | CommandId::GamutWarning | CommandId::PreviewSdr)
     }
@@ -96,6 +115,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             M::Select => ContextMenu { title: menu.label().into(), sections: vec![
                 [CommandId::SelectAll, CommandId::Deselect, CommandId::Reselect, CommandId::InvertSelection].into_iter().map(command).collect(),
                 [CommandId::QuickMask, CommandId::NewSelectionLayer, CommandId::SaveSelectionLayer].into_iter().map(command).collect(),
+                [CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer, CommandId::ClearSelected, CommandId::ClearOutside].into_iter().map(command).collect(),
                 self.selection_resize_items(None),
                 self.selection_source_menu_items(),
                 vec![ContextMenuItem::submenu("Load Selection", vec![self.saved_selection_menu_items()]), ContextMenuItem::submenu("Replace Selection Layer from Current Selection",vec![self.replace_selection_menu_items()])],
@@ -111,35 +131,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     sections: Vec::new(),
                 }),
             M::Window => self.workspace_menu(),
-            M::Filter => {
-                // Ignore the panel's search/category selection; the menu always
-                // exposes the whole live catalog and never requests thumbnails.
-                let choices = effects::catalog(&self.effect_catalog, &Default::default());
-                ContextMenu {
-                    title: menu.label().into(),
-                    sections: vec![
-                        self.effect_catalog
-                            .categories()
-                            .iter()
-                            .map(|category| {
-                                let items = choices
-                                    .iter()
-                                    .filter(|f| f.category == category.id)
-                                    .map(|f| {
-                                        let mut item = ContextMenuItem::command(
-                                            f.label.to_string(),
-                                            f.action.clone(),
-                                        );
-                                        item.enabled = self.selection_masks.target().is_none() && self.require_document_idle().is_ok();
-                                        item
-                                    })
-                                    .collect();
-                                ContextMenuItem::submenu(&category.label, vec![items])
-                            })
-                            .collect(),
-                    ],
-                }
-            }
+            M::Filter => ContextMenu {
+                title: menu.label().into(),
+                sections: vec![self.filter_category_items()],
+            },
             _ => {
                 let sections: &[&[CommandId]] = match menu {
                     M::File => FILE_MENU.sections,

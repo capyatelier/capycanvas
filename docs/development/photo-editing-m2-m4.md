@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1 and M2.2. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -692,11 +692,23 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - Android shows refusals and dispatch errors as notices instead of modal dialogs;
   - `refresh_commands` costs 2.2 µs per call before and about 3 µs after, and the Android model grows by 4.5 KB.
 
+- **M2.2** on GTK, Web and Android:
+  - bar menu items (Copy to Layer ▾, Refine ▾, Adjust ▾, Clear ▾);
+  - Clear Selected and Clear Outside Selection through a bounded `Erase` operation; Clear Entire Layer;
+  - Delete and Backspace resolved by scoped bindings, and a focused drawing tab keeps Delete on Web and Android;
+  - Copy and Cut Selection to New Layer in one step through `CanvasEngine::insert_with_operations`;
+  - new effects masked by the selection (T-1).
+
 **Follow-ups**
+- **Erase right after a stroke:** an Erase on a raster that is still pending, or that holds watercolor or wet state, damages the whole layer so the layer settles. Clearing right after a stroke therefore rewrites every page. It is a still-frame cost.
+- **Copy to New Layer** drops the source's mask and clipping, and the copy is unlocked. Copying from a locked layer is allowed; cutting is not.
+- **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
 - **Apple and Windows:**
   - present `UiState.notice` and answer `UiAction::Notice`;
   - read `CommandState.disabled_reason`;
-  - retire `canvas_bar_reason` once Apple reads the field.
+  - retire `canvas_bar_reason` once Apple reads the field;
+  - open bar menu items (`CanvasBarItem.menu` and `icon`, through `canvas_bar_choice_menu`);
+  - add icons for the new commands to Apple's coverage list.
 
-**Remaining:** M2.2 to M2.6, M3 and M4. Record milestone completion in the research record's section 7.
+**Remaining:** M2.3 to M2.6, M3 and M4. Record milestone completion in the research record's section 7.

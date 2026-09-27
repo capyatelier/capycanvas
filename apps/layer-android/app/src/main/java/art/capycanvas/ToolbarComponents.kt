@@ -204,6 +204,7 @@ private const val CaptionPadding = 10f
 private const val CaptionGap = 6f
 private const val ChoicePadding = 8f
 private fun captionedWidth(text: String, textWidth: (String) -> Float) = CaptionPadding * 2 + 16f + CaptionGap + kotlin.math.ceil(textWidth(text))
+internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = captionedWidth(caption, textWidth) + CaptionGap + 12f
 
 @Composable internal fun ToolOptionField(option: JSONObject, width: Float, vertical: Boolean, style: String, labeled: Boolean,
     preferences: JSONObject, tileWidth: Float, iconSize: Int, edit: (JSONObject) -> Unit,
@@ -255,6 +256,30 @@ private fun captionedWidth(text: String, textWidth: (String) -> Float) = Caption
     }
     if (caption == null) face()
     else HoverTip(reason ?: command.getString("tooltip"), Modifier.fillMaxSize(), reveal = reveal, content = face)
+}
+
+/** A captioned item that opens its core menu without taking window focus. A
+ * disabled primary command disables it and shows its reason, like an action. */
+@Composable internal fun ToolOptionMenu(id: String, icon: String, label: String, command: JSONObject?, prefix: String,
+    load: ((JSONObject?) -> Unit) -> Unit) {
+    val button = remember { WindowlessMenuButton() }
+    val enabled = command?.getBoolean("enabled") ?: true
+    val reason = command?.takeIf { !enabled && !it.isNull("disabled_reason") }?.getString("disabled_reason")
+    var reveal by remember { mutableIntStateOf(0) }
+    HoverTip(reason ?: command?.getString("tooltip") ?: label, Modifier.fillMaxSize(), reveal = reveal) {
+        Row(Modifier.fillMaxSize().testTag("$prefix-menu-$id").clip(ControlShape).alpha(if (enabled) 1f else .4f)
+            .focusProperties { canFocus = false }
+            .then(if (enabled) Modifier.opensWindowlessMenu(button, label, load)
+                else Modifier.combinedClickable(enabled = reason != null, role = Role.Button, onClickLabel = label,
+                    onLongClick = { reveal++ }) { reveal++ }.semantics { disabled() })
+            .padding(horizontal = CaptionPadding.dp),
+            horizontalArrangement = Arrangement.spacedBy(CaptionGap.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
+            SharedIcon(icon, null, Modifier.size(16.dp))
+            Text(label, maxLines = 1, softWrap = false)
+            SharedIcon("chevron-down", null, Modifier.size(12.dp))
+        }
+        WindowlessMenuHost(LocalCanvasHost.current, button)
+    }
 }
 
 @Composable private fun ToolbarNumber(field: JSONObject, vertical: Boolean, style: String,

@@ -4,6 +4,8 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
+const UNAVAILABLE: &str = "Unavailable in the current tool or edit target";
+
 /// Shared rhythm for native search surfaces; toolkit themes supply colors,
 /// typography and motion. Touch hosts may increase row_height.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -311,6 +313,10 @@ fn entry(
                 | CommandId::FillSelection
                 | CommandId::MaskSelection
                 | CommandId::UseReferenceBelow
+                | CommandId::ClearSelected
+                | CommandId::ClearOutside
+                | CommandId::CopySelectionToLayer
+                | CommandId::CutSelectionToLayer
                 | CommandId::SelectAll
                 | CommandId::Deselect
                 | CommandId::InvertSelection,
@@ -426,6 +432,11 @@ fn action_description(action: &UiAction) -> &'static str {
             TransformWarp => "Bend the content with a mesh of curved patches, dragging its nodes and their tangent handles.",
             WarpGridThree | WarpGridFour | WarpGridFive => "Choose how many patches the warp mesh has, keeping its current shape.",
             UseReferenceBelow => "Mark the nearest visible photo or paint layer below as a reference for Wand and Fill.",
+            ClearLayer => "Erase everything on the active layer. A placed photo's original is discarded too.",
+            ClearSelected => "Erase the selected pixels of the active layer; soft edges erase partially. A placed photo keeps its original.",
+            ClearOutside => "Erase the pixels of the active layer outside the selection.",
+            CopySelectionToLayer => "Copy the selected pixels to a new layer above, in place. Without a selection, duplicate the layer.",
+            CutSelectionToLayer => "Move the selected pixels from the active layer to a new layer above, in place.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -959,7 +970,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::Deselect
             | C::InvertSelection
             | C::ClearLayer
-            | C::FillSelection => self.require_document_idle(),
+            | C::FillSelection
+            | C::ClearSelected
+            | C::ClearOutside
+            | C::CopySelectionToLayer
+            | C::CutSelectionToLayer => self.require_document_idle(),
             C::SaveDocument | C::SaveDocumentAs => self.require_raster_snapshot(),
             C::CloseDocument => self.require_document_snapshot_idle(),
             C::ResetLayout if self.managed_workspace.is_some() => self.require_workspace_idle(),
@@ -1066,6 +1081,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::CancelSelection => "No selection path to cancel",
             C::RemoveSelectionPoint => "Place a polygon point first",
             C::UseReferenceBelow => self.use_reference_below_reason().unwrap_or(super::notices::NO_REFERENCE_BELOW),
+            C::ClearSelected | C::ClearOutside => self.clear_refusal().unwrap_or(UNAVAILABLE),
+            C::CopySelectionToLayer | C::CutSelectionToLayer => {
+                self.selection_to_layer_refusal(command == C::CutSelectionToLayer).unwrap_or(UNAVAILABLE)
+            }
             C::MaskSelection if self.engine.document().selection.is_none() => "Make a selection first",
             C::MaskSelection => "Select an unlocked artwork layer",
             C::SelectionVisible | C::SelectionEditing | C::SelectionReference => "Choose a selection tool first",
@@ -1079,7 +1098,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::ClearLayer | C::FillSelection if document.active_mask => "Return to the layer's artwork first",
             C::RaiseLayer => "The layer is already at the top",
             C::LowerLayer => "The layer is already at the bottom",
-            _ => "Unavailable in the current tool or edit target",
+            _ => UNAVAILABLE,
         };
         reason.into()
     }

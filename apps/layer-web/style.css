@@ -1056,6 +1056,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .canvas-action-bar .toolbar-segments { box-sizing: border-box; width: auto; height: 40px; border-radius: var(--control-radius); }
 .canvas-action-bar .toolbar-segments > button { flex: none; height: 38px; min-height: 38px; border-radius: 0; }
 .canvas-action-bar .toolbar-choice > button { width: auto; }
+.canvas-action-bar-menu svg:last-child { width: 12px; height: 12px; margin-left: -2px; }
 #workspace > .canvas-action-bar .suggested-action { background: var(--accent); color: var(--accent-foreground); }
 :where(:root:not([data-touch])) #workspace > .canvas-action-bar .suggested-action:hover { background: color-mix(in srgb, white 10%, var(--accent)); }
 #workspace > .canvas-action-bar .suggested-action:active { background: color-mix(in srgb, black 10%, var(--accent)); }

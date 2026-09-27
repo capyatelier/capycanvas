@@ -4,11 +4,13 @@ import { revealTooltip } from "./tooltips.js";
 export const GAP = 4, PADDING = 6;
 const text = value => JSON.stringify(value, (_, v) => typeof v === "bigint" ? String(v) : v);
 export const barSchema = view => text([view.context, view.label ?? null,
-  ...[view.items, view.completion].map(items => items.map(({ option, label }) => option.Action
-    ? ["action", label, option.Action.state.id, option.Action.state.icon, option.Action.state.label, option.Action.checkable]
-    : option.Choice
-      ? ["choice", label, option.Choice.id, option.Choice.label, option.Choice.segmented, option.Choice.items.map(i => [i.label, i.icon])]
-      : ["other", label]))]);
+  ...[view.items, view.completion].map(items => items.map(({ option, label, menu, icon }) => menu
+    ? ["menu", label, menu, icon, option.Action?.state.id]
+    : option.Action
+      ? ["action", label, option.Action.state.id, option.Action.state.icon, option.Action.state.label, option.Action.checkable]
+      : option.Choice
+        ? ["choice", label, option.Choice.id, option.Choice.label, option.Choice.segmented, option.Choice.items.map(i => [i.label, i.icon])]
+        : ["other", label]))]);
 
 export function createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, openMenu, presented,
   reappearMs, setTimer = setTimeout, clearTimer = clearTimeout, explain = revealTooltip }) {
@@ -24,26 +26,32 @@ export function createCanvasBar({ app, workspace, element, button, icon, dispatc
   root.addEventListener("mousedown", e => { if (!e.target.closest?.("input,select,textarea")) e.preventDefault(); });
   let view = null, schema = "", fields = [], sizes = null, layout = null, popup = null;
   let suppressed = false, held = 0, timer = 0;
-  let menu = null, menuOpen = false, reopen = false;
+  let menu = null, owner = null, reopen = false;
   const shown = { visible: false, transform: "", items: -1 };
-  more.addEventListener("pointerdown", () => { reopen = menuOpen && menu?.menuOwner === more; });
+  opensMenu(more);
 
+  function opensMenu(node) {
+    node.addEventListener("pointerdown", () => { reopen = owner === node && menu?.menuOwner === node; });
+  }
   function toggleMenu() {
+    showMenu(more, () => app.canvas_bar_menu(view.context, Number(layout?.items ?? 0)));
+  }
+  function showMenu(node, query) {
     const skip = reopen; reopen = false;
     if (skip || !view) return;
-    const model = app.canvas_bar_menu(view.context, Number(layout?.items ?? 0));
+    const model = query();
     if (!model) return;
-    more.menuModel = () => model;
-    const opened = openMenu(more);
+    node.menuModel = () => model;
+    const opened = openMenu(node);
     if (menu !== opened) {
       menu = opened;
-      menu.addEventListener("toggle", e => { if (e.newState === "closed") menuOpen = false; });
+      menu.addEventListener("toggle", e => { if (e.newState === "closed") owner = null; });
     }
-    menuOpen = true;
+    owner = node;
   }
   function closeMenu() {
-    if (menuOpen && menu?.menuOwner === more && menu.matches(":popover-open")) menu.hidePopover();
-    menuOpen = false;
+    if (owner && menu?.menuOwner === owner && menu.matches(":popover-open")) menu.hidePopover();
+    owner = null;
   }
   function openPopup(anchor, content) {
     closePopup();
@@ -56,11 +64,33 @@ export function createCanvasBar({ app, workspace, element, button, icon, dispatc
   }
   function closePopup() { popup?.remove(); popup = null; }
 
+  function menuField(item, context) {
+    const row = element("div", "toolbar-option toolbar-action canvas-action-bar-menu");
+    row.dataset.toolbarField = "";
+    const b = button("", () => {
+      if (b.getAttribute("aria-disabled") === "true") explain(b);
+      else showMenu(b, () => app.canvas_bar_choice_menu(context, item.menu));
+    });
+    b.dataset.canvasBarMenu = item.menu;
+    b.setAttribute("aria-label", item.label); b.setAttribute("aria-haspopup", "menu");
+    b.append(icon(item.icon), element("span", "toolbar-action-label", item.label), icon("chevron-down"));
+    opensMenu(b); row.append(b);
+    let tooltip, disabled;
+    function update(option) {
+      const state = option.Action?.state, off = state ? !state.enabled : false;
+      const text = !state ? item.label : state.enabled ? state.tooltip : state.disabled_reason ?? state.tooltip;
+      if (disabled !== off) b.setAttribute("aria-disabled", String(disabled = off));
+      if (tooltip !== text) b.title = tooltip = text;
+    }
+    update(item.option);
+    return { row, update };
+  }
   function build(item, context, completion) {
     const send = action => dispatch({ type: "canvas_bar_edit", context, action });
     const { option } = item;
     let field;
-    if (option.Action) {
+    if (item.menu) field = menuField(item, context);
+    else if (option.Action) {
       field = actionField({ element, button, icon }, option.Action, send, { label: item.label, ariaDisabled: true, explain });
       field.button.dataset.command = option.Action.state.id;
       if (item.accent) field.button.classList.add("suggested-action");
@@ -137,6 +167,6 @@ export function createCanvasBar({ app, workspace, element, button, icon, dispatc
   return {
     root, refresh, place, hold,
     bounds: () => shown.visible ? layout.bounds : null,
-    menuOpen: () => menuOpen,
+    menuOpen: () => !!owner,
   };
 }

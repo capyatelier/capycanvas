@@ -495,6 +495,7 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
             alpha_locked: true,
         },
         LayerOperationKind::ApplyMask,
+        LayerOperationKind::Erase { alpha_locked: false },
         LayerOperationKind::Transform(ImageTransform::affine(Affine::translation(Point { x: 83.25, y: 127.5 }))),
     ] {
         let mut a = project(DocumentColor {
@@ -508,7 +509,7 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
         let mut cold = renderer(&b, 0);
         let before = image(&cold);
         let mut coverage = LayerMask::reveal_all(LayerId(99), Point::default());
-        if kind == LayerOperationKind::ApplyMask {
+        if matches!(kind, LayerOperationKind::ApplyMask | LayerOperationKind::Erase { .. }) {
             coverage.default_coverage = 0.5;
         }
         let operation = LayerOperation { placement: layer_core::Affine::IDENTITY, coverage, kind };

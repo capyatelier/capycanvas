@@ -76,7 +76,7 @@ mod tab_drag;
 pub use tab_drag::{TabDragOffset, TabDragPreview};
 mod numeric;
 mod session;
-pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, ToolCategory};
+pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMenu, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, ToolCategory};
 pub mod keymaps;
 mod settings;
 mod shortcut_page;
@@ -224,7 +224,7 @@ pub const EDIT_MENU: MenuSpec = MenuSpec {
         &[CommandId::SearchCommands],
         &[CommandId::Undo, CommandId::Redo],
         &[CommandId::PasteImage],
-        &[CommandId::RasterizeSource, CommandId::ClearLayer, CommandId::FillSelection],
+        &[CommandId::RasterizeSource, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer],
         &[CommandId::ScaleRotate],
         &[CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth],
         &[CommandId::Settings],
@@ -474,6 +474,10 @@ command_ids! {
     WarpGridFour,
     WarpGridFive,
     UseReferenceBelow,
+    ClearSelected,
+    ClearOutside,
+    CopySelectionToLayer,
+    CutSelectionToLayer,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -630,6 +634,10 @@ impl CommandId {
             Self::Website => "website",
             Self::SourceCode => "source-code",
             Self::UseReferenceBelow => "reference",
+            Self::ClearSelected => "clear-selection",
+            Self::ClearOutside => "clear-outside",
+            Self::CopySelectionToLayer => "copy-to-layer",
+            Self::CutSelectionToLayer => "cut-to-layer",
         })
     }
     pub const TOOLS: [Self; 25] = [
@@ -752,7 +760,7 @@ impl CommandId {
             Self::Fill => "Fill",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
-            Self::ClearLayer => "Clear layer",
+            Self::ClearLayer => "Clear Entire Layer",
             Self::FillSelection => "Fill selection",
             Self::SelectAll => "Select all pixels",
             Self::Deselect => "Deselect pixels",
@@ -804,6 +812,10 @@ impl CommandId {
             Self::Website => ApplicationLink::Website.label(),
             Self::SourceCode => ApplicationLink::SourceCode.label(),
             Self::UseReferenceBelow => "Use layer below as reference",
+            Self::ClearSelected => "Clear Selected Pixels",
+            Self::ClearOutside => "Clear Outside Selection",
+            Self::CopySelectionToLayer => "Copy Selection to New Layer",
+            Self::CutSelectionToLayer => "Cut Selection to New Layer",
         }
     }
 }

@@ -24,7 +24,33 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
     return call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,pointerType:device,force:type==='mouseReleased'?0:.6});
   };
   const tap=async(p,device)=>{touchId++;await pointer('mousePressed',p,device);await pointer('mouseReleased',p,device);await settle();await pause(60);};
-  const press=async(command,device)=>{await wait(`!!document.querySelector('${bar} [data-command="${command}"]')&&${visible}`);await tap(await middle(`${bar} [data-command="${command}"]`),device);};
+  const shownItem=selector=>`(n=>!!n&&!n.closest('.canvas-action-bar-item,.canvas-action-bar-completion').hidden)(document.querySelector(${JSON.stringify(selector)}))`;
+  const openMenu='.panel-context-menu:popover-open';
+  const hasRow=label=>`[...document.querySelectorAll('${openMenu} .menu-label')].some(n=>n.textContent===${JSON.stringify(label)})`;
+  const menuLabels=()=>evaluate(`[...document.querySelectorAll('${openMenu} .menu-label')].map(n=>n.textContent)`);
+  const chooseRow=async(label,device)=>{
+    await wait(hasRow(label));
+    await tap(await evaluate(`(()=>{const r=[...document.querySelectorAll('${openMenu} button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(label)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`),device);
+  };
+  const openMore=async device=>{await tap(await middle(`${bar} .canvas-action-bar-more`),device);await wait(`!!document.querySelector('${openMenu}')`);};
+  const press=async(command,device)=>{
+    const selector=`${bar} [data-command="${command}"]`;
+    await wait(`!!document.querySelector('${selector}')&&${visible}`);
+    if(await evaluate(shownItem(selector)))return tap(await middle(selector),device);
+    await openMore(device);
+    await chooseRow(await evaluate(`layerApp.state().commands.find(c=>c.id==='${command}').label`),device);
+  };
+  const openBarMenu=async(id,device)=>{
+    const selector=`${bar} [data-canvas-bar-menu="${id}"]`;
+    await wait(`!!document.querySelector('${selector}')&&${visible}`);
+    if(!await evaluate(shownItem(selector))){
+      await openMore(device);await chooseRow(await evaluate(`document.querySelector('${selector}').getAttribute('aria-label')`),device);return 'more';
+    }
+    await tap(await middle(selector),device);
+    await wait(`document.querySelector('${openMenu}')?.menuOwner===document.querySelector('${selector}')`);
+    assert.ok(await evaluate(`document.activeElement!==document.querySelector('${selector}')`),`${device}: a bar menu button never takes focus`);
+    return 'bar';
+  };
   const drag=async(points,device,during)=>{
     await wait('layerApp.app.brush_ready()');
     touchId++;const fingers=device==='touch'?2:1;
@@ -239,6 +265,16 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
         await wait(`layerApp.state().canvas_bar?.context.kind==='selection' && ${visible}`);
         const pointers=await evaluate('barProbe.pointers');
         await evaluate('osInput.length=0');
+        const menu=await evaluate(`[...document.querySelectorAll('${bar} .canvas-action-bar-item:not([hidden]) [data-canvas-bar-menu]')][0]?.dataset.canvasBarMenu`);
+        assert.ok(menu,`A bar menu is shown on the tablet`);
+        const menuButton=`${bar} [data-canvas-bar-menu="${menu}"]`,served=await evaluate(`layerApp.app.canvas_bar_choice_menu(layerApp.state().canvas_bar.context,'${menu}').sections.flat().map(i=>i.label)`);
+        await osTap(menuButton,kind);
+        await wait(`document.querySelector('${openMenu}')?.menuOwner===document.querySelector('${menuButton}')`);
+        assert.deepEqual((await menuLabels()).filter(label=>served.includes(label)),served,`OS ${kind} taps open the ${menu} menu with its shared items`);
+        await osTap(menuButton,kind);
+        await wait(`!document.querySelector('${openMenu}')`);
+        assert.equal(await evaluate('layerApp.state().canvas_bar?.context.kind??null'),'selection',`OS ${kind} taps close the ${menu} menu and keep the selection`);
+        console.log(`OS ${kind} taps open and close the ${menu} menu`);
         await osTap(`${bar} [data-command="scale_rotate"]`,kind);
         await wait(`layerApp.state().layer_tools.tool==='transform' && ${visible}`);
         const events=await evaluate('osInput');
@@ -264,6 +300,116 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
         await wait(`layerApp.state().layer_tools.tool!=='transform'`);
       }
     }
+    const layerIds=()=>evaluate('layerApp.state().layers.map(l=>String(l.id))');
+    const activeLayer=()=>evaluate('String(layerApp.state().layers.find(l=>l.editing).id)');
+    const revision=id=>evaluate(`String(layerApp.state().layers.find(l=>String(l.id)==='${id}').paint_revision)`);
+    const page=await evaluate('(({width,height})=>({width,height}))(layerApp.state().tabs.find(t=>t.active))');
+    const thumbnail=(id,mask=false)=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+20000;function check(){
+      const layer=layerApp.state().layers.find(l=>String(l.id)==='${id}'),c=document.querySelectorAll('[data-layer="${id}"] .layer-thumbnail')[${mask?1:0}]?.querySelector('canvas');
+      const current=layer&&String(layer.${mask?'mask_revision':'paint_revision'});
+      if(c&&c.dataset.previewRevision?.split(':').at(-1)===current){const d=c.getContext('2d',{willReadFrequently:true}).getImageData(0,0,c.width,c.height).data;
+        resolve({side:c.width,values:Array.from({length:d.length/4},(_,i)=>d[i*4+3]>128?d[i*4]:-1)});}
+      else if(performance.now()>end)reject(Error('The thumbnail of layer ${id} did not update'));else setTimeout(check,60);}check();})`);
+    const fit=image=>{const scale=image.side/Math.max(page.width,page.height);return{scale,x:(image.side-page.width*scale)/2,y:(image.side-page.height*scale)/2};};
+    const painted=value=>value>=0&&value<100;
+    const valueAt=(image,[x,y])=>{const f=fit(image);return image.values[Math.floor(f.y+y*f.scale)*image.side+Math.floor(f.x+x*f.scale)];};
+    const frame=image=>{
+      const found={x0:Infinity,y0:Infinity,x1:-1,y1:-1,count:0};
+      image.values.forEach((value,i)=>{
+        if(!painted(value))return;
+        const x=i%image.side,y=Math.floor(i/image.side);
+        Object.assign(found,{x0:Math.min(found.x0,x),y0:Math.min(found.y0,y),x1:Math.max(found.x1,x),y1:Math.max(found.y1,y),count:found.count+1});
+      });
+      return{width:found.x1-found.x0+1,height:found.y1-found.y0+1,count:found.count};
+    };
+    const holdsOnly=(image,box)=>{
+      const found=frame(image),aspect=(box[2]-box[0])/(box[3]-box[1]);
+      const [width,height]=aspect>=1?[image.side,image.side/aspect]:[image.side*aspect,image.side];
+      return{...found,expected:[width,height],ok:found.count===found.width*found.height&&Math.abs(found.width-width)<=1.5&&Math.abs(found.height-height)<=1.5};
+    };
+    const middleOf=box=>[(box[0]+box[2])/2,(box[1]+box[3])/2],corner=[page.width*.02,page.height*.02];
+    const selectRegion=async(device,origin=at)=>{
+      if(await evaluate('layerApp.state().layer_tools.has_selection'))await invoke('deselect');
+      await invoke('lasso');await settle();
+      await drag([origin(-80,-140),origin(80,-140),origin(80,130),origin(-80,130),origin(-80,-140)],device==='touch'?'pen':device);
+      await wait(`layerApp.state().canvas_bar?.context.kind==='selection' && ${visible}`);
+      return (await state()).canvas_bar.anchor;
+    };
+    const tablet=device,viewport=width=>call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});
+    for(const device of devices) {
+      const wide=!tablet&&device==='mouse';
+      let origin=at;
+      if(wide) {
+        await viewport(2560);await settle();await invoke('fit_canvas');await settle();
+        const c=await camera();
+        origin=(x,y)=>({x:c.r.x+(c.a[0]+c.a[2]/2)*c.r.width/c.v[0]+x,y:c.r.y+(c.a[1]+c.a[3]/2)*c.r.height/c.v[1]+y});
+      }
+      await invoke('select_all');await invoke('fill_selection');await invoke('deselect');await settle();
+      const source=await activeLayer(),ids=await layerIds(),routes=[];
+      let box=await selectRegion(device,origin);
+      const context=(await state()).canvas_bar.context,shown=await rect(bar),window=await evaluate('innerWidth');
+      assert.ok(shown.x>=0&&shown.right<=window,`${device}: the selection bar fits the window and overflows into More ${JSON.stringify({shown,window})}`);
+      routes.push(await openBarMenu('copy_to_layer',device));
+      assert.ok(await evaluate(hasRow('Cut Selection to New Layer')),`${device}: Copy to Layer offers Cut: ${await menuLabels()}`);
+      await chooseRow('Copy Selection to New Layer',device);
+      await wait(`layerApp.state().layers.length===${ids.length+1}&&!layerApp.state().layer_tools.has_selection`);
+      const copy=await activeLayer();
+      assert.ok(!ids.includes(copy),`${device}: the copy is a new, active layer`);
+      const whole=[0,0,page.width,page.height],copied=holdsOnly(await thumbnail(copy),box);
+      assert.ok(copied.ok,`${device}: the new layer holds only the selected pixels ${JSON.stringify({copied,box})}`);
+      assert.ok(holdsOnly(await thumbnail(source),whole).ok,`${device}: copying keeps the source pixels`);
+      assert.equal(await evaluate(`layerApp.app.canvas_bar_choice_menu(${JSON.stringify(context)},'copy_to_layer')??null`),null,`${device}: the consumed selection's menu is stale`);
+      await invoke('undo');
+      await wait(`layerApp.state().layers.length===${ids.length}`);
+      assert.deepEqual(await layerIds(),ids,`${device}: one undo step removes the copy`);
+      assert.ok(holdsOnly(await thumbnail(source),whole).ok,`${device}: the undo keeps the painted layer`);
+
+      box=await selectRegion(device,origin);
+      const before=await revision(source);
+      routes.push(await openBarMenu('clear',device));
+      assert.ok(await evaluate(hasRow('Clear Selected Pixels')),`${device}: Clear offers Clear Selected Pixels`);
+      await chooseRow('Clear Outside Selection',device);
+      await wait(`String(layerApp.state().layers.find(l=>String(l.id)==='${source}').paint_revision)!=='${before}'`);
+      const kept=holdsOnly(await thumbnail(source),box);
+      assert.ok(kept.ok,`${device}: Clear Outside keeps only the selected pixels ${JSON.stringify({kept,box})}`);
+      await invoke('undo');
+      assert.ok(holdsOnly(await thumbnail(source),whole).ok,`${device}: one undo step restores the cleared pixels`);
+      assert.deepEqual(await layerIds(),ids);
+
+      box=await selectRegion(device,origin);
+      routes.push(await openBarMenu('adjust',device));
+      await chooseRow('Tone',device);
+      await chooseRow('Curves',device);
+      await wait(`layerApp.state().layers.length===${ids.length+1}&&!layerApp.state().layer_tools.has_selection`);
+      const effect=await evaluate('JSON.parse(JSON.stringify(layerApp.state().layers.find(l=>l.editing),(_,v)=>typeof v==="bigint"?String(v):v))');
+      assert.equal(effect.label,'Curves',`${device}: Adjust › Tone › Curves adds a Curves layer`);
+      assert.ok(effect.has_mask,`${device}: the Curves layer is masked`);
+      const mask=await thumbnail(effect.id,true);
+      assert.ok(valueAt(mask,middleOf(box))>200&&valueAt(mask,corner)>=0&&valueAt(mask,corner)<50,`${device}: the mask reveals the selection only ${JSON.stringify({inside:valueAt(mask,middleOf(box)),outside:valueAt(mask,corner)})}`);
+      await invoke('undo');
+      await wait(`layerApp.state().layers.length===${ids.length}&&layerApp.state().layer_tools.has_selection`);
+      assert.deepEqual(await layerIds(),ids,`${device}: one undo step removes the Curves layer and restores the selection`);
+      await invoke('deselect');
+      if(wide) {
+        assert.deepEqual(routes,['bar','bar','bar'],'A wide work area shows every menu on the bar');
+        await viewport(1440);await settle();await invoke('fit_canvas');await settle();
+      }
+      console.log(`${device}: bar menus opened from ${routes.join(', ')}`);
+    }
+    const key=async name=>{
+      const code={Delete:46,Backspace:8}[name];
+      for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:name,code:name,windowsVirtualKeyCode:code,nativeVirtualKeyCode:code});
+      await settle();
+    };
+    const source=await activeLayer();
+    const box=await selectRegion('pen');
+    const before=await revision(source);
+    await key('Delete');
+    await wait(`String(layerApp.state().layers.find(l=>String(l.id)==='${source}').paint_revision)!=='${before}'`);
+    const cleared=await thumbnail(source);
+    assert.ok(!painted(valueAt(cleared,middleOf(box)))&&painted(valueAt(cleared,corner)),'Delete clears the selected pixels only');
+    await invoke('undo');
+    assert.ok(holdsOnly(await thumbnail(source),[0,0,page.width,page.height]).ok,'One undo step restores the pixels Delete cleared');
     const stroke=async withBar=>{
       if(withBar){await drag([at(-120,-80),at(120,-80),at(120,80),at(-120,-80)],'pen');await wait(`layerApp.state().canvas_bar?.context.kind==='selection' && ${visible}`);await pause(300);}
       else {await invoke('deselect');await settle();await pause(300);}
@@ -294,7 +440,26 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
     console.log('Stroke metrics',JSON.stringify(strokes));
     await invoke('deselect');await settle();
     assert.equal(await evaluate(visible),false,'Deselect removes the bar');
-    console.log(`PASS canvas action bar (${device?'tablet':'desktop'}): selection bar beside new selections, Transform, taps never paint, hide during drags, More, Apply/Cancel, completion-only, Zen, glass and screenshots in ${directory}`);
+    const drawings=()=>evaluate('layerApp.app.document_tabs(0).tabs.map(t=>String(t.id))');
+    const ready=()=>wait('!layerApp.documents.busy()&&layerApp.app.brush_ready()&&!layerApp.state().document_file.busy&&layerApp.app.document_park_ready()');
+    const [first]=await drawings();
+    await invoke('new_document');
+    await wait(`!![...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create')`);
+    await evaluate(`(()=>{const dialog=document.querySelector('dialog[open]');for(const n of dialog.querySelectorAll('input[type=number]'))n.value=96;[...dialog.querySelectorAll('button')].find(b=>b.textContent==='Create').click();})()`);
+    await wait('layerApp.app.document_tabs(0).tabs.length===2');await ready();
+    const second=(await drawings()).find(id=>id!==first);
+    await evaluate(`layerApp.documents.select(BigInt(${first}))`);await ready();
+    await invoke('select_all');
+    await wait(`layerApp.state().commands.find(c=>c.id==='clear_selected').enabled`);
+    const kept=await revision(source);
+    await evaluate(`document.querySelector('.drawing-tab[data-drawing-id="${second}"] .drawing-tab-pick').focus()`);
+    await key('Delete');
+    await wait('layerApp.app.document_tabs(0).tabs.length===1');await ready();
+    assert.deepEqual(await drawings(),[first],'Delete on a focused drawing tab closes that drawing');
+    assert.equal(await revision(source),kept,'Delete on a focused drawing tab clears no pixels in the active drawing');
+    assert.ok(await evaluate('layerApp.state().layer_tools.has_selection'),'Delete on a focused drawing tab keeps the selection');
+    await invoke('deselect');await settle();
+    console.log(`PASS canvas action bar (${device?'tablet':'desktop'}): selection bar beside new selections, Transform, taps never paint, hide during drags, More, Apply/Cancel, completion-only, Zen, glass, Copy to Layer, Clear Outside and Adjust › Curves from bar menus, Delete clearing a selection but not from a focused drawing tab, and screenshots in ${directory}`);
   } catch(error) {
     const shot=await call('Page.captureScreenshot',{format:'png'});
     await writeFile(`${directory}/failure.png`,Buffer.from(shot.data,'base64'));

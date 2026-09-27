@@ -106,12 +106,14 @@ export async function checkNotices({call,evaluate,settle,device=false}) {
     await invoke('select_all');await invoke('move');
     const active=(await state()).layers.find(l=>l.editing);
     await send({type:'layer',action:{op:'lock',id:active.id,value:true}});
-    const fill=`${bar} [data-command="fill_selection"]`;
-    await wait(`${barShown}&&document.querySelector('${fill}')?.getAttribute('aria-disabled')==='true'`);
-    assert.equal(await evaluate(`document.querySelector('${fill}').title`),LOCKED,'A disabled bar item shows its reason on hover');
+    await wait(`${barShown}&&layerApp.state().commands.find(c=>c.id==='fill_selection').disabled_reason===${JSON.stringify(LOCKED)}`);
+    const command=await evaluate(`[...document.querySelectorAll('${bar} .canvas-action-bar-item:not([hidden]) button[aria-disabled="true"][data-command]')][0]?.dataset.command`);
+    assert.ok(command,'The locked layer disables a bar item that is shown');
+    const disabled=`${bar} [data-command="${command}"]`,reason=await evaluate(`layerApp.state().commands.find(c=>c.id==='${command}').disabled_reason`);
+    assert.equal(await evaluate(`document.querySelector('${disabled}').title`),reason,'A disabled bar item shows its reason on hover');
     for(const kind of ['pen','touch','mouse']) {
-      await tap(await middle(fill),kind);
-      await wait(`document.querySelector('#hover-tooltip').matches(':popover-open')&&document.querySelector('#hover-tooltip').textContent===${JSON.stringify(LOCKED)}`);
+      await tap(await middle(disabled),kind);
+      await wait(`document.querySelector('#hover-tooltip').matches(':popover-open')&&document.querySelector('#hover-tooltip').textContent===${JSON.stringify(reason)}`);
       assert.equal(await evaluate('layerApp.state().layer_tools.has_selection'),true,`${kind}: tapping a disabled item runs nothing`);
       await evaluate("(t=>t.matches(':popover-open')&&t.hidePopover())(document.querySelector('#hover-tooltip'))");
     }

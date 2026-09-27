@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -207,6 +208,7 @@ private const val TabCloseSize=24f
                 .background(if(selected)(if(vertical)colors.active else colors.documentTab)else if(held)colors.tabs else Color.Transparent)
                 .then(if(vertical&&drag.active==id)Modifier.border(2.dp,colors.accent,ControlShape)else Modifier)
                 .drawingKeys(controller,id){if(vertical)drag.menu=id else controller.selector=true}
+                .onFocusChanged{if(it.isFocused)controller.focused=id else if(controller.focused==id)controller.focused=null}
                 .selectable(selected,enabled=!controller.blocked,role=Role.Tab){controller.select(id)}
                 .semantics{contentDescription="${item.getString("title")}${if(item.getBoolean("modified"))", modified"else ""}, ${item.getString("location")}"},verticalAlignment=Alignment.CenterVertically) {
                 if(vertical)Box(Modifier.width(32.dp).fillMaxHeight().drawingBounds(drag.handles,id).testTag("drawing-handle-$id"),contentAlignment=Alignment.Center){PanelGrip("Move drawing")}

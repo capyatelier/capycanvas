@@ -685,7 +685,15 @@ impl WgpuRasterizer {
                             }
                         }
                     } else {
-                        let data = wanted.unwrap_or_default();
+                        // A target inserted with pending pixels, such as a
+                        // layer copy with an operation, starts from its source.
+                        let restored = packet
+                            .restore_rasters
+                            .iter()
+                            .find(|(target, _)| *target == id)
+                            .map(|(_, root)| root.wait_data().map_err(GpuRasterError::Effect))
+                            .transpose()?;
+                        let data = wanted.or(restored).unwrap_or_default();
                         if !data.tiles.is_empty() {
                             damage.extend(
                                 restored_damage(

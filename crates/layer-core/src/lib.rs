@@ -1653,7 +1653,13 @@ impl Edit {
             Self::SetColor { .. } | Self::SetProof(_) | Self::SetSdrRendition(_) => true,
             Self::SetSavedSelection { .. } => true,
             Self::Batch(edits) => edits.iter().any(|e| e.requires_history_admission(document)),
-            Self::InsertLayer { layer, .. } => layer.source.is_some() || layer.selection.is_some(),
+            // A copy that shares an existing layer's original adds no ownership.
+            Self::InsertLayer { layer, .. } => {
+                layer.selection.is_some()
+                    || layer.source.as_ref().is_some_and(|source| {
+                        !document.layers.iter().any(|l| l.source.as_ref().is_some_and(|s| Arc::ptr_eq(s, source)))
+                    })
+            }
             Self::RemoveLayer { id } => document.layer(*id).is_some_and(|l| l.source.is_some() || l.selection.is_some()),
             Self::ReplaceLayer(layer) => {
                 if layer.selection.is_some() || document.layer(layer.id).is_some_and(|l| l.selection.is_some()) { return true; }

@@ -3827,20 +3827,22 @@ impl CanvasRenderer for WgpuRasterizer {
                     continue;
                 };
                 let op = &layer.pending_operations[operation_index as usize];
+                let masking = matches!(
+                    op.kind,
+                    layer_core::LayerOperationKind::ApplyMask | layer_core::LayerOperationKind::Erase { .. }
+                );
                 if matches!(
                     op.kind,
                     layer_core::LayerOperationKind::Fill { .. }
                         | layer_core::LayerOperationKind::Gradient { .. }
                         | layer_core::LayerOperationKind::Figure(_)
-                ) || (op.kind == layer_core::LayerOperationKind::ApplyMask
-                    && (layer.source.is_some() || self.native_backing(layer.id).is_some()))
+                ) || (masking && (layer.source.is_some() || self.native_backing(layer.id).is_some()))
                 {
                     // Coverage may be translated or inverted: its source mask
                     // pages are not necessarily the destination paint pages.
-                    let bounds =
-                        pixel_rect(op.bounds(self.target_extent(layer.id)), self.target_extent(layer.id));
+                    let bounds = batch_pixel_rect(batch, self.target_extent(layer.id));
                     for c in page_coordinates(bounds) {
-                        if op.kind == layer_core::LayerOperationKind::ApplyMask
+                        if masking
                             && !self.native_backing(layer.id).is_some_and(|data| {
                                 data.tiles.contains_key(&layer_core::raster::TileKey {
                                     plane: layer_core::raster::RasterPlane::Color,
@@ -3971,7 +3973,8 @@ impl CanvasRenderer for WgpuRasterizer {
                     result?;
                 } else {
                     let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
-                    scene.apply_operation(self, packet, layer_index, op as usize, &mut encoder)?;
+                    let damage = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
+                    scene.apply_operation(self, packet, layer_index, op as usize, damage, &mut encoder)?;
                     self.scene = Some(scene);
                 }
                 let bounds = packet.layers[layer_index].pending_operations[op as usize]

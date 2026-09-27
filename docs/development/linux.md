@@ -491,6 +491,13 @@ canvas contact and the 4 s timeout dismiss it, that its action marks the layer
 below as a reference without taking focus from the canvas, and that a disabled
 canvas-bar item shows its reason as the tooltip.
 
+For the selection bar's menus, run
+`bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_selection_menus --tablet`.
+With mouse, finger and pen in turn it chooses Copy to Layer, Clear ▾ › Clear
+Outside Selection and Adjust ▾ › Curves, through More when an item does not fit.
+`--native-test=native_delete_clears_pixels_unless_a_guide_is_selected` presses
+the real Delete key over a selection, then over a guide drawn with the Ruler tool.
+
 For [stacked columns](../ui/stacked-columns.md), run
 `bash tools/performance/workspace-motion.sh gtk --column-stacks`.
 This uses real mouse/touch and private SQLite storage. It checks handle stacking

@@ -45,8 +45,10 @@ pub(crate) mod rulers;
 mod canvas_bar;
 #[path = "notices.rs"]
 mod notices;
+#[path = "selection_pixels.rs"]
+mod selection_pixels;
 pub use notices::{Notice, NoticeAction};
-pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
+pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
     ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
 };
@@ -1143,22 +1145,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                             self.in_modifier_hold(&name)
                         } {
                             reply.handled = true;
-                        } else if let Some(binding) = self.held_shortcut_match(&key, modifiers, divider.is_none()) {
-                            reply.handled = true;
-                            if !repeat || binding.repeat {
-                                match binding.action {
-                                    ShortcutAction::Action { action } => {
-                                        if !matches!(*action, UiAction::Invoke { command } if !self.command(command).enabled)
-                                            && !matches!(&*action, UiAction::StepToolSetting { id, .. } if !self.state.tool_settings.iter().any(|c| c.id == *id))
-                                        {
-                                            let restore = (!repeat).then(|| self.spring_restore(&action)).flatten();
-                                            reply.change = self.dispatch(*action)?;
-                                            if let Some(restore) = restore {
-                                                self.interaction.spring = Some(crate::interaction::Spring { key: name.clone(), restore, used: false });
-                                            }
-                                        }
-                                    }
-                                    ShortcutAction::Pan | ShortcutAction::Hold { .. } | ShortcutAction::Momentary { .. } => {}
+                        } else {
+                            let bindings = self.held_shortcut_matches(&key, modifiers, divider.is_none());
+                            reply.handled |= !bindings.is_empty();
+                            let binding = bindings.into_iter().find(|b| self.binding_enabled(&b.action));
+                            if let Some(ShortcutDefinition { action: ShortcutAction::Action { action }, repeat: repeats, .. }) = binding
+                                && (!repeat || repeats)
+                            {
+                                let restore = (!repeat).then(|| self.spring_restore(&action)).flatten();
+                                reply.change = self.dispatch(*action)?;
+                                if let Some(restore) = restore {
+                                    self.interaction.spring = Some(crate::interaction::Spring { key: name.clone(), restore, used: false });
                                 }
                             }
                         }
@@ -2091,6 +2088,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SelectAll => self.require_document_idle().is_ok(),
             CommandId::Deselect | CommandId::InvertSelection => {
                 self.require_document_idle().is_ok() && self.has_selection()
+            }
+            CommandId::ClearSelected | CommandId::ClearOutside => {
+                self.require_document_idle().is_ok() && self.clear_refusal().is_none()
+            }
+            CommandId::CopySelectionToLayer | CommandId::CutSelectionToLayer => {
+                self.require_document_idle().is_ok()
+                    && self.selection_to_layer_refusal(id == CommandId::CutSelectionToLayer).is_none()
             }
             CommandId::ClearLayer | CommandId::FillSelection => {
                 self.require_document_idle().is_ok()
@@ -4086,6 +4090,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.use_reference_below()?;
                 Ok((DOCUMENT | COMMANDS, true))
             }
+            CommandId::ClearSelected | CommandId::ClearOutside => {
+                self.clear_selection(command == CommandId::ClearOutside)?;
+                Ok((DOCUMENT, true))
+            }
+            CommandId::CopySelectionToLayer | CommandId::CutSelectionToLayer => {
+                self.selection_to_layer(command == CommandId::CutSelectionToLayer)?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
             CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect
             | CommandId::SelectionAntialias | CommandId::SelectionConstrainAngles => {
                 self.region_tools.cancel();
@@ -5061,6 +5073,7 @@ mod tests {
     include!("color_picker_tests.rs");
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
+    include!("selection_pixel_tests.rs");
     include!("tonal_tests.rs");
     include!("painted_selection_tests.rs");
     include!("toolbar_component_tests.rs");

@@ -37,20 +37,25 @@ class CapyDeviceRule(private val nativeFileJobs: Boolean = false) : ExternalReso
     val recovery get() = File(root, "recovery")
     private lateinit var userPreferences: Map<String, *>
     private var rotation: Pair<Int, Boolean>? = null
-    fun landscape(scenario: ActivityScenario<MainActivity>) {
-        var portrait = false
+    fun landscape(scenario: ActivityScenario<MainActivity>) = orient(scenario, true)
+    fun portrait(scenario: ActivityScenario<MainActivity>) = orient(scenario, false)
+    private fun orient(scenario: ActivityScenario<MainActivity>, landscape: Boolean) {
+        fun turned(activity: MainActivity) = (activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) != landscape
+        var turn = false
+        var current = 0
         scenario.onActivity {
             if (rotation == null) rotation = it.window.decorView.display.rotation to (android.provider.Settings.System.getInt(it.contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, 1) != 0)
-            portrait = it.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            current = it.window.decorView.display.rotation
+            turn = turned(it)
         }
-        if (!portrait) return
-        assertTrue(instrumentation.uiAutomation.setRotation(if (rotation!!.first % 2 == 0) android.app.UiAutomation.ROTATION_FREEZE_90 else android.app.UiAutomation.ROTATION_FREEZE_0))
+        if (!turn) return
+        assertTrue(instrumentation.uiAutomation.setRotation(if (current % 2 == 0) android.app.UiAutomation.ROTATION_FREEZE_90 else android.app.UiAutomation.ROTATION_FREEZE_0))
         val until = SystemClock.uptimeMillis() + 10_000
-        while (portrait && SystemClock.uptimeMillis() < until) {
+        while (turn && SystemClock.uptimeMillis() < until) {
             SystemClock.sleep(50)
-            scenario.onActivity { portrait = it.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE }
+            scenario.onActivity { turn = turned(it) }
         }
-        assertFalse("The fixtures use the landscape tablet layout", portrait)
+        assertFalse("The fixture uses the ${if (landscape) "landscape" else "portrait"} tablet layout", turn)
     }
     override fun before() {
         val context = instrumentation.targetContext

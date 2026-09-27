@@ -13,6 +13,9 @@ import org.json.JSONObject
 internal class DrawingTabsController(private val host: CanvasHost) {
     var view by mutableStateOf(JSONObject()); private set
     var selector by mutableStateOf(false)
+    /** The drawing tab with key focus. It closes on Delete, which canvas shortcuts then never see. */
+    var focused: Long? = null
+    fun takes(event:KeyEvent) = event.keyCode==KeyEvent.KEYCODE_FORWARD_DEL && focused.let { id -> rows.any { it.getLong("id")==id } }
     var switching by mutableStateOf(false); private set
     private fun transition(value:Boolean) {
         switching=value

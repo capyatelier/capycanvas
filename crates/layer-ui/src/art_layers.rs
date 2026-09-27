@@ -1204,25 +1204,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.state.layer_tools.tool = LayerCanvasTool::Paint;
                         self.refresh_tools();
                         if layer.mask.is_none() || replace {
-                            let linked = layer.mask.as_ref().is_none_or(|m| m.linked);
-                            let offset = layer
-                                .mask
-                                .as_ref()
-                                .map_or(layer.properties.offset, |m| m.offset);
-                            let mut mask =
-                                LayerMask::reveal_all(self.engine.allocate_layer_id(), offset);
-                            mask.linked = linked;
-                            if let Some(selection) = &self.engine.document().selection {
-                                let mut selection = selection.clone();
-                                selection.inverted ^= hide_selection;
-                                let world = self.engine.document().layer_offset(layer.id);
-                                let geometry = mask.transform_in_parent(&layer.properties).then(layer_core::Affine::translation(Point {
-                                    x: world.x - layer.properties.offset.x, y: world.y - layer.properties.offset.y,
-                                }));
-                                mask.initial = Some(selection.transformed(geometry.inverse().ok_or("Invalid mask placement")?).map_err(error)?);
-                                mask.default_coverage = f32::from(selection.inverted);
-                            }
-                            layer.mask = Some(mask);
+                            layer.mask = Some(self.selection_mask(&layer, hide_selection)?);
                             self.layer_edit(Edit::Batch(vec![
                                 Edit::ReplaceLayer(Box::new(layer)),
                                 Edit::SetSelection(None),
@@ -1594,7 +1576,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             let mut destructive = Vec::new();
             if paint {
-                destructive.push(item("Clear layer", A::Clear { id }));
+                destructive.push(item(CommandId::ClearLayer.label(), A::Clear { id }));
             }
             destructive.push(item(
                 if multiple {
@@ -1610,30 +1592,43 @@ impl<R: CanvasRenderer> UiSession<R> {
                     A::Delete { id }
                 },
             ));
+            let mut new = vec![vec![
+                item(
+                    "New layer",
+                    A::New {
+                        group: false,
+                        clipped: false,
+                    },
+                ),
+                item(
+                    "New clipping layer",
+                    A::New {
+                        group: false,
+                        clipped: true,
+                    },
+                ),
+                item(
+                    "New group",
+                    A::New {
+                        group: true,
+                        clipped: false,
+                    },
+                ),
+            ]];
+            if l.id == doc.active_layer {
+                new.push(
+                    [CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer]
+                        .map(|command| {
+                            let state = self.command(command);
+                            let mut item = ContextMenuItem::command(state.label, UiAction::Invoke { command });
+                            item.enabled = state.enabled;
+                            item
+                        })
+                        .into(),
+                );
+            }
             vec![
-                vec![ContextMenuItem::submenu("New", vec![vec![
-                    item(
-                        "New layer",
-                        A::New {
-                            group: false,
-                            clipped: false,
-                        },
-                    ),
-                    item(
-                        "New clipping layer",
-                        A::New {
-                            group: false,
-                            clipped: true,
-                        },
-                    ),
-                    item(
-                        "New group",
-                        A::New {
-                            group: true,
-                            clipped: false,
-                        },
-                    ),
-                ]])],
+                vec![ContextMenuItem::submenu("New", new)],
                 vec![ContextMenuItem::submenu("Organize", vec![organization]), ContextMenuItem::submenu("Layer Settings", vec![protection])],
                 vec![
                     ContextMenuItem::submenu("Mask", mask_menu),

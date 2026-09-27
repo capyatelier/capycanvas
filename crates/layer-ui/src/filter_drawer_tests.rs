@@ -49,6 +49,27 @@ fn filter_drawer_replaces_the_selected_layer_after_reopening_and_cancel_is_undoa
 }
 
 #[test]
+fn the_filter_drawer_masks_a_new_effect_but_never_the_one_it_replaces() {
+    let (mut s, _) = filters();
+    let selection = layer_core::Selection::polygon(vec![
+        Point { x: 50., y: 50. },
+        Point { x: 250., y: 50. },
+        Point { x: 250., y: 200. },
+    ])
+    .unwrap();
+    s.layer_edit(layer_core::Edit::SetSelection(Some(selection.clone()))).unwrap();
+    choose(&mut s, "brightness_contrast");
+    let id = s.engine.document().active_layer;
+    let mask = s.engine.document().layer(id).unwrap().mask.clone().expect("a new effect takes the selection");
+    assert_eq!(mask.initial.as_ref(), Some(&selection));
+    invoke(&mut s, CommandId::Reselect);
+    choose(&mut s, "curves");
+    assert_eq!(s.engine.document().active_layer, id, "the drawer replaces the effect");
+    assert_eq!(s.engine.document().layer(id).unwrap().mask, Some(mask), "and keeps its mask");
+    assert_eq!(s.engine.document().selection, Some(selection), "replacing leaves the selection");
+}
+
+#[test]
 fn filters_resolve_drawing_without_borrowing_other_masks_or_entering_groups() {
     let (mut s, _) = filters();
     choose(&mut s, "curves");

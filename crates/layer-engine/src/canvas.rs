@@ -140,6 +140,34 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     metrics: EngineMetrics,
 }
 
+/// Published pixels with no watercolor or wet material state, so an erase
+/// can rewrite only the pages it covers instead of settling the whole layer.
+fn plain_color(raster: &layer_core::raster::RasterRevision) -> bool {
+    matches!(raster.try_data(), Some(Ok(data)) if data.watercolor.is_none()
+        && data.tiles.keys().all(|key| key.plane == layer_core::raster::RasterPlane::Color))
+}
+
+fn full_extent(extent: [u32; 2]) -> Rect {
+    Rect {
+        min: layer_core::Point::default(),
+        max: layer_core::Point { x: extent[0] as f32, y: extent[1] as f32 },
+    }
+}
+
+/// Raster pages of `extent` that `damage` touches.
+fn pages(damage: Rect, extent: [u32; 2]) -> u64 {
+    if damage.is_empty() {
+        return 0;
+    }
+    let size = layer_core::raster::TILE_SIZE as f32;
+    let span = |min: f32, max: f32, limit: u32| {
+        let first = (min.max(0.) / size).floor() as u64;
+        let last = (max.min(limit as f32) / size).ceil() as u64;
+        last.saturating_sub(first)
+    };
+    span(damage.min.x, damage.max.x, extent[0]) * span(damage.min.y, damage.max.y, extent[1])
+}
+
 impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn new(
         mut backend: B,
@@ -436,7 +464,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         id: LayerId,
         operation: layer_core::LayerOperation,
     ) -> Result<(), DocumentError> {
-        self.append_operations(vec![(id, operation)], None)
+        self.append_operations(Vec::new(), vec![(id, operation)], None)
+    }
+
+    /// Apply `prefix` edits, such as inserting layers, and run pixel operations
+    /// on their result as one undo step. An inserted target starts from the
+    /// pixels it was inserted with. `selection_after`: None keeps the
+    /// selection; Some(None) clears it.
+    pub fn insert_with_operations(
+        &mut self,
+        prefix: Vec<Edit>,
+        operations: Vec<(LayerId, layer_core::LayerOperation)>,
+        selection_after: Option<Option<layer_core::Selection>>,
+    ) -> Result<(), DocumentError> {
+        self.append_operations(prefix, operations, selection_after)
     }
 
     /// Commit the displayed pixels and moved selection as one undoable edit.
@@ -492,7 +533,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 },
             ));
         }
-        self.append_operations(operations, Some(selection))?;
+        self.append_operations(Vec::new(), operations, Some(selection))?;
         Ok(true)
     }
 
@@ -550,6 +591,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     fn append_operations(
         &mut self,
+        prefix: Vec<Edit>,
         operations: Vec<(LayerId, layer_core::LayerOperation)>,
         // None preserves the selection; Some(None) explicitly clears it.
         selection_after: Option<Option<layer_core::Selection>>,
@@ -563,31 +605,56 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 "Finish the stroke first",
             ));
         }
+        let staged;
+        let document = if prefix.is_empty() {
+            self.document()
+        } else {
+            let mut next = self.document().clone();
+            next.apply(Edit::Batch(prefix.clone()))?;
+            staged = next;
+            &staged
+        };
         let mut layers = std::collections::BTreeMap::new();
         let mut batches = Vec::with_capacity(operations.len());
+        let mut restores = Vec::new();
+        let mut reservations = std::collections::BTreeMap::<LayerId, Rect>::new();
         for (id, operation) in operations {
-            let owner = self
-                .document()
+            let owner = document
                 .target_owner(id)
                 .ok_or(DocumentError::MissingLayer(id))?;
             if (owner.id == id && owner.kind != layer_core::LayerKind::Paint)
-                || self.document().is_locked(id)
+                || document.is_locked(id)
             {
                 return Err(DocumentError::InvalidLayerOperation(
                     "Select an unlocked paint layer",
                 ));
             }
+            let pixels = document.target_raster(id).cloned().unwrap_or_default();
+            if self.document().target_owner(id).is_none() && !restores.iter().any(|(target, _)| *target == id) {
+                restores.push((id, pixels.clone()));
+            }
+            let extent = document.target_extent(id);
+            let damage = if matches!(operation.kind, layer_core::LayerOperationKind::Erase { .. })
+                && !plain_color(&pixels)
+            {
+                full_extent(extent)
+            } else {
+                operation.bounds(extent)
+            };
             let layer = layers.entry(owner.id).or_insert_with(|| owner.clone());
+            let raster = if id == layer.id {
+                &mut layer.raster
+            } else {
+                &mut layer.mask.as_mut().unwrap().raster
+            };
+            *raster = layer_core::raster::RasterRevision::pending();
             let history = layer.target_operations_mut(id).unwrap();
             let index = history.len() as u32;
-            let damage = operation.bounds(self.document().target_extent(id));
             history.push(operation);
-            if id == layer.id {
-                layer.raster = layer_core::raster::RasterRevision::pending();
-            } else if let Some(mask) = &mut layer.mask {
-                mask.raster = layer_core::raster::RasterRevision::pending();
-            }
-
+            reservations
+                .entry(id)
+                .and_modify(|r| *r = r.union(damage))
+                .or_insert(damage);
             batches.push(DabBatch {
                 material_update: 0,
                 stroke_id: StrokeId(0),
@@ -601,16 +668,35 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 damage,
             });
         }
-        let mut edits: Vec<_> = layers
-            .into_values()
-            .map(|l| Edit::ReplaceLayer(Box::new(l)))
-            .collect();
+        let color = document.color;
+        for (id, damage) in reservations {
+            let owner = document.target_owner(id).unwrap().id;
+            let layer = &layers[&owner];
+            let (raster, plane) = if id == owner {
+                (&layer.raster, layer_core::raster::RasterPlane::Color)
+            } else {
+                (&layer.mask.as_ref().unwrap().raster, layer_core::raster::RasterPlane::Mask)
+            };
+            let tile = layer_core::raster::TileBlob::max_compressed_len(plane.descriptor(color))
+                .unwrap_or(0) as u64;
+            raster.reserve_pending_bytes(pages(damage, document.target_extent(id)) * tile);
+        }
+        let mut edits = prefix;
+        for edit in &mut edits {
+            if let Edit::InsertLayer { layer, .. } = edit
+                && let Some(operated) = layers.remove(&layer.id)
+            {
+                *layer = operated;
+            }
+        }
+        edits.extend(layers.into_values().map(|l| Edit::ReplaceLayer(Box::new(l))));
         if let Some(selection) = selection_after {
             edits.push(Edit::SetSelection(selection));
         }
         self.editor.perform(Edit::Batch(edits))?;
         self.transform_preview = None;
         self.batches.extend(batches);
+        self.restore_rasters.extend(restores);
         Ok(())
     }
 
@@ -2925,6 +3011,122 @@ mod tests {
         };
         engine.set_transform_preview(Some(contours)).unwrap();
         assert!(engine.transform_selection_request(42).is_none(), "contours map on the CPU");
+    }
+
+    fn erase(
+        engine: &mut CanvasEngine<RecordingRenderer>,
+        selection: &layer_core::Selection,
+    ) -> layer_core::LayerOperation {
+        let mut coverage =
+            layer_core::LayerMask::reveal_all(engine.allocate_layer_id(), Point::default());
+        coverage.default_coverage = f32::from(selection.inverted);
+        coverage.initial = Some(selection.clone());
+        layer_core::LayerOperation {
+            placement: layer_core::Affine::IDENTITY,
+            coverage,
+            kind: layer_core::LayerOperationKind::Erase { alpha_locked: false },
+        }
+    }
+
+    #[test]
+    fn inserted_layers_take_operations_from_their_source_pixels_in_one_step() {
+        let (_, mut engine) = engine("insert with operations", 1024, 768);
+        engine.render_frame().unwrap();
+        let source = engine.document().active_layer;
+        let pixels = engine.document().layer(source).unwrap().raster.clone();
+        let selection = layer_core::Selection::polygon(vec![
+            Point { x: 300., y: 280. },
+            Point { x: 420., y: 280. },
+            Point { x: 420., y: 400. },
+            Point { x: 300., y: 400. },
+        ])
+        .unwrap();
+        engine
+            .apply_edit(Edit::SetSelection(Some(selection.clone())))
+            .unwrap();
+        let before = engine.document().clone();
+        let mut copy = before.layer(source).unwrap().clone();
+        copy.id = engine.allocate_layer_id();
+        let mut outside = selection.clone();
+        outside.inverted = true;
+        let operations = vec![
+            (copy.id, erase(&mut engine, &outside)),
+            (source, erase(&mut engine, &selection)),
+        ];
+        let id = copy.id;
+        engine
+            .insert_with_operations(
+                vec![Edit::InsertLayer { index: 0, layer: copy }],
+                operations,
+                Some(None),
+            )
+            .unwrap();
+        assert_eq!(engine.restore_rasters, [(id, pixels)], "the copy starts from its source pixels");
+        assert!(engine.document().selection.is_none());
+        let damage: Vec<_> = engine.batches.iter().map(|b| (b.layer_id, b.damage)).collect();
+        assert_eq!(damage[0], (id, full_extent([1024, 768])), "erasing outside touches every page");
+        assert_eq!(damage[1], (source, selection.bounds()), "erasing inside stays within the selection");
+        for layer in [id, source] {
+            assert!(engine.document().layer(layer).unwrap().raster.try_data().is_none());
+        }
+        engine.render_frame().unwrap();
+        assert!(engine.restore_rasters.is_empty());
+        assert!(engine.undo().unwrap());
+        assert_eq!(engine.document().layers, before.layers, "one undo step removes the copy and restores the source");
+        assert_eq!(engine.document().selection, before.selection);
+        assert!(engine.redo().unwrap());
+        assert_eq!(engine.document().layers.len(), before.layers.len() + 1);
+    }
+
+    #[test]
+    fn large_operations_reserve_their_pages_and_erase_settles_material_state() {
+        use layer_core::raster::{RasterPlane, TileBlob, TILE_SIZE};
+        let [width, height] = [12288, 8192];
+        let (_, mut engine) = engine("large erase", width, height);
+        engine.render_frame().unwrap();
+        let layer = engine.document().active_layer;
+        let mut everything = layer_core::Selection::polygon(vec![
+            Point { x: 0., y: 0. },
+            Point { x: 1., y: 0. },
+            Point { x: 1., y: 1. },
+        ])
+        .unwrap();
+        everything.inverted = true;
+        let op = erase(&mut engine, &everything);
+        engine.append_layer_operation(layer, op).unwrap();
+        let pages = u64::from(width.div_ceil(TILE_SIZE) * height.div_ceil(TILE_SIZE));
+        let tile = TileBlob::max_compressed_len(RasterPlane::Color.descriptor(engine.document().color)).unwrap() as u64;
+        assert!(pages * tile > layer_core::raster::MAX_CAPTURE_BYTES);
+        assert!(
+            engine.retained_tiles().resident_bytes() as u64 >= pages * tile,
+            "the pending pixels reserve every page they may write"
+        );
+        engine.render_frame().unwrap();
+
+        let small = layer_core::Selection::polygon(vec![
+            Point { x: 10., y: 10. },
+            Point { x: 20., y: 10. },
+            Point { x: 20., y: 20. },
+        ])
+        .unwrap();
+        let op = erase(&mut engine, &small);
+        engine.append_layer_operation(layer, op).unwrap();
+        assert_eq!(engine.batches[0].damage, small.bounds(), "plain pixels erase only the selected pages");
+
+        let mut document = Document::new("watercolor erase", 512, 512);
+        document.layers[0].raster = layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
+            watercolor: Some(layer_core::raster::RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.2, edge_width: 2. }),
+            ..Default::default()
+        });
+        let (_, mut engine) = engine_with(RecordingRenderer::default(), document, view(512, 512), TRANSFORM);
+        let layer = engine.document().active_layer;
+        let op = erase(&mut engine, &small);
+        engine.append_layer_operation(layer, op).unwrap();
+        assert_eq!(
+            engine.batches[0].damage,
+            full_extent([512, 512]),
+            "watercolor settles across the whole layer before erasing"
+        );
     }
 
     #[test]

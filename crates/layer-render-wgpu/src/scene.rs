@@ -1173,12 +1173,16 @@ impl Scene {
         );
         Ok(true)
     }
+    /// Run a pending paint operation over `damage`, the batch's pages. Masks
+    /// and erases that cover the whole layer settle watercolor and wet
+    /// material first, so hidden pigment cannot bring erased content back.
     pub fn apply_operation(
         &mut self,
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
         layer_index: usize,
         operation_index: usize,
+        damage: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         use layer_core::LayerOperationKind;
@@ -1187,9 +1191,16 @@ impl Scene {
         let layer = &packet.layers[layer_index];
         let op = &layer.pending_operations[operation_index];
         let extent = layer.local_extent(packet.document_extent);
-        let damage = pixel_rect(op.bounds(extent), extent);
+        if matches!(op.kind, LayerOperationKind::Erase { alpha_locked: true }) {
+            return Ok(());
+        }
         let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) else {
             return Ok(());
+        };
+        let settles = match op.kind {
+            LayerOperationKind::ApplyMask => true,
+            LayerOperationKind::Erase { .. } => damage == PixelRect::full(extent),
+            _ => false,
         };
         let pages: Vec<_> = stored
             .pages
@@ -1203,7 +1214,8 @@ impl Scene {
                 )
             })
             .collect();
-        let watercolor = stored.watercolor.is_some() && op.kind == LayerOperationKind::ApplyMask;
+        let watercolor = stored.watercolor.is_some() && settles;
+        let erase = f32::from(matches!(op.kind, LayerOperationKind::Erase { .. }));
         for (c, source, destination) in pages {
             let mask = self.mask_at(r, &op.coverage, op.coverage.placement.then(layer_core::Affine::translation(op.coverage.offset)), layer.local_extent(packet.document_extent), c)?;
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
@@ -1211,7 +1223,7 @@ impl Scene {
                 LayerOperationKind::Transform(_) => {
                     unreachable!("transforms execute against immutable captures")
                 }
-                LayerOperationKind::ApplyMask => {
+                LayerOperationKind::ApplyMask | LayerOperationKind::Erase { .. } => {
                     let mut resolved = None;
                     if watercolor {
                         let binding = self.watercolor_binding(r, layer, stored, c, false)?;
@@ -1231,7 +1243,7 @@ impl Scene {
                         resolved.map_or(source, |p| self.pool[p].view.clone()),
                         Some(self.pool[mask].view.clone()),
                         [0., 0., 256., 256.],
-                        [3., 1., 0., 0.],
+                        [3., 1., erase, 0.],
                         false,
                     );
                     if let Some(p) = resolved {
@@ -1301,7 +1313,7 @@ impl Scene {
             self.free(mask);
         }
         self.encode_jobs(r, encoder)?;
-        if op.kind == LayerOperationKind::ApplyMask {
+        if settles {
             // Appearance is baked before discarding material state. Hidden
             // reservoirs/wet pigment must not bring discarded content back.
             if let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) {

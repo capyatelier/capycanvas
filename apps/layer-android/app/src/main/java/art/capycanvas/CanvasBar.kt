@@ -75,8 +75,9 @@ private class BarFrame {
     val measurer = rememberTextMeasurer()
     val textStyle = LocalTextStyle.current
     fun textWidth(text: String) = measurer.measure(text, textStyle).size.width / density
-    fun width(item: JSONObject) = toolOptionSize(item.getJSONObject("option"), false, 0f, BarItemHeight, BarItemHeight,
-        BarItemStyle, ::textWidth, item.getString("label"))[0]
+    fun width(item: JSONObject) = if (!item.isNull("menu")) menuButtonWidth(item.getString("label"), ::textWidth)
+        else toolOptionSize(item.getJSONObject("option"), false, 0f, BarItemHeight, BarItemHeight, BarItemStyle, ::textWidth,
+            item.getString("label"))[0]
     val itemWidths = remember(view.opt("items"), textStyle, density) { items.map(::width) }
     val completionWidths = remember(view.opt("completion"), textStyle, density) { completion.map(::width) }
     val labelWidth = remember(label, textStyle, density) { label?.let { ceil(textWidth(it)) + 2 * BarLabelPadding } ?: 0f }
@@ -147,8 +148,12 @@ private class BarFrame {
 
 @Composable private fun BarField(item: JSONObject, width: Float, edit: (JSONObject) -> Unit,
     choiceMenu: (String, (JSONObject?) -> Unit) -> Unit) {
+    val option = item.getJSONObject("option")
     Box(Modifier.width(width.dp).height(BarItemHeight.dp), contentAlignment = Alignment.Center) {
-        ToolOptionField(item.getJSONObject("option"), width, false, "medium", false, BarItemStyle, BarItemHeight, 16, edit,
+        if (!item.isNull("menu")) item.getString("menu").let { menu ->
+            ToolOptionMenu(menu, item.getString("icon"), item.getString("label"), option.optJSONObject("Action")?.getJSONObject("state"),
+                "canvas-bar") { choiceMenu(menu, it) }
+        } else ToolOptionField(option, width, false, "medium", false, BarItemStyle, BarItemHeight, 16, edit,
             caption = item.getString("label"), prefix = "canvas-bar", accent = item.optBoolean("accent"), choiceMenu = choiceMenu)
     }
 }

@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
             return true
         }
         if (deviceKey(event.keyCode) != null) return super.dispatchKeyEvent(event)
-        host.key(event)
+        if (!host.drawingTabs.takes(event)) host.key(event)
         return super.dispatchKeyEvent(event)
     }
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {

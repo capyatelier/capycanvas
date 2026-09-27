@@ -176,7 +176,7 @@ Other focused `node apps/layer-web/test.mjs --headless` modes:
   page with the GTK allocations and font sizes in `artifacts/ui/settings-audit`.
 
 For the canvas action bar, run `node --test apps/layer-web/canvas-bar.test.mjs`
-for its placement, overflow and hiding rules, then
+for its placement, overflow, hiding and menu-button rules, then
 `node apps/layer-web/test.mjs --headless --canvas-bar`. The journey uses mouse,
 touch and pen for the selection bar beside a new selection, Transform and the
 transform bar, taps that never reach the canvas, hiding during canvas drags,
@@ -187,6 +187,21 @@ runs the same journey on a tablet. `--image-placement` uses the bar's Original
 Size, Cancel and Apply. Disabled bar items and Tool Options actions take their
 hover text from each command's published `disabled_reason`, and a tap on a
 disabled bar item reveals the same tooltip with mouse, touch and pen.
+
+Bar menu items (Copy to Layer ▾, Clear ▾, Refine ▾, Adjust ▾) are menu buttons.
+They open the menu that the `canvas_bar_choice_menu` export serves, in the same
+popover menu as More, and every entry dispatches the `CanvasBarEdit` it
+carries. An item that does not fit is a submenu of More. With pen, touch and
+mouse, the journey copies a selection to a new layer (one undo step; the copy's
+content-framed thumbnail holds only the selection), and chooses Clear ▾ › Clear
+Outside Selection and Adjust ▾ › Tone › Curves (a masked Curves layer). In the
+1440 px window Clear and Adjust open through More; a 2560 px mouse pass opens
+all three from the bar. It then presses
+Delete over a selection, which clears it, and on the focused tab of another
+drawing, which closes that drawing and clears nothing: `keyInput` skips key
+presses that a control has already handled with `preventDefault`. On a tablet,
+`device.test.mjs --canvas-bar` also opens a bar menu with real pen, touch and
+mouse taps and closes it with a second tap.
 
 The shared canvas notice (see [shared UI](../ui/shared-ui.md#actions-and-observation))
 is [`notice.js`](../../apps/layer-web/notice.js): a bubble in `#workspace`,

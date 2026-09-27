@@ -19,6 +19,8 @@ mod transform_latency;
 mod transform_oracles;
 #[path = "placement_tests.rs"]
 mod placement;
+#[path = "erase_tests.rs"]
+mod erase;
 
 fn view() -> ViewState {
     ViewState {

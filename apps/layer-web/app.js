@@ -1574,6 +1574,7 @@ canvas.addEventListener(
   { passive: false },
 );
 function keyInput(e, pressed, divider = null) {
+  if (pressed && e.defaultPrevented) return;
   if (pressed && e.target instanceof Element && e.target.closest("dialog[open]:not(#settings, #shortcut-editor, #modifier-key)")) return;
   updateZen();
   const reply = input({

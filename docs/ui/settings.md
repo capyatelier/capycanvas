@@ -58,8 +58,11 @@ modifiers and reserved OS interactions also need native testing.
 Each binding has a scope: Application, Canvas, or specific tool categories.
 Canvas and tool scopes apply only while no chrome control such as a divider owns
 keyboard focus. Recording a chord that another action already uses anywhere its
-scope overlaps is a conflict; Reassign moves the chord. The most specific scope
-still wins at runtime for overlaps saved by earlier versions. An explicitly saved
+scope overlaps is a conflict; Reassign moves the chord. At runtime a chord runs
+the most specific binding that is enabled, so a disabled one lets the next run:
+Delete and Backspace delete the selected guide with the Ruler and Move tools,
+and otherwise clear the selected pixels. Defaults and presets share a chord
+across scopes only in such deliberate layers. An explicitly saved
 binding suppresses a newer default on the same chord in an overlapping scope, so
 upgrades never shadow existing choices.
 

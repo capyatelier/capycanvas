@@ -301,6 +301,60 @@ class AndroidCanvasBarBenchmarkTest {
                 measure("selection-distort-drag") { drag(corner(), duration, wiggle) }
                 invoke("cancel_transform")
             }
+            if (wanted("menus")) {
+                newDocument(2048 to 1536)
+                invoke("select_all"); invoke("fill_selection"); invoke("deselect"); invoke("rectangle_select")
+                val area = state().getJSONObject("camera").getJSONArray("work_area")
+                val center = area.getDouble(0) + area.getDouble(2) / 2 to area.getDouble(1) + area.getDouble(3) / 2
+                val span = minOf(area.getDouble(2), area.getDouble(3)) * .15
+                fun strokes(milliseconds: Int) {
+                    val began = SystemClock.uptimeMillis()
+                    var index = 0
+                    do {
+                        val shift = (index % 3 - 1) * span * .4
+                        android.os.Trace.beginAsyncSection("capy-selection-stroke", ++index)
+                        drag(center.first - span + shift to center.second - span, 300) { t -> 2 * span * t / .3 to 1.5 * span * t / .3 }
+                        android.os.Trace.endAsyncSection("capy-selection-stroke", index)
+                        SystemClock.sleep(900)
+                    } while (SystemClock.uptimeMillis() - began < milliseconds)
+                }
+                fun menuButton(tag: String): Pair<Float, Float>? {
+                    var point: Pair<Float, Float>? = null
+                    instrumentation.runOnMainSync {
+                        findTag(tag)?.let { (root, node) ->
+                            val origin = IntArray(2); root.view.getLocationOnScreen(origin)
+                            point = node.boundsInRoot.center.let { it.x + origin[0] to it.y + origin[1] }
+                        }
+                    }
+                    return point
+                }
+                fun menus(tag: String, milliseconds: Int) {
+                    val began = SystemClock.uptimeMillis()
+                    while (SystemClock.uptimeMillis() - began < milliseconds) {
+                        val (x, y) = menuButton(tag) ?: error("The selection bar has no $tag")
+                        val down = SystemClock.uptimeMillis()
+                        inject(MotionEvent.ACTION_DOWN, down, x - host.surfaceOrigin.x.toDouble(), y - host.surfaceOrigin.y.toDouble(), .7f)
+                        SystemClock.sleep(50)
+                        inject(MotionEvent.ACTION_UP, down, x - host.surfaceOrigin.x.toDouble(), y - host.surfaceOrigin.y.toDouble(), 0f)
+                        waitFor("$tag opens its menu") { semanticsRoots().any { it.find(hasTag("workspace-menu")) != null } }
+                        SystemClock.sleep(600)
+                        instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+                        waitFor("$tag closes its menu") { semanticsRoots().none { it.find(hasTag("workspace-menu")) != null } }
+                        SystemClock.sleep(600)
+                    }
+                }
+                strokes(0)
+                waitFor("selection bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "selection" && host.canvasBarVisible }
+                SystemClock.sleep(1500)
+                measure("selection-bar-after-strokes") { strokes(duration) }
+                invoke("show_canvas_action_bar")
+                measure("selection-strokes-bar-off") { strokes(duration) }
+                invoke("show_canvas_action_bar")
+                waitFor("selection bar after strokes") { host.canvasBarVisible && findTag("canvas-bar-menu-adjust") != null }
+                SystemClock.sleep(1500)
+                measure("selection-bar-menu-open") { menus("canvas-bar-menu-adjust", duration) }
+                measure("selection-bar-more-open") { menus("canvas-bar-more", duration) }
+            }
             activity.window.removeOnFrameMetricsAvailableListener(listener)
             metricsThread.quitSafely()
             assertNull(host.failure)

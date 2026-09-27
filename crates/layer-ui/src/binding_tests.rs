@@ -180,13 +180,25 @@ fn modifier_keys_and_shortcuts_never_share_a_key() {
 
 #[test]
 fn defaults_and_presets_never_share_a_key_between_overlapping_contexts() {
+    // A tool-scoped binding may share its key with an application binding;
+    // dispatch runs the more specific one while it is enabled.
+    let layered = |a: &str, b: &str| {
+        [("command.DeleteRuler", "command.ClearSelected")].iter().any(|&(x, y)| (a, b) == (x, y) || (a, b) == (y, x))
+    };
     for preset in crate::keymaps::KEYMAP_PRESETS {
         let mut settings = Settings::default();
         crate::keymaps::select(&mut settings, preset.id).unwrap();
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac] {
             for (definition, _) in crate::shortcuts::definitions(platform).into_iter().filter(|(d, _)| d.target.is_none()) {
                 for key in settings.keys(&definition.id) {
-                    let others: Vec<_> = settings.conflicts(&definition.id, &key, platform).into_iter().map(|d| d.id).collect();
+                    let others: Vec<_> = settings
+                        .conflicts(&definition.id, &key, platform)
+                        .into_iter()
+                        .filter(|other| {
+                            other.scope.specificity() == definition.scope.specificity() || !layered(&definition.id, &other.id)
+                        })
+                        .map(|d| d.id)
+                        .collect();
                     assert!(others.is_empty(), "{} on {platform:?}: {} and {others:?} share {key:?}", preset.id, definition.id);
                 }
             }

@@ -1967,6 +1967,7 @@ class AndroidInteractionTest {
                 onCanvas { drag(point, point + shift) }
                 waitFor("$name a repeated refusal shows again", 5_000) { (notice()?.optLong("id") ?: 0) > first && shown("canvas-notice") }
 
+                idle(name)
                 invoke("hand")
                 tap(point)
                 waitFor("$name the next canvas contact hides the notice", 3_000) { notice() == null && !shown("canvas-notice") }
@@ -2003,14 +2004,8 @@ class AndroidInteractionTest {
             item.getJSONObject("option").optJSONObject("Choice")?.takeIf { it.getString("id") == id }
         }
         fun chosen(id: String) = choice(id)?.array("items")?.objects()?.firstOrNull { it.getBoolean("selected") }?.getString("label")
-        fun screen(x: Double, y: Double): Offset {
-            val camera = state().getJSONObject("camera")
-            val zoom = camera.getDouble("zoom"); val translation = camera.getJSONArray("translation")
-            val work = bounds("workspace")
-            return Offset(work.left + (x * zoom + translation.getDouble(0)).toFloat(), work.top + (y * zoom + translation.getDouble(1)).toFloat())
-        }
-        fun onDocument(x: Double, y: Double) = state().array("tabs").getJSONObject(0).let { screen(it.getInt("width") * x, it.getInt("height") * y) }
-        fun corner() = canvasBar()!!.getJSONArray("anchor").let { screen(it.getDouble(2), it.getDouble(3)) }
+        fun onDocument(x: Double, y: Double) = state().array("tabs").getJSONObject(0).let { documentPoint(it.getInt("width") * x, it.getInt("height") * y) }
+        fun corner() = canvasBar()!!.getJSONArray("anchor").let { documentPoint(it.getDouble(2), it.getDouble(3)) }
         val devices = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)
         popupInput = true
         try {
@@ -2085,7 +2080,7 @@ class AndroidInteractionTest {
                 waitFor("$device Grid menu closes", 5_000) { popupCount() == 0 && chosen("transform-warp-grid") == grid }
                 settle()
                 val hull = canvasBar()!!.getJSONArray("anchor")
-                val edgeNode = screen(hull.getDouble(0) + (hull.getDouble(2) - hull.getDouble(0)) / 3, hull.getDouble(1))
+                val edgeNode = documentPoint(hull.getDouble(0) + (hull.getDouble(2) - hull.getDouble(0)) / 3, hull.getDouble(1))
                 val edge = hull.getDouble(1)
                 val base = hull.getDouble(3)
                 val name = listOf("mouse", "finger", "stylus")[devices.indexOf(device)]
@@ -2189,5 +2184,290 @@ class AndroidInteractionTest {
             action(obj("type" to "set_theme", "theme" to originalTheme)); transparency(originalTransparency)
         }
         println("PASS canvas action bar: selection and transform bars, chrome taps, hide and return, More, toggle, Apply/Cancel, Zen, glass, light/dark")
+    }
+
+    private fun command(id: String) = action(obj("type" to "invoke", "command" to id))
+    private fun layerAction(value: JSONObject) = action(obj("type" to "layer", "action" to value))
+    private fun layerStates() = state().array("layers").objects()
+    private fun editingLayer() = state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+    private fun hasSelection() = state().getJSONObject("layer_tools").getBoolean("has_selection")
+    private fun paintRevision(id: Long) = layerStates().first { it.getLong("id") == id }.getLong("paint_revision")
+    private fun blue(pixel: Int) = android.graphics.Color.blue(pixel) - android.graphics.Color.red(pixel) > 80
+    /** Where a document position is drawn, in the window's coordinates. */
+    private fun documentPoint(x: Double, y: Double): Offset {
+        val camera = state().getJSONObject("camera")
+        val zoom = camera.getDouble("zoom"); val translation = camera.getJSONArray("translation")
+        val work = bounds("workspace")
+        return Offset(work.left + (x * zoom + translation.getDouble(0)).toFloat(), work.top + (y * zoom + translation.getDouble(1)).toFloat())
+    }
+    private fun screenPixels(points: List<Offset>): List<Int> {
+        val origin = IntArray(2)
+        onMain { owner.view.getLocationOnScreen(origin) }
+        val image = instrumentation.uiAutomation.takeScreenshot()
+        try { return points.map { image.getPixel((it.x + origin[0]).toInt(), (it.y + origin[1]).toInt()) } } finally { image.recycle() }
+    }
+    private fun awaitPixels(label: String, points: List<Offset>, check: (List<Int>) -> Boolean) {
+        val until = SystemClock.uptimeMillis() + 5_000
+        var last = screenPixels(points)
+        while (!check(last)) {
+            if (SystemClock.uptimeMillis() > until) fail("$label: ${last.map { "#%06x".format(it and 0xffffff) }}")
+            SystemClock.sleep(100); last = screenPixels(points)
+        }
+    }
+    /** An item's label in the open windowless menu, never the bar or panels beneath it. */
+    private fun menuText(text: String): Rect? {
+        var result: Rect? = null
+        onMain {
+            val base = IntArray(2); owner.view.getLocationOnScreen(base)
+            semanticsRoots().filter { it !== owner && it.find(hasTag("workspace-menu")) != null }
+                .firstNotNullOfOrNull { root -> root.find(hasLabel(text))?.let { root to it } }?.let { (root, node) ->
+                    val origin = IntArray(2); root.view.getLocationOnScreen(origin)
+                    result = node.boundsInRoot.translate(Offset((origin[0] - base[0]).toFloat(), (origin[1] - base[1]).toFloat()))
+                }
+        }
+        return result
+    }
+    /** Open a bar menu, or its submenu in More when it does not fit, and choose `path` in it. */
+    private fun chooseFromBarMenu(menu: String, path: List<String>) {
+        val tag = "canvas-bar-menu-$menu"
+        val onBar = shown(tag)
+        val label = canvasBar()!!.array("items").objects().first { it.optString("menu") == menu }.getString("label")
+        tap(bounds(if (onBar) tag else "canvas-bar-more").center)
+        waitFor("$menu opens", 5_000) { popupCount() == 1 }
+        onMain { assertTrue("the $menu menu leaves window focus with the canvas", owner.view.hasWindowFocus()) }
+        for (text in if (onBar) path else listOf(label) + path) {
+            waitFor("$text in the $menu menu", 5_000) { menuText(text) != null }
+            settle()
+            tap(menuText(text)!!.center)
+        }
+        waitFor("the $menu menu closes", 5_000) { popupCount() == 0 }
+        onMain { assertTrue("choosing from $menu leaves window focus with the canvas", owner.view.hasWindowFocus()) }
+    }
+    private class BlueSelection(val layer: Long, val inside: Offset, val outside: Offset)
+    /** Remove the layers a journey added, then select part of a new blue layer with the pen. */
+    private fun blueSelection(keep: Set<Long>): BlueSelection {
+        if (state().array("commands").objects().any { it.getString("id") == "deselect" && it.getBoolean("enabled") }) command("deselect")
+        layerStates().map { it.getLong("id") }.filter { it !in keep }.forEach { layerAction(obj("op" to "delete", "id" to it)) }
+        layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+        val layer = editingLayer()
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.1, .3, .9, 1))))
+        command("select_all"); command("fill_selection"); command("deselect")
+        command("rectangle_select")
+        val extent = state().array("tabs").objects().first { it.getBoolean("active") }
+        val (width, height) = extent.getInt("width").toDouble() to extent.getInt("height").toDouble()
+        val device = tool
+        tool = MotionEvent.TOOL_TYPE_STYLUS
+        drag(documentPoint(width * .4, height * .35), documentPoint(width * .6, height * .55))
+        tool = device
+        waitFor("the selection bar", 5_000) { hasSelection() && barKind() == "selection" && shown("canvas-action-bar") }
+        settle()
+        return BlueSelection(layer, documentPoint(width * .5, height * .45), documentPoint(width * .2, height * .45))
+    }
+    private fun filterCategory(filter: String) = kotlinx.coroutines.runBlocking {
+        host.withNative { JSONObject(Native.query(it, obj("type" to "application_menu", "menu" to "filter").toString())) }
+    }.array("sections").getJSONArray(0).objects().first { category ->
+        category.array("sections").values().any { section -> (section as JSONArray).objects().any { it.getString("label") == filter } }
+    }.getString("label")
+
+    @Test fun canvasBarSelectionMenusAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val bands = fixture.getJSONObject("layout").array("bands").objects()
+        val wide = JSONObject(fixture.toString()).apply { getJSONObject("layout").put("bands", JSONArray(bands.filter { it.getInt("id") == 44 })) }
+        val docked = JSONObject(fixture.toString()).apply {
+            getJSONObject("layout").array("bands").objects().first { it.getInt("id") == 42 }.put("extent", 620)
+        }
+        val curves = filterCategory("Curves")
+        popupInput = true
+        try {
+            for ((layout, workspace) in listOf("wide" to wide, "docked" to docked)) for (device in pointerTools) {
+                val name = "$layout ${listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]}"
+                action(obj("type" to "restore_workspace", "workspace" to workspace)); command("fit_canvas")
+                SystemClock.sleep(300)
+                tool = device
+
+                var selection = blueSelection(keep)
+                if (layout == "docked") assertFalse("$name: Adjust and Clear do not fit beside the docks",
+                    shown("canvas-bar-menu-adjust") || shown("canvas-bar-menu-clear"))
+                else assertTrue("$name: every menu fits on the bar",
+                    listOf("copy_to_layer", "adjust", "clear").all { shown("canvas-bar-menu-$it") })
+                val count = layerStates().size
+                chooseFromBarMenu("copy_to_layer", listOf("Copy Selection to New Layer"))
+                waitFor("$name: Copy to Layer adds a layer and consumes the selection", 5_000) {
+                    layerStates().size == count + 1 && !hasSelection() && editingLayer() != selection.layer
+                }
+                command("undo")
+                waitFor("$name: one undo step removes the copy and restores the selection", 5_000) {
+                    layerStates().size == count && hasSelection() && editingLayer() == selection.layer
+                }
+                command("redo")
+                waitFor("$name: redo", 5_000) { layerStates().size == count + 1 && !hasSelection() }
+                layerAction(obj("op" to "visibility", "id" to selection.layer, "value" to false))
+                awaitPixels("$name: the copy holds only the selected pixels", listOf(selection.inside, selection.outside)) { (inside, outside) ->
+                    blue(inside) && !blue(outside)
+                }
+
+                selection = blueSelection(keep)
+                val filled = paintRevision(selection.layer)
+                chooseFromBarMenu("clear", listOf("Clear Outside Selection"))
+                waitFor("$name: Clear Outside edits the layer and keeps the selection", 5_000) {
+                    paintRevision(selection.layer) != filled && hasSelection()
+                }
+                awaitPixels("$name: Clear Outside keeps only the selected pixels", listOf(selection.inside, selection.outside)) { (inside, outside) ->
+                    blue(inside) && !blue(outside)
+                }
+                command("undo")
+                awaitPixels("$name: one undo step restores the cleared pixels", listOf(selection.inside, selection.outside)) { (inside, outside) ->
+                    blue(inside) && blue(outside)
+                }
+                if (layout == "wide") {
+                    fun clear() = canvasBar()?.array("items")?.objects()?.first { it.optString("menu") == "clear" }
+                        ?.getJSONObject("option")?.getJSONObject("Action")?.getJSONObject("state")
+                    layerAction(obj("op" to "lock", "id" to selection.layer, "value" to true))
+                    waitFor("$name: a locked layer disables Clear ▾", 5_000) { clear()?.getBoolean("enabled") == false && shown("canvas-action-bar") }
+                    val reason = clear()!!.getString("disabled_reason")
+                    tap(bounds("canvas-bar-menu-clear").center)
+                    waitFor("$name: a tap on the disabled Clear ▾ shows why", 3_000) { findTag("hover-tooltip") != null && textBounds(reason) != null }
+                    assertEquals("$name: the disabled menu stays closed", 0, popupCount())
+                    layerAction(obj("op" to "lock", "id" to selection.layer, "value" to false))
+                }
+
+                selection = blueSelection(keep)
+                val before = layerStates().size
+                chooseFromBarMenu("adjust", listOf(curves, "Curves"))
+                waitFor("$name: Adjust › Curves adds a Curves layer masked by the selection, which it consumes", 5_000) {
+                    val active = layerStates().first { it.getLong("id") == editingLayer() }
+                    layerStates().size == before + 1 && active.getString("label") == "Curves" && active.getBoolean("has_mask") && !hasSelection()
+                }
+                command("undo")
+                waitFor("$name: one undo step removes the effect and restores the selection", 5_000) {
+                    layerStates().size == before && hasSelection() && editingLayer() == selection.layer
+                }
+                println("PASS canvas bar menus $name")
+            }
+        } finally { popupInput = false }
+        println("PASS canvas bar menus: Copy to Layer, Clear ▾ › Clear Outside and Adjust ▾ › Curves on the bar and through More, with mouse, finger and stylus")
+    }
+
+    @Test fun selectionBarOverflowsIntoMoreInBothOrientations() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        popupInput = true
+        try {
+            for (portrait in listOf(false, true)) {
+                val name = if (portrait) "portrait" else "landscape"
+                if (portrait) device.portrait(scenario) else device.landscape(scenario)
+                restore(); command("fit_canvas")
+                SystemClock.sleep(500)
+                tool = MotionEvent.TOOL_TYPE_STYLUS
+                val selection = blueSelection(keep)
+                val items = canvasBar()!!.array("items").objects()
+                fun tag(item: JSONObject) = if (!item.isNull("menu")) "canvas-bar-menu-${item.getString("menu")}"
+                    else "canvas-bar-action-${item.getJSONObject("option").getJSONObject("Action").getJSONObject("state").getString("id")}"
+                val hidden = items.filter { !shown(tag(it)) }
+                assertTrue("$name: the selection bar overflows into More (${items.size - hidden.size} of ${items.size} shown)",
+                    hidden.isNotEmpty() && hidden.size < items.size)
+                assertEquals("$name: the bar shows a leading run of items", items.takeLast(hidden.size), hidden)
+                val bar = bounds("canvas-action-bar")
+                var window = Rect.Zero
+                onMain { window = Rect(0f, 0f, owner.view.width.toFloat(), owner.view.height.toFloat()) }
+                assertTrue("$name: the bar stays in the window: $bar in $window", bar.left >= window.left && bar.right <= window.right)
+                captureCanvasBar("selection-overflow-$name")
+                tap(bounds("canvas-bar-more").center)
+                waitFor("$name: More lists every hidden item", 5_000) {
+                    popupCount() == 1 && hidden.all { item ->
+                        menuText(if (!item.isNull("menu")) item.getString("label")
+                            else item.getJSONObject("option").getJSONObject("Action").getJSONObject("state").getString("label")) != null
+                    }
+                }
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                waitFor("$name: Back closes More") { popupCount() == 0 }
+
+                val count = layerStates().size
+                chooseFromBarMenu("copy_to_layer", listOf("Cut Selection to New Layer"))
+                waitFor("$name: Cut to Layer adds a layer and consumes the selection", 5_000) {
+                    layerStates().size == count + 1 && !hasSelection()
+                }
+                awaitPixels("$name: Cut leaves a hole in the source, filled by the new layer", listOf(selection.inside, selection.outside)) { (inside, outside) ->
+                    blue(inside) && blue(outside)
+                }
+                layerAction(obj("op" to "visibility", "id" to editingLayer(), "value" to false))
+                awaitPixels("$name: hiding the cut pixels shows the hole", listOf(selection.inside, selection.outside)) { (inside, outside) ->
+                    !blue(inside) && blue(outside)
+                }
+                println("PASS selection bar overflow $name")
+            }
+        } finally { popupInput = false }
+    }
+
+    @Test fun hardwareDeleteClearsSelectedPixels() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        tool = MotionEvent.TOOL_TYPE_STYLUS
+        command("fit_canvas")
+        val selection = blueSelection(keep)
+        for ((key, name) in listOf(KeyEvent.KEYCODE_FORWARD_DEL to "Delete", KeyEvent.KEYCODE_DEL to "Backspace")) {
+            val filled = paintRevision(selection.layer)
+            instrumentation.sendKeyDownUpSync(key)
+            waitFor("$name clears the selected pixels", 5_000) { paintRevision(selection.layer) != filled }
+            awaitPixels("$name clears only the selected pixels", listOf(selection.inside, selection.outside)) { (inside, outside) ->
+                !blue(inside) && blue(outside)
+            }
+            assertTrue("$name keeps the selection", hasSelection())
+            command("undo")
+            awaitPixels("one undo step restores what $name cleared", listOf(selection.inside, selection.outside)) { (inside, outside) ->
+                blue(inside) && blue(outside)
+            }
+        }
+
+        action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
+        layerAction(obj("op" to "begin_rename", "id" to selection.layer))
+        waitFor("the rename field takes keys", 5_000) { host.editingText }
+        val renaming = paintRevision(selection.layer)
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_FORWARD_DEL)
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DEL)
+        settle()
+        assertEquals("a text field keeps Delete and Backspace", renaming, paintRevision(selection.layer))
+        layerAction(obj("op" to "cancel_rename"))
+        waitFor("the rename field closes", 5_000) { !host.editingText }
+
+        var first = 0L
+        onMain { first = host.drawingTabs.selected }
+        val task = kotlinx.coroutines.runBlocking { host.withNative { h ->
+            val (id, file) = documentRequest(h, "new_document")
+            Native.projectTask(h, id, "null", file.getLong("epoch"), file.getLong("revision"))
+        } }
+        try {
+            Native.projectWork(task, -1, 640, 480)
+            val until = SystemClock.uptimeMillis() + 60_000
+            while (!kotlinx.coroutines.runBlocking { host.withNative { Native.projectParkReady(it, task) } }) {
+                assertTrue("the first drawing parks", SystemClock.uptimeMillis() < until); SystemClock.sleep(16)
+            }
+            kotlinx.coroutines.runBlocking { host.withNative { Native.projectAdopt(it, task, "null") } }
+        } finally { Native.projectFree(task) }
+        onMain { host.documentChanged() }
+        waitFor("a second drawing", 30_000) { !host.drawingTabs.switching && host.drawingTabs.rows.size == 2 && host.drawingTabs.selected != first }
+        onMain { host.drawingTabs.select(first) }
+        waitFor("the first drawing returns", 30_000) { !host.drawingTabs.switching && host.drawingTabs.selected == first && hasSelection() }
+        waitFor("drawing tabs in the header", 10_000) { exists("drawing-tab-$first") }
+        val kept = paintRevision(selection.layer)
+        instrumentation.setInTouchMode(false)
+        try {
+            waitFor("keyboard mode") { !owner.view.isInTouchMode }
+            onMain { assertTrue(find("drawing-tab-$first")!!.config[androidx.compose.ui.semantics.SemanticsActions.RequestFocus].action!!.invoke()) }
+            waitFor("the drawing tab takes key focus") { host.drawingTabs.focused == first }
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_FORWARD_DEL)
+            waitFor("Delete closes the focused drawing", 30_000) { findTag("document-close-cancel") != null }
+            assertEquals("a focused drawing tab keeps Delete from the canvas", kept, paintRevision(selection.layer))
+            assertTrue(hasSelection())
+            onMain { findTag("document-close-cancel")!!.second.config[androidx.compose.ui.semantics.SemanticsActions.OnClick].action!!.invoke() }
+            waitFor("the drawing stays open", 30_000) { findTag("document-close-cancel") == null && !host.drawingTabs.switching && host.drawingTabs.rows.size == 2 }
+        } finally {
+            instrumentation.setInTouchMode(true)
+            waitFor("touch mode returns") { owner.view.isInTouchMode }
+        }
+        var second = 0L
+        onMain { second = host.drawingTabs.rows.first { it.getLong("id") != first }.getLong("id"); host.drawingTabs.select(second) }
+        waitFor("the second drawing", 30_000) { !host.drawingTabs.switching && host.drawingTabs.selected == second }
+        onMain { host.drawingTabs.select(second, true) }
+        waitFor("the second drawing closes", 30_000) { !host.drawingTabs.switching && host.drawingTabs.rows.size == 1 }
+        println("PASS hardware Delete and Backspace clear selected pixels in one undo step each; a text field and a focused drawing tab keep them")
     }
 }
