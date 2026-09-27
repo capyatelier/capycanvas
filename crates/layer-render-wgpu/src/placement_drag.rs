@@ -42,33 +42,31 @@ impl PlacementCopy {
     pub fn ready(&self) -> bool {
         self.pending.is_empty()
     }
-    /// Reduce the layer's next tiles, at least one and at most `tiles`, until
-    /// `budget` has elapsed.
+    /// Whether a drag can draw the layer, from this or the display.
+    pub fn drawable(&self) -> bool {
+        self.ready() || self.display.is_some()
+    }
+    /// Reduce the layer's next tiles within this frame's preparation.
     pub fn prepare(
         &mut self,
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder,
-        tiles: usize,
-        budget: std::time::Duration,
     ) -> Result<(), GpuRasterError> {
-        let Some(layer) = packet.layers.iter().find(|l| l.id == self.key.0) else {
+        let Some(layer) = packet.layers.iter().find(|l| l.id == self.key.0).filter(|_| !self.ready()) else {
             return Ok(());
         };
-        let started = web_time::Instant::now();
-        let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
-        let mut result = Ok(());
-        for _ in 0..tiles {
+        r.prepare(encoder, Work::Placement, |r, encoder| {
             let Some(tile) = self.pending.pop() else {
-                break;
+                return Ok(false);
             };
-            result = scene.reduce_layer_tiles(r, packet, layer, &[tile], &mut self.reduced.image, encoder);
-            if result.is_err() || started.elapsed() >= budget {
-                break;
-            }
-        }
-        r.scene = Some(scene);
-        result
+            let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
+            let reduced = scene.reduce_tile(r, tile, &mut self.reduced.image, encoder, |scene, r| {
+                scene.local_color_tile(r, packet, layer, tile)
+            });
+            r.scene = Some(scene);
+            reduced.map(|()| true)
+        })
     }
     pub fn layer(&self) -> LayerId {
         self.key.0
@@ -81,30 +79,34 @@ impl PlacementCopy {
 pub(super) struct PlacementDrag {
     pub layer: LayerId,
     pub level: u32,
-    copy: PlacementCopy,
+    /// The level of the layer's own pixels its copy holds.
+    pub local: u32,
     /// The placement the display shows.
     shown: layer_core::Affine,
     /// The document region drawn since the drag began.
-    touched: PixelRect,
+    pub touched: PixelRect,
     /// Frames since the placement last moved.
     still: u32,
 }
 impl PlacementDrag {
-    /// Begin a drag of `layer`, whose display shows it at `shown`, reusing
-    /// `copy` when it still holds the layer's pixels at the level needed.
+    /// Begin a drag of `layer`, whose display shows it at `shown`, keeping
+    /// its copy when that still holds the layer's pixels at the level needed.
     /// Without a complete copy, a lone layer is drawn from `display`, the
     /// display level showing it over the paper.
     pub fn new(
-        r: &WgpuRasterizer,
+        r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         layer: &Layer,
         level: u32,
         shown: layer_core::Affine,
-        copy: Option<PlacementCopy>,
         display: Option<&wgpu::Texture>,
     ) -> Self {
         let local = paint_transform::local_level(level, shown);
-        let mut copy = copy.filter(|c| c.matches(layer, local)).unwrap_or_else(|| PlacementCopy::new(r, layer, local));
+        let mut copy = r
+            .placement_copy
+            .take()
+            .filter(|copy| copy.matches(layer, local))
+            .unwrap_or_else(|| PlacementCopy::new(r, layer, local));
         if let Some(texture) = display
             && copy.display.is_none()
             && !copy.ready()
@@ -114,10 +116,11 @@ impl PlacementDrag {
             encoder.copy_texture_to_texture(texture.as_image_copy(), captured.image.texture.as_image_copy(), texture.size());
             copy.display = Some((captured, shown));
         }
+        r.placement_copy = Some(copy);
         Self {
             layer: layer.id,
             level,
-            copy,
+            local,
             shown,
             touched: PixelRect::EMPTY,
             still: 0,
@@ -129,37 +132,14 @@ impl PlacementDrag {
         self.still += 1;
         self.still <= STILL_FRAMES
     }
-    /// Whether a frame can draw the layer, from its copy or the display.
-    pub fn drawable(&self) -> bool {
-        self.copy.ready() || self.copy.display.is_some()
-    }
-    pub fn storage_bytes(&self) -> u64 {
-        self.copy.storage_bytes()
-    }
-    /// Add document tiles the drag must recompose once it ends.
-    pub fn touch(&mut self, region: PixelRect) {
-        self.touched = self.touched.union(region);
-    }
-    /// The layer's reduced copy and the document region drawn.
-    pub fn finish(self) -> (PlacementCopy, PixelRect) {
-        (self.copy, self.touched)
-    }
-    /// Reduce the next tiles of the layer's own pixels, at most `tiles`,
-    /// within a frame's budget.
-    pub fn prepare(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        packet: FramePacket<'_>,
-        tiles: usize,
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<(), GpuRasterError> {
-        self.copy.prepare(r, packet, encoder, tiles, PREPARE_MOVING)
-    }
-    /// Draw the layer at `placement` into display `target`, clearing where
-    /// the display showed it before. Returns the document region drawn.
+    /// Draw the layer at `placement` from `copy` into display `target`,
+    /// clearing where the display showed it before. Returns the document
+    /// region drawn.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         r: &mut WgpuRasterizer,
+        copy: &mut PlacementCopy,
         pass: &paint_transform::resample::Resample,
         encoder: &mut crate::submission::CommandEncoder,
         target: &wgpu::TextureView,
@@ -168,28 +148,16 @@ impl PlacementDrag {
     ) -> Result<PixelRect, GpuRasterError> {
         self.still = 0;
         let side = display.side;
-        let extent = self.copy.extent;
-        let bounds = PixelRect::full(extent).to_rect();
+        let bounds = PixelRect::full(copy.extent).to_rect();
         let region = [self.shown, placement]
             .into_iter()
             .map(|p| pixel_rect(p.bounds(bounds), display.extent))
             .fold(PixelRect::EMPTY, PixelRect::union);
-        let region = PixelRect::new(
-            region.min_x() / side * side,
-            region.min_y() / side * side,
-            region.max_x().div_ceil(side).saturating_mul(side).min(display.extent[0]),
-            region.max_y().div_ceil(side).saturating_mul(side).min(display.extent[1]),
-        );
+        let region = paint_transform::aligned(region, side, display.extent);
         if region.is_empty() {
             return Ok(region);
         }
-        let low = [region.min_x() / side, region.min_y() / side];
-        let texels = [
-            low[0],
-            low[1],
-            region.max_x().div_ceil(side) - low[0],
-            region.max_y().div_ceil(side) - low[1],
-        ];
+        let texels = paint_transform::texel_rect(region, side);
         let clip = layer_core::Affine([side as f32, 0., 0., side as f32, 0., 0.])
             .then(placement.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid layer placement"))?);
         let at_level = pixel_transform::DisplayLevel {
@@ -197,8 +165,8 @@ impl PlacementDrag {
             extent: display.extent.map(|n| n.div_ceil(side)),
             ..display
         };
-        let ready = self.copy.ready();
-        match &mut self.copy.display {
+        let ready = copy.ready();
+        match &mut copy.display {
             Some((captured, original)) if !ready => {
                 let back = layer_core::ImageTransform::affine(original.inverse().unwrap());
                 let transform = paint_transform::resample_map(&back, placement, self.level, self.level)?;
@@ -211,12 +179,11 @@ impl PlacementDrag {
                 let transform = paint_transform::resample_map(
                     &layer_core::ImageTransform::default(),
                     placement,
-                    self.copy.key.1,
+                    copy.key.1,
                     self.level,
                 )?;
-                self.copy
-                    .reduced
-                    .draw(r, pass, encoder, target, &transform, &transform, clip, extent, texels, at_level, None)?;
+                copy.reduced
+                    .draw(r, pass, encoder, target, &transform, &transform, clip, copy.extent, texels, at_level, None)?;
             }
         }
         self.shown = placement;

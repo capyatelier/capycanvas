@@ -1282,9 +1282,21 @@ fn complete_pair(doc: &layer_core::Document) -> [WgpuRasterizer; 2] {
         let mut r = bounded_renderer(doc.color).unwrap();
         r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
         r.set_complete_display_allowance(256 * 1024 * 1024);
-        r.display_previews = i == 0;
+        r.test.reference = i == 1;
         r
     })
+}
+
+/// Submit frames until `r` has no pending work, fewer than `limit`. Returns
+/// how many.
+fn drain(r: &mut WgpuRasterizer, doc: &layer_core::Document, v: ViewState, limit: usize, what: &str) -> usize {
+    let mut frames = 0;
+    while r.has_pending_work() {
+        frames += 1;
+        assert!(frames < limit, "{what}");
+        submit(r, doc, v, false);
+    }
+    frames
 }
 
 fn preview(
@@ -1352,32 +1364,13 @@ fn moving_transforms_drawn_into_the_display_match_recomposition_and_release_exac
                 step > 0,
                 "later frames of the drag draw into the display"
             );
-            {
-                let shown = display_levels(&direct, level);
-                let expected = display_levels(&reference, level);
-                let differences: Vec<f32> = shown
-                    .iter()
-                    .zip(&expected)
-                    .flat_map(|(a, b)| a.iter().zip(b))
-                    .flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs()))
-                    .collect();
-                let largest = differences.iter().copied().fold(0f32, f32::max);
-                let mean = differences.iter().map(|d| f64::from(*d)).sum::<f64>() / differences.len() as f64;
-                let (largest_bound, mean_bound) = (0.5, 3e-3);
-                assert!(
-                    largest <= largest_bound && mean <= mean_bound,
-                    "level {level} scale {scale} step {step}: largest {largest}, mean {mean}"
-                );
-            }
+            let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+            assert!(
+                largest <= 0.5 && mean <= 3e-3,
+                "level {level} scale {scale} step {step}: largest {largest}, mean {mean}"
+            );
             if !moving {
-                let still = preview(layer, moving, Some(selection.clone()), map.clone());
-                let mut frames = 0;
-                while direct.has_pending_work() {
-                    frames += 1;
-                    assert!(frames < 16, "the still preview settles within a few frames");
-                    direct.set_transform_preview(Some(&still)).unwrap();
-                    submit(&mut direct, &doc, v, false);
-                }
+                drain(&mut direct, &doc, v, 16, "the still preview settles within a few frames");
                 assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
             }
         }
@@ -1418,12 +1411,7 @@ fn drags_resample_the_layer_reduced_to_the_display_level() {
             r.set_transform_preview(Some(&start)).unwrap();
             submit(r, &doc, v, false);
         }
-        let mut frames = 0;
-        while direct.has_pending_work() {
-            frames += 1;
-            assert!(frames < 8, "the layer is reduced within a few frames");
-            submit(&mut direct, &doc, v, false);
-        }
+        drain(&mut direct, &doc, v, 8, "the layer is reduced within a few frames");
         assert_eq!(direct.transforms.as_ref().unwrap().reduced_level(), Some(level));
         let steps = [
             (1e-4, 1e-7, layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 16., y: -24. }))),
@@ -1449,30 +1437,34 @@ fn drags_resample_the_layer_reduced_to_the_display_level() {
             Some(all.clone()),
             layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 21.5, y: 3.25 })),
         );
-        let spares = direct.transforms.as_ref().unwrap().spares_created();
+        let created = direct.test.pages_created.get();
         for r in [&mut direct, &mut reference] {
             r.set_transform_preview(Some(&still)).unwrap();
             submit(r, &doc, v, false);
         }
-        assert_eq!(
-            direct.transforms.as_ref().unwrap().spares_created(),
-            spares,
-            "level {level}: the frame that ends a drag allocates no pages"
+        assert_eq!(direct.test.pages_created.get(), created, "level {level}: the frame that ends a drag allocates no pages");
+        let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+        assert!(largest <= 0.35 && mean <= 5e-4, "level {level}: the still frame resamples: largest {largest}, mean {mean}");
+        submit(&mut direct, &doc, v, false);
+        let again = preview(
+            layer,
+            true,
+            Some(all.clone()),
+            layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 9.75, y: -6.5 })),
         );
-        let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
-        assert!(largest <= 0.35 && mean <= 5e-4, "level {level}: the first still frame resamples: largest {largest}, mean {mean}");
-        for _ in 0..2 {
-            submit(&mut direct, &doc, v, false);
+        let composed = direct.metrics.composited_pixels;
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&again)).unwrap();
+            submit(r, &doc, v, false);
         }
+        assert_eq!(direct.metrics.composited_pixels, composed, "level {level}: a drag begun while a release settles draws at once");
         let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
-        assert!(largest <= 1e-3 && mean <= 1e-6, "level {level}: the next frames draw it exactly: largest {largest}, mean {mean}");
-        let mut frames = 0;
-        while direct.has_pending_work() {
-            frames += 1;
-            assert!(frames < 16, "the still preview settles within a few frames");
-            direct.set_transform_preview(Some(&still)).unwrap();
-            submit(&mut direct, &doc, v, false);
+        assert!(largest <= 0.35 && mean <= 5e-4, "level {level}: largest {largest}, mean {mean}");
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&still)).unwrap();
+            submit(r, &doc, v, false);
         }
+        drain(&mut direct, &doc, v, 16, "the still preview settles within a few frames");
         assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
         let part = layer_core::Selection::polygon(
             [[100., 80.], [1300., 140.], [1200., 900.], [160., 700.]].map(|[x, y]| Point { x, y }).to_vec(),
@@ -1484,12 +1476,7 @@ fn drags_resample_the_layer_reduced_to_the_display_level() {
         };
         direct.set_transform_preview(Some(&kept)).unwrap();
         submit(&mut direct, &doc, v, false);
-        let mut frames = 0;
-        while direct.has_pending_work() {
-            frames += 1;
-            assert!(frames < 8, "the layer is reduced within a few frames");
-            submit(&mut direct, &doc, v, false);
-        }
+        drain(&mut direct, &doc, v, 8, "the layer is reduced within a few frames");
         assert_eq!(
             direct.transforms.as_ref().unwrap().reduced_level(),
             Some(level),
@@ -1518,19 +1505,12 @@ fn a_selection_reduces_whole_the_pages_it_covers_or_leaves_out() {
         r.set_transform_preview(Some(&start)).unwrap();
         submit(r, &doc, v, false);
     }
-    let mut frames = 0;
-    while direct.has_pending_work() {
-        frames += 1;
-        assert!(frames < 8, "the layer is reduced within a few frames");
-        submit(&mut direct, &doc, v, false);
-    }
+    drain(&mut direct, &doc, v, 8, "the layer is reduced within a few frames");
     assert_eq!(direct.transforms.as_ref().unwrap().reduced_level(), Some(level));
-    let transforms = direct.transforms.as_ref().unwrap();
+    let [exactly, reduced] = [direct.test.reduced_exactly.get(), direct.test.reduced_pages.get()];
     assert!(
-        (1..transforms.reduced_from_originals()).contains(&transforms.reduced_exactly()),
-        "only the pages the selection's edge crosses are drawn exactly: {} of {}",
-        transforms.reduced_exactly(),
-        transforms.reduced_from_originals()
+        (1..reduced).contains(&exactly),
+        "only the pages the selection's edge crosses are drawn exactly: {exactly} of {reduced}"
     );
     let moved = preview(
         layer,
@@ -1565,12 +1545,7 @@ fn placed_layers_resample_their_reduced_copy_and_settle_exactly() {
         r.set_transform_preview(Some(&start)).unwrap();
         submit(r, &doc, v, false);
     }
-    let mut frames = 0;
-    while direct.has_pending_work() {
-        frames += 1;
-        assert!(frames < 8, "the layer is reduced within a few frames");
-        submit(&mut direct, &doc, v, false);
-    }
+    drain(&mut direct, &doc, v, 8, "the layer is reduced within a few frames");
     assert_eq!(direct.transforms.as_ref().unwrap().reduced_level(), Some(level + 1));
     let center = Point { x: 700., y: 500. };
     for step in 0..4 {
@@ -1600,13 +1575,7 @@ fn placed_layers_resample_their_reduced_copy_and_settle_exactly() {
         r.set_transform_preview(Some(&still)).unwrap();
         submit(r, &doc, v, false);
     }
-    let mut frames = 0;
-    while direct.has_pending_work() {
-        frames += 1;
-        assert!(frames < 64, "the still preview settles");
-        direct.set_transform_preview(Some(&still)).unwrap();
-        submit(&mut direct, &doc, v, false);
-    }
+    drain(&mut direct, &doc, v, 64, "the still preview settles");
     assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
     for r in [&mut direct, &mut reference] {
         r.set_transform_preview(None).unwrap();
@@ -1634,13 +1603,8 @@ fn placement_drags_draw_into_the_display_and_recompose_after_release() {
         }
         let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap();
         direct.prepare_moving_layer(Some(doc.layers[0].id));
-        let mut frames = 0;
         submit(&mut direct, &doc, v, false);
-        while direct.has_pending_work() {
-            frames += 1;
-            assert!(frames < 64, "stacked {stacked}: a hinted layer is prepared while idle");
-            submit(&mut direct, &doc, v, false);
-        }
+        drain(&mut direct, &doc, v, 64, &format!("stacked {stacked}: a hinted layer is prepared while idle"));
         assert_eq!(
             direct.placement_copy.as_ref().is_some_and(|copy| copy.ready()),
             stacked,
@@ -1675,13 +1639,8 @@ fn placement_drags_draw_into_the_display_and_recompose_after_release() {
                 "stacked {stacked} step {step}: largest {largest}, mean {mean}"
             );
         }
-        let mut frames = 0;
         submit(&mut direct, &doc, v, false);
-        while direct.has_pending_work() {
-            frames += 1;
-            assert!(frames < 256, "stacked {stacked}: the released placement is recomposed");
-            submit(&mut direct, &doc, v, false);
-        }
+        let frames = drain(&mut direct, &doc, v, 256, &format!("stacked {stacked}: the released placement is recomposed"));
         assert!(frames > 8, "stacked {stacked}: the drag waits for stillness, then recomposition spreads over frames");
         assert!(display_levels(&direct, 0) == display_levels(&reference, 0), "stacked {stacked}");
         direct.prepare_moving_layer(None);
@@ -1710,19 +1669,14 @@ fn a_lone_layer_drags_from_the_display_before_its_copy_is_reduced() {
         }
         assert_eq!(direct.metrics.composited_pixels, composed, "step {step}: the drag draws into the display");
         assert!(
-            direct.placement_drag.as_ref().is_some_and(|drag| drag.drawable()),
+            direct.placement_copy.as_ref().is_some_and(|copy| copy.drawable()),
             "step {step}: the drag draws before the layer's copy is reduced"
         );
         let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
         assert!(largest <= 0.35 && mean <= 1e-3, "step {step}: largest {largest}, mean {mean}");
     }
-    let mut frames = 0;
     submit(&mut direct, &doc, v, false);
-    while direct.has_pending_work() {
-        frames += 1;
-        assert!(frames < 256, "the released placement is recomposed");
-        submit(&mut direct, &doc, v, false);
-    }
+    drain(&mut direct, &doc, v, 256, "the released placement is recomposed");
     assert!(display_levels(&direct, 0) == display_levels(&reference, 0));
 }
 
@@ -1834,12 +1788,7 @@ fn layered_transforms_draw_between_static_display_layers_and_settle_exactly() {
             r.set_transform_preview(Some(&start)).unwrap();
             submit(r, &doc, v, false);
         }
-        let mut frames = 0;
-        while direct.has_pending_work() {
-            frames += 1;
-            assert!(frames < 32, "the layers around the transform are prepared within a few frames");
-            submit(&mut direct, &doc, v, false);
-        }
+        drain(&mut direct, &doc, v, 32, "the layers around the transform are prepared within a few frames");
         let center = Point { x: 700., y: 500. };
         let mut drawn = 0;
         for step in 0..8 {
@@ -1876,21 +1825,79 @@ fn layered_transforms_draw_between_static_display_layers_and_settle_exactly() {
             r.set_transform_preview(Some(&still)).unwrap();
             submit(r, &doc, v, false);
         }
-        let mut frames = 0;
-        while direct.has_pending_work() {
-            frames += 1;
-            assert!(frames < 16, "the still preview settles within a few frames");
-            direct.set_transform_preview(Some(&still)).unwrap();
-            submit(&mut direct, &doc, v, false);
-        }
+        drain(&mut direct, &doc, v, 16, "the still preview settles within a few frames");
         assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0), "{blend:?}");
         for r in [&mut direct, &mut reference] {
             r.set_transform_preview(None).unwrap();
             submit(r, &doc, v, false);
         }
         assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0), "{blend:?}");
-        assert!(direct.layered_display.is_none());
+        let kept = direct.layered_display.as_ref().map(|l| l.moving().clone());
+        direct.set_transform_preview(Some(&layer_render::TransformPreview { transaction: 2, ..start.clone() })).unwrap();
+        submit(&mut direct, &doc, v, false);
+        assert!(
+            kept.is_some() && direct.layered_display.as_ref().map(|l| l.moving()) == kept.as_ref(),
+            "{blend:?}: the next transaction keeps the static layers while nothing else changed"
+        );
+        direct.set_transform_preview(None).unwrap();
+        let mut changed = doc.clone();
+        changed.layers[0].opacity = 0.5;
+        for r in [&mut direct, &mut reference] {
+            submit(r, &changed, v, false);
+        }
+        assert!(direct.layered_display.is_none(), "{blend:?}: a change to another layer drops them");
+        let [start, moved] = [(false, [0., 0.]), (true, [9.5, -4.25])].map(|(moving_now, [x, y])| {
+            let map = layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x, y }));
+            layer_render::TransformPreview { transaction: 3, ..preview(moving, moving_now, None, map) }
+        });
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&start)).unwrap();
+            submit(r, &changed, v, false);
+        }
+        drain(&mut direct, &changed, v, 32, "the layers around the transform are prepared again");
+        let composed = direct.metrics.composited_pixels;
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&moved)).unwrap();
+            submit(r, &changed, v, false);
+        }
+        assert_eq!(direct.metrics.composited_pixels, composed, "{blend:?}: the drag draws into the display");
+        let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+        assert!(largest <= 0.35 && mean <= 5e-4, "{blend:?}: the static layers show the change: largest {largest}, mean {mean}");
     }
+}
+
+#[test]
+fn a_drag_held_until_its_layer_is_reduced_ends_without_allocating() {
+    let extent = [1536, 1024];
+    let mut doc = document(extent);
+    doc.layers[0].properties.placement =
+        layer_core::Affine::around(Point { x: 768., y: 512. }, [0.8, 0.8], 0.2, Point { x: 60., y: -30. });
+    let layer = doc.layers[0].id;
+    let [mut direct, mut reference] = complete_pair(&doc);
+    direct.preparation.limit(1);
+    let v = centered_view(extent, [320, 240], 0.2, 0.);
+    for r in [&mut direct, &mut reference] {
+        submit(r, &doc, v, true);
+    }
+    let [start, moving, still] = [(false, 0.), (true, 40.), (false, 40.)].map(|(moving, x)| {
+        let map = layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x, y: -x * 0.5 }));
+        preview(layer, moving, None, map)
+    });
+    for preview in [&start, &moving] {
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(preview)).unwrap();
+            submit(r, &doc, v, false);
+        }
+    }
+    assert!(direct.reducing, "the drag waits for its layer to be reduced");
+    let created = direct.test.pages_created.get();
+    for r in [&mut direct, &mut reference] {
+        r.set_transform_preview(Some(&still)).unwrap();
+        submit(r, &doc, v, false);
+    }
+    assert_eq!(direct.test.pages_created.get(), created, "the frame that ends a held drag allocates no pages");
+    drain(&mut direct, &doc, v, 256, "the released drag settles");
+    assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
 }
 
 #[test]
@@ -1980,12 +1987,7 @@ fn moving_warps_resample_the_reduced_layer_into_the_display_and_settle_exactly()
             r.set_transform_preview(Some(&start)).unwrap();
             submit(r, &doc, v, false);
         }
-        let mut frames = 0;
-        while direct.has_pending_work() {
-            frames += 1;
-            assert!(frames < 16, "the layer is reduced within a few frames");
-            submit(&mut direct, &doc, v, false);
-        }
+        drain(&mut direct, &doc, v, 16, "the layer is reduced within a few frames");
         for (step, mesh) in [seeded.clone(), edited.clone(), mapped.clone()].into_iter().enumerate() {
             let map = layer_core::TransformMap::Mesh(Arc::new(mesh));
             let composed = direct.metrics.composited_pixels;
@@ -2008,13 +2010,7 @@ fn moving_warps_resample_the_reduced_layer_into_the_display_and_settle_exactly()
             r.set_transform_preview(Some(&still)).unwrap();
             submit(r, &doc, v, false);
         }
-        let mut frames = 0;
-        while direct.has_pending_work() {
-            frames += 1;
-            assert!(frames < 64, "the still warp settles");
-            direct.set_transform_preview(Some(&still)).unwrap();
-            submit(&mut direct, &doc, v, false);
-        }
+        drain(&mut direct, &doc, v, 64, "the still warp settles");
         assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0), "placement {placement:?}");
     }
 }
@@ -2057,12 +2053,7 @@ fn a_whole_placed_photo_is_reduced_from_its_placement_preview_like_its_originals
                 assert!(frames < 16, "the layer is reduced within a few frames");
             }
             assert_eq!(r.transforms.as_ref().unwrap().reduced_level(), Some(level + 1));
-            assert_eq!(
-                r.transforms.as_ref().unwrap().reduced_from_originals() == 0,
-                mips,
-                "the copy comes from the placement preview when it is current"
-            );
-            assert!(!r.warming, "a layer that moves whole decodes no originals ahead");
+            assert_eq!(r.test.reduced_pages.get() == 0, mips, "the copy comes from the placement preview when it is current");
             let composed = r.metrics.composited_pixels;
             r.set_transform_preview(Some(&moving)).unwrap();
             submit(&mut r, &doc, v, false);

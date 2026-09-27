@@ -62,7 +62,7 @@ impl Reduced {
         pending: Vec<PixelRect>,
         kept: bool,
     ) -> Self {
-        let plan = display_mips::Plan::at_level(extent, level);
+        let plan = display_mips::Plan::at(extent, level);
         Self {
             transaction,
             level,

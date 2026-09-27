@@ -364,7 +364,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.tool = LayerCanvasTool::Transform;
         self.layer_interaction.changed = true;
         self.update_transform()?;
-        self.engine.backend_mut().prepare_moving_layer(Some(target));
         Ok(())
     }
     pub(super) fn finish_transform(&mut self, apply: bool) -> Result<(), String> {

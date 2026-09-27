@@ -118,10 +118,6 @@ impl Scene {
     pub fn image_cache_bytes(&self) -> u64 {
         self.images.storage_bytes()
     }
-    /// The pipeline that draws placed layers.
-    pub fn placement_pipeline(&self) -> &Deferred<wgpu::RenderPipeline> {
-        &self.placement.pipeline
-    }
     pub fn source_cache_work(&self) -> [u64; 2] {
         [self.source_tiles.hits + self.display_source_tiles.hits,
             self.source_tiles.misses + self.display_source_tiles.misses]
@@ -1415,41 +1411,42 @@ impl Scene {
             })
             .count()
     }
-    /// Compose document `tiles` of the layers below index `stop`, or of every
-    /// layer, into `image`, which reduces each tile to its level.
-    pub(super) fn compose_image_tiles(
+    /// Compose document `tile` of the layers below index `stop`, or of every
+    /// layer, into `image`, which reduces it to its level.
+    pub(super) fn compose_image_tile(
         &mut self,
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
         stop: Option<usize>,
-        tiles: &[[u32; 2]],
+        tile: [u32; 2],
         image: &mut display_mips::Image,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
+        self.reduce_tile(r, tile, image, encoder, |scene, r| {
+            scene.stop_before = stop.map(|index| (index, false));
+            let output = scene.group(r, packet, None, tile);
+            scene.stop_before = None;
+            output
+        })
+    }
+    /// Write the scratch tile `render` draws into `image` at `tile`, which
+    /// reduces it to the image's level.
+    pub(super) fn reduce_tile(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        tile: [u32; 2],
+        image: &mut display_mips::Image,
+        encoder: &mut crate::submission::CommandEncoder,
+        render: impl FnOnce(&mut Self, &mut WgpuRasterizer) -> Result<usize, GpuRasterError>,
+    ) -> Result<(), GpuRasterError> {
         self.jobs.clear();
         self.used.fill(false);
-        self.stop_before = stop.map(|index| (index, false));
-        let result = (|| {
-            let mut outputs = Vec::with_capacity(tiles.len());
-            for &tile in tiles {
-                outputs.push((tile, self.group(r, packet, None, tile)?));
-            }
-            self.encode_jobs(r, encoder)?;
-            for (tile, output) in outputs {
-                image.write_tile(
-                    &r.device,
-                    r.display_pipelines.as_ref().unwrap(),
-                    encoder,
-                    &self.pool[output].texture,
-                    [0; 2],
-                    tile,
-                )?;
-                self.free(output);
-            }
-            Ok(())
-        })();
-        self.stop_before = None;
-        result
+        let output = render(self, r)?;
+        self.encode_jobs(r, encoder)?;
+        let pipelines = r.display_pipelines.as_ref().unwrap();
+        image.write_tile(&r.device, pipelines, encoder, &self.pool[output].texture, [0; 2], tile)?;
+        self.free(output);
+        Ok(())
     }
 
     pub fn compose(
@@ -1592,10 +1589,6 @@ impl Scene {
                 });
                 self.encode_display_jobs(r, encoder, &direct_tiles[..direct_count])?;
                 direct_count = 0;
-                // Keep at most two batches with source uploads live. Finish and
-                // submit this batch while the previous batch can execute, then
-                // wait before preparing a third. Native command finalization is
-                // costly. Batches that only read resident pages need no wait.
                 let current = Self::submit_commands(r, encoder, "bounded display composition");
                 if uploads && let Some(previous) = submitted.replace(current) {
                     Self::wait_submission(r, previous)?;

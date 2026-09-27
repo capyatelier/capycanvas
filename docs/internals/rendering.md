@@ -118,10 +118,11 @@ and the placement and the kept ones through the placement alone. With content
 above or below, the
 [layered display](../../crates/layer-render-wgpu/src/paint_transform/layers.rs)
 composes the static layers once at that level, then places the moving layer
-between them with its blend. A drag waits for them and the reduced copy. After
-release, the still preview of an unplaced layer is first resampled, then drawn
-as the exact area mean a page at a time from the next frame; a placed layer
-keeps its resampled preview. Later frames draw the preview's pages and recompose what the drag
+between them with its blend. They are kept for the moving layer and level
+while nothing else changes, across drags and transactions. A drag waits for
+them and the reduced copy, and so does the frame that ends a drag that waited.
+The frame that releases a drag resamples the still preview too. Later frames
+draw the preview's pages at full resolution and then recompose what the drag
 touched a few tiles at a time, reporting pending work so hosts keep drawing.
 
 A Warp transform is a [mesh](../../crates/layer-render-wgpu/src/paint_transform/mesh.rs)
@@ -135,11 +136,10 @@ tessellated triangle it covers, so the large flat triangles of an unbent patch
 still split into jobs within the pass's texture bindings. Paint, masks and a selection's moved pixels draw this way in the
 preview and when applied. A drag rasterizes the mesh at the display level's
 texels instead, tessellated within half a texel, and resamples the reduced copy
-at those positions, still or moving; the still preview then settles its pages
-without drawing the exact display first. A pixel selection moved by a warp is
-resampled on the GPU the same way, a window at a time. What draws meshes
-compiles in the background when a warp is first shown, and until then the
-preview keeps the frame before it.
+at those positions. A pixel selection moved by a warp is resampled on the GPU
+the same way, a window at a time. What draws meshes compiles in the background
+when a warp is first shown, and until then the preview keeps the frame before
+it.
 
 A [placement drag](../../crates/layer-render-wgpu/src/placement_drag.rs) is a
 frame in which only one layer's placement changed. Its layer's own pixels are
@@ -149,28 +149,27 @@ paper is drawn from the display level as the drag began, within the canvas that
 level showed. Each drag frame resamples the copy through the new placement, and
 the frame's full recomposition is skipped. Frames in which nothing moves keep
 the drag; once the placement has stayed still for a few frames, what the drag
-drew is recomposed a few tiles at a time. When a transaction may move a layer,
-the pipelines its drag draws with and the one that composes placed layers are
-compiled in the background while input is quiet, and that recomposition waits
-for them.
+drew is recomposed a few tiles at a time. What drags draw with and what
+composes placed layers compile in the background while input is quiet after
+startup, and that recomposition waits for them.
 
 [Preparation](../../crates/layer-render-wgpu/src/preparation.rs) for a drag and
 the work after one, including the layer's copy, the static layers around it, a
-still preview's exact display and settled pages, and the recomposition, is
-spread over frames by the GPU time that earlier work of the same kind took,
-measured with timestamps where the device has them. Each measured frame sets
-the next frames' units from its own cost per unit, to fit 10 ms of GPU time for
-work a drag waits for and 5 ms for work after a release. Timestamps arrive a
-few frames late, so a count never grows past twice what the measured frame was
-allowed, and late measurements do not compound. A drag that starts meanwhile
-waits behind at most a frame of that work. Neither drag frames nor
-the frame that ends a drag allocate pages: the pages a still preview settles
-into are reserved a few per still frame, from the layer's reduction until its
-first drag and then as settling needs them, and settling waits for them.
+still preview's settled pages and the recomposition, is spread over frames by
+the GPU time that earlier work of the same kind took, measured with timestamps.
+Each measured frame sets the next frames' units from its own cost per unit, to
+fit 10 ms of GPU time for work a drag waits for and 5 ms for work after a
+release. Timestamps arrive a few frames late, so a count never grows past twice
+what the measured frame was allowed, and late measurements do not compound. A
+frame also stops preparing once its preparation has taken 4 ms of CPU time,
+after at least one unit of each kind; without timestamps that deadline alone
+sets how much a frame prepares. A drag that starts meanwhile waits behind at
+most a frame of that work. Neither drag frames nor the frame that ends a drag
+allocate pages: once the layer is reduced, still frames reserve the pages its
+preview settles into, a few each, and settling waits for them.
 
-Only drag frames and placed still previews resample, and a still display is
-otherwise approximate only at the edges of partly transparent layers; pages,
-Apply and commits are exact.
+Drag frames and still previews until they settle resample; pages, Apply,
+commits and the settled display are exact.
 
 ## Filters
 

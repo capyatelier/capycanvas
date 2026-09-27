@@ -1,4 +1,4 @@
-//! Static layers above and below a moving transform, composed once at the
+//! Static layers above and below a moving layer, composed once at the
 //! display level a view samples, so each drag frame draws only the moving
 //! layer and places it between them.
 use super::*;
@@ -9,86 +9,43 @@ pub(crate) struct LayerComposite {
 }
 impl LayerComposite {
     pub fn new(device: &PipelineDevice) -> Self {
-        let texture = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        };
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let texture = |binding| crate::bindings::texture(binding, wgpu::ShaderStages::COMPUTE, false);
+        let layout = crate::bindings::layout(device, "layered display composite", &[
+            texture(0),
+            texture(1),
+            texture(2),
+            crate::bindings::storage_texture(
+                3,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::TextureFormat::Rgba32Float,
+                wgpu::StorageTextureAccess::WriteOnly,
+            ),
+            crate::bindings::buffer(
+                4,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+                false,
+                wgpu::BufferSize::new(32),
+            ),
+        ]);
+        let shader = Deferred::wgsl(device, "layered display composite", crate::compose_wgsl(&[
+            &crate::working_color::shader(device),
+            include_str!("../blend_modes.wgsl"),
+            include_str!("../display_layers.wgsl"),
+        ]));
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("layered display composite"),
-            entries: &[
-                texture(0),
-                texture(1),
-                texture(2),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba32Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(32),
-                    },
-                    count: None,
-                },
-            ],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
-        let (compile_device, parameters) = (device.clone(), layout.clone());
-        let pipeline = Deferred::pipeline(move |mode| {
-            let device = &compile_device;
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("layered display composite"),
-                source: wgpu::ShaderSource::Wgsl(crate::compose_wgsl(&[
-                    &crate::working_color::shader(device),
-                    include_str!("../blend_modes.wgsl"),
-                    include_str!("../display_layers.wgsl"),
-                ])),
-            });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("layered display composite"),
-                bind_group_layouts: &[Some(&parameters)],
-                immediate_size: 0,
-            });
-            mode.compute(
-                device,
-                &wgpu::ComputePipelineDescriptor {
-                    label: Some("layered display composite"),
-                    layout: Some(&layout),
-                    module: &shader,
-                    entry_point: Some("composite_main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                },
-            )
-        });
+        let pipeline =
+            Deferred::compute(device, "layered display composite", &pipeline_layout, &shader, "composite_main");
         Self { layout, pipeline }
     }
 }
 
-/// What moves a layer drawn straight into the display: a transform
-/// transaction or a placement drag.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Motion {
-    Transform(u64),
-    Placement,
-}
-
-/// The motion, layer and display level a layered display serves.
-pub(crate) type LayeredKey = (Motion, LayerId, u32);
+/// The moving layer and the display level a layered display serves.
+pub(crate) type LayeredKey = (LayerId, u32);
 
 pub(crate) struct LayeredDisplay {
     pub key: LayeredKey,
@@ -97,11 +54,11 @@ pub(crate) struct LayeredDisplay {
     pending: Vec<[u32; 2]>,
     moving: (wgpu::Texture, wgpu::TextureView),
     uniforms: wgpu::Buffer,
-    binding: Option<(wgpu::TextureView, wgpu::BindGroup)>,
+    binding: crate::bindings::CachedBinding<wgpu::TextureView>,
 }
 impl LayeredDisplay {
     pub fn new(r: &WgpuRasterizer, extent: [u32; 2], key: LayeredKey, above: bool) -> Self {
-        let plan = display_mips::Plan::at_level(extent, key.2);
+        let plan = display_mips::Plan::at(extent, key.1);
         Self {
             key,
             below: display_mips::Image::new(r, plan),
@@ -114,7 +71,7 @@ impl LayeredDisplay {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            binding: None,
+            binding: Default::default(),
         }
     }
     pub fn ready(&self) -> bool {
@@ -129,43 +86,41 @@ impl LayeredDisplay {
     pub fn moving(&self) -> &wgpu::TextureView {
         &self.moving.1
     }
-    /// Compose the next document tiles, at most `tiles`, of the layers below
-    /// `index` and, with a transparent paper, of those above it.
+    /// Compose, within this frame's preparation, the next document tiles of
+    /// the layers below `index` and, with a transparent paper, of those above
+    /// it.
     pub fn build(
         &mut self,
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
         index: usize,
-        tiles: usize,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        let started = web_time::Instant::now();
-        let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
-        let result = (|| {
-            for _ in 0..tiles {
-                let Some(tile) = self.pending.pop() else {
-                    break;
-                };
-                scene.compose_image_tiles(r, packet, Some(index), &[tile], &mut self.below, encoder)?;
-                if let Some(above) = &mut self.above {
-                    let transparent = FramePacket {
-                        layers: &packet.layers[..index],
-                        view: layer_render::ViewState {
-                            background_rgba_linear: [0.; 4],
-                            ..packet.view
-                        },
-                        ..packet
-                    };
-                    scene.compose_image_tiles(r, transparent, None, &[tile], above, encoder)?;
-                }
-                if started.elapsed() >= PREPARE_MOVING {
-                    break;
-                }
+        if self.ready() {
+            return Ok(());
+        }
+        let transparent = FramePacket {
+            layers: &packet.layers[..index],
+            view: layer_render::ViewState {
+                background_rgba_linear: [0.; 4],
+                ..packet.view
+            },
+            ..packet
+        };
+        r.prepare(encoder, Work::Layers, |r, encoder| {
+            let Some(tile) = self.pending.pop() else {
+                return Ok(false);
+            };
+            let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
+            let mut composed = scene.compose_image_tile(r, packet, Some(index), tile, &mut self.below, encoder);
+            if let Some(above) = &mut self.above
+                && composed.is_ok()
+            {
+                composed = scene.compose_image_tile(r, transparent, None, tile, above, encoder);
             }
-            Ok(())
-        })();
-        r.scene = Some(scene);
-        result
+            r.scene = Some(scene);
+            composed.map(|()| true)
+        })
     }
     /// Place the moving layer's `texels` over the layers below with `blend`,
     /// under the layers above, into the display `level`.
@@ -178,54 +133,28 @@ impl LayeredDisplay {
         texels: [u32; 4],
         blend: layer_core::LayerBlend,
     ) -> Result<(), GpuRasterError> {
-        let values = [
-            texels[0],
-            texels[1],
-            texels[2],
-            texels[3],
-            blend as u32,
-            u32::from(self.above.is_some()),
-            0,
-            0,
-        ];
-        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
-        r.uploads.write(encoder, &self.uniforms, &bytes)?;
-        if self.binding.as_ref().is_none_or(|(view, _)| view != level) {
-            let above = self.above.as_ref().unwrap_or(&self.below);
-            let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("layered display composite"),
-                layout: &pass.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&self.moving.1),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&self.below.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&above.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(level),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: self.uniforms.as_entire_binding(),
-                    },
-                ],
-            });
-            self.binding = Some((level.clone(), binding));
+        let values = [texels[0], texels[1], texels[2], texels[3], blend as u32, u32::from(self.above.is_some()), 0, 0];
+        let mut bytes = [0; 32];
+        for (dst, value) in bytes.chunks_exact_mut(4).zip(values) {
+            dst.copy_from_slice(&value.to_le_bytes());
         }
+        r.uploads.write(encoder, &self.uniforms, &bytes)?;
+        let above = self.above.as_ref().unwrap_or(&self.below);
+        let binding = self.binding.get(level.clone(), || {
+            crate::bindings::group(&r.device, "layered display composite", &pass.layout, [
+                wgpu::BindingResource::TextureView(&self.moving.1),
+                wgpu::BindingResource::TextureView(&self.below.view),
+                wgpu::BindingResource::TextureView(&above.view),
+                wgpu::BindingResource::TextureView(level),
+                self.uniforms.as_entire_binding(),
+            ])
+        });
         let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("layered display composite"),
             timestamp_writes: None,
         });
         compute.set_pipeline(&pass.pipeline);
-        compute.set_bind_group(0, &self.binding.as_ref().unwrap().1, &[]);
+        compute.set_bind_group(0, &binding, &[]);
         compute.dispatch_workgroups(texels[2].div_ceil(8), texels[3].div_ceil(8), 1);
         Ok(())
     }

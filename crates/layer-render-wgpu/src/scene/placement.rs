@@ -125,38 +125,8 @@ impl Scene {
         Ok(out)
     }
 
-    /// Reduce `layer`'s own pixels in its local `tiles` into `image`.
-    pub(crate) fn reduce_layer_tiles(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        packet: FramePacket<'_>,
-        layer: &Layer,
-        tiles: &[[u32; 2]],
-        image: &mut display_mips::Image,
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<(), GpuRasterError> {
-        self.jobs.clear();
-        self.used.fill(false);
-        let mut outputs = Vec::with_capacity(tiles.len());
-        for &tile in tiles {
-            outputs.push((tile, self.local_color_tile(r, packet, layer, tile)?));
-        }
-        self.encode_jobs(r, encoder)?;
-        for (tile, output) in outputs {
-            image.write_tile(
-                &r.device,
-                r.display_pipelines.as_ref().unwrap(),
-                encoder,
-                &self.pool[output].texture,
-                [0; 2],
-                tile,
-            )?;
-            self.free(output);
-        }
-        Ok(())
-    }
-
-    fn local_color_tile(
+    /// A scratch tile of `layer`'s own pixels at its local `c`.
+    pub(crate) fn local_color_tile(
         &mut self,
         r: &WgpuRasterizer,
         packet: FramePacket<'_>,

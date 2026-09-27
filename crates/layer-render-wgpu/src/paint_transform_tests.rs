@@ -218,7 +218,7 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
         let preview = preview(Interpolation::Bicubic, moving, if moving { 2 } else { 3 });
         r.set_transform_preview(Some(&preview)).unwrap();
         frame(&mut r, std::slice::from_ref(&layer), extent, &[], &[], false);
-        let captures = r.transforms.as_ref().unwrap().source_captures();
+        let captures = r.test.source_captures.get();
         let mut op = operation(30, Affine::IDENTITY, None);
         op.kind = LayerOperationKind::Transform(preview.transform.clone());
         let apply = DabBatch {
@@ -235,7 +235,7 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
             "apply after a moving={moving} preview shows the bicubic result"
         );
         assert_eq!(
-            r.transforms.as_ref().unwrap().source_captures() == captures,
+            r.test.source_captures.get() == captures,
             !moving,
             "only a still preview is kept as the commit"
         );
@@ -321,7 +321,7 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<TransformMap>) {
         r.set_transform_preview(Some(&preview)).unwrap();
         frame(&mut r, layers, extent, &[], &[], false);
         let before_commit = r.readback_srgb_rgba8().unwrap();
-        let captures = r.transforms.as_ref().unwrap().source_captures();
+        let captures = r.test.source_captures.get();
         let mut op = operation(21, Affine::IDENTITY, preview.selection.clone());
         op.kind = LayerOperationKind::Transform(preview.transform.clone());
         let operation = DabBatch {
@@ -337,7 +337,7 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<TransformMap>) {
             "{preset:?} apply must not jump"
         );
         assert_eq!(
-            r.transforms.as_ref().unwrap().source_captures(),
+            r.test.source_captures.get(),
             captures,
             "apply reuses the matching preview result"
         );

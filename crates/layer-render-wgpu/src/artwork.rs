@@ -40,17 +40,17 @@ impl Frame {
                 == packet.layers.iter().filter(artwork).count();
         let mut moved = Vec::new();
         for (a, b) in self.layers.iter().filter(artwork).zip(packet.layers.iter().filter(artwork)) {
-            let unplaced = |l: &Layer| layer_core::LayerProperties {
-                placement: layer_core::Affine::IDENTITY,
-                offset: layer_core::Point::default(),
-                ..l.properties.clone()
-            };
             let same_layer = a.id == b.id
                 && a.kind == b.kind
                 && a.visible == b.visible
                 && a.opacity == b.opacity
                 && a.raster == b.raster
-                && unplaced(a) == unplaced(b)
+                && a.properties
+                    == layer_core::LayerProperties {
+                        placement: a.properties.placement,
+                        offset: a.properties.offset,
+                        ..b.properties.clone()
+                    }
                 && a.mask == b.mask
                 && a.effect == b.effect
                 && match (&a.source, &b.source) {
