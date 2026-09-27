@@ -1764,6 +1764,8 @@ impl PreferencesState {
                 self.shortcut_page.category = id;
             }
             PreferenceAction::SearchShortcutKey { chord } => {
+                let modifiers = crate::Modifiers { command: chord.command, shift: chord.shift, alt: chord.alt };
+                let chord = KeyChord::new(&chord.key, modifiers);
                 self.shortcut_query = chord.label(platform);
                 self.shortcut_page.key = Some(chord);
             }

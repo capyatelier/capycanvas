@@ -39,7 +39,7 @@ function replaceRequired(text, from, to) {
 
 // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
 // Hash final bytes after rewriting dependencies; no bundler required.
-const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","glass.js","documents.js","preferences.js", "command-bar.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "canvas-bar.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "pkg/layer_web.js", "app.js"];
+const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","glass.js","documents.js","shortcut-page.js","preferences.js", "command-bar.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "canvas-bar.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "pkg/layer_web.js", "app.js"];
 const workers = ["workspace-worker.js", "raster-worker.js", "proof-worker.js"];
 
 export function fingerprintAssets(directory) {
@@ -96,7 +96,10 @@ export function fingerprintAssets(directory) {
   let documents = read(join(directory, "documents.js"));
   for (const path of ["drawing-tabs.js", "document-recovery.js", "export-controls.js", "histogram.js","document-color.js","proof.js","image-import.js"]) documents = replaceRequired(documents, `from './${path}'`, `from "./${names[path]}"`);
   publish("documents.js", documents);
-  publish("preferences.js", replaceRequired(read(join(directory, "preferences.js")), "from './export-controls.js'", `from "./${names["export-controls.js"]}"`));
+  publish("shortcut-page.js");
+  let preferences = read(join(directory, "preferences.js"));
+  for (const path of ["export-controls.js", "shortcut-page.js"]) preferences = replaceRequired(preferences, `from './${path}'`, `from "./${names[path]}"`);
+  publish("preferences.js", preferences);
   publish("command-bar.js");
   publish("gpu.js");
   let toolbarComponents = read(join(directory, "toolbar-components.js"));
@@ -123,7 +126,7 @@ export function fingerprintAssets(directory) {
     preload = replaceRequired(preload, `"./${path}"`, JSON.stringify(`./${names[path]}`));
   publish("workspace-preload.js", preload);
   let app = read(join(directory, "app.js"));
-  for (const path of modules.slice(0, -1).filter(path => path !== "range-control.js" && path !== "toolbar-components.js" && path !== "workspace-store.js" && path !== "drawing-tabs.js" && path !== "document-recovery.js" && path !== "filter-previews.js" && path !== "stroke-recording.js" && path !== "workspace-switcher.js" && path !== "color-controls.js" && path !== "export-controls.js" && path !== "histogram.js" && path !== "document-color.js" && path !== "image-import.js" && path !== "proof.js"))
+  for (const path of modules.slice(0, -1).filter(path => path !== "range-control.js" && path !== "toolbar-components.js" && path !== "workspace-store.js" && path !== "drawing-tabs.js" && path !== "document-recovery.js" && path !== "filter-previews.js" && path !== "stroke-recording.js" && path !== "workspace-switcher.js" && path !== "color-controls.js" && path !== "export-controls.js" && path !== "histogram.js" && path !== "document-color.js" && path !== "image-import.js" && path !== "proof.js" && path !== "shortcut-page.js"))
     app = replaceRequired(app, `from "./${path}"`, `from "./${names[path]}"`);
   const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews)\//.test(path) || path === "icons.svg" || path === "pkg/layer_web_bg.wasm" || path === "workspace-worker.js"));
   app = replaceRequired(app, "const assetPaths = {};", `const assetPaths = ${JSON.stringify(artwork)};`);

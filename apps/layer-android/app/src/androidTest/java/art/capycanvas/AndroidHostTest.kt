@@ -51,6 +51,7 @@ class AndroidHostTest {
     @get:Rule(order = 1) val compose = createAndroidComposeRule<MainActivity>()
     private val host get() = compose.activity.host
     @Before fun ready() {
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
         host.awaitReady()
         compose.runOnIdle {
             host.dispatch(obj("type" to "close_settings"))
@@ -1712,9 +1713,16 @@ class AndroidHostTest {
             compose.onNodeWithText("Keyboard Shortcuts").performClick()
             compose.waitUntil(10_000) { preferences().getString("page") == "shortcuts" }
             compose.mainClock.advanceTimeBy(300)
+            compose.onNodeWithTag("shortcut-category-Edit").performScrollTo().performClick()
+            compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_page").optString("category") == "Edit" }
+            compose.mainClock.advanceTimeBy(80)
+            val enteringCategory = compose.onNodeWithTag("settings-content-category:Edit").fetchSemanticsNode().positionInRoot.x
+            compose.mainClock.advanceTimeBy(300)
+            val settledCategory = compose.onNodeWithTag("settings-content-category:Edit").fetchSemanticsNode().positionInRoot.x
+            assertTrue("A category slides in from the right ($enteringCategory -> $settledCategory)", enteringCategory > settledCategory)
             val shortcut = preferences().array("shortcuts").objects().first { it.getBoolean("visible") }
             compose.onNode(hasText(shortcut.getString("label")) and hasClickAction()
-                and hasAnyAncestor(hasTestTag("settings-content-page:shortcuts"))).performScrollTo().performClick()
+                and hasAnyAncestor(hasTestTag("settings-content-category:Edit"))).performScrollTo().performClick()
             compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") != null }
             compose.mainClock.advanceTimeBy(80)
             val tag = "settings-content-shortcut:" + shortcut.getString("id")
@@ -1727,6 +1735,10 @@ class AndroidHostTest {
 
             compose.onNodeWithContentDescription("Back").performClick()
             compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") == null }
+            compose.mainClock.advanceTimeBy(400)
+            compose.onNodeWithTag("settings-content-category:Edit").assertIsDisplayed()
+            compose.onNodeWithContentDescription("Back").performClick()
+            compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_page").isNull("category") }
             compose.mainClock.advanceTimeBy(400)
             compose.onNodeWithTag("settings-content-page:shortcuts").assertIsDisplayed()
             compose.onNodeWithTag("settings-done").performClick()
@@ -2225,43 +2237,39 @@ class AndroidHostTest {
         val id = "command.ZenMode"
         fun preference(type: String) = action(obj("type" to "preferences", "action" to obj("type" to type, "id" to id)))
         preference("reset_shortcut")
-        fun weight() : Int {
-            val results = mutableListOf<TextLayoutResult>()
-            compose.onNodeWithTag("shortcut-binding-$id", useUnmergedTree = true)
-                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(results)) }
-            return results.single().layoutInput.style.fontWeight!!.weight
-        }
-        assertEquals(400, weight())
+        fun modified() = compose.onAllNodesWithTag("shortcut-reset-$id").fetchSemanticsNodes().isNotEmpty()
+        assertFalse(modified())
         compose.onNodeWithTag("shortcut-$id").performScrollTo().performClick()
         compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") != null }
         compose.onNodeWithContentDescription("Remove shortcut").performClick()
         compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_editor").array("bindings").length() == 0 }
         action(obj("type" to "preferences", "action" to obj("type" to "close_shortcut_editor")))
-        assertEquals(700, weight())
+        assertTrue("A changed shortcut offers its reset button", modified())
         compose.onNodeWithTag("shortcut-binding-$id", useUnmergedTree = true).assertTextEquals("Disabled")
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
             capture("shortcuts-modified-$theme")
         }
         preference("reset_shortcut")
-        assertEquals(400, weight())
+        compose.waitForIdle()
+        assertFalse(modified())
         compose.onNodeWithText("Done").performClick()
     }
 
     @Test fun shortcutPageRecordsMultipleBindingsAndPersists() {
         openSettings()
         compose.onNodeWithText("Keyboard Shortcuts").performClick()
-        compose.onNodeWithText("Search keyboard shortcuts").performTextInput("Zen mode")
+        compose.onNodeWithText("Search or press a shortcut").performTextInput("Zen mode")
         compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
         compose.onNode(hasText("Zen mode") and !hasSetTextAction()).performScrollTo().performClick()
         compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") != null }
         // Instrumentation can run again against an already installed app.
         if (preferences().getJSONObject("shortcut_editor").getBoolean("modified")) {
-            compose.onNodeWithText("Restore default").performClick()
+            compose.onNodeWithTag("shortcut-editor-reset").performClick()
             compose.waitUntil(10_000) { !preferences().getJSONObject("shortcut_editor").getBoolean("modified") }
         }
         val original = preferences().getJSONObject("shortcut_editor").array("bindings").length()
-        compose.onNodeWithText("Add shortcut").performClick()
+        compose.onNodeWithText("Add Shortcut").performClick()
         compose.waitUntil(10_000) { preferences().objectOrNull("capture") != null }
         compose.waitForIdle()
         val conflictTime = SystemClock.uptimeMillis()
@@ -2273,10 +2281,11 @@ class AndroidHostTest {
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         capture("35-shortcut-conflict-inline")
-        compose.onNodeWithText("Cancel recording").performScrollTo().performClick()
+        compose.onNodeWithTag("confirm-shortcut").assertTextEquals("Reassign")
+        compose.onNodeWithTag("cancel-shortcut").performScrollTo().performClick()
         compose.waitUntil(10_000) { preferences().objectOrNull("capture") == null }
         assertEquals(original, preferences().getJSONObject("shortcut_editor").array("bindings").length())
-        compose.onNodeWithText("Add shortcut").performScrollTo().performClick()
+        compose.onNodeWithText("Add Shortcut").performScrollTo().performClick()
         compose.waitUntil(10_000) { preferences().objectOrNull("capture") != null }
         compose.waitForIdle()
         val now = SystemClock.uptimeMillis()
@@ -2288,7 +2297,7 @@ class AndroidHostTest {
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         capture("34-shortcut-recording-inline")
-        compose.onNodeWithText("Use shortcut").performClick()
+        compose.onNodeWithTag("confirm-shortcut").assertTextEquals("Add").performClick()
         compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_editor").array("bindings").length() == original + 1 }
         capture("14-shortcut-editor")
         compose.onNodeWithText("Done").performClick()
@@ -2299,12 +2308,12 @@ class AndroidHostTest {
         compose.waitUntil(20_000) { compose.activity.hasWindowFocus() && host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") && !it.optBoolean("switcher_busy") } == true }
         openSettings()
         compose.onNodeWithText("Keyboard Shortcuts").performClick()
-        compose.onNodeWithText("Search keyboard shortcuts").performTextInput("Zen mode")
+        compose.onNodeWithText("Search or press a shortcut").performTextInput("Zen mode")
         compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
         compose.onNode(hasText("Zen mode") and !hasSetTextAction()).performScrollTo().performClick()
         compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") != null }
         assertEquals(original + 1, preferences().getJSONObject("shortcut_editor").array("bindings").length())
-        compose.onNodeWithText("Restore default").performClick()
+        compose.onNodeWithTag("shortcut-editor-reset").performClick()
         compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_editor").array("bindings").length() == original }
         compose.onNodeWithText("Done").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }

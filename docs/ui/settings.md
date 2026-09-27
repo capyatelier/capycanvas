@@ -176,8 +176,8 @@ classes. Bluetooth support alone does not make a device compatible.
 
 Input settings map finger taps and pen side buttons to the same shortcut
 definitions. By default a two-finger tap undoes and a three-finger tap redoes.
-Four-finger taps and the lower, upper and third side buttons do nothing until
-chosen. An unbound side button stays with the tablet driver and the host's
+Four-finger taps and the lower and upper side buttons, plus a third on Linux, do
+nothing until chosen. An unbound side button stays with the tablet driver and the host's
 previous behavior. Tap overrides are stored under `gestures`, keyed by trigger ID.
 An empty value turns off a default.
 
@@ -204,8 +204,9 @@ Side-button presses and releases arrive as `pen_button` input, never as pen
 samples. They use the same hold lifecycle as held keys. A button pressed during
 a stroke changes the tool only after the stroke ends, and blur releases it. GTK
 reports Wayland stylus buttons 2, 3 and 8, and tablet pad buttons as
-`pad_button_N` keys when the compositor leaves them to the app. Web reports
-pointer `buttons` bits 2 and 4. Android reports the stylus primary and secondary buttons. Windows, macOS and
+`pad_button_N` keys when the compositor leaves them to the app. Android reports
+tablet buttons `KEYCODE_BUTTON_1`–`16` as the same `pad_button_N` keys. Web
+reports pointer `buttons` bits 2 and 4. Android reports the stylus primary and secondary buttons. Windows, macOS and
 iPadOS do not show these rows until their hosts deliver the same input.
 
 ## Saving and loading

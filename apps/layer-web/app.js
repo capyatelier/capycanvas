@@ -892,7 +892,7 @@ function update(regions) {
               link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0);
             }
             else if (request.kind.type === "import_keymap") {
-              const input = Object.assign(document.createElement("input"), { type: "file", accept: ".json,application/json" });
+              const input = Object.assign(document.createElement("input"), { type: "file", accept: ".capykeys" });
               input.addEventListener("change", async () => {
                 const file = input.files?.[0];
                 if (!file) return;
@@ -1563,7 +1563,7 @@ canvas.addEventListener(
   { passive: false },
 );
 function keyInput(e, pressed, divider = null) {
-  if (pressed && e.target instanceof Element && e.target.closest("dialog[open]:not(#settings, #shortcut-capture, #shortcut-editor)")) return;
+  if (pressed && e.target instanceof Element && e.target.closest("dialog[open]:not(#settings, #shortcut-editor, #modifier-key)")) return;
   updateZen();
   const reply = input({
     type: "key",

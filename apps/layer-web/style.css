@@ -483,7 +483,7 @@ dialog h2 { margin: 0; font-size: inherit; font-weight: 700; }
 .preferences-search-results { overflow-y: auto; padding: 6px; }
 .preferences-search-results button { display: flex; flex-direction: column; align-items: start; text-align: left; width: 100%; padding: 10px; font-weight: 400; line-height: 18px; }
 .preferences-search-results small { opacity: .55; font-size: calc(var(--ui-text-size) / 1.2); line-height: 15px; margin-top: 3px; }
-.shortcut-search { position: relative; margin-bottom: 24px; }
+.shortcut-search { position: relative; flex: 1; min-width: 0; }
 .shortcut-search > svg { position: absolute; left: 9px; top: 9px; opacity: .55; }
 #shortcuts-search { display: block; margin: 0; padding-left: 32px; width: 100%; }
 .preferences-content { position: relative; }
@@ -516,7 +516,7 @@ body[data-theme="light"] .preferences-error { color: #c01c28; }
 .number-preference .number-value, .number-preference .number-entry { min-height: 34px; height: 34px; padding: 0 9px; }
 .number-preference .number-track { margin-top: 3px; }
 .number-preference { --number-track: color-mix(in srgb, var(--text) 12%, transparent); }
-.settings-group, .shortcut-search { max-width: var(--preference-width, 576px); margin-inline: auto; }
+.settings-group { max-width: var(--preference-width, 576px); margin-inline: auto; }
 .number-preference .number-spin { background: transparent; }
 .number-preference .number-spin .number-entry { background: transparent; }
 .number-preference .number-spin .number-step { width: 30px; height: 30px; min-width: 30px; min-height: 30px; border-radius: 50%; background: var(--button); margin-inline-start: 10px; }
@@ -524,18 +524,52 @@ body[data-theme="light"] .preferences-error { color: #c01c28; }
 .settings-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0003; }
 .settings-switch:checked { background: var(--accent); }
 .settings-switch:checked::after { left: 23px; }
-.shortcut-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.shortcut-heading h3 { margin: 0; height: auto; padding: 0; }
-.shortcut-heading .settings-description { font-size: inherit; line-height: 20px; margin: 7px 0 0; }
-.shortcut-heading button { flex: none; }
-.keymap-files { display: flex; gap: 6px; flex: none; }
-.keymap-differences { margin-top: 8px; }
-.keymap-differences summary { cursor: pointer; padding: 8px 0; }
+.settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.settings-heading > div { min-width: 0; }
+.settings-heading h3 { margin: 0; height: auto; padding: 0; }
+.settings-heading .settings-description { margin: 0; white-space: pre-line; }
+.settings-heading h3 + .settings-description { margin-top: 3px; }
 .keymap-preview { margin: 4px 0 12px; padding-left: 20px; }
-.shortcut-row { padding-block: 0; }
-.shortcut-row.modified .shortcut-hint { font-weight: 700; }
+.keymap-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.keymap-menu summary { padding: 0; width: 34px; height: 34px; justify-content: center; border-radius: 50%; cursor: pointer; }
+.keymap-menu .preference-options button { justify-content: start; }
+.shortcut-filters { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+.filter-select { flex: none; field-sizing: content; height: 34px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--button); color: inherit; font-weight: 700; }
+.shortcut-row { padding-block: 0; padding-inline-end: 8px; }
 .shortcut-choose { flex: 1; display: flex; align-items: center; gap: 12px; text-align: left; min-width: 0; min-height: 54px; padding: 8px 0; }
-.shortcut-heading button { background: var(--button); }
+.shortcut-results > .settings-group { margin-top: 24px; }
+.nav-row, .button-row, .picker-row { width: 100%; text-align: left; font-weight: 400; border-radius: 0; }
+.nav-row .row-chevron { flex: none; width: 16px; height: 16px; transform: rotate(-90deg); opacity: .8; }
+.button-row { justify-content: center; gap: 8px; font-weight: 700; }
+.button-row > svg { width: 16px; height: 16px; }
+.button-row.destructive-action { color: #c01c28; }
+body[data-theme="dark"] .button-row.destructive-action { color: #ff7b63; }
+.picker-row > svg { flex: none; width: 16px; height: 16px; }
+.icon-button { flex: none; display: grid; place-items: center; width: 34px; height: 34px; min-height: 34px; padding: 0; border-radius: 50%; background: transparent; }
+.icon-button > svg { width: 16px; height: 16px; }
+.status-page { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 36px 12px; text-align: center; }
+.status-page > svg { width: 64px; height: 64px; opacity: .5; }
+.status-page p { margin: 0; opacity: .7; }
+.settings-pane[hidden] { display: none; }
+.subpage-back { position: absolute; left: 6px; padding: 0; width: 34px; font-size: 24px; }
+.preferences-layout.in-subpage .preferences-back { display: none !important; }
+dialog.sheet { width: 460px; height: fit-content; }
+dialog.sheet[open] { display: flex; flex-direction: column; }
+dialog.sheet.picker { height: 600px; }
+.sheet-body { display: flex; flex-direction: column; gap: 18px; padding: 0 12px 24px; min-height: 0; overflow-y: auto; }
+.sheet .settings-group { width: 100%; max-width: none; }
+.sheet-summary { text-align: center; margin: 0; }
+.sheet-start { position: absolute; left: 11px; top: 7px; background: var(--button); }
+#action-picker-description { text-align: center; margin: 0; }
+#action-picker-search { margin: 0; flex: none; }
+.picker-list { display: flex; flex-direction: column; gap: 18px; flex: 1; min-height: 0; overflow-y: auto; }
+dialog.sheet.picker .sheet-body { overflow: hidden; flex: 1; }
+.recording { gap: 8px; }
+.recording > svg { flex: none; width: 16px; height: 16px; }
+.recording > svg.warning { color: #e5a50a; }
+body[data-theme="light"] .recording > svg.warning { color: #9c5700; }
+.recording button { flex: none; background: var(--button); }
+.recording button.suggested-action { background: var(--accent); color: var(--accent-foreground); }
 .preference-group:has(.preference-choice[open]) { overflow: visible; }
 .preference-choice { position: relative; }
 .preference-choice summary, .preference-options button { display: flex; align-items: center; gap: 12px; padding: 8px; font-weight: 400; }
@@ -562,11 +596,7 @@ body[data-theme="light"] .preferences-error { color: #c01c28; }
 .transparency-circles .swatch svg { width: 28px; height: 28px; }
 :where(:root:not([data-touch])) .swatch-circles .swatch:hover:not(:disabled) { filter: brightness(1.08); }
 .preference-image-tiles button[aria-pressed="true"] { background: var(--selection); box-shadow: inset 0 0 0 2px var(--accent); }
-dialog.shortcut-editor { width: 460px; height: fit-content; }
-.shortcut-editor-body { padding: 18px; }
-.shortcut-editor-body > p { margin: 12px 0; }
-.shortcut-editor footer { margin: 18px 0 0; }
-.shortcut-editor footer button { flex: 1; white-space: nowrap; }
+
 dialog footer { display: flex; justify-content: end; align-items: center; gap: 6px; margin: 12px; grid-column: 1 / -1; }
 dialog footer .preferences-error { flex: 1; }
 dialog footer button { background: color-mix(in srgb, var(--text) 8%, transparent); }
@@ -594,15 +624,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .prompt-actions { display: flex; gap: 12px; margin-top: 24px; }
 .prompt-actions button { flex: 1; background: var(--button); }
 .prompt-actions .destructive-action { color: white; background: #c01c28; }
-dialog.shortcut-capture { width: 414px; height: fit-content; min-height: 250px; }
-dialog.shortcut-capture[open] { display: flex; flex-direction: column; gap: 12px; }
-.shortcut-capture footer { flex: none; }
-.shortcut-capture .preferences-error { font-size: inherit; color: #e5a50a; }
-body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; }
-#confirm-shortcut { flex: 1; white-space: nowrap; }
-.shortcut-capture p { text-align: center; margin: 6px; line-height: 18px; }
-.shortcut-capture .shortcut-key { line-height: 26px; }
-.shortcut-key { font-size: var(--ui-text-size); font-weight: 700; }
+
 .preferences-back { display: none; position: absolute; left: 6px; padding: 0; width: 34px; font-size: 24px; }
 [hidden] { display: none !important; }
 @media (max-width: 680px) {

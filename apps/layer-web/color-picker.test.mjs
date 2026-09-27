@@ -122,10 +122,15 @@ export async function checkColorPicker({call,evaluate,settle}) {
   await barrel('mouseMoved',0);await barrel('mousePressed',2);
   assert.equal((await state()).layer_tools.tool,'paint','unbound side buttons do nothing');
   await barrel('mouseReleased',0);
-  await send({type:'preferences',action:{type:'edit',id:'pen_button',value:1}});
+  await send({type:'open_settings',page:'input'});
+  for(const action of [{type:'edit_pen_button',trigger:'pen.button.primary'},{type:'open_pen_button_picker',trigger:'pen.button.primary',category:null},{type:'choose_action',id:'command.Eyedropper'}])
+    await send({type:'preferences',action});
+  await send({type:'close_settings'});
   await barrel('mousePressed',2);assert.equal((await state()).layer_tools.tool,'pick_visible','bound side button samples while held');
   await barrel('mouseMoved',2);assert.equal((await state()).layer_tools.tool,'pick_visible');
   await barrel('mouseReleased',0);assert.equal((await state()).layer_tools.tool,'paint');
-  await send({type:'preferences',action:{type:'reset',id:'pen_button'}});
+  await send({type:'open_settings',page:'input'});
+  await send({type:'preferences',action:{type:'reset_trigger',trigger:'pen.button.primary'}});
+  await send({type:'close_settings'});
   console.log('PASS: picker tiles, settings, real sampling, pen lift, touch offset/source/cancel, retained asynchronous wheel preview, category drawer, finger taps and pen side buttons');
 }

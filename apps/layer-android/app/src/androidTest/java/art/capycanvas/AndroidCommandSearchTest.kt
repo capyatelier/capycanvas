@@ -284,13 +284,19 @@ class AndroidCommandSearchTest {
         stylus(MotionEvent.ACTION_HOVER_MOVE, MotionEvent.BUTTON_STYLUS_PRIMARY)
         assertEquals("unbound side buttons stay with the driver", "paint", tool())
         stylus(MotionEvent.ACTION_HOVER_MOVE, 0)
-        action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "pen_button", "value" to 1)))
+        action(obj("type" to "open_settings", "page" to "input"))
+        action(obj("type" to "preferences", "action" to obj("type" to "edit_pen_button", "trigger" to "pen.button.primary")))
+        action(obj("type" to "preferences", "action" to obj("type" to "open_pen_button_picker", "trigger" to "pen.button.primary", "category" to null)))
+        action(obj("type" to "preferences", "action" to obj("type" to "choose_action", "id" to "command.Eyedropper")))
+        action(obj("type" to "close_settings"))
         stylus(MotionEvent.ACTION_HOVER_MOVE, MotionEvent.BUTTON_STYLUS_PRIMARY)
         waitFor("bound side button samples while held") { tool() == "pick_visible" }
         stylus(MotionEvent.ACTION_HOVER_MOVE, 0)
         waitFor("release restores the brush") { tool() == "paint" }
         stylus(MotionEvent.ACTION_HOVER_EXIT, 0)
-        action(obj("type" to "preferences", "action" to obj("type" to "reset", "id" to "pen_button")))
+        action(obj("type" to "open_settings", "page" to "input"))
+        action(obj("type" to "preferences", "action" to obj("type" to "reset_trigger", "trigger" to "pen.button.primary")))
+        action(obj("type" to "close_settings"))
         action(obj("type" to "invoke", "command" to "undo"))
     }
 
@@ -354,15 +360,17 @@ class AndroidCommandSearchTest {
         press("keymap-preset")
         press("keymap-choice-krita")
         waitFor("Krita keymap") { keymap() == "krita" }
+        press("keymap-menu")
         press("keymap-differences")
-        waitFor("differences") { labelled("5") != null }
+        waitFor("differences") { tagged("keymap-details") != null && labelled("5") != null }
+        action(obj("type" to "preferences", "action" to obj("type" to "keymap_details", "open" to false)))
         val text = obj("format" to "capycanvas-keymap", "version" to 1, "keymap" to obj("id" to "photoshop", "revision" to 1)).toString()
         main { host.preference(obj("type" to "import_keymap", "text" to text)) }
         press("keymap-confirm-import")
         waitFor("imported keymap") { keymap() == "photoshop" }
         action(obj("type" to "preferences", "action" to obj("type" to "edit_shortcut", "id" to "command.Move")))
-        waitFor("editor context") {
-            tagged("shortcut-editor-context")?.second?.config?.getOrNull(SemanticsProperties.Text)?.any { it.text.contains("Photoshop Style") } == true
+        waitFor("preset default") {
+            tagged("shortcut-editor-default")?.second?.config?.getOrNull(SemanticsProperties.Text)?.any { it.text == "Default: V" } == true
         }
         action(obj("type" to "preferences", "action" to obj("type" to "close_shortcut_editor")))
         action(obj("type" to "preferences", "action" to obj("type" to "select_keymap", "id" to "capy")))

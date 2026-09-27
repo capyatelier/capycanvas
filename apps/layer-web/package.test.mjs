@@ -109,7 +109,8 @@ function runtimeFixture(t, changes = {}) {
     "tooltips.js": "export function installTooltips() {}",
     "pen-scroll.js": "export function installPenScrolling() {}",
     "palettes.js": "export function createPalettes() {}",
-    "preferences.js": "import {chooseProfileLibrary} from './export-controls.js'; export function createPreferences() {}",
+    "preferences.js": "import {chooseProfileLibrary} from './export-controls.js'; import {createShortcutPage} from './shortcut-page.js'; export function createPreferences() {}",
+    "shortcut-page.js": "export function createShortcutPage() {}",
     "command-bar.js": "export function createCommandBar() {}",
     "gpu.js": "export function showGpuNotice() {}",
     "toolbar-components.js": "import {createNumberField} from './numeric.js'; import {createRangeControl} from './range-control.js';",
@@ -147,6 +148,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
     assert.ok(readFileSync(join(dir, names[path]), "utf8").includes(`from "./${names["workspace-switcher.js"]}"`));
   assert.ok(readFileSync(join(dir, names["header.js"]), "utf8").includes(`from "./${names["color-controls.js"]}"`));
   assert.ok(readFileSync(join(dir, names["editor-panels.js"]), "utf8").includes(`from "./${names["raster-worker-client.js"]}"`));
+  assert.ok(readFileSync(join(dir, names["preferences.js"]), "utf8").includes(`from "./${names["shortcut-page.js"]}"`));
   assert.ok(readFileSync(join(dir, names["style.css"]), "utf8").includes(`url("${names["icons/pen.svg"]}")`));
   assert.ok(readFileSync(join(dir, names["pkg/layer_web.js"]), "utf8").includes(names["pkg/layer_web_bg.wasm"].slice(4)));
   assert.deepEqual(fingerprintAssets(runtimeFixture(t)), names, "An identical rebuild keeps every URL stable");

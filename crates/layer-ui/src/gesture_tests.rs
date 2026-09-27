@@ -183,7 +183,8 @@ fn tap_bindings_are_configurable_and_validated() {
     assert!(serde_json::to_value(Settings::default()).unwrap().get("gestures").is_none());
     let triggers = |platform| crate::shortcut_page::triggers(platform).map(|t| t.id).collect::<Vec<_>>();
     assert!(triggers(Platform::Mac).is_empty() && triggers(Platform::Ios).is_empty());
-    assert_eq!(triggers(Platform::Android).len(), 6);
+    assert_eq!(triggers(Platform::Android).len(), 5, "only Linux reports a third side button");
+    assert_eq!(triggers(Platform::Gtk).len(), 6);
 }
 
 #[test]

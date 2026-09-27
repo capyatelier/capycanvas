@@ -155,6 +155,7 @@ pub(crate) fn triggers(platform: Platform) -> impl Iterator<Item = &'static Gest
     GESTURE_TRIGGERS
         .iter()
         .filter(move |t| if t.held { platform.pen_buttons() } else { platform.touch_gestures() })
+        .filter(move |t| t.id != "pen.button.tertiary" || platform == Platform::Gtk)
 }
 
 fn action_label(all: &[(ShortcutDefinition, &str)], id: &str) -> String {

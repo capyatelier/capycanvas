@@ -3,12 +3,6 @@ package art.capycanvas
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import androidx.compose.animation.*
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
@@ -25,7 +19,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerType
@@ -119,8 +112,25 @@ internal val LocalPreferencesOpen = compositionLocalOf { true }
     }
 }
 
+private fun JSONObject.shortcutCategory(): String? =
+    objectOrNull("shortcut_page")?.takeIf { getString("page") == "shortcuts" && !it.isNull("category") }?.getString("category")
+
 private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")?.let { "shortcut:" + it.getString("id") }
+    ?: objectOrNull("modifier_editor")?.let { "modifier:" + it.getString("label") }
+    ?: objectOrNull("pen_button_editor")?.let { "pen:" + it.getString("trigger") }
+    ?: shortcutCategory()?.let { "category:$it" }
     ?: "page:" + getString("page")
+
+private fun String.routeDepth() = when (substringBefore(':')) {
+    "page" -> 0
+    "category", "pen" -> 1
+    else -> 2
+}
+
+private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor")?.getString("label")
+    ?: objectOrNull("modifier_editor")?.getString("label")
+    ?: objectOrNull("pen_button_editor")?.getString("label")
+    ?: shortcutCategory()
 
 @Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject, open: Boolean) {
     var profilesOpen by remember { mutableStateOf(false) }
@@ -141,18 +151,22 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
     BoxWithConstraints(Modifier.fillMaxSize().background(colors.settingsBackground).imePadding()
         .focusRequester(paneFocus).focusable().testTag("preferences-surface")) {
         val wide = maxWidth >= 840.dp
-        val shortcut = view.objectOrNull("shortcut_editor")
+        val detail = view.settingsTitle()
         fun close() { focus.clearFocus(); host.dispatch(obj("type" to "close_settings")) }
         fun back() {
             focus.clearFocus()
             when {
                 view.objectOrNull("capture") != null -> host.preference(obj("type" to "cancel_shortcut"))
-                shortcut != null -> host.preference(obj("type" to "close_shortcut_editor"))
+                view.objectOrNull("shortcut_editor") != null -> host.preference(obj("type" to "close_shortcut_editor"))
+                view.objectOrNull("modifier_editor") != null -> host.preference(obj("type" to "close_modifier_key"))
+                view.objectOrNull("pen_button_editor") != null -> host.preference(obj("type" to "close_pen_button"))
+                view.shortcutCategory() != null -> host.preference(obj("type" to "shortcut_category", "id" to null))
                 !wide && showPage -> showPage = false
                 else -> close()
             }
         }
         BackHandler(enabled = open, onBack = ::back)
+        if (open) ShortcutDialogs(host, view)
         // Two full-height panes, not a global app bar stacked over two columns.
         Row(Modifier.fillMaxSize()) {
             if (wide || !showPage) PreferencesNavigation(host, view,
@@ -163,10 +177,10 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                     val page = view.array("pages").objects().find { it.getString("id") == view.getString("page") }
                     // Pane controls stay put while only its contents slide.
                     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).heightIn(min = 48.dp)) {
-                        Text(shortcut?.getString("label") ?: page?.getString("title") ?: "",
+                        Text(detail ?: page?.getString("title") ?: "",
                             Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 88.dp).testTag("settings-page-title"),
                             fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
-                        if (shortcut != null || !wide) {
+                        if (detail != null || !wide) {
                             IconButton(::back, Modifier.align(Alignment.CenterStart).size(48.dp)) {
                                 SharedIcon("back", "Back", Modifier.size(20.dp))
                             }
@@ -175,15 +189,20 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                     }
                     AnimatedContent(view, Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentKey = { it.settingsRoute() },
                         transitionSpec = {
-                            if (initialState.settingsRoute().startsWith("page:") && targetState.settingsRoute().startsWith("page:")) {
+                            val from = initialState.settingsRoute().routeDepth()
+                            val to = targetState.settingsRoute().routeDepth()
+                            if (from == 0 && to == 0) {
                                 fadeIn(tween(140)) togetherWith fadeOut(tween(100))
                             } else {
-                                val direction = if (targetState.settingsRoute().startsWith("page:")) -1 else 1
+                                val direction = if (to < from) -1 else 1
                                 (slideInHorizontally(tween(220)) { it * direction } + fadeIn(tween(160))) togetherWith
                                     (slideOutHorizontally(tween(220)) { -it * direction / 3 } + fadeOut(tween(120)))
                             }
                         }, label = "settings-detail") { model ->
                         val editor = model.objectOrNull("shortcut_editor")
+                        val modifierKey = model.objectOrNull("modifier_editor")
+                        val penButton = model.objectOrNull("pen_button_editor")
+                        val category = model.shortcutCategory()
                         val page = model.array("pages").objects().find { it.getString("id") == model.getString("page") }
                         Column(Modifier.fillMaxSize().testTag("settings-content-" + model.settingsRoute())
                             .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp),
@@ -191,8 +210,24 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                             Column(Modifier.widthIn(max = 632.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
                                 when {
                                     editor != null -> ShortcutEditor(host, model, editor)
+                                    modifierKey != null -> {
+                                        val key = modifierKey.getJSONObject("key")
+                                        PerToolPage(host, "modifier", "Hold ${modifierKey.getString("label")} to use an action until you let go.", modifierKey,
+                                            obj("type" to "reset_modifier_key", "key" to key),
+                                            { obj("type" to "modifier_key_per_tool", "key" to key, "per_tool" to it) },
+                                            { obj("type" to "open_modifier_picker", "key" to key, "category" to it) },
+                                            "Remove Modifier Key" to obj("type" to "remove_modifier_key", "key" to key))
+                                    }
+                                    penButton != null -> {
+                                        val trigger = penButton.getString("trigger")
+                                        PerToolPage(host, "pen-button", "Tools, brushes and modes last while the button is held. Other actions run once.", penButton,
+                                            obj("type" to "reset_trigger", "trigger" to trigger),
+                                            { obj("type" to "pen_button_per_tool", "trigger" to trigger, "per_tool" to it) },
+                                            { obj("type" to "open_pen_button_picker", "trigger" to trigger, "category" to it) }, null)
+                                    }
+                                    category != null -> ShortcutCategory(host, model, category)
                                     else -> {
-                                        if (model.getString("page") == "shortcuts") Shortcuts(host, model)
+                                        if (model.getString("page") == "shortcuts") ShortcutsHome(host, model)
                                         else page?.array("groups")?.objects()?.forEach { group ->
                                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                                 Text(group.getString("title"), Modifier.padding(horizontal = 4.dp).testTag("settings-group-title-" + group.getString("title")),
@@ -219,6 +254,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                                         }
                                     }
                                 }
+                                if (model.settingsRoute() == "page:input") TriggerGroups(host, model)
                                 if(model.getString("page")=="color")TextButton({profilesOpen=true}){Text("Manage Color Profiles…")}
                                 model.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let {
                                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("settings-error"))
@@ -547,170 +583,6 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
         FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
             verticalArrangement = Arrangement.spacedBy(6.dp)) { circles() }
         entry()
-    }
-}
-
-@Composable private fun Keymap(host: CanvasHost, keymap: JSONObject) {
-    val colors = LocalPalette.current
-    val context = LocalContext.current
-    var choosing by remember { mutableStateOf(false) }
-    var differences by rememberSaveable { mutableStateOf(false) }
-    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        val text = host.keymapFile?.optString("text"); host.keymapFile = null
-        if (uri != null && text != null) host.viewModelScope.launch {
-            try { withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray()) } ?: error("Could not open the export destination") } }
-            catch (e: Exception) { host.preference(obj("type" to "cancel_keymap_import")) }
-        }
-    }
-    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        host.keymapFile = null
-        if (uri != null) host.viewModelScope.launch {
-            val text = withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    val buffer = ByteArray(1 shl 20); var length = 0
-                    while (length < buffer.size) { val n = input.read(buffer, length, buffer.size - length); if (n < 0) break; length += n }
-                    String(buffer, 0, length)
-                }
-            }
-            if (text != null) host.preference(obj("type" to "import_keymap", "text" to text))
-        }
-    }
-    LaunchedEffect(host.keymapFile) {
-        val request = host.keymapFile ?: return@LaunchedEffect
-        when (request.getString("type")) {
-            "export_keymap" -> exporter.launch(request.getString("name"))
-            "import_keymap" -> importer.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
-        }
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Keymap", Modifier.weight(1f).padding(horizontal = 4.dp), fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
-            TextButton({ host.preference(obj("type" to "choose_keymap_file")) }, Modifier.testTag("keymap-import")) { Text("Import…") }
-            TextButton({ host.preference(obj("type" to "export_keymap")) }, Modifier.testTag("keymap-export")) { Text("Export…") }
-        }
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = colors.settingsCard, shadowElevation = 1.dp) {
-            Column {
-                val presets = keymap.array("presets").objects()
-                val selected = presets.firstOrNull { it.getString("id") == keymap.getString("selected") }
-                Box {
-                    Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("keymap-preset").clickable { choosing = true }.padding(16.dp)) {
-                        Text(selected?.getString("title") ?: "")
-                        Text(keymap.getString("source"), color = colors.settingsSecondary, fontSize = 13.sp)
-                    }
-                    DropdownMenu(choosing, { choosing = false }) {
-                        presets.forEach { preset ->
-                            DropdownMenuItem({ Text(preset.getString("title")) }, {
-                                choosing = false
-                                host.preference(obj("type" to "select_keymap", "id" to preset.getString("id")))
-                            }, Modifier.testTag("keymap-choice-" + preset.getString("id")))
-                        }
-                    }
-                }
-                val items = keymap.array("differences").objects()
-                if (items.isNotEmpty()) {
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("keymap-differences").clickable { differences = !differences }.padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text("Differences from " + keymap.getString("app"), Modifier.weight(1f))
-                        SharedIcon("chevron-down", null, Modifier.size(20.dp).rotate(if (differences) 180f else 0f), tint = colors.settingsSecondary)
-                    }
-                    if (differences) items.forEach { item ->
-                        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            Text(item.getString("trigger"))
-                            Text(item.getString("note"), color = colors.settingsSecondary, fontSize = 13.sp)
-                        }
-                    }
-                }
-            }
-        }
-    }
-    keymap.objectOrNull("import")?.let { preview ->
-        AlertDialog({ host.preference(obj("type" to "cancel_keymap_import")) },
-            confirmButton = { TextButton({ host.preference(obj("type" to "confirm_keymap_import")) }, Modifier.testTag("keymap-confirm-import")) { Text("Import") } },
-            dismissButton = { TextButton({ host.preference(obj("type" to "cancel_keymap_import")) }) { Text("Cancel") } },
-            title = { Text("Import " + preview.getString("title") + "?") },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState()).testTag("keymap-import-preview")) {
-                    var any = false
-                    for ((title, key) in listOf("Added" to "added", "Changed" to "changed", "Removed" to "removed", "Not available" to "unavailable")) {
-                        val lines = preview.array(key).values()
-                        if (lines.isEmpty()) continue
-                        any = true
-                        Text("$title (${lines.size})", fontWeight = FontWeight.SemiBold)
-                        lines.forEach { Text(it.toString(), fontSize = 13.sp) }
-                    }
-                    if (!any) Text("No shortcuts change.")
-                }
-            })
-    }
-}
-
-@Composable private fun Shortcuts(host: CanvasHost, view: JSONObject) {
-    Keymap(host, view.getJSONObject("keymap"))
-    CoreTextField(view.optString("shortcut_query"), { host.preference(obj("type" to "search_shortcuts", "query" to it)) },
-        modifier = Modifier.fillMaxWidth().testTag("shortcuts-search"), height = 48.dp,
-        placeholder = { Text("Search keyboard shortcuts") }, leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) })
-    val colors = LocalPalette.current
-    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = colors.settingsCard, shadowElevation = 1.dp) {
-        Column {
-            view.array("shortcuts").objects().filter { it.getBoolean("visible") }.forEachIndexed { index, shortcut ->
-                if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("shortcut-" + shortcut.getString("id"))
-                    .clickable { host.preference(obj("type" to "edit_shortcut", "id" to shortcut.getString("id"))) }.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text(shortcut.getString("label"), Modifier.weight(1f))
-                    Text(shortcut.getString("shortcut"), color = colors.settingsSecondary,
-                        modifier = Modifier.testTag("shortcut-binding-" + shortcut.getString("id")),
-                        fontWeight = if (shortcut.getBoolean("modified")) FontWeight.Bold else FontWeight.Normal)
-                    SharedIcon("chevron-down", null, Modifier.size(20.dp).rotate(-90f), tint = colors.settingsSecondary)
-                }
-            }
-        }
-    }
-}
-
-/** Shortcut information, recording and conflict resolution are all inline. */
-@Composable private fun ShortcutEditor(host: CanvasHost, view: JSONObject, editor: JSONObject) {
-    val capture = view.objectOrNull("capture")
-    val focus = remember { FocusRequester() }
-    val visible = LocalPreferencesOpen.current
-    LaunchedEffect(visible, capture != null) { if (visible && capture != null) focus.requestFocus() }
-    Column(Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
-        if (capture != null) { host.key(event.nativeKeyEvent); true } else false
-    }.focusRequester(focus).focusable(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text(listOf(editor.getString("group"), editor.getString("scope"), editor.getString("source")).joinToString(" · "),
-            color = LocalPalette.current.settingsSecondary, modifier = Modifier.testTag("shortcut-editor-context"))
-        editor.array("overlaps").values().forEach { Text(it.toString(), color = LocalPalette.current.settingsSecondary) }
-        Text("Default: " + editor.array("defaults").values().joinToString(" / "), color = LocalPalette.current.settingsSecondary)
-        editor.array("bindings").values().forEachIndexed { index, binding ->
-            Row(Modifier.fillMaxWidth().background(LocalPalette.current.settingsCard, RoundedCornerShape(12.dp))
-                .padding(start = 16.dp, end = 8.dp).heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(binding.toString(), Modifier.weight(1f))
-                IconButton({ host.preference(obj("type" to "remove_shortcut", "id" to editor.getString("id"), "index" to index)) }) {
-                    SharedIcon("minus", "Remove shortcut", Modifier.size(20.dp))
-                }
-            }
-        }
-        if (capture != null) {
-            Surface(shape = RoundedCornerShape(12.dp), color = LocalPalette.current.settingsCard) {
-                Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Press a key combination on your keyboard")
-                    Text(capture.optString("shortcut"), fontSize = 20.sp, fontWeight = FontWeight.Medium)
-                    capture.optString("notice").takeIf { it.isNotEmpty() }?.let { Text(it) }
-                    if (!capture.isNull("conflict")) {
-                        TextButton({ host.preference(obj("type" to "confirm_shortcut", "replace" to true)) }) { Text("Replace assignment") }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton({ host.preference(obj("type" to "cancel_shortcut")) }) { Text("Cancel recording") }
-                        TextButton({ host.preference(obj("type" to "confirm_shortcut", "replace" to false)) },
-                            enabled = capture.objectOrNull("chord") != null && capture.isNull("conflict")) { Text("Use shortcut") }
-                    }
-                }
-            }
-        } else TextButton({ host.preference(obj("type" to "begin_shortcut", "id" to editor.getString("id"))) },
-            enabled = editor.optBoolean("can_add")) { Text("Add shortcut") }
-        TextButton({ host.preference(obj("type" to "reset_shortcut", "id" to editor.getString("id"))) },
-            enabled = editor.optBoolean("modified")) { Text("Restore default") }
     }
 }
 

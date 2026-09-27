@@ -167,7 +167,8 @@ internal fun deviceKey(code: Int): String? = when (code) {
 internal fun CanvasHost.claimsDeviceKey(event: KeyEvent): Boolean {
     val name = deviceKey(event.keyCode) ?: return false
     val shortcuts = snapshot?.objectOrNull("state")?.objectOrNull("settings")?.optJSONObject("shortcuts") ?: return false
-    return shortcuts.keys().asSequence().any { id ->
+    val holds = snapshot?.objectOrNull("state")?.objectOrNull("settings")?.optJSONArray("hold_keys")?.objects().orEmpty()
+    return holds.any { it.objectOrNull("key")?.optString("key") == name } || shortcuts.keys().asSequence().any { id ->
         shortcuts.optJSONArray(id)?.objects()?.any { it.optString("key") == name } == true
     }
 }
@@ -178,31 +179,35 @@ internal fun CanvasHost.key(event: KeyEvent) {
         KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN,
         KeyEvent.KEYCODE_MOVE_HOME, KeyEvent.KEYCODE_MOVE_END, KeyEvent.KEYCODE_ESCAPE)) return
     if (colorControlFocus != null && event.keyCode in listOf(KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)) return
-    val key = when (event.keyCode) {
-            KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> "shift"
-            KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT -> "alt"
-            KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_CTRL_RIGHT -> "control"
-            KeyEvent.KEYCODE_META_LEFT, KeyEvent.KEYCODE_META_RIGHT -> "meta"
-            KeyEvent.KEYCODE_SPACE -> " "
-            KeyEvent.KEYCODE_ESCAPE -> "escape"
-            KeyEvent.KEYCODE_ENTER -> "enter"
-            KeyEvent.KEYCODE_TAB -> "tab"
-            KeyEvent.KEYCODE_DEL -> "backspace"
-            KeyEvent.KEYCODE_FORWARD_DEL -> "delete"
-            KeyEvent.KEYCODE_INSERT -> "insert"
-            KeyEvent.KEYCODE_MOVE_HOME -> "home"
-            KeyEvent.KEYCODE_MOVE_END -> "end"
-            KeyEvent.KEYCODE_PAGE_UP -> "pageup"
-            KeyEvent.KEYCODE_PAGE_DOWN -> "pagedown"
-            in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12 -> "f${event.keyCode - KeyEvent.KEYCODE_F1 + 1}"
-            KeyEvent.KEYCODE_DPAD_LEFT -> "arrowleft"
-            KeyEvent.KEYCODE_DPAD_RIGHT -> "arrowright"
-            KeyEvent.KEYCODE_DPAD_UP -> "arrowup"
-            KeyEvent.KEYCODE_DPAD_DOWN -> "arrowdown"
-            else -> deviceKey(event.keyCode) ?: event.getUnicodeChar(event.metaState and (KeyEvent.META_SHIFT_MASK or KeyEvent.META_CAPS_LOCK_ON))
-                .takeIf { it > 0 && Character.isValidCodePoint(it) }?.let { String(Character.toChars(it)) }
-        }
-        if (key != null) input(obj("type" to "key", "key" to key, "pressed" to (event.action == KeyEvent.ACTION_DOWN),
+    val key = keyName(event)
+    if (key != null) input(obj("type" to "key", "key" to key, "pressed" to (event.action == KeyEvent.ACTION_DOWN),
             "repeat" to (event.repeatCount > 0), "editing" to editingText,
             "modifiers" to obj("command" to (event.isCtrlPressed || event.isMetaPressed), "shift" to event.isShiftPressed, "alt" to event.isAltPressed)))
+}
+
+/** The shared key names the core records and matches. */
+internal fun keyName(event: KeyEvent): String? = when (event.keyCode) {
+    KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> "shift"
+    KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT -> "alt"
+    KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_CTRL_RIGHT -> "control"
+    KeyEvent.KEYCODE_META_LEFT, KeyEvent.KEYCODE_META_RIGHT -> "meta"
+    KeyEvent.KEYCODE_SPACE -> " "
+    KeyEvent.KEYCODE_ESCAPE -> "escape"
+    KeyEvent.KEYCODE_ENTER -> "enter"
+    KeyEvent.KEYCODE_TAB -> "tab"
+    KeyEvent.KEYCODE_DEL -> "backspace"
+    KeyEvent.KEYCODE_FORWARD_DEL -> "delete"
+    KeyEvent.KEYCODE_INSERT -> "insert"
+    KeyEvent.KEYCODE_MOVE_HOME -> "home"
+    KeyEvent.KEYCODE_MOVE_END -> "end"
+    KeyEvent.KEYCODE_PAGE_UP -> "pageup"
+    KeyEvent.KEYCODE_PAGE_DOWN -> "pagedown"
+    in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12 -> "f${event.keyCode - KeyEvent.KEYCODE_F1 + 1}"
+    KeyEvent.KEYCODE_DPAD_LEFT -> "arrowleft"
+    KeyEvent.KEYCODE_DPAD_RIGHT -> "arrowright"
+    KeyEvent.KEYCODE_DPAD_UP -> "arrowup"
+    KeyEvent.KEYCODE_DPAD_DOWN -> "arrowdown"
+    in KeyEvent.KEYCODE_BUTTON_1..KeyEvent.KEYCODE_BUTTON_16 -> "pad_button_${event.keyCode - KeyEvent.KEYCODE_BUTTON_1 + 1}"
+    else -> deviceKey(event.keyCode) ?: event.getUnicodeChar(event.metaState and (KeyEvent.META_SHIFT_MASK or KeyEvent.META_CAPS_LOCK_ON))
+        .takeIf { it > 0 && Character.isValidCodePoint(it) }?.let { String(Character.toChars(it)) }
 }
