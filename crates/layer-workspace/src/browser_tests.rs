@@ -475,7 +475,7 @@ fn browser_transactions_match_sqlite_contract() {
 }
 
 #[test]
-fn browser_replaces_older_and_unversioned_snapshots() {
+fn browser_snapshots_of_other_versions_decode_only_by_reset() {
     let owner = Owner::fresh();
     let mut db = BrowserDatabase::default();
     let batch = CommitBatch::prepare(owner.clone(), vec![create(workspace("Older"))]).unwrap();
@@ -486,7 +486,12 @@ fn browser_replaces_older_and_unversioned_snapshots() {
         serde_json::Value::Null,
     ] {
         encoded["schema"] = schema;
-        let mut db = BrowserDatabase::decode(&encoded.to_string()).unwrap();
+        let text = encoded.to_string();
+        assert_eq!(
+            BrowserDatabase::decode(&text).err().unwrap().kind,
+            ErrorKind::UnsupportedSchema
+        );
+        let mut db = BrowserDatabase::replace(Some(&text)).unwrap();
         let StoreResponse::List(items) = db.execute(StoreRequest::List, 2).unwrap() else {
             panic!()
         };
@@ -510,13 +515,12 @@ fn browser_preserves_newer_schemas_and_exact_large_counters() {
     db.execute(StoreRequest::Commit { batch }, 1).unwrap();
     let mut encoded: serde_json::Value = serde_json::from_str(&db.encoded().unwrap()).unwrap();
     encoded["schema"] = serde_json::json!(999);
-    assert_eq!(
-        BrowserDatabase::decode(&encoded.to_string())
-            .err()
-            .unwrap()
-            .kind,
-        ErrorKind::UnsupportedSchema
-    );
+    for result in [
+        BrowserDatabase::decode(&encoded.to_string()),
+        BrowserDatabase::replace(Some(&encoded.to_string())),
+    ] {
+        assert_eq!(result.err().unwrap().kind, ErrorKind::UnsupportedSchema);
+    }
     encoded["schema"] = serde_json::json!(SCHEMA_VERSION);
     encoded["fences"][&id] = serde_json::json!("9007199254740993");
     encoded["items"][&id]["claim"]["fence"] = serde_json::json!("9007199254740993");

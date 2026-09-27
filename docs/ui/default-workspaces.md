@@ -313,26 +313,18 @@ Other platforms can use the [minimal implementation handoff](workspace-switcher-
 ![Web workspace switcher configuration](default-workspaces/web-switcher.png)
 ![Web workspace row menu](default-workspaces/web-switcher-menu.png)
 
-## Invalid-default recovery acceptance (September 13)
+## Unreadable storage
 
-- 396 shared tests pass (`layer-ui`, `layer-host`, and 72 `layer-workspace` tests).
-  Recovery fixtures corrupt actual stored JSON for all three included workspaces
-  on SQLite and the browser reducer. They cover unknown fields, invalid working
-  versions, absent working state, invalid metadata/content, missing resources,
-  healthy/custom preservation, live leases, stale writes, rollback and reopen.
-- GTK's `native_default_workspace_recovery_input` passes with private SQLite
-  storage and real pointer input. It covers header switching, broken resumed
-  startup, manager preview/Cancel, claim release, preservation of another
-  workspace's edited brush settings, and using the recovered Painter color
-  drawer. Evidence: `/tmp/capy-workspace-motion.FbGJD2`.
-- Chrome passes 49 SQLite/IndexedDB contract cases plus default recovery,
-  transaction abort after replacement, ownership rejection and durable reopen:
-  `/tmp/capy-workspace-motion.OKMFPg`. The existing complete workspace-manager
-  interaction regression also passes: `/tmp/capy-workspace-motion.W0b1pp`.
-
-Run the recovery journey with
-`bash tools/performance/workspace-motion.sh gtk --native-test=native_default_workspace_recovery_input --native-storage`.
-For the browser contract, first generate its fixture with
+Included workspaces are not repaired one at a time. If startup cannot read the
+stored workspaces, it replaces the whole store, seeds fresh included workspaces
+and shows a notice; see
+[workspace startup](../development/workspace-ownership.md#startup-always-adopts-a-workspace).
+The GTK journey
+`bash tools/performance/workspace-motion.sh gtk --native-test=native_unreadable_workspace_storage_input --native-storage`
+and `node apps/layer-web/test.mjs --headless --workspace-startup` each change a
+stored field's type in every workspace, restart, and require the reset
+workspaces to be usable. For the browser storage contract, first generate its
+fixture with
 `CAPY_STORE_CONTRACT_FIXTURE=/tmp/capy-workspace-store-contract.json cargo test --locked -p layer-workspace --features native browser_transactions_match_sqlite_contract`,
 then run `bash tools/performance/workspace-motion.sh web --workspace-store`.
 These tests use isolated stores; they do not wipe normal app workspaces.

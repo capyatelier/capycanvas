@@ -90,17 +90,30 @@ fn update_ids(
     }
     Ok(field.clone())
 }
+fn schema(text: &str) -> Option<u64> {
+    #[derive(Deserialize)]
+    struct Schema {
+        schema: Option<u64>,
+    }
+    serde_json::from_str::<Schema>(text).ok()?.schema
+}
 impl BrowserDatabase {
-    /// An unversioned or older snapshot decodes as an empty current database,
-    /// like a first start; the next write replaces it (see newer_schema).
     pub fn decode(text: &str) -> Result<Self> {
-        let value: serde_json::Value = serde_json::from_str(text)?;
-        let current = u64::from(SCHEMA_VERSION);
-        match value.get("schema").and_then(|v| v.as_u64()) {
-            Some(schema) if schema > current => Err(newer_schema()),
-            Some(schema) if schema == current => Ok(serde_json::from_value(value)?),
-            _ => Ok(Self::default()),
+        match schema(text) {
+            Some(schema) if schema == u64::from(SCHEMA_VERSION) => Ok(serde_json::from_str(text)?),
+            Some(schema) if schema > u64::from(SCHEMA_VERSION) => Err(newer_schema()),
+            _ => Err(other_schema()),
         }
+    }
+    /// `StoreRequest::Reset` for a snapshot that may not decode at all.
+    pub fn replace(previous: Option<&str>) -> Result<Self> {
+        if previous
+            .and_then(schema)
+            .is_some_and(|schema| schema > u64::from(SCHEMA_VERSION))
+        {
+            return Err(newer_schema());
+        }
+        Ok(Self::default())
     }
     pub fn encoded(&self) -> Result<String> {
         Ok(serde_json::to_string(self)?)
@@ -176,7 +189,6 @@ impl BrowserDatabase {
     }
     /// Failure leaves the original snapshot unchanged, including multi-item
     /// mutations, ownership changes, bindings and receipts.
-    #[cfg(test)]
     pub fn execute(&mut self, request: StoreRequest, now: u64) -> Result<StoreResponse> {
         let mut transaction = self.clone();
         let response = transaction.apply(request, now)?;
@@ -293,12 +305,20 @@ impl BrowserDatabase {
             Binding { key } => StoreResponse::Binding(self.bindings.get(&key).cloned()),
             Pending => StoreResponse::Pending(self.pending.values().cloned().collect()),
             Reopen => StoreResponse::Done,
+            Reset => {
+                *self = Self::default();
+                StoreResponse::Done
+            }
             Maintenance { owner, clear_older } => {
-                let items: Vec<_> = self
+                let items = self
                     .items
                     .values()
-                    .filter_map(|r| r.stored().ok().filter(|s| s.entity.validate().is_ok()))
-                    .collect();
+                    .map(|r| {
+                        let stored = r.stored()?;
+                        stored.entity.validate()?;
+                        Ok(stored)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 let changed = retention::retention_plan(
                     &items,
                     owner.as_ref(),

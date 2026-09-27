@@ -87,7 +87,9 @@ impl StoreWorker {
                         }
                         WorkerRequest::Store(request) => request,
                     };
-                    if matches!(request, StoreRequest::Reopen) && store.is_err() {
+                    if matches!(request, StoreRequest::Reopen | StoreRequest::Reset)
+                        && store.is_err()
+                    {
                         store = SqliteStore::open(&database);
                     }
                     let result = match &mut store {

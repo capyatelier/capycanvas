@@ -93,14 +93,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
 
     /// Hosts with a switcher call this at startup and when refreshing the list.
     pub async fn refresh_switcher(&self) -> Result<()> {
-        let StoreResponse::Switcher(ids) = self.store.execute(StoreRequest::Switcher).await? else {
+        let StoreResponse::Switcher(ids) = self.execute(StoreRequest::Switcher).await? else {
             return Err(StoreError::invalid("Unexpected workspace switcher reply."));
         };
         if let Some(ids) = &ids {
             validate_ids(ids)?;
         }
         let StoreResponse::WorkspaceOrder(order) =
-            self.store.execute(StoreRequest::WorkspaceOrder).await?
+            self.execute(StoreRequest::WorkspaceOrder).await?
         else {
             return Err(StoreError::invalid("Unexpected workspace order reply."));
         };
@@ -135,7 +135,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 if self.state.borrow().workspace_order.is_none() {
                     let order = self.workspace_ids();
                     let StoreResponse::WorkspaceOrder(saved) = self
-                        .store
                         .execute(StoreRequest::UpdateWorkspaceOrder {
                             expected: None,
                             ids: order,
@@ -176,7 +175,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 StoreRequest::UpdateWorkspaceOrder { expected, ids }
             }
         };
-        let response = self.store.execute(request).await;
+        let response = self.execute(request).await;
         match response {
             Ok(StoreResponse::Switcher(ids)) => {
                 self.state.borrow_mut().switcher = ids;

@@ -322,7 +322,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         // Return the new aggregate for synchronous prepared adoption in the host.
         if active {
             let StoreResponse::Binding(Some(id)) = self
-                .store
                 .execute(StoreRequest::Binding {
                     key: format!("window:{}", self.owner.id),
                 })

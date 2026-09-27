@@ -33,6 +33,10 @@ impl Ownership {
         })
     }
 
+    pub(super) fn release_all(&mut self) {
+        self.held.clear();
+    }
+
     fn try_lock(&self, id: &str) -> Result<Option<File>> {
         // IDs are not paths. Keep the files permanently: unlink/recreate would
         // allow two processes to lock different inodes for the same workspace.

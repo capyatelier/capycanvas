@@ -1169,3 +1169,246 @@ fn import_toolbar_package_selects_it_and_backup_adopts() {
     assert!(f.controller.view.name.starts_with("My Workspace"));
     assert!(!f.controller.view.busy && f.controller.view.page.is_none());
 }
+
+/// Answers like `Store` until request `fail_from`, then fails every request.
+/// A reset heals it when `reset_heals`, as replacing unreadable data does.
+struct Faulty {
+    database: RefCell<BrowserDatabase>,
+    requests: Cell<usize>,
+    fail_from: usize,
+    reset_heals: bool,
+    healed: Cell<bool>,
+    reset: Cell<bool>,
+}
+#[derive(Clone)]
+struct FaultyStore(Rc<Faulty>);
+impl FaultyStore {
+    fn new(fail_from: usize, reset_heals: bool) -> Self {
+        Self(Rc::new(Faulty {
+            database: RefCell::default(),
+            requests: Cell::new(0),
+            fail_from,
+            reset_heals,
+            healed: Cell::new(false),
+            reset: Cell::new(false),
+        }))
+    }
+}
+impl WorkspaceStore for FaultyStore {
+    async fn execute(&self, request: StoreRequest) -> Result<StoreResponse, StoreError> {
+        let f = &self.0;
+        let index = f.requests.replace(f.requests.get() + 1);
+        let reset = matches!(request, StoreRequest::Reset);
+        f.reset.set(f.reset.get() || reset);
+        if index >= f.fail_from && !f.healed.get() && !(reset && f.reset_heals) {
+            return Err(StoreError::invalid("invalid type: map, expected a boolean"));
+        }
+        f.healed.set(f.healed.get() || reset);
+        if let StoreRequest::Commit { batch } = &request {
+            f.database.borrow_mut().prepare_delivery(batch)?;
+        }
+        f.database.borrow_mut().execute(request, 1000)
+    }
+}
+fn start<S: WorkspaceStore + 'static>(
+    store: S,
+    platform: Platform,
+) -> (WorkspaceController<S>, layer_host::NativeHost) {
+    let mut host = layer_host::NativeHost::new(platform).unwrap();
+    let mut controller = WorkspaceController::new(store, platform, 1000);
+    for _ in 0..20 {
+        if controller.view.ready {
+            break;
+        }
+        controller.tick(&mut host.session, 1000);
+    }
+    (controller, host)
+}
+fn notice(host: &layer_host::NativeHost) -> Option<String> {
+    host.session.state().notice.as_ref().map(|n| n.text.clone())
+}
+fn assert_started<S: WorkspaceStore + 'static>(
+    controller: &WorkspaceController<S>,
+    host: &mut layer_host::NativeHost,
+    context: &str,
+) {
+    assert!(
+        controller.view.ready,
+        "{context}: {:?}",
+        controller.view.error
+    );
+    assert!(controller.view.error.is_none(), "{context}");
+    assert!(!controller.view.busy, "{context}");
+    assert_eq!(
+        controller.manager.current().map(|e| e.id),
+        Some(DEFAULT_WORKSPACES[1].0.to_string()),
+        "{context}"
+    );
+    assert!(host.session.capture_workspace().is_ok(), "{context}");
+}
+
+#[test]
+fn startup_on_every_platform_adopts_from_empty_or_unusable_storage() {
+    for platform in Platform::ALL {
+        let (controller, mut host) = start(FaultyStore::new(usize::MAX, false), platform);
+        assert_started(&controller, &mut host, &format!("{platform:?} empty"));
+        assert!(!controller.manager.in_memory());
+        assert_eq!(notice(&host), None);
+
+        let (controller, mut host) = start(FaultyStore::new(0, false), platform);
+        assert_started(&controller, &mut host, &format!("{platform:?} unusable"));
+        assert!(controller.manager.in_memory());
+        assert_eq!(
+            notice(&host).as_deref(),
+            Some(
+                "Workspace changes in this window won't be saved: invalid type: map, expected a boolean"
+            )
+        );
+    }
+}
+
+#[test]
+fn startup_survives_a_failure_at_every_storage_request() {
+    let clean = FaultyStore::new(usize::MAX, false);
+    let (_, _) = start(clean.clone(), Platform::Web);
+    let requests = clean.0.requests.get();
+    assert!(requests > 10);
+    for fail_from in 0..requests {
+        for reset_heals in [true, false] {
+            let store = FaultyStore::new(fail_from, reset_heals);
+            let (mut controller, mut host) = start(store.clone(), Platform::Web);
+            let context = format!("failing from request {fail_from}, reset heals: {reset_heals}");
+            assert_started(&controller, &mut host, &context);
+            assert!(store.0.reset.get() || fail_from > 0, "{context}");
+            if !store.0.reset.get() {
+                assert!(!controller.manager.in_memory(), "{context}");
+                assert_eq!(notice(&host), None, "{context}");
+                continue;
+            }
+            assert_eq!(controller.manager.in_memory(), !reset_heals, "{context}");
+            let expected = if reset_heals {
+                "Saved workspaces couldn't be opened, so they were reset."
+            } else {
+                "Workspace changes in this window won't be saved: invalid type: map, expected a boolean"
+            };
+            assert_eq!(notice(&host).as_deref(), Some(expected), "{context}");
+            let before = host.session.capture_workspace().unwrap();
+            host.dispatch(UiAction::Invoke {
+                command: layer_ui::CommandId::Eraser,
+            })
+            .unwrap();
+            controller.observe(&mut host.session, 2000);
+            for _ in 0..3 {
+                controller.tick(&mut host.session, 2400);
+            }
+            assert!(controller.view.error.is_none(), "{context}");
+            assert!(!controller.manager.dirty(), "{context}");
+            assert_ne!(
+                controller.manager.current().unwrap().capture().unwrap(),
+                before
+            );
+            if reset_heals {
+                let StoreResponse::List(items) = store
+                    .0
+                    .database
+                    .borrow_mut()
+                    .execute(StoreRequest::List, 1000)
+                    .unwrap()
+                else {
+                    panic!()
+                };
+                assert_eq!(items.len(), DEFAULT_WORKSPACES.len(), "{context}");
+            }
+        }
+    }
+}
+
+fn start_native(
+    directory: &std::path::Path,
+) -> (WorkspaceController<StoreWorker>, layer_host::NativeHost) {
+    let mut host = layer_host::NativeHost::new(Platform::Gtk).unwrap();
+    let mut controller =
+        WorkspaceController::new(StoreWorker::shared(directory).unwrap(), Platform::Gtk, 1000);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !controller.view.ready && std::time::Instant::now() < deadline {
+        controller.tick(&mut host.session, 1000);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    (controller, host)
+}
+fn close_native(
+    mut controller: WorkspaceController<StoreWorker>,
+    host: &mut layer_host::NativeHost,
+) {
+    controller
+        .input(&mut host.session, WorkspaceInput::Close, 1000)
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !controller.view.closed && std::time::Instant::now() < deadline {
+        controller.tick(&mut host.session, 1000);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(controller.view.closed);
+}
+
+#[test]
+fn sqlite_startup_replaces_workspaces_of_the_same_version_it_cannot_read() {
+    let directory = crate::test_support::temp_dir("workspace-stale");
+    let (controller, mut host) = start_native(&directory);
+    assert_started(&controller, &mut host, "first start");
+    close_native(controller, &mut host);
+    let db = rusqlite::Connection::open(directory.join("workspaces.sqlite3")).unwrap();
+    let stale = db
+        .execute(
+            "UPDATE items SET working=json_set(working,'$.zen_mode',json('{}'))",
+            [],
+        )
+        .unwrap();
+    assert_eq!(stale, DEFAULT_WORKSPACES.len());
+
+    let (controller, mut host) = start_native(&directory);
+    assert_started(&controller, &mut host, "stale start");
+    assert!(!controller.manager.in_memory());
+    assert_eq!(
+        notice(&host).as_deref(),
+        Some("Saved workspaces couldn't be opened, so they were reset.")
+    );
+    close_native(controller, &mut host);
+
+    let (controller, mut host) = start_native(&directory);
+    assert_started(&controller, &mut host, "restart");
+    assert_eq!(notice(&host), None);
+    close_native(controller, &mut host);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn sqlite_startup_keeps_a_newer_store_and_runs_in_memory() {
+    let directory = crate::test_support::temp_dir("workspace-newer");
+    let (controller, mut host) = start_native(&directory);
+    close_native(controller, &mut host);
+    let db = rusqlite::Connection::open(directory.join("workspaces.sqlite3")).unwrap();
+    db.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+        .unwrap();
+    let rows = || -> u32 {
+        db.query_row("SELECT count(*) FROM items", [], |r| r.get(0))
+            .unwrap()
+    };
+    let before = rows();
+
+    let (controller, mut host) = start_native(&directory);
+    assert_started(&controller, &mut host, "newer store");
+    assert!(controller.manager.in_memory());
+    assert!(
+        notice(&host)
+            .unwrap()
+            .contains("A newer version of Capy Canvas updated workspace storage.")
+    );
+    close_native(controller, &mut host);
+    let version: u32 = db
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION + 1);
+    assert_eq!(rows(), before);
+    let _ = std::fs::remove_dir_all(&directory);
+}

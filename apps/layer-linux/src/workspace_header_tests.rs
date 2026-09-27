@@ -472,9 +472,9 @@ fn native_workspace_ownership_input() {
 }
 
 #[test]
-#[ignore = "isolated native-input.js --native-test=native_default_workspace_recovery_input --native-storage"]
-fn native_default_workspace_recovery_input() {
-    let mut d = Driver::managed("art.capycanvas.DefaultWorkspaceRecovery");
+#[ignore = "isolated native-input.js --native-test=native_unreadable_workspace_storage_input --native-storage"]
+fn native_unreadable_workspace_storage_input() {
+    let mut d = Driver::managed("art.capycanvas.UnreadableWorkspaceStorage");
     let database = std::path::PathBuf::from(std::env::var_os("CAPY_WORKSPACE_DIR").unwrap())
         .join("workspaces.sqlite3");
     let sql = |query: &str| {
@@ -490,120 +490,42 @@ fn native_default_workspace_recovery_input() {
         );
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     };
-    d.w.dispatch(UiAction::SetBrushSize { value: 77. });
-    pump(200);
-    let illustrator =
-        d.w.gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
-            .capture_workspace()
-            .unwrap()
-            .working;
-    // The failing workspace is inactive, so its saved bytes cannot be autosaved
-    // over by the live editor. "wheel" is not a supported ColorShape variant.
-    sql(
-        "UPDATE items SET working=json_set(working,'$.colors.shape','wheel') WHERE id='builtin:workspace:painter'",
-    );
-    d.click_name("workspace-switch-painter");
-    wait_workspaces(&d.w);
-    pump(400);
-    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
-    assert!(d.w.workspaces.manager().unwrap().error().is_none());
-    assert_eq!(
-        sql(
-            "SELECT json_extract(working,'$.colors.shape') FROM items WHERE id='builtin:workspace:painter'"
-        ),
-        "circle"
-    );
-    d.click_name(&d.header_tool(ToolbarControl::Color));
-    assert!(state(&d.w).customization.drawer.is_some());
-    d.w.dispatch(UiAction::Customize {
-        action: CustomizationAction::CloseExpanded,
-    });
     d.w.window.close();
     until(|| !d.w.window.is_visible(), "workspace close");
-    // Startup repairs only the resumed Painter, not every included workspace.
-    sql(
-        "UPDATE items SET working=json_set(working,'$.colors.shape','wheel') WHERE id IN ('builtin:workspace:painter','builtin:workspace:photographer')",
+    assert_eq!(
+        sql("UPDATE items SET working=json_set(working,'$.zen_mode',json('{}')); SELECT changes()"),
+        "3"
     );
     d.w = Workspace::new(&d._app);
     d.w.window.maximize();
     d.w.window.present();
     wait_workspaces(&d.w);
     pump(500);
+    let manager = d.w.workspaces.manager().unwrap();
+    assert!(manager.error().is_none());
+    assert!(!manager.in_memory());
     assert_eq!(
-        d.w.workspaces
-            .manager()
-            .unwrap()
-            .active_name()
-            .as_deref(),
-        Some("Sketch")
+        state(&d.w).notice.map(|notice| notice.text),
+        Some("Saved workspaces couldn't be opened, so they were reset.".into())
     );
-    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     assert!(d.w.area.is_mapped());
     assert_eq!(
-        sql(
-            "SELECT json_extract(working,'$.colors.shape') FROM items WHERE id='builtin:workspace:photographer'"
-        ),
-        "wheel"
-    );
-    d.w.workspaces
-        .ui
-        .show(&d.w, layer_workspace::ManagerPage::Workspaces);
-    pump(500);
-    d.click_name("workspace-row-builtin:workspace:photographer");
-    pump(300);
-    assert!(d.named("workspace-manager-apply").is_sensitive());
-    assert_eq!(
-        durable_layout(&state(&d.w).workspace.layout),
-        WorkspacePreset::Photographer.layout(Platform::Gtk)
-    );
-    assert_eq!(
-        d.w.workspaces
-            .manager()
-            .unwrap()
-            .active_name()
-            .as_deref(),
-        Some("Sketch")
-    );
-    assert_eq!(
-        sql("SELECT owner IS NULL FROM items WHERE id='builtin:workspace:photographer'"),
-        "1"
-    );
-    let cancel = find_button(d.w.workspaces.ui.dialog.upcast_ref(), "Cancel").unwrap();
-    d.click(cancel.upcast_ref());
-    pump(250);
-    assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
-    for name in ["illustrator", "photographer", "painter"] {
-        d.click_name(&format!("workspace-switch-{name}"));
-        wait_workspaces(&d.w);
-        pump(300);
-        if name == "illustrator" {
-            assert_eq!(
-                d.w.gpu
-                    .borrow_mut()
-                    .as_mut()
-                    .unwrap()
-                    .session
-                    .capture_workspace()
-                    .unwrap()
-                    .working,
-                illustrator
-            );
-        }
-    }
-    assert_eq!(
-        sql("SELECT count(*) FROM items WHERE json_extract(working,'$.colors.shape')='wheel'"),
+        sql("SELECT count(*) FROM items WHERE json_type(working,'$.zen_mode')='object'"),
         "0"
     );
-    assert!(d.w.workspaces.manager().unwrap().error().is_none());
+    d.click_name("workspace-switch-painter");
+    wait_workspaces(&d.w);
+    pump(400);
+    assert_eq!(
+        state(&d.w).workspace.layout.header,
+        HeaderLayout::painter_for_platform(Platform::Gtk)
+    );
+    assert!(manager.error().is_none());
     d.click_name(&d.header_tool(ToolbarControl::Color));
     assert!(state(&d.w).customization.drawer.is_some());
     crate::capture(
         &d.w,
-        d.input.dir.join("recovered-painter.png").to_str().unwrap(),
+        d.input.dir.join("replaced-storage.png").to_str().unwrap(),
     );
     d.finish();
 }

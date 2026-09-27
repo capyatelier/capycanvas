@@ -53,12 +53,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         clear_older: bool,
     ) -> Result<Option<StoredEntity>, StoreError> {
         self.flush().await?;
-        self.store
-            .execute(StoreRequest::Maintenance {
-                owner: Some(self.owner.clone()),
-                clear_older,
-            })
-            .await?;
+        self.execute(StoreRequest::Maintenance {
+            owner: Some(self.owner.clone()),
+            clear_older,
+        })
+        .await?;
         self.refresh().await?;
         match self.active_id() {
             Some(id) => self.load(&id).await.map(Some),

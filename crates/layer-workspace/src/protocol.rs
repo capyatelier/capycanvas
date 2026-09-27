@@ -406,6 +406,9 @@ pub enum StoreRequest {
         clear_older: bool,
     },
     Reopen,
+    /// Replace every stored item and record with an empty current store. A
+    /// store written by a newer build is refused and kept.
+    Reset,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]

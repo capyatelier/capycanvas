@@ -33,12 +33,35 @@ the owning GTK window where available. A stale SwitchToWindow menu action uses
 the same path; if the external owner disappeared during the attempt, it retries
 the claim rather than retaining the stale error.
 
-SQLite and browser stores share `SCHEMA_VERSION`. Until the format is stable, an
-unversioned or older store is replaced by an empty current one on open, with no
-migration, so every platform starts on the current version without asking. A
-newer store is rejected with its data preserved, so a window still running an
-older build cannot discard it. Lock failures fail closed; database export
-refuses paths inside the lock store.
+Lock failures fail closed; database export refuses paths inside the lock store.
+
+## Startup always adopts a workspace
+
+Every host (GTK, Web, Android, Apple and Windows) starts through
+`WorkspaceController`, in up to three stages. Any error before the first
+adoption, whether from storage, decoding, validation, claiming or
+`adopt_workspace`, moves startup to the next stage:
+
+1. **Stored**: start from the store as it is.
+2. **Replaced**: `StoreRequest::Reset` empties the store, then start again.
+3. **In memory**: continue on a `BrowserDatabase` owned by the manager. Nothing
+   in this window is persisted.
+
+Stages 2 and 3 raise the shared canvas notice to explain what happened (GTK, Web
+and Android show it). Stage 3 reads nothing that was stored: it seeds the
+built-in presets from code into an empty store and adopts one. Startup
+therefore always ends with an adopted workspace, provided the presets adopt on
+that platform and every storage request eventually replies or fails. Tests
+check the presets for every `Platform`. The transports fail rather than wait:
+SQLite has a busy timeout, and the web store rejects on IndexedDB errors,
+blocked upgrades and worker failures.
+
+Formats are not migrated while they are unstable. `SCHEMA_VERSION` only
+identifies a store: a store of any other version serves nothing but `Reset`.
+Startup maintenance decodes every item and pending delivery, so a store this
+build cannot fully read fails stage 1 whether or not the version was bumped.
+`Reset` refuses a store written by a newer build. A window still running an
+older build keeps that store and runs in memory.
 
 ## Verification
 
@@ -48,6 +71,16 @@ live ownership past heartbeat expiry, same-process window teardown, queued
 unadopted claims, failed teardown cleanup, racing claims, failed SQL publication,
 stale writes/releases, path aliases, lock I/O errors, recovery/maintenance and
 browser lease behavior.
+
+Startup is covered by `startup_on_every_platform_adopts_from_empty_or_unusable_storage`
+and `startup_survives_a_failure_at_every_storage_request`, which fails each
+startup request in turn, with and without a healing reset. The SQLite cases
+`sqlite_startup_replaces_workspaces_of_the_same_version_it_cannot_read` and
+`sqlite_startup_keeps_a_newer_store_and_runs_in_memory` cover the rest. The same
+journey runs on real storage with
+`node apps/layer-web/test.mjs --headless --workspace-startup` and
+`bash tools/performance/workspace-motion.sh gtk
+--native-test=native_unreadable_workspace_storage_input --native-storage`.
 
 `bash tools/performance/workspace-motion.sh gtk
 --native-test=native_workspace_ownership_input --native-storage` runs the GTK

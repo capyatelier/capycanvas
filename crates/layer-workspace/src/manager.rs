@@ -29,6 +29,10 @@ pub struct WorkspaceManager<S: WorkspaceStore> {
     pub platform: Platform,
     state: RefCell<State>,
     saving: Cell<bool>,
+    /// Replaces `store` for the rest of this manager's life once set.
+    memory: RefCell<Option<BrowserDatabase>>,
+    /// The latest host time, used for leases in `memory`.
+    pub(crate) clock: Cell<u64>,
 }
 impl<S: WorkspaceStore> Drop for WorkspaceManager<S> {
     fn drop(&mut self) {
@@ -43,7 +47,29 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             platform,
             state: RefCell::new(State::default()),
             saving: Cell::new(false),
+            memory: RefCell::new(None),
+            clock: Cell::new(0),
         }
+    }
+    pub(crate) async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
+        if let Some(memory) = self.memory.borrow_mut().as_mut() {
+            return memory.execute(request, self.clock.get());
+        }
+        self.store.execute(request).await
+    }
+    /// Empty the store for a new start. A store written by a newer build is kept.
+    pub async fn replace_storage(&self) -> Result<()> {
+        *self.state.borrow_mut() = State::default();
+        self.execute(StoreRequest::Reset).await.map(|_| ())
+    }
+    /// Continue on a new store that lives only in this manager.
+    pub fn use_memory(&self) {
+        *self.state.borrow_mut() = State::default();
+        self.store.retire_owner(&self.owner);
+        *self.memory.borrow_mut() = Some(BrowserDatabase::default());
+    }
+    pub fn in_memory(&self) -> bool {
+        self.memory.borrow().is_some()
     }
     pub fn active_id(&self) -> Option<String> {
         self.state.borrow().latest.as_ref().map(|e| e.id.clone())
@@ -140,7 +166,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     async fn publish(&self, batch: CommitBatch) -> Result<CommitReceipt> {
         let id = batch.operation_id.clone();
         let response = match self
-            .store
             .execute(StoreRequest::Commit {
                 batch: batch.clone(),
             })
@@ -149,7 +174,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             Ok(response) => response,
             Err(error) => {
                 if let Ok(StoreResponse::Receipt(Some(receipt))) = self
-                    .store
                     .execute(StoreRequest::Receipt {
                         operation_id: id.clone(),
                     })
@@ -195,7 +219,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         // A lost acknowledgement leaves delivery bookkeeping for later cleanup;
         // it does not turn a successfully committed operation into a failed save.
         let _ = self
-            .store
             .execute(StoreRequest::Acknowledge { operation_id: id })
             .await;
         self.forget_operation(&receipt.operation_id);
@@ -257,25 +280,20 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
     }
     pub async fn refresh(&self) -> Result<()> {
-        let StoreResponse::List(items) = self.store.execute(StoreRequest::List).await? else {
+        let StoreResponse::List(items) = self.execute(StoreRequest::List).await? else {
             return Err(StoreError::invalid("Unexpected workspace list reply."));
         };
         self.state.borrow_mut().items = items;
         Ok(())
     }
     pub async fn load(&self, id: &str) -> Result<StoredEntity> {
-        match self
-            .store
-            .execute(StoreRequest::Load { id: id.into() })
-            .await?
-        {
+        match self.execute(StoreRequest::Load { id: id.into() }).await? {
             StoreResponse::Entity(entity) => Ok(*entity),
             _ => Err(StoreError::invalid("Unexpected workspace load reply.")),
         }
     }
     pub(crate) async fn claim(&self, id: &str) -> Result<StoredEntity> {
         match self
-            .store
             .execute(StoreRequest::Claim {
                 id: id.into(),
                 owner: self.owner.clone(),
@@ -291,25 +309,23 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     async fn release_checked(&self, entity: &StoredEntity) -> Result<()> {
         if let Some(claim) = &entity.claim {
-            self.store
-                .execute(StoreRequest::Release {
-                    id: entity.entity.id.clone(),
-                    owner: self.owner.clone(),
-                    fence: claim.fence.to_string(),
-                })
-                .await?;
+            self.execute(StoreRequest::Release {
+                id: entity.entity.id.clone(),
+                owner: self.owner.clone(),
+                fence: claim.fence.to_string(),
+            })
+            .await?;
         }
         Ok(())
     }
     /// Populate built-ins without claiming or creating a window workspace.
     /// Native scene restoration can then prefer its own durable binding.
     pub async fn initialize_catalog(&self, now: u64) -> Result<()> {
-        self.store
-            .execute(StoreRequest::Maintenance {
-                owner: None,
-                clear_older: false,
-            })
-            .await?;
+        self.execute(StoreRequest::Maintenance {
+            owner: None,
+            clear_older: false,
+        })
+        .await?;
         self.refresh().await?;
         self.ensure_defaults(now).await
     }
@@ -330,7 +346,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .map(|i| i.id);
         self.initialize_catalog(now).await?;
         let binding = match self
-            .store
             .execute(StoreRequest::Binding {
                 key: "last_workspace".into(),
             })
@@ -356,7 +371,12 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn resume_startup(&self, preferred: &str, now: u64) -> Result<StoredEntity> {
         self.prepare_startup_inner(preferred, now, true).await
     }
-    async fn prepare_startup_inner(&self, preferred: &str, now: u64, resume: bool) -> Result<StoredEntity> {
+    async fn prepare_startup_inner(
+        &self,
+        preferred: &str,
+        now: u64,
+        resume: bool,
+    ) -> Result<StoredEntity> {
         self.refresh().await?;
         let mut candidates = self.items();
         candidates.retain(|item| item.metadata.kind == ItemKind::Workspace);
@@ -376,18 +396,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             )
         });
         for candidate in &candidates {
-            match self.prepare_switch_inner(&candidate.id, now, resume && candidate.id == preferred).await {
+            match self
+                .prepare_switch_inner(&candidate.id, now, resume && candidate.id == preferred)
+                .await
+            {
                 Ok(incoming) => return Ok(incoming),
                 // Claims, rather than the catalog's lease snapshot, decide
                 // availability when several windows open at the same time.
-                Err(error)
-                    if matches!(
-                        error.kind,
-                        ErrorKind::OwnedElsewhere | ErrorKind::InvalidData
-                    ) =>
-                {
-                    continue;
-                }
+                Err(error) if error.kind == ErrorKind::OwnedElsewhere => continue,
                 Err(error) => return Err(error),
             }
         }
@@ -581,7 +597,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .map(|s| (s.entity.id.clone(), s.claim.clone()));
         if let Some((id, Some(claim))) = saved {
             let result = self
-                .store
                 .execute(StoreRequest::Renew {
                     id: id.clone(),
                     owner: self.owner.clone(),
@@ -647,7 +662,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let pending = self.state.borrow().pending.clone();
         if let Some(pending) = pending {
             match self
-                .store
                 .execute(StoreRequest::Receipt {
                     operation_id: pending.batch.operation_id.clone(),
                 })

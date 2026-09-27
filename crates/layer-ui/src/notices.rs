@@ -61,7 +61,7 @@ fn stroke_refusal_text(refusal: StrokeRefusal) -> &'static str {
 pub(super) const NO_REFERENCE_BELOW: &str = "No visible photo or paint layer below";
 
 impl<R: CanvasRenderer> UiSession<R> {
-    pub(super) fn notify(&mut self, text: impl Into<String>) {
+    pub fn notify(&mut self, text: impl Into<String>) {
         self.raise_notice(text.into(), None);
     }
 

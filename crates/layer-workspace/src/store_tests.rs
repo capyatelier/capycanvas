@@ -738,17 +738,28 @@ fn newer_schemas_and_corrupt_items_are_preserved() {
     );
     assert!(f.store.load(&bad.entity.id).is_err());
     assert_eq!(f.store.load(&good.entity.id).unwrap(), good);
+    assert!(matches!(
+        f.store.handle(StoreRequest::Maintenance {
+            owner: None,
+            clear_older: false
+        }),
+        Err(StoreError {
+            kind: ErrorKind::InvalidData,
+            ..
+        })
+    ));
     f.store
         .connection
         .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
         .unwrap();
-    assert!(matches!(
-        SqliteStore::open(&f.directory.join("workspaces.sqlite3")),
-        Err(StoreError {
-            kind: ErrorKind::UnsupportedSchema,
-            ..
-        })
-    ));
+    let mut newer = f.connection();
+    for request in [StoreRequest::List, StoreRequest::Reset] {
+        assert_eq!(
+            newer.handle(request).unwrap_err().kind,
+            ErrorKind::UnsupportedSchema
+        );
+    }
+    assert_eq!(newer.list().unwrap().len(), 2);
     let version: u32 = f
         .store
         .connection
@@ -758,7 +769,7 @@ fn newer_schemas_and_corrupt_items_are_preserved() {
 }
 
 #[test]
-fn older_and_unversioned_stores_are_replaced_by_empty_current_ones() {
+fn stores_of_other_versions_serve_only_reset() {
     for version in [SCHEMA_VERSION - 1, 0] {
         let mut f = Fixture::new();
         f.create("Older");
@@ -771,7 +782,17 @@ fn older_and_unversioned_stores_are_replaced_by_empty_current_ones() {
             .pragma_update(None, "user_version", version)
             .unwrap();
         let mut store = f.connection();
-        assert!(store.list().unwrap().is_empty(), "version {version}");
+        assert_eq!(
+            store.handle(StoreRequest::List).unwrap_err().kind,
+            ErrorKind::UnsupportedSchema,
+            "version {version}"
+        );
+        assert_eq!(store.list().unwrap().len(), 1);
+        store.handle(StoreRequest::Reset).unwrap();
+        let StoreResponse::List(items) = store.handle(StoreRequest::List).unwrap() else {
+            panic!()
+        };
+        assert!(items.is_empty());
         let retired: u32 = store
             .connection
             .query_row(

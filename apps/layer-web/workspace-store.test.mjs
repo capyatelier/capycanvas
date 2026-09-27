@@ -69,3 +69,39 @@ export async function checkWorkspaceStore({evaluate}) {
   assert.equal(result.unavailableError, "unavailable"); assert.equal(result.quotaError, "storage_full");
   console.log(`PASS: ${fixtures.length} IndexedDB/SQLite contract cases, aborted transaction, newer database, unavailable storage and quota errors`);
 }
+
+export async function checkStaleWorkspaceStartup({evaluate, reload}) {
+  const wait = async predicate => {
+    for (let i = 0; i < 300; i++) { try { if (await evaluate(predicate)) return; } catch {} await new Promise(r => setTimeout(r, 100)); }
+    throw Error(`Workspace startup timed out: ${await evaluate("layerApp.app.workspace_view()")}`);
+  };
+  const ready = 'window.layerApp?.startupTimes.complete != null && JSON.parse(layerApp.app.workspace_view())?.ready && !JSON.parse(layerApp.app.workspace_view()).busy';
+  const snapshot = edit => `new Promise((resolve, reject) => {
+    const open = indexedDB.open("capycanvas.workspaces", 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction("workspace", "readwrite"), store = tx.objectStore("workspace"), read = store.get("database");
+      let result;
+      read.onsuccess = () => { const database = JSON.parse(read.result.snapshot); result = (${edit})(database); store.put({id: "database", snapshot: JSON.stringify(database)}); };
+      tx.oncomplete = () => { open.result.close(); resolve(result); };
+      tx.onerror = () => reject(tx.error);
+    };
+  })`;
+  await wait(ready);
+  const stale = await evaluate(snapshot(`database => Object.values(database.items).map(item => { item.entity.working.zen_mode = {}; return item.entity.id; })`));
+  assert.ok(stale.length >= 3);
+  await reload();
+  await wait(ready);
+  const view = JSON.parse(await evaluate("layerApp.app.workspace_view()"));
+  assert.equal(view.error, null);
+  assert.equal(view.id, "builtin:workspace:illustrator");
+  assert.equal(await evaluate('document.querySelector(".canvas-notice-text")?.textContent'),
+    "Saved workspaces couldn't be opened, so they were reset.");
+  assert.equal(await evaluate('[...document.querySelectorAll("dialog")].some(d => d.open)'), false);
+  const zen = await evaluate(snapshot(`database => Object.values(database.items).map(item => item.entity.working.zen_mode)`));
+  assert.ok(zen.length >= 3 && zen.every(value => typeof value === "boolean"));
+  await reload();
+  await wait(ready);
+  assert.equal(JSON.parse(await evaluate("layerApp.app.workspace_view()")).error, null);
+  console.log(`PASS: startup replaced ${stale.length} unreadable workspaces and started without a dialog`);
+}

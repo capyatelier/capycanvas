@@ -8,13 +8,10 @@ impl SqliteStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.ownership.reconcile(&tx, now)?;
-        let ids = strings(&tx, "SELECT id FROM items")?;
-        let mut items = Vec::new();
-        for id in ids {
-            if let Ok(item) = load(&tx, &id) {
-                items.push(item);
-            }
-        }
+        let items = strings(&tx, "SELECT id FROM items")?
+            .iter()
+            .map(|id| load(&tx, id))
+            .collect::<Result<Vec<_>>>()?;
         let changed = retention::retention_plan(
             &items,
             owner,
@@ -98,20 +95,11 @@ fn collect_components(connection: &Connection) -> Result<()> {
         Ok(())
     }
     let mut used = BTreeSet::new();
-    // If a preserved newer/corrupt record cannot be decoded, defer collection.
-    // Its dependencies must survive even while the item cannot be opened.
     for text in strings(connection, "SELECT content FROM items")? {
-        let Ok(value) = serde_json::from_str(&text) else {
-            return Ok(());
-        };
-        if visit(&value, connection, &mut used, 0).is_err() {
-            return Ok(());
-        }
+        visit(&serde_json::from_str(&text)?, connection, &mut used, 0)?;
     }
     for text in strings(connection, "SELECT payload FROM pending")? {
-        let Ok(batch) = serde_json::from_str::<CommitBatch>(&text) else {
-            return Ok(());
-        };
+        let batch: CommitBatch = serde_json::from_str(&text)?;
         used.extend(batch.components.keys().cloned());
     }
     for id in strings(connection, "SELECT id FROM components")? {

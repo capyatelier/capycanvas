@@ -198,6 +198,23 @@ impl Outcome {
         Self::Adopt(Box::new(entity))
     }
 }
+/// Any failure before the first adoption moves startup to the next stage. The
+/// last stage reads nothing that was stored, so startup always ends adopted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Startup {
+    Stored,
+    Replaced,
+    InMemory,
+}
+impl Startup {
+    fn next(self) -> Option<Self> {
+        match self {
+            Self::Stored => Some(Self::Replaced),
+            Self::Replaced => Some(Self::InMemory),
+            Self::InMemory => None,
+        }
+    }
+}
 type Selection = (Option<ManagerDetails>, Option<DockLayout>);
 pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     pub manager: Rc<WorkspaceManager<S>>,
@@ -232,6 +249,8 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     selected_elsewhere: bool,
     renew_error: Option<String>,
     routed: UiChange,
+    startup: Option<Startup>,
+    startup_error: Option<StoreError>,
 }
 impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     pub fn new(store: S, platform: Platform, now: u64) -> Self {
@@ -273,6 +292,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             selected_elsewhere: false,
             renew_error: None,
             routed: UiChange::default(),
+            startup: None,
+            startup_error: None,
         };
         c.view.owner = c.manager.owner.id.clone();
         c.initialize(now);
@@ -311,6 +332,12 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.quiet = true;
     }
     fn initialize(&mut self, now: u64) {
+        self.start(Startup::Stored, now);
+    }
+    fn start(&mut self, stage: Startup, now: u64) {
+        self.startup = Some(stage);
+        self.incoming = None;
+        self.incoming_renew = None;
         let m = self.manager.clone();
         let keys: Vec<String> = self
             .resume_key
@@ -319,12 +346,17 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             .chain([format!("window:{}", m.owner.id)])
             .collect();
         self.run(async move {
-            m.store.execute(StoreRequest::Reopen).await?;
+            match stage {
+                Startup::Stored => {}
+                Startup::Replaced => m.replace_storage().await?,
+                Startup::InMemory => m.use_memory(),
+            }
+            m.execute(StoreRequest::Reopen).await?;
             m.refresh_switcher().await?;
             let mut bound = Vec::new();
             for key in keys {
                 if let StoreResponse::Binding(Some(id)) =
-                    m.store.execute(StoreRequest::Binding { key }).await?
+                    m.execute(StoreRequest::Binding { key }).await?
                 {
                     bound.push(id);
                 }
@@ -344,6 +376,31 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 },
             ))
         });
+    }
+    /// Returns false once startup has finished, is closing, or has no next stage.
+    fn restart(&mut self, error: StoreError, now: u64) -> bool {
+        let Some(next) = self
+            .startup
+            .and_then(Startup::next)
+            .filter(|_| !self.terminating)
+        else {
+            return false;
+        };
+        self.startup_error = Some(error);
+        self.start(next, now);
+        true
+    }
+    fn startup_notice(&self) -> Option<String> {
+        match self.startup? {
+            Startup::Stored => None,
+            Startup::Replaced => {
+                Some("Saved workspaces couldn't be opened, so they were reset.".into())
+            }
+            Startup::InMemory => Some(format!(
+                "Workspace changes in this window won't be saved: {}",
+                self.startup_error.as_ref()?
+            )),
+        }
     }
     pub fn observe<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) {
         if !self.view.ready || self.transition || self.suspended {
@@ -1186,7 +1243,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         let key = self.resume_key.clone();
         self.start_transition(session)?;
         self.run(async move {
-            m.store.execute(StoreRequest::Reopen).await?;
+            m.execute(StoreRequest::Reopen).await?;
             m.revalidate_owner(now).await?;
             m.flush().await?;
             Ok(match m.retry_failed_operation().await? {
@@ -1308,6 +1365,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         Ok(change)
     }
     pub fn tick<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) -> UiChange {
+        self.manager.clock.set(now);
         self.route_requests(session, now);
         let mut change = std::mem::take(&mut self.routed);
         let mut presentation_changed = false;
@@ -1401,11 +1459,13 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     self.pending_binding = self.manager.binding();
                 }
                 Err(e) => {
-                    self.view.error = Some(e.to_string());
-                    if self.view.page.is_none() && self.view.prompt.is_none() {
-                        self.end_transition(session);
+                    if !self.restart(e.clone(), now) {
+                        self.view.error = Some(e.to_string());
+                        if self.view.page.is_none() && self.view.prompt.is_none() {
+                            self.end_transition(session);
+                        }
+                        self.close_after_task &= self.discard;
                     }
-                    self.close_after_task &= self.discard;
                 }
             }
         }
@@ -1431,7 +1491,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             self.incoming_renew = None;
             match result {
                 Ok(incoming) => self.incoming = Some(incoming),
-                Err(e) => self.view.error = Some(e.to_string()),
+                Err(e) => {
+                    if !self.restart(e.clone(), now) {
+                        self.view.error = Some(e.to_string());
+                    }
+                }
             }
         }
         if self.incoming.is_some()
@@ -1456,7 +1520,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         if let Some(incoming) = &self.incoming
             && !self.terminating
             && self.incoming_renew.is_none()
-            && self.view.error.is_none()
+            && (self.startup.is_some() || self.view.error.is_none())
             && incoming
                 .claim
                 .as_ref()
@@ -1476,7 +1540,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         if self.incoming.is_some()
             && !self.terminating
             && self.incoming_renew.is_none()
-            && self.view.error.is_none()
+            && (self.startup.is_some() || self.view.error.is_none())
             && session.require_workspace_idle().is_ok()
         {
             presentation_changed = true;
@@ -1485,9 +1549,16 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 .entity
                 .capture()
                 .and_then(|c| PreparedWorkspace::new(c).map_err(StoreError::invalid));
+            if prepared.is_ok()
+                && let Some(notice) = self.startup_notice()
+            {
+                session.notify(notice);
+            }
             match prepared.and_then(|p| session.adopt_workspace(p).map_err(StoreError::invalid)) {
                 Ok(c) => {
                     merge(&mut change, c);
+                    self.startup = None;
+                    self.startup_error = None;
                     let id = incoming.entity.id.clone();
                     let outgoing = self
                         .manager
@@ -1523,8 +1594,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     self.pending_binding = self.manager.binding();
                 }
                 Err(e) => {
-                    self.incoming = Some(incoming);
-                    self.view.error = Some(e.to_string());
+                    if !self.restart(e.clone(), now) {
+                        self.incoming = Some(incoming);
+                        self.view.error = Some(e.to_string());
+                    }
                 }
             }
         }

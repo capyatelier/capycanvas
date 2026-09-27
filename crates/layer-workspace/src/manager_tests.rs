@@ -215,33 +215,27 @@ fn startup_write_failure_does_not_switch_elsewhere_or_create_a_workspace() {
 }
 
 #[test]
-fn undecodable_builtin_is_reported_without_replacement() {
+fn an_unreadable_item_fails_startup_until_storage_is_replaced() {
     pollster::block_on(async {
         let f = Fixture::new();
         f.manager.close().await.unwrap();
-        let id = DEFAULT_WORKSPACES[1].0;
+        let unreadable = DEFAULT_WORKSPACES[0].0;
         let db = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
-        db.execute("UPDATE items SET metadata='{' WHERE id=?1", [id])
-            .unwrap();
-        let row = || -> Vec<String> {
-            db.query_row(
-                "SELECT metadata,content,working,fence,metadata_generation FROM items WHERE id=?1",
-                [id],
-                |r| Ok(vec![r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?]),
-            )
-            .unwrap()
-        };
-        let before = row();
+        db.execute(
+            "UPDATE items SET working='{\"zen_mode\":{}}' WHERE id=?1",
+            [unreadable],
+        )
+        .unwrap();
         let m = WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
         assert_eq!(
-            m.prepare_switch(id, 2_000).await.unwrap_err().kind,
+            m.initialize(2_000).await.unwrap_err().kind,
             ErrorKind::InvalidData
         );
-        assert_eq!(row(), before);
+        m.replace_storage().await.unwrap();
         let incoming = m.initialize(3_000).await.unwrap();
-        assert_eq!(incoming.entity.id, DEFAULT_WORKSPACES[0].0);
-        assert_eq!(row(), before);
-        assert!(m.items().iter().any(|i| i.id == id && i.error.is_some()));
+        assert_eq!(incoming.entity.id, DEFAULT_WORKSPACES[1].0);
+        assert_eq!(m.items().len(), DEFAULT_WORKSPACES.len());
+        assert!(m.items().iter().all(|i| i.error.is_none()));
         m.activate(incoming);
         m.close().await.unwrap();
     });

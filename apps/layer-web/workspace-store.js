@@ -80,7 +80,7 @@ export function createWorkspaceClient(url, { onSettled = () => {}, module, prelo
     execute(request) {
       return new Promise((resolve,reject) => {
         try {
-          if (failed && JSON.parse(request).type !== "reopen") { reject(failed); return; }
+          if (failed && !["reopen", "reset"].includes(JSON.parse(request).type)) { reject(failed); return; }
           if (!worker) start();
           const id = ++sequence; pending.set(id,{resolve,reject}); worker.postMessage({id,request});
         } catch(e) { reject(JSON.stringify({kind:"unavailable",message:String(e)})); }

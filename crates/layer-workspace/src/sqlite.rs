@@ -52,6 +52,8 @@ pub struct SqliteStore {
     connection: Connection,
     clock: Arc<dyn Clock>,
     ownership: ownership::Ownership,
+    /// Set for a store of another version; only `StoreRequest::Reset` is served.
+    incompatible: Option<StoreError>,
 }
 impl SqliteStore {
     pub fn open(path: &Path) -> Result<Self> {
@@ -89,50 +91,56 @@ impl SqliteStore {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "wal_autocheckpoint", 1000)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > SCHEMA_VERSION {
-            return Err(newer_schema());
-        }
-        if version < SCHEMA_VERSION {
-            // A new, unversioned or older store becomes an empty current one;
-            // older workspaces are discarded, not migrated (see newer_schema).
-            let tables = tx
-                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")?
-                .query_map([], |r| r.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            for table in tables {
-                tx.execute(
-                    &format!("DROP TABLE \"{}\"", table.replace('"', "\"\"")),
-                    [],
-                )?;
+        let incompatible = match tx.pragma_query_value(None, "user_version", |r| r.get(0))? {
+            SCHEMA_VERSION => None,
+            0 if table_names(&tx)?.is_empty() => {
+                create_schema(&tx)?;
+                None
             }
-            tx.execute_batch("CREATE TABLE items (
-                id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, name_key TEXT NOT NULL,
-                metadata TEXT NOT NULL, content TEXT NOT NULL, working TEXT,
-                metadata_generation TEXT NOT NULL, layout_generation TEXT NOT NULL, working_generation TEXT NOT NULL,
-                builtin INTEGER NOT NULL,
-                fence TEXT NOT NULL DEFAULT '0', owner TEXT, epoch TEXT, lease_until TEXT);
-                CREATE UNIQUE INDEX item_names ON items(kind,name_key);
-                CREATE TABLE components (id TEXT PRIMARY KEY, json TEXT NOT NULL);
-                CREATE TABLE receipts (id TEXT PRIMARY KEY, hash TEXT NOT NULL, receipt TEXT NOT NULL,
-                    owner TEXT NOT NULL, epoch TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
-                CREATE TABLE pending (id TEXT PRIMARY KEY, hash TEXT NOT NULL, payload TEXT NOT NULL);
-                CREATE TABLE bindings (key TEXT PRIMARY KEY, item_id TEXT NOT NULL);
-                CREATE TABLE tombstones (id TEXT PRIMARY KEY, fence TEXT NOT NULL);
-                CREATE TABLE cancelled_operations (id TEXT PRIMARY KEY);
-                CREATE TABLE workspace_switcher (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);
-                CREATE TABLE workspace_order (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);")?;
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        }
+            version if version > SCHEMA_VERSION => Some(newer_schema()),
+            _ => Some(other_schema()),
+        };
         tx.commit()?;
         Ok(Self {
             connection,
             clock,
             ownership: ownership::Ownership::new(path)?,
+            incompatible,
         })
     }
+    fn reset(&mut self) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if version > SCHEMA_VERSION {
+            return Err(newer_schema());
+        }
+        for table in table_names(&tx)? {
+            tx.execute(
+                &format!("DROP TABLE \"{}\"", table.replace('"', "\"\"")),
+                [],
+            )?;
+        }
+        create_schema(&tx)?;
+        tx.commit()?;
+        self.ownership.release_all();
+        self.incompatible = None;
+        Ok(())
+    }
     pub fn handle(&mut self, request: StoreRequest) -> Result<StoreResponse> {
+        if let Some(error) = self
+            .incompatible
+            .as_ref()
+            .filter(|_| !matches!(request, StoreRequest::Reset))
+        {
+            return Err(error.clone());
+        }
         match request {
+            StoreRequest::Reset => {
+                self.reset()?;
+                Ok(StoreResponse::Done)
+            }
             StoreRequest::Switcher => self
                 .preference_ids("workspace_switcher")
                 .map(StoreResponse::Switcher),
@@ -536,6 +544,32 @@ impl SqliteStore {
         }
         Ok(result)
     }
+}
+fn table_names(connection: &Connection) -> Result<Vec<String>> {
+    Ok(connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+fn create_schema(connection: &Connection) -> Result<()> {
+    connection.execute_batch("CREATE TABLE items (
+        id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, name_key TEXT NOT NULL,
+        metadata TEXT NOT NULL, content TEXT NOT NULL, working TEXT,
+        metadata_generation TEXT NOT NULL, layout_generation TEXT NOT NULL, working_generation TEXT NOT NULL,
+        builtin INTEGER NOT NULL,
+        fence TEXT NOT NULL DEFAULT '0', owner TEXT, epoch TEXT, lease_until TEXT);
+        CREATE UNIQUE INDEX item_names ON items(kind,name_key);
+        CREATE TABLE components (id TEXT PRIMARY KEY, json TEXT NOT NULL);
+        CREATE TABLE receipts (id TEXT PRIMARY KEY, hash TEXT NOT NULL, receipt TEXT NOT NULL,
+            owner TEXT NOT NULL, epoch TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE pending (id TEXT PRIMARY KEY, hash TEXT NOT NULL, payload TEXT NOT NULL);
+        CREATE TABLE bindings (key TEXT PRIMARY KEY, item_id TEXT NOT NULL);
+        CREATE TABLE tombstones (id TEXT PRIMARY KEY, fence TEXT NOT NULL);
+        CREATE TABLE cancelled_operations (id TEXT PRIMARY KEY);
+        CREATE TABLE workspace_switcher (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);
+        CREATE TABLE workspace_order (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);")?;
+    connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
 }
 struct Header {
     metadata: String,

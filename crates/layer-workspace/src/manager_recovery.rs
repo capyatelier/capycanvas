@@ -2,8 +2,7 @@ use super::*;
 
 impl<S: WorkspaceStore> WorkspaceManager<S> {
     async fn interrupted_batches(&self) -> Result<Vec<CommitBatch>> {
-        let StoreResponse::Pending(mut batches) = self.store.execute(StoreRequest::Pending).await?
-        else {
+        let StoreResponse::Pending(mut batches) = self.execute(StoreRequest::Pending).await? else {
             return Err(StoreError::invalid("Unexpected interrupted-change reply."));
         };
         if let Some(batch) = self.state.borrow().failed_operation.clone()
@@ -48,15 +47,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 continue;
             }
             if matches!(
-                self.store
-                    .execute(StoreRequest::Receipt {
-                        operation_id: batch.operation_id.clone()
-                    })
-                    .await?,
+                self.execute(StoreRequest::Receipt {
+                    operation_id: batch.operation_id.clone()
+                })
+                .await?,
                 StoreResponse::Receipt(Some(_))
             ) {
                 let _ = self
-                    .store
                     .execute(StoreRequest::Acknowledge {
                         operation_id: batch.operation_id,
                     })
