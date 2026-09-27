@@ -21,6 +21,7 @@ struct Target {
     layer: LayerId,
     operation: Option<layer_core::LayerOperationKind>,
     tonal: bool,
+    transform: bool,
     color: Option<layer_core::color::RgbColor>,
     basis: layer_core::Affine,
 }
@@ -119,6 +120,9 @@ impl RegionTools {
     pub fn busy(&self) -> bool {
         self.pending || self.queued.is_some() || self.failure.is_some()
     }
+    pub fn applying_transform(&self) -> bool {
+        self.target.as_ref().is_some_and(|t| t.transform)
+    }
     pub fn cancellable(&self) -> bool {
         self.contact.is_some() || self.target.is_some()
     }
@@ -204,6 +208,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     revision: doc.revision,
                     layer: doc.active_layer,
                     tonal: false,
+                    transform: false,
                     operation: fill.then(|| self.fill_operation()),
                     color: (fill
                         && !self.state.colors.transparent()
@@ -231,14 +236,34 @@ impl<R: CanvasRenderer> UiSession<R> {
             operation: None,
             color: None,
             tonal: false,
+            transform: false,
             basis: layer_core::Affine::IDENTITY,
         });
+    }
+    pub(super) fn queue_transform_selection(&mut self) -> bool {
+        self.region_tools.cancel();
+        let Some(request) = self.engine.transform_selection_request(self.region_tools.generation) else {
+            return false;
+        };
+        let doc = self.engine.document();
+        self.region_tools.target = Some(Target {
+            generation: request.request_id,
+            revision: doc.revision,
+            layer: doc.active_layer,
+            operation: None,
+            color: None,
+            tonal: false,
+            transform: true,
+            basis: layer_core::Affine::IDENTITY,
+        });
+        self.region_tools.queued = Some(request);
+        true
     }
     pub(super) fn queue_tonal_region(&mut self, mut request: RegionRequest) {
         self.region_tools.cancel();
         request.request_id=self.region_tools.generation;
         let doc=self.engine.document();
-        self.region_tools.target=Some(Target {generation:request.request_id,revision:doc.revision,layer:doc.active_layer,operation:None,color:None,tonal:true,basis:layer_core::Affine::IDENTITY});
+        self.region_tools.target=Some(Target {generation:request.request_id,revision:doc.revision,layer:doc.active_layer,operation:None,color:None,tonal:true,transform:false,basis:layer_core::Affine::IDENTITY});
         self.region_tools.queued=Some(request);
     }
     pub(super) fn poll_region_tool(&mut self) -> Result<(), String> {
@@ -260,6 +285,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let doc = self.engine.document();
                 if doc.revision == target.revision && doc.active_layer == target.layer {
                     if target.tonal {self.tonal_result(result)?;return Ok(());}
+                    if target.transform {
+                        return self.apply_transform_selection(result.pixels);
+                    }
                     if target.operation.is_some() && result.pixels.bounds() == [0; 4] {
                         return Ok(()); // No paint and no empty undo entry.
                     }

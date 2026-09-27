@@ -599,3 +599,87 @@ fn interpolation_follows_the_mode_until_chosen_and_stays_chosen() {
     assert_eq!(preview(&mut s), Interpolation::Nearest, "and later transforms");
     assert!(s.state.tool_actions.iter().any(|a| a.command == CommandId::TransformBicubic));
 }
+
+fn distorted_pixel_selection() -> UiSession<Recorder> {
+    let mut s = filled_selection_session();
+    let doc = s.engine.document();
+    let extent = doc.target_extent(doc.active_layer);
+    let row = extent[0].div_ceil(4) as usize;
+    let mut words = vec![0u32; row * extent[1] as usize];
+    for y in 100..300 {
+        for x in (100..300).step_by(4) {
+            words[y * row + x / 4] = u32::MAX;
+        }
+    }
+    let pixels = layer_core::SelectionPixels::bytes(extent, [100, 100, 300, 300], words).unwrap();
+    s.layer_edit(layer_core::Edit::SetSelection(Some(layer_core::Selection::pixels(std::sync::Arc::new(pixels)))))
+        .unwrap();
+    invoke(&mut s, CommandId::ScaleRotate);
+    s.frame(2, 2).unwrap();
+    invoke(&mut s, CommandId::TransformDistort);
+    let quad = s.operation.quad();
+    let target = Point { x: quad[1].x + 40., y: quad[1].y - 30. };
+    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), quad[1]).unwrap();
+    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), target).unwrap();
+    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), target).unwrap();
+    s.frame(3, 3).unwrap();
+    s
+}
+
+fn resampled_reply(s: &mut UiSession<Recorder>) -> layer_render::RegionResult {
+    let request = s.renderer_mut().region_requests.last().cloned().expect("a coverage request");
+    assert!(matches!(request.source, layer_render::RegionSource::TransformedSelection { .. }));
+    let doc = s.engine.document();
+    let extent = doc.target_extent(doc.active_layer);
+    let words = vec![u32::MAX; extent[0].div_ceil(4) as usize * extent[1] as usize];
+    layer_render::RegionResult {
+        tonal_sample: None,
+        request_id: request.request_id,
+        pixels: std::sync::Arc::new(layer_core::SelectionPixels::bytes(extent, [0, 0, extent[0], extent[1]], words).unwrap()),
+    }
+}
+
+#[test]
+fn applying_a_distorted_pixel_selection_waits_for_its_resampled_coverage() {
+    let mut s = distorted_pixel_selection();
+    let before = s.engine.document().layers.clone();
+    invoke(&mut s, CommandId::ApplyTransform);
+    s.frame(4, 4).unwrap();
+    assert!(s.operation.active(), "the transform stays open until its coverage returns");
+    assert!(!s.command(CommandId::ApplyTransform).enabled);
+    assert_eq!(s.command_disabled_reason(CommandId::ApplyTransform).as_deref(), Some("Applying the transform"));
+    assert!(s.command(CommandId::CancelTransform).enabled);
+    let reply = resampled_reply(&mut s);
+    s.renderer_mut().region_reply = Some(reply);
+    let change = s.frame(5, 5).unwrap();
+    assert!(!s.operation.active());
+    assert_ne!(change.regions & regions::DOCUMENT, 0);
+    assert!(s.engine.document().selection.is_some());
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().layers, before, "Apply is one undo step");
+}
+
+#[test]
+fn cancelling_or_editing_a_pending_apply_discards_its_coverage() {
+    let mut s = distorted_pixel_selection();
+    let before = s.engine.document().clone();
+    invoke(&mut s, CommandId::ApplyTransform);
+    s.frame(4, 4).unwrap();
+    let reply = resampled_reply(&mut s);
+    invoke(&mut s, CommandId::CancelTransform);
+    s.renderer_mut().region_reply = Some(reply);
+    s.frame(5, 5).unwrap();
+    assert!(!s.operation.active());
+    assert_eq!(s.engine.document().layers, before.layers, "a cancelled Apply edits nothing");
+
+    let mut s = distorted_pixel_selection();
+    invoke(&mut s, CommandId::ApplyTransform);
+    s.frame(4, 4).unwrap();
+    let reply = resampled_reply(&mut s);
+    invoke(&mut s, CommandId::TransformFlipHorizontal);
+    assert!(s.command(CommandId::ApplyTransform).enabled, "an edit supersedes the pending Apply");
+    s.renderer_mut().region_reply = Some(reply);
+    s.frame(5, 5).unwrap();
+    assert!(s.operation.active(), "the stale coverage is discarded");
+}
+

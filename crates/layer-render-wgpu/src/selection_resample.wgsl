@@ -1,8 +1,9 @@
 // Resample immutable source coverage once per placement. Brush/mask consumers
-// retain their compact packed-coverage interface and pay no per-dab affine cost.
+// retain their compact packed-coverage interface and pay no per-dab transform
+// cost. Rows x, y and w map an output pixel to homogeneous source pixels.
 struct Params {
     rect: vec4<u32>, info: vec4<u32>,
-    inverse: vec4<f32>, offset: vec4<f32>,
+    x: vec4<f32>, y: vec4<f32>, w: vec4<f32>,
 }
 struct Packed { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(0) var<uniform> params: Params;
@@ -12,30 +13,38 @@ struct Packed { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 fn at(p: vec2<i32>) -> f32 {
     let q = p - vec2<i32>(source.rect.xy);
     if any(q < vec2<i32>(0)) || any(q >= vec2<i32>(source.rect.zw)) { return 0.; }
-    let count = select(8u,4u,source.info.y == 2u);
+    let bytes = source.info.y == 2u;
+    let count = select(8u,4u,bytes);
     let bits = 32u/count;
     let word = u32(q.y) * ((source.rect.z + count-1u) / count) + u32(q.x) / count;
-    return f32((source.values[word] >> ((u32(q.x) % count) * bits)) & select(15u,255u,source.info.y == 2u));
+    return f32((source.values[word] >> ((u32(q.x) % count) * bits)) & select(15u,255u,bytes)) / select(4.,255.,bytes);
+}
+
+fn coverage(p: vec2<f32>) -> f32 {
+    let h = vec3(p, 1.);
+    let w = dot(params.w.xyz, h);
+    let q = vec2(dot(params.x.xyz, h), dot(params.y.xyz, h)) / w - .5;
+    if w <= 0. || any(abs(q) > vec2(16777216.)) { return 0.; }
+    let base = vec2<i32>(floor(q));
+    let f = fract(q);
+    return mix(mix(at(base), at(base + vec2<i32>(1, 0)), f.x),
+        mix(at(base + vec2<i32>(0, 1)), at(base + vec2<i32>(1, 1)), f.x), f.y);
 }
 
 @compute @workgroup_size(64)
 fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
-    let count = select(8u,4u,params.info.y == 2u);
-    let maximum = select(4u,255u,params.info.y == 2u);
+    let bytes = params.info.y == 2u;
+    let count = select(8u,4u,bytes);
+    let maximum = select(4.,255.,bytes);
     let stride = (params.rect.z + count-1u) / count;
     if id.x >= stride || id.y >= params.rect.w { return; }
     var packed = 0u;
     for (var i = 0u; i < count; i++) {
         let x = id.x * count + i;
         if x >= params.rect.z { break; }
-        let p = vec2<f32>(params.rect.xy + vec2<u32>(x, id.y)) + .5;
-        let q = vec2<f32>(dot(params.inverse.xz, p), dot(params.inverse.yw, p)) + params.offset.xy - .5;
-        let base = vec2<i32>(floor(q));
-        let f = fract(q);
-        let value = mix(mix(at(base), at(base + vec2<i32>(1, 0)), f.x),
-            mix(at(base + vec2<i32>(0, 1)), at(base + vec2<i32>(1, 1)), f.x), f.y);
+        let value = coverage(vec2<f32>(params.rect.xy + vec2<u32>(x, id.y)) + .5);
         // Preserve the source coverage precision and bounded storage.
-        packed |= min(maximum, u32(floor(value + .5))) << (i * (32u/count));
+        packed |= min(u32(maximum), u32(floor(value * maximum + .5))) << (i * (32u/count));
     }
     output.values[id.y * stride + id.x] = packed;
 }

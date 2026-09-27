@@ -1019,6 +1019,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::ResetLayout if self.managed_workspace.is_some() => "The layout already matches its starting state",
             C::RepairSourceProfile | C::RasterizeSource if document.active_mask => "Return to the layer's artwork first",
             C::RepairSourceProfile | C::RasterizeSource => "Select an unlocked retained image layer",
+            C::ApplyTransform if self.region_tools.applying_transform() => "Applying the transform",
             C::ApplyTransform
             | C::CancelTransform
             | C::TransformAspect

@@ -51,6 +51,10 @@ impl SelectionRefiner {
             empty,
         }
     }
+    pub fn prepare_bounds(&self, compiler: &startup::Compiler) -> bool {
+        compiler.pipeline(&self.pipelines[3], startup::BRUSH);
+        self.pipelines[3].ready()
+    }
     pub fn prepare(&self, compiler: &startup::Compiler, options: &SelectionRefinement) -> bool {
         compiler.require(
             self.pipelines

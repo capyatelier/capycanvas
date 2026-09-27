@@ -265,12 +265,8 @@ impl SelectionClip {
         ];
         let mut header_bytes: Vec<_> = header.iter().flat_map(|v| v.to_ne_bytes()).collect();
         if !translation && matches!(geometry.shape, layer_core::SelectionShape::Pixels(_)) {
-            header_bytes.extend(
-                inverse
-                    .into_iter()
-                    .chain([0., 0.])
-                    .flat_map(f32::to_ne_bytes),
-            );
+            let [a, b, c, d, x, y] = inverse;
+            header_bytes.extend(resample_rows([[a, c, x], [b, d, y], [0., 0., 1.]]));
         }
         let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("selection raster geometry header"),
@@ -344,7 +340,104 @@ impl SelectionClip {
         self.region = region;
         Ok(())
     }
+    /// Carry pixel coverage through a map that selection metadata cannot
+    /// express. Returns uninverted byte coverage over `extent`, with room for
+    /// its bounds after the coverage words.
+    pub fn resample_mapped(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut crate::submission::CommandEncoder,
+        extent: [u32; 2],
+        selection: &layer_core::Selection,
+        map: &layer_core::TransformMap,
+    ) -> Result<wgpu::Buffer, GpuRasterError> {
+        let layer_core::SelectionShape::Pixels(pixels) = &selection.shape else {
+            return Err(GpuRasterError::InvalidTransform(
+                "Contour selections map on the CPU",
+            ));
+        };
+        let map = match map {
+            layer_core::TransformMap::Affine(affine) => layer_core::Projective::from_affine(*affine),
+            layer_core::TransformMap::Projective(projective) => *projective,
+            layer_core::TransformMap::Mesh(_) => {
+                return Err(GpuRasterError::InvalidTransform("Unsupported transform"));
+            }
+        };
+        let inverse = layer_core::Projective::from_affine(selection.affine)
+            .then(map)
+            .inverse()
+            .ok_or(GpuRasterError::InvalidTransform("Invalid selection transform"))?
+            .0;
+        let [w, h] = extent;
+        let stride = w.div_ceil(4);
+        let bytes = 32 + u64::from(stride) * u64::from(h) * 4 + 32;
+        if extent.contains(&0)
+            || bytes > device.limits().max_storage_buffer_binding_size
+            || h > device.limits().max_compute_workgroups_per_dimension
+        {
+            return Err(GpuRasterError::SizeOverflow);
+        }
+        let source = self.pixel_buffer(device, pixels);
+        let header = [0, 0, w, h, 0, 2, 0, 0];
+        let params: Vec<u8> = header
+            .into_iter()
+            .flat_map(u32::to_ne_bytes)
+            .chain(resample_rows([
+                [inverse[0], inverse[1], inverse[2]],
+                [inverse[3], inverse[4], inverse[5]],
+                [inverse[6], inverse[7], inverse[8]],
+            ]))
+            .collect();
+        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("mapped selection parameters"),
+            contents: &params,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
+        });
+        let output = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mapped selection coverage"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&params, 0, &output, 0, 32);
+        let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mapped selection inputs"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: source.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: output.as_entire_binding(),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("resample mapped selection"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.resample);
+        pass.set_bind_group(0, &binding, &[]);
+        pass.dispatch_workgroups(stride.div_ceil(64), h, 1);
+        drop(pass);
+        Ok(output)
+    }
 }
+/// Destination-to-source rows of the resample shader's parameters.
+fn resample_rows(rows: [[f32; 3]; 3]) -> impl Iterator<Item = u8> {
+    rows.into_iter()
+        .flat_map(|[a, b, c]| [a, b, c, 0.])
+        .flat_map(f32::to_ne_bytes)
+}
+
 fn pixel_region_buffer(
     device: &wgpu::Device,
     pixels: &layer_core::SelectionPixels,

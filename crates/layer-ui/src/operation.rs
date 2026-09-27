@@ -381,8 +381,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             return self.finish_layer_placement(apply);
         }
         if apply {
+            if self.queue_transform_selection() {
+                return Ok(());
+            }
             self.engine.commit_transform().map_err(error)?;
         }
+        self.cancel_transform()?;
+        Ok(())
+    }
+    pub(super) fn apply_transform_selection(
+        &mut self,
+        pixels: std::sync::Arc<layer_core::SelectionPixels>,
+    ) -> Result<(), String> {
+        self.engine.commit_transform_with_selection(pixels).map_err(error)?;
         self.cancel_transform()?;
         Ok(())
     }
@@ -390,6 +401,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.operation.placing() {
             self.finish_layer_placement(false)?;
             return Ok(true);
+        }
+        if self.region_tools.applying_transform() {
+            self.region_tools.cancel();
         }
         if self.operation.current.take().is_none() {
             return Ok(false);
@@ -414,6 +428,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn update_transform(&mut self) -> Result<(), String> {
+        if self.region_tools.applying_transform() {
+            self.region_tools.cancel();
+        }
         let chosen = self.operation.interpolation;
         let Some(t) = &mut self.operation.current else {
             return Ok(());

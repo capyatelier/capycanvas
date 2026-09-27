@@ -369,6 +369,14 @@ pub enum RegionSource {
     Selection(std::sync::Arc<layer_core::Selection>),
     /// Continuous luminance classification of a raw layer or artwork composite.
     Tonal(Box<TonalRequest>),
+    /// Pixel coverage carried through a transform the selection's metadata
+    /// cannot express, resampled into the target's local pixels. Inversion is
+    /// the caller's: the result is the moved, uninverted coverage.
+    TransformedSelection {
+        layer: LayerId,
+        selection: std::sync::Arc<layer_core::Selection>,
+        map: layer_core::TransformMap,
+    },
 }
 impl RegionSource {
     pub fn raw_source(&self) -> &Self {

@@ -1963,8 +1963,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::CloseDocument => self.require_document_snapshot_idle().is_ok(),
             CommandId::ScaleRotate => idle && self.can_transform(),
             CommandId::PlacementOriginalSize => idle && self.operation.placing(),
-            CommandId::ApplyTransform
-            | CommandId::CancelTransform
+            CommandId::ApplyTransform => {
+                idle && self.operation.active() && !self.region_tools.applying_transform()
+            }
+            CommandId::CancelTransform
             | CommandId::TransformAspect
             | CommandId::TransformFlipHorizontal
             | CommandId::TransformFlipVertical

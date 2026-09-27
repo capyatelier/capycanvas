@@ -336,3 +336,47 @@ fn native_canvas_bar_polygon_input() {
         "the finished polygon hands the bar to its selection",
     );
 }
+
+#[test]
+#[ignore = "isolated compositor, GPU and native mouse delivery"]
+fn native_canvas_bar_distorts_a_pixel_selection() {
+    let app = native_test_app("art.capycanvas.CanvasBarPixels");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
+    w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+    native_pen_path(&w, &[[650., 500.], [1150., 500.], [1150., 850.], [650., 850.], [650., 500.]]);
+    w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
+    w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
+    w.dispatch(UiAction::Invoke { command: CommandId::ColorSelect });
+    pump(200);
+    let pixels = |w: &Workspace| {
+        w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.as_ref()
+            .is_some_and(|s| matches!(s.shape, layer_core::SelectionShape::Pixels(_)))
+    };
+    let mut native = Native::start();
+    native.events(json!([{"point": [900., 675.]}, {"down": true}, {"wait_ms": 30}, {"down": false}]));
+    until(|| pixels(&w), "Color Select makes a pixel selection");
+    w.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate });
+    w.dispatch(UiAction::Invoke { command: CommandId::TransformDistort });
+    until(|| shown(&w) && transforming(&w), "the transform bar appears");
+    let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+    let anchor = anchor_in_window(&w);
+    let corner = [anchor[2], anchor[1]];
+    native.events(json!([
+        {"point": corner}, {"down": true}, {"wait_ms": 40},
+        {"point": [corner[0] + 40., corner[1] - 20.]}, {"wait_ms": 20},
+        {"point": [corner[0] + 80., corner[1] - 40.]}, {"wait_ms": 20}, {"down": false}
+    ]));
+    until(|| shown(&w), "the bar returns after the corner drag");
+    let apply = bar_widget(&w, "canvas-bar-ApplyTransform");
+    native.events(json!([{"point": center(&w, &apply)}, {"down": true}, {"down": false}]));
+    until(|| !transforming(&w), "Apply finishes once the resampled coverage returns");
+    let document = w.gpu.borrow().as_ref().unwrap().session.engine().document().clone();
+    assert!(document.revision > revision, "Apply commits the distorted pixels");
+    assert!(pixels(&w), "the selection follows the distortion as pixel coverage");
+}
+

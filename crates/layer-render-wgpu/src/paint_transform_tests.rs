@@ -419,3 +419,169 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
         "only intersecting pages are allocated"
     );
 }
+
+#[test]
+fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
+    use layer_core::{Projective, SelectionPixels};
+    use layer_render::{RegionRequest, RegionSource};
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let layer = Layer::paint(LayerId(1), "mapped selection");
+    submit(&mut r, std::slice::from_ref(&layer), &[], &[], true);
+    let extent = [128u32, 128];
+    let soft = |x: u32, y: u32| -> u32 {
+        let inside = (20..90).contains(&x) && (30..100).contains(&y);
+        if !inside {
+            0
+        } else if (x + y) % 17 == 0 {
+            64
+        } else {
+            255 - (x * 3 + y) % 200
+        }
+    };
+    let bytes: Vec<u32> = (0..extent[1])
+        .flat_map(|y| {
+            (0..extent[0].div_ceil(4)).map(move |w| {
+                (0..4).fold(0, |word, i| {
+                    let x = w * 4 + i;
+                    word | if x < extent[0] { soft(x, y) << (i * 8) } else { 0 }
+                })
+            })
+        })
+        .collect();
+    let nibbles: Vec<u32> = (0..extent[1])
+        .flat_map(|y| {
+            (0..extent[0].div_ceil(8)).map(move |w| {
+                (0..8).fold(0, |word, i| word | (soft(w * 8 + i, y) * 4 / 255) << (i * 4))
+            })
+        })
+        .collect();
+    let byte_pixels = SelectionPixels::bytes(extent, [20, 30, 90, 100], bytes).unwrap();
+    let nibble_pixels = SelectionPixels::new(extent, [20, 30, 90, 100], nibbles).unwrap();
+    let placement = Affine::around(Point::default(), [1.1, 0.9], 0.2, Point { x: 3., y: -4. });
+    let map = Projective::rect_to_quad(
+        Rect {
+            min: Point { x: 0., y: 0. },
+            max: Point { x: 128., y: 128. },
+        },
+        [[10.3, 5.1], [118.2, 20.4], [100.1, 120.3], [2.2, 110.4]].map(|[x, y]| Point { x, y }),
+    )
+    .unwrap();
+    let forward: [f64; 9] = {
+        let [a, b, c, d, x, y] = placement.0.map(f64::from);
+        let m = map.0.map(f64::from);
+        let p = [a, c, x, b, d, y, 0., 0., 1.];
+        std::array::from_fn(|i| (0..3).map(|k| m[i / 3 * 3 + k] * p[k * 3 + i % 3]).sum())
+    };
+    let receive = |r: &mut WgpuRasterizer| {
+        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+        loop {
+            if let Some(result) = r.take_region() {
+                break result.unwrap();
+            }
+            assert!(std::time::Instant::now() < deadline, "region callback timed out");
+            std::thread::yield_now();
+        }
+    };
+    for (n, pixels) in [byte_pixels, nibble_pixels].into_iter().enumerate() {
+        let scale = if pixels.coverage_format() == 2 { 255. } else { 4. };
+        let coverage = |x: i32, y: i32| -> f64 {
+            if x < 0 || y < 0 || x >= extent[0] as i32 || y >= extent[1] as i32 {
+                return 0.;
+            }
+            let per = pixels.pixels_per_word();
+            let word =
+                pixels.words()[(y as u32 * extent[0].div_ceil(per) + x as u32 / per) as usize];
+            let bits = 32 / per;
+            f64::from((word >> ((x as u32 % per) * bits)) & ((1 << bits) - 1)) / scale
+        };
+        for inverted in [false, true] {
+            let mut selection = Selection::pixels(std::sync::Arc::new(pixels.clone()))
+                .transformed(placement)
+                .unwrap();
+            selection.inverted = inverted;
+            let id = 70 + n as u64 * 2 + u64::from(inverted);
+            let request = RegionRequest {
+                contiguous: false,
+                selection: None,
+                request_id: id,
+                source: RegionSource::TransformedSelection {
+                    layer: layer.id,
+                    selection: std::sync::Arc::new(selection),
+                    map: TransformMap::Projective(map),
+                },
+                position: [0, 0],
+                tolerance: 0.,
+                refinement: Default::default(),
+                limit: None,
+            };
+            assert!(r.request_region(request).unwrap());
+            r.wait_idle().unwrap();
+            let result = receive(&mut r);
+            assert_eq!(result.request_id, id);
+            assert_eq!(result.pixels.extent(), extent);
+            assert_eq!(result.pixels.coverage_format(), 2);
+            let mut bounds = [u32::MAX, u32::MAX, 0, 0];
+            for y in 0..extent[1] {
+                for x in 0..extent[0] {
+                    let [px, py] = [x as f64 + 0.5, y as f64 + 0.5];
+                    let h = forward;
+                    let [a, b, c, d] = [
+                        h[0] - px * h[6],
+                        h[1] - px * h[7],
+                        h[3] - py * h[6],
+                        h[4] - py * h[7],
+                    ];
+                    let [e, f] = [px * h[8] - h[2], py * h[8] - h[5]];
+                    let det = a * d - b * c;
+                    let [u, v] = [(e * d - b * f) / det - 0.5, (a * f - e * c) / det - 0.5];
+                    let [ix, iy] = [u.floor() as i32, v.floor() as i32];
+                    let [tx, ty] = [u - u.floor(), v - v.floor()];
+                    let value = (coverage(ix, iy) * (1. - tx) + coverage(ix + 1, iy) * tx)
+                        * (1. - ty)
+                        + (coverage(ix, iy + 1) * (1. - tx) + coverage(ix + 1, iy + 1) * tx) * ty;
+                    let expected = (value * 255.).round() as u32;
+                    let word = result.pixels.words()[(y * extent[0].div_ceil(4) + x / 4) as usize];
+                    let actual = (word >> ((x % 4) * 8)) & 255;
+                    assert!(
+                        actual.abs_diff(expected) <= 1,
+                        "format {n} inverted {inverted} at {x},{y}: {actual} != {expected}"
+                    );
+                    if actual > 0 {
+                        bounds = [
+                            bounds[0].min(x),
+                            bounds[1].min(y),
+                            bounds[2].max(x + 1),
+                            bounds[3].max(y + 1),
+                        ];
+                    }
+                }
+            }
+            assert_eq!(result.pixels.bounds(), bounds);
+        }
+    }
+    let contours = RegionRequest {
+        contiguous: false,
+        selection: None,
+        request_id: 80,
+        source: RegionSource::TransformedSelection {
+            layer: layer.id,
+            selection: std::sync::Arc::new(
+                Selection::polygon(vec![
+                    Point::default(),
+                    Point { x: 9., y: 0. },
+                    Point { x: 0., y: 9. },
+                ])
+                .unwrap(),
+            ),
+            map: TransformMap::Projective(map),
+        },
+        position: [0, 0],
+        tolerance: 0.,
+        refinement: Default::default(),
+        limit: None,
+    };
+    assert!(
+        r.request_region(contours).is_err(),
+        "contours map exactly on the CPU"
+    );
+}

@@ -424,18 +424,88 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .as_ref()
             .ok_or(DocumentError::InvalidLayerOperation(
                 "No transform to apply",
+            ))?;
+        if !preview.transform.is_identity()
+            && self.selection_display.is_none()
+            && let Some(Err(error)) = preview.selection.as_ref().map(|s| s.mapped(&preview.transform.map))
+        {
+            return Err(error);
+        }
+        let selection = self.display_selection().map(|s| s.into_owned());
+        self.commit_transform_as(selection)
+    }
+
+    /// The GPU request that carries the preview's pixel selection through a
+    /// map its metadata cannot express, in the transformed target's pixels.
+    /// Apply waits for its result and passes it to
+    /// `commit_transform_with_selection`. None means `commit_transform` can
+    /// apply directly.
+    pub fn transform_selection_request(
+        &self,
+        request_id: u64,
+    ) -> Option<layer_render::RegionRequest> {
+        let preview = self.transform_preview.as_ref()?;
+        let selection = preview.selection.as_ref()?;
+        if preview.transform.is_identity()
+            || self.selection_display.is_some()
+            || selection.mapped(&preview.transform.map).is_ok()
+        {
+            return None;
+        }
+        Some(layer_render::RegionRequest {
+            contiguous: false,
+            selection: None,
+            request_id,
+            source: layer_render::RegionSource::TransformedSelection {
+                layer: preview.layer,
+                selection: std::sync::Arc::new(selection.clone()),
+                map: preview.transform.map.clone(),
+            },
+            position: [0, 0],
+            tolerance: 0.,
+            refinement: Default::default(),
+            limit: None,
+        })
+    }
+
+    /// Apply the preview with the coverage `transform_selection_request`
+    /// resampled, as one undoable edit. The preview's inversion is kept.
+    pub fn commit_transform_with_selection(
+        &mut self,
+        pixels: std::sync::Arc<layer_core::SelectionPixels>,
+    ) -> Result<bool, DocumentError> {
+        let preview = self
+            .transform_preview
+            .as_ref()
+            .ok_or(DocumentError::InvalidLayerOperation(
+                "No transform to apply",
+            ))?;
+        if pixels.extent() != self.document().target_extent(preview.layer) {
+            return Err(DocumentError::InvalidLayerOperation(
+                "The resampled selection belongs to another layer",
+            ));
+        }
+        let mut selection = layer_core::Selection::pixels(pixels);
+        selection.inverted = preview.selection.as_ref().is_some_and(|s| s.inverted);
+        let selection = selection.transformed(self.document().layer_transform(preview.layer))?;
+        self.commit_transform_as(Some(selection))
+    }
+
+    fn commit_transform_as(
+        &mut self,
+        selection: Option<layer_core::Selection>,
+    ) -> Result<bool, DocumentError> {
+        let preview = self
+            .transform_preview
+            .as_ref()
+            .ok_or(DocumentError::InvalidLayerOperation(
+                "No transform to apply",
             ))?
             .clone();
         if preview.transform.is_identity() {
             self.transform_preview = None;
             return Ok(false);
         }
-        if self.selection_display.is_none()
-            && let Some(Err(error)) = preview.selection.as_ref().map(|s| s.mapped(&preview.transform.map))
-        {
-            return Err(error);
-        }
-        let selection = self.display_selection().map(|s| s.into_owned());
         let companion = preview.companion(&self.document().layers);
         let mut operations = Vec::with_capacity(2);
         for target in std::iter::once(preview).chain(companion) {
@@ -2792,6 +2862,45 @@ mod tests {
         );
         assert!(engine.transform_preview().is_some());
         assert!(engine.can_redo(), "the refused commit leaves history untouched");
+        let request = engine.transform_selection_request(41).unwrap();
+        assert_eq!(request.request_id, 41);
+        let layer_render::RegionSource::TransformedSelection {
+            layer: target,
+            selection: coverage,
+            map: requested,
+        } = &request.source
+        else {
+            panic!("a mapped selection request")
+        };
+        assert_eq!((*target, requested), (layer, &map));
+        assert!(matches!(coverage.shape, layer_core::SelectionShape::Pixels(_)));
+        let pending = engine.transform_preview().unwrap().clone();
+        let before = engine.document().selection.clone();
+        let moved = std::sync::Arc::new(
+            SelectionPixels::bytes([128, 128], [4, 4, 12, 12], vec![0x80ff_ff80; 32 * 128])
+                .unwrap(),
+        );
+        let elsewhere = std::sync::Arc::new(SelectionPixels::bytes([64, 64], [0; 4], vec![0; 16 * 64]).unwrap());
+        assert!(engine.commit_transform_with_selection(elsewhere).is_err());
+        assert!(engine.can_redo(), "a mismatched result leaves history untouched");
+        for inverted in [false, true] {
+            let mut preview = pending.clone();
+            preview.selection.as_mut().unwrap().inverted = inverted;
+            engine.set_transform_preview(Some(preview)).unwrap();
+            assert!(engine.commit_transform_with_selection(moved.clone()).unwrap());
+            let mut expected = Selection::pixels(moved.clone());
+            expected.inverted = inverted;
+            assert_eq!(engine.document().selection.as_ref(), Some(&expected));
+            assert!(engine.transform_preview().is_none());
+            assert!(engine.undo().unwrap());
+            assert_eq!(engine.document().selection, before, "pixels and selection are one step");
+        }
+        let contours = layer_render::TransformPreview {
+            selection: Some(selection.clone()),
+            ..pending
+        };
+        engine.set_transform_preview(Some(contours)).unwrap();
+        assert!(engine.transform_selection_request(42).is_none(), "contours map on the CPU");
     }
 
     #[test]

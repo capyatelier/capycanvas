@@ -43,11 +43,17 @@ impl RegionRequests {
             return Ok(false);
         }
         let extent = match request.source.raw_source() {
-            layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => {
+            layer_render::RegionSource::Layer(id)
+            | layer_render::RegionSource::Coverage(id)
+            | layer_render::RegionSource::TransformedSelection { layer: id, .. } => {
                 r.target_extent(*id)
             }
             _ => r.document_extent,
         };
+        let mapped = matches!(
+            request.source,
+            layer_render::RegionSource::TransformedSelection { .. }
+        );
         let tone = if let layer_render::RegionSource::Tonal(t) = &request.source {
             Some(t.as_ref())
         } else {
@@ -67,16 +73,21 @@ impl RegionRequests {
                     | layer_render::RegionSource::Coverage(_)
                     | layer_render::RegionSource::Tonal(_)
             ) && request.selection.is_none())
+            || (mapped && (request.selection.is_some() || request.limit.is_some()))
         {
             return Err(GpuRasterError::InvalidExtent);
         }
-        if request.selection.is_some() && self.refiner.is_none() {
+        if (mapped || request.selection.is_some()) && self.refiner.is_none() {
             self.refiner = Some(selection_refine::SelectionRefiner::new(&r.device));
         }
         if let Some(startup) = &r.startup {
             startup.compiler.check()?;
             let mut ready = true;
-            if tone.is_some() {
+            if mapped {
+                startup.compiler.pipeline(&r.selection_clip.resample, startup::BRUSH);
+                ready &= r.selection_clip.resample.ready();
+                ready &= self.refiner.as_ref().unwrap().prepare_bounds(&startup.compiler);
+            } else if tone.is_some() {
                 ready &= self.raw.prepare_tonal(&startup.compiler);
             } else if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
                 if !matches!(request.source, layer_render::RegionSource::Coverage(_)) {
@@ -111,7 +122,21 @@ impl RegionRequests {
             r.selection_clip
                 .prepare(&r.device, &mut encoder, extent, selection)?;
         }
-        let input = if let layer_render::RegionSource::Selection(selection) = &request.source {
+        let input = if let layer_render::RegionSource::TransformedSelection {
+            selection, map, ..
+        } = &request.source
+        {
+            flood::Region {
+                coverage: r.selection_clip.resample_mapped(
+                    &r.device,
+                    &mut encoder,
+                    extent,
+                    selection,
+                    map,
+                )?,
+                bounds_offset: 0,
+            }
+        } else if let layer_render::RegionSource::Selection(selection) = &request.source {
             r.selection_clip
                 .prepare(&r.device, &mut encoder, extent, selection)?;
             let buffer = r.selection_clip.buffer.as_ref().unwrap();
@@ -157,7 +182,18 @@ impl RegionRequests {
                     && s.resize == 0
                     && s.source_to_document == layer_core::Affine::IDENTITY
             });
-        let (region, extent, byte_coverage) = if direct_tonal {
+        let (region, extent, byte_coverage) = if mapped {
+            (
+                self.refiner.as_ref().unwrap().bounds_only(
+                    &r.device,
+                    &mut encoder,
+                    extent,
+                    input.coverage,
+                ),
+                extent,
+                true,
+            )
+        } else if direct_tonal {
             self.raw.release_mask();
             (
                 self.refiner.as_ref().unwrap().bounds_only(

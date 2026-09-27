@@ -56,6 +56,9 @@ Status: shared model, GTK, Web, Android and Windows hosts implemented. Apple kee
   - A parallelogram folds back into position, scale, rotation and skew exactly.
 - **Flips and quarter turns** act in the layer's axes about the centre of the transformed box.
 - **Reset** returns to Free and the geometry the transform started with.
+- **Applying a distorted pixel selection:** a soft or painted selection cannot follow a perspective map as metadata, so Apply first resamples its coverage on the GPU.
+  - The transform stays open, and Apply reads "Applying the transform" until the coverage returns; the result is one undo step.
+  - Cancel discards the pending coverage, and any further edit to the transform supersedes it.
 - **Interpolation:** Nearest neighbor, Bilinear or Bicubic, on the bar and in Tool Options.
   - Until one is chosen, Free and Uniform resample bilinearly and Distort bicubically.
   - A chosen filter stays for later transforms in the session.
@@ -73,7 +76,7 @@ Status: shared model, GTK, Web, Android and Windows hosts implemented. Apple kee
 - **Narrow windows:** when docks leave the work area narrower than the smallest bar, placement uses the window width.
 - **Tests:**
   - shared: `crates/layer-ui/src/canvas_bar_tests.rs`;
-  - GTK native: `native_canvas_bar_input` and `native_canvas_bar_polygon_input` in `apps/layer-linux/src/canvas_bar_tests.rs`;
+  - GTK native: `native_canvas_bar_input`, `native_canvas_bar_polygon_input` and `native_canvas_bar_distorts_a_pixel_selection` in `apps/layer-linux/src/canvas_bar_tests.rs`;
   - Web: `node --test apps/layer-web/canvas-bar.test.mjs`, `node apps/layer-web/test.mjs --headless --canvas-bar`, and `device.test.mjs --canvas-bar` on a tablet;
   - Android: `AndroidInteractionTest#canvasActionBarJourneysAcrossDevices` with mouse, finger and stylus, and `AndroidCanvasBarBenchmarkTest` for frame timing on a 6000 × 4000 canvas (see the [Android guide](../development/android.md)).
   - Windows: `apps/layer-windows/scripts/exercise-canvas-bar.ps1` with mouse, touch and pen, and the native host queries in `crates/layer-host/src/lib.rs`.

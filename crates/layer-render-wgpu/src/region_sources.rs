@@ -305,7 +305,9 @@ impl RawRegions {
                 Some(Arc::new(frame))
             }
             layer_render::RegionSource::Layer(_) | layer_render::RegionSource::Coverage(_) => None,
-            layer_render::RegionSource::Selection(_) | layer_render::RegionSource::Tonal(_) => {
+            layer_render::RegionSource::Selection(_)
+            | layer_render::RegionSource::Tonal(_)
+            | layer_render::RegionSource::TransformedSelection { .. } => {
                 return Err(GpuRasterError::InvalidExtent);
             }
         };
