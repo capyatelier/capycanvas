@@ -317,6 +317,7 @@ impl UiState {
         for group in [
             ToolActionGroup::TransformMode,
             ToolActionGroup::TransformInterpolation,
+            ToolActionGroup::TransformWarpGrid,
             ToolActionGroup::SelectionMode,
             ToolActionGroup::SelectionSource,
         ] {

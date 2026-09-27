@@ -103,7 +103,53 @@ fn cases() -> Vec<(&'static str, Box<dyn Fn(f32) -> ImageTransform>)> {
                 interpolation: Interpolation::Bicubic,
             }),
         ),
+        ("3x3 warp bicubic", Box::new(move |t| warp(t, [3, 3]))),
+        ("5x5 warp bicubic", Box::new(move |t| warp(t, [5, 5]))),
     ]
+}
+
+/// A mesh seeded from a keystone with two nodes dragged, as a Warp drag moves
+/// one handle every frame.
+fn warp(t: f32, cells: [u16; 2]) -> ImageTransform {
+    let [w, h] = EXTENT.map(|v| v as f32);
+    let bounds = layer_core::Rect {
+        min: Point::default(),
+        max: Point { x: w, y: h },
+    };
+    let keystone = Projective::rect_to_quad(
+        bounds,
+        [
+            [300., 150.],
+            [w - 250., 100.],
+            [w - 100., h - 80.],
+            [120., h - 60.],
+        ]
+        .map(|[x, y]| Point { x, y }),
+    )
+    .unwrap();
+    let columns = u32::from(cells[0]) + 1;
+    let mesh = layer_core::MeshMap::from_projective(bounds, cells, &keystone)
+        .unwrap()
+        .move_node(
+            columns + 1,
+            Point {
+                x: 400. * t.sin(),
+                y: 250. * t.cos(),
+            },
+        )
+        .unwrap()
+        .move_node(
+            columns * 2 - 2,
+            Point {
+                x: -300. * t.cos(),
+                y: 180.,
+            },
+        )
+        .unwrap();
+    ImageTransform {
+        map: TransformMap::Mesh(std::sync::Arc::new(mesh)),
+        interpolation: Interpolation::Bicubic,
+    }
 }
 
 fn submit(r: &mut WgpuRasterizer, layer: &Layer, reset: bool) {
@@ -373,7 +419,8 @@ fn native_photo_drag(r: &mut WgpuRasterizer, layers: &[Layer], photo: LayerId, l
         min: Point::default(),
         max: Point { x: w, y: h },
     };
-    let cases: [(&str, Box<dyn Fn(f32) -> TransformMap>); 2] = [
+    let warp_start = layer_core::MeshMap::identity(bounds, [4, 4]).unwrap();
+    let cases: [(&str, Box<dyn Fn(f32) -> TransformMap>); 3] = [
         (
             "free",
             Box::new(|t: f32| {
@@ -403,6 +450,16 @@ fn native_photo_drag(r: &mut WgpuRasterizer, layers: &[Layer], photo: LayerId, l
                     )
                     .unwrap(),
                 )
+            }),
+        ),
+        (
+            "warp",
+            Box::new(move |t: f32| {
+                TransformMap::Mesh(std::sync::Arc::new(
+                    warp_start
+                        .move_node(6, Point { x: w * 0.08 * t.sin(), y: h * 0.06 * (t * 1.3).sin() })
+                        .unwrap(),
+                ))
             }),
         ),
     ];

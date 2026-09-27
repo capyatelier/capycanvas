@@ -48,3 +48,25 @@ fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     output.values[id.y * stride + id.x] = packed;
 }
+
+// A warp mesh maps each output pixel through the layer position rasterized at
+// it, one window of rect at a time, with a one-pixel border, into an output
+// info.z pixels wide. Rows x and y then map that position to source pixels.
+@group(0) @binding(3) var positions: texture_2d<f32>;
+const UNCOVERED = -1e38;
+@compute @workgroup_size(64)
+fn resample_mesh(@builtin(global_invocation_id) id: vec3<u32>) {
+    let words = (params.rect.z + 3u) / 4u;
+    if id.x >= words || id.y >= params.rect.w { return; }
+    var packed = 0u;
+    for (var i = 0u; i < 4u; i++) {
+        let x = id.x * 4u + i;
+        if x >= params.rect.z { break; }
+        let s = textureLoad(positions, vec2<i32>(vec2(x, id.y)) + vec2(1), 0).xy;
+        if s.x > UNCOVERED {
+            packed |= min(255u, u32(floor(coverage(s) * 255. + .5))) << (i * 8u);
+        }
+    }
+    let stride = (params.info.z + 3u) / 4u;
+    output.values[(params.rect.y + id.y) * stride + params.rect.x / 4u + id.x] = packed;
+}

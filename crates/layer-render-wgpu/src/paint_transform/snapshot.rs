@@ -58,8 +58,9 @@ impl TileSnapshot {
     pub fn splitter(
         &self,
         transform: &layer_core::ImageTransform,
+        mesh: Option<std::sync::Arc<super::mesh::MeshGeometry>>,
     ) -> Result<Splitter<impl Fn([u32; 2]) -> bool + '_>, GpuRasterError> {
-        Splitter::new(self.bounds, transform, |c| self.contains(c))
+        Splitter::new(self.bounds, transform, mesh, |c| self.contains(c))
     }
     pub fn binding(
         &self,
@@ -67,6 +68,7 @@ impl TileSnapshot {
         pass: &mut PixelTransform,
         sources: &[[u32; 2]],
         selection: Option<&wgpu::Buffer>,
+        positions: Option<&wgpu::TextureView>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<TransformSource, GpuRasterError> {
         let mut originals = Vec::new();
@@ -113,6 +115,7 @@ impl TileSnapshot {
                 &views,
                 self.source_bounds(),
                 selection,
+                positions,
                 &r.empty_view,
             )
             .map_err(GpuRasterError::InvalidTransform)?;
@@ -130,13 +133,15 @@ pub(crate) struct Splitter<F> {
     align: u32,
 }
 impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
+    /// A mesh transform needs its geometry, which bounds each region's source.
     pub fn new(
         bounds: PixelRect,
         transform: &layer_core::ImageTransform,
+        mesh: Option<std::sync::Arc<super::mesh::MeshGeometry>>,
         contains: F,
     ) -> Result<Self, GpuRasterError> {
         Ok(Self {
-            map: SourceMap::new(transform, bounds)?,
+            map: SourceMap::new(transform, bounds, mesh)?,
             bounds,
             contains,
             align: 1,
@@ -164,18 +169,18 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
                     (y1 + support).ceil().max(0.) as u32,
                 )
                 .intersect(self.bounds);
-                if !footprint.is_empty() && required.len() <= TRANSFORM_SLOTS {
+                if !footprint.is_empty() && required.len() <= self.map.slots {
                     for c in page_coordinates(footprint) {
                         if !required.contains(&c) && (self.contains)(c) {
                             required.push(c);
                         }
-                        if required.len() > TRANSFORM_SLOTS {
+                        if required.len() > self.map.slots {
                             break;
                         }
                     }
                 }
             }
-            if required.len() <= TRANSFORM_SLOTS {
+            if required.len() <= self.map.slots {
                 if jobs.len() == 65_536 {
                     return Err(GpuRasterError::InvalidTransform(
                         "Transform requires too many source regions",
@@ -249,7 +254,7 @@ pub(crate) fn region_jobs(
     regions: &[PixelRect],
     contains: impl Fn([u32; 2]) -> bool,
 ) -> Result<Vec<RegionJob>, GpuRasterError> {
-    let splitter = Splitter::new(bounds, transform, contains)?;
+    let splitter = Splitter::new(bounds, transform, None, contains)?;
     let mut found = Vec::new();
     let mut owners = Vec::new();
     for coordinate in coordinates {
@@ -281,6 +286,8 @@ struct SourceMap {
     /// Samples lie at pixel centers, or anywhere in the pixel when filtered
     /// samples spread over a minified pixel.
     inset: f64,
+    /// Source views a job may bind; a mesh keeps one for its positions.
+    slots: usize,
 }
 enum SourceKind {
     Identity,
@@ -292,11 +299,14 @@ enum SourceKind {
         floor: f64,
         bounds: [f64; 4],
     },
+    /// Triangles of the tessellated mesh, binned by destination page.
+    Mesh(std::sync::Arc<super::mesh::MeshGeometry>),
 }
 impl SourceMap {
     fn new(
         transform: &layer_core::ImageTransform,
         bounds: PixelRect,
+        mesh: Option<std::sync::Arc<super::mesh::MeshGeometry>>,
     ) -> Result<Self, GpuRasterError> {
         let invalid = GpuRasterError::InvalidTransform("Transform must be finite and invertible");
         let support = f64::from(transform.interpolation.support().max(1));
@@ -305,10 +315,13 @@ impl SourceMap {
         } else {
             0.
         };
+        let slots = TRANSFORM_SLOTS
+            - usize::from(matches!(transform.map, layer_core::TransformMap::Mesh(_)));
         let map = |kind| Self {
             kind,
             support,
             inset,
+            slots,
         };
         if transform.is_identity() {
             return Ok(map(SourceKind::Identity));
@@ -319,7 +332,8 @@ impl SourceMap {
             }
             layer_core::TransformMap::Projective(projective) => *projective,
             layer_core::TransformMap::Mesh(_) => {
-                return Err(GpuRasterError::InvalidTransform("Unsupported transform"));
+                let geometry = mesh.ok_or(GpuRasterError::InvalidTransform("Unsupported transform"))?;
+                return Ok(map(SourceKind::Mesh(geometry)));
             }
         };
         if let Some(affine) = projective.as_affine() {
@@ -360,6 +374,9 @@ impl SourceMap {
         ];
         match &self.kind {
             SourceKind::Identity => None,
+            SourceKind::Mesh(geometry) => geometry.footprint(region).map(|[x0, y0, x1, y1]| {
+                [x0 - 1., y0 - 1., x1 + 1., y1 + 1.]
+            }),
             SourceKind::Affine(inverse) => {
                 let mut low = [f64::INFINITY; 2];
                 let mut high = [f64::NEG_INFINITY; 2];
@@ -522,7 +539,7 @@ mod tests {
         let bounds = PixelRect::full(EXTENT);
         let (mut transform, h) = perspective(quad);
         transform.interpolation = interpolation;
-        let splitter = Splitter::new(bounds, &transform, |_| true).unwrap();
+        let splitter = Splitter::new(bounds, &transform, None, |_| true).unwrap();
         let mut jobs = Vec::new();
         for y in (0..EXTENT[1]).step_by(512) {
             for x in (0..EXTENT[0]).step_by(512) {

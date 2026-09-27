@@ -331,22 +331,33 @@ impl Selection {
         })
     }
     /// The selection carried by a pixel transform's geometry. Contours map
-    /// exactly under perspective; pixel coverage must be resampled by the
-    /// renderer instead.
+    /// exactly under perspective, and within a pixel under a mesh, after
+    /// clipping away any part with no image; pixel coverage must be resampled
+    /// by the renderer instead.
     pub fn mapped(&self, map: &crate::TransformMap) -> Result<Self, DocumentError> {
-        let projective = match map {
-            crate::TransformMap::Affine(affine) => return self.transformed(*affine),
-            crate::TransformMap::Projective(projective) => *projective,
-            crate::TransformMap::Mesh(_) => {
-                return Err(DocumentError::InvalidLayerOperation("Unsupported transform"));
-            }
-        };
+        if let crate::TransformMap::Affine(affine) = map {
+            return self.transformed(*affine);
+        }
         let SelectionShape::Contours(paths) = &self.shape else {
             return Err(DocumentError::InvalidLayerOperation(Self::RESAMPLE_PIXELS));
         };
-        let map = crate::Projective::from_affine(self.affine).then(projective);
+        let paths = match map {
+            crate::TransformMap::Affine(_) => unreachable!(),
+            crate::TransformMap::Projective(projective) => {
+                crate::Projective::from_affine(self.affine)
+                    .then(*projective)
+                    .map_polygons(paths)
+            }
+            crate::TransformMap::Mesh(mesh) => {
+                let placed: Vec<Arc<[Point]>> = paths
+                    .iter()
+                    .map(|ring| ring.iter().map(|p| self.affine.map(*p)).collect())
+                    .collect();
+                mesh.map_polygons(&placed)
+            }
+        };
         Ok(Self {
-            shape: SelectionShape::Contours(map.map_polygons(paths).into()),
+            shape: SelectionShape::Contours(paths.into()),
             affine: crate::Affine::IDENTITY,
             inverted: self.inverted,
         })

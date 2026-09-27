@@ -42,7 +42,7 @@ impl TransformMap {
         match self {
             Self::Affine(affine) => Some(affine.map(p)),
             Self::Projective(projective) => projective.map(p),
-            Self::Mesh(_) => None,
+            Self::Mesh(mesh) => mesh.map(p),
         }
     }
 }
@@ -76,16 +76,13 @@ impl ImageTransform {
         }
     }
     /// Finite and invertible geometry that the renderer can resample. A
-    /// perspective map resamples only the source it covers.
+    /// perspective map resamples only the source it covers, and a mesh only
+    /// its rectangle.
     pub fn validate(&self) -> Result<(), DocumentError> {
         let valid = match &self.map {
             TransformMap::Affine(affine) => affine.inverse().is_some(),
             TransformMap::Projective(projective) => projective.inverse().is_some(),
-            TransformMap::Mesh(_) => {
-                return Err(DocumentError::InvalidLayerOperation(
-                    "Unsupported transform",
-                ));
-            }
+            TransformMap::Mesh(mesh) => mesh.valid(),
         };
         if valid {
             Ok(())
@@ -102,7 +99,7 @@ impl ImageTransform {
             TransformMap::Projective(projective) => {
                 TransformMap::Projective(projective.conjugate(to)?)
             }
-            TransformMap::Mesh(_) => return None,
+            TransformMap::Mesh(mesh) => TransformMap::Mesh(Arc::new(mesh.conjugate(to))),
         };
         Some(Self {
             map,
@@ -120,7 +117,7 @@ impl ImageTransform {
             TransformMap::Projective(projective) => {
                 projective.bounds(source).unwrap_or(Rect::UNBOUNDED)
             }
-            TransformMap::Mesh(_) => Rect::UNBOUNDED,
+            TransformMap::Mesh(mesh) => mesh.drawn_bounds(),
         }
     }
     /// Conservative cut + placement footprint. Expand in source space before

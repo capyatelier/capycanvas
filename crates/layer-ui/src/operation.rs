@@ -2,7 +2,8 @@
 //! render ordinary tool controls; no platform owns transform math or history.
 use super::error;
 use crate::*;
-use layer_core::{Affine, Document, ImageTransform, Interpolation, LayerKind, LayerOperationKind, Point, Projective, Rect, TransformMap};
+use layer_core::{Affine, Document, ImageTransform, Interpolation, LayerKind, LayerOperationKind, MeshMap, Point, Projective, Rect, TransformMap};
+use std::sync::Arc;
 use layer_engine::{PenEvent, PenPhase};
 use layer_render::{CanvasRenderer, CursorSegment, TransformPreview};
 #[path = "operation/placement.rs"]
@@ -69,6 +70,7 @@ const MAX_SKEW: f32 = 85. * std::f32::consts::PI / 180.;
 pub(super) enum TransformMode {
     Free,
     Distort,
+    Warp,
 }
 #[derive(Clone, Copy)]
 enum Handle {
@@ -77,17 +79,21 @@ enum Handle {
     Rotate,
     Corner(usize),
     Edge(usize),
+    Node(u32),
+    Tangent(u32, u8),
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Drag {
     handle: Handle,
     press: Point,
     current: Point,
     pose: Pose,
     inner: Option<Projective>,
+    mesh: Option<Arc<MeshMap>>,
 }
-/// `bounds` is the source rectangle. `inner` maps it onto a quad before the
-/// pose, which acts about the `frame` box: the bounds, or the quad's bounds
+/// `bounds` is the source rectangle. A warp `mesh` maps it first; `inner`
+/// then maps the source, or the mesh's hull, onto a quad before the pose,
+/// which acts about the `frame` box: that rectangle, or the quad's bounds
 /// once a distortion has been folded in.
 struct Transaction {
     placement: Option<Placement>,
@@ -97,6 +103,9 @@ struct Transaction {
     bounds: Rect,
     frame: Rect,
     inner: Option<Projective>,
+    mesh: Option<Arc<MeshMap>>,
+    cells: [u16; 2],
+    node: Option<u32>,
     mode: TransformMode,
     perspective: bool,
     start: Pose,
@@ -128,6 +137,10 @@ impl Operation {
     #[cfg(test)]
     pub(super) fn distorted(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.inner.is_some())
+    }
+    #[cfg(test)]
+    pub(super) fn mesh(&self) -> Option<Arc<MeshMap>> {
+        self.current.as_ref().and_then(|t| t.mesh.clone())
     }
     #[cfg(test)]
     pub(super) fn shear(&self) -> f32 {
@@ -363,6 +376,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             bounds,
             frame: bounds,
             inner: None,
+            mesh: None,
+            cells: MeshMap::PRESETS[0],
+            node: None,
             mode: TransformMode::Free,
             perspective: false,
             start: Pose::identity(),
@@ -471,7 +487,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn transform_controls(&self) -> Vec<tool_settings::ToolSetting> {
-        let Some(t) = &self.operation.current else {
+        let Some(t) = self.operation.current.as_ref().filter(|t| t.mode != TransformMode::Warp) else {
             return Vec::new();
         };
         let pixels = |span: f32| NumericControl {
@@ -603,12 +619,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         match event.phase {
             PenPhase::Down => {
                 if let Some(handle) = t.hit(p, reach) {
+                    if let Handle::Node(node) = handle {
+                        t.node = Some(node);
+                    }
                     t.drag = Some(Drag {
                         handle,
                         press: p,
                         current: p,
                         pose: t.pose,
                         inner: t.inner,
+                        mesh: t.mesh.clone(),
                     });
                     self.layer_interaction.path = vec![p];
                 }
@@ -618,7 +638,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(());
                 };
                 drag.current = p;
-                let drag = *drag;
+                let drag = drag.clone();
                 t.apply_drag(drag, p, self.interaction.modifiers, self.operation.aspect);
                 if event.phase == PenPhase::Up {
                     t.drag = None;
@@ -637,6 +657,23 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn reorient_transform(&mut self, command: CommandId) -> Result<(), String> {
         self.require_idle()?;
         let t = self.operation.current.as_mut().ok_or("Start a transform first")?;
+        if t.mode == TransformMode::Warp && command != CommandId::ResetTransform {
+            let mesh = t.mesh.clone().ok_or("Start a warp first")?;
+            let pivot = center(mesh.bounds());
+            let zero = Point::default();
+            let turn = std::f32::consts::FRAC_PI_2;
+            let about = match command {
+                CommandId::TransformFlipHorizontal => Affine::around(pivot, [-1., 1.], 0., zero),
+                CommandId::TransformFlipVertical => Affine::around(pivot, [1., -1.], 0., zero),
+                CommandId::TransformRotateLeft => Affine::around(pivot, [1., 1.], -turn, zero),
+                CommandId::TransformRotateRight => Affine::around(pivot, [1., 1.], turn, zero),
+                _ => return Err("Not a transform command".into()),
+            };
+            let mesh = mesh.post(about);
+            t.frame = mesh.bounds();
+            t.mesh = Some(Arc::new(mesh));
+            return self.update_transform();
+        }
         let p = t.pose;
         let turn = |angle: f32| {
             (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
@@ -680,6 +717,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         t.pose = drag.pose;
         t.inner = drag.inner;
+        if let Some(mesh) = drag.mesh {
+            t.frame = mesh.bounds();
+            t.mesh = Some(mesh);
+        }
         self.layer_interaction.path.clear();
         self.update_transform()?;
         Ok(true)
@@ -696,17 +737,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(t) = &mut self.operation.current else {
             return Ok(false);
         };
-        let Some(drag) = t.drag else {
+        let Some(drag) = t.drag.clone() else {
             return Ok(false);
         };
-        t.apply_drag(drag, drag.current, self.interaction.modifiers, self.operation.aspect);
+        let current = drag.current;
+        t.apply_drag(drag, current, self.interaction.modifiers, self.operation.aspect);
         self.update_transform()?;
         Ok(true)
     }
     pub(super) fn set_transform_mode(&mut self, mode: TransformMode, uniform: bool) -> Result<(), String> {
         self.require_idle()?;
         let t = self.operation.current.as_mut().ok_or("Start a transform first")?;
-        if mode == TransformMode::Distort && t.placement.is_some() {
+        if mode != TransformMode::Free && t.placement.is_some() {
             return Err(DISTORT_PLACEMENT.into());
         }
         t.set_mode(mode);
@@ -721,6 +763,20 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn transform_mode(&self) -> Option<(TransformMode, bool)> {
         self.operation.current.as_ref().map(|t| (t.mode, t.perspective))
+    }
+    pub(super) fn warp_cells(&self) -> Option<[u16; 2]> {
+        self.operation.current.as_ref().filter(|t| t.mode == TransformMode::Warp).map(|t| t.cells)
+    }
+    pub(super) fn set_warp_cells(&mut self, cells: [u16; 2]) -> Result<(), String> {
+        self.require_idle()?;
+        let t = self
+            .operation
+            .current
+            .as_mut()
+            .filter(|t| t.mode == TransformMode::Warp)
+            .ok_or("Choose Warp first")?;
+        t.set_cells(cells);
+        self.update_transform()
     }
     pub(super) fn transform_interpolation(&self) -> Option<Interpolation> {
         self.operation
@@ -775,7 +831,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return;
         };
         let map = self.transform_surface_map(t);
-        let corners = t.corners().map(&map);
+        let reach = self.ruler_reach();
         let mut line = |a, b, solid| {
             segments.push(CursorSegment {
                 from: a,
@@ -785,16 +841,53 @@ impl<R: CanvasRenderer> UiSession<R> {
                 scale: 1.,
             })
         };
-        for i in 0..4 {
-            line(corners[i], corners[(i + 1) % 4], false);
-        }
-        let reach = self.ruler_reach();
-        if t.mode == TransformMode::Free {
-            line(
-                map(t.pose_affine().map(local_handle(t.frame, [0., -1.]))),
-                map(t.rotate_handle(reach)),
-                true,
-            );
+        if let (TransformMode::Warp, Some(mesh)) = (t.mode, t.mesh.as_deref()) {
+            let source = mesh.source();
+            let [columns, rows] = mesh.cells;
+            let along = |from: Point, to: Point, cells: u16| -> Vec<[f32; 2]> {
+                let steps = 8 * usize::from(cells);
+                (0..=steps)
+                    .filter_map(|s| {
+                        let f = s as f32 / steps as f32;
+                        mesh.map(Point { x: from.x + (to.x - from.x) * f, y: from.y + (to.y - from.y) * f })
+                    })
+                    .map(&map)
+                    .collect()
+            };
+            let span = sub(source.max, source.min);
+            for i in 0..=columns {
+                let x = source.min.x + span.x * f32::from(i) / f32::from(columns);
+                let curve = along(Point { x, y: source.min.y }, Point { x, y: source.max.y }, rows);
+                for pair in curve.windows(2) {
+                    line(pair[0], pair[1], true);
+                }
+            }
+            for j in 0..=rows {
+                let y = source.min.y + span.y * f32::from(j) / f32::from(rows);
+                let curve = along(Point { x: source.min.x, y }, Point { x: source.max.x, y }, columns);
+                for pair in curve.windows(2) {
+                    line(pair[0], pair[1], true);
+                }
+            }
+            if let Some((node, at)) = t.node.and_then(|node| mesh.node(node).map(|p| (node, p))) {
+                for side in 0..4 {
+                    if let Some(tangent) = mesh.tangent(node, side) {
+                        line(map(at), map(tangent), true);
+                    }
+                }
+            }
+        } else {
+            let corners = t.corners().map(&map);
+            for i in 0..4 {
+                line(corners[i], corners[(i + 1) % 4], false);
+            }
+            if t.mode == TransformMode::Free {
+                line(
+                    map(t.pose_affine().map(local_handle(t.frame, [0., -1.]))),
+                    map(t.rotate_handle(reach)),
+                    true,
+                );
+            }
         }
         for p in t.handle_points(reach) {
             let [x, y] = map(p);
@@ -815,6 +908,48 @@ fn quad_of(bounds: Rect, inner: Option<Projective>, outer: Affine) -> [Point; 4]
         outer.map(inner.and_then(|m| m.map(corner)).unwrap_or(corner))
     })
 }
+fn mesh_through(mesh: &MeshMap, map: &Projective) -> MeshMap {
+    MeshMap {
+        net: mesh.net.iter().map(|p| map.map(*p).unwrap_or(*p)).collect(),
+        ..mesh.clone()
+    }
+}
+fn refit(mesh: &MeshMap, cells: [u16; 2]) -> Option<MeshMap> {
+    const THIRDS: [[f32; 4]; 4] = [
+        [1., 0., 0., 0.],
+        [-5. / 6., 3., -1.5, 1. / 3.],
+        [1. / 3., -1.5, 3., -5. / 6.],
+        [0., 0., 0., 1.],
+    ];
+    let seed = MeshMap::identity(mesh.source(), cells)?;
+    let width = 3 * usize::from(cells[0]) + 1;
+    let mut net = seed.net.to_vec();
+    for cy in 0..usize::from(cells[1]) {
+        for cx in 0..usize::from(cells[0]) {
+            let at = |i: usize, j: usize| (3 * cy + j) * width + 3 * cx + i;
+            let mut samples = [[Point::default(); 4]; 4];
+            for (j, row) in samples.iter_mut().enumerate() {
+                for (i, sample) in row.iter_mut().enumerate() {
+                    *sample = mesh.map(seed.net[at(i, j)])?;
+                }
+            }
+            for j in 0..4 {
+                for i in 0..4 {
+                    let mut p = Point::default();
+                    for (l, row) in samples.iter().enumerate() {
+                        for (k, sample) in row.iter().enumerate() {
+                            let w = THIRDS[j][l] * THIRDS[i][k];
+                            p.x += w * sample.x;
+                            p.y += w * sample.y;
+                        }
+                    }
+                    net[at(i, j)] = p;
+                }
+            }
+        }
+    }
+    Some(MeshMap { net: net.into(), ..seed }).filter(MeshMap::valid)
+}
 fn midpoint(a: Point, b: Point) -> Point {
     Point { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 }
 }
@@ -827,19 +962,28 @@ impl Transaction {
     fn pose_affine(&self) -> Affine {
         self.pose.affine(center(self.frame))
     }
+    fn outer_bounds(&self) -> Rect {
+        self.mesh.as_ref().map_or(self.bounds, |mesh| mesh.bounds())
+    }
     fn map(&self) -> TransformMap {
         let outer = self.pose_affine();
-        match self.inner {
-            None => TransformMap::Affine(outer),
-            Some(inner) => match inner.then(Projective::from_affine(outer)) {
-                map if map.as_affine().is_some() => TransformMap::Affine(map.as_affine().unwrap()),
-                map => TransformMap::Projective(map),
-            },
+        let outer = match self.inner {
+            None => Ok(outer),
+            Some(inner) => {
+                let map = inner.then(Projective::from_affine(outer));
+                map.as_affine().ok_or(map)
+            }
+        };
+        match (&self.mesh, outer) {
+            (None, Ok(affine)) => TransformMap::Affine(affine),
+            (None, Err(map)) => TransformMap::Projective(map),
+            (Some(mesh), Ok(affine)) => TransformMap::Mesh(Arc::new(mesh.post(affine))),
+            (Some(mesh), Err(map)) => TransformMap::Mesh(Arc::new(mesh_through(mesh, &map))),
         }
     }
     /// The source rectangle's corners as displayed, top-left clockwise.
     fn quad(&self) -> [Point; 4] {
-        quad_of(self.bounds, self.inner, self.pose_affine())
+        quad_of(self.outer_bounds(), self.inner, self.pose_affine())
     }
     fn corners(&self) -> [Point; 4] {
         match self.mode {
@@ -848,10 +992,26 @@ impl Transaction {
                 let affine = self.pose_affine();
                 [0, 2, 4, 6].map(|i| affine.map(local_handle(self.frame, HANDLES[i])))
             }
+            TransformMode::Warp => {
+                let hull = self.outer_bounds();
+                [0, 2, 4, 6].map(|i| local_handle(hull, HANDLES[i]))
+            }
         }
+    }
+    fn warp_handles(&self) -> Vec<(Handle, Point)> {
+        let Some(mesh) = &self.mesh else {
+            return Vec::new();
+        };
+        let tangents = self.node.into_iter().flat_map(|node| {
+            (0..4u8).filter_map(move |side| mesh.tangent(node, side).map(|p| (Handle::Tangent(node, side), p)))
+        });
+        tangents
+            .chain((0..mesh.node_count()).filter_map(|node| mesh.node(node).map(|p| (Handle::Node(node), p))))
+            .collect()
     }
     fn handle_points(&self, reach: f32) -> Vec<Point> {
         match self.mode {
+            TransformMode::Warp => self.warp_handles().into_iter().map(|(_, p)| p).collect(),
             TransformMode::Distort => {
                 let q = self.quad();
                 q.into_iter()
@@ -872,32 +1032,59 @@ impl Transaction {
     fn fold(&mut self) {
         let outer = Projective::from_affine(self.pose_affine());
         let inner = self.inner.map_or(outer, |m| m.then(outer));
+        let bounds = self.outer_bounds();
         self.inner = Some(inner);
         self.pose = Pose::identity();
-        self.frame = inner.bounds(self.bounds).unwrap_or(self.bounds);
+        self.frame = inner.bounds(bounds).unwrap_or(bounds);
+    }
+    /// Fold everything into the mesh, seeding it from the current map.
+    fn enter_warp(&mut self) {
+        let mesh = match self.map() {
+            TransformMap::Mesh(mesh) => Some((*mesh).clone()),
+            TransformMap::Affine(affine) => MeshMap::from_affine(self.bounds, self.cells, affine),
+            TransformMap::Projective(map) => MeshMap::from_projective(self.bounds, self.cells, &map),
+        };
+        if let Some(mesh) = mesh {
+            self.frame = mesh.bounds();
+            self.mesh = Some(Arc::new(mesh));
+            self.inner = None;
+            self.pose = Pose::identity();
+        }
+    }
+    fn set_cells(&mut self, cells: [u16; 2]) {
+        self.cells = cells;
+        self.node = None;
+        if let Some(mesh) = self.mesh.as_deref().and_then(|mesh| refit(mesh, cells)) {
+            self.frame = mesh.bounds();
+            self.mesh = Some(Arc::new(mesh));
+        }
     }
     fn interpolation(&self, chosen: Option<Interpolation>) -> Interpolation {
         match (self.placement.is_some(), chosen, self.mode) {
             (true, ..) => Interpolation::Linear,
             (false, Some(chosen), _) => chosen,
-            (false, None, TransformMode::Distort) => Interpolation::Bicubic,
+            (false, None, TransformMode::Distort | TransformMode::Warp) => Interpolation::Bicubic,
             (false, None, TransformMode::Free) => Interpolation::Linear,
         }
     }
     fn set_mode(&mut self, mode: TransformMode) {
         match mode {
+            TransformMode::Warp => self.enter_warp(),
             TransformMode::Distort => self.fold(),
             TransformMode::Free => {
+                let bounds = self.outer_bounds();
                 if let Some(inner) = self.inner {
                     let combined = inner.then(Projective::from_affine(self.pose_affine()));
-                    match combined.as_affine().and_then(|a| Pose::from_affine(a, center(self.bounds))) {
+                    match combined.as_affine().and_then(|a| Pose::from_affine(a, center(bounds))) {
                         Some(pose) => {
                             self.pose = pose;
                             self.inner = None;
-                            self.frame = self.bounds;
+                            self.frame = bounds;
                         }
                         None => self.fold(),
                     }
+                } else if self.mode == TransformMode::Warp {
+                    self.frame = bounds;
                 }
             }
         }
@@ -906,24 +1093,45 @@ impl Transaction {
     fn reset(&mut self) {
         self.pose = self.start;
         self.inner = None;
+        self.mesh = None;
+        self.node = None;
         self.frame = self.bounds;
         self.mode = TransformMode::Free;
     }
     fn apply_drag(&mut self, drag: Drag, p: Point, modifiers: Modifiers, aspect: bool) {
+        let delta = sub(p, drag.press);
+        let warped = match (drag.handle, drag.mesh.as_deref()) {
+            (Handle::Node(node), Some(mesh)) => Some(mesh.move_node(node, delta)),
+            (Handle::Tangent(node, side), Some(mesh)) => {
+                Some(mesh.tangent(node, side).and_then(|t| mesh.move_tangent(node, side, add(t, delta))))
+            }
+            (Handle::Move, Some(mesh)) if self.mode == TransformMode::Warp => {
+                Some(Some(mesh.post(Affine::translation(delta))))
+            }
+            _ => None,
+        };
+        if let Some(mesh) = warped {
+            if let Some(mesh) = mesh.filter(MeshMap::valid) {
+                self.frame = mesh.bounds();
+                self.mesh = Some(Arc::new(mesh));
+            }
+            return;
+        }
         let distorts = matches!(drag.handle, Handle::Corner(_) | Handle::Edge(_))
             || (self.mode == TransformMode::Distort && matches!(drag.handle, Handle::Move));
         if distorts {
             self.pose = drag.pose;
-            if let Some(inner) = self.drag_quad(drag, p, modifiers) {
+            if let Some(inner) = self.drag_quad(&drag, p, modifiers) {
                 self.inner = Some(inner);
             }
         } else {
-            self.pose = self.drag_pose(drag, p, modifiers, aspect);
+            self.pose = self.drag_pose(&drag, p, modifiers, aspect);
         }
     }
-    fn drag_quad(&self, drag: Drag, p: Point, modifiers: Modifiers) -> Option<Projective> {
+    fn drag_quad(&self, drag: &Drag, p: Point, modifiers: Modifiers) -> Option<Projective> {
         let outer = drag.pose.affine(center(self.frame));
-        let mut q = quad_of(self.bounds, drag.inner, outer);
+        let bounds = self.outer_bounds();
+        let mut q = quad_of(bounds, drag.inner, outer);
         let mut delta = sub(p, drag.press);
         match drag.handle {
             Handle::Corner(i) => {
@@ -944,10 +1152,10 @@ impl Transaction {
                 q[(i + 1) % 4] = add(q[(i + 1) % 4], delta);
             }
             Handle::Move => q = q.map(|c| add(c, delta)),
-            Handle::Scale(_) | Handle::Rotate => return drag.inner,
+            Handle::Scale(_) | Handle::Rotate | Handle::Node(_) | Handle::Tangent(..) => return drag.inner,
         }
         let inverse = outer.inverse()?;
-        Projective::rect_to_quad(self.bounds, q.map(|c| inverse.map(c)))
+        Projective::rect_to_quad(bounds, q.map(|c| inverse.map(c)))
     }
     fn rotate_handle(&self, reach: f32) -> Point {
         let top = self
@@ -965,6 +1173,20 @@ impl Transaction {
             let q = self.basis.map(q);
             (world.x - q.x).hypot(world.y - q.y)
         };
+        if self.mode == TransformMode::Warp {
+            let nearest = self
+                .warp_handles()
+                .into_iter()
+                .map(|(handle, q)| (distance(q), handle))
+                .filter(|(d, _)| *d <= reach)
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, handle)| handle);
+            let hull = self.outer_bounds();
+            return nearest.or_else(|| {
+                (p.x >= hull.min.x && p.y >= hull.min.y && p.x <= hull.max.x && p.y <= hull.max.y)
+                    .then_some(Handle::Move)
+            });
+        }
         if self.mode == TransformMode::Distort {
             let quad = self.quad();
             let nearest = |points: &mut dyn Iterator<Item = (usize, Point)>| {
@@ -992,7 +1214,7 @@ impl Transaction {
         (q.x >= self.frame.min.x && q.y >= self.frame.min.y
             && q.x <= self.frame.max.x && q.y <= self.frame.max.y).then_some(Handle::Move)
     }
-    fn drag_pose(&self, drag: Drag, p: Point, modifiers: Modifiers, aspect: bool) -> Pose {
+    fn drag_pose(&self, drag: &Drag, p: Point, modifiers: Modifiers, aspect: bool) -> Pose {
         let mut pose = drag.pose;
         let pivot = center(self.frame);
         match drag.handle {
@@ -1048,7 +1270,7 @@ impl Transaction {
                     pose = next;
                 }
             }
-            Handle::Corner(_) | Handle::Edge(_) => {}
+            Handle::Corner(_) | Handle::Edge(_) | Handle::Node(_) | Handle::Tangent(..) => {}
             Handle::Scale(side) => {
                 let start = pose.affine(pivot);
                 let moving = local_handle(self.frame, side);
@@ -1122,6 +1344,9 @@ mod tests {
                 max: Point { x: 240., y: 190. },
             },
             inner: None,
+            mesh: None,
+            cells: MeshMap::PRESETS[0],
+            node: None,
             mode: TransformMode::Free,
             perspective: false,
             start: Pose::identity(),
@@ -1163,9 +1388,9 @@ mod tests {
                 } else {
                     Point { x: 0., y: 1. }
                 });
-                let drag = Drag { handle: Handle::Scale(side), press, current: press, pose: t.pose, inner: t.inner };
+                let drag = Drag { handle: Handle::Scale(side), press, current: press, pose: t.pose, inner: t.inner, mesh: None };
                 let target = add(press, Point { x: along.x * 0.2, y: along.y * 0.2 });
-                let next = t.drag_pose(drag, target, command, false);
+                let next = t.drag_pose(&drag, target, command, false);
                 let fixed = local_handle(t.bounds, side.map(|v| -v));
                 near(original.map(fixed), next.affine(pivot).map(fixed));
                 near(next.affine(pivot).map(local_handle(t.bounds, side)), target);
@@ -1197,6 +1422,7 @@ mod tests {
                         current: press,
                         pose: t.pose,
                         inner: t.inner,
+                        mesh: None,
                     };
                     for alt in [false, true] {
                         for shift in [false, true] {
@@ -1205,12 +1431,12 @@ mod tests {
                                 shift,
                                 ..Default::default()
                             };
-                            let unchanged = t.drag_pose(drag, press, modifiers, false);
+                            let unchanged = t.drag_pose(&drag, press, modifiers, false);
                             for p in [t.bounds.min, t.bounds.max] {
                                 near(unchanged.affine(pivot).map(p), original.map(p));
                             }
                             let next = t.drag_pose(
-                                drag,
+                                &drag,
                                 add(press, Point { x: 50., y: -30. }),
                                 modifiers,
                                 false,
@@ -1247,12 +1473,13 @@ mod tests {
         let press = t.bounds.max;
         for delta in [-220., -221., -219.99] {
             let next = t.drag_pose(
-                Drag {
+                &Drag {
                     handle: Handle::Scale([1., 1.]),
                     press,
                     current: press,
                     pose: t.pose,
                     inner: None,
+                    mesh: None,
                 },
                 add(press, Point { x: delta, y: -150. }),
                 Modifiers::default(),
@@ -1263,12 +1490,13 @@ mod tests {
         let press = add(pivot, Point { x: 80., y: 0. });
         let current = add(pivot, Point { x: 30., y: 70. });
         let next = t.drag_pose(
-            Drag {
+            &Drag {
                 handle: Handle::Rotate,
                 press,
                 current,
                 pose: t.pose,
                 inner: None,
+                mesh: None,
             },
             current,
             Modifiers {

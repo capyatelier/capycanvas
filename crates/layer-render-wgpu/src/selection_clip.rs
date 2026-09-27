@@ -11,7 +11,10 @@ pub(super) struct SelectionClip {
     pub(super) crossings: Deferred<wgpu::ComputePipeline>,
     pub(super) fill: Deferred<wgpu::ComputePipeline>,
     pub(super) resample: Deferred<wgpu::ComputePipeline>,
+    /// Resamples coverage through a warp mesh's rasterized positions.
+    pub(super) resample_mesh: Deferred<wgpu::ComputePipeline>,
     layout: wgpu::BindGroupLayout,
+    mesh_layout: wgpu::BindGroupLayout,
     pub buffer: Option<wgpu::Buffer>,
     pub binding: Option<wgpu::BindGroup>,
     geometry: Option<Arc<layer_core::Selection>>,
@@ -41,11 +44,40 @@ impl SelectionClip {
         let pipeline = |entry| Deferred::compute(device, "rasterize packed selection", &pipeline_layout, &shader, entry);
         let resample_shader = Deferred::wgsl(device, "affine selection coverage", include_str!("selection_resample.wgsl"));
         let resample = Deferred::compute(device, "resample packed selection", &pipeline_layout, &resample_shader, "resample");
+        let mesh_layout = crate::bindings::layout(device, "warped selection inputs", &[
+            buffer_entry(0, wgpu::BufferBindingType::Uniform),
+            buffer_entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
+            buffer_entry(2, wgpu::BufferBindingType::Storage { read_only: false }),
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ]);
+        let mesh_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("warped selection layout"),
+            bind_group_layouts: &[Some(&mesh_layout)],
+            immediate_size: 0,
+        });
+        let resample_mesh = Deferred::compute(
+            device,
+            "resample warped selection",
+            &mesh_pipeline_layout,
+            &resample_shader,
+            "resample_mesh",
+        );
         Self {
             crossings: pipeline("crossings"),
             fill: pipeline("fill"),
             resample,
+            resample_mesh,
             layout,
+            mesh_layout,
             buffer: None,
             binding: None,
             geometry: None,
@@ -429,6 +461,69 @@ impl SelectionClip {
         pass.dispatch_workgroups(stride.div_ceil(64), h, 1);
         drop(pass);
         Ok(output)
+    }
+}
+impl SelectionClip {
+    /// A pixel selection's coverage buffer and the rows mapping layer
+    /// positions to its pixels, for resampling through a warp mesh.
+    pub fn warp_source(
+        &mut self,
+        device: &wgpu::Device,
+        selection: &layer_core::Selection,
+    ) -> Result<(wgpu::Buffer, [[f32; 3]; 3]), GpuRasterError> {
+        let layer_core::SelectionShape::Pixels(pixels) = &selection.shape else {
+            return Err(GpuRasterError::InvalidTransform(
+                "Contour selections map on the CPU",
+            ));
+        };
+        let [a, b, c, d, x, y] = selection
+            .affine
+            .inverse()
+            .ok_or(GpuRasterError::InvalidTransform("Invalid selection transform"))?
+            .0;
+        Ok((self.pixel_buffer(device, pixels), [[a, c, x], [b, d, y], [0., 0., 1.]]))
+    }
+    /// Resample `rect` of a warped selection's output, `width` pixels wide,
+    /// from the mesh positions rasterized for it.
+    pub fn resample_warp_window(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut crate::submission::CommandEncoder,
+        source: &wgpu::Buffer,
+        rows: [[f32; 3]; 3],
+        output: &wgpu::Buffer,
+        positions: &wgpu::TextureView,
+        rect: PixelRect,
+        width: u32,
+    ) {
+        let header = [rect.min_x(), rect.min_y(), rect.width(), rect.height(), 0, 2, width, 0];
+        let params: Vec<u8> = header
+            .into_iter()
+            .flat_map(u32::to_ne_bytes)
+            .chain(resample_rows(rows))
+            .collect();
+        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("warped selection parameters"),
+            contents: &params,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("warped selection inputs"),
+            layout: &self.mesh_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: source.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: output.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(positions) },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("resample warped selection"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.resample_mesh);
+        pass.set_bind_group(0, &binding, &[]);
+        pass.dispatch_workgroups(rect.width().div_ceil(4).div_ceil(64), rect.height(), 1);
     }
 }
 /// Destination-to-source rows of the resample shader's parameters.

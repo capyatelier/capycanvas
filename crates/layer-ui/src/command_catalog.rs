@@ -421,6 +421,8 @@ fn action_description(action: &UiAction) -> &'static str {
             TransformDistort => "Pin each corner of the transform box independently, including perspective.",
             TransformPerspective => "While distorting, mirror each corner drag onto its neighbour for symmetric perspective.",
             TransformNearest | TransformBilinear | TransformBicubic => "Choose how transformed pixels are resampled: hard-edged, smooth, or smooth and sharp.",
+            TransformWarp => "Bend the content with a mesh of curved patches, dragging its nodes and their tangent handles.",
+            WarpGridThree | WarpGridFour | WarpGridFive => "Choose how many patches the warp mesh has, keeping its current shape.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -1040,7 +1042,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::TransformFree
             | C::TransformUniform
             | C::TransformPerspective => "Start a transform first",
-            C::TransformDistort if self.operation.placing() => crate::session::operation::DISTORT_PLACEMENT,
+            C::TransformDistort | C::TransformWarp if self.operation.placing() => crate::session::operation::DISTORT_PLACEMENT,
+            C::TransformWarp => "Start a transform first",
+            C::WarpGridThree | C::WarpGridFour | C::WarpGridFive => "Choose Warp first",
             C::TransformNearest | C::TransformBilinear | C::TransformBicubic if self.operation.placing() => {
                 "Placed photos keep their original pixels"
             }

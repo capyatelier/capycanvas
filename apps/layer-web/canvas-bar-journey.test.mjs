@@ -149,6 +149,18 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       }
       assert.equal(await evaluate(`document.querySelector('${interpolation} .toolbar-choice-label').textContent`),
         await evaluate(`layerApp.state().canvas_bar.items.find(i=>i.option.Choice?.id==='transform-interpolation').option.Choice.items.find(i=>i.selected).label`),`${device}: the dropdown shows the chosen filter`);
+      await tap(await middle(segment(3)),device);
+      await wait(`layerApp.state().commands.find(c=>c.id==='transform_warp').selected&&!!document.querySelector('${bar} [data-toolbar-choice="transform-warp-grid"]')`);
+      const hull=await anchor(),top={x:hull.x+(hull.right-hull.x)/3,y:hull.y},edge=(await state()).canvas_bar.anchor[1];
+      await wait('layerApp.app.brush_ready()');
+      touchId++;
+      await pointer('mousePressed',top,device,1);
+      for(const lift of [20,40]){await pointer('mouseMoved',{x:top.x,y:top.y-lift},device,1);await settle();}
+      await pointer('mouseReleased',{x:top.x,y:top.y-40},device,1);await settle();
+      await wait(visible);
+      assert.ok((await state()).canvas_bar.anchor[1]<edge-10,`${device}: dragging a Warp edge node with one contact bends the edge`);
+      await invoke('reset_transform');
+      await wait(`layerApp.state().commands.find(c=>c.id==='transform_free').selected`);
       await tap(await middle(segment(0)),device);
       await wait(`!document.querySelector('${bar} [data-command="transform_perspective"]')&&layerApp.state().commands.find(c=>c.id==='transform_free').selected&&${visible}`);
       await tap(await middle(`${bar} .canvas-action-bar-more`),device);

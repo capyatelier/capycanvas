@@ -1881,3 +1881,84 @@ fn layered_display_previews_fall_back_for_effects_clips_and_blends_above() {
         assert_eq!(skipped > 0, eligible, "{name}");
     }
 }
+
+#[test]
+fn moving_warps_resample_the_reduced_layer_into_the_display_and_settle_exactly() {
+    use layer_core::MeshMap;
+    let extent = [1536, 1024];
+    let [w, h] = extent.map(|n| n as f32);
+    let bounds = layer_core::Rect { min: Point::default(), max: Point { x: w, y: h } };
+    let keystone = layer_core::Projective::rect_to_quad(
+        bounds,
+        [[40., 30.], [w - 36., 70.], [w - 136., h - 24.], [90., h - 64.]].map(|[x, y]| Point { x, y }),
+    )
+    .unwrap();
+    let seeded = MeshMap::from_projective(bounds, [4, 4], &keystone).unwrap();
+    let edited = seeded.move_node(7, Point { x: 60., y: -35. }).unwrap().move_node(13, Point { x: -40., y: 22. }).unwrap();
+    let flat = MeshMap::identity(bounds, [3, 3]).unwrap().move_node(5, Point { x: 48., y: 30. }).unwrap();
+    let mapped = MeshMap {
+        net: flat.net.iter().map(|p| keystone.map(*p).unwrap_or(*p)).collect(),
+        ..flat.clone()
+    };
+    let placements = [
+        layer_core::Affine::IDENTITY,
+        layer_core::Affine::around(Point { x: 768., y: 512. }, [0.45, 0.45], 0.2, Point { x: 90., y: -40. }),
+    ];
+    for placement in placements {
+        let mut doc = document(extent);
+        doc.layers[0].opacity = 0.8;
+        doc.layers[0].properties.placement = placement;
+        let layer = doc.layers[0].id;
+        let all = layer_core::Selection::polygon(
+            [[0., 0.], [w, 0.], [w, h], [0., h]].map(|[x, y]| Point { x, y }).to_vec(),
+        )
+        .unwrap();
+        let [mut direct, mut reference] = complete_pair(&doc);
+        let v = centered_view([doc.width, doc.height], [320, 240], 0.2, 0.);
+        for r in [&mut direct, &mut reference] {
+            submit(r, &doc, v, true);
+        }
+        let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap();
+        let start = preview(layer, false, Some(all.clone()), layer_core::TransformMap::Affine(layer_core::Affine::IDENTITY));
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&start)).unwrap();
+            submit(r, &doc, v, false);
+        }
+        let mut frames = 0;
+        while direct.has_pending_work() {
+            frames += 1;
+            assert!(frames < 16, "the layer is reduced within a few frames");
+            submit(&mut direct, &doc, v, false);
+        }
+        for (step, mesh) in [seeded.clone(), edited.clone(), mapped.clone()].into_iter().enumerate() {
+            let map = layer_core::TransformMap::Mesh(Arc::new(mesh));
+            let composed = direct.metrics.composited_pixels;
+            for r in [&mut direct, &mut reference] {
+                r.set_transform_preview(Some(&preview(layer, true, Some(all.clone()), map.clone()))).unwrap();
+                submit(r, &doc, v, false);
+            }
+            assert_eq!(
+                direct.metrics.composited_pixels, composed,
+                "placement {placement:?} step {step} draws into the display"
+            );
+            let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+            assert!(
+                largest <= 0.35 && mean <= 5e-4,
+                "placement {placement:?} step {step}: largest {largest}, mean {mean}"
+            );
+        }
+        let still = preview(layer, false, Some(all.clone()), layer_core::TransformMap::Mesh(Arc::new(edited.clone())));
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&still)).unwrap();
+            submit(r, &doc, v, false);
+        }
+        let mut frames = 0;
+        while direct.has_pending_work() {
+            frames += 1;
+            assert!(frames < 64, "the still warp settles");
+            direct.set_transform_preview(Some(&still)).unwrap();
+            submit(&mut direct, &doc, v, false);
+        }
+        assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0), "placement {placement:?}");
+    }
+}

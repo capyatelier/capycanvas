@@ -7,6 +7,10 @@ use layer_core::{ImageTransform, Interpolation, Projective, TransformMap};
 
 pub(super) const TRANSFORM_SLOTS: usize = 16;
 const SOURCE_RECORD_BYTES: u64 = (1 + TRANSFORM_SLOTS as u64) * 16;
+/// Mesh source positions per attachment pixel, bound in the last source slot;
+/// uncovered pixels hold UNCOVERED.
+pub(super) const POSITIONS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
+pub(super) const UNCOVERED: f64 = -3.0e38;
 /// Destination-to-source rows, attachment origin and options of one region,
 /// and how a display level composites it.
 const REGION_BYTES: u64 = 112;
@@ -72,12 +76,19 @@ pub(super) enum Part {
     Kept,
 }
 
+/// A cached source binding's selection, source views and mesh positions.
+type SourceKey = (wgpu::Buffer, Vec<wgpu::TextureView>, Option<wgpu::TextureView>);
+
 pub struct PixelTransform {
     placement: bool,
     pub(super) part: Part,
     scalar: bool,
     visibility: bool,
+    /// Whether the prepared transform is a warp mesh, which draws through
+    /// `mesh_pipeline` from its source positions.
+    mesh: bool,
     pub(super) pipeline: Deferred<wgpu::RenderPipeline>,
+    pub(super) mesh_pipeline: Deferred<wgpu::RenderPipeline>,
     /// Color transforms drawn straight into a display level.
     pub(super) display: Option<Deferred<wgpu::ComputePipeline>>,
     display_layout: wgpu::BindGroupLayout,
@@ -90,7 +101,7 @@ pub struct PixelTransform {
     source_stride: u32,
     source_next_record: u64,
     source_upload: Vec<u8>,
-    bindings: std::collections::HashMap<(wgpu::Buffer, Vec<wgpu::TextureView>), (u64, wgpu::BindGroup)>,
+    bindings: std::collections::HashMap<SourceKey, (u64, wgpu::BindGroup)>,
     binding_frame: u64,
     uniforms: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     stride: u32,
@@ -155,6 +166,8 @@ impl PixelTransform {
         ]);
         let source_layout = crate::bindings::layout(device, "bounded immutable transform inputs", &entries);
         let pipeline = transform_pipeline(device, &layout, &source_layout, scalar, visibility, "fragment_main");
+        let mesh_pipeline =
+            transform_pipeline(device, &layout, &source_layout, scalar, visibility, "mesh_fragment_main");
         let display_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("transform display level"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -175,7 +188,9 @@ impl PixelTransform {
             part: Part::Whole,
             scalar,
             visibility,
+            mesh: false,
             pipeline,
+            mesh_pipeline,
             display,
             display_layout,
             display_target: None,
@@ -216,7 +231,9 @@ impl PixelTransform {
             part: self.part,
             scalar: self.scalar,
             visibility: self.visibility,
+            mesh: false,
             pipeline: self.pipeline.clone(),
+            mesh_pipeline: self.mesh_pipeline.clone(),
             display: self.display.clone(),
             display_layout: self.display_layout.clone(),
             display_target: None,
@@ -252,9 +269,11 @@ impl PixelTransform {
         tiles: &[TransformTile<'_>],
         bounds: [i32; 4],
         selection: Option<&wgpu::Buffer>,
+        positions: Option<&wgpu::TextureView>,
         fallback: &wgpu::TextureView,
     ) -> Result<TransformSource, &'static str> {
-        if tiles.len() > TRANSFORM_SLOTS
+        let slots = TRANSFORM_SLOTS - usize::from(positions.is_some());
+        if tiles.len() > slots
             || bounds[2] <= 0
             || bounds[3] <= 0
             || !valid_extent([bounds[0], bounds[1]], [bounds[2] as u32, bounds[3] as u32])
@@ -270,18 +289,25 @@ impl PixelTransform {
             return Err("Invalid transform selection");
         }
         let selection = selection.unwrap_or(&self.empty_selection);
-        let key = (selection.clone(), tiles.iter().map(|t| t.view.clone()).collect::<Vec<_>>());
+        let key = (
+            selection.clone(),
+            tiles.iter().map(|t| t.view.clone()).collect::<Vec<_>>(),
+            positions.cloned(),
+        );
         let binding = if let Some((used, binding)) = self.bindings.get_mut(&key) {
             *used = self.binding_frame;
             binding.clone()
         } else {
             let mut entries = Vec::with_capacity(TRANSFORM_SLOTS + 2);
             for i in 0..TRANSFORM_SLOTS {
+                let view = match tiles.get(i) {
+                    Some(tile) => tile.view,
+                    None if i + 1 == TRANSFORM_SLOTS => positions.unwrap_or(fallback),
+                    None => fallback,
+                };
                 entries.push(wgpu::BindGroupEntry {
                     binding: i as u32,
-                    resource: wgpu::BindingResource::TextureView(
-                        tiles.get(i).map_or(fallback, |t| t.view),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(view),
                 });
             }
             entries.push(wgpu::BindGroupEntry {
@@ -331,7 +357,7 @@ impl PixelTransform {
         selection: Option<&wgpu::Buffer>,
     ) {
         let allowed: std::collections::HashSet<_> = views.iter().copied().collect();
-        self.bindings.retain(|(buffer, bound), _| {
+        self.bindings.retain(|(buffer, bound, _), _| {
             (*buffer == self.empty_selection || selection.is_some_and(|s| s == buffer))
                 && bound.iter().all(|v| allowed.contains(v))
         });
@@ -384,6 +410,9 @@ impl PixelTransform {
             self.uniforms = Some((buffer, binding));
         }
     }
+    fn drawing_pipeline(&self) -> &wgpu::RenderPipeline {
+        if self.mesh { &self.mesh_pipeline } else { &self.pipeline }
+    }
     pub fn prepare_tiled(
         &mut self,
         device: &wgpu::Device,
@@ -397,6 +426,7 @@ impl PixelTransform {
     ) -> Result<[u32; 2], &'static str> {
         let rows = inverse_rows(transform)?;
         let identity = transform.is_identity();
+        self.mesh = matches!(transform.map, TransformMap::Mesh(_));
         let source_stride = self.source_stride;
         let bytes = jobs.len() as u64 * 2 * u64::from(self.stride);
         let source_bytes = jobs.len() as u64 * u64::from(source_stride);
@@ -496,7 +526,7 @@ impl PixelTransform {
         let region_offset = offsets[0] + (index as u32 * 2 + u32::from(identity)) * self.stride;
         let source_offset = offsets[1] + index as u32 * self.source_stride;
         let mut pass = encoder.color_pass("affine changed region", target.view, wgpu::LoadOp::Load);
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(self.drawing_pipeline());
         pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[region_offset]);
         pass.set_bind_group(1, &source.binding, &[source_offset]);
         let [x, y, w, h] = target.region;
@@ -518,7 +548,7 @@ impl PixelTransform {
             attachment,
             if clear { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
         );
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(self.drawing_pipeline());
         for draw in draws {
             let region = offsets[0] + (draw.job as u32 * 2 + u32::from(draw.identity)) * self.stride;
             pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[region]);
@@ -588,13 +618,14 @@ fn filter_flags(interpolation: Interpolation) -> f32 {
 }
 
 /// Rows mapping a destination pixel to homogeneous source coordinates. An
-/// affine map keeps w' = 1, so its perspective form draws identically.
+/// affine map keeps w' = 1, so its perspective form draws identically. A mesh
+/// reads its source positions from a texture instead.
 pub(super) fn inverse_rows(transform: &ImageTransform) -> Result<[[f32; 3]; 3], &'static str> {
     let invalid = "Transform must be finite and invertible";
     let projective = match &transform.map {
         TransformMap::Affine(affine) => Projective::from_affine(*affine),
         TransformMap::Projective(projective) => *projective,
-        TransformMap::Mesh(_) => return Err("Unsupported transform"),
+        TransformMap::Mesh(_) => Projective::IDENTITY,
     };
     if let Some(affine) = projective.as_affine() {
         let [a, b, c, d, x, y] = affine.inverse().ok_or(invalid)?.0;

@@ -225,7 +225,7 @@ pub(super) fn encode(
         })
         .collect();
     let source = pass
-        .source_views(&r.device, &views, bounds, None, &r.empty_view)
+        .source_views(&r.device, &views, bounds, None, None, &r.empty_view)
         .map_err(GpuRasterError::InvalidTransform)?;
     pass.encode_prepared(
         encoder,

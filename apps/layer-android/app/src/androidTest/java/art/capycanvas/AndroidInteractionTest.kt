@@ -1961,6 +1961,35 @@ class AndroidInteractionTest {
                 assertEquals("Distort", chosen("transform-mode"))
                 settle()
 
+                invoke("reset_transform")
+                waitFor("$device reset before Warp", 5_000) { chosen("transform-mode") == "Free" }
+                settle()
+                tap(bounds("canvas-bar-segment-transform-mode-3").center)
+                waitFor("$device Warp shows its grid choice", 5_000) { chosen("transform-mode") == "Warp" && exists("canvas-bar-choice-transform-warp-grid") }
+                settle()
+                val grid = chosen("transform-warp-grid")!!
+                tap(bounds("canvas-bar-choice-transform-warp-grid").center)
+                waitFor("$device Grid menu lists its presets", 5_000) { popupCount() == 1 && listOf("3 × 3", "4 × 4", "5 × 5").all { textBounds(it) != null } }
+                tap(textBounds(grid)!!.center)
+                waitFor("$device Grid menu closes", 5_000) { popupCount() == 0 && chosen("transform-warp-grid") == grid }
+                settle()
+                val hull = canvasBar()!!.getJSONArray("anchor")
+                val warpCamera = state().getJSONObject("camera")
+                val warpZoom = warpCamera.getDouble("zoom").toFloat(); val warpTranslation = warpCamera.getJSONArray("translation")
+                val edgeNode = Offset(work.left + (hull.getDouble(0) + (hull.getDouble(2) - hull.getDouble(0)) / 3).toFloat() * warpZoom + warpTranslation.getDouble(0).toFloat(),
+                    work.top + hull.getDouble(1).toFloat() * warpZoom + warpTranslation.getDouble(1).toFloat())
+                val edge = hull.getDouble(1)
+                val base = hull.getDouble(3)
+                val name = listOf("mouse", "finger", "stylus")[devices.indexOf(device)]
+                drag(edgeNode, edgeNode - Offset(0f, 40 * density)) { captureCanvasBar("warp-held-$name") }
+                waitFor("$device Warp edge node drag bends the top edge", 5_000) { canvasBar()?.getJSONArray("anchor")?.getDouble(1)?.let { it < edge - 10 } == true }
+                assertEquals("$device the Warp node drag leaves the bottom edge in place", base, canvasBar()!!.getJSONArray("anchor").getDouble(3), 1.0)
+                waitFor("$device bar returns after the Warp drag", 3_000) { exists("canvas-action-bar") }
+                captureCanvasBar("warp-$name")
+                invoke("reset_transform")
+                waitFor("$device reset returns to Free", 5_000) { chosen("transform-mode") == "Free" }
+                settle()
+
                 var hiddenWhileHeld = false
                 var glassWhileHeld = -1
                 drag(selection.center, selection.center + Offset(30 * density, 20 * density)) {

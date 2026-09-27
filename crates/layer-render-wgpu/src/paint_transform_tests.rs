@@ -585,3 +585,292 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
         "contours map exactly on the CPU"
     );
 }
+
+/// Warps seeded from perspectives, with a node and a tangent moved, and a net
+/// mapped through a perspective as the Warp handles leave it.
+fn warps(source: Rect) -> Vec<layer_core::MeshMap> {
+    use layer_core::{MeshMap, Projective};
+    let quad = |q: [[f32; 2]; 4]| Projective::rect_to_quad(source, q.map(|[x, y]| Point { x, y })).unwrap();
+    let keystone = quad([[90., 40.], [420., 90.], [460., 330.], [40., 250.]]);
+    let edited = MeshMap::from_projective(source, [3, 3], &keystone)
+        .unwrap()
+        .move_node(5, Point { x: 21.5, y: -14.25 })
+        .unwrap()
+        .move_tangent(10, 1, Point { x: 190.3, y: 150.7 })
+        .unwrap();
+    let flat = MeshMap::identity(source, [4, 4]).unwrap().move_node(7, Point { x: -12., y: 18. }).unwrap();
+    let through = quad([[260., 70.], [300., 70.], [600., 370.], [10., 370.]]);
+    let mapped = MeshMap {
+        net: flat.net.iter().map(|p| through.map(*p).unwrap_or(*p)).collect(),
+        ..flat.clone()
+    };
+    vec![edited, flat, mapped]
+}
+
+#[test]
+fn live_warps_match_replay_cancel_exactly_and_commit_without_jump() {
+    use layer_core::DefaultBrushPreset::*;
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let extent = [640, 384];
+    let view = ViewState {
+        width_px: extent[0],
+        height_px: extent[1],
+        ..view()
+    };
+    let frame =
+        |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch], reset| {
+            r.submit(FramePacket {
+                view,
+                dabs,
+                dab_batches: batches,
+                reset_layers: reset,
+                composite_all: false,
+                ..packet(layers, extent)
+            })
+            .unwrap();
+        };
+    let source = Rect {
+        min: Point { x: 60., y: 60. },
+        max: Point { x: 300., y: 300. },
+    };
+    for preset in [GPen, WatercolorWash] {
+        let mut layer = Layer::paint(LayerId(1), "live warp");
+        layer.properties.offset = Point { x: 5., y: 7. };
+        let mut b = batch(1);
+        b.style = preset_style(preset);
+        b.damage = Rect {
+            min: Point { x: 70., y: 70. },
+            max: Point { x: 280., y: 280. },
+        };
+        let mut d = dab([0.8, 0.1, 0.6, 0.7]);
+        d.center = Point { x: 175., y: 175. };
+        d.radii = [100.; 2];
+        d.material = [0.5, 0.8, 1., 0.8];
+        let layers = std::slice::from_ref(&layer);
+        frame(&mut r, layers, &[d], &[b.clone()], true);
+        let original = r.readback_srgb_rgba8().unwrap();
+        let selection = Selection::polygon(vec![
+            Point { x: 60., y: 60. },
+            Point { x: 300., y: 60. },
+            Point { x: 300., y: 300. },
+            Point { x: 60., y: 300. },
+        ])
+        .unwrap();
+        let mut preview = layer_render::TransformPreview {
+            transaction: 1,
+            moving: false,
+            layer: layer.id,
+            selection: Some(selection.clone()),
+            transform: ImageTransform::default(),
+        };
+        for (n, mesh) in warps(source).into_iter().enumerate() {
+            preview.transform = ImageTransform {
+                map: TransformMap::Mesh(std::sync::Arc::new(mesh)),
+                interpolation: Interpolation::Linear,
+            };
+            r.set_transform_preview(Some(&preview)).unwrap();
+            frame(&mut r, layers, &[], &[], false);
+            assert_ne!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?} warp {n} moves pixels");
+            let mut expected = layer.clone();
+            let mut op = operation(20, Affine::IDENTITY, Some(selection.clone()));
+            op.kind = LayerOperationKind::Transform(preview.transform.clone());
+            expected.pending_operations.push(op.clone());
+            let operation = DabBatch {
+                damage: op.bounds(extent),
+                ..op_batch(0, &op)
+            };
+            frame(&mut reference, &[expected], &[d], &[b.clone(), operation], true);
+            assert_eq!(
+                r.readback_srgb_rgba8().unwrap(),
+                reference.readback_srgb_rgba8().unwrap(),
+                "{preset:?} warp {n}"
+            );
+        }
+        r.set_transform_preview(None).unwrap();
+        frame(&mut r, layers, &[], &[], false);
+        assert_eq!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?} cancel");
+        preview.transaction += 1;
+        r.set_transform_preview(Some(&preview)).unwrap();
+        frame(&mut r, layers, &[], &[], false);
+        let before_commit = r.readback_srgb_rgba8().unwrap();
+        let captures = r.transforms.as_ref().unwrap().source_captures();
+        let mut op = operation(21, Affine::IDENTITY, preview.selection.clone());
+        op.kind = LayerOperationKind::Transform(preview.transform.clone());
+        let operation = DabBatch {
+            damage: op.bounds(extent),
+            ..op_batch(0, &op)
+        };
+        layer.pending_operations.push(op);
+        r.set_transform_preview(None).unwrap();
+        frame(&mut r, &[layer], &[], &[operation], false);
+        assert_eq!(
+            r.readback_srgb_rgba8().unwrap(),
+            before_commit,
+            "{preset:?} apply must not jump"
+        );
+        assert_eq!(
+            r.transforms.as_ref().unwrap().source_captures(),
+            captures,
+            "apply reuses the matching preview result"
+        );
+    }
+}
+
+#[test]
+fn mask_warps_commit_and_replay_as_previewed() {
+    let extent = [384, 256];
+    let view = ViewState {
+        width_px: extent[0],
+        height_px: extent[1],
+        ..view()
+    };
+    let frame = |r: &mut WgpuRasterizer, layer: &Layer, batches: &[DabBatch], reset| {
+        r.submit(FramePacket {
+            view,
+            dab_batches: batches,
+            reset_layers: reset,
+            composite_all: false,
+            ..packet(std::slice::from_ref(layer), extent)
+        })
+        .unwrap();
+    };
+    let mask_pages = |r: &WgpuRasterizer| -> Vec<([u32; 2], Vec<u8>)> {
+        let mut pages: Vec<_> = r
+            .layer_masks
+            .pages
+            .iter()
+            .filter(|((owner, _), _)| *owner == LayerId(9))
+            .map(|((_, c), page)| (*c, page_bytes(r, &page.texture)))
+            .collect();
+        pages.sort_by_key(|(c, _)| *c);
+        pages
+    };
+    let mut layer = Layer::paint(LayerId(1), "masked warp");
+    let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
+    mask.default_coverage = 0.;
+    mask.initial = Some(
+        Selection::polygon([[20., 20.], [260., 30.], [230., 200.], [30., 180.]].map(|[x, y]| Point { x, y }).to_vec())
+            .unwrap(),
+    );
+    layer.mask = Some(mask);
+    let source = Rect {
+        min: Point { x: 10., y: 10. },
+        max: Point { x: 280., y: 220. },
+    };
+    for (n, mesh) in warps(source).into_iter().enumerate() {
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        frame(&mut r, &layer, &[], true);
+        let original = mask_pages(&r);
+        let transform = ImageTransform {
+            map: TransformMap::Mesh(std::sync::Arc::new(mesh)),
+            interpolation: Interpolation::Bicubic,
+        };
+        r.set_transform_preview(Some(&layer_render::TransformPreview {
+            transaction: 1,
+            moving: false,
+            layer: LayerId(9),
+            selection: None,
+            transform: transform.clone(),
+        }))
+        .unwrap();
+        frame(&mut r, &layer, &[], false);
+        let previewed = mask_pages(&r);
+        assert_ne!(previewed, original, "warp {n} moves the mask");
+        let mut op = operation(30, Affine::IDENTITY, None);
+        op.kind = LayerOperationKind::Transform(transform);
+        let mut committed = layer.clone();
+        committed.mask.as_mut().unwrap().pending_operations = std::sync::Arc::new(vec![op.clone()]);
+        let operation = DabBatch {
+            layer_id: LayerId(9),
+            damage: op.bounds(extent),
+            ..op_batch(0, &op)
+        };
+        r.set_transform_preview(None).unwrap();
+        frame(&mut r, &committed, std::slice::from_ref(&operation), false);
+        assert_eq!(mask_pages(&r), previewed, "warp {n}: apply keeps the preview");
+        let mut replay = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        frame(&mut replay, &committed, &[operation], true);
+        assert_eq!(mask_pages(&replay), previewed, "warp {n}: replay matches the preview");
+    }
+}
+
+#[test]
+fn pixel_selections_resample_through_warps_like_their_affine() {
+    use layer_core::{MeshMap, SelectionPixels};
+    use layer_render::{RegionRequest, RegionSource};
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let extent = [1200u32, 700];
+    let layer = Layer::paint(LayerId(1), "warped selection");
+    r.submit(packet(std::slice::from_ref(&layer), extent)).unwrap();
+    let soft = |x: u32, y: u32| -> u32 {
+        if !((100..900).contains(&x) && (80..560).contains(&y)) {
+            0
+        } else {
+            255 - (x * 3 + y * 5) % 200
+        }
+    };
+    let words: Vec<u32> = (0..extent[1])
+        .flat_map(|y| {
+            (0..extent[0].div_ceil(4))
+                .map(move |w| (0..4).fold(0, |word, i| word | soft(w * 4 + i, y) << (i * 8)))
+        })
+        .collect();
+    let pixels = std::sync::Arc::new(SelectionPixels::bytes(extent, [100, 80, 900, 560], words).unwrap());
+    let selection = std::sync::Arc::new(
+        Selection::pixels(pixels)
+            .transformed(Affine::translation(Point { x: 4., y: -3. }))
+            .unwrap(),
+    );
+    let affine = Affine::around(Point { x: 600., y: 350. }, [0.9, 1.15], 0.3, Point { x: 40., y: 25. });
+    let bounds = Rect {
+        min: Point::default(),
+        max: Point { x: extent[0] as f32, y: extent[1] as f32 },
+    };
+    let resample = |r: &mut WgpuRasterizer, id: u64, map: TransformMap| {
+        let request = RegionRequest {
+            contiguous: false,
+            selection: None,
+            request_id: id,
+            source: RegionSource::TransformedSelection {
+                layer: layer.id,
+                selection: selection.clone(),
+                map,
+            },
+            position: [0, 0],
+            tolerance: 0.,
+            refinement: Default::default(),
+            limit: None,
+        };
+        assert!(r.request_region(request).unwrap());
+        r.wait_idle().unwrap();
+        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+        loop {
+            if let Some(result) = r.take_region() {
+                let result = result.unwrap();
+                assert_eq!(result.request_id, id);
+                break result.pixels;
+            }
+            assert!(std::time::Instant::now() < deadline, "region callback timed out");
+            std::thread::yield_now();
+        }
+    };
+    let expected = resample(&mut r, 90, TransformMap::Affine(affine));
+    let warped = resample(
+        &mut r,
+        91,
+        TransformMap::Mesh(std::sync::Arc::new(MeshMap::from_affine(bounds, [4, 3], affine).unwrap())),
+    );
+    assert_eq!(warped.extent(), extent);
+    let byte = |words: &[u32], x: u32, y: u32| (words[(y * extent[0].div_ceil(4) + x / 4) as usize] >> ((x % 4) * 8)) & 255;
+    let mut covered = 0;
+    for y in 0..extent[1] {
+        for x in 0..extent[0] {
+            let [e, w] = [byte(expected.words(), x, y), byte(warped.words(), x, y)];
+            assert!(e.abs_diff(w) <= 1, "at {x},{y}: warp {w} != affine {e}");
+            covered += usize::from(e > 0);
+        }
+    }
+    assert!(covered > 100_000, "the selection lands inside the layer");
+    assert_eq!(warped.bounds(), expected.bounds());
+}

@@ -11,7 +11,7 @@ Status: shared model, GTK, Web, Android, Windows, macOS and iPadOS hosts impleme
 | Context | Shown when | Items | Placement |
 | --- | --- | --- | --- |
 | Placement | A photo is being placed or pasted | Mode, Original Size, flips, quarter turns, Reset · Cancel, Apply | Beside the photo |
-| Transform | Transform is open on paint, a mask or selected pixels | Mode (Free, Uniform, Distort), Perspective while distorting, Flip H/V, Rotate 90° left/right, Reset, Interpolation · Cancel, Apply | Beside the transform box |
+| Transform | Transform is open on paint, a mask or selected pixels | Mode (Free, Uniform, Distort, Warp), Perspective while distorting, Grid while warping, Flip H/V, Rotate 90° left/right, Reset, Interpolation · Cancel, Apply | Beside the transform box |
 | Polygon | A polygon selection is under construction | Remove Last Point · Cancel, Finish | Bottom edge |
 | Selection | A selection exists and a selection tool or Move is active, or a command such as Select All just made it | Deselect, Invert, Transform, Mask, Fill, Quick Mask, Save as Selection Layer | Beside the selection |
 
@@ -51,10 +51,14 @@ Status: shared model, GTK, Web, Android, Windows, macOS and iPadOS hosts impleme
 - **Free:** scale, rotate and move with the box handles. Ctrl-dragging an edge skews about the opposite edge.
 - **Uniform:** Free with proportions kept.
 - **Distort:** each corner moves independently and each edge moves both of its corners. **Perspective**, or Shift, mirrors a corner drag onto its neighbour so opposite sides stay symmetric.
+- **Warp:** a mesh of curved patches over the content.
+  - Drag a node to bend the mesh around it. Pressing a node shows its tangent handles, which shape the curves leaving it. Dragging elsewhere inside moves the whole mesh.
+  - **Grid** offers 3 × 3 (the default), 4 × 4 and 5 × 5 cells. Changing it keeps the current shape.
 - **Switching modes keeps the geometry:**
   - Returning to Free from a perspective quad keeps it under a bounding-box frame.
   - A parallelogram folds back into position, scale, rotation and skew exactly.
-- **Flips and quarter turns** act in the layer's axes about the centre of the transformed box.
+  - Warp starts from the current box or quad. Leaving Warp keeps the mesh, and Free or Distort then act on its hull.
+- **Flips and quarter turns** act in the layer's axes about the centre of the transformed box, or of the mesh's hull while warping.
 - **Reset** returns to Free and the geometry the transform started with.
 - **Applying a distorted pixel selection:** a soft or painted selection cannot follow a perspective map as metadata, so Apply first resamples its coverage on the GPU.
   - The transform stays open, and Apply reads "Applying the transform" until the coverage returns; the result is one undo step.
@@ -77,7 +81,7 @@ Status: shared model, GTK, Web, Android, Windows, macOS and iPadOS hosts impleme
 - **Narrow windows:** when docks leave the work area narrower than the smallest bar, placement uses the window width.
 - **Tests:**
   - shared: `crates/layer-ui/src/canvas_bar_tests.rs`;
-  - GTK native: `native_canvas_bar_input`, `native_canvas_bar_polygon_input` and `native_canvas_bar_distorts_a_pixel_selection` in `apps/layer-linux/src/canvas_bar_tests.rs`;
+  - GTK native, in `apps/layer-linux/src/canvas_bar_tests.rs`: `native_canvas_bar_input`, `native_canvas_bar_polygon_input`, `native_canvas_bar_distorts_a_pixel_selection`, `native_canvas_bar_finger_moves_a_transform`, and `native_canvas_bar_warps_a_selection` (mouse, finger and pen; run with `--tablet`);
   - Web: `node --test apps/layer-web/canvas-bar.test.mjs`, `node apps/layer-web/test.mjs --headless --canvas-bar`, and `device.test.mjs --canvas-bar` on a tablet;
   - Android: `AndroidInteractionTest#canvasActionBarJourneysAcrossDevices` with mouse, finger and stylus, and `AndroidCanvasBarBenchmarkTest` for frame timing on a 6000 × 4000 canvas (see the [Android guide](../development/android.md)).
   - Apple: `EditorLaunchTests/testCanvasActionBar` on macOS and a physical iPad covers overflow into More, modes, Interpolation, Cancel/Apply history, the toggle, Zen and placement beside a selection; the ABI test `native/src/canvas_bar_tests.rs` covers stale edits and contact hiding.

@@ -75,6 +75,10 @@ pub(crate) fn short_label(command: CommandId) -> &'static str {
         CommandId::TransformNearest => "Nearest",
         CommandId::TransformBilinear => "Bilinear",
         CommandId::TransformBicubic => "Bicubic",
+        CommandId::TransformWarp => "Warp",
+        CommandId::WarpGridThree => "3 × 3",
+        CommandId::WarpGridFour => "4 × 4",
+        CommandId::WarpGridFive => "5 × 5",
         CommandId::TransformFlipHorizontal
         | CommandId::TransformFlipVertical
         | CommandId::TransformRotateLeft
@@ -137,7 +141,10 @@ enum PlanItem {
 }
 fn group_commands(group: ToolActionGroup) -> &'static [CommandId] {
     match group {
-        ToolActionGroup::TransformMode => &[CommandId::TransformFree, CommandId::TransformUniform, CommandId::TransformDistort],
+        ToolActionGroup::TransformMode => {
+            &[CommandId::TransformFree, CommandId::TransformUniform, CommandId::TransformDistort, CommandId::TransformWarp]
+        }
+        ToolActionGroup::TransformWarpGrid => &[CommandId::WarpGridThree, CommandId::WarpGridFour, CommandId::WarpGridFive],
         ToolActionGroup::TransformInterpolation => {
             &[CommandId::TransformNearest, CommandId::TransformBilinear, CommandId::TransformBicubic]
         }
@@ -242,6 +249,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut transform_items = vec![PlanItem::Choice(ToolActionGroup::TransformMode)];
         if distorting {
             transform_items.push(PlanItem::Command(CommandId::TransformPerspective, true));
+        }
+        if self.warp_cells().is_some() {
+            transform_items.push(PlanItem::Choice(ToolActionGroup::TransformWarpGrid));
         }
         transform_items.extend([
             PlanItem::Command(CommandId::TransformFlipHorizontal, false),

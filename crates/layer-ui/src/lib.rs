@@ -469,6 +469,10 @@ command_ids! {
     TransformNearest,
     TransformBilinear,
     TransformBicubic,
+    TransformWarp,
+    WarpGridThree,
+    WarpGridFour,
+    WarpGridFive,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -491,6 +495,7 @@ impl CommandId {
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::TransformFree | Self::TransformUniform | Self::TransformDistort | Self::TransformPerspective
                 | Self::TransformNearest | Self::TransformBilinear | Self::TransformBicubic
+                | Self::TransformWarp | Self::WarpGridThree | Self::WarpGridFour | Self::WarpGridFive
                 | Self::ZenMode
                 | Self::Fullscreen
                 | Self::ToggleTheme
@@ -620,6 +625,7 @@ impl CommandId {
             Self::TransformNearest => "mosaic",
             Self::TransformBilinear => "blur",
             Self::TransformBicubic => "sharpen",
+            Self::TransformWarp | Self::WarpGridThree | Self::WarpGridFour | Self::WarpGridFive => "warp",
             Self::KeyboardShortcuts => "keyboard",
             Self::About => "info",
             Self::Website => "website",
@@ -790,6 +796,10 @@ impl CommandId {
             Self::TransformNearest => "Nearest neighbor",
             Self::TransformBilinear => "Bilinear",
             Self::TransformBicubic => "Bicubic",
+            Self::TransformWarp => "Warp",
+            Self::WarpGridThree => "3 × 3 warp grid",
+            Self::WarpGridFour => "4 × 4 warp grid",
+            Self::WarpGridFive => "5 × 5 warp grid",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
             Self::Website => ApplicationLink::Website.label(),

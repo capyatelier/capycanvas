@@ -51,6 +51,7 @@ struct DocumentKey {
     source: bool,
     operations: bool,
     transform: bool,
+    mesh: bool,
     chains: Vec<(Vec<Arc<layer_core::EffectProgram>>, effects::Execution)>,
 }
 impl DocumentKey {
@@ -64,6 +65,10 @@ impl DocumentKey {
             transform: document.layers.iter().any(|l| l.pending_operations.iter()
                 .chain(l.masks().flat_map(|m| m.pending_operations.iter()))
                 .any(|op| matches!(op.kind, layer_core::LayerOperationKind::Transform(_)))),
+            mesh: document.layers.iter().any(|l| l.pending_operations.iter()
+                .chain(l.masks().flat_map(|m| m.pending_operations.iter()))
+                .any(|op| matches!(&op.kind, layer_core::LayerOperationKind::Transform(t)
+                    if matches!(t.map, layer_core::TransformMap::Mesh(_))))),
             chains: scene::startup_effect_chains(&document.layers).into_iter()
                 .map(|(layers, execution)| (layers.into_iter().filter_map(|l| l.effect.as_ref().map(|e| e.program.clone())).collect(), execution)).collect(),
         }
@@ -315,6 +320,9 @@ impl WgpuRasterizer {
             if shader.key.operations {
                 required.render.push(self.layer_masks.initialize.clone());
                 required.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
+            }
+            if shader.key.mesh {
+                required.render.extend(self.transforms.as_ref().unwrap().mesh_pipelines().into_iter().cloned());
             }
             if shader.key.transform {
                 required.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());

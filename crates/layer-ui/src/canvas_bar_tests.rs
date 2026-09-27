@@ -94,7 +94,7 @@ fn transform_publishes_a_bar_whose_edits_expire_with_the_transform() {
     assert_ne!(change.regions & regions::CANVAS_BAR, 0);
     let bar = s.state.canvas_bar.clone().expect("transform bar");
     assert_eq!(bar.context.kind, CanvasBarKind::Transform);
-    assert_eq!(mode_choice(&bar), [CommandId::TransformFree, CommandId::TransformUniform, CommandId::TransformDistort]);
+    assert_eq!(mode_choice(&bar), [CommandId::TransformFree, CommandId::TransformUniform, CommandId::TransformDistort, CommandId::TransformWarp]);
     assert_eq!(bar_commands(&bar.items), [CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft, CommandId::TransformRotateRight, CommandId::ResetTransform]);
     assert_eq!(bar_commands(&bar.completion), [CommandId::CancelTransform, CommandId::ApplyTransform]);
     assert_eq!(bar.placement, CanvasBarPlacement::NearObject);
@@ -741,6 +741,101 @@ fn cancelling_or_editing_a_pending_apply_discards_its_coverage() {
     assert!(s.operation.active(), "the stale coverage is discarded");
 }
 
+fn preview_map(s: &mut UiSession<Recorder>) -> layer_core::TransformMap {
+    s.renderer_mut().transform.clone().unwrap().transform.map
+}
+
+fn close(a: Point, b: Point, tolerance: f32) -> bool {
+    (a.x - b.x).abs() <= tolerance && (a.y - b.y).abs() <= tolerance
+}
+
+fn drag_to(s: &mut UiSession<Recorder>, from: Point, to: Point) {
+    s.transform_pen(event(s, 1, PenPhase::Down, 1.), from).unwrap();
+    s.transform_pen(event(s, 2, PenPhase::Move, 1.), to).unwrap();
+    s.transform_pen(event(s, 3, PenPhase::Up, 1.), to).unwrap();
+}
+
+#[test]
+fn warp_seeds_from_the_transform_and_bends_through_nodes_and_tangents() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::TransformRotateRight);
+    s.frame(2, 2).unwrap();
+    let rotated = preview_map(&mut s);
+    invoke(&mut s, CommandId::TransformWarp);
+    s.frame(3, 3).unwrap();
+    assert!(s.command(CommandId::TransformWarp).selected);
+    assert!(s.command(CommandId::WarpGridThree).selected, "three by three cells by default");
+    assert_eq!(s.transform_interpolation(), Some(layer_core::Interpolation::Bicubic));
+    let mesh = s.operation.mesh().expect("Warp seeds a mesh");
+    assert_eq!(mesh.node_count(), 16);
+    for corner in [Point { x: 150., y: 150. }, Point { x: 250., y: 180. }, Point { x: 200., y: 250. }] {
+        assert!(close(mesh.map(corner).unwrap(), rotated.map(corner).unwrap(), 0.01), "the seed keeps the quarter turn");
+    }
+    let bar = s.state.canvas_bar.clone().unwrap();
+    assert!(bar.items.iter().any(|i| matches!(i.option, ToolOption::Choice { id: "transform-warp-grid", .. })));
+    assert!(s.state.tool_settings.is_empty(), "the pose fields do not apply to a mesh");
+
+    let node = mesh.node(5).unwrap();
+    let moved = Point { x: node.x + 30., y: node.y + 20. };
+    drag_to(&mut s, node, moved);
+    s.frame(4, 4).unwrap();
+    let mesh = s.operation.mesh().unwrap();
+    assert!(close(mesh.node(5).unwrap(), moved, 0.01), "a node follows the pen");
+    assert!(matches!(preview_map(&mut s), layer_core::TransformMap::Mesh(_)));
+    let tangent = mesh.tangent(5, 0).expect("the pressed node shows its tangents");
+    let pulled = Point { x: tangent.x, y: tangent.y + 25. };
+    drag_to(&mut s, tangent, pulled);
+    assert!(close(s.operation.mesh().unwrap().tangent(5, 0).unwrap(), pulled, 0.01), "a tangent handle follows the pen");
+
+    let probe = Point { x: 200., y: 200. };
+    let before = s.operation.mesh().unwrap().map(probe).unwrap();
+    invoke(&mut s, CommandId::WarpGridFour);
+    let refit = s.operation.mesh().unwrap();
+    assert_eq!(refit.node_count(), 25);
+    assert!(close(refit.map(probe).unwrap(), before, 0.5), "a new grid keeps the shape");
+
+    invoke(&mut s, CommandId::TransformFree);
+    s.frame(5, 5).unwrap();
+    assert!(s.operation.mesh().is_some(), "leaving Warp keeps the mesh");
+    let hull = s.operation.quad();
+    let centre = Point { x: (hull[0].x + hull[2].x) * 0.5, y: (hull[0].y + hull[2].y) * 0.5 };
+    drag_to(&mut s, centre, Point { x: centre.x + 10., y: centre.y });
+    s.frame(6, 6).unwrap();
+    let layer_core::TransformMap::Mesh(moved) = preview_map(&mut s) else { panic!("the mesh stays under the box") };
+    assert!(close(moved.map(probe).unwrap(), Point { x: before.x + 10., y: before.y }, 0.5), "the box moves the warped content");
+
+    invoke(&mut s, CommandId::TransformWarp);
+    invoke(&mut s, CommandId::TransformFlipHorizontal);
+    let flipped = s.operation.mesh().unwrap();
+    let hull = flipped.bounds();
+    assert!(close(flipped.map(probe).unwrap(), Point { x: hull.min.x + hull.max.x - before.x - 10., y: before.y }, 0.5), "a flip mirrors the mesh about its hull");
+
+    invoke(&mut s, CommandId::ResetTransform);
+    s.frame(7, 7).unwrap();
+    assert!(s.operation.mesh().is_none());
+    assert!(s.command(CommandId::TransformFree).selected);
+    invoke(&mut s, CommandId::TransformWarp);
+    invoke(&mut s, CommandId::ApplyTransform);
+    assert!(!s.operation.active(), "an unbent warp applies at once");
+}
+
+#[test]
+fn warp_is_refused_on_photo_placements() {
+    use layer_core::color::{SampleDepth, source::*};
+    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
+        profile: Default::default(), profile_assumed: false,
+    }, 1024 * 1024).unwrap();
+    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
+        Document::new("warp placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
+    s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    assert!(!s.command(CommandId::TransformWarp).enabled);
+    assert_eq!(s.command_disabled_reason(CommandId::TransformWarp).as_deref(), Some(operation::DISTORT_PLACEMENT));
+    assert!(s.dispatch(UiAction::Invoke { command: CommandId::TransformWarp }).is_err());
+    assert!(!s.command(CommandId::WarpGridFour).enabled);
+}
 
 #[test]
 fn a_placement_drag_publishes_the_document_on_release() {

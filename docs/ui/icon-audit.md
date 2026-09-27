@@ -274,6 +274,7 @@ Category mapping: Tone → Levels; Color → hue/saturation swatches; Detail →
 | Free transform | `transform` | The existing transform box. |
 | Uniform transform | `link` | Chain links, as for a preserved aspect. |
 | Distort | `distort` | New: an irregular quad with four independent corner handles. |
+| Warp and its grid presets | `warp` | New: a grid whose rows and columns bend. |
 | Perspective | `perspective` | New: a trapezoid with handles at its four corners. |
 | Flip horizontally / vertically | `flip-horizontal`, `flip-vertical` | Reused from the view flips; the bar shows the icon alone. |
 | Rotate 90° left / right | `rotate-left`, `rotate-right` | Reused from view rotation; the bar shows the icon alone. |

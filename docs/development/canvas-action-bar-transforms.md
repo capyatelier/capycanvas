@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Drag convention](../ui/drag-and-reorder.md) · [Panel transparency](../ui/panel-transparency.md)
 
-Status: **in progress.** Done and pushed: A1–A3, B1–B3, C1 (GTK), D1–D9, E1, E2, F1 (Web, including Chrome on the MovinkPad 11), F2 (Android), F3 (macOS and iPadOS), F4 (Windows) and finger-touch handles for every transform. 24 MP photo transforms without adjustment layers are being brought to 120 Hz; on Android the full-resolution transform and placement previews and glass changes are far over budget (see the [Android guide](android.md)). Adjustment layers above a transformed layer will be optimized later. The current behavior is documented in [the canvas action bar guide](../ui/canvas-action-bar.md).
+Status: **in progress.** Done and pushed: A1–A3, B1–B3, C1 (GTK), D1–D12, E1, E2, F1 (Web, including Chrome on the MovinkPad 11), F2 (Android), F3 (macOS and iPadOS), F4 (Windows) and finger-touch handles for every transform. Drags of a 24 MP photo draw at display resolution: on GTK they hold 120 Hz alone and layered, in Free and Distort, and on the MovinkPad 11 selection, photo and placement drags run at 119–217 Hz (see [rendering internals](../internals/rendering.md)). Adjustment layers above a transformed layer will be optimized later. The current behavior is documented in [the canvas action bar guide](../ui/canvas-action-bar.md).
 
 Two refinements made during implementation:
 - **More opens a menu,** not the Tool Options drawer: the items that did not fit (mode choices as submenus), then the context's own menu and the bar toggle. Bar items are commands and choices that menus can represent, so no new drawer anchor was needed on any host.

@@ -205,7 +205,7 @@ impl PlacementDrag {
                 let over_paper = pixel_transform::DisplayLevel { opacity: 1., ..at_level };
                 let captured_at = clip.then(*original);
                 let document = r.document_extent;
-                captured.draw(r, pass, encoder, target, &transform, &transform, captured_at, document, texels, over_paper)?;
+                captured.draw(r, pass, encoder, target, &transform, &transform, captured_at, document, texels, over_paper, None)?;
             }
             _ => {
                 let transform = paint_transform::resample_map(
@@ -216,7 +216,7 @@ impl PlacementDrag {
                 );
                 self.copy
                     .reduced
-                    .draw(r, pass, encoder, target, &transform, &transform, clip, extent, texels, at_level)?;
+                    .draw(r, pass, encoder, target, &transform, &transform, clip, extent, texels, at_level, None)?;
             }
         }
         self.shown = placement;

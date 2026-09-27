@@ -204,18 +204,33 @@ fn native_canvas_bar_input() {
     );
     assert!((distorted[0] - anchor[0]).abs() < 1. && (distorted[1] - anchor[1]).abs() < 1., "the opposite corner stays");
     capture_reference(&w, &format!("{dir}/distort.png"), 1.);
+    let selected = |w: &Workspace, id: CommandId| state(w).commands.iter().any(|c| c.id == id && c.selected);
+    assert!(selected(&w, CommandId::TransformBicubic), "Distort resamples with Bicubic");
+    let press = |native: &mut Native, widget: &gtk::Widget| {
+        native.events(json!([{"point": center(&w, widget)}, {"down": true}, {"down": false}]));
+    };
+    let from_more = |native: &mut Native, labels: &[&str]| {
+        press(native, &bar_widget(&w, "canvas-bar-more"));
+        for label in labels {
+            let item = until_some(|| mapped_label(w.canvas_bar.root.upcast_ref(), label), label);
+            press(native, &item);
+        }
+    };
     let interpolation = bar_widget(&w, "canvas-bar-choice-transform-interpolation");
-    assert!(mapped_label(&interpolation, "Bicubic").is_some(), "Distort resamples with Bicubic");
-    native.events(json!([{"point": center(&w, &interpolation)}, {"down": true}, {"down": false}]));
-    let nearest = until_some(|| mapped_label(w.window.upcast_ref(), "Nearest"), "the dropdown lists the filters");
-    native.events(json!([{"point": center(&w, &nearest)}, {"down": true}, {"down": false}]));
-    until(
-        || state(&w).commands.iter().any(|c| c.id == CommandId::TransformNearest && c.selected)
-            && mapped_label(&interpolation, "Nearest").is_some(),
-        "choosing Nearest resamples with hard edges",
-    );
+    if interpolation.is_mapped() {
+        press(&mut native, &interpolation);
+        let nearest = until_some(|| mapped_label(w.window.upcast_ref(), "Nearest"), "the dropdown lists the filters");
+        press(&mut native, &nearest);
+    } else {
+        from_more(&mut native, &["Interpolation", "Nearest"]);
+    }
+    until(|| selected(&w, CommandId::TransformNearest), "choosing Nearest resamples with hard edges");
     let reset = bar_widget(&w, "canvas-bar-ResetTransform");
-    native.events(json!([{"point": center(&w, &reset)}, {"down": true}, {"down": false}]));
+    if reset.is_mapped() {
+        press(&mut native, &reset);
+    } else {
+        from_more(&mut native, &["Reset transform"]);
+    }
     until(
         || !perspective(&w) && anchor_in_window(&w).iter().zip(anchor).all(|(a, b)| (a - b).abs() < 1.),
         "Reset returns to Free and the starting box",
@@ -230,7 +245,11 @@ fn native_canvas_bar_input() {
     native.events(json!([{"down": false}]));
     until(|| w.canvas_bar.visible_bounds().is_some(), "the bar returns after the drag");
     let moved = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
-    assert!((moved.x() - bar.x() - 40.).abs() < 3., "the bar follows the moved box");
+    let shift = moved.x() - bar.x();
+    assert!(
+        (moved.y() - bar.y() - 20.).abs() < 3. && (-1. ..=43.).contains(&shift),
+        "the bar follows the moved box, clamped to the work area: {bar:?} -> {moved:?}"
+    );
     let more = bar_widget(&w, "canvas-bar-more");
     native.events(json!([{"point": center(&w, &more)}, {"down": true}, {"down": false}]));
     until(|| w.canvas_bar.menu_open(), "More opens its menu");
@@ -379,6 +398,92 @@ fn native_canvas_bar_distorts_a_pixel_selection() {
     assert!(document.revision > revision, "Apply commits the distorted pixels");
     assert!(pixels(&w), "the selection follows the distortion as pixel coverage");
 }
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_canvas_bar_warps_a_selection --tablet"]
+fn native_canvas_bar_warps_a_selection() {
+    let app = native_test_app("art.capycanvas.CanvasBarWarp");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
+    w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+    native_pen_path(&w, &[[650., 500.], [1150., 500.], [1150., 850.], [650., 850.], [650., 500.]]);
+    w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
+    let kind = |w: &Workspace| state(w).canvas_bar.map(|b| b.context.kind);
+    until(|| kind(&w) == Some(layer_ui::CanvasBarKind::Selection) && shown(&w), "the selection bar appears");
+    let mut native = Native::start();
+    let click = |native: &mut Native, widget: &gtk::Widget| {
+        native.events(json!([{"point": center(&w, widget)}, {"down": true}, {"down": false}]));
+    };
+    click(&mut native, &bar_widget(&w, "canvas-bar-ScaleRotate"));
+    until(|| kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && shown(&w), "Transform opens the transform bar");
+    let modes = bar_widget(&w, "canvas-bar-choice-transform-mode");
+    let mut warp = modes.first_child();
+    for _ in 0..3 {
+        warp = warp.and_then(|c| c.next_sibling());
+    }
+    click(&mut native, &warp.expect("the Warp segment"));
+    until(
+        || state(&w).commands.iter().any(|c| c.id == CommandId::TransformWarp && c.selected)
+            && find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-choice-transform-warp-grid").is_some(),
+        "Warp shows its grid choice",
+    );
+    let mesh = |w: &Workspace| {
+        let g = w.gpu.borrow();
+        match &g.as_ref().unwrap().session.engine().transform_preview().unwrap().transform.map {
+            layer_core::TransformMap::Mesh(mesh) => mesh.clone(),
+            other => panic!("Warp previews a mesh, not {other:?}"),
+        }
+    };
+    let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+    let node = |w: &Workspace, index: u32| {
+        let p = mesh(w).node(index).unwrap();
+        canvas_point(w, [p.x, p.y])
+    };
+    let drags: [(u32, [f32; 2], &str); 3] = [(5, [40., 30.], "mouse"), (6, [-30., 25.], "touch"), (1, [10., -45.], "pen")];
+    for (index, delta, device) in drags {
+        let from = node(&w, index);
+        let to = [from[0] + delta[0], from[1] + delta[1]];
+        let middle = [from[0] + delta[0] * 0.5, from[1] + delta[1] * 0.5];
+        let events = match device {
+            "mouse" => json!([
+                {"point": from}, {"down": true}, {"wait_ms": 40},
+                {"point": middle}, {"wait_ms": 20}, {"point": to}, {"wait_ms": 20}, {"down": false}
+            ]),
+            "touch" => json!([
+                {"touch": "down", "point": from}, {"wait_ms": 40},
+                {"touch": "move", "point": middle}, {"wait_ms": 20},
+                {"touch": "move", "point": to}, {"wait_ms": 20}, {"touch": "up"}
+            ]),
+            _ => json!([
+                {"pen": "down", "point": from}, {"wait_ms": 40},
+                {"pen": "move", "point": middle}, {"wait_ms": 20},
+                {"pen": "move", "point": to}, {"wait_ms": 20}, {"pen": "up"}, {"pen": "leave"}
+            ]),
+        };
+        native.events(events);
+        until(
+            || {
+                let now = node(&w, index);
+                (now[0] - to[0]).hypot(now[1] - to[1]) < 3.
+            },
+            &format!("a {device} drag moves mesh node {index}"),
+        );
+        until(|| shown(&w), "the bar returns after the drag");
+    }
+    let dir = "../../artifacts/canvas-action-bar";
+    std::fs::create_dir_all(dir).unwrap();
+    pump(300);
+    capture_reference(&w, &format!("{dir}/warp.png"), 1.);
+    click(&mut native, &bar_widget(&w, "canvas-bar-ApplyTransform"));
+    until(|| !transforming(&w), "Apply ends the warp");
+    let document = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+    assert!(document > revision, "Apply commits the warped pixels");
+}
+
 
 #[test]
 #[ignore = "isolated compositor, GPU and native touch delivery"]

@@ -4,6 +4,7 @@
 use super::*;
 use pixel_transform::PixelTransform;
 pub(super) mod layers;
+pub(super) mod mesh;
 pub(super) mod resample;
 pub(super) mod snapshot;
 use snapshot::TileSnapshot;
@@ -26,6 +27,10 @@ impl PaintTransforms {
     }
     pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 3] {
         self.0[0].pipelines()
+    }
+    /// What warp meshes draw with, compiled when a mesh is first shown.
+    pub fn mesh_pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 4] {
+        self.0[0].mesh_pipelines()
     }
     /// Drag previews draw into the display with these once they are ready;
     /// they never delay input.
@@ -178,9 +183,11 @@ impl PaintTransforms {
     }
     /// Draw a preview of a layer without a mask straight into a reduced
     /// display `level`, from the transaction's captured originals. A placed
-    /// layer is only resampled from its reduced copy. The layer's pages keep
-    /// the last full preview. Returns the document region drawn, or None when
-    /// the transaction has not captured this layer or reduced a placed one.
+    /// layer or a warp is only resampled from its reduced copy, a warp
+    /// through its mesh rasterized at the level's texels. The layer's pages
+    /// keep the last full preview. Returns the document region drawn, or None
+    /// when the transaction has not captured this layer or reduced a placed
+    /// one or a warped one.
     #[allow(clippy::too_many_arguments)]
     pub fn render_display(
         &mut self,
@@ -228,6 +235,15 @@ struct ImageTransformState {
     exacting: Option<(layer_render::TransformPreview, Vec<PixelRect>)>,
     spares: PreviewPages,
     atlases: [Option<Atlas>; 2],
+    /// Mesh positions for each window of pages a warp draws.
+    positions: mesh::Positions,
+    /// Mesh positions for the display texels a moving warp resamples.
+    display_positions: mesh::Positions,
+    /// The warp mesh last drawn into a display level, the tolerance it was
+    /// tessellated within and its geometry.
+    display_mesh: Option<(Arc<layer_core::MeshMap>, f32, Arc<mesh::MeshGeometry>)>,
+    /// The warp mesh last drawn and its tessellated geometry.
+    mesh: Option<(Arc<layer_core::MeshMap>, Arc<mesh::MeshGeometry>)>,
     #[cfg(test)]
     pub source_captures: u64,
 }
@@ -249,6 +265,9 @@ const SETTLE_RECORDS: u64 = 4096;
 /// smallest capacity keeps every tile of a batch resident until it is drawn.
 const BATCH_ORIGINAL_TILES: usize = 48;
 
+/// Pages per window of a mesh transform, matching its positions texture.
+const MESH_WINDOW: [u32; 2] = [mesh::WINDOW_PAGES; 2];
+
 /// A destination page and the page-local part of it a transform draws.
 struct Target {
     texture: wgpu::Texture,
@@ -268,15 +287,21 @@ struct Window {
 /// The level of a layer's own pixels whose texels are at least as fine as
 /// those of display `level` along the axis `placement` magnifies most.
 pub(crate) fn local_level(level: u32, placement: layer_core::Affine) -> u32 {
+    (level as f32 - magnification(placement).log2()).floor().clamp(0., 4.) as u32
+}
+
+/// How far `placement` stretches layer pixels along the axis it magnifies
+/// most.
+fn magnification(placement: layer_core::Affine) -> f32 {
     let [a, b, c, d, _, _] = placement.0;
     let sum = a * a + b * b + c * c + d * d;
     let det = (a * d - b * c).abs();
-    let high = ((sum + (sum * sum - 4. * det * det).max(0.).sqrt()) * 0.5).sqrt();
-    (level as f32 - high.log2()).floor().clamp(0., 4.) as u32
+    ((sum + (sum * sum - 4. * det * det).max(0.).sqrt()) * 0.5).sqrt()
 }
 
 /// `transform` followed by `placement`, from texels of the layer reduced to
-/// `local` to texels of display `level`, sampled bilinearly.
+/// `local` to texels of display `level`, sampled bilinearly. A warp resamples
+/// from mesh positions instead and maps through the placement alone.
 pub(crate) fn resample_map(
     transform: &layer_core::ImageTransform,
     placement: layer_core::Affine,
@@ -430,6 +455,7 @@ impl ImageTransformState {
             PixelTransform::staged(device, false),
             PixelTransform::staged(device, true),
             PixelTransform::staged_visibility(device),
+            mesh::Positions::new(device),
         )
     }
     pub fn fork(&self) -> Self {
@@ -437,12 +463,14 @@ impl ImageTransformState {
             self.color.fork(),
             self.scalar.fork(),
             self.visibility.fork(),
+            self.positions.fork(),
         )
     }
     fn with_passes(
         color: PixelTransform,
         scalar: PixelTransform,
         visibility: PixelTransform,
+        positions: mesh::Positions,
     ) -> Self {
         Self {
             color,
@@ -465,6 +493,10 @@ impl ImageTransformState {
             exacting: None,
             spares: PreviewPages::default(),
             atlases: Default::default(),
+            display_positions: positions.fork(),
+            positions,
+            display_mesh: None,
+            mesh: None,
             #[cfg(test)]
             source_captures: 0,
         }
@@ -476,6 +508,14 @@ impl ImageTransformState {
             &self.visibility.pipeline,
         ]
     }
+    pub fn mesh_pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 4] {
+        [
+            &self.color.mesh_pipeline,
+            &self.scalar.mesh_pipeline,
+            &self.visibility.mesh_pipeline,
+            &self.positions.pipeline,
+        ]
+    }
     pub fn begin_frame(&mut self) {
         self.color.begin_frame();
         self.scalar.begin_frame();
@@ -484,6 +524,8 @@ impl ImageTransformState {
     pub fn storage_bytes(&self) -> u64 {
         self.spares.storage_bytes()
             + self.atlases.iter().flatten().map(Atlas::storage_bytes).sum::<u64>()
+            + self.positions.storage_bytes()
+            + self.display_positions.storage_bytes()
             + self.color.storage_bytes()
             + self.selection.as_ref().map_or(0, wgpu::Buffer::size)
             + self.scalar.storage_bytes()
@@ -642,6 +684,14 @@ impl ImageTransformState {
             return Ok(());
         }
         let index = r.paint_layers.iter().position(|l| l.id == layer);
+        let mesh = match &transform.map {
+            layer_core::TransformMap::Mesh(map) => {
+                let geometry = self.mesh_geometry(map);
+                self.positions.upload(r, encoder, &geometry)?;
+                Some(geometry)
+            }
+            _ => None,
+        };
         let material = self.sources[1].is_some();
         let watercolor = self.sources[2].is_some();
         let support = self.channel_regions(transform, r.target_extent(layer));
@@ -803,7 +853,7 @@ impl ImageTransformState {
                     (!region.is_empty()).then_some((c, target))
                 })
                 .collect();
-            let windows = self.plan_windows(r, channel, transform, targets)?;
+            let windows = self.plan_windows(r, channel, transform, mesh.as_ref(), targets)?;
             if channel == 0 && r.device.working_format().block_copy_size(None) == Some(4) {
                 self.capture_originals(r, encoder, &windows)?;
             }
@@ -827,9 +877,14 @@ impl ImageTransformState {
         r: &WgpuRasterizer,
         channel: usize,
         transform: &layer_core::ImageTransform,
+        mesh: Option<&Arc<mesh::MeshGeometry>>,
         targets: Vec<([u32; 2], Target)>,
     ) -> Result<Vec<Window>, GpuRasterError> {
-        let [columns, rows] = Atlas::pages(self.atlas_format(r, channel));
+        let [columns, rows] = if mesh.is_some() {
+            MESH_WINDOW
+        } else {
+            Atlas::pages(self.atlas_format(r, channel))
+        };
         let mut windows = std::collections::BTreeMap::new();
         for (c, target) in targets {
             let key = [c[0] / columns, c[1] / rows];
@@ -843,7 +898,10 @@ impl ImageTransformState {
                 .pages
                 .push((c, target));
         }
-        let splitter = self.sources[channel].as_ref().unwrap().splitter(transform)?;
+        let splitter = self.sources[channel]
+            .as_ref()
+            .unwrap()
+            .splitter(transform, mesh.cloned())?;
         let mut found = Vec::new();
         for window in windows.values_mut() {
             let mut blocks = std::collections::BTreeMap::new();
@@ -905,6 +963,9 @@ impl ImageTransformState {
                 })
             })
             .collect();
+        let meshed = matches!(transform.map, layer_core::TransformMap::Mesh(_));
+        let positions = meshed
+            .then(|| self.positions.view(&r.device, MESH_WINDOW.map(|n| n * PAGE_SIZE)));
         let pass = if self.background.is_some() {
             &mut self.visibility
         } else if channel == 0 {
@@ -928,13 +989,23 @@ impl ImageTransformState {
         let mut first = 0;
         for window in windows {
             let origin = window.origin.map(|v| v * PAGE_SIZE);
+            if meshed {
+                self.positions.draw(r, encoder, window.origin)?;
+            }
             let snapshot = self.sources[channel].as_ref().unwrap();
             let batches = source_batches(&window.jobs, |c| snapshot.pages.contains_key(&c));
             for (n, batch) in batches.into_iter().enumerate() {
                 let mut sources = Vec::with_capacity(batch.len());
                 for (job, _) in &window.jobs[batch.clone()] {
                     let snapshot = self.sources[channel].as_ref().unwrap();
-                    sources.push(snapshot.binding(r, pass, &job.sources, selection, encoder)?);
+                    sources.push(snapshot.binding(
+                        r,
+                        pass,
+                        &job.sources,
+                        selection,
+                        positions.as_ref(),
+                        encoder,
+                    )?);
                 }
                 let draws: Vec<_> = batch
                     .zip(&sources)
@@ -1034,7 +1105,7 @@ impl ImageTransformState {
             })
             .collect();
         let identity = layer_core::ImageTransform::default();
-        let copies = self.plan_windows(r, 0, &identity, targets)?;
+        let copies = self.plan_windows(r, 0, &identity, None, targets)?;
         let has_selection = std::mem::replace(&mut self.has_selection, false);
         let result = self.draw_windows(r, encoder, 0, &identity, &copies);
         self.has_selection = has_selection;
@@ -1085,6 +1156,29 @@ impl ImageTransformState {
             coordinate,
             snapshot::SnapshotPage::of(&capture.texture, &capture.view),
         );
+    }
+    /// The mesh tessellated within `tolerance` destination pixels for a
+    /// display level.
+    fn display_geometry(&mut self, map: &Arc<layer_core::MeshMap>, tolerance: f32) -> Arc<mesh::MeshGeometry> {
+        if let Some((cached, within, geometry)) = &self.display_mesh
+            && *within == tolerance
+            && (Arc::ptr_eq(cached, map) || cached == map)
+        {
+            return geometry.clone();
+        }
+        let geometry = Arc::new(mesh::MeshGeometry::display(map, tolerance));
+        self.display_mesh = Some((map.clone(), tolerance, geometry.clone()));
+        geometry
+    }
+    fn mesh_geometry(&mut self, map: &Arc<layer_core::MeshMap>) -> Arc<mesh::MeshGeometry> {
+        if let Some((cached, geometry)) = &self.mesh
+            && (Arc::ptr_eq(cached, map) || cached == map)
+        {
+            return geometry.clone();
+        }
+        let geometry = Arc::new(mesh::MeshGeometry::new(map));
+        self.mesh = Some((map.clone(), geometry.clone()));
+        geometry
     }
     fn release_snapshot(&mut self) {
         self.sources = Default::default();
@@ -1244,7 +1338,6 @@ impl ImageTransformState {
             && self.sources[0].is_some()
             && self.sources[1].is_none()
             && self.sources[2].is_none()
-            && !matches!(next.transform.map, layer_core::TransformMap::Mesh(_))
     }
     fn render_display(
         &mut self,
@@ -1266,7 +1359,11 @@ impl ImageTransformState {
             reduced.transaction == next.transaction && reduced.level == local && reduced.pending.is_empty()
         });
         let placed = placement != layer_core::Affine::IDENTITY;
-        if placed && !reduced {
+        let mesh = match &next.transform.map {
+            layer_core::TransformMap::Mesh(map) => Some(map.clone()),
+            _ => None,
+        };
+        if (placed || mesh.is_some()) && !reduced {
             return Ok(None);
         }
         if self.displayed.as_ref().is_some_and(|(shown, _)| shown == next) {
@@ -1334,11 +1431,35 @@ impl ImageTransformState {
             let kept = resample_map(&layer_core::ImageTransform::default(), placement, local, display_level);
             let clip = layer_core::Affine([side as f32, 0., 0., side as f32, 0., 0.])
                 .then(placement.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid layer placement"))?);
-            self.reduced
-                .as_mut()
-                .unwrap()
-                .draw(r, resample, encoder, level, &transform, &kept, clip, extent, texels, at_level)?;
-            if !next.moving && !placed {
+            let positions = match &mesh {
+                Some(map) => {
+                    let tolerance = 0.5 * side as f32 / magnification(placement).max(1e-6);
+                    let geometry = self.display_geometry(map, tolerance);
+                    let texel = 1. / side as f32;
+                    let to_texels = placement.then(layer_core::Affine([texel, 0., 0., texel, 0., 0.]));
+                    let origin = [texels[0] as f32 - 1., texels[1] as f32 - 1.];
+                    let view = self.display_positions.view(&r.device, [texels[2], texels[3]]);
+                    self.display_positions.upload(r, encoder, &geometry)?;
+                    self.display_positions
+                        .draw_display(r, encoder, origin, to_texels, 1. / (1u32 << local) as f32)?;
+                    Some(view)
+                }
+                None => None,
+            };
+            self.reduced.as_mut().unwrap().draw(
+                r,
+                resample,
+                encoder,
+                level,
+                &transform,
+                &kept,
+                clip,
+                extent,
+                texels,
+                at_level,
+                positions.as_ref(),
+            )?;
+            if !next.moving && !placed && mesh.is_none() {
                 let block = 2 * PAGE_SIZE / side * side;
                 let mut blocks = Vec::new();
                 for y in (drawn.min_y()..drawn.max_y()).step_by(block as usize) {
@@ -1368,7 +1489,7 @@ impl ImageTransformState {
     ) -> Result<(), GpuRasterError> {
         let side = display.side;
         let snapshot = self.sources[0].as_ref().unwrap();
-        let splitter = snapshot.splitter(transform)?.aligned(side);
+        let splitter = snapshot.splitter(transform, None)?.aligned(side);
         let mut blocks = std::collections::BTreeMap::new();
         for c in page_coordinates(drawn) {
             blocks
@@ -1421,7 +1542,7 @@ impl ImageTransformState {
             let mut sources = Vec::with_capacity(batch.len());
             for (job, _) in &pieces[batch.clone()] {
                 let snapshot = self.sources[0].as_ref().unwrap();
-                sources.push(snapshot.binding(r, &mut self.color, &job.sources, selection, encoder)?);
+                sources.push(snapshot.binding(r, &mut self.color, &job.sources, selection, None, encoder)?);
             }
             let draws: Vec<_> = batch
                 .zip(&sources)

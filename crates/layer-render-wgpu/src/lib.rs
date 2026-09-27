@@ -890,6 +890,9 @@ pub struct WgpuRasterizer {
     /// drags need is still being prepared.
     moving_hint: Option<LayerId>,
     preparing_moving: bool,
+    /// A warp preview waits, showing the frame before it, until what draws
+    /// meshes has compiled in the background.
+    awaiting_meshes: bool,
     preparation: preparation::Preparation,
     /// The pending recomposition follows a placement drag, a few tiles per
     /// frame while nothing else changes.
@@ -1212,6 +1215,7 @@ impl WgpuRasterizer {
             placement_copy: None,
             moving_hint: None,
             preparing_moving: false,
+            awaiting_meshes: false,
             preparation: preparation::Preparation::new(!cfg!(test)),
             recompose_placement: false,
             recompose: None,
@@ -1564,6 +1568,17 @@ impl WgpuRasterizer {
             self.recompose_placement = true;
             self.recompose_tiles = self.recompose_tiles.min(RECOMPOSE_FIRST_TILES);
         }
+    }
+
+    /// Whether warp meshes draw without compiling on this thread, asking the
+    /// background compiler for what they draw with. Without one, a frame
+    /// compiles it.
+    fn mesh_pipelines_ready(&self) -> bool {
+        let (Some(startup), Some(transforms)) = (&self.startup, &self.transforms) else {
+            return true;
+        };
+        startup.compiler.require(transforms.mesh_pipelines(), startup::BRUSH)
+            & startup.compiler.require([&transforms.resample().mesh_pipeline], startup::BRUSH)
     }
 
     /// The pipeline that composes placed layers.
@@ -3244,6 +3259,7 @@ impl CanvasRenderer for WgpuRasterizer {
             || self.reducing
             || self.placement_drag.is_some()
             || self.preparing_moving
+            || self.awaiting_meshes
             || self.recompose.is_some()
             || self.layered_display.as_ref().is_some_and(|layers| !layers.ready())
     }
@@ -4189,7 +4205,12 @@ impl CanvasRenderer for WgpuRasterizer {
             || self.layered_display.is_some();
         let units = self.preparation.begin(&self.device, &self.queue, &mut encoder, !may_prepare);
         let mut prepared = false;
-        let eligible = self.transform_preview.clone().and_then(|preview| {
+        self.awaiting_meshes = self
+            .transform_preview
+            .as_ref()
+            .is_some_and(|p| matches!(p.transform.map, layer_core::TransformMap::Mesh(_)))
+            && !self.mesh_pipelines_ready();
+        let eligible = self.transform_preview.clone().filter(|_| !self.awaiting_meshes).and_then(|preview| {
             (dirty.is_empty() && self.transform_damage.is_empty())
                 .then(|| self.display_preview(&packet, &preview, requested_view.background_rgba_linear))
                 .flatten()
@@ -4482,7 +4503,7 @@ impl CanvasRenderer for WgpuRasterizer {
             ..packet
         };
         if let Some(preview) = self.transform_preview.clone() {
-            if !displayed {
+            if !displayed && !self.awaiting_meshes {
                 let mut transforms = self.transforms.take().expect("retained transform renderer");
                 let result = transforms.update_preview(
                     self,

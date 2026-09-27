@@ -119,6 +119,21 @@ layer is drawn as the exact area mean; a placed layer keeps its resampled
 preview. Later frames draw the preview's pages and recompose what the drag
 touched a few tiles at a time, reporting pending work so hosts keep drawing.
 
+A Warp transform is a [mesh](../../crates/layer-render-wgpu/src/paint_transform/mesh.rs)
+of Bézier patches. Its pages are drawn a window of four by four pages at a
+time: the mesh, tessellated within half a pixel and extended by a skirt past
+its edges, is first rasterized into a texture of the source position at each
+destination pixel, and the transform pass samples the original there,
+averaging a pixel's footprint from its neighbors' positions where the mesh
+shrinks it. Paint, masks and a selection's moved pixels draw this way in the
+preview and when applied. A drag rasterizes the mesh at the display level's
+texels instead, tessellated within half a texel, and resamples the reduced copy
+at those positions, still or moving; the still preview then settles its pages
+without drawing the exact display first. A pixel selection moved by a warp is
+resampled on the GPU the same way, a window at a time. What draws meshes
+compiles in the background when a warp is first shown, and until then the
+preview keeps the frame before it.
+
 A [placement drag](../../crates/layer-render-wgpu/src/placement_drag.rs) is a
 frame in which only one layer's placement changed. Its layer's own pixels are
 reduced once and kept between drags while they are unchanged, together with the

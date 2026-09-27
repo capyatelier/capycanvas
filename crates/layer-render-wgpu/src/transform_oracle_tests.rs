@@ -482,3 +482,321 @@ fn bicubic_mask_transforms_keep_scalar_coverage_within_the_unit_interval() {
     );
     assert!(values.iter().any(|v| *v > 0.999) && values.iter().any(|v| *v > 0.01 && *v < 0.99));
 }
+
+/// Source positions of the mesh's triangles at pixel centers, rasterized on
+/// the CPU with later triangles winning: centers more than 0.02 px inside a
+/// triangle, and centers within 0.02 px of its edges, where snapped vertices
+/// allow either rasterization.
+/// Hardware interpolates them to about 1/32768 of their size, so nearest
+/// sampling and the minification grid allow either side of a boundary.
+fn mesh_positions(
+    geometry: &crate::paint_transform::mesh::MeshGeometry,
+) -> ([Vec<Option<[f64; 2]>>; 2], usize) {
+    let size = (EXTENT[0] * EXTENT[1]) as usize;
+    let mut maps = [vec![None; size], vec![None; size]];
+    let mut hits = vec![0u32; size];
+    let vertex = |i: u32| geometry.vertices[i as usize].map(f64::from);
+    for triangle in geometry.triangles() {
+        let [a, b, c] = [
+            vertex(triangle[0]),
+            vertex(triangle[1]),
+            vertex(triangle[2]),
+        ];
+        let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        if area.abs() < 1e-12 {
+            continue;
+        }
+        let low = [0, 1].map(|k| a[k].min(b[k]).min(c[k]).floor().max(0.) as u32);
+        let high = [0, 1].map(|k| (a[k].max(b[k]).max(c[k]).ceil().max(0.) as u32).min(EXTENT[k]));
+        for y in low[1]..high[1] {
+            for x in low[0]..high[0] {
+                let p = [x as f64 + 0.5, y as f64 + 0.5];
+                let weight = |u: [f64; 4], v: [f64; 4]| {
+                    ((u[0] - p[0]) * (v[1] - p[1]) - (u[1] - p[1]) * (v[0] - p[0])) / area
+                };
+                let l = [weight(b, c), weight(c, a), weight(a, b)];
+                let edges = [(b, c), (c, a), (a, b)].map(|(u, v)| (u[0] - v[0]).hypot(u[1] - v[1]));
+                let nearest_edge = (0..3)
+                    .map(|i| l[i] * area.abs() / edges[i])
+                    .fold(f64::INFINITY, f64::min);
+                let source = [2, 3].map(|k| l[0] * a[k] + l[1] * b[k] + l[2] * c[k]);
+                let index = (y * EXTENT[0] + x) as usize;
+                if nearest_edge > 0.02 {
+                    maps[0][index] = Some(source);
+                    hits[index] += 1;
+                }
+                if nearest_edge > -0.02 {
+                    maps[1][index] = Some(source);
+                }
+            }
+        }
+    }
+    (maps, hits.iter().filter(|h| **h > 1).count())
+}
+
+impl Oracle {
+    /// The moved value at a pixel of a mesh transform, from rasterized
+    /// source positions.
+    fn meshed(
+        &self,
+        positions: &[Option<[f64; 2]>],
+        interpolation: Interpolation,
+        x: u32,
+        y: u32,
+    ) -> Vec<[f64; 4]> {
+        let at = |x: i64, y: i64| -> Option<[f64; 2]> {
+            let [x, y] = [
+                x.clamp(0, EXTENT[0] as i64 - 1),
+                y.clamp(0, EXTENT[1] as i64 - 1),
+            ];
+            positions[(y as u32 * EXTENT[0] + x as u32) as usize]
+        };
+        let Some(s) = at(x as i64, y as i64) else {
+            return vec![[0.; 4]];
+        };
+        if interpolation == Interpolation::Nearest {
+            let [xs, ys] = s.map(|v| [(v - 5e-3).floor() as i32, (v + 5e-3).floor() as i32]);
+            return xs
+                .into_iter()
+                .flat_map(|x| ys.map(|y| self.selected(x, y)))
+                .collect();
+        }
+        let step = |dx: i64, dy: i64| -> [f64; 2] {
+            let [after, before] = [
+                at(x as i64 + dx, y as i64 + dy),
+                at(x as i64 - dx, y as i64 - dy),
+            ];
+            match (after, before) {
+                (Some(a), Some(b)) => [(a[0] - b[0]) * 0.5, (a[1] - b[1]) * 0.5],
+                (Some(a), None) => [a[0] - s[0], a[1] - s[1]],
+                (None, Some(b)) => [s[0] - b[0], s[1] - b[1]],
+                (None, None) => [0.; 2],
+            }
+        };
+        let [dx, dy] = [step(1, 0), step(0, 1)];
+        let reach = [dx[0].hypot(dx[1]), dy[0].hypot(dy[1])];
+        let count = |r: f64| ((r + 0.5).floor() as u32).clamp(1, 4);
+        let mut values = Vec::new();
+        let mut counts = Vec::new();
+        for offset in [0., -1e-2, 1e-2] {
+            let n = [count(reach[0] + offset), count(reach[1] + offset)];
+            if !counts.contains(&n) {
+                counts.push(n);
+            }
+        }
+        for [nx, ny] in counts {
+            if [nx, ny] == [1, 1] && interpolation == Interpolation::Bicubic {
+                // Its clamp follows the nearest four texels, which change
+                // across a texel boundary.
+                for [ox, oy] in [[0., 0.], [-5e-3, 0.], [5e-3, 0.], [0., -5e-3], [0., 5e-3]] {
+                    values.push(self.bicubic([s[0] + ox, s[1] + oy]));
+                }
+                continue;
+            }
+            values.push(match (nx, ny, interpolation) {
+                (1, 1, Interpolation::Bicubic) => self.bicubic(s),
+                (1, 1, _) => self.bilinear(s),
+                _ => {
+                    let mut sum = [0.; 4];
+                    for j in 0..ny {
+                        for i in 0..nx {
+                            let o = [
+                                (i as f64 + 0.5) / nx as f64 - 0.5,
+                                (j as f64 + 0.5) / ny as f64 - 0.5,
+                            ];
+                            let tap = self.bilinear([
+                                s[0] + dx[0] * o[0] + dy[0] * o[1],
+                                s[1] + dx[1] * o[0] + dy[1] * o[1],
+                            ]);
+                            for k in 0..4 {
+                                sum[k] += tap[k] / (nx * ny) as f64;
+                            }
+                        }
+                    }
+                    sum
+                }
+            });
+        }
+        values
+    }
+}
+
+#[test]
+fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
+    use crate::paint_transform::mesh::MeshGeometry;
+    use layer_core::MeshMap;
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut layer = Layer::paint(LayerId(1), "mesh oracle");
+    layer.source = Some(source_image());
+    frame(&mut r, &layer, true);
+    let source = Rect {
+        min: Point { x: 40., y: 30. },
+        max: Point { x: 230., y: 180. },
+    };
+    let quad =
+        [[30.3, 20.1], [250.2, 45.4], [280.1, 200.3], [10.2, 170.4]].map(|[x, y]| Point { x, y });
+    let seeded = MeshMap::from_projective(
+        source,
+        [3, 3],
+        &Projective::rect_to_quad(source, quad).unwrap(),
+    )
+    .unwrap();
+    let warped = seeded
+        .move_node(5, Point { x: 21.5, y: -14.25 })
+        .unwrap()
+        .move_tangent(10, 1, Point { x: 190.3, y: 150.7 })
+        .unwrap();
+    let folded = MeshMap::identity(source, [2, 2])
+        .unwrap()
+        .move_node(4, Point { x: 150.25, y: 20.5 })
+        .unwrap();
+    let shrunk = MeshMap::from_affine(
+        source,
+        [3, 3],
+        Affine::around(
+            Point { x: 135., y: 105. },
+            [0.3, 0.4],
+            0.2,
+            Point::default(),
+        ),
+    )
+    .unwrap()
+    .move_node(6, Point { x: 3., y: 2. })
+    .unwrap();
+    let pixels = selection_pixels();
+    let mut transaction = 100;
+    for (mesh, folds) in [(warped, false), (folded, true), (shrunk, false)] {
+        let geometry = MeshGeometry::new(&mesh);
+        let (positions, stacked) = mesh_positions(&geometry);
+        let covered = positions[0].iter().filter(|p| p.is_some()).count();
+        assert!(covered > 1000, "the mesh covers the layer");
+        assert_eq!(
+            stacked > 1000,
+            folds,
+            "only the folded mesh overlaps itself"
+        );
+        for mode in [0, 1] {
+            let oracle = Oracle { mode };
+            let selection = (mode == 1).then(|| Selection::pixels(pixels.clone()));
+            for interpolation in [
+                Interpolation::Nearest,
+                Interpolation::Linear,
+                Interpolation::Bicubic,
+            ] {
+                transaction += 1;
+                r.set_transform_preview(Some(&layer_render::TransformPreview {
+                    transaction,
+                    moving: false,
+                    layer: layer.id,
+                    selection: selection.clone(),
+                    transform: ImageTransform {
+                        map: TransformMap::Mesh(Arc::new(mesh.clone())),
+                        interpolation,
+                    },
+                }))
+                .unwrap();
+                frame(&mut r, &layer, false);
+                let texels = pages(&r);
+                assert!(!texels.is_empty());
+                let mut mismatches = Vec::new();
+                for ([x, y], actual) in &texels {
+                    let expected: Vec<_> = positions
+                        .iter()
+                        .flat_map(|map| oracle.meshed(map, interpolation, *x, *y))
+                        .map(|moved| oracle.composed(*x, *y, moved))
+                        .collect();
+                    if !expected.iter().any(|e| {
+                        e.iter()
+                            .zip(actual)
+                            .all(|(e, a)| (e - f64::from(*a)).abs() <= 4e-3 + e.abs() * 2e-4)
+                    }) {
+                        mismatches.push(([*x, *y], *actual, expected));
+                    }
+                }
+                // Where the mesh folds, sliver triangles stack several source
+                // positions within a pixel's rasterization tolerance.
+                let allowed = if folds { texels.len() / 1000 } else { 0 };
+                assert!(
+                    mismatches.len() <= allowed,
+                    "mesh {transaction} mode {mode} {interpolation:?}: {} pixels differ, first {:?}",
+                    mismatches.len(),
+                    mismatches.first()
+                );
+                r.set_transform_preview(None).unwrap();
+                frame(&mut r, &layer, false);
+            }
+        }
+    }
+}
+
+#[test]
+fn mask_warps_seeded_from_an_affine_match_the_affine() {
+    use layer_core::MeshMap;
+    let mask_pages = |r: &WgpuRasterizer| -> std::collections::BTreeMap<[u32; 2], Vec<f32>> {
+        r.layer_masks
+            .pages
+            .iter()
+            .filter(|((owner, _), _)| *owner == LayerId(9))
+            .map(|((_, c), page)| {
+                let values = page_bytes(r, &page.texture)
+                    .chunks_exact(4)
+                    .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+                    .collect();
+                (*c, values)
+            })
+            .collect()
+    };
+    let affine = Affine::around(Point { x: 128., y: 96. }, [1.3, 0.8], 0.4, Point { x: 6.5, y: -3.25 });
+    let bounds = Rect {
+        min: Point::default(),
+        max: Point { x: EXTENT[0] as f32, y: EXTENT[1] as f32 },
+    };
+    let maps = [
+        TransformMap::Affine(affine),
+        TransformMap::Mesh(Arc::new(MeshMap::from_affine(bounds, [4, 3], affine).unwrap())),
+    ];
+    for interpolation in [Interpolation::Nearest, Interpolation::Linear, Interpolation::Bicubic] {
+        let drawn: Vec<_> = maps
+            .iter()
+            .map(|map| {
+                let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+                let mut layer = Layer::paint(LayerId(1), "masked");
+                let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
+                mask.default_coverage = 0.;
+                mask.initial = Some(
+                    Selection::polygon(
+                        [[20., 20.], [150., 30.], [120., 160.], [30., 110.]].map(|[x, y]| Point { x, y }).to_vec(),
+                    )
+                    .unwrap(),
+                );
+                layer.mask = Some(mask);
+                frame(&mut r, &layer, true);
+                r.set_transform_preview(Some(&layer_render::TransformPreview {
+                    transaction: 1,
+                    moving: false,
+                    layer: LayerId(9),
+                    selection: None,
+                    transform: ImageTransform {
+                        map: map.clone(),
+                        interpolation,
+                    },
+                }))
+                .unwrap();
+                frame(&mut r, &layer, false);
+                mask_pages(&r)
+            })
+            .collect();
+        assert!(!drawn[0].is_empty(), "{interpolation:?}: the affine draws mask pages");
+        let mut largest = 0f32;
+        let mut moved = 0;
+        for (c, affine) in &drawn[0] {
+            let warped = drawn[1].get(c).unwrap_or_else(|| panic!("{interpolation:?}: the warp draws page {c:?}"));
+            for (a, w) in affine.iter().zip(warped) {
+                largest = largest.max((a - w).abs());
+                moved += usize::from(*a > 0.5);
+            }
+        }
+        assert!(moved > 1000, "{interpolation:?}: the mask moves");
+        assert!(largest <= 4e-3, "{interpolation:?}: the warp differs from its affine by {largest}");
+    }
+}

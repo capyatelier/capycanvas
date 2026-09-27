@@ -40,7 +40,7 @@ pub use affine::{Affine, ImageTransform, Interpolation, TransformMap};
 mod projective;
 pub use projective::Projective;
 mod warp;
-pub use warp::MeshMap;
+pub use warp::{MeshMap, TANGENT_SIDES, Tessellation};
 mod project;
 mod project_storage;
 pub use project_storage::SelectionIndex as ProjectSelections;
