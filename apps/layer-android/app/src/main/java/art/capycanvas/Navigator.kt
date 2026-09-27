@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -35,9 +36,22 @@ import kotlin.math.roundToInt
     var geometry by remember { mutableStateOf<JSONObject?>(null) }
     val key = remember { Any() }
     val order = LocalWorkspaceZ.current
+    val opening = LocalPanelOpening.current
+    val overview = remember { arrayOfNulls<LayoutCoordinates>(1) }
     val document = host.panelContent?.getJSONObject("state")?.array("tabs")?.optJSONObject(0)
     val documentSize = document?.let { it.optInt("width") to it.optInt("height") }
     DisposableEffect(host) { onDispose { host.navigatorPlacement(key, null) } }
+    fun open() {
+        val panel = opening?.coordinates?.takeIf { it.isAttached } ?: return
+        val canvas = overview[0]?.takeIf { it.isAttached } ?: return
+        opening.bounds = geometry?.getJSONObject("image")?.let { image ->
+            Rect(panel.localPositionOf(canvas, Offset(image.number("x") * density, image.number("y") * density)),
+                Size(image.number("width") * density, image.number("height") * density))
+                .intersect(panel.localBoundingBoxOf(canvas)).takeUnless { it.isEmpty }
+        }
+    }
+    SideEffect { open() }
+    DisposableEffect(opening) { onDispose { opening?.bounds = null } }
     LaunchedEffect(viewport, documentSize) {
         if (viewport.width > 0 && viewport.height > 0) geometry = host.awaitQuery(obj("type" to "navigator",
             "viewport" to JSONArray(listOf(viewport.width / density, viewport.height / density))))
@@ -49,6 +63,8 @@ import kotlin.math.roundToInt
         Canvas(Modifier.fillMaxWidth().height(overviewHeight).testTag("navigator-overview").background(colors.surround)
             .onSizeChanged { viewport = it }
             .onGloballyPositioned { coords ->
+                overview[0] = coords
+                open()
                 val origin = coords.positionInRoot() - host.surfaceOrigin
                 val clip = coords.boundsInRoot().translate(-host.surfaceOrigin)
                 fun rect(r: Rect) = JSONArray(listOf(r.left, r.top, r.width, r.height))
@@ -72,7 +88,7 @@ import kotlin.math.roundToInt
                     } finally { if (!released) send("cancel", Offset.Zero) }
                 }
             }) {
-            geometry?.let { g ->
+            if (opening == null) geometry?.let { g ->
                 val rect = g.getJSONObject("image")
                 // Clear this part of the native window to reveal the live
                 // overview in the existing SurfaceView below Compose.

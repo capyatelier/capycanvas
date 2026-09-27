@@ -315,13 +315,16 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                             radius = group.objectOrNull("tiles")?.takeIf { !group.getBoolean("tabs_visible") }
                                 ?.number("tile_corner_radius") ?: SurfaceRadius.value)
                     val placement = if (expansion == null) Modifier.workspacePlaced(host, group.getInt("id"), bounds, shown, density) else Modifier.placed(bounds, density)
+                    val opening = remember { PanelOpening() }
                     Box(placement.zIndex(z.toFloat()).testTag("group-${group.getInt("id")}").chromeRegion(dock)
-                        .then(if (expansion != null) Modifier.shadow(16.dp, shape) else Modifier.panelShadow(6.dp, shape)).clip(shape)
+                        .then(if (expansion != null) Modifier.shadow(16.dp, shape).clip(shape)
+                            else Modifier.panelSurface(6.dp, shape, opening = opening))
                         .then(if (expansion == null) Modifier.glass(shape) else Modifier)) {
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)
                         val projected = expansion?.objectOrNull("tiles")?.let { JSONObject(retainedGroup.toString()).put("tiles", it) } ?: retainedGroup
-                        CompositionLocalProvider(LocalPalette provides if (expansion == null) colors.onGlass else colors) {
+                        CompositionLocalProvider(LocalPalette provides if (expansion == null) colors.onGlass else colors,
+                            LocalPanelOpening provides opening.takeIf { expansion == null }) {
                             PanelGroup(host, host.panelContent?.getJSONObject("state") ?: state, projected, panels, dock, mod)
                         }
                         expansion?.getJSONObject("configuration")?.let { rect ->

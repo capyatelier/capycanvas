@@ -29,9 +29,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.ClipOp
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -104,7 +101,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             }
             CompositionLocalProvider(LocalWorkspaceZ provides 160, LocalPalette provides LocalPalette.current.onGlass) {
                 Box(Modifier.placed(bounds, dock.density).zIndex(160f).testTag("collapsed-column-$id")
-                    .chromeRegion(dock).panelShadow(6.dp, shape).clip(shape).glass(shape, LocalPalette.current.panelFill)
+                    .chromeRegion(dock).panelSurface(6.dp, shape).glass(shape, LocalPalette.current.panelFill)
                     .combinedClickable(interactionSource = remember { MutableInteractionSource() },
                         indication = rememberChromeFocusIndication(), onClick = {}, onDoubleClick = {
                         host.customize(obj("type" to "set_column_collapsed", "group" to id, "collapsed" to false))
@@ -229,17 +226,14 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
         }
         val cut = connection?.getJSONObject("bounds")?.rect()?.translate(-placement.getJSONObject("bounds").rect().topLeft)
         Box(Modifier.placed(placement.getJSONObject("bounds"), dock.density).zIndex(if (nested) 199f else 99f)
-            .drawWithContent {
-                if (cut == null) drawContent()
-                else clipRect(cut.left * dock.density, cut.top * dock.density, cut.right * dock.density, cut.bottom * dock.density,
-                    ClipOp.Difference) { this@drawWithContent.drawContent() }
-            }
-            .panelShadow(12.dp, shape))
+            .panelSurface(12.dp, shape, cut = cut?.let { Rect(it.topLeft * dock.density, it.bottomRight * dock.density) }))
         connection?.let { DrawerBridge(it, dock, z.toFloat()) }
+        val opening = remember { PanelOpening() }
         Box(Modifier.placed(placement.getJSONObject("bounds"), dock.density).zIndex(z.toFloat())
             .testTag(if (id == "tool") "tool-drawer" else "column-drawer-$id").chromeRegion(dock)
             .then(if (columnId != null) Modifier.columnDrawerBounds(dock, columnId, if (current != null) tabs?.getInt("group") else null) else Modifier)
-            .clip(shape).glass(shape, if (tabbed) Color.Transparent else LocalPalette.current.panelFill)) {
+            .panelSurface(0.dp, shape, opening = opening)
+            .glass(shape, if (tabbed) Color.Transparent else LocalPalette.current.panelFill)) {
             // Placement can lag the model by a frame when switching to a drawer with fewer columns.
             placement.array("columns").objects().take(columns.size).forEachIndexed { index, bounds ->
                 Column(Modifier.placed(bounds, dock.density)) {
@@ -281,7 +275,8 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                     var clip by remember { mutableStateOf(Rect.Zero) }
                     Box(Modifier.fillMaxWidth().weight(1f).then(if (tabbed) Modifier.background(LocalPalette.current.panelFill) else Modifier)
                         .clipToBounds().onGloballyPositioned { clip = it.boundsInRoot().translate(-dock.origin) }) {
-                        CompositionLocalProvider(LocalDrawerColumn provides columnId, LocalDrawerClip provides clip, LocalWorkspaceZ provides (200 + (columnId ?: 100))) {
+                        CompositionLocalProvider(LocalDrawerColumn provides columnId, LocalDrawerClip provides clip,
+                            LocalWorkspaceZ provides (200 + (columnId ?: 100)), LocalPanelOpening provides opening) {
                             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
                                 .onSizeChanged { heights[index] = it.height / dock.density + tabHeight }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 columns[index].values().forEach { panelId ->

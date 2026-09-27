@@ -182,13 +182,40 @@ physical drawing size. Color changes and overlapping panel motion reuse it. The
 color-field bitmap remains cached by shape, hue and size.
 `AndroidColorPanelTest` checks rendering and picking across shapes and sizes.
 
-Panel, collapsed-column and drawer shadows use a retained native elevation layer
-clipped outside the panel outline, so translucent fills cannot reveal an inner
-shadow. Cached corner paths and rectangular exterior clips avoid masking the
-entire viewport or rebuilding curved clips during a resize. `AndroidPanelShadowTest`
-compares hardware-rendered interiors with and without shadows across fills,
-corner shapes, sizes and elevations, and checks that exterior shadows and content
-remain visible.
+Panel groups, collapsed columns, drawers and the canvas action bar draw through
+`panelSurface` in [`PanelShadow.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/PanelShadow.kt).
+Each is an offscreen Compose layer enlarged by its shadow reach
+(`PanelShadowReach` × elevation). The layer draws the native elevation shadow
+once, clears the panel interior so translucent fills cannot reveal it, and then
+draws the content clipped to the panel outline. HWUI re-renders a layer only when
+its content changes. A moved panel, or a frame drawn for some other change,
+composites the cached texture instead. If HWUI drops layers after a memory trim,
+it re-renders them on the next frame. In the Paint workspace the panel layers
+hold about 8.5 MB of GPU memory, plus 0.6 MB while the canvas bar is shown. The
+Navigator clears its overview opening
+after its layer is composited (`PanelOpening`), so the live overview in the
+SurfaceView still shows through. Command Search is not in a cached layer; its
+shadow comes from a shadow texture that is recorded once.
+
+Caching matters because of how this GPU driver presents frames. The MovinkPad 11
+(MT8781, Mali-G57) EGL driver offers neither `EGL_EXT_buffer_age` nor an
+`EGL_SWAP_BEHAVIOR_PRESERVED` config. Every process logs
+`Unable to match the desired swap behavior`. As a result, HWUI redraws the whole
+2200 × 1440 window on every frame. Any chrome that is not cached therefore
+repeats its full draw on every frame, including the squircle clip masks, which
+Skia rasterizes on the CPU and uploads as textures.
+
+Test coverage:
+
+- `AndroidPanelShadowTest` compares hardware-rendered interiors with and without
+  shadows across fills, corner shapes, sizes and elevations. It checks that
+  exterior shadows and content remain visible, and that cached layers match
+  direct drawing.
+- `AndroidInteractionTest#cachedPanelsMatchDirectDrawing` compares whole-window
+  captures with `PanelLayers.cached` on and off. It covers light and dark, every
+  transparency level, the docked layout, a floating group, a collapsed column
+  with its drawer, the Navigator, Zen, and the state after `send-trim-memory`.
+  It saves `dumpsys gfxinfo` beside the captures in `validation/panel-layers`.
 
 For measured overlap motion, build the release-based benchmark variant and run:
 
@@ -212,8 +239,10 @@ and `continuousResizeFrameTiming`.
 canvas with the same benchmark APKs: pen strokes, a 24-megapixel photo placement
 and a full-canvas selection transform, each with stylus handle drags, contact
 taps that hide and return the bar, and bar show/hide alone. Run it with
-`-e canvasBarBenchmark true`; `-e scenarios paint,photo,selection`, `durationMs`,
-`width`, `height` and `transparency` narrow or resize the run. Each scenario logs
+`-e canvasBarBenchmark true`; `-e scenarios ui,paint,photo,selection`, `durationMs`,
+`width`, `height` and `transparency` narrow or resize the run. The `ui` scenario
+uses a 2048 × 1536 document to isolate UI frames: bar show/hide, bar moves, show/hide
+in Zen and a plain Tool Options change. Each scenario logs
 one `CapyBarPerf` line and writes `canvas-bar-benchmark/<label>.json` with the
 renderer frame rows, GPU completions and UI `FrameMetrics` percentiles.
 `AndroidInteractionTest#canvasActionBarJourneysAcrossDevices` covers the bar's

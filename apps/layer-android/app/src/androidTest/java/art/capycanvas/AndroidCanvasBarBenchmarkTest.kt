@@ -76,7 +76,10 @@ class AndroidCanvasBarBenchmarkTest {
                 }
                 return request.put("file", s.getJSONObject("document_file"))
             }
-            fun newDocument() {
+            var documentExtent = "${width}x$height"
+            fun newDocument(extent: Pair<Int, Int> = width to height) {
+                val (width, height) = extent
+                documentExtent = "${width}x$height"
                 val task = native { h ->
                     val request = documentRequest(h, "new_document"); val file = request.getJSONObject("file")
                     Native.projectTask(h, request.getInt("id"), "null", file.getLong("epoch"), file.getLong("revision"))
@@ -211,7 +214,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val ui = synchronized(uiFrames) { uiFrames.toList() }
                 val seconds = (ended - began) / 1e9
                 val result = obj("label" to label, "display_hz" to refreshRate, "seconds" to seconds, "transparency" to transparency,
-                    "canvas" to "${width}x$height", "debuggable" to BuildConfig.DEBUG,
+                    "canvas" to documentExtent, "debuggable" to BuildConfig.DEBUG,
                     "bar_visible_fraction" to if (bars.isEmpty()) 0.0 else bars.count { it } / bars.size.toDouble(),
                     "bar_transitions" to bars.zipWithNext().count { (a, b) -> a != b },
                     "renderer_submitted_hz" to submitted.size / seconds,
@@ -239,6 +242,37 @@ class AndroidCanvasBarBenchmarkTest {
             action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
             val wiggle = { t: Double -> (-60 - 50 * sin(2 * PI * t)) to (-40 - 35 * sin(2 * PI * t)) }
 
+            if (wanted("ui")) {
+                newDocument(2048 to 1536)
+                invoke("zoom_out")
+                invoke("select_all"); invoke("fill_selection"); SystemClock.sleep(800)
+                invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
+                waitFor("transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
+                SystemClock.sleep(1500)
+                measure("ui-bar-show-hide") { hideAndShow(duration) }
+                measure("ui-bar-move") {
+                    val began = SystemClock.uptimeMillis()
+                    var step = 0
+                    while (SystemClock.uptimeMillis() - began < duration) {
+                        action(obj("type" to "set_tool_setting", "id" to "transform_x", "value" to if (step++ % 2 == 0) 240f else 0f))
+                        SystemClock.sleep(400)
+                    }
+                }
+                invoke("zen_mode")
+                SystemClock.sleep(1500)
+                measure("ui-bar-show-hide-zen") { hideAndShow(duration) }
+                invoke("zen_mode")
+                invoke("cancel_transform"); invoke("deselect"); invoke("brush")
+                SystemClock.sleep(1500)
+                measure("ui-panel-change") {
+                    val began = SystemClock.uptimeMillis()
+                    var step = 0
+                    while (SystemClock.uptimeMillis() - began < duration) {
+                        action(obj("type" to "set_brush_size", "value" to if (step++ % 2 == 0) 40f else 18f))
+                        SystemClock.sleep(400)
+                    }
+                }
+            }
             if (wanted("paint")) {
                 newDocument()
                 invoke("brush")

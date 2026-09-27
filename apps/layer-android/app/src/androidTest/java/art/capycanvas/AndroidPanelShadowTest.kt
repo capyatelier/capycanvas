@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.After
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -27,6 +28,8 @@ import kotlin.math.abs
 /** PixelCopy captures real hardware shadows, including their overlap with translucent fills. */
 class AndroidPanelShadowTest {
     @get:Rule val compose = createComposeRule()
+
+    @After fun restorePanelLayers() { PanelLayers.cached = true }
 
     @Test fun shadowsStayOutsideTranslucentPanels() {
         var shape: Shape by mutableStateOf(SurfaceShape)
@@ -42,8 +45,8 @@ class AndroidPanelShadowTest {
         compose.setContent {
             Box(Modifier.size(320.dp).background(Color.White).testTag("shadow-scene")) {
                 Box(Modifier.offset { IntOffset(left.dp.roundToPx(), 64.dp.roundToPx()) }.size(width.dp, height.dp)
-                    .then(if (enabled) Modifier.panelShadow(elevation.dp, shape) else Modifier)
-                    .clip(shape).background(fill.copy(alpha = alpha))) {
+                    .then(if (enabled) Modifier.panelSurface(elevation.dp, shape) else Modifier.clip(shape))
+                    .background(fill.copy(alpha = alpha))) {
                     // Content must survive exclusion of the shadow's interior.
                     Box(Modifier.offset { IntOffset(66.dp.roundToPx(), (height / 2 - 4).dp.roundToPx()) }
                         .size(8.dp).background(Color.Red))
@@ -65,7 +68,9 @@ class AndroidPanelShadowTest {
                 }
                 val image = compose.onNodeWithTag("shadow-scene").captureToImage()
                 val pixels = image.toPixelMap()
-                compose.runOnIdle { enabled = false }
+                compose.runOnIdle { PanelLayers.cached = false }
+                val direct = compose.onNodeWithTag("shadow-scene").captureToImage().toPixelMap()
+                compose.runOnIdle { PanelLayers.cached = true; enabled = false }
                 val reference = compose.onNodeWithTag("shadow-scene").captureToImage().toPixelMap()
                 compose.runOnIdle { enabled = true }
                 compose.waitForIdle()
@@ -74,6 +79,11 @@ class AndroidPanelShadowTest {
                     image.asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
                 }
                 val scale = image.width / 320f
+                for (y in 0 until image.height step 2) for (x in 0 until image.width step 2) {
+                    val a = direct[x, y]; val b = pixels[x, y]
+                    assertTrue("$label: the cached layer draws like direct drawing at $x,$y ($a -> $b)",
+                        listOf(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue)).all { it <= 2f / 255 })
+                }
                 fun equalAt(x: Float, y: Float) {
                     val px = (x * scale).toInt(); val py = (y * scale).toInt()
                     val a = reference[px, py]; val b = pixels[px, py]

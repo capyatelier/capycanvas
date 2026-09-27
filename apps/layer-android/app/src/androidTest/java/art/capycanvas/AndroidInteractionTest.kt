@@ -2053,4 +2053,92 @@ class AndroidInteractionTest {
         }
         println("PASS canvas action bar: selection and transform bars, chrome taps, hide and return, More, toggle, Apply/Cancel, Zen, glass, light/dark")
     }
+    @Test fun cachedPanelsMatchDirectDrawing() {
+        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        val originalTransparency = transparency()
+        val (width, height) = 2048 to 1536
+        val stripes = ByteArray(width * height * 4) { i -> if (i % 4 == 3 || (i / 4 % width / 12 + i / 4 / width / 12) % 2 == 0) -1 else 40 }
+        instrumentation.runOnMainSync { host.importLayer("Stripes", width, height, stripes) }
+        waitFor("stripes") { state().getJSONObject("layer_tools").getJSONObject("editing_layer").getString("label") == "Stripes" }
+        val viewport = JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))
+        fun screen(): android.graphics.Bitmap {
+            SystemClock.sleep(500); settle()
+            return instrumentation.uiAutomation.takeScreenshot()
+        }
+        fun memory(label: String): String {
+            val dump = android.os.ParcelFileDescriptor.AutoCloseInputStream(
+                instrumentation.uiAutomation.executeShellCommand("dumpsys gfxinfo ${activity.packageName}")).use { String(it.readBytes()) }
+            File(File(instrumentation.targetContext.getExternalFilesDir(null), "validation/panel-layers").apply { mkdirs() }, "$label-gfxinfo.txt").writeText(dump)
+            return dump.lines().map { it.trim() }.dropWhile { !it.startsWith("Total GPU memory usage") }.take(2).joinToString(" ")
+        }
+        fun compare(label: String, cached: android.graphics.Bitmap, direct: android.graphics.Bitmap) {
+            try {
+                val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/panel-layers").apply { mkdirs() }
+                File(directory, "$label-cached.png").outputStream().use { cached.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                File(directory, "$label-direct.png").outputStream().use { direct.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                var differing = 0; var largest = 0
+                for (y in 0 until cached.height step 2) for (x in 0 until cached.width step 2) {
+                    val a = cached.getPixel(x, y); val b = direct.getPixel(x, y)
+                    val delta = listOf(0, 8, 16).maxOf { kotlin.math.abs((a shr it and 255) - (b shr it and 255)) }
+                    largest = maxOf(largest, delta)
+                    if (delta > 2) differing++
+                }
+                println("PANEL LAYERS $label: largest channel difference $largest, samples over 2: $differing")
+                assertEquals("$label: cached panels draw like direct panels (largest difference $largest)", 0, differing)
+            } finally { cached.recycle(); direct.recycle() }
+        }
+        fun compareModes(label: String) {
+            instrumentation.runOnMainSync { PanelLayers.cached = true }
+            val cached = screen()
+            val cachedMemory = memory("$label-cached")
+            instrumentation.runOnMainSync { PanelLayers.cached = false }
+            val direct = screen()
+            println("PANEL LAYERS $label memory cached: $cachedMemory")
+            println("PANEL LAYERS $label memory direct: ${memory("$label-direct")}")
+            instrumentation.runOnMainSync { PanelLayers.cached = true }
+            compare(label, cached, direct)
+        }
+        try {
+            for (theme in listOf("light", "dark")) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                restore()
+                compareModes("$theme-docked")
+                action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
+                action(obj("type" to "move_group", "group" to 43, "target" to obj("kind" to "float", "position" to JSONArray(listOf(560, 260))),
+                    "viewport" to viewport))
+                customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+                customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
+                tap(bounds("column-icon-brushes").center); waitFor("drawer") { exists("column-drawer-41") }
+                invoke("fit_canvas")
+                for (level in 0..3) {
+                    transparency(level)
+                    compareModes("$theme-level$level")
+                }
+                action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "navigator"))
+                waitFor("navigator") { exists("navigator-overview") }
+                compareModes("$theme-navigator")
+                val overview = bounds("navigator-overview")
+                val shown = screen()
+                val colors = (-30 until 30).flatMap { dy -> (-30 until 30).map { dx ->
+                    shown.getPixel(overview.center.x.toInt() + dx, overview.center.y.toInt() + dy) } }.toSet()
+                shown.recycle()
+                assertTrue("$theme: the cached navigator reveals the live overview (${colors.size} colors)", colors.size > 1)
+                invoke("zen_mode")
+                waitFor("Zen") { snapshot().optBoolean("chrome_hidden") }
+                compareModes("$theme-zen")
+                instrumentation.runOnMainSync { PanelLayers.cached = true }
+                val before = screen()
+                android.os.ParcelFileDescriptor.AutoCloseInputStream(
+                    instrumentation.uiAutomation.executeShellCommand("am send-trim-memory ${android.os.Process.myPid()} COMPLETE")).use { it.readBytes() }
+                instrumentation.runOnMainSync { activity.window.decorView.invalidate() }
+                compare("$theme-trimmed", screen(), before)
+                invoke("zen_mode")
+            }
+        } finally {
+            instrumentation.runOnMainSync { PanelLayers.cached = true }
+            action(obj("type" to "set_theme", "theme" to originalTheme)); transparency(originalTransparency)
+        }
+        println("PASS cached panel layers match direct drawing in light and dark, Off through High, navigator, Zen and after memory trim")
+    }
 }

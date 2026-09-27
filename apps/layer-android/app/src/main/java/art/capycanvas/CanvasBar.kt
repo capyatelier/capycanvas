@@ -11,12 +11,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import org.json.JSONArray
@@ -30,15 +33,39 @@ private const val BarItemHeight = 32f
 private const val BarLabelPadding = 6f
 private val BarItemStyle = obj("sliders" to false, "text" to true)
 
+private val BarElevation = 6.dp
+private val BarShadowMargin = BarElevation * PanelShadowReach
+
+private class BarFrame {
+    var bounds by mutableStateOf<JSONObject?>(null)
+}
+
 @Composable internal fun CanvasBar(host: CanvasHost, dock: DockInteraction, layout: JSONObject) {
     val dragging = dock.dragging
     LaunchedEffect(dragging) { host.holdCanvasBar(CanvasHost.CanvasBarWorkspaceDrag, dragging) }
-    val view = host.canvasBar ?: return
-    if (!host.canvasBarVisible) return
-    key(view.getJSONObject("context").toString()) { PlacedCanvasBar(host, dock, view, layout) }
+    val density = LocalDensity.current.density
+    val frame = remember { BarFrame() }
+    val placement = remember(frame, density) {
+        val margin = (BarShadowMargin.value * density).roundToInt()
+        fun px(bounds: JSONObject, key: String) = (bounds.number(key) * density).roundToInt()
+        Modifier.zIndex(198f).offset {
+            frame.bounds?.let { IntOffset(px(it, "x") - margin, px(it, "y") - margin) } ?: IntOffset.Zero
+        }.layout { measurable, _ ->
+            val bounds = frame.bounds
+            val width = bounds?.let { px(it, "width") + 2 * margin } ?: 0
+            val height = bounds?.let { px(it, "height") + 2 * margin } ?: 0
+            val content = measurable.measure(Constraints.fixed(width, height))
+            layout(width, height) { content.place(0, 0) }
+        }.clipToBounds()
+    }
+    Box(placement) {
+        val view = host.canvasBar ?: return@Box
+        if (!host.canvasBarVisible) return@Box
+        key(view.getJSONObject("context").toString()) { PlacedCanvasBar(host, dock, view, layout, frame) }
+    }
 }
 
-@Composable private fun PlacedCanvasBar(host: CanvasHost, dock: DockInteraction, view: JSONObject, layout: JSONObject) {
+@Composable private fun PlacedCanvasBar(host: CanvasHost, dock: DockInteraction, view: JSONObject, layout: JSONObject, frame: BarFrame) {
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val context = view.getJSONObject("context")
@@ -57,11 +84,15 @@ private val BarItemStyle = obj("sliders" to false, "text" to true)
         "completion" to JSONArray(completionWidths), "more" to BarItemHeight, "height" to BarItemHeight + 2 * BarPadding,
         "gap" to BarGap, "padding" to BarPadding).toString()
     var placed by remember { mutableStateOf<JSONObject?>(null) }
+    var revealed by remember { mutableStateOf(false) }
     LaunchedEffect(measure, view.opt("anchor")?.toString(), layout) {
-        placed = host.awaitQuery(obj("type" to "canvas_bar_layout", "measure" to JSONObject(measure)))
+        val next = host.awaitQuery(obj("type" to "canvas_bar_layout", "measure" to JSONObject(measure)))
+        if (next?.toString() != placed?.toString()) {
+            placed = next
+            if (revealed) next?.getJSONObject("bounds")?.let { frame.bounds = it }
+        }
     }
     val glass = remember { Any() }
-    var revealed by remember { mutableStateOf(false) }
     DisposableEffect(host, glass) { onDispose { host.glassBox(glass, null) } }
     val placement = placed ?: return
     val shape = ControlShape
@@ -71,6 +102,7 @@ private val BarItemStyle = obj("sliders" to false, "text" to true)
         val radius = ControlRadius.value * density
         host.glassBox(glass, floatArrayOf(px("x"), px("y"), px("width"), px("height"), radius, radius, radius, radius))
         host.glassPresented()
+        frame.bounds = placed?.getJSONObject("bounds") ?: bounds
         revealed = true
     }
     if (!revealed) return
@@ -83,12 +115,12 @@ private val BarItemStyle = obj("sliders" to false, "text" to true)
     fun choiceMenu(id: String, load: (JSONObject?) -> Unit) = host.query(obj("type" to "canvas_bar_choice_menu", "context" to context, "id" to id)) {
         load(it as? JSONObject)
     }
-    Box(Modifier.placed(placement.getJSONObject("bounds"), density).zIndex(198f).testTag("canvas-action-bar")
+    Box(Modifier.padding(BarShadowMargin).fillMaxSize().testTag("canvas-action-bar")
         .chromeRegion(dock).onGloballyPositioned {
             val bounds = it.boundsInRoot().translate(-dock.origin)
             if (dock.canvasBar != bounds) { dock.canvasBar = bounds; dock.refresh() }
         }
-        .panelShadow(6.dp, shape).clip(shape).glass(shape, key = glass)
+        .panelSurface(BarElevation, shape).glass(shape, key = glass)
         .semantics { contentDescription = "Canvas actions" }) {
         CompositionLocalProvider(LocalPalette provides colors.onGlass) {
             Surface(Modifier.fillMaxSize(), color = colors.onGlass.panelFill, contentColor = colors.text) {
