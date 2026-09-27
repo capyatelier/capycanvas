@@ -162,6 +162,28 @@ database owner/epoch/fence validation still governs writes.
 `AndroidWorkspaceOwnershipTest` verifies independent native sessions cannot
 take an active workspace and can acquire it after its owner closes.
 
+`Native.modelUpdate` sends the paths that changed since the last full model
+([`model_update.rs`](../../crates/layer-host/src/model_update.rs)). Arrays of
+unchanged length are diffed element by element, with a decimal index as the path
+segment. The header's primary menu carries only its title, and `primaryMenu()`
+in `WorkspaceHeader.kt` rebuilds its sections from `application_menus`. A single
+command-availability change, such as Select All, is about 1.5 KB. On the owner
+thread, Rust still builds and serializes the full 178 KB snapshot and splits it
+by top-level field before diffing. That takes about 0.7 ms per publication on a
+desktop and 6–8.5 ms on the MovinkPad 11, where a drag release previously cost
+15–18 ms. The follow-up is to rebuild and re-serialize only the entries whose
+input revisions changed.
+
+`CanvasHost` applies each model update on the native owner thread. Replaced
+values reuse every part the previous model repeats, so unchanged objects and
+array elements keep their identity. The main thread then assigns the model into
+[`ObservedModel`](../../apps/layer-android/app/src/main/java/art/capycanvas/ObservedModel.kt).
+Compose observes the published root, `state` and `state.document_file` one key
+at a time, so a publication recomposes only the scopes that read a changed
+key. Composables with unchanged arguments skip. Camera, layout and command
+search packets update the owner's model as well as the observed one, so a later
+full publication cannot restore an older value.
+
 Interaction tests dispatch typed mouse/touch/stylus `MotionEvent`s through native
 views; `AndroidInteractionTest` optionally accepts `-e systemInput true` where OS
 injection is supported. Neither substitutes for physical pen testing. When adding
@@ -216,6 +238,11 @@ Test coverage:
   transparency level, the docked layout, a floating group, a collapsed column
   with its drawer, the Navigator, Zen, and the state after `send-trim-memory`.
   It saves `dumpsys gfxinfo` beside the captures in `validation/panel-layers`.
+  Samples must match within 2/255. Skia can rasterize anti-aliased path edges
+  slightly differently in a layer and in the window, so a sample whose 3 × 3
+  neighbourhood spans 64 levels or more may differ by up to 8/255. The Layers
+  panel's more icon shows 4/255 on one edge pixel of two of its dots, at the
+  same positions.
 
 For measured overlap motion, build the release-based benchmark variant and run:
 
@@ -242,9 +269,14 @@ taps that hide and return the bar, and bar show/hide alone. Run it with
 `-e canvasBarBenchmark true`; `-e scenarios ui,paint,photo,selection`, `durationMs`,
 `width`, `height` and `transparency` narrow or resize the run. The `ui` scenario
 uses a 2048 × 1536 document to isolate UI frames: bar show/hide, bar moves, show/hide
-in Zen and a plain Tool Options change. Each scenario logs
-one `CapyBarPerf` line and writes `canvas-bar-benchmark/<label>.json` with the
-renderer frame rows, GPU completions and UI `FrameMetrics` percentiles.
+in Zen and a plain Tool Options change. The `photo` scenario also repeats short
+placement and pixel transform drags, each marked by a `capy-drag` trace section, so a
+Perfetto trace shows every drag start and release. The `capy.publish.native` and
+`capy.publish.parse` trace sections time each publication on the owner thread, and
+`-e composeTrace true` adds a trace section for every composable, which slows the
+frames it attributes. Each scenario logs one `CapyBarPerf` line and writes
+`canvas-bar-benchmark/<label>.json` with the renderer frame rows, GPU completions
+and UI `FrameMetrics` percentiles.
 `AndroidInteractionTest#canvasActionBarJourneysAcrossDevices` covers the bar's
 mouse, finger and stylus behavior and saves light and dark captures in
 `validation/canvas-bar`.

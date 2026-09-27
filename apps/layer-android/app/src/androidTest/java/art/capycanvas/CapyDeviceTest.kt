@@ -127,17 +127,24 @@ fun CanvasHost.importStripes(width: Int, height: Int) {
         for (x in 0 until width step 16) canvas.drawRect(x.toFloat(), 0f, x + 8f, height.toFloat(), white)
         stripes.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     } finally { bitmap.recycle() }
-    val control = Native.captureControl()
-    val task = runBlocking { withNative { h ->
-        Native.dispatch(h, obj("type" to "invoke", "command" to "import_image").toString())
-        val request = JSONArray(Native.query(h, obj("type" to "requests").toString())).objects().first { it.getJSONObject("kind").optString("type") == "document" }
-        Native.imageImportTask(h, request.getInt("id"), Native.imageImportContext(h, "null", "null"), control)
-    } }
+    val hostFileJobs = DocumentController.nativeFileJobsForTest
+    DocumentController.nativeFileJobsForTest = true
     try {
-        Native.imageImportRead(task, ParcelFileDescriptor.open(stripes, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), stripes.name)
-        runBlocking { withNative { Native.imageImportAdopt(it, task) } }
-    } finally { Native.imageImportFree(task); Native.captureFree(control) }
-    instrumentation.runOnMainSync { documentChanged() }
+        val control = Native.captureControl()
+        val task = runBlocking { withNative { h ->
+            Native.dispatch(h, obj("type" to "invoke", "command" to "import_image").toString())
+            val request = JSONArray(Native.query(h, obj("type" to "requests").toString())).objects().first { it.getJSONObject("kind").optString("type") == "document" }
+            Native.imageImportTask(h, request.getInt("id"), Native.imageImportContext(h, "null", "null"), control)
+        } }
+        try {
+            Native.imageImportRead(task, ParcelFileDescriptor.open(stripes, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), stripes.name)
+            runBlocking { withNative { Native.imageImportAdopt(it, task) } }
+        } finally { Native.imageImportFree(task); Native.captureFree(control) }
+        instrumentation.runOnMainSync { documentChanged() }
+        awaitMain("the imported layer's request completes") {
+            snapshot?.optJSONObject("state")?.array("requests")?.objects()?.none { it.getJSONObject("kind").optString("type") == "document" } == true
+        }
+    } finally { DocumentController.nativeFileJobsForTest = hostFileJobs }
 }
 
 fun screenshot(path: String, inspect: ((Bitmap) -> Unit)? = null) {

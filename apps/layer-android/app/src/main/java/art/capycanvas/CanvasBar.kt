@@ -10,11 +10,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -60,12 +62,12 @@ private class BarFrame {
     }
     Box(placement) {
         val view = host.canvasBar ?: return@Box
-        if (!host.canvasBarVisible) return@Box
-        key(view.getJSONObject("context").toString()) { PlacedCanvasBar(host, dock, view, layout, frame) }
+        key(view.getJSONObject("context").toString()) { PlacedCanvasBar(host, dock, view, layout, frame, host.canvasBarVisible) }
     }
 }
 
-@Composable private fun PlacedCanvasBar(host: CanvasHost, dock: DockInteraction, view: JSONObject, layout: JSONObject, frame: BarFrame) {
+@Composable private fun PlacedCanvasBar(host: CanvasHost, dock: DockInteraction, view: JSONObject, layout: JSONObject, frame: BarFrame,
+    visible: Boolean) {
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val context = view.getJSONObject("context")
@@ -77,8 +79,8 @@ private class BarFrame {
     fun textWidth(text: String) = measurer.measure(text, textStyle).size.width / density
     fun width(item: JSONObject) = toolOptionSize(item.getJSONObject("option"), false, 0f, BarItemHeight, BarItemHeight,
         BarItemStyle, ::textWidth, item.getString("label"))[0]
-    val itemWidths = remember(view, textStyle, density) { items.map(::width) }
-    val completionWidths = remember(view, textStyle, density) { completion.map(::width) }
+    val itemWidths = remember(view.opt("items"), textStyle, density) { items.map(::width) }
+    val completionWidths = remember(view.opt("completion"), textStyle, density) { completion.map(::width) }
     val labelWidth = remember(label, textStyle, density) { label?.let { ceil(textWidth(it)) + 2 * BarLabelPadding } ?: 0f }
     val measure = obj("context" to context, "label" to labelWidth, "items" to JSONArray(itemWidths),
         "completion" to JSONArray(completionWidths), "more" to BarItemHeight, "height" to BarItemHeight + 2 * BarPadding,
@@ -96,8 +98,14 @@ private class BarFrame {
     DisposableEffect(host, glass) { onDispose { host.glassBox(glass, null) } }
     val placement = placed ?: return
     val shape = ControlShape
-    LaunchedEffect(Unit) {
-        val bounds = placement.getJSONObject("bounds")
+    LaunchedEffect(visible) {
+        if (!visible) {
+            revealed = false
+            host.glassBox(glass, null)
+            dock.canvasBar = null; dock.refresh()
+            return@LaunchedEffect
+        }
+        val bounds = placed?.getJSONObject("bounds") ?: placement.getJSONObject("bounds")
         fun px(key: String) = (bounds.number(key) * density).roundToInt().toFloat()
         val radius = ControlRadius.value * density
         host.glassBox(glass, floatArrayOf(px("x"), px("y"), px("width"), px("height"), radius, radius, radius, radius))
@@ -105,7 +113,6 @@ private class BarFrame {
         frame.bounds = placed?.getJSONObject("bounds") ?: bounds
         revealed = true
     }
-    if (!revealed) return
     DisposableEffect(dock) { onDispose { dock.canvasBar = null; dock.refresh() } }
     val shown = placement.optInt("items").coerceIn(0, items.size)
     fun edit(action: JSONObject) = host.dispatch(obj("type" to "canvas_bar_edit", "context" to context, "action" to action))
@@ -115,27 +122,32 @@ private class BarFrame {
     fun choiceMenu(id: String, load: (JSONObject?) -> Unit) = host.query(obj("type" to "canvas_bar_choice_menu", "context" to context, "id" to id)) {
         load(it as? JSONObject)
     }
-    Box(Modifier.padding(BarShadowMargin).fillMaxSize().testTag("canvas-action-bar")
-        .chromeRegion(dock).onGloballyPositioned {
-            val bounds = it.boundsInRoot().translate(-dock.origin)
-            if (dock.canvasBar != bounds) { dock.canvasBar = bounds; dock.refresh() }
-        }
-        .panelSurface(BarElevation, shape).glass(shape, key = glass)
-        .semantics { contentDescription = "Canvas actions" }) {
-        CompositionLocalProvider(LocalPalette provides colors.onGlass) {
-            Surface(Modifier.fillMaxSize(), color = colors.onGlass.panelFill, contentColor = colors.text) {
-                Row(Modifier.padding(BarPadding.dp).clipToBounds(), horizontalArrangement = Arrangement.spacedBy(BarGap.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    label?.let {
-                        Text(it, Modifier.width(labelWidth.dp).padding(horizontal = BarLabelPadding.dp).testTag("canvas-bar-label"),
-                            color = colors.secondary, maxLines = 1, softWrap = false)
+    Layout(content = {
+        Box(Modifier.padding(BarShadowMargin).fillMaxSize().testTag("canvas-action-bar")
+            .then(if (revealed) Modifier.chromeRegion(dock) else Modifier).onGloballyPositioned {
+                val bounds = it.boundsInRoot().translate(-dock.origin)
+                if (dock.canvasBar != bounds) { dock.canvasBar = bounds; dock.refresh() }
+            }
+            .panelSurface(BarElevation, shape).glass(shape, key = glass)
+            .semantics { contentDescription = "Canvas actions" }) {
+            CompositionLocalProvider(LocalPalette provides colors.onGlass) {
+                Surface(Modifier.fillMaxSize(), color = colors.onGlass.panelFill, contentColor = colors.text) {
+                    Row(Modifier.padding(BarPadding.dp).clipToBounds(), horizontalArrangement = Arrangement.spacedBy(BarGap.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        label?.let {
+                            Text(it, Modifier.width(labelWidth.dp).padding(horizontal = BarLabelPadding.dp).testTag("canvas-bar-label"),
+                                color = colors.secondary, maxLines = 1, softWrap = false)
+                        }
+                        items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], false, ::edit, ::reason, ::choiceMenu) }
+                        CanvasBarMore(host, context, shown)
+                        completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], true, ::edit, ::reason, ::choiceMenu) }
                     }
-                    items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], false, ::edit, ::reason, ::choiceMenu) }
-                    CanvasBarMore(host, context, shown)
-                    completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], true, ::edit, ::reason, ::choiceMenu) }
                 }
             }
         }
+    }, modifier = if (revealed) Modifier else Modifier.clearAndSetSemantics {}) { bar, constraints ->
+        val placeable = bar.single().measure(constraints)
+        layout(constraints.maxWidth, constraints.maxHeight) { if (revealed) placeable.place(0, 0) }
     }
 }
 

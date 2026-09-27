@@ -190,7 +190,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
 }
 
 @Composable internal fun ImagePlacementControls(host: CanvasHost, state: JSONObject) {
-    val commands = state.array("commands").objects().associateBy { it.getString("id") }
+    val commands = state.array("commands").let { list -> remember(list) { list.objects().associateBy { it.getString("id") } } }
     val images = host.documents.images
     if (images.working && !images.choosing) androidx.compose.ui.window.Popup(alignment = Alignment.BottomCenter) {
         Surface(Modifier.padding(12.dp), shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {

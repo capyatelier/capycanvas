@@ -45,6 +45,17 @@ import kotlin.math.roundToInt
 
 private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it as JSONArray).objects() }
 
+internal fun primaryMenu(snapshot: JSONObject): JSONObject {
+    val menu = snapshot.getJSONObject("header").getJSONObject("primary_menu")
+    if (menu.array("sections").length() > 0) return menu
+    val submenus = snapshot.array("application_menus").objects().map { application ->
+        val sections = application.getJSONObject("model").array("sections").values().filter { (it as JSONArray).length() > 0 }
+        obj("label" to application.getString("label"), "selected" to null, "action" to null, "enabled" to sections.isNotEmpty(),
+            "hint" to "", "bindings" to JSONArray(), "sections" to JSONArray(sections))
+    }
+    return obj("title" to menu.getString("title"), "sections" to JSONArray().put(JSONArray(submenus)))
+}
+
 @Composable internal fun WorkspaceHeader(host: CanvasHost, snapshot: JSONObject, input: HeaderInteraction) {
     val view = snapshot.objectOrNull("header") ?: return
     val state = snapshot.getJSONObject("state")
@@ -178,7 +189,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
                                 val entry = entries.first { it.getInt("id") == id }
                                 input.overflow = null
                                 when (entry.getJSONObject("item").getString("kind")) {
-                                    "menu", "menu_labels" -> overflowMenu = view.getJSONObject("primary_menu")
+                                    "menu", "menu_labels" -> overflowMenu = primaryMenu(snapshot)
                                     "workspaces" -> overflowMenu = workspaceSwitcherMenu(host.workspaceManager)
                                     else -> activateHeader(host, entry)
                                 }
@@ -281,7 +292,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     Modifier.fillMaxSize().testTag(if (kind == "menu_labels") "header-menu-labels-compact" else "header-control-$id"),
                     inBar = inBar, onClick = {
                         when (kind) {
-                            "menu", "menu_labels" -> menu = snapshot.getJSONObject("header").getJSONObject("primary_menu")
+                            "menu", "menu_labels" -> menu = primaryMenu(snapshot)
                             "workspaces" -> menu = workspaceSwitcherMenu(host.workspaceManager)
                             else -> activate()
                         }

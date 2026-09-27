@@ -39,6 +39,7 @@ impl NativeHost {
     /// apply matching revisions at placement/draw time and retain panel content.
     /// Full snapshots and motion use the same acknowledgement/serialization path.
     pub fn take_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
+        self.model_transport = false;
         let mut bytes = Vec::new();
         let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SnapshotFormatter);
         Ok(self
@@ -50,6 +51,11 @@ impl NativeHost {
     /// complete resolved layout and current camera/measurements. Consumers of
     /// take_update_bytes refresh all models for dimension changes.
     pub fn take_layout_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
+        self.model_transport = false;
+        self.layout_update_bytes()
+    }
+
+    pub(super) fn layout_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
         let mut bytes = Vec::new();
         let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SnapshotFormatter);
         Ok(self
@@ -276,7 +282,7 @@ impl NativeHost {
             &self.session.filter_preview_revision(),
         )?;
         map.serialize_entry("application_menus", &menus)?;
-        map.serialize_entry("header", &self.session.header_view())?;
+        map.serialize_entry("header", &self.session.header_view_with(!self.model_transport))?;
         map.serialize_entry("proof_panel", &layer_ui::color_management::proof_view(&self.session))?;
         map.serialize_entry("color_preview", &self.color_preview())?;
         let colors = state.display_colors();

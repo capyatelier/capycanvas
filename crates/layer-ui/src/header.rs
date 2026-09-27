@@ -599,6 +599,10 @@ pub struct HeaderComponentView {
 }
 impl<R: layer_render::CanvasRenderer> UiSession<R> {
     pub fn header_view(&self) -> HeaderView {
+        self.header_view_with(true)
+    }
+
+    pub fn header_view_with(&self, primary_sections: bool) -> HeaderView {
         let state = self.state();
         let model = state.workspace.layout.header.projected_for(state.platform);
         let items = model
@@ -645,7 +649,14 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                     singleton: item.singleton(),
                 })
                 .collect(),
-            primary_menu: self.application_menu(ApplicationMenu::Primary),
+            primary_menu: if primary_sections {
+                self.application_menu(ApplicationMenu::Primary)
+            } else {
+                ContextMenu {
+                    title: ApplicationMenu::Primary.label().into(),
+                    sections: Vec::new(),
+                }
+            },
         }
     }
 }

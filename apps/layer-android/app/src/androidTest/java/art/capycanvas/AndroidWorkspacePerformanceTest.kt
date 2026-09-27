@@ -158,9 +158,6 @@ class AndroidWorkspacePerformanceTest {
                     try {
                         event(MotionEvent.ACTION_MOVE, if (resize || colorOverlap || mode == "attached") first else workspace.center)
                         SystemClock.sleep(750)
-                        var retainedSnapshot: JSONObject? = null
-                        var retainedPanels: JSONObject? = null
-                        scenario.onActivity { retainedSnapshot = host.snapshot; retainedPanels = host.panelContent }
                         report(reset = true)
                         synchronized(durations) { durations.clear(); lostMetrics = 0 }
                         scenario.onActivity {
@@ -220,8 +217,7 @@ class AndroidWorkspacePerformanceTest {
                         val expectRetained = !resize || InstrumentationRegistry.getArguments().getString("expectRetainedResize") != "false"
                         if (expectRetained) assertEquals("Steady motion retains the full UI models", 0L, metrics.getLong("snapshots_published"))
                         scenario.onActivity {
-                            if (!resize) assertSame(retainedSnapshot, host.snapshot)
-                            if (expectRetained) assertSame(retainedPanels, host.panelContent)
+                            if (expectRetained) assertEquals("Steady motion retains panel content", 0L, metrics.getLong("panel_content_changes"))
                             val geometry = host.workspaceGeometry!!
                             if (geometry.group != null) {
                                 val shown = owner.find(hasTag("group-${geometry.group}"))!!.boundsInRoot

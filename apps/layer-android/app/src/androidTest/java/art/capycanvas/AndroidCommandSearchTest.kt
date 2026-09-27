@@ -163,7 +163,17 @@ class AndroidCommandSearchTest {
         open(); query("select"); pressKey(KeyEvent.KEYCODE_DPAD_DOWN)
         waitFor("selected row") { search()?.optInt("selected") == 1 }
         capture("dark")
-        val retained = host.panelContent
+        fun panelContent(): List<Any?> {
+            var parts = emptyList<Any?>()
+            main {
+                val model = host.panelContent!!
+                val state = model.getJSONObject("state")
+                parts = listOf("panels", "color_panel", "palette_panel").map(model::opt) +
+                    state.keys().asSequence().filter { it !in listOf("command_search", "revision") }.sorted().map(state::opt).toList()
+            }
+            return parts
+        }
+        val retained = panelContent()
         val timings = mutableListOf<Double>()
         repeat(40) { index ->
             val value = listOf("undo", "select", "pencil", "brush size")[index % 4]
@@ -182,7 +192,8 @@ class AndroidCommandSearchTest {
                 tagged("command-search")!!.second.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(value))
             }
             assertTrue("query draws", done.await(5, TimeUnit.SECONDS)); if (index >= 20) timings.add(duration)
-            main { assertSame("Search retains panel content", retained, host.panelContent) }
+            val current = panelContent()
+            assertTrue("Search retains panel content", retained.size == current.size && retained.zip(current).all { (a, b) -> a === b })
         }
         android.util.Log.i("CommandSearchTest", "query_to_android_draw_p95_ms=${timings.sorted()[18]} samples=$timings")
         pressKey(KeyEvent.KEYCODE_ESCAPE); waitFor("closed") { search() == null }

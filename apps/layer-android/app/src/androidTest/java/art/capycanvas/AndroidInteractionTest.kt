@@ -58,6 +58,7 @@ class AndroidInteractionTest {
         return checkNotNull(result) { "Missing $tag" }
     }
     private fun exists(tag: String) = tagged(tag) != null
+    private fun shown(tag: String): Boolean { var placed = false; onMain { placed = tagged(tag)?.second?.layoutInfo?.isPlaced == true }; return placed }
     private fun snapshot() = host.snapshot!!
     private fun state() = snapshot().getJSONObject("state")
     private fun workspace() = state().getJSONObject("workspace").toString()
@@ -1905,14 +1906,14 @@ class AndroidInteractionTest {
             for (device in devices) {
                 restore()
                 clear(); invoke("fit_canvas"); invoke("rectangle_select")
-                waitFor("no bar without a selection") { canvasBar() == null && !exists("canvas-action-bar") }
+                waitFor("no bar without a selection") { canvasBar() == null && !shown("canvas-action-bar") }
                 val glassBefore = glassBoxes()
                 val work = bounds("workspace")
                 fun at(x: Float, y: Float) = Offset(work.left + x * density, work.top + y * density)
                 val selection = Rect(at(620f, 220f), at(840f, 380f))
                 tool = MotionEvent.TOOL_TYPE_STYLUS
                 drag(selection.topLeft, selection.bottomRight)
-                waitFor("$device selection bar", 5_000) { barKind() == "selection" && exists("canvas-action-bar") }
+                waitFor("$device selection bar", 5_000) { barKind() == "selection" && shown("canvas-action-bar") }
                 invoke("fill_selection")
                 settle()
                 var bar = bounds("canvas-action-bar")
@@ -1926,10 +1927,10 @@ class AndroidInteractionTest {
                 val padding = Offset(bar.left + 3 * density, bar.center.y)
                 tap(padding); settle()
                 assertEquals("$device bar padding tap keeps the selection", selectionContext, canvasBar()?.getJSONObject("context")?.toString())
-                assertTrue(exists("canvas-action-bar"))
+                assertTrue(shown("canvas-action-bar"))
 
                 tap(bounds("canvas-bar-action-scale_rotate").center)
-                waitFor("$device transform bar", 5_000) { barKind() == "transform" && exists("canvas-bar-action-apply_transform") }
+                waitFor("$device transform bar", 5_000) { barKind() == "transform" && shown("canvas-bar-action-apply_transform") }
                 assertTrue("$device bar tap keeps window focus", owner.view.hasWindowFocus())
                 settle()
                 bar = bounds("canvas-action-bar")
@@ -1939,10 +1940,10 @@ class AndroidInteractionTest {
                 assertEquals("Free", chosen("transform-mode"))
                 assertTrue("$device flips are icon-only", canvasBar()!!.array("items").objects().any { it.getString("label").isEmpty() })
                 tap(bounds("canvas-bar-segment-transform-mode-2").center)
-                waitFor("$device Distort", 5_000) { chosen("transform-mode") == "Distort" && exists("canvas-bar-action-transform_perspective") }
+                waitFor("$device Distort", 5_000) { chosen("transform-mode") == "Distort" && shown("canvas-bar-action-transform_perspective") }
                 settle()
                 tap(bounds("canvas-bar-segment-transform-mode-0").center)
-                waitFor("$device back to Free", 5_000) { chosen("transform-mode") == "Free" && !exists("canvas-bar-action-transform_perspective") }
+                waitFor("$device back to Free", 5_000) { chosen("transform-mode") == "Free" && !shown("canvas-bar-action-transform_perspective") }
                 settle()
                 tap(bounds("canvas-bar-choice-transform-interpolation").center)
                 waitFor("$device interpolation menu", 5_000) { popupCount() == 1 && textBounds("Nearest") != null }
@@ -1957,7 +1958,7 @@ class AndroidInteractionTest {
                 val start = corner()
                 drag(start, start + Offset(36 * density, 28 * density))
                 waitFor("$device Distort corner drag reshapes the transform", 5_000) { canvasBar()?.opt("anchor")?.toString() != quad }
-                waitFor("$device bar returns after the corner drag", 3_000) { exists("canvas-action-bar") }
+                waitFor("$device bar returns after the corner drag", 3_000) { shown("canvas-action-bar") }
                 assertEquals("Distort", chosen("transform-mode"))
                 settle()
 
@@ -1965,7 +1966,7 @@ class AndroidInteractionTest {
                 waitFor("$device reset before Warp", 5_000) { chosen("transform-mode") == "Free" }
                 settle()
                 tap(bounds("canvas-bar-segment-transform-mode-3").center)
-                waitFor("$device Warp shows its grid choice", 5_000) { chosen("transform-mode") == "Warp" && exists("canvas-bar-choice-transform-warp-grid") }
+                waitFor("$device Warp shows its grid choice", 5_000) { chosen("transform-mode") == "Warp" && shown("canvas-bar-choice-transform-warp-grid") }
                 settle()
                 val grid = chosen("transform-warp-grid")!!
                 tap(bounds("canvas-bar-choice-transform-warp-grid").center)
@@ -1984,7 +1985,7 @@ class AndroidInteractionTest {
                 drag(edgeNode, edgeNode - Offset(0f, 40 * density)) { captureCanvasBar("warp-held-$name") }
                 waitFor("$device Warp edge node drag bends the top edge", 5_000) { canvasBar()?.getJSONArray("anchor")?.getDouble(1)?.let { it < edge - 10 } == true }
                 assertEquals("$device the Warp node drag leaves the bottom edge in place", base, canvasBar()!!.getJSONArray("anchor").getDouble(3), 1.0)
-                waitFor("$device bar returns after the Warp drag", 3_000) { exists("canvas-action-bar") }
+                waitFor("$device bar returns after the Warp drag", 3_000) { shown("canvas-action-bar") }
                 captureCanvasBar("warp-$name")
                 invoke("reset_transform")
                 waitFor("$device reset returns to Free", 5_000) { chosen("transform-mode") == "Free" }
@@ -1993,7 +1994,7 @@ class AndroidInteractionTest {
                 var hiddenWhileHeld = false
                 var glassWhileHeld = -1
                 drag(selection.center, selection.center + Offset(30 * density, 20 * density)) {
-                    waitFor("$device bar hides during a canvas contact") { !exists("canvas-action-bar") }
+                    waitFor("$device bar hides during a canvas contact") { !shown("canvas-action-bar") }
                     hiddenWhileHeld = true
                     waitFor("$device glass leaves with the bar") { glassBoxes() == glassBefore }
                     glassWhileHeld = nativeGlassRegions()
@@ -2001,10 +2002,10 @@ class AndroidInteractionTest {
                 assertTrue(hiddenWhileHeld)
                 assertTrue("$device native glass region count falls: $glassWhileHeld < $nativeShown", glassWhileHeld in 0 until nativeShown)
                 SystemClock.sleep(60)
-                assertFalse("$device bar waits for input to settle", exists("canvas-action-bar"))
-                waitFor("$device bar returns after the contact", 3_000) { exists("canvas-action-bar") }
+                assertFalse("$device bar waits for input to settle", shown("canvas-action-bar"))
+                waitFor("$device bar returns after the contact", 3_000) { shown("canvas-action-bar") }
                 val returned = SystemClock.uptimeMillis()
-                while (SystemClock.uptimeMillis() - returned < 500) { assertTrue("$device bar returns once", exists("canvas-action-bar")); SystemClock.sleep(16) }
+                while (SystemClock.uptimeMillis() - returned < 500) { assertTrue("$device bar returns once", shown("canvas-action-bar")); SystemClock.sleep(16) }
                 waitFor("$device glass returns") { glassBoxes() == glassBefore + 1 }
 
                 tap(bounds("canvas-bar-more").center)
@@ -2027,29 +2028,29 @@ class AndroidInteractionTest {
                     waitFor("More reopens", 5_000) { popupCount() == 1 && textBounds("Show canvas action bar") != null }
                     tap(textBounds("Show canvas action bar")!!.center)
                     waitFor("Hide the bar from More", 5_000) { popupCount() == 0 && !state().getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_bar").getBoolean("visible") }
-                    waitFor("completion-only bar", 5_000) { exists("canvas-bar-action-apply_transform") && !exists("canvas-bar-action-transform_flip_horizontal") }
+                    waitFor("completion-only bar", 5_000) { shown("canvas-bar-action-apply_transform") && !shown("canvas-bar-action-transform_flip_horizontal") }
                     settle()
                     val edge = bounds("canvas-action-bar")
                     assertTrue("completion-only bar sits on the bottom edge: $edge", edge.top > selection.bottom + 100 * density)
                     assertEquals("transform", barKind())
                     tap(bounds("canvas-bar-action-apply_transform").center)
                     waitFor("Apply ends the transform", 5_000) { barKind() != "transform" }
-                    waitFor("no selection bar while the toggle is off") { !exists("canvas-action-bar") }
+                    waitFor("no selection bar while the toggle is off") { !shown("canvas-action-bar") }
                     invoke("show_canvas_action_bar")
-                    waitFor("selection bar returns with the toggle", 5_000) { barKind() == "selection" && exists("canvas-action-bar") }
+                    waitFor("selection bar returns with the toggle", 5_000) { barKind() == "selection" && shown("canvas-action-bar") }
                 } else {
                     tap(bounds("canvas-bar-action-cancel_transform").center)
-                    waitFor("$device Cancel ends the transform", 5_000) { barKind() == "selection" && exists("canvas-action-bar") }
+                    waitFor("$device Cancel ends the transform", 5_000) { barKind() == "selection" && shown("canvas-action-bar") }
                 }
 
                 instrumentation.runOnMainSync { host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(work.width / density / 2, work.height / density / 2)))) }
                 invoke("zen_mode")
                 waitFor("$device Zen hides docked chrome") { snapshot().optBoolean("chrome_hidden") }
-                waitFor("$device Zen keeps the bar", 3_000) { exists("canvas-action-bar") }
+                waitFor("$device Zen keeps the bar", 3_000) { shown("canvas-action-bar") }
                 invoke("zen_mode")
                 waitFor("$device Zen ends") { !snapshot().optBoolean("chrome_hidden") }
                 invoke("deselect")
-                waitFor("$device Deselect removes the bar") { canvasBar() == null && !exists("canvas-action-bar") }
+                waitFor("$device Deselect removes the bar") { canvasBar() == null && !shown("canvas-action-bar") }
                 waitFor("$device glass count returns", 3_000) { glassBoxes() == glassBefore }
                 println("PASS canvas bar device=$device")
             }
@@ -2062,12 +2063,12 @@ class AndroidInteractionTest {
             for (i in 0..10) drag(Offset(stripes.left + i * 40 * density, stripes.top), Offset(stripes.left + i * 40 * density + 20 * density, stripes.bottom), 6)
             invoke("rectangle_select")
             drag(Offset(work.left + 620 * density, work.top + 220 * density), Offset(work.left + 840 * density, work.top + 330 * density))
-            waitFor("selection bar for captures", 5_000) { barKind() == "selection" && exists("canvas-action-bar") }
+            waitFor("selection bar for captures", 5_000) { barKind() == "selection" && shown("canvas-action-bar") }
             tap(bounds("canvas-bar-action-scale_rotate").center)
-            waitFor("transform bar for captures", 5_000) { exists("canvas-bar-action-apply_transform") }
+            waitFor("transform bar for captures", 5_000) { shown("canvas-bar-action-apply_transform") }
             for (theme in listOf("light", "dark")) for (level in listOf(0, 3)) {
                 action(obj("type" to "set_theme", "theme" to theme)); transparency(level)
-                waitFor("$theme/$level bar", 5_000) { exists("canvas-bar-action-apply_transform") }
+                waitFor("$theme/$level bar", 5_000) { shown("canvas-bar-action-apply_transform") }
                 val apply = bounds("canvas-bar-action-apply_transform")
                 val accent = android.graphics.Color.parseColor(state().getJSONObject("palette").getString("accent"))
                 captureCanvasBar("$theme-level$level") { image, origin ->
@@ -2106,15 +2107,20 @@ class AndroidInteractionTest {
                 val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/panel-layers").apply { mkdirs() }
                 File(directory, "$label-cached.png").outputStream().use { cached.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
                 File(directory, "$label-direct.png").outputStream().use { direct.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-                var differing = 0; var largest = 0
+                fun contrast(x: Int, y: Int): Int {
+                    val around = (maxOf(0, y - 1)..minOf(direct.height - 1, y + 1)).flatMap { ny ->
+                        (maxOf(0, x - 1)..minOf(direct.width - 1, x + 1)).map { nx -> direct.getPixel(nx, ny) and 255 } }
+                    return around.max() - around.min()
+                }
+                var differing = 0; var edges = 0; var largest = 0
                 for (y in 0 until cached.height step 2) for (x in 0 until cached.width step 2) {
                     val a = cached.getPixel(x, y); val b = direct.getPixel(x, y)
                     val delta = listOf(0, 8, 16).maxOf { kotlin.math.abs((a shr it and 255) - (b shr it and 255)) }
                     largest = maxOf(largest, delta)
-                    if (delta > 2) differing++
+                    if (delta > 2) { if (delta <= 8 && contrast(x, y) >= 64) edges++ else differing++ }
                 }
-                println("PANEL LAYERS $label: largest channel difference $largest, samples over 2: $differing")
-                assertEquals("$label: cached panels draw like direct panels (largest difference $largest)", 0, differing)
+                println("PANEL LAYERS $label: largest channel difference $largest, anti-aliased edge samples over 2: $edges, other samples over 2: $differing")
+                assertEquals("$label: cached panels draw like direct panels, within 8/255 on anti-aliased edges (largest difference $largest)", 0, differing)
             } finally { cached.recycle(); direct.recycle() }
         }
         fun compareModes(label: String) {

@@ -114,7 +114,7 @@ import org.json.JSONArray
     }
     val modes = setOf("selection_new", "selection_add", "selection_subtract", "selection_intersect")
     val actions = state.array("tool_actions").objects()
-    val commands = state.array("commands").objects().associateBy { it.getString("id") }
+    val commands = state.array("commands").let { list -> remember(list) { list.objects().associateBy { it.getString("id") } } }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (actions.any { it.getString("command") in modes }) Row(Modifier.fillMaxWidth().clip(ControlShape).border(1.dp, LocalPalette.current.divider, ControlShape).selectableGroup().testTag("selection-mode-row")) {
             actions.filter { it.getString("command") in modes }.forEach { action ->
@@ -163,7 +163,7 @@ import org.json.JSONArray
 }
 
 @Composable private fun TonalSettingsControls(host: CanvasHost, state: JSONObject) {
-    val commands = state.array("commands").objects().associateBy { it.getString("id") }
+    val commands = state.array("commands").let { list -> remember(list) { list.objects().associateBy { it.getString("id") } } }
     val actions = state.array("tool_actions").objects()
     val modes = obj("id" to "selection-mode", "label" to "Selection mode", "segmented" to true, "items" to JSONArray(actions.map { action ->
         val command = commands.getValue(action.getString("command"))

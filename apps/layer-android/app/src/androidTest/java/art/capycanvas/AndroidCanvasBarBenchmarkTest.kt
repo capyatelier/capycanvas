@@ -16,6 +16,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
@@ -28,6 +29,9 @@ import kotlin.math.sin
 class AndroidCanvasBarBenchmarkTest {
     @get:Rule val device = CapyDeviceRule(nativeFileJobs = true)
 
+    @OptIn(androidx.compose.runtime.InternalComposeTracingApi::class)
+    @After fun clearCompositionTracer() = androidx.compose.runtime.Composer.setTracer(null)
+
     @Test fun canvasBarFrameTiming() {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue(args.getString("canvasBarBenchmark") == "true")
@@ -37,6 +41,12 @@ class AndroidCanvasBarBenchmarkTest {
         val height = args.getString("height", "4000")!!.toInt()
         val transparency = listOf("off", "low", "medium", "high").indexOf(args.getString("transparency", "low"))
         val only = args.getString("scenarios")?.split(',')
+        if (args.getString("composeTrace") == "true") @OptIn(androidx.compose.runtime.InternalComposeTracingApi::class)
+            androidx.compose.runtime.Composer.setTracer(object : androidx.compose.runtime.CompositionTracer {
+                override fun isTraceInProgress() = android.os.Trace.isEnabled()
+                override fun traceEventStart(key: Int, dirty1: Int, dirty2: Int, info: String) = android.os.Trace.beginSection(info.take(120))
+                override fun traceEventEnd() = android.os.Trace.endSection()
+            })
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var activity: MainActivity
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -145,6 +155,17 @@ class AndroidCanvasBarBenchmarkTest {
                     val (dx, dy) = path(i * interval / 1000.0)
                     inject(if (i == 0) MotionEvent.ACTION_DOWN else if (i == count) MotionEvent.ACTION_UP else MotionEvent.ACTION_MOVE,
                         down, start.first + dx, start.second + dy, if (i == count) 0f else .7f)
+                }
+            }
+            fun drags(milliseconds: Int) {
+                val began = SystemClock.uptimeMillis()
+                var index = 0
+                while (SystemClock.uptimeMillis() - began < milliseconds) {
+                    val start = corner()
+                    android.os.Trace.beginAsyncSection("capy-drag", ++index)
+                    drag(start, 400) { t -> (-60 - 50 * sin(2 * PI * t / .4)) to (-40 - 35 * sin(2 * PI * t / .4)) }
+                    android.os.Trace.endAsyncSection("capy-drag", index)
+                    SystemClock.sleep(900)
                 }
             }
             fun hideAndShow(milliseconds: Int) {
@@ -291,6 +312,7 @@ class AndroidCanvasBarBenchmarkTest {
                 invoke("show_canvas_action_bar")
                 waitFor("completion-only bar") { host.canvasBar?.array("items")?.length() == 0 }
                 measure("photo-handle-drag-bar-visible") { drag(corner(), duration, wiggle) }
+                measure("photo-handle-drags") { drags(duration) }
                 invoke("show_canvas_action_bar")
                 invoke("apply_transform")
                 waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
@@ -298,6 +320,7 @@ class AndroidCanvasBarBenchmarkTest {
                 waitFor("photo transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
                 SystemClock.sleep(1500)
                 measure("photo-pixels-handle-drag") { drag(corner(), duration, wiggle) }
+                measure("photo-pixels-drags") { drags(duration) }
                 invoke("transform_distort")
                 SystemClock.sleep(1000)
                 measure("photo-pixels-distort-drag") { drag(corner(), duration, wiggle) }
