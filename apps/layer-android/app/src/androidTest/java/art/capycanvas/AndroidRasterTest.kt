@@ -2170,7 +2170,7 @@ class AndroidRasterTest {
             compose.waitUntil(10_000) { !tick() }
             assertEquals("Fifo", display().getString("present_mode"))
             assertFalse(display().getBoolean("retained_target"))
-            assertEquals(3, display().getInt("desired_maximum_frame_latency"))
+            assertTrue(display().getInt("desired_maximum_frame_latency") >= 3)
             assertEquals(revision, native { state(it).getJSONObject("document_file").getLong("revision") })
             assertEquals(painted, hash(png("presentation-after-$index.png")))
             val pixels = native { Native.surfacePixelsForTest(it) }

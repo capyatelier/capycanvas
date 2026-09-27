@@ -22,6 +22,7 @@ mod surface_capture;
 // Allow CPU, GPU and display consumption to overlap during full-view motion.
 // Depths 1–2 stalled near 96 FPS on Wacom; 3 sustained approximately 119 FPS.
 const NAVIGATION_FRAME_LATENCY: u32 = 3;
+const MEDIATEK_NULL_THROTTLE_FENCE_DEQUEUED_BUFFERS: u32 = 3;
 
 struct Window(NonNull<ndk_sys::ANativeWindow>);
 impl Drop for Window {
@@ -50,6 +51,7 @@ pub(crate) struct Surface {
     last_paint_start: u64,
     presentation_switches: u64,
     last_presentation_switch_ns: u64,
+    navigation_latency: u32,
     _instance: wgpu::Instance,
     _window: Window,
 }
@@ -69,6 +71,29 @@ impl Surface {
         Ok(())
     }
 }
+
+fn mediatek_android_14() -> bool {
+    if unsafe { ndk_sys::android_get_device_api_level() } != 34 { return false; }
+    let mut manufacturer = [0; libc::PROP_VALUE_MAX as usize];
+    unsafe { libc::__system_property_get(c"ro.soc.manufacturer".as_ptr(), manufacturer.as_mut_ptr()) };
+    unsafe { std::ffi::CStr::from_ptr(manufacturer.as_ptr()) }.to_bytes().eq_ignore_ascii_case(b"mediatek")
+}
+
+fn navigation_frame_latency(surface: &wgpu::Surface, adapter: &wgpu::Adapter) -> u32 {
+    use wgpu::hal::Adapter as _;
+    if !mediatek_android_14() { return NAVIGATION_FRAME_LATENCY; }
+    let latencies = match (unsafe { surface.as_hal::<wgpu::hal::api::Vulkan>() },
+        unsafe { adapter.as_hal::<wgpu::hal::api::Vulkan>() }) {
+        (Some(surface), Some(adapter)) => unsafe { adapter.surface_capabilities(&surface) }.map(|caps| caps.maximum_frame_latency),
+        _ => None,
+    };
+    let Some(latencies) = latencies else { return NAVIGATION_FRAME_LATENCY };
+    let latency = NAVIGATION_FRAME_LATENCY.clamp(*latencies.start(), *latencies.end());
+    let min_undequeued_buffers = latencies.start().saturating_sub(1);
+    let max_dequeued_buffers = (latency + 1).saturating_sub(min_undequeued_buffers);
+    if max_dequeued_buffers == MEDIATEK_NULL_THROTTLE_FENCE_DEQUEUED_BUFFERS { latency + 1 } else { latency }
+}
+
 pub(crate) fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -329,6 +354,7 @@ impl App {
         let color=SdrSurfaceColor::Srgb;
         config.color_space=color.surface_color_space();
         let presenter = ViewportPresenter::for_surface(gpu, config.format, color).map_err(error)?;
+        let navigation_latency = navigation_frame_latency(&surface, gpu.adapter());
         let mut surface = Surface {
             surface,
             config,
@@ -348,6 +374,7 @@ impl App {
             last_paint_start: 0,
             presentation_switches: 0,
             last_presentation_switch_ns: 0,
+            navigation_latency,
             _instance: instance,
             _window: window,
         };
@@ -431,7 +458,7 @@ impl App {
             if surface.config.present_mode != present_mode {
                 surface.config.present_mode = present_mode;
                 surface.config.desired_maximum_frame_latency = if present_mode == wgpu::PresentMode::Fifo {
-                    NAVIGATION_FRAME_LATENCY
+                    surface.navigation_latency
                 } else { 1 };
                 let switch_started = std::time::Instant::now();
                 surface.configure(gpu, [view.width_px, view.height_px])?;

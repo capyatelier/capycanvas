@@ -3,8 +3,9 @@
 ## Presentation contract
 
 Camera changes (pinch, pan, rotation, fit) use FIFO with
-`desired_maximum_frame_latency = 3`. Navigation stays buffered after settling;
-an accepted new paint contact returns to `SharedDemandRefresh`, latency 1.
+`desired_maximum_frame_latency = 3` (4 on some MediaTek Android 14 devices;
+see below). Navigation stays buffered after settling; an accepted new paint
+contact returns to `SharedDemandRefresh`, latency 1.
 Simultaneous camera motion takes precedence. Idle views stop rendering.
 
 Paint admission belongs to shared Rust `NativeHost`; its contact sequence is
@@ -17,6 +18,31 @@ Kotlin UI scheduling and shared brush/cache/mip algorithms are unchanged.
 reconfiguration, including resize and recovery. Buffered images redraw fully;
 a replacement shared image also needs a full first draw. Android still requires
 shared-presentation support for painting; FIFO is not a driver fallback.
+
+## MediaTek Android 14 BufferQueue workaround
+
+The XP-Pen MagicNotePad (MT8781, Mali-G57 MC2, Android 14 `UP1A.231005.007`)
+crashed with SIGSEGV on the first FIFO present after any shared present.
+Rotation, zoom and pan all trigger it. Its `libgui` differs from AOSP: for an
+EGL-connected producer whose `mMaxDequeuedBufferCount` is exactly 3,
+`queueBuffer` throttles on the fence from two queues back. Any other queue
+leaves that older fence null, and connect/disconnect do not reset it. Shared
+presentation dequeues one buffer, so the next 3-buffer FIFO queue waits on
+null (`Fence::waitForever`, fault address `0xc`). Recreating the swapchain or
+`wgpu::Surface` does not help, because the window keeps the same producer.
+
+On 2026-09-27, disassembly found this change only in the XP-Pen's `libgui`.
+The Wacom RosePlus (MT8781, Android 14, February 2026 build), TCL 9465X
+(MT8786, Android 15) and Huion KP1202 (MT8391, Android 16) keep the AOSP
+single-fence throttle. Forcing three dequeued buffers after shared
+presentation crashed only the XP-Pen.
+
+On Android 14+, a FIFO swapchain's dequeue budget is
+`latency + 1 - (minimum latency - 1)`. On MediaTek Android 14 devices
+(`ro.soc.manufacturer`), the host adds one frame of navigation latency when
+that budget would be 3. The XP-Pen (minimum latency 2) therefore navigates at
+latency 4. The RosePlus minimum of 4 already avoids the count. Other devices
+keep latency 3.
 
 ## Wacom qualification, 2026-09-21
 
@@ -56,6 +82,8 @@ comparisons. No cache admission or memory limits were relaxed.
   images match the full redraw reference without changing the scene.
 - `AndroidRasterTest#navigationBuffersAndPenReturnsToFrontBuffer`: the first ink
   frame is shared; repeated navigation preserves document pixels and revision.
+  Without the MediaTek Android 14 workaround, the XP-Pen crashes at its first
+  zoom.
 - `AndroidRasterTest#frontBufferSurfaceLifecycle`: rotation, surface recreation,
   GPU recovery, undo/redo and artwork hashes.
 
