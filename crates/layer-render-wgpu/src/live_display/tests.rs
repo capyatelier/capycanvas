@@ -1962,3 +1962,68 @@ fn moving_warps_resample_the_reduced_layer_into_the_display_and_settle_exactly()
         assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0), "placement {placement:?}");
     }
 }
+
+#[test]
+fn a_whole_placed_photo_drags_from_its_placement_preview_while_its_originals_decode() {
+    let extent = [3072, 2304];
+    let [w, h] = extent.map(|n| n as f32);
+    let mut doc = document(extent);
+    doc.layers[0].source = Some(photo(extent, 7, |x, y| if (x / 83 + y / 59) % 4 == 0 { 30000 } else { 65535 }));
+    doc.layers[0].properties.placement =
+        layer_core::Affine::around(Point { x: 1536., y: 1152. }, [0.45, 0.45], 0.2, Point { x: 90., y: -40. });
+    let layer = doc.layers[0].id;
+    let all = layer_core::Selection::polygon(
+        [[0., 0.], [w, 0.], [w, h], [0., h]].map(|[x, y]| Point { x, y }).to_vec(),
+    )
+    .unwrap();
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.1, 0.);
+    let start = preview(layer, false, Some(all.clone()), layer_core::TransformMap::Affine(layer_core::Affine::IDENTITY));
+    let moving = preview(
+        layer,
+        true,
+        Some(all),
+        layer_core::TransformMap::Affine(layer_core::Affine::around(Point { x: 1400., y: 1100. }, [0.9, 1.1], 0.2, Point { x: 30., y: -12. })),
+    );
+    let drawn: Vec<_> = [true, false]
+        .into_iter()
+        .map(|mips| {
+            let [mut r, _] = complete_pair(&doc);
+            submit(&mut r, &doc, v, true);
+            let level = r.live_display.as_ref().unwrap().sampled_level().unwrap();
+            r.set_transform_preview(Some(&start)).unwrap();
+            let mut frames = 0;
+            loop {
+                if !mips {
+                    r.scene.as_mut().unwrap().forget_placement_mips();
+                }
+                submit(&mut r, &doc, v, false);
+                let reduced = r.transforms.as_ref().unwrap().reduced_level().is_some();
+                if (mips && reduced) || !r.has_pending_work() {
+                    break;
+                }
+                frames += 1;
+                assert!(frames < 16, "the layer is reduced within a few frames");
+            }
+            assert_eq!(r.transforms.as_ref().unwrap().reduced_level(), Some(level + 1));
+            assert_eq!(r.warming, mips, "only the placement preview is ready before the originals decode");
+            assert_eq!(
+                r.transforms.as_ref().unwrap().reduced_blocks() == 0,
+                mips,
+                "the copy comes from the placement preview when it is current"
+            );
+            let composed = r.metrics.composited_pixels;
+            let undecoded = r.transforms.as_ref().unwrap().undecoded_originals();
+            r.set_transform_preview(Some(&moving)).unwrap();
+            submit(&mut r, &doc, v, false);
+            assert_eq!(r.metrics.composited_pixels, composed, "the drag draws into the display");
+            assert_eq!(
+                r.transforms.as_ref().unwrap().undecoded_originals(),
+                undecoded,
+                "the drag neither waits for the originals nor decodes them"
+            );
+            display_levels(&r, level)
+        })
+        .collect();
+    let (largest, _) = largest_and_mean(&drawn[0], &drawn[1]);
+    assert!(largest <= 1e-5, "the drag differs by {largest}");
+}

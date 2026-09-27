@@ -16,7 +16,29 @@ pub(in crate::scene) struct Mip {
     pub updates: u64,
 }
 
+impl Mip {
+    /// This layer's own pixels reduced to `level` over `extent`, while they
+    /// are current and hold no prediction.
+    fn reduced(&self, layer: &Layer, space: layer_core::color::RgbSpace, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
+        let current = layer.source.as_ref().is_some_and(|s| self.source.ptr_eq(&Arc::downgrade(s)))
+            && self.raster == layer.raster.identity()
+            && self.space == space
+            && self.preview.is_empty()
+            && self.image.plan.extent == extent;
+        current.then(|| self.image.level_texture(level)).flatten()
+    }
+}
+
 impl Scene {
+    #[cfg(test)]
+    pub fn forget_placement_mips(&mut self) {
+        self.placement_mips.clear();
+    }
+    /// A placed photo's pixels reduced to `level` by its placement preview,
+    /// when that preview is current.
+    pub fn reduced_layer(&self, r: &WgpuRasterizer, layer: &Layer, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
+        self.placement_mips.get(&layer.id)?.reduced(layer, r.document_color().space, extent, level)
+    }
     pub(in crate::scene) fn prepare_placement_mips(
         &mut self,
         r: &mut WgpuRasterizer,

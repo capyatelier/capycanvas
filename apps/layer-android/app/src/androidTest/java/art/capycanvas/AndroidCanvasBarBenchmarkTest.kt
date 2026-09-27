@@ -303,6 +303,19 @@ class AndroidCanvasBarBenchmarkTest {
                 measure("photo-pixels-distort-drag") { drag(corner(), duration, wiggle) }
                 invoke("cancel_transform")
             }
+            if (wanted("scaled")) {
+                newDocument()
+                place(photo())
+                for (axis in listOf("transform_width", "transform_height")) action(obj("type" to "set_tool_setting", "id" to axis, "value" to .45f))
+                invoke("apply_transform")
+                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                SystemClock.sleep(3000)
+                invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
+                waitFor("photo transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
+                SystemClock.sleep(1500)
+                measure("scaled-photo-pixels-handle-drag") { drag(corner(), duration, wiggle) }
+                invoke("cancel_transform")
+            }
             if (wanted("selection")) {
                 newDocument()
                 invoke("select_all"); invoke("fill_selection"); SystemClock.sleep(1500)

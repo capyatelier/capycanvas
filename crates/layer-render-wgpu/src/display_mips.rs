@@ -325,6 +325,13 @@ impl Image {
                 .sum::<u64>()
     }
     pub fn last_level(&self) -> u32 { self.views.len() as u32 - 1 }
+    /// The retained image at `level`, when it has one.
+    pub fn level_texture(&self, level: u32) -> Option<&wgpu::Texture> {
+        match level.checked_sub(self.plan.level)? {
+            0 => Some(&self.texture),
+            n => self.reduced.get(n as usize - 1).map(|(texture, _)| texture),
+        }
+    }
     pub fn sample(&self, requested: u32) -> (u32, &wgpu::TextureView, [u32; 2]) {
         let level = requested.clamp(self.plan.level, self.last_level());
         let view = if level == self.plan.level { &self.view }

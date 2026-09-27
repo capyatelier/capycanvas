@@ -105,16 +105,19 @@ moving layer into the level the view samples, at most sixteen layer pixels per
 texel side, and the coarser levels are reduced from it. While the Transform is
 still, the layer is reduced once per transaction as the exact area mean of its
 full-resolution pixels, to the level of its own pixels that matches the display
-under its placement. When the selection keeps some pixels in place, those are
-reduced apart from the pixels it moves. Each drag frame
+under its placement. A whole placed photo is copied instead from its placement
+preview when that preview is current and holds the level. When the selection
+keeps some pixels in place, those are reduced apart from the pixels it moves.
+Each drag frame
 [resamples](../../crates/layer-render-wgpu/src/paint_transform/resample.rs) the
 copy with one bilinear sample per texel, the moved pixels through the transform
 and the placement and the kept ones through the placement alone. With content
 above or below, the
 [layered display](../../crates/layer-render-wgpu/src/paint_transform/layers.rs)
 composes the static layers once at that level, then places the moving layer
-between them with its blend. A drag waits for them, the moving photo's decoded
-tiles and the reduced copy. After release, the still preview of an unplaced
+between them with its blend. A drag waits for them and the reduced copy, and
+for the moving photo's decoded tiles unless the copy came from its placement
+preview. After release, the still preview of an unplaced
 layer is drawn as the exact area mean; a placed layer keeps its resampled
 preview. Later frames draw the preview's pages and recompose what the drag
 touched a few tiles at a time, reporting pending work so hosts keep drawing.
@@ -148,10 +151,12 @@ compiled in the background while input is quiet, and that recomposition waits
 for them.
 
 [Preparation](../../crates/layer-render-wgpu/src/preparation.rs) for a drag and
-the recomposition after one, including the layer's copy and the static layers
-around it, are spread over frames by the GPU time that earlier such frames took,
-measured with timestamps where the device has them. A drag that starts
-meanwhile waits behind at most a frame of that work.
+the work after one, including the layer's copy, the static layers around it, a
+still preview's exact display and settled pages, and the recomposition, is
+spread over frames by the GPU time that earlier such work took, measured with
+timestamps where the device has them. A drag that starts meanwhile waits behind
+at most a frame of that work. Drag frames allocate no pages; the pages a still
+preview settles into are allocated a few per still frame.
 
 Only drag frames and placed still previews resample, and a still display is
 otherwise approximate only at the edges of partly transparent layers; pages,

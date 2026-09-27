@@ -114,14 +114,12 @@ const PAGE_SIZE: u32 = 256;
 /// around it.
 const WARM_TILES: usize = 48;
 /// Blocks of 512 x 512 layer pixels a transform preview reduces per frame to
-/// the display level its drag frames resample. A drag waits for them too.
+/// the display level its drag frames resample, unless a placed photo's
+/// preview already holds them. A drag waits for them too.
 const REDUCED_BLOCKS: usize = 32;
 /// Time an idle frame spends reducing the pixels of a layer a transaction may
 /// soon move.
 const PREPARE_MOVING: Duration = Duration::from_millis(4);
-/// Pages a still transform preview first drawn at display resolution
-/// completes per frame.
-const SETTLE_PAGES: usize = 64;
 /// Tiles of a settled display preview recomposed per frame: at first, and
 /// at most. The count grows by one while composition takes under
 /// RECOMPOSE_MS and halves when it takes longer.
@@ -4198,13 +4196,7 @@ impl CanvasRenderer for WgpuRasterizer {
         let mut displayed = false;
         let mut drew = false;
         let mut recomposing = 0;
-        let may_prepare = self.moving_hint.is_some()
-            || self.transform_preview.is_some()
-            || self.placement_drag.is_some()
-            || self.recompose.is_some()
-            || self.layered_display.is_some();
-        let units = self.preparation.begin(&self.device, &self.queue, &mut encoder, !may_prepare);
-        let mut prepared = false;
+        let units = self.preparation.begin(&self.device, &self.queue);
         self.awaiting_meshes = self
             .transform_preview
             .as_ref()
@@ -4285,7 +4277,9 @@ impl CanvasRenderer for WgpuRasterizer {
                 .layered_display
                 .take()
                 .unwrap_or_else(|| paint_transform::layers::LayeredDisplay::new(self, packet.document_extent, key, above));
-            prepared |= !layers.ready();
+            if !layers.ready() {
+                self.preparation.start(&mut encoder);
+            }
             let built = if layers.ready() { Ok(()) } else { layers.build(self, packet, index, units, &mut encoder) };
             self.layered_display = Some(layers);
             built?;
@@ -4294,7 +4288,8 @@ impl CanvasRenderer for WgpuRasterizer {
             stack.is_none() || r.layered_display.as_ref().is_some_and(|l| l.ready())
         };
         if let Some((preview, (_, _, stack))) = &eligible
-            && (!preview.moving || self.warming)
+            && (!preview.moving
+                || (self.warming && !self.transforms.as_ref().unwrap().reduced(preview, packet.layers)))
             && built(self, stack)
         {
             let mut transforms = self.transforms.take().expect("retained transform renderer");
@@ -4305,19 +4300,21 @@ impl CanvasRenderer for WgpuRasterizer {
             self.warming = false;
         }
         self.reducing = false;
+        let mut reduced = None;
         let reducible = eligible.as_ref().map(|(preview, _)| preview.clone());
         if let Some((preview, (level, _, stack))) = &eligible
             && built(self, stack)
-            && !self.warming
         {
             let mut transforms = self.transforms.take().expect("retained transform renderer");
-            let reduced = transforms.prepare_reduced(self, &mut encoder, preview, packet.layers, *level, REDUCED_BLOCKS);
+            let originals = !self.warming;
+            let result = transforms.prepare_reduced(self, &mut encoder, preview, packet.layers, *level, REDUCED_BLOCKS, originals);
             self.transforms = Some(transforms);
-            self.reducing = reduced? == Some(false);
+            reduced = result?;
+            self.reducing = reduced == Some(false);
         }
         if let Some((preview, (_, _, stack))) = &eligible
             && preview.moving
-            && (!built(self, stack) || self.warming || self.reducing)
+            && (!built(self, stack) || self.reducing || (self.warming && reduced != Some(true)))
         {
             displayed = true;
         }
@@ -4338,7 +4335,10 @@ impl CanvasRenderer for WgpuRasterizer {
                 Some(layers) if stack.is_some() => layers.moving().clone(),
                 _ => level_view.clone(),
             };
-            let result = transforms.render_display(self, &mut encoder, &preview, packet.layers, &target, display);
+            if !preview.moving {
+                self.preparation.start(&mut encoder);
+            }
+            let result = transforms.render_display(self, &mut encoder, &preview, packet.layers, &target, display, units.div_ceil(4));
             if let Ok(Some(drawn)) = &result && !drawn.is_empty() {
                 drew = true;
                 if let Some((_, _, blend)) = stack {
@@ -4373,7 +4373,8 @@ impl CanvasRenderer for WgpuRasterizer {
                 && self.recompose.is_none()
                 && result.as_ref().is_ok_and(|drawn| drawn.is_some_and(|d| d.is_empty()))
             {
-                transforms.settle(self, &mut encoder, &preview, packet.layers, SETTLE_PAGES)
+                self.preparation.start(&mut encoder);
+                transforms.settle(self, &mut encoder, &preview, packet.layers, units)
             } else {
                 Ok(None)
             };
@@ -4399,7 +4400,9 @@ impl CanvasRenderer for WgpuRasterizer {
                 self.recompose_placement = false;
             }
             let mut drag = self.placement_drag.take().expect("placement drag");
-            prepared |= !drag.drawable();
+            if !drag.drawable() {
+                self.preparation.start(&mut encoder);
+            }
             let copied = if drag.drawable() { Ok(()) } else { drag.prepare(self, packet, units, &mut encoder) };
             let drawn = copied.and_then(|()| {
                 if !drag.drawable() || !built(self, &stack) {
@@ -4473,7 +4476,9 @@ impl CanvasRenderer for WgpuRasterizer {
                     .take()
                     .filter(|copy| copy.matches(moving, local))
                     .unwrap_or_else(|| placement_drag::PlacementCopy::new(self, moving, local));
-                prepared |= !copy.ready();
+                if !copy.ready() {
+                    self.preparation.start(&mut encoder);
+                }
                 let copied = copy.prepare(self, packet, &mut encoder, units, PREPARE_MOVING);
                 self.preparing_moving = !copy.ready();
                 self.placement_copy = Some(copy);
@@ -4486,7 +4491,9 @@ impl CanvasRenderer for WgpuRasterizer {
                     .take()
                     .filter(|l| l.key == key)
                     .unwrap_or_else(|| paint_transform::layers::LayeredDisplay::new(self, packet.document_extent, key, above));
-                prepared |= !layers.ready();
+                if !layers.ready() {
+                    self.preparation.start(&mut encoder);
+                }
                 let built = if layers.ready() { Ok(()) } else { layers.build(self, packet, index, units, &mut encoder) };
                 self.preparing_moving |= !layers.ready();
                 self.layered_display = Some(layers);
@@ -4534,9 +4541,9 @@ impl CanvasRenderer for WgpuRasterizer {
                 self.recompose = Some((layer, tiles));
             } else {
                 let count = if displayed || (self.recompose_placement && dirty.is_empty() && !packet.composite_all) {
+                    self.preparation.start(&mut encoder);
                     let mut decodes = 0;
                     let scene = self.scene.as_ref();
-                    prepared = true;
                     tiles
                         .iter()
                         .take(self.recompose_tiles.min(units))
@@ -4705,7 +4712,7 @@ impl CanvasRenderer for WgpuRasterizer {
         trace_phase.next(c"capy.publication");
         self.telemetry.phase_end(2, &mut encoder);
         self.telemetry.end(&mut encoder);
-        self.preparation.end(&mut encoder, prepared);
+        self.preparation.end(&mut encoder);
         let submission = encoder.submit(&self.queue);
         self.preparation.submitted(&self.queue);
         self.telemetry.submitted(&self.queue);

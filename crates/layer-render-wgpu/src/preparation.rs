@@ -15,9 +15,10 @@ const MOST_UNITS: usize = 96;
 const PENDING_FRAMES: usize = 8;
 
 /// Units of preparation, each about one 256 x 256 tile of GPU work, a frame
-/// may do. Measured, the count doubles after a frame that prepared took
-/// under half of TARGET on the GPU, grows by one under TARGET, and halves
-/// after a longer one. Unmeasured, it stays where it began.
+/// may do. Measured from where a frame's preparation starts, the count
+/// doubles after preparation that took under half of TARGET on the GPU,
+/// grows by one under TARGET, and halves after longer. Unmeasured, it stays
+/// where it began.
 pub(super) struct Preparation {
     units: usize,
     measured: bool,
@@ -39,15 +40,8 @@ impl Preparation {
             pending: VecDeque::new(),
         }
     }
-    /// The units this frame may prepare. Unless `idle`, the frame's GPU
-    /// time is measured until `end`.
-    pub fn begin(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        idle: bool,
-    ) -> usize {
+    /// The units this frame may prepare.
+    pub fn begin(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> usize {
         if !self.measured || !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return self.units;
         }
@@ -64,25 +58,29 @@ impl Preparation {
                 self.units = adjust(self.units, Duration::from_nanos(sample.elapsed_ns));
             }
         }
-        if !idle {
+        self.units
+    }
+    /// Measure the GPU time from here until `end`, as preparation begins in
+    /// this frame.
+    pub fn start(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if self.timing {
+            return;
+        }
+        if let Some(timer) = &mut self.timer {
             self.frame += 1;
             self.timing = timer.begin_encoded(encoder, self.frame);
         }
-        self.units
     }
-    /// Finish measuring this frame, which `prepared` or not.
-    pub fn end(&mut self, encoder: &mut wgpu::CommandEncoder, prepared: bool) {
+    /// Finish measuring this frame's preparation.
+    pub fn end(&mut self, encoder: &mut wgpu::CommandEncoder) {
         if !std::mem::take(&mut self.timing) {
             return;
         }
-        let timer = self.timer.as_mut().unwrap();
-        timer.end_encoded(encoder);
-        if prepared {
-            if self.pending.len() == PENDING_FRAMES {
-                self.pending.pop_front();
-            }
-            self.pending.push_back(self.frame);
+        self.timer.as_mut().unwrap().end_encoded(encoder);
+        if self.pending.len() == PENDING_FRAMES {
+            self.pending.pop_front();
         }
+        self.pending.push_back(self.frame);
     }
     /// Note that the measured frame was submitted.
     pub fn submitted(&mut self, queue: &wgpu::Queue) {
