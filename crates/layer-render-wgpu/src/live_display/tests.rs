@@ -1585,13 +1585,22 @@ fn placement_drags_draw_into_the_display_and_recompose_after_release() {
             assert!(frames < 64, "stacked {stacked}: a hinted layer is prepared while idle");
             submit(&mut direct, &doc, v, false);
         }
-        assert!(direct.placement_copy.as_ref().is_some_and(|copy| copy.ready()));
+        assert_eq!(
+            direct.placement_copy.as_ref().is_some_and(|copy| copy.ready()),
+            stacked,
+            "a lone layer inside the canvas is drawn from the display instead"
+        );
         assert_eq!(direct.layered_display.as_ref().is_some_and(|l| l.ready()), stacked);
         let center = Point { x: 768., y: 512. };
         for step in 1..6 {
             if step == 4 {
-                submit(&mut direct, &doc, v, false);
-                assert!(direct.has_pending_work(), "stacked {stacked}: a pause recomposes what the drag drew");
+                let composed = direct.metrics.composited_pixels;
+                submit(&mut direct, &doc, v, true);
+                assert_eq!(
+                    direct.metrics.composited_pixels, composed,
+                    "stacked {stacked}: a frame without motion keeps the drag instead of recomposing"
+                );
+                assert!(direct.placement_drag.is_some(), "stacked {stacked}");
             }
             let t = step as f32;
             doc.layers[0].properties.placement =
@@ -1617,11 +1626,48 @@ fn placement_drags_draw_into_the_display_and_recompose_after_release() {
             assert!(frames < 256, "stacked {stacked}: the released placement is recomposed");
             submit(&mut direct, &doc, v, false);
         }
-        assert!(frames > 1, "stacked {stacked}: recomposition spreads over frames");
+        assert!(frames > 8, "stacked {stacked}: the drag waits for stillness, then recomposition spreads over frames");
         assert!(display_levels(&direct, 0) == display_levels(&reference, 0), "stacked {stacked}");
         direct.prepare_moving_layer(None);
         assert!(direct.placement_copy.is_none() && direct.layered_display.is_none());
     }
+}
+
+#[test]
+fn a_lone_layer_drags_from_the_display_before_its_copy_is_reduced() {
+    let mut doc = document([1536, 1024]);
+    doc.layers[0].opacity = 0.8;
+    let [mut direct, mut reference] = complete_pair(&doc);
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.2, 0.);
+    for r in [&mut direct, &mut reference] {
+        submit(r, &doc, v, true);
+    }
+    let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap();
+    let center = Point { x: 768., y: 512. };
+    for step in 1..4 {
+        let t = step as f32;
+        doc.layers[0].properties.placement =
+            layer_core::Affine::around(center, [1. - t * 0.08; 2], t * 0.05, Point { x: t * 23.5, y: -t * 9.25 });
+        let composed = direct.metrics.composited_pixels;
+        for r in [&mut direct, &mut reference] {
+            submit(r, &doc, v, true);
+        }
+        assert_eq!(direct.metrics.composited_pixels, composed, "step {step}: the drag draws into the display");
+        assert!(
+            direct.placement_drag.as_ref().is_some_and(|drag| drag.drawable()),
+            "step {step}: the drag draws before the layer's copy is reduced"
+        );
+        let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+        assert!(largest <= 0.35 && mean <= 1e-3, "step {step}: largest {largest}, mean {mean}");
+    }
+    let mut frames = 0;
+    submit(&mut direct, &doc, v, false);
+    while direct.has_pending_work() {
+        frames += 1;
+        assert!(frames < 256, "the released placement is recomposed");
+        submit(&mut direct, &doc, v, false);
+    }
+    assert!(display_levels(&direct, 0) == display_levels(&reference, 0));
 }
 
 #[test]

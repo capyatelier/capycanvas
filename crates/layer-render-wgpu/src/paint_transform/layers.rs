@@ -3,9 +3,6 @@
 //! layer and places it between them.
 use super::*;
 
-/// Document tiles of each static stack composed per frame while building.
-const BUILD_TILES: usize = 96;
-
 pub(crate) struct LayerComposite {
     layout: wgpu::BindGroupLayout,
     pub pipeline: Deferred<wgpu::ComputePipeline>,
@@ -132,29 +129,38 @@ impl LayeredDisplay {
     pub fn moving(&self) -> &wgpu::TextureView {
         &self.moving.1
     }
-    /// Compose the next document tiles of the layers below `index` and, with
-    /// a transparent paper, of those above it.
+    /// Compose the next document tiles, at most `tiles`, of the layers below
+    /// `index` and, with a transparent paper, of those above it.
     pub fn build(
         &mut self,
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
         index: usize,
+        tiles: usize,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        let tiles: Vec<_> = (0..BUILD_TILES).map_while(|_| self.pending.pop()).collect();
+        let started = web_time::Instant::now();
         let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
         let result = (|| {
-            scene.compose_image_tiles(r, packet, Some(index), &tiles, &mut self.below, encoder)?;
-            if let Some(above) = &mut self.above {
-                let transparent = FramePacket {
-                    layers: &packet.layers[..index],
-                    view: layer_render::ViewState {
-                        background_rgba_linear: [0.; 4],
-                        ..packet.view
-                    },
-                    ..packet
+            for _ in 0..tiles {
+                let Some(tile) = self.pending.pop() else {
+                    break;
                 };
-                scene.compose_image_tiles(r, transparent, None, &tiles, above, encoder)?;
+                scene.compose_image_tiles(r, packet, Some(index), &[tile], &mut self.below, encoder)?;
+                if let Some(above) = &mut self.above {
+                    let transparent = FramePacket {
+                        layers: &packet.layers[..index],
+                        view: layer_render::ViewState {
+                            background_rgba_linear: [0.; 4],
+                            ..packet.view
+                        },
+                        ..packet
+                    };
+                    scene.compose_image_tiles(r, transparent, None, &[tile], above, encoder)?;
+                }
+                if started.elapsed() >= PREPARE_MOVING {
+                    break;
+                }
             }
             Ok(())
         })();

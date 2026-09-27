@@ -758,6 +758,16 @@ impl Cache {
         }
         self.retained.iter().find(|r| r.level == level).map(|r| &r.view)
     }
+    /// A complete display's image texture at `level`.
+    pub fn level_texture(&self, level: u32) -> Option<&wgpu::Texture> {
+        if !self.is_complete() {
+            return None;
+        }
+        if level == self.coarse.plan.level {
+            return Some(&self.coarse.texture);
+        }
+        self.retained.iter().find(|r| r.level == level).map(|r| &r.texture)
+    }
     /// Reduce level-0 tiles whose pixels were drawn directly at `level`.
     pub fn tiles_written_at(&mut self, encoder: &mut crate::submission::CommandEncoder,
         level: u32, coordinates: &[[u32; 2]]) {

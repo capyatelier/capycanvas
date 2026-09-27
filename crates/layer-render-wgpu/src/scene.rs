@@ -118,6 +118,10 @@ impl Scene {
     pub fn image_cache_bytes(&self) -> u64 {
         self.images.storage_bytes()
     }
+    /// The pipeline that draws placed layers.
+    pub fn placement_pipeline(&self) -> &Deferred<wgpu::RenderPipeline> {
+        &self.placement.pipeline
+    }
     pub fn source_cache_work(&self) -> [u64; 2] {
         [self.source_tiles.hits + self.display_source_tiles.hits,
             self.source_tiles.misses + self.display_source_tiles.misses]

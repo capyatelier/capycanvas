@@ -122,9 +122,22 @@ touched a few tiles at a time, reporting pending work so hosts keep drawing.
 A [placement drag](../../crates/layer-render-wgpu/src/placement_drag.rs) is a
 frame in which only one layer's placement changed. Its layer's own pixels are
 reduced once and kept between drags while they are unchanged, together with the
-static layers around it. Each drag frame resamples the copy through the new
-placement, and the frame's full recomposition is skipped. When a frame no
-longer moves the layer, what the drag drew is recomposed a few tiles at a time.
+static layers around it. Until that copy is complete, a lone layer over the
+paper is drawn from the display level as the drag began, within the canvas that
+level showed. Each drag frame resamples the copy through the new placement, and
+the frame's full recomposition is skipped. Frames in which nothing moves keep
+the drag; once the placement has stayed still for a few frames, what the drag
+drew is recomposed a few tiles at a time. When a transaction may move a layer,
+the pipelines its drag draws with and the one that composes placed layers are
+compiled in the background while input is quiet, and that recomposition waits
+for them.
+
+[Preparation](../../crates/layer-render-wgpu/src/preparation.rs) for a drag and
+the recomposition after one, including the layer's copy and the static layers
+around it, are spread over frames by the GPU time that earlier such frames took,
+measured with timestamps where the device has them. A drag that starts
+meanwhile waits behind at most a frame of that work.
+
 Only drag frames and placed still previews resample, and a still display is
 otherwise approximate only at the edges of partly transparent layers; pages,
 Apply and commits are exact.

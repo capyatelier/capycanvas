@@ -232,12 +232,13 @@ struct ImageTransformState {
     pub source_captures: u64,
 }
 
-/// Spare pages a moving display preview allocates per frame.
-const SPARE_PAGES_PER_FRAME: usize = 24;
-
 /// Blocks of 512 x 512 layer pixels of a still preview drawn exactly into
 /// the display per frame, after its first frame resampled it.
 const EXACT_BLOCKS: usize = 16;
+
+/// Time a display preview frame spends allocating spare pages for the
+/// preview's release.
+const SPARE_PAGE_TIME: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// Transform regions one frame of a released preview draws, reserved before
 /// the drag so drawing them does not replace every cached source binding.
@@ -1497,8 +1498,7 @@ impl ImageTransformState {
             self.reduced = Some(resample::Reduced::new(r, next.transaction, level, extent, pending, kept));
         }
         let reduced = self.reduced.as_mut().unwrap();
-        let batch: Vec<_> = (0..blocks).map_while(|_| reduced.pending.pop()).collect();
-        let complete = reduced.pending.is_empty();
+        let started = web_time::Instant::now();
         let parts = match &reduced.kept {
             Some(kept) => vec![
                 (pixel_transform::Part::Selected, reduced.image.view.clone()),
@@ -1513,14 +1513,22 @@ impl ImageTransformState {
             backdrop: [0.; 4],
         };
         let identity = layer_core::ImageTransform::default();
-        let drawn = batch.into_iter().try_for_each(|block| {
-            parts.iter().try_for_each(|(part, view)| {
+        let mut drawn = Ok(());
+        for _ in 0..blocks {
+            let Some(block) = self.reduced.as_mut().unwrap().pending.pop() else {
+                break;
+            };
+            drawn = parts.iter().try_for_each(|(part, view)| {
                 self.color.part = *part;
                 self.draw_exact(r, encoder, &identity, block, view, display)
-            })
-        });
+            });
+            if drawn.is_err() || started.elapsed() >= PREPARE_MOVING {
+                break;
+            }
+        }
         self.color.part = pixel_transform::Part::Whole;
         drawn?;
+        let complete = self.reduced.as_ref().unwrap().pending.is_empty();
         if complete {
             self.color.reserve(&r.device, SETTLE_RECORDS);
             let format = self.atlas_format(r, 0);
@@ -1540,8 +1548,8 @@ impl ImageTransformState {
             .flat_map(|b| page_coordinates(*b))
             .filter(|c| !present.contains(c))
             .collect();
-        let wanted = needed.len().saturating_sub(self.spares.paint.len()).min(SPARE_PAGES_PER_FRAME);
-        for _ in 0..wanted {
+        let started = web_time::Instant::now();
+        while self.spares.paint.len() < needed.len() && started.elapsed() < SPARE_PAGE_TIME {
             self.spares.paint.push(r.create_page([0; 2], "transformed paint page"));
         }
     }
@@ -1573,12 +1581,17 @@ impl ImageTransformState {
             self.warming = Some((next.transaction, pending));
         }
         let (_, pending) = self.warming.as_mut().unwrap();
-        let batch: Vec<_> = (0..tiles).map_while(|_| pending.pop()).collect();
-        let remaining = !pending.is_empty();
-        for c in batch {
+        let started = web_time::Instant::now();
+        for _ in 0..tiles {
+            let Some(c) = pending.pop() else {
+                break;
+            };
             r.original_source_tile(&original, c, encoder)?;
+            if started.elapsed() >= PREPARE_MOVING {
+                break;
+            }
         }
-        Ok(remaining)
+        Ok(!pending.is_empty())
     }
     fn settle(
         &mut self,
