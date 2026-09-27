@@ -81,6 +81,7 @@ enum Command {
     AdoptColor(u64),
     DiscardColor(u64, mpsc::Sender<()>),
     TransformPreview(Option<layer_render::TransformPreview>),
+    MovingLayer(Option<layer_core::LayerId>),
     Startup(
         u64,
         Box<(layer_core::Document, layer_core::BrushSnapshot, bool)>,
@@ -146,6 +147,7 @@ pub struct RenderWorker {
     pub(crate) proof_owner: u64,
     hdr_view: Option<(Option<layer_core::color::hdr::SdrRendition>, bool)>,
     transform_preview: Option<layer_render::TransformPreview>,
+    moving_layer: Option<layer_core::LayerId>,
     initialized: bool,
     pub(crate) display_headroom: f32,
     pub(crate) display_encoding: Option<layer_render_wgpu::SdrSurfaceColor>,
@@ -323,6 +325,7 @@ impl RenderWorker {
             proof_owner,
             hdr_view: None,
             transform_preview: None,
+            moving_layer: None,
             initialized: false,
             display_headroom: 1.,
             display_encoding: None,
@@ -561,6 +564,11 @@ impl CanvasRenderer for RenderWorker {
             self.transform_preview = preview.cloned();
         }
         Ok(())
+    }
+    fn prepare_moving_layer(&mut self, layer: Option<layer_core::LayerId>) {
+        if self.moving_layer != layer && self.send(Command::MovingLayer(layer)).is_ok() {
+            self.moving_layer = layer;
+        }
     }
     fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> {
         self.ready().map_err(|_| BackendError("Selection worker unavailable"))?;
@@ -1080,6 +1088,7 @@ impl Worker {
                     .renderer
                     .set_transform_preview(preview.as_ref())
                     .map_err(error)?,
+                Command::MovingLayer(layer) => self.renderer.prepare_moving_layer(layer),
                 Command::Startup(generation, inputs) => {
                     let (document, brush, transform) = *inputs;
                     startup_input = Some((generation, document, brush, transform));

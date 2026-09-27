@@ -250,6 +250,34 @@ fn canvas_bar_stays_in_the_window_when_docks_leave_no_work_area() {
 }
 
 #[test]
+fn transactions_hint_the_layer_their_drags_may_move() {
+    use layer_core::color::{SampleDepth, source::*};
+    let mut s = filled_selection_session();
+    let layer = s.engine.document().active_layer;
+    assert_eq!(s.engine.backend().moving_layer, None);
+    invoke(&mut s, CommandId::ScaleRotate);
+    assert_eq!(s.engine.backend().moving_layer, Some(layer), "a transform hints its layer");
+    invoke(&mut s, CommandId::CancelTransform);
+    assert_eq!(s.engine.backend().moving_layer, None, "cancelling clears the hint");
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::ApplyTransform);
+    assert_eq!(s.engine.backend().moving_layer, None, "applying clears the hint");
+
+    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
+        profile: Default::default(), profile_assumed: false,
+    }, 1024 * 1024).unwrap();
+    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
+        Document::new("hinted placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
+    s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    let photo = s.engine.document().active_layer;
+    assert_eq!(s.engine.backend().moving_layer, Some(photo), "a placement hints its photo");
+    invoke(&mut s, CommandId::ApplyTransform);
+    assert_eq!(s.engine.backend().moving_layer, None, "finishing a placement clears the hint");
+}
+
+#[test]
 fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
     use layer_core::color::{SampleDepth, source::*};
     let source = || {

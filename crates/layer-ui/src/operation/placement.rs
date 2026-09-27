@@ -108,6 +108,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(cause);
         }
         self.operation.aspect = true;
+        let single = self.operation.current.as_ref().is_some_and(|t| {
+            t.placement.as_ref().is_some_and(|p| p.members.len() == 1)
+        });
+        self.engine.backend_mut().prepare_moving_layer(single.then_some(layer.id));
         self.layer_interaction.editing = Some(layer.id);
         self.layer_interaction.selected = ids.into_iter().collect();
         self.layer_interaction.tool = LayerCanvasTool::Transform;
@@ -155,6 +159,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         }
         self.operation.current = None;
+        self.engine.backend_mut().prepare_moving_layer(None);
         self.layer_interaction.editing = Some(self.engine.document().active_layer);
         self.layer_interaction.selected = selected;
         self.layer_interaction.path.clear();

@@ -16,32 +16,56 @@ impl Frame {
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
     /// Source identity and raster publication catch edits without scanning pixels.
     pub fn same_artwork(&self, packet: FramePacket<'_>, background: [f32; 4]) -> bool {
+        self.placed(packet, background).is_some_and(|moved| moved.is_empty())
+    }
+    /// The one layer whose placement alone changed since this frame.
+    pub fn moved_placement(&self, packet: FramePacket<'_>, background: [f32; 4]) -> Option<LayerId> {
+        match self.placed(packet, background)?[..] {
+            [layer] => Some(layer),
+            _ => None,
+        }
+    }
+    /// Whether nothing but `layer`'s placement changed since this frame.
+    pub fn unchanged_except(&self, packet: FramePacket<'_>, background: [f32; 4], layer: LayerId) -> bool {
+        self.placed(packet, background).is_some_and(|moved| moved.iter().all(|id| *id == layer))
+    }
+    /// The layers placed differently, when nothing else about the artwork
+    /// changed.
+    fn placed(&self, packet: FramePacket<'_>, background: [f32; 4]) -> Option<Vec<LayerId>> {
         let artwork = |l: &&Layer| l.kind != LayerKind::Selection;
-        self.background == background
+        let same = self.background == background
             && self.previews.is_empty()
             && packet.dab_batches.is_empty()
             && self.layers.iter().filter(artwork).count()
-                == packet.layers.iter().filter(artwork).count()
-            && self
-                .layers
-                .iter()
-                .filter(artwork)
-                .zip(packet.layers.iter().filter(artwork))
-                .all(|(a, b)| {
-                    a.id == b.id
-                        && a.kind == b.kind
-                        && a.visible == b.visible
-                        && a.opacity == b.opacity
-                        && a.raster == b.raster
-                        && a.properties == b.properties
-                        && a.mask == b.mask
-                        && a.effect == b.effect
-                        && match (&a.source, &b.source) {
-                            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                            (None, None) => true,
-                            _ => false,
-                        }
-                })
+                == packet.layers.iter().filter(artwork).count();
+        let mut moved = Vec::new();
+        for (a, b) in self.layers.iter().filter(artwork).zip(packet.layers.iter().filter(artwork)) {
+            let unplaced = |l: &Layer| layer_core::LayerProperties {
+                placement: layer_core::Affine::IDENTITY,
+                offset: layer_core::Point::default(),
+                ..l.properties.clone()
+            };
+            let same_layer = a.id == b.id
+                && a.kind == b.kind
+                && a.visible == b.visible
+                && a.opacity == b.opacity
+                && a.raster == b.raster
+                && unplaced(a) == unplaced(b)
+                && a.mask == b.mask
+                && a.effect == b.effect
+                && match (&a.source, &b.source) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                };
+            if !same_layer {
+                return None;
+            }
+            if a.properties != b.properties {
+                moved.push(b.id);
+            }
+        }
+        same.then_some(moved)
     }
     pub fn new(packet: FramePacket<'_>, background: [f32; 4]) -> Self {
         Self {

@@ -25,6 +25,7 @@ pub(crate) struct Recorder {
     pub(crate) region_requests: Vec<layer_render::RegionRequest>,
     pub(crate) region_reply: Option<layer_render::RegionResult>,
     pub(crate) transform: Option<layer_render::TransformPreview>,
+    pub(crate) moving_layer: Option<layer_core::LayerId>,
     pub(crate) overlay: Option<layer_render::SelectionOverlay>,
     pub(crate) filter_preview: Option<FilterPreviewRequest>,
     pub(crate) filter_preview_ready: Option<Result<FilterPreviewImage, BackendError>>,
@@ -53,6 +54,9 @@ impl CanvasRenderer for Recorder {
     ) -> Result<(), Self::Error> {
         self.transform = preview.cloned();
         Ok(())
+    }
+    fn prepare_moving_layer(&mut self, layer: Option<layer_core::LayerId>) {
+        self.moving_layer = layer;
     }
     fn paint_selection(&mut self,update:&layer_render::SelectionPaint)->Result<bool,Self::Error> {
         self.selection_updates.push(update.clone()); Ok(!self.selection_wait)

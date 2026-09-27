@@ -612,6 +612,10 @@ pub trait CanvasRenderer {
     fn has_pending_work(&self) -> bool {
         false
     }
+    /// The layer a placement or transform that just began may move. The
+    /// renderer may prepare what drawing its drag needs while idle. None
+    /// when the transaction ends.
+    fn prepare_moving_layer(&mut self, _layer: Option<LayerId>) {}
     /// Applied by the next submit. None restores the captured original before
     /// subsequent paint/operations. This performs no readback or blocking wait.
     fn set_transform_preview(

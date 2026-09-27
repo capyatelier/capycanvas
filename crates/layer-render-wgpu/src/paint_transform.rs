@@ -4,10 +4,11 @@
 use super::*;
 use pixel_transform::PixelTransform;
 pub(super) mod layers;
+pub(super) mod resample;
 pub(super) mod snapshot;
 use snapshot::TileSnapshot;
 
-pub(super) struct PaintTransforms([ImageTransformState; 2], layers::LayerComposite);
+pub(super) struct PaintTransforms([ImageTransformState; 2], layers::LayerComposite, resample::Resample);
 impl PaintTransforms {
     pub(super) fn placement_pass(&self) -> PixelTransform {
         self.0[0].color.placement_pass()
@@ -15,18 +16,21 @@ impl PaintTransforms {
     pub fn new(device: &PipelineDevice) -> Self {
         let primary = ImageTransformState::new(device);
         let companion = primary.fork();
-        Self([primary, companion], layers::LayerComposite::new(device))
+        Self([primary, companion], layers::LayerComposite::new(device), resample::Resample::new(device))
     }
     pub fn composite(&self) -> &layers::LayerComposite {
         &self.1
+    }
+    pub fn resample(&self) -> &resample::Resample {
+        &self.2
     }
     pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 3] {
         self.0[0].pipelines()
     }
     /// Drag previews draw into the display with these once they are ready;
     /// they never delay input.
-    pub fn display_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 2] {
-        [self.0[0].color.display.as_ref().expect("color transform"), &self.1.pipeline]
+    pub fn display_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 3] {
+        [self.0[0].color.display.as_ref().expect("color transform"), &self.1.pipeline, &self.2.pipeline]
     }
     pub fn begin_frame(&mut self) {
         for t in &mut self.0 {
@@ -57,6 +61,10 @@ impl PaintTransforms {
     #[cfg(test)]
     pub fn source_captures(&self) -> u64 {
         self.0.iter().map(|t| t.source_captures).sum()
+    }
+    #[cfg(test)]
+    pub fn reduced_level(&self) -> Option<u32> {
+        self.0[0].reduced.as_ref().filter(|r| r.pending.is_empty()).map(|r| r.level)
     }
     pub fn apply(
         &mut self,
@@ -118,6 +126,37 @@ impl PaintTransforms {
     ) -> Result<bool, GpuRasterError> {
         self.0[0].warm_originals(r, encoder, next, tiles)
     }
+    /// Reduce up to `blocks` more blocks of the moving layer to display
+    /// `level`, which drag frames then resample instead of evaluating every
+    /// layer pixel. Returns whether that is complete, or None when drags
+    /// cannot resample it.
+    pub fn prepare_reduced(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        next: &layer_render::TransformPreview,
+        layers: &[Layer],
+        level: u32,
+        blocks: usize,
+    ) -> Result<Option<bool>, GpuRasterError> {
+        if next.companion(layers).is_some() || self.0[1].has_preview() {
+            return Ok(None);
+        }
+        let local = local_level(level, layer_core::target_transform(layers, next.layer));
+        self.0[0].prepare_reduced(r, encoder, next, r.target_extent(next.layer), local, blocks)
+    }
+    /// Whether drag frames can resample `next`'s layer reduced to a display
+    /// level, or None until the transaction has captured it.
+    pub fn reducible(&self, next: &layer_render::TransformPreview, layers: &[Layer]) -> Option<bool> {
+        self.0[0]
+            .displayable(next)
+            .then(|| next.companion(layers).is_none() && !self.0[1].has_preview() && self.0[0].reducible(next))
+    }
+    /// Whether `next`'s layer, captured by this transaction, still has to be
+    /// reduced before its drag frames.
+    pub fn reduces(&self, next: &layer_render::TransformPreview, layers: &[Layer]) -> bool {
+        next.companion(layers).is_none() && !self.0[1].has_preview() && self.0[0].reduces(next)
+    }
     /// Draw up to `pages` full-resolution pages of a still preview last drawn
     /// straight into the display. Returns the layer regions to recompose once
     /// every page is drawn.
@@ -126,14 +165,23 @@ impl PaintTransforms {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         next: &layer_render::TransformPreview,
+        layers: &[Layer],
         pages: usize,
     ) -> Result<Option<Vec<(LayerId, PixelRect)>>, GpuRasterError> {
-        self.0[0].settle(r, encoder, next, r.target_extent(next.layer), pages)
+        let settled = self.0[0].settle(r, encoder, next, r.target_extent(next.layer), pages)?;
+        Ok(settled.map(|damage| {
+            damage
+                .into_iter()
+                .map(|(id, local)| (id, brush_tiles::document_damage(layers, id, local, r.document_extent)))
+                .collect()
+        }))
     }
-    /// Draw a moving preview of a layer without a mask straight into a
-    /// reduced display `level`, from the transaction's captured originals.
-    /// The layer's pages keep the last full preview. Returns the layer region
-    /// drawn, or None when the transaction has not captured this layer yet.
+    /// Draw a preview of a layer without a mask straight into a reduced
+    /// display `level`, from the transaction's captured originals. A placed
+    /// layer is only resampled from its reduced copy. The layer's pages keep
+    /// the last full preview. Returns the document region drawn, or None when
+    /// the transaction has not captured this layer or reduced a placed one.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_display(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -146,7 +194,8 @@ impl PaintTransforms {
         if next.companion(layers).is_some() || self.0[1].has_preview() {
             return Ok(None);
         }
-        self.0[0].render_display(r, encoder, next, r.target_extent(next.layer), level, display)
+        let placement = layer_core::target_transform(layers, next.layer);
+        self.0[0].render_display(r, encoder, next, r.target_extent(next.layer), placement, level, display, &self.2)
     }
 }
 
@@ -173,6 +222,10 @@ struct ImageTransformState {
     /// The transaction whose original photo tiles are being decoded, and the
     /// tiles still to decode.
     warming: Option<(u64, Vec<[u32; 2]>)>,
+    reduced: Option<resample::Reduced>,
+    /// The still preview first resampled into the display, and the blocks of
+    /// it still to draw exactly, a few per frame.
+    exacting: Option<(layer_render::TransformPreview, Vec<PixelRect>)>,
     spares: PreviewPages,
     atlases: [Option<Atlas>; 2],
     #[cfg(test)]
@@ -181,6 +234,15 @@ struct ImageTransformState {
 
 /// Spare pages a moving display preview allocates per frame.
 const SPARE_PAGES_PER_FRAME: usize = 24;
+
+/// Blocks of 512 x 512 layer pixels of a still preview drawn exactly into
+/// the display per frame, after its first frame resampled it.
+const EXACT_BLOCKS: usize = 16;
+
+/// Transform regions one frame of a released preview draws, reserved before
+/// the drag so drawing them does not replace every cached source binding.
+const SETTLE_RECORDS: u64 = 4096;
+
 
 /// Distinct source-cache tiles one batch may bind. Staying below the cache's
 /// smallest capacity keeps every tile of a batch resident until it is drawn.
@@ -200,6 +262,72 @@ struct Window {
     /// Absolute destination regions, and whether each draws unmoved pixels.
     jobs: Vec<(snapshot::Footprint, bool)>,
     pages: Vec<([u32; 2], Target)>,
+}
+
+/// The level of a layer's own pixels whose texels are at least as fine as
+/// those of display `level` along the axis `placement` magnifies most.
+pub(crate) fn local_level(level: u32, placement: layer_core::Affine) -> u32 {
+    let [a, b, c, d, _, _] = placement.0;
+    let sum = a * a + b * b + c * c + d * d;
+    let det = (a * d - b * c).abs();
+    let high = ((sum + (sum * sum - 4. * det * det).max(0.).sqrt()) * 0.5).sqrt();
+    (level as f32 - high.log2()).floor().clamp(0., 4.) as u32
+}
+
+/// `transform` followed by `placement`, from texels of the layer reduced to
+/// `local` to texels of display `level`, sampled bilinearly.
+pub(crate) fn resample_map(
+    transform: &layer_core::ImageTransform,
+    placement: layer_core::Affine,
+    local: u32,
+    level: u32,
+) -> layer_core::ImageTransform {
+    let matrix = |map: &layer_core::TransformMap| match map {
+        layer_core::TransformMap::Affine(affine) => layer_core::Projective::from_affine(*affine).0,
+        layer_core::TransformMap::Projective(projective) => projective.0,
+        layer_core::TransformMap::Mesh(_) => layer_core::Projective::IDENTITY.0,
+    };
+    let multiply = |a: [f32; 9], b: [f32; 9]| -> [f32; 9] {
+        std::array::from_fn(|i| (0..3).map(|k| a[i / 3 * 3 + k] * b[k * 3 + i % 3]).sum())
+    };
+    let [from, to] = [local, level].map(|l| (1u32 << l) as f32);
+    let reduce = [1. / to, 0., 0., 0., 1. / to, 0., 0., 0., 1.];
+    let expand = [from, 0., 0., 0., from, 0., 0., 0., 1.];
+    let placed = multiply(layer_core::Projective::from_affine(placement).0, matrix(&transform.map));
+    let map = layer_core::Projective(multiply(multiply(reduce, placed), expand));
+    layer_core::ImageTransform {
+        map: map
+            .as_affine()
+            .map_or(layer_core::TransformMap::Projective(map), layer_core::TransformMap::Affine),
+        interpolation: layer_core::Interpolation::Linear,
+    }
+}
+
+/// Whether `selection` fully covers every pixel of `bounds`, so a transform
+/// moves all of them and leaves none in place.
+fn selects_all(selection: &layer_core::Selection, bounds: PixelRect) -> bool {
+    let layer_core::SelectionShape::Contours(contours) = &selection.shape else {
+        return false;
+    };
+    let [a, b, c, d, x, y] = selection.affine.0;
+    match &contours[..] {
+        [] => selection.inverted,
+        [contour] if !selection.inverted && b == 0. && c == 0. && contour.len() == 4 => {
+            let corners: Vec<_> = contour.iter().map(|p| [a * p.x + x, d * p.y + y]).collect();
+            let rectangle = (0..4).all(|i| {
+                let [p, q] = [corners[i], corners[(i + 1) % 4]];
+                (p[0] == q[0]) != (p[1] == q[1])
+            });
+            let low = corners.iter().fold([f32::MAX; 2], |m, p| [m[0].min(p[0]), m[1].min(p[1])]);
+            let high = corners.iter().fold([f32::MIN; 2], |m, p| [m[0].max(p[0]), m[1].max(p[1])]);
+            rectangle
+                && low[0] <= bounds.min_x() as f32
+                && low[1] <= bounds.min_y() as f32
+                && high[0] >= bounds.max_x() as f32
+                && high[1] >= bounds.max_y() as f32
+        }
+        _ => false,
+    }
 }
 
 fn on_page(local: PixelRect, coordinate: [u32; 2]) -> PixelRect {
@@ -332,6 +460,8 @@ impl ImageTransformState {
             displayed: None,
             settling: None,
             warming: None,
+            reduced: None,
+            exacting: None,
             spares: PreviewPages::default(),
             atlases: Default::default(),
             #[cfg(test)]
@@ -357,6 +487,7 @@ impl ImageTransformState {
             + self.selection.as_ref().map_or(0, wgpu::Buffer::size)
             + self.scalar.storage_bytes()
             + self.visibility.storage_bytes()
+            + self.reduced.as_ref().map_or(0, resample::Reduced::storage_bytes)
             + self
                 .captures
                 .iter()
@@ -957,6 +1088,7 @@ impl ImageTransformState {
     fn release_snapshot(&mut self) {
         self.sources = Default::default();
         self.atlases = Default::default();
+        self.reduced = None;
         // Active copies follow the overwritten paint footprint. After the
         // transaction, retain only a small reusable pool, never every area
         // visited by unrelated transforms. Originals themselves stay tiled.
@@ -986,6 +1118,7 @@ impl ImageTransformState {
         self.preview_regions = [PixelRect::EMPTY; 2];
         self.displayed = None;
         self.settling = None;
+        self.exacting = None;
         self.spares.clear();
         self.release_snapshot();
     }
@@ -1034,6 +1167,7 @@ impl ImageTransformState {
     ) -> Result<Option<(LayerId, PixelRect)>, GpuRasterError> {
         self.displayed = None;
         self.settling = None;
+        self.exacting = None;
         let Some(previous) = self.preview.take() else {
             return Ok(None);
         };
@@ -1060,6 +1194,7 @@ impl ImageTransformState {
     ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
         self.displayed = None;
         self.settling = None;
+        self.exacting = None;
         if self.preview.as_ref() == Some(next) {
             return Ok(Vec::new());
         }
@@ -1097,33 +1232,60 @@ impl ImageTransformState {
         self.preview_regions = regions;
         Ok(damage)
     }
+    /// Whether this transaction's captured originals can draw `next` into a
+    /// display level.
+    fn displayable(&self, next: &layer_render::TransformPreview) -> bool {
+        self.preview.as_ref().is_some_and(|p| {
+            p.transaction == next.transaction
+                && p.layer == next.layer
+                && p.selection == next.selection
+        }) && self.background.is_none()
+            && self.sources[0].is_some()
+            && self.sources[1].is_none()
+            && self.sources[2].is_none()
+            && !matches!(next.transform.map, layer_core::TransformMap::Mesh(_))
+    }
     fn render_display(
         &mut self,
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         next: &layer_render::TransformPreview,
         extent: [u32; 2],
+        placement: layer_core::Affine,
         level: &wgpu::TextureView,
         display: pixel_transform::DisplayLevel,
+        resample: &resample::Resample,
     ) -> Result<Option<PixelRect>, GpuRasterError> {
-        let captured = self.preview.as_ref().is_some_and(|p| {
-            p.transaction == next.transaction
-                && p.layer == next.layer
-                && p.selection == next.selection
+        if !self.displayable(next) {
+            return Ok(None);
+        }
+        let display_level = display.side.trailing_zeros();
+        let local = local_level(display_level, placement);
+        let reduced = self.reduced.as_ref().is_some_and(|reduced| {
+            reduced.transaction == next.transaction && reduced.level == local && reduced.pending.is_empty()
         });
-        if !captured
-            || self.background.is_some()
-            || self.sources[0].is_none()
-            || self.sources[1].is_some()
-            || self.sources[2].is_some()
-            || matches!(next.transform.map, layer_core::TransformMap::Mesh(_))
-        {
+        let placed = placement != layer_core::Affine::IDENTITY;
+        if placed && !reduced {
             return Ok(None);
         }
         if self.displayed.as_ref().is_some_and(|(shown, _)| shown == next) {
-            return Ok(Some(PixelRect::EMPTY));
+            let Some((_, pending)) = self.exacting.as_mut().filter(|(still, _)| still == next) else {
+                return Ok(Some(PixelRect::EMPTY));
+            };
+            let batch: Vec<_> = (0..EXACT_BLOCKS).map_while(|_| pending.pop()).collect();
+            if pending.is_empty() {
+                self.exacting = None;
+            }
+            let transform = next.drawn();
+            let mut drawn = PixelRect::EMPTY;
+            for block in batch {
+                self.draw_exact(r, encoder, &transform, block, level, display)?;
+                drawn = drawn.union(block);
+            }
+            return Ok(Some(drawn));
         }
         self.settling = None;
+        self.exacting = None;
         let regions = next
             .transform
             .affected_regions(self.cut)
@@ -1140,12 +1302,72 @@ impl ImageTransformState {
             drawn.max_y().div_ceil(side).saturating_mul(side).min(extent[1]),
         );
         self.displayed = Some((next.clone(), regions));
-        if drawn.is_empty() {
-            return Ok(Some(drawn));
+        let shown = if placed {
+            let shown = pixel_rect(placement.bounds(drawn.to_rect()), display.extent);
+            PixelRect::new(
+                shown.min_x() / side * side,
+                shown.min_y() / side * side,
+                shown.max_x().div_ceil(side).saturating_mul(side).min(display.extent[0]),
+                shown.max_y().div_ceil(side).saturating_mul(side).min(display.extent[1]),
+            )
+        } else {
+            drawn
+        };
+        if shown.is_empty() {
+            return Ok(Some(shown));
         }
-        let transform = next.drawn();
+        if reduced {
+            let low = [shown.min_x() / side, shown.min_y() / side];
+            let texels = [
+                low[0],
+                low[1],
+                shown.max_x().div_ceil(side) - low[0],
+                shown.max_y().div_ceil(side) - low[1],
+            ];
+            let at_level = pixel_transform::DisplayLevel {
+                side: 1,
+                extent: display.extent.map(|n| n.div_ceil(side)),
+                ..display
+            };
+            let transform = resample_map(&next.transform, placement, local, display_level);
+            let kept = resample_map(&layer_core::ImageTransform::default(), placement, local, display_level);
+            let clip = layer_core::Affine([side as f32, 0., 0., side as f32, 0., 0.])
+                .then(placement.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid layer placement"))?);
+            self.reduced
+                .as_mut()
+                .unwrap()
+                .draw(r, resample, encoder, level, &transform, &kept, clip, extent, texels, at_level)?;
+            if !next.moving && !placed {
+                let block = 2 * PAGE_SIZE / side * side;
+                let mut blocks = Vec::new();
+                for y in (drawn.min_y()..drawn.max_y()).step_by(block as usize) {
+                    for x in (drawn.min_x()..drawn.max_x()).step_by(block as usize) {
+                        blocks.push(PixelRect::new(x, y, (x + block).min(drawn.max_x()), (y + block).min(drawn.max_y())));
+                    }
+                }
+                blocks.reverse();
+                self.exacting = Some((next.clone(), blocks));
+            }
+        } else {
+            self.draw_exact(r, encoder, &next.drawn(), drawn, level, display)?;
+        }
+        self.reserve_spare_pages(r, next.layer, &regions);
+        Ok(Some(shown))
+    }
+    /// Draw `drawn`, whose corners lie on texel corners, by evaluating every
+    /// layer pixel of every texel from the captured originals.
+    fn draw_exact(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        transform: &layer_core::ImageTransform,
+        drawn: PixelRect,
+        level: &wgpu::TextureView,
+        display: pixel_transform::DisplayLevel,
+    ) -> Result<(), GpuRasterError> {
+        let side = display.side;
         let snapshot = self.sources[0].as_ref().unwrap();
-        let splitter = snapshot.splitter(&transform)?.aligned(side);
+        let splitter = snapshot.splitter(transform)?.aligned(side);
         let mut blocks = std::collections::BTreeMap::new();
         for c in page_coordinates(drawn) {
             blocks
@@ -1186,7 +1408,7 @@ impl ImageTransformState {
                 encoder,
                 bounds,
                 0.,
-                &transform,
+                transform,
                 &records,
                 Some(display),
             )
@@ -1211,8 +1433,100 @@ impl ImageTransformState {
                 .collect();
             self.color.encode_display(&r.device, encoder, level, side, offsets, &draws);
         }
-        self.reserve_spare_pages(r, next.layer, &regions);
-        Ok(Some(drawn))
+        Ok(())
+    }
+    /// Whether drag frames can resample `next`'s layer reduced to a display
+    /// level.
+    fn reducible(&self, next: &layer_render::TransformPreview) -> bool {
+        self.displayable(next)
+    }
+    /// Whether `next`'s selection keeps some of the layer's pixels in place.
+    fn keeps_pixels(&self, next: &layer_render::TransformPreview) -> bool {
+        self.has_selection
+            && !next
+                .selection
+                .as_ref()
+                .is_some_and(|s| selects_all(s, self.sources[0].as_ref().unwrap().bounds))
+    }
+    /// Whether `next`'s layer still has to be reduced before drag frames.
+    fn reduces(&self, next: &layer_render::TransformPreview) -> bool {
+        self.reducible(next)
+            && self
+                .reduced
+                .as_ref()
+                .is_none_or(|r| r.transaction != next.transaction || !r.pending.is_empty())
+    }
+    /// Draw up to `blocks` more blocks of the layer at display `level` for
+    /// drag frames to resample, the pixels the selection moves apart from
+    /// those it keeps. Returns whether it is complete, or None when drags
+    /// cannot resample the layer.
+    fn prepare_reduced(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        next: &layer_render::TransformPreview,
+        extent: [u32; 2],
+        level: u32,
+        blocks: usize,
+    ) -> Result<Option<bool>, GpuRasterError> {
+        if !self.reducible(next) {
+            return Ok(None);
+        }
+        let bounds = self.sources[0].as_ref().unwrap().bounds;
+        let side = 1 << level;
+        if self
+            .reduced
+            .as_ref()
+            .is_none_or(|reduced| reduced.transaction != next.transaction || reduced.level != level)
+        {
+            let aligned = PixelRect::new(
+                bounds.min_x() / side * side,
+                bounds.min_y() / side * side,
+                bounds.max_x().div_ceil(side).saturating_mul(side).min(extent[0]),
+                bounds.max_y().div_ceil(side).saturating_mul(side).min(extent[1]),
+            );
+            let blocks: std::collections::BTreeSet<_> =
+                page_coordinates(aligned).map(|c| [c[0] / 2, c[1] / 2]).collect();
+            let block = 2 * PAGE_SIZE;
+            let pending = blocks
+                .into_iter()
+                .rev()
+                .map(|[x, y]| PixelRect::new(x * block, y * block, (x + 1) * block, (y + 1) * block).intersect(aligned))
+                .collect();
+            let kept = self.keeps_pixels(next);
+            self.reduced = Some(resample::Reduced::new(r, next.transaction, level, extent, pending, kept));
+        }
+        let reduced = self.reduced.as_mut().unwrap();
+        let batch: Vec<_> = (0..blocks).map_while(|_| reduced.pending.pop()).collect();
+        let complete = reduced.pending.is_empty();
+        let parts = match &reduced.kept {
+            Some(kept) => vec![
+                (pixel_transform::Part::Selected, reduced.image.view.clone()),
+                (pixel_transform::Part::Kept, kept.view.clone()),
+            ],
+            None => vec![(pixel_transform::Part::Whole, reduced.image.view.clone())],
+        };
+        let display = pixel_transform::DisplayLevel {
+            side,
+            opacity: 1.,
+            extent,
+            backdrop: [0.; 4],
+        };
+        let identity = layer_core::ImageTransform::default();
+        let drawn = batch.into_iter().try_for_each(|block| {
+            parts.iter().try_for_each(|(part, view)| {
+                self.color.part = *part;
+                self.draw_exact(r, encoder, &identity, block, view, display)
+            })
+        });
+        self.color.part = pixel_transform::Part::Whole;
+        drawn?;
+        if complete {
+            self.color.reserve(&r.device, SETTLE_RECORDS);
+            let format = self.atlas_format(r, 0);
+            self.atlases[0].get_or_insert_with(|| Atlas::new(&r.device, format));
+        }
+        Ok(Some(complete))
     }
     /// Allocate, a few per frame, the spare pages the first still preview
     /// after a drag draws, so that frame does not create them all at once.

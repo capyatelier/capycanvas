@@ -203,6 +203,12 @@ impl Startup {
             finished: false,
         })
     }
+    /// Compile, while idle, what a drag of a moving layer draws with.
+    pub fn compile_display_pipelines(&self, pipelines: [&Deferred<wgpu::ComputePipeline>; 3]) {
+        for pipeline in pipelines {
+            self.compiler.pipeline(pipeline, OTHER);
+        }
+    }
 }
 impl WgpuRasterizer {
     pub fn shader_input(&self) {

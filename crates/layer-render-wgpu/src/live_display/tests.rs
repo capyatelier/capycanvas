@@ -1315,7 +1315,7 @@ fn moving_transforms_drawn_into_the_display_match_recomposition_and_release_exac
         for r in [&mut direct, &mut reference] {
             submit(r, &doc, v, true);
         }
-        let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap().min(2);
+        let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap().min(4);
         let layer = doc.layers[0].id;
         let selection = layer_core::Selection::polygon(vec![
             Point { x: 100.5, y: 80. },
@@ -1363,8 +1363,9 @@ fn moving_transforms_drawn_into_the_display_match_recomposition_and_release_exac
                     .collect();
                 let largest = differences.iter().copied().fold(0f32, f32::max);
                 let mean = differences.iter().map(|d| f64::from(*d)).sum::<f64>() / differences.len() as f64;
+                let (largest_bound, mean_bound) = (0.5, 3e-3);
                 assert!(
-                    largest <= 1e-3 && mean <= 1e-6,
+                    largest <= largest_bound && mean <= mean_bound,
                     "level {level} scale {scale} step {step}: largest {largest}, mean {mean}"
                 );
             }
@@ -1385,6 +1386,241 @@ fn moving_transforms_drawn_into_the_display_match_recomposition_and_release_exac
             submit(r, &doc, v, false);
         }
         assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
+    }
+}
+
+#[test]
+fn drags_resample_the_layer_reduced_to_the_display_level() {
+    for (extent, scale, expected) in [([1536, 1024], 0.2, 2), ([3072, 2048], 0.1, 3)] {
+        let mut doc = document(extent);
+        doc.layers[0].opacity = 0.8;
+        let layer = doc.layers[0].id;
+        let [w, h] = extent.map(|n| n as f32);
+        let all = layer_core::Selection::polygon(
+            [[0., 0.], [w, 0.], [w, h], [0., h]].map(|[x, y]| Point { x, y }).to_vec(),
+        )
+        .unwrap();
+        let center = Point { x: 700., y: 500. };
+        let keystone = layer_core::Projective::rect_to_quad(
+            layer_core::Rect { min: Point::default(), max: Point { x: w, y: h } },
+            [[40., 30.], [w - 36., 70.], [w - 136., h - 24.], [90., h - 64.]].map(|[x, y]| Point { x, y }),
+        )
+        .unwrap();
+        let [mut direct, mut reference] = complete_pair(&doc);
+        let v = centered_view([doc.width, doc.height], [320, 240], scale, 0.);
+        for r in [&mut direct, &mut reference] {
+            submit(r, &doc, v, true);
+        }
+        let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap();
+        assert_eq!(level, expected);
+        let start = preview(layer, false, Some(all.clone()), layer_core::TransformMap::Affine(layer_core::Affine::IDENTITY));
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&start)).unwrap();
+            submit(r, &doc, v, false);
+        }
+        let mut frames = 0;
+        while direct.has_pending_work() {
+            frames += 1;
+            assert!(frames < 8, "the layer is reduced within a few frames");
+            submit(&mut direct, &doc, v, false);
+        }
+        assert_eq!(direct.transforms.as_ref().unwrap().reduced_level(), Some(level));
+        let steps = [
+            (1e-4, 1e-7, layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 16., y: -24. }))),
+            (0.35, 5e-4, layer_core::TransformMap::Affine(layer_core::Affine::around(center, [0.7, 0.9], 0.3, Point { x: 31., y: 5. }))),
+            (0.35, 5e-4, layer_core::TransformMap::Projective(keystone)),
+        ];
+        for (step, (largest_bound, mean_bound, map)) in steps.into_iter().enumerate() {
+            let composed = direct.metrics.composited_pixels;
+            for r in [&mut direct, &mut reference] {
+                r.set_transform_preview(Some(&preview(layer, true, Some(all.clone()), map.clone()))).unwrap();
+                submit(r, &doc, v, false);
+            }
+            assert_eq!(direct.metrics.composited_pixels, composed, "level {level} step {step} draws into the display");
+            let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+            assert!(
+                largest <= largest_bound && mean <= mean_bound,
+                "level {level} step {step}: largest {largest}, mean {mean}"
+            );
+        }
+        let still = preview(
+            layer,
+            false,
+            Some(all.clone()),
+            layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 21.5, y: 3.25 })),
+        );
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&still)).unwrap();
+            submit(r, &doc, v, false);
+        }
+        let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+        assert!(largest <= 0.35 && mean <= 5e-4, "level {level}: the first still frame resamples: largest {largest}, mean {mean}");
+        for _ in 0..2 {
+            submit(&mut direct, &doc, v, false);
+        }
+        let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+        assert!(largest <= 1e-3 && mean <= 1e-6, "level {level}: the next frames draw it exactly: largest {largest}, mean {mean}");
+        let mut frames = 0;
+        while direct.has_pending_work() {
+            frames += 1;
+            assert!(frames < 16, "the still preview settles within a few frames");
+            direct.set_transform_preview(Some(&still)).unwrap();
+            submit(&mut direct, &doc, v, false);
+        }
+        assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
+        let part = layer_core::Selection::polygon(
+            [[100., 80.], [1300., 140.], [1200., 900.], [160., 700.]].map(|[x, y]| Point { x, y }).to_vec(),
+        )
+        .unwrap();
+        let kept = layer_render::TransformPreview {
+            transaction: 2,
+            ..preview(layer, false, Some(part), layer_core::TransformMap::Affine(layer_core::Affine::IDENTITY))
+        };
+        direct.set_transform_preview(Some(&kept)).unwrap();
+        submit(&mut direct, &doc, v, false);
+        let mut frames = 0;
+        while direct.has_pending_work() {
+            frames += 1;
+            assert!(frames < 8, "the layer is reduced within a few frames");
+            submit(&mut direct, &doc, v, false);
+        }
+        assert_eq!(
+            direct.transforms.as_ref().unwrap().reduced_level(),
+            Some(level),
+            "a selection that keeps pixels in place reduces them apart from those it moves"
+        );
+    }
+}
+
+#[test]
+fn placed_layers_resample_their_reduced_copy_and_settle_exactly() {
+    let mut doc = document([1536, 1024]);
+    let layer = doc.layers[0].id;
+    doc.layers[0].properties.placement =
+        layer_core::Affine::around(Point { x: 768., y: 512. }, [0.45, 0.45], 0.2, Point { x: 90., y: -40. });
+    let [mut direct, mut reference] = complete_pair(&doc);
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.2, 0.);
+    for r in [&mut direct, &mut reference] {
+        submit(r, &doc, v, true);
+    }
+    let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap();
+    let start = preview(layer, false, None, layer_core::TransformMap::Affine(layer_core::Affine::IDENTITY));
+    for r in [&mut direct, &mut reference] {
+        r.set_transform_preview(Some(&start)).unwrap();
+        submit(r, &doc, v, false);
+    }
+    let mut frames = 0;
+    while direct.has_pending_work() {
+        frames += 1;
+        assert!(frames < 8, "the layer is reduced within a few frames");
+        submit(&mut direct, &doc, v, false);
+    }
+    assert_eq!(direct.transforms.as_ref().unwrap().reduced_level(), Some(level + 1));
+    let center = Point { x: 700., y: 500. };
+    for step in 0..4 {
+        let t = step as f32;
+        let map = layer_core::TransformMap::Affine(layer_core::Affine::around(
+            center,
+            [0.9 + t * 0.05; 2],
+            t * 0.1,
+            Point { x: t * 17.5, y: -t * 6.25 },
+        ));
+        let composed = direct.metrics.composited_pixels;
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&preview(layer, true, None, map.clone()))).unwrap();
+            submit(r, &doc, v, false);
+        }
+        assert_eq!(direct.metrics.composited_pixels, composed, "step {step} draws into the display");
+        let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+        assert!(largest <= 0.35 && mean <= 5e-4, "step {step}: largest {largest}, mean {mean}");
+    }
+    let still = preview(
+        layer,
+        false,
+        None,
+        layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 21.5, y: 3.25 })),
+    );
+    for r in [&mut direct, &mut reference] {
+        r.set_transform_preview(Some(&still)).unwrap();
+        submit(r, &doc, v, false);
+    }
+    let mut frames = 0;
+    while direct.has_pending_work() {
+        frames += 1;
+        assert!(frames < 64, "the still preview settles");
+        direct.set_transform_preview(Some(&still)).unwrap();
+        submit(&mut direct, &doc, v, false);
+    }
+    assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
+    for r in [&mut direct, &mut reference] {
+        r.set_transform_preview(None).unwrap();
+        submit(r, &doc, v, false);
+    }
+    assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
+}
+
+#[test]
+fn placement_drags_draw_into_the_display_and_recompose_after_release() {
+    let mut doc = document([1536, 1024]);
+    doc.layers[0].opacity = 0.8;
+    let mut below = Layer::paint(doc.allocate_layer_id(), "below");
+    below.source = Some(photo([1536, 1024], 13, |x, y| if (x / 97 + y / 61) % 3 == 0 { 50000 } else { 0 }));
+    doc.layers.push(below);
+    for stacked in [false, true] {
+        let mut doc = doc.clone();
+        if !stacked {
+            doc.layers.pop();
+        }
+        let [mut direct, mut reference] = complete_pair(&doc);
+        let v = centered_view([doc.width, doc.height], [320, 240], 0.2, 0.);
+        for r in [&mut direct, &mut reference] {
+            submit(r, &doc, v, true);
+        }
+        let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap();
+        direct.prepare_moving_layer(Some(doc.layers[0].id));
+        let mut frames = 0;
+        submit(&mut direct, &doc, v, false);
+        while direct.has_pending_work() {
+            frames += 1;
+            assert!(frames < 64, "stacked {stacked}: a hinted layer is prepared while idle");
+            submit(&mut direct, &doc, v, false);
+        }
+        assert!(direct.placement_copy.as_ref().is_some_and(|copy| copy.ready()));
+        assert_eq!(direct.layered_display.as_ref().is_some_and(|l| l.ready()), stacked);
+        let center = Point { x: 768., y: 512. };
+        for step in 1..6 {
+            if step == 4 {
+                submit(&mut direct, &doc, v, false);
+                assert!(direct.has_pending_work(), "stacked {stacked}: a pause recomposes what the drag drew");
+            }
+            let t = step as f32;
+            doc.layers[0].properties.placement =
+                layer_core::Affine::around(center, [1. - t * 0.08; 2], t * 0.05, Point { x: t * 23.5, y: -t * 9.25 });
+            let composed = direct.metrics.composited_pixels;
+            for r in [&mut direct, &mut reference] {
+                submit(r, &doc, v, true);
+            }
+            assert_eq!(
+                direct.metrics.composited_pixels, composed,
+                "stacked {stacked} step {step}: a placement drag draws into the display"
+            );
+            let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+            assert!(
+                largest <= 0.35 && mean <= 1e-3,
+                "stacked {stacked} step {step}: largest {largest}, mean {mean}"
+            );
+        }
+        let mut frames = 0;
+        submit(&mut direct, &doc, v, false);
+        while direct.has_pending_work() {
+            frames += 1;
+            assert!(frames < 256, "stacked {stacked}: the released placement is recomposed");
+            submit(&mut direct, &doc, v, false);
+        }
+        assert!(frames > 1, "stacked {stacked}: recomposition spreads over frames");
+        assert!(display_levels(&direct, 0) == display_levels(&reference, 0), "stacked {stacked}");
+        direct.prepare_moving_layer(None);
+        assert!(direct.placement_copy.is_none() && direct.layered_display.is_none());
     }
 }
 
@@ -1522,7 +1758,7 @@ fn layered_transforms_draw_between_static_display_layers_and_settle_exactly() {
                 let (largest, mean) =
                     largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
                 assert!(
-                    largest <= 0.1 && mean <= 1e-3,
+                    largest <= 0.35 && mean <= 5e-4,
                     "{blend:?} step {step}: largest {largest}, mean {mean}"
                 );
             }

@@ -19,6 +19,8 @@ const UNMOVED=2u;
 const PLACEMENT=4u;
 const BICUBIC=8u;
 const NO_VIEW=16u;
+const SELECTED=32u;
+const KEPT=64u;
 
 @vertex fn vertex_main(@builtin(vertex_index) index:u32)->@builtin(position) vec4<f32> {
     let p=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.));
@@ -169,6 +171,14 @@ fn layer_pixel(world:vec2<f32>)->vec4<f32> {
     return layer_pixel(position.xy+transform.attachment.xy);
 }
 @group(2) @binding(0) var display_level:texture_storage_2d<rgba32float,write>;
+// An unmoved display level holds only the pixels the selection moves, or only
+// those it keeps, when those flags ask for them.
+fn display_pixel(world:vec2<f32>)->vec4<f32> {
+    let p=vec2<i32>(floor(world));
+    if (flags()&(UNMOVED|SELECTED))==(UNMOVED|SELECTED) {return selected(p);}
+    if (flags()&(UNMOVED|KEPT))==(UNMOVED|KEPT) {return original(p)*(1.-brush_selection_at(world));}
+    return layer_pixel(world);
+}
 var<workgroup> display_pixels:array<vec4<f32>,256>;
 // Texels of a display level, `side` layer pixels across: one invocation per
 // layer pixel, then the area mean of each texel's pixels over the backdrop,
@@ -181,7 +191,7 @@ fn display_main(@builtin(workgroup_id) group:vec3<u32>,@builtin(local_invocation
     let world=vec2<f32>(first*side+local.xy)+.5+transform.attachment.xy;
     let inside=all(world<transform.display.zw);
     var value=vec4(0.);
-    if inside && all(first+local.xy/side<end) {value=layer_pixel(world);}
+    if inside && all(first+local.xy/side<end) {value=display_pixel(world);}
     display_pixels[local.y*16u+local.x]=select(vec4(-1.),value,inside);
     workgroupBarrier();
     let texel=first+local.xy/side;

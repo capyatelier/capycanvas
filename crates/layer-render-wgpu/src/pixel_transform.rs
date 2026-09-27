@@ -61,8 +61,20 @@ pub(super) struct BatchDraw<'a> {
     pub scissor: [u32; 4],
 }
 
+/// Which of a layer's unmoved pixels an identity transform draws.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Part {
+    #[default]
+    Whole,
+    /// Only the pixels the selection moves.
+    Selected,
+    /// Only the pixels the selection keeps in place.
+    Kept,
+}
+
 pub struct PixelTransform {
     placement: bool,
+    pub(super) part: Part,
     scalar: bool,
     visibility: bool,
     pub(super) pipeline: Deferred<wgpu::RenderPipeline>,
@@ -160,6 +172,7 @@ impl PixelTransform {
             .then(|| display_pipeline(device, &layout, &source_layout, &display_layout));
         Self {
             placement: false,
+            part: Part::Whole,
             scalar,
             visibility,
             pipeline,
@@ -200,6 +213,7 @@ impl PixelTransform {
     pub(super) fn fork(&self) -> Self {
         Self {
             placement: self.placement,
+            part: self.part,
             scalar: self.scalar,
             visibility: self.visibility,
             pipeline: self.pipeline.clone(),
@@ -329,6 +343,28 @@ impl PixelTransform {
             0
         }
     }
+    /// Size the records for `jobs` regions drawn in one frame ahead of that
+    /// frame. Growing the source records replaces every cached binding.
+    pub(super) fn reserve(&mut self, device: &wgpu::Device, jobs: u64) {
+        self.reserve_regions(device, jobs * 2 * u64::from(self.stride));
+        self.reserve_sources(device, jobs * u64::from(self.source_stride));
+    }
+    fn reserve_sources(&mut self, device: &wgpu::Device, end: u64) {
+        if end > self.source_capacity {
+            self.bindings.clear();
+            self.source_capacity = end
+                .next_power_of_two()
+                .min(device.limits().max_buffer_size)
+                .min(u64::from(u32::MAX))
+                & !3;
+            self.source_records = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("batched affine source records"),
+                size: self.source_capacity,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+    }
     fn reserve_regions(&mut self, device: &wgpu::Device, end: u64) {
         if end > self.capacity {
             self.capacity = end
@@ -374,20 +410,7 @@ impl PixelTransform {
             return Ok(offsets);
         }
         self.reserve_regions(device, end);
-        if source_end > self.source_capacity {
-            self.bindings.clear();
-            self.source_capacity = source_end
-                .next_power_of_two()
-                .min(device.limits().max_buffer_size)
-                .min(u64::from(u32::MAX))
-                & !3;
-            self.source_records = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("batched affine source records"),
-                size: self.source_capacity,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
+        self.reserve_sources(device, source_end);
         self.records.resize(bytes as usize, 0);
         self.source_upload.resize(source_bytes as usize, 0);
         for (i, job) in jobs.iter().enumerate() {
@@ -415,7 +438,12 @@ impl PixelTransform {
                     job.target.map(|v| (v * super::PAGE_SIZE) as f32),
                     filter_flags(transform.interpolation)
                         + 2. * f32::from(unmoved || identity)
-                        + 4. * f32::from(self.placement),
+                        + 4. * f32::from(self.placement)
+                        + match self.part {
+                            Part::Whole => 0.,
+                            Part::Selected => 32.,
+                            Part::Kept => 64.,
+                        },
                     background,
                     display,
                     job.texels.map(|v| v as f32),
@@ -561,7 +589,7 @@ fn filter_flags(interpolation: Interpolation) -> f32 {
 
 /// Rows mapping a destination pixel to homogeneous source coordinates. An
 /// affine map keeps w' = 1, so its perspective form draws identically.
-fn inverse_rows(transform: &ImageTransform) -> Result<[[f32; 3]; 3], &'static str> {
+pub(super) fn inverse_rows(transform: &ImageTransform) -> Result<[[f32; 3]; 3], &'static str> {
     let invalid = "Transform must be finite and invertible";
     let projective = match &transform.map {
         TransformMap::Affine(affine) => Projective::from_affine(*affine),

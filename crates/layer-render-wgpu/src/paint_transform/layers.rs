@@ -82,8 +82,16 @@ impl LayerComposite {
     }
 }
 
-/// The transaction, layer and display level a layered display serves.
-pub(crate) type LayeredKey = (u64, LayerId, u32);
+/// What moves a layer drawn straight into the display: a transform
+/// transaction or a placement drag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Motion {
+    Transform(u64),
+    Placement,
+}
+
+/// The motion, layer and display level a layered display serves.
+pub(crate) type LayeredKey = (Motion, LayerId, u32);
 
 pub(crate) struct LayeredDisplay {
     pub key: LayeredKey,

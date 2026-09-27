@@ -97,21 +97,37 @@ single brush mark. Animated effects also need updates without new pen input.
 The [clipping regression record](../history/filter-clipping-regression.md)
 provides a concrete example of a cache invalidation bug and the work it caused.
 
-A transform drag skips both the full-resolution pages and composition when a
-native document keeps a complete display pyramid and the moving layer is an
-unmasked top-level layer under normal static layers.
+A transform or placement drag skips both the full-resolution pages and
+composition when a native document keeps a complete display pyramid and the
+moving layer is an unmasked top-level layer under normal static layers.
 [`render_display`](../../crates/layer-render-wgpu/src/paint_transform.rs) draws the
-moving layer into the level the view samples, at most four layer pixels per texel
-side, as the exact area mean of its full-resolution pixels, and the coarser levels
-are reduced from it. With content above or below, the
+moving layer into the level the view samples, at most sixteen layer pixels per
+texel side, and the coarser levels are reduced from it. While the Transform is
+still, the layer is reduced once per transaction as the exact area mean of its
+full-resolution pixels, to the level of its own pixels that matches the display
+under its placement. When the selection keeps some pixels in place, those are
+reduced apart from the pixels it moves. Each drag frame
+[resamples](../../crates/layer-render-wgpu/src/paint_transform/resample.rs) the
+copy with one bilinear sample per texel, the moved pixels through the transform
+and the placement and the kept ones through the placement alone. With content
+above or below, the
 [layered display](../../crates/layer-render-wgpu/src/paint_transform/layers.rs)
-composes the static layers once per transaction at that level, while the
-Transform is still, then places the moving layer between them with its blend.
-A drag waits for them and for the moving photo's decoded tiles. After release,
-the still preview is drawn the same way and later frames draw its pages and
-recompose what the drag touched a few tiles at a time, reporting pending work
-so hosts keep drawing. Only the display is ever approximate, and only at the
-edges of partly transparent layers; pages, Apply and commits are exact.
+composes the static layers once at that level, then places the moving layer
+between them with its blend. A drag waits for them, the moving photo's decoded
+tiles and the reduced copy. After release, the still preview of an unplaced
+layer is drawn as the exact area mean; a placed layer keeps its resampled
+preview. Later frames draw the preview's pages and recompose what the drag
+touched a few tiles at a time, reporting pending work so hosts keep drawing.
+
+A [placement drag](../../crates/layer-render-wgpu/src/placement_drag.rs) is a
+frame in which only one layer's placement changed. Its layer's own pixels are
+reduced once and kept between drags while they are unchanged, together with the
+static layers around it. Each drag frame resamples the copy through the new
+placement, and the frame's full recomposition is skipped. When a frame no
+longer moves the layer, what the drag drew is recomposed a few tiles at a time.
+Only drag frames and placed still previews resample, and a still display is
+otherwise approximate only at the edges of partly transparent layers; pages,
+Apply and commits are exact.
 
 ## Filters
 
