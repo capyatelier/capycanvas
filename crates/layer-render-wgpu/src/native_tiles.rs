@@ -9,7 +9,7 @@ pub(crate) mod transfer;
 pub use transfer::NativeTransfer;
 
 pub const MAX_BATCH_TILES: usize = 16;
-pub const STATUS_BYTES: u64 = 8;
+pub const STATUS_BYTES: u64 = 4;
 
 /// Full default views shared only while recording one bounded publication.
 /// This owns no pixel allocation and is dropped before returning to input; it
@@ -132,10 +132,6 @@ impl NativeTileRequest<'_> {
 /// Shared across every batch in a publication. Reset once before recording them,
 /// and read after their completion, before publishing any native tile.
 pub struct NativeEncodeStatus(wgpu::Buffer);
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct NativeEncodingStats {
-    pub clipped_pixels: u32,
-}
 impl NativeEncodeStatus {
     pub fn new(device: &wgpu::Device) -> Self {
         Self(device.create_buffer(&wgpu::BufferDescriptor {
@@ -153,21 +149,18 @@ impl NativeEncodeStatus {
     pub fn buffer(&self) -> &wgpu::Buffer {
         &self.0
     }
-    pub fn decode(bytes: &[u8]) -> Result<NativeEncodingStats, GpuRasterError> {
+    pub fn decode(bytes: &[u8]) -> Result<(), GpuRasterError> {
         if bytes.len() != STATUS_BYTES as usize {
             return Err(GpuRasterError::Color(
                 "Invalid native encoding status".into(),
             ));
         }
-        let invalid = u32::from_le_bytes(bytes[..4].try_into().unwrap());
-        if invalid != 0 {
+        if bytes != [0; 4] {
             return Err(GpuRasterError::Color(
                 "Color processing produced non-finite values, invalid coverage or RGB outside the selected storage range".into(),
             ));
         }
-        Ok(NativeEncodingStats {
-            clipped_pixels: u32::from_le_bytes(bytes[4..].try_into().unwrap()),
-        })
+        Ok(())
     }
 }
 struct Job {
@@ -178,12 +171,8 @@ struct Job {
 }
 pub struct NativeTileBatch {
     jobs: Vec<Job>,
-    parameter_bytes: u64,
 }
 impl NativeTileBatch {
-    pub fn parameter_bytes(&self) -> u64 {
-        self.parameter_bytes
-    }
     pub fn is_empty(&self) -> bool {
         self.jobs.is_empty()
     }
@@ -203,13 +192,6 @@ impl NativeTileEncoder {
     pub(crate) fn pipelines_for_depth(&self, depth: SampleDepth) -> &[crate::Deferred<wgpu::ComputePipeline>] {
         let start = depth.bytes().ilog2() as usize * self.tiles_per_dispatch;
         &self.pipelines[start..start + self.tiles_per_dispatch]
-    }
-    pub fn new(device: &wgpu::Device) -> Self {
-        let encoder = Self::with_device(&device.clone().into());
-        for pipeline in &encoder.pipelines {
-            pipeline.compile();
-        }
-        encoder
     }
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
         Self::with_mode(device, false)
@@ -370,15 +352,7 @@ impl NativeTileEncoder {
     }
     /// Prepare and validate the whole batch before recording any tile writes.
     /// Bindings and parameters can be reused while these resources/regions remain.
-    pub fn prepare(
-        &self,
-        device: &wgpu::Device,
-        requests: &[NativeTileRequest<'_>],
-        status: &NativeEncodeStatus,
-    ) -> Result<NativeTileBatch, GpuRasterError> {
-        self.prepare_with_views(device, requests, status, &mut Default::default())
-    }
-    pub(crate) fn prepare_with_views(
+    pub(crate) fn prepare(
         &self,
         device: &wgpu::Device,
         requests: &[NativeTileRequest<'_>],
@@ -406,13 +380,12 @@ impl NativeTileEncoder {
         if requests.is_empty() {
             return Ok(NativeTileBatch {
                 jobs: Vec::new(),
-                parameter_bytes: 0,
             });
         }
         let full = requests.iter().all(|r| r.region == [0, 0, 256, 256]);
         let stride = self.parameter_stride;
-        let (parameters, size) = if full {
-            (self.full_parameters.clone(), 0)
+        let parameters = if full {
+            self.full_parameters.clone()
         } else {
             let size = u64::from(stride) * requests.len() as u64;
             let mut bytes = vec![0; size as usize];
@@ -447,7 +420,7 @@ impl NativeTileEncoder {
                 .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
                 .copy_from_slice(&bytes);
             parameters.unmap();
-            (parameters, size)
+            parameters
         };
         let mut jobs = Vec::new();
         let mut first = 0;
@@ -529,7 +502,6 @@ impl NativeTileEncoder {
         }
         Ok(NativeTileBatch {
             jobs,
-            parameter_bytes: size,
         })
     }
     /// The submission owner starts the compute pass so its normal chunking,

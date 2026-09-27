@@ -83,7 +83,6 @@ fn hdr_linear(host: &NativeHost) -> Vec<[f32; 4]> {
             s.engine().view().background_rgba_linear,
             0.,
             Default::default(),
-            Default::default(),
         )
         .unwrap();
     capture.preview_linear_document([32, 24]).unwrap().pixels

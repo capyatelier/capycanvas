@@ -55,7 +55,7 @@ pub struct ViewportPresenter {
     hdr_uniform: wgpu::Buffer,
     hdr_options: [f32; 8],
     local_buffer: wgpu::Buffer,
-    local_guide: Option<std::sync::Arc<layer_core::color::hdr::LocalToneGuide>>,
+    disabled_local_buffer: wgpu::Buffer,
     gpu_local_guide: Option<std::sync::Arc<crate::local_tone::GpuToneGuide>>,
     proof_options: [u32; 4],
     proof_lut: Option<std::sync::Arc<layer_color::ProofLut>>,
@@ -106,64 +106,16 @@ impl ViewportPresenter {
             if g.device != *renderer.device || g.space != renderer.document_color.space {
                 return Err(GpuRasterError::Color("Local tone guide belongs to a different device or color space".into()));
             }
-            if self.gpu_local_guide.as_ref().is_some_and(|old| std::sync::Arc::ptr_eq(old,g)) { return Ok(()); }
-            self.local_buffer = g.buffer.clone();
-            self.local_guide = None;
-            self.gpu_local_guide = guide;
-            self.bind_group = None;
-            Ok(())
-        } else {
-            self.set_local_tone_guide(renderer, None)
         }
-    }
-    pub fn set_local_tone_guide(
-        &mut self,
-        renderer: &WgpuRasterizer,
-        guide: Option<std::sync::Arc<layer_core::color::hdr::LocalToneGuide>>,
-    ) -> Result<(), GpuRasterError> {
-        if match (&self.local_guide, &guide) {
-            (None, None) => self.gpu_local_guide.is_none(),
+        if match (&self.gpu_local_guide, &guide) {
+            (None, None) => true,
             (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
             _ => false,
         } {
             return Ok(());
         }
-        let size = guide.as_ref().map_or(32, |g| g.byte_len()) as u64;
-        if size > renderer.device.limits().max_storage_buffer_binding_size as u64 {
-            return Err(GpuRasterError::Color(
-                "Local tone guide exceeds GPU buffer limit".into(),
-            ));
-        }
-        let buffer = renderer.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("local Laplacian Float32 guide"),
-            size,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: true,
-        });
-        {
-            let mut bytes = buffer
-                .slice(..)
-                .get_mapped_range_mut()
-                .map_err(|e| GpuRasterError::Color(e.to_string()))?;
-            let mut packed = vec![0u8; size as usize];
-            if let Some(g) = &guide {
-                let header = [
-                    g.extent[0],
-                    g.extent[1],
-                    g.document_extent[0],
-                    g.document_extent[1],
-                ];
-                packed[..16].copy_from_slice(header.map(u32::to_ne_bytes).as_flattened());
-                for (out, p) in packed[16..].chunks_exact_mut(16).zip(&g.samples) {
-                    out.copy_from_slice(p.map(f32::to_ne_bytes).as_flattened());
-                }
-            }
-            bytes.copy_from_slice(&packed);
-        }
-        buffer.unmap();
-        self.local_buffer = buffer;
-        self.local_guide = guide;
-        self.gpu_local_guide = None;
+        self.local_buffer = guide.as_ref().map_or_else(|| self.disabled_local_buffer.clone(), |g| g.buffer.clone());
+        self.gpu_local_guide = guide;
         self.bind_group = None;
         Ok(())
     }
@@ -243,7 +195,7 @@ impl ViewportPresenter {
     }
 
     pub fn proof_storage_bytes(&self) -> u64 {
-        (if self.local_guide.is_some() || self.gpu_local_guide.is_some() { self.local_buffer.size() } else { 0 })
+        (if self.gpu_local_guide.is_some() { self.local_buffer.size() } else { 0 })
             + if self.proof_lut.is_some() {
                 self.proof_buffer.size()
             } else {
@@ -256,7 +208,6 @@ impl ViewportPresenter {
     pub fn inherit_proof(&mut self, renderer: &WgpuRasterizer, source: &Self) {
         if self.local_buffer != source.local_buffer {
             self.local_buffer = source.local_buffer.clone();
-            self.local_guide = source.local_guide.clone();
             self.gpu_local_guide = source.gpu_local_guide.clone();
             self.bind_group = None;
         }
@@ -350,10 +301,6 @@ impl ViewportPresenter {
         Ok(())
     }
 
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        Self::with_device(&device.clone().into(), format, SdrSurfaceColor::Srgb)
-    }
-
     /// Shares the renderer's optional startup cache with presentation shaders.
     pub fn for_renderer(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> Self {
         Self::with_device(&renderer.device, format, SdrSurfaceColor::Srgb)
@@ -378,15 +325,6 @@ impl ViewportPresenter {
             1.,
         )?;
         Ok(presenter)
-    }
-
-    /// A Navigator canvas owns its coverage instead of preserving the parent
-    /// viewport's rounded-window alpha. Present with `present_overviews`.
-    pub fn for_overviews(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> Self {
-        Self {
-            standalone_overview: true,
-            ..Self::for_renderer(renderer, format)
-        }
     }
 
     /// Standalone Navigator with the same explicit encoding as its main canvas.
@@ -607,6 +545,12 @@ impl ViewportPresenter {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let disabled_local_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("disabled local tone guide"),
+            size: 32,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         Self {
             pipeline,
             layout,
@@ -630,13 +574,8 @@ impl ViewportPresenter {
                 mapped_at_creation: false,
             }),
             hdr_options: [0.; 8],
-            local_buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("disabled local tone guide"),
-                size: 32,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            }),
-            local_guide: None,
+            local_buffer: disabled_local_buffer.clone(),
+            disabled_local_buffer,
             gpu_local_guide: None,
             proof_options: [0; 4],
             timing: None,
@@ -879,7 +818,7 @@ impl ViewportPresenter {
     ) -> Result<(), GpuRasterError> {
         assert!(
             self.standalone_overview,
-            "use ViewportPresenter::for_overviews"
+            "use ViewportPresenter::for_overview_surface"
         );
         let mut encoder = renderer.device.create_command_encoder(&Default::default());
         self.encode_content(
@@ -1058,7 +997,7 @@ impl ViewportPresenter {
         let camera_changed = self.camera_data != Some(data);
         if camera_changed {
             self.uploads
-                .write(encoder, &renderer.queue, &self.uniform, bytes)?;
+                .write(encoder, &self.uniform, bytes)?;
             self.camera_data = Some(data);
         }
         let source_camera = (self.backdrop.is_some() && !overview_only).then(|| {
@@ -1071,10 +1010,10 @@ impl ViewportPresenter {
                 std::slice::from_raw_parts(source.as_ptr().cast::<u8>(), std::mem::size_of_val(&source))
             };
             self.uploads
-                .write_at(encoder, &renderer.queue, &self.uniform, SOURCE_CAMERA.into(), bytes)?;
+                .write_at(encoder, &self.uniform, SOURCE_CAMERA.into(), bytes)?;
             self.source_camera = Some(source);
         }
-        self.picker.upload(&mut self.uploads, renderer, encoder)?;
+        self.picker.upload(&mut self.uploads, encoder)?;
         if !self.cursor_vertices.is_empty() {
             // repr(C) contains only initialized f32s, without padding.
             let bytes = unsafe {
@@ -1084,7 +1023,7 @@ impl ViewportPresenter {
                 )
             };
             self.uploads
-                .write(encoder, &renderer.queue, &self.cursor_buffer, bytes)?;
+                .write(encoder, &self.cursor_buffer, bytes)?;
         }
         if self.overviews_changed && !self.overviews.is_empty() {
             // Fixed initialized f32 arrays, with no struct padding.
@@ -1096,7 +1035,6 @@ impl ViewportPresenter {
             };
             self.uploads.write(
                 encoder,
-                &renderer.queue,
                 self.overview_buffer.as_ref().unwrap(),
                 bytes,
             )?;

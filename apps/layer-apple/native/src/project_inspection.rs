@@ -22,7 +22,7 @@ impl Task {
         let project = self.project.take().ok_or("Inspection was already consumed")?;
         let sampled_time = project.document.has_animated_effects().then_some(self.time);
         let mut snapshot = self.gpu.capture(project, self.background, self.time,
-            Default::default(), task.control.clone()).map_err(|e| e.to_string())?;
+            task.control.clone()).map_err(|e| e.to_string())?;
         let histogram = snapshot.histogram().map_err(|e| e.to_string())?;
         task.check_cancelled()?;
         Ok(serde_json::json!({"epoch":task.epoch, "revision":task.revision,

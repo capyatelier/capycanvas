@@ -175,7 +175,7 @@ impl LayeredDisplay {
             0,
         ];
         let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
-        r.uploads.write(encoder, &r.queue, &self.uniforms, &bytes)?;
+        r.uploads.write(encoder, &self.uniforms, &bytes)?;
         if self.binding.as_ref().is_none_or(|(view, _)| view != level) {
             let above = self.above.as_ref().unwrap_or(&self.below);
             let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {

@@ -40,9 +40,7 @@ pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
             (None, Some(system)) if unified_memory(device) => Some(system),
             _ => None,
         };
-        let bytes = allowance(headroom, 2);
-        android_admission_log(headroom, system, bytes);
-        bytes
+        allowance(headroom, 2)
     }
     #[cfg(not(target_os = "android"))]
     allowance(headroom, 4)
@@ -132,26 +130,6 @@ mod tests {
             allowance(Some(96 * 1024 * 1024 * 1024), 4),
             24 * 1024 * 1024 * 1024
         );
-    }
-}
-
-#[cfg(target_os = "android")]
-fn android_admission_log(headroom: Option<u64>, system: Option<u64>, allowance: u64) {
-    #[link(name = "log")]
-    unsafe extern "C" {
-        fn __android_log_write(
-            priority: i32,
-            tag: *const std::ffi::c_char,
-            text: *const std::ffi::c_char,
-        ) -> i32;
-    }
-    let message = std::ffi::CString::new(format!(
-        "display headroom={headroom:?} system={system:?} allowance={allowance}"
-    ))
-    .unwrap();
-    // SAFETY: both strings are NUL-terminated and live through this call.
-    unsafe {
-        __android_log_write(4, c"CapyDisplay".as_ptr(), message.as_ptr());
     }
 }
 

@@ -48,7 +48,7 @@ fn snapshot_resized_composition_matches_area_before_profile_quantization_and_mat
         let extent = [137, 83];
         let resized = area(source_extent, extent, &pixels);
         let mut renderer =
-            SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
+            capture(project.clone()).unwrap();
         renderer.set_output_extent(extent).unwrap();
         assert_eq!(renderer.extent(), source_extent);
         assert!(renderer.set_output_extent([0, 1]).is_err());
@@ -135,7 +135,7 @@ fn snapshot_resized_composition_matches_area_before_profile_quantization_and_mat
             profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
             profile_assumed: false,
         };
-        renderer.limits.planned_pixel_bytes = 1;
+        renderer.planned_pixel_bytes = 1;
         assert!(
             renderer
                 .write_png(&mut Vec::new(), &target, Default::default(), None)
@@ -163,7 +163,7 @@ fn snapshot_enlarged_jpeg_matches_profiled_png_and_reset_restores_exact_identity
         [33, 17],
     );
     let source = project.document.layers[0].source.as_ref().unwrap().clone();
-    let mut renderer = SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+    let mut renderer = capture(project).unwrap();
     let extent = [97, 50];
     renderer.set_output_extent(extent).unwrap();
     let target = SourceInterpretation {
@@ -232,7 +232,7 @@ fn output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_m
     );
     let original = project.clone();
     let mut renderer =
-        SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
+        capture(project.clone()).unwrap();
     let full = renderer.read_region([0, 0, 513, 35]).unwrap();
     for view in [RgbSpace::Srgb, RgbSpace::DisplayP3] {
         let before = renderer.preview_document([73, 41], view).unwrap();

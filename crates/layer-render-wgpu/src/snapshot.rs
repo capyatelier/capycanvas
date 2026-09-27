@@ -10,17 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 /// Conservative request planning ceiling, separate from codec/output buffers,
 /// retained compressed sources and driver/pipeline memory. This is not a device
 /// memory qualification; hosts must also enforce their measured process budget.
-#[derive(Clone, Copy, Debug)]
-pub struct CaptureLimits {
-    pub planned_pixel_bytes: u64,
-}
-impl Default for CaptureLimits {
-    fn default() -> Self {
-        Self {
-            planned_pixel_bytes: 512 * 1024 * 1024,
-        }
-    }
-}
+const PLANNED_PIXEL_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Share before worker initialization so cancellation also applies to setup.
 #[derive(Clone, Default)]
@@ -129,10 +119,9 @@ impl SnapshotGpu {
         project: Project,
         background: [f32; 4],
         time: f32,
-        limits: CaptureLimits,
         control: CaptureControl,
     ) -> Result<SnapshotRenderer, GpuRasterError> {
-        SnapshotRenderer::construct(project, background, time, limits, control, Some(self))
+        SnapshotRenderer::construct(project, background, time, control, self)
     }
 }
 
@@ -146,46 +135,21 @@ pub struct SnapshotRenderer {
     resident: HashMap<LayerId, RasterData>,
     extent: [u32; 2],
     #[cfg(not(target_arch = "wasm32"))]
-    shared_device: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     output_extent: [u32; 2],
     #[cfg(not(target_arch = "wasm32"))]
     output_resolution: Option<layer_core::ImageResolution>,
     background: [f32; 4],
     time: f32,
-    limits: CaptureLimits,
+    planned_pixel_bytes: u64,
     control: CaptureControl,
 }
 impl SnapshotRenderer {
-    /// Run on a worker: resolves pending immutable raster backing and prepares a
-    /// native Float32 device. No full composite or full paint image is created.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(
-        project: Project,
-        background: [f32; 4],
-        time: f32,
-        limits: CaptureLimits,
-    ) -> Result<Self, GpuRasterError> {
-        Self::with_control(project, background, time, limits, CaptureControl::default())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn with_control(
-        project: Project,
-        background: [f32; 4],
-        time: f32,
-        limits: CaptureLimits,
-        control: CaptureControl,
-    ) -> Result<Self, GpuRasterError> {
-        Self::construct(project, background, time, limits, control, None)
-    }
     fn construct(
         project: Project,
         background: [f32; 4],
         time: f32,
-        limits: CaptureLimits,
         control: CaptureControl,
-        gpu: Option<&SnapshotGpu>,
+        gpu: &SnapshotGpu,
     ) -> Result<Self, GpuRasterError> {
         control.check()?;
         project
@@ -257,27 +221,17 @@ impl SnapshotRenderer {
             }
         }
         control.check()?;
-        let mut renderer = match gpu {
-            Some(gpu) => WgpuRasterizer::native_capture_on_gpu(
-                gpu.adapter.clone(),
-                gpu.device.clone(),
-                gpu.queue.clone(),
-                project.document.color,
-            )?,
-            #[cfg(not(target_arch = "wasm32"))]
-            None => WgpuRasterizer::new_native_capture(project.document.color)?,
-            #[cfg(target_arch = "wasm32")]
-            None => {
-                return Err(GpuRasterError::Color(
-                    "Browser capture requires the canvas device".into(),
-                ));
-            }
-        };
+        let mut renderer = WgpuRasterizer::native_capture_on_gpu(
+            gpu.adapter.clone(),
+            gpu.device.clone(),
+            gpu.queue.clone(),
+            project.document.color,
+        )?;
         #[cfg(target_arch = "wasm32")]
-        if let Some(encoder) = gpu.and_then(|gpu| gpu.encoder.clone()) {
+        if let Some(encoder) = gpu.encoder.clone() {
             renderer.set_browser_raster_encoder(encoder);
         }
-        if let Some(gpu) = gpu { renderer.effect_clocks = gpu.effect_clocks.clone(); }
+        renderer.effect_clocks = gpu.effect_clocks.clone();
         renderer.ensure_document_metadata(extent, &layers)?;
         let mut background = background;
         if let Some(paper) = layers.iter().find(|l| l.kind == LayerKind::Background) {
@@ -298,14 +252,12 @@ impl SnapshotRenderer {
             resident: HashMap::new(),
             extent,
             #[cfg(not(target_arch = "wasm32"))]
-            shared_device: gpu.is_some(),
-            #[cfg(not(target_arch = "wasm32"))]
             output_extent: extent,
             #[cfg(not(target_arch = "wasm32"))]
             output_resolution: project.document.resolution,
             background,
             time,
-            limits,
+            planned_pixel_bytes: PLANNED_PIXEL_BYTES,
             control,
         })
     }
@@ -440,17 +392,17 @@ impl SnapshotRenderer {
     fn read_interactive_band(&mut self, y: u32, rows: u32) -> Result<Vec<[f32; 4]>, GpuRasterError> {
         let width = self.extent[0];
         let band_bytes = u64::from(width) * u64::from(rows) * 16;
-        if band_bytes > self.limits.planned_pixel_bytes {
-            return Err(GpuRasterError::CaptureBudget { required: band_bytes, limit: self.limits.planned_pixel_bytes });
+        if band_bytes > self.planned_pixel_bytes {
+            return Err(GpuRasterError::CaptureBudget { required: band_bytes, limit: self.planned_pixel_bytes });
         }
         let mut band = vec![[0.; 4]; width as usize * rows as usize];
         for x in (0..width).step_by(512) {
             self.check_cancelled()?;
             let columns = 512.min(width - x);
             // The assembled CPU band stays alive beside each bounded GPU job.
-            self.limits.planned_pixel_bytes -= band_bytes;
+            self.planned_pixel_bytes -= band_bytes;
             let result = self.read_region([x, y, columns, rows]);
-            self.limits.planned_pixel_bytes += band_bytes;
+            self.planned_pixel_bytes += band_bytes;
             let pixels = result?;
             for (row, source) in pixels.chunks_exact(columns as usize).enumerate() {
                 let start = row * width as usize + x as usize;
@@ -547,10 +499,10 @@ impl SnapshotRenderer {
                 selected.insert(id, data);
             }
         }
-        if planned > self.limits.planned_pixel_bytes {
+        if planned > self.planned_pixel_bytes {
             return Err(GpuRasterError::CaptureBudget {
                 required: planned,
-                limit: self.limits.planned_pixel_bytes,
+                limit: self.planned_pixel_bytes,
             });
         }
         let r = &mut self.renderer;
@@ -724,7 +676,7 @@ impl SnapshotRenderer {
         let mut rows = maximum.min(height - y);
         loop {
             #[cfg(not(target_arch = "wasm32"))]
-            let result = if self.shared_device && width > 512 {
+            let result = if width > 512 {
                 self.read_interactive_band(y, rows)
             } else {
                 self.read_region_async([0, y, width, rows]).await

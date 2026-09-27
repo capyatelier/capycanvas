@@ -26,7 +26,7 @@ fn thumbnail(
 ) -> Result<Image, String> {
     let hdr_document = project.document.color.depth.is_float();
     let mut renderer =
-        gpu.capture(project, background, time, Default::default(), control)
+        gpu.capture(project, background, time, control)
             .map_err(|e| e.to_string())?;
     let hdr = output.as_ref().is_some_and(|r| r.format.is_hdr());
     let display_hdr = hdr_document && headroom > 1. && (hdr || output.is_none());

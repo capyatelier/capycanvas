@@ -318,7 +318,6 @@ impl SourceThumbnails {
         let mapping = overview_mapping(overview.extent, placement);
         r.uploads.write(
             encoder,
-            &r.queue,
             &self.display_parameters,
             &mapping
                 .into_iter().chain(r.ui_rendition_parameters())
@@ -391,7 +390,7 @@ impl SourceThumbnails {
             *dst = value.to_le_bytes();
         }
         r.uploads
-            .write(encoder, &r.queue, &self.parameters, &bytes)?;
+            .write(encoder, &self.parameters, &bytes)?;
         let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ordered photo overview tile"),
             layout: &self.layout,

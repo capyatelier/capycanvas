@@ -23,7 +23,6 @@ pub(super) fn capture_selection<T: Send + 'static>(
             // One bulk copy into immutable history. A per-word iterator
             // also builds an intermediate Vec and performs slow scalar
             // reads from mapped device memory on mobile GPUs.
-            #[cfg(target_endian = "little")]
             let words: std::sync::Arc<[u32]> = {
                 let source = &bytes[32..32 + count * 4];
                 let mut words = std::sync::Arc::<[u32]>::new_uninit_slice(count);
@@ -42,8 +41,6 @@ pub(super) fn capture_selection<T: Send + 'static>(
                     words.assume_init()
                 }
             };
-            #[cfg(target_endian = "big")]
-            let words: std::sync::Arc<[u32]> = (0..count).map(|i| read(32 + i * 4)).collect();
             let bounds = if read(coverage_size as usize + 16) == 0 {
                 [0; 4]
             } else {

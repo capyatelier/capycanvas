@@ -62,7 +62,7 @@ fn submit(
 fn read_status(
     r: &WgpuRasterizer,
     status: &NativeEncodeStatus,
-) -> Result<NativeEncodingStats, GpuRasterError> {
+) -> Result<(), GpuRasterError> {
     let read = r.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("native encoding test status"),
         size: STATUS_BYTES,
@@ -182,7 +182,7 @@ fn native_in_place_writeback_codes_boundaries_and_partial_tiles() { writeback_co
 
 fn writeback_corpus(in_place: bool) {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let encoder = if in_place { NativeTileEncoder::validated_in_place(&r.device) } else { NativeTileEncoder::new(&r.device) };
+    let encoder = if in_place { NativeTileEncoder::validated_in_place(&r.device) } else { NativeTileEncoder::with_device(&r.device) };
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
     let canonical = if in_place { working.clone() } else { texture(&r, wgpu::TextureFormat::Rgba32Float) };
@@ -264,7 +264,7 @@ fn writeback_corpus(in_place: bool) {
                                 alpha,
                                 region,
                             }],
-                            &status,
+                            &status, &mut Default::default(),
                         )
                         .unwrap();
                     submit(&r, &encoder, &status, &[batch], true);
@@ -382,7 +382,7 @@ fn native_restore_writeback_capture_round_trip_preserves_committed_codes() {
                     region: [0, 0, 256, 256],
                 };
                 let descriptor = request.descriptor();
-                let batch = encoder.prepare(&r.device, &[request], &status).unwrap();
+                let batch = encoder.prepare(&r.device, &[request], &status, &mut Default::default()).unwrap();
                 let mut first = None;
                 for cycle in 0..4 {
                     submit(&r, &encoder, &status, std::slice::from_ref(&batch), true);
@@ -436,7 +436,7 @@ fn native_restore_writeback_capture_round_trip_preserves_committed_codes() {
 fn hdr_half_publication_preserves_finite_codes_subnormals_and_canonical_cache() {
     use layer_core::color::{DocumentColor, f16};
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 }).unwrap();
-    let encoder = NativeTileEncoder::new(&r.device);
+    let encoder = NativeTileEncoder::with_device(&r.device);
     let transfer = r.prepare_native_transfer(RgbSpace::Srgb).unwrap();
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
@@ -451,9 +451,9 @@ fn hdr_half_publication_preserves_finite_codes_subnormals_and_canonical_cache() 
         upload(&r, &working, &working_bytes(&pixels));
         let request = NativeTileRequest { working: &working, encoded: &output, canonical: &canonical, transfer: &transfer,
             depth: SampleDepth::F16, alpha: AlphaAssociation::Straight, region: [0,0,256,256] };
-        let batch=encoder.prepare(&r.device, &[request], &status).unwrap();
+        let batch=encoder.prepare(&r.device, &[request], &status, &mut Default::default()).unwrap();
         submit(&r, &encoder, &status, &[batch], true);
-        assert_eq!(read_status(&r,&status).unwrap().clipped_pixels,0);
+        read_status(&r,&status).unwrap();
         let actual=page_bytes(&r,&output);
         let cache=page_bytes(&r,&canonical);
         for (i, ((bytes,linear),pixel)) in actual.chunks_exact(8).zip(cache.chunks_exact(16)).zip(&pixels).enumerate() {
@@ -473,7 +473,7 @@ fn hdr_half_publication_preserves_finite_codes_subnormals_and_canonical_cache() 
     for pixel in [[65505.,0.,0.,1.],[-65505.,0.,0.,1.],[f32::NAN,0.,0.,1.],[1.,0.,0.,-0.1]] {
         upload(&r,&working,&working_bytes(&vec![pixel;65536]));
         let batch=encoder.prepare(&r.device,&[NativeTileRequest { working:&working, encoded:&output, canonical:&canonical, transfer:&transfer,
-            depth:SampleDepth::F16,alpha:AlphaAssociation::Straight,region:[0,0,256,256] }],&status).unwrap();
+            depth:SampleDepth::F16,alpha:AlphaAssociation::Straight,region:[0,0,256,256] }],&status, &mut Default::default()).unwrap();
         submit(&r,&encoder,&status,&[batch],true);
         assert!(read_status(&r,&status).is_err());
     }
@@ -483,7 +483,7 @@ fn hdr_half_publication_preserves_finite_codes_subnormals_and_canonical_cache() 
 fn float32_publication_retains_precision_range_and_rejects_unassociation_overflow() {
     use layer_core::color::DocumentColor;
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F32 }).unwrap();
-    let encoder = NativeTileEncoder::new(&r.device);
+    let encoder = NativeTileEncoder::with_device(&r.device);
     let transfer = r.prepare_native_transfer(RgbSpace::Srgb).unwrap();
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
@@ -496,9 +496,9 @@ fn float32_publication_retains_precision_range_and_rejects_unassociation_overflo
         }).collect();
         upload(&r, &working, &working_bytes(&pixels));
         let batch = encoder.prepare(&r.device, &[NativeTileRequest { working: &working, encoded: &output, canonical: &canonical, transfer: &transfer,
-            depth: SampleDepth::F32, alpha: AlphaAssociation::Straight, region }], &status).unwrap();
+            depth: SampleDepth::F32, alpha: AlphaAssociation::Straight, region }], &status, &mut Default::default()).unwrap();
         submit(&r, &encoder, &status, &[batch], true);
-        assert_eq!(read_status(&r,&status).unwrap().clipped_pixels, 0);
+        read_status(&r, &status).unwrap();
         let actual = page_bytes(&r, &output);
         for y in region[1]..region[1]+region[3] { for x in region[0]..region[0]+region[2] {
             let i = (y*256+x) as usize;
@@ -510,7 +510,7 @@ fn float32_publication_retains_precision_range_and_rejects_unassociation_overflo
     for pixel in [[f32::MAX,0.,0.,0.125],[f32::NAN,0.,0.,1.],[0.,0.,0.,1.1]] {
         upload(&r, &working, &working_bytes(&vec![pixel;65536]));
         let batch = encoder.prepare(&r.device, &[NativeTileRequest { working: &working, encoded: &output, canonical: &canonical, transfer: &transfer,
-            depth: SampleDepth::F32, alpha: AlphaAssociation::Straight, region: [0,0,256,256] }], &status).unwrap();
+            depth: SampleDepth::F32, alpha: AlphaAssociation::Straight, region: [0,0,256,256] }], &status, &mut Default::default()).unwrap();
         submit(&r,&encoder,&status,&[batch],true);
         assert!(read_status(&r,&status).is_err());
     }

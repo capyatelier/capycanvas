@@ -133,12 +133,8 @@ impl NativeScalarRequest<'_> {
 }
 pub struct NativeScalarBatch {
     jobs: Vec<(wgpu::BindGroup, usize, u32, [u32; 3])>,
-    parameter_bytes: u64,
 }
 impl NativeScalarBatch {
-    pub fn parameter_bytes(&self) -> u64 {
-        self.parameter_bytes
-    }
     pub fn is_empty(&self) -> bool {
         self.jobs.is_empty()
     }
@@ -152,14 +148,6 @@ pub struct NativeScalarEncoder {
     parameter_stride: u32,
 }
 impl NativeScalarEncoder {
-    /// Prepare alongside the color encoder, before interaction.
-    pub fn new(device: &wgpu::Device) -> Self {
-        let encoder = Self::with_device(&device.clone().into());
-        for pipeline in &encoder.pipelines {
-            pipeline.compile();
-        }
-        encoder
-    }
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
         Self::with_mode(device, false)
     }
@@ -321,15 +309,7 @@ impl NativeScalarEncoder {
     pub(crate) fn storage_bytes(&self) -> u64 {
         self.full_parameters.size()
     }
-    pub fn prepare(
-        &self,
-        device: &wgpu::Device,
-        requests: &[NativeScalarRequest<'_>],
-        status: &NativeEncodeStatus,
-    ) -> Result<NativeScalarBatch, GpuRasterError> {
-        self.prepare_with_views(device, requests, status, &mut Default::default())
-    }
-    pub(crate) fn prepare_with_views(
+    pub(crate) fn prepare(
         &self,
         device: &wgpu::Device,
         requests: &[NativeScalarRequest<'_>],
@@ -357,13 +337,12 @@ impl NativeScalarEncoder {
         if requests.is_empty() {
             return Ok(NativeScalarBatch {
                 jobs: Vec::new(),
-                parameter_bytes: 0,
             });
         }
         let full = requests.iter().all(|r| r.region == [0, 0, 256, 256]);
         let stride = self.parameter_stride;
-        let (parameters, size) = if full {
-            (self.full_parameters.clone(), 0)
+        let parameters = if full {
+            self.full_parameters.clone()
         } else {
             let size = u64::from(stride) * requests.len() as u64;
             let parameters = device.create_buffer(&wgpu::BufferDescriptor {
@@ -393,7 +372,7 @@ impl NativeScalarEncoder {
                 }
             }
             parameters.unmap();
-            (parameters, size)
+            parameters
         };
         let mut jobs = Vec::new();
         let mut first = 0;
@@ -476,7 +455,6 @@ impl NativeScalarEncoder {
         }
         Ok(NativeScalarBatch {
             jobs,
-            parameter_bytes: size,
         })
     }
     pub fn encode(&self, pass: &mut wgpu::ComputePass<'_>, batch: &NativeScalarBatch) {

@@ -44,10 +44,10 @@ impl SnapshotRenderer {
             return Ok(guide.clone());
         }
         let reserved = Builder::allocation_bound(self.extent)?;
-        if reserved > self.limits.planned_pixel_bytes {
+        if reserved > self.planned_pixel_bytes {
             return Err(GpuRasterError::CaptureBudget {
                 required: reserved,
-                limit: self.limits.planned_pixel_bytes,
+                limit: self.planned_pixel_bytes,
             }
             .to_string());
         }

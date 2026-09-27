@@ -317,7 +317,6 @@ impl PreparedCapture {
                 .map(|(b, e)| Chunk::map(b, e))
                 .collect(),
             validation: self.validation.take().map(|b| Chunk::map(b, Vec::new())),
-            staging_bytes: self.staging_bytes,
             pool: self.pool.clone(),
         }
     }
@@ -399,7 +398,6 @@ pub struct RasterCapture {
     chunks: Vec<Chunk>,
     validation: Option<Chunk>,
     pool: Arc<BufferPool>,
-    pub staging_bytes: u64,
 }
 impl RasterCapture {
     /// Worker only. Cached readback scratch is bounded to four 16 MiB chunks.

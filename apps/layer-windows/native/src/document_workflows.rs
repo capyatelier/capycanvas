@@ -341,7 +341,6 @@ impl Task {
                         project,
                         *background,
                         *time,
-                        Default::default(),
                         self.control.clone(),
                     )
                     .map_err(|e| e.to_string())?;

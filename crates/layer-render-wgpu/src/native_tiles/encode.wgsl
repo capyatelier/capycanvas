@@ -1,5 +1,5 @@
 struct Settings { maximum:u32, scale:u32, curve:u32, straight:u32, region:vec4<u32> }
-struct Status { invalid:atomic<u32>, clipped:atomic<u32> }
+struct Status { invalid:atomic<u32> }
 TEXTURES
 @group(0) @binding(TRANSFER_BINDING) var<storage,read> transfer:array<vec2<f32>>;
 @group(0) @binding(SETTINGS_BINDING) var<uniform> settings:Settings;
@@ -69,7 +69,6 @@ fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
     if alpha==0u {store_result(invocation.z,pixel,vec4(0u));return;}
     var rgb=value.rgb;
     let limit=select(1.,value.a,settings.straight!=0u);
-    if any(rgb<vec3(0.)) || any(rgb>vec3(limit)) {atomicAdd(&status.clipped,1u);}
     // Clamp only at the declared native SDR publication boundary. Clamp before
     // division so finite extended RGB cannot overflow while unassociating.
     rgb=clamp(rgb,vec3(0.),vec3(limit));

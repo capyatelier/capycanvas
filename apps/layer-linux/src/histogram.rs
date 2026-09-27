@@ -162,7 +162,6 @@ impl Inspector {
                     project,
                     key.background,
                     time,
-                    Default::default(),
                     worker_control,
                 )
                 .map_err(|e| e.to_string())?;

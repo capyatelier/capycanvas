@@ -48,20 +48,10 @@ impl SnapshotRenderer {
         bounds: [u32; 2],
         space: RgbSpace,
     ) -> Result<SnapshotPreview, String> {
-        self.preview_document_for_display(bounds, space, 1.)
+        self.preview_document_with_coverage(bounds, space, 1.).map(|v| v.0)
     }
-
     /// Same composition as the canvas. Headroom above one uses the HDR display
     /// shoulder; one uses the document's saved SDR appearance. Neither edits it.
-    pub fn preview_document_for_display(
-        &mut self,
-        bounds: [u32; 2],
-        space: RgbSpace,
-        headroom: f32,
-    ) -> Result<SnapshotPreview, String> {
-        self.preview_document_with_coverage(bounds, space, headroom)
-            .map(|v| v.0)
-    }
     pub fn preview_document_with_coverage(
         &mut self,
         bounds: [u32; 2],

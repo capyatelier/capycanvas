@@ -2,7 +2,7 @@
 //! history checks. This is offscreen work latency, never GTK presentation time.
 use super::*;
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
-use layer_render_wgpu::snapshot::{CaptureControl, CaptureLimits};
+use layer_render_wgpu::snapshot::CaptureControl;
 use std::sync::{Arc, Barrier};
 
 #[path = "navigation.rs"]
@@ -277,7 +277,6 @@ fn concurrent(
                 export_snapshot,
                 [0.; 4],
                 0.,
-                CaptureLimits::default(),
                 export_control,
             )
             .map_err(|e| e.to_string())?;
@@ -528,7 +527,6 @@ pub(super) fn run(
             canvas.snapshot()?,
             [0.; 4],
             0.,
-            CaptureLimits::default(),
             control.clone(),
         )?;
         println!("Histogram worker setup {:.3} ms", ms(start));

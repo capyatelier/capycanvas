@@ -158,7 +158,6 @@ impl ExportTask {
                     self.original.project.clone(),
                     self.original.background,
                     self.original.time,
-                    Default::default(),
                     control,
                 )
                 .map_err(|e| e.to_string())?,

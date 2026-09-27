@@ -238,7 +238,6 @@ pub(super) fn encode(
     let offsets = pass
         .prepare_tiled(
             &r.device,
-            &r.queue,
             &mut r.uploads,
             encoder,
             bounds,

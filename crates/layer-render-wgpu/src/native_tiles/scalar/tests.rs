@@ -138,7 +138,7 @@ fn scalar_corpus(in_place: bool) {
                     region,
                 };
                 let descriptor = request.descriptor();
-                let batch = encoder.prepare(&r.device, &[request], &status).unwrap();
+                let batch = encoder.prepare(&r.device, &[request], &status, &mut Default::default()).unwrap();
                 submit(&r, &encoder, &status, &batch);
                 let bytes = capture(&r, &encoded, descriptor, &status);
                 let canonical_bytes = page_bytes(&r, &canonical);

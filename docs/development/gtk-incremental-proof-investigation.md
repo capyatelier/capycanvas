@@ -43,8 +43,8 @@ The relevant sequence is in
    [`local_tone_guide`](../../crates/layer-render-wgpu/src/snapshot/output.rs)
    and [`build_local_tone_guide`](../../crates/layer-color/src/output_rows.rs).
 5. The finished CPU guide is packed, copied into a newly allocated GPU storage
-   buffer, and triggers presentation. See
-   [`set_local_tone_guide`](../../crates/layer-render-wgpu/src/present.rs).
+   buffer, and triggers presentation. The CPU upload path was later replaced by
+   [`set_gpu_local_tone_guide`](../../crates/layer-render-wgpu/src/present.rs).
 
 During the gap,
 [`local_tone_artwork`](../../crates/layer-render-wgpu/src/hdr_view.wgsl)

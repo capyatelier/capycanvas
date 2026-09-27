@@ -184,7 +184,7 @@ impl ToneService {
                 .spawn(move || {
                     let result = catch_unwind(AssertUnwindSafe(|| {
                         capture
-                            .capture(project, background, time, Default::default(), cancel)
+                            .capture(project, background, time, cancel)
                             .map_err(|e| e.to_string())
                             .and_then(|mut snapshot| snapshot.gpu_local_tone_guide())
                     }))

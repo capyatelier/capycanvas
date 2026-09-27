@@ -253,15 +253,6 @@ impl WgpuRasterizer {
         Ok(r)
     }
 
-    /// Capture is already on a worker and does not draw new strokes. Retain
-    /// lazy pipeline recipes instead of warming every brush, tip and transform.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn new_native_capture(color: DocumentColor) -> Result<Self, GpuRasterError> {
-        let mut r = pollster::block_on(Self::headless(color.space, Initialization::Snapshot))?;
-        r.initialize_native(color)?;
-        Ok(r)
-    }
-
     pub(crate) fn native_capture_on_gpu(
         adapter: wgpu::Adapter,
         device: PipelineDevice,
@@ -470,16 +461,16 @@ impl WgpuRasterizer {
             let color =
                 native
                     .color
-                    .prepare_with_views(&self.device, &color, status, &mut views)?;
+                    .prepare(&self.device, &color, status, &mut views)?;
             let scalar =
                 native
                     .scalar
-                    .prepare_with_views(&self.device, &scalar, status, &mut views)?;
+                    .prepare(&self.device, &scalar, status, &mut views)?;
             let promotions = native
                 .promoter
                 .as_ref()
                 .map(|promoter| {
-                    promoter.prepare_with_views(&self.device, &promotions, status, &mut views)
+                    promoter.prepare(&self.device, &promotions, status, &mut views)
                 })
                 .transpose()?;
             {

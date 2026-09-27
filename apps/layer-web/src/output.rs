@@ -85,7 +85,6 @@ impl WebApp {
                     project,
                     background,
                     time,
-                    Default::default(),
                     control.clone(),
                 )
                 .map_err(js)?;
@@ -154,7 +153,6 @@ pub(super) async fn render_output(
             snapshot.project,
             snapshot.background,
             snapshot.time,
-            Default::default(),
             control.clone(),
         )
         .map_err(js)?;

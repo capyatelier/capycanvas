@@ -40,15 +40,7 @@ impl NativePromoter {
         self.full_region.size()
     }
 
-    /// Prepare with native encoding pipelines before interaction. Working
-    /// destinations require write-only storage access in their Float32 format.
-    pub fn new(device: &wgpu::Device) -> Self {
-        let encoder = Self::with_device(&device.clone().into());
-        for pipeline in &encoder.pipelines {
-            pipeline.compile();
-        }
-        encoder
-    }
+    /// Working destinations require write-only storage access in their Float32 format.
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
         let formats = [
             wgpu::TextureFormat::Rgba32Float,
@@ -167,15 +159,7 @@ impl NativePromoter {
     /// status again. A failed status leaves all destination pixels unchanged.
     /// The caller still handles failure/recovery of the provisional edit and
     /// publishes CPU backing only after the same status succeeds in capture.
-    pub fn prepare(
-        &self,
-        device: &wgpu::Device,
-        requests: &[NativePromotion<'_>],
-        status: &NativeEncodeStatus,
-    ) -> Result<NativePromotionBatch, GpuRasterError> {
-        self.prepare_with_views(device, requests, status, &mut Default::default())
-    }
-    pub(crate) fn prepare_with_views(
+    pub(crate) fn prepare(
         &self,
         device: &wgpu::Device,
         requests: &[NativePromotion<'_>],

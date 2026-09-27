@@ -115,7 +115,6 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                             },
                             PixelRect::new(253, 251, 279, 283),
                             &mut encoder,
-                            true,
                             None,
                         )
                         .unwrap();
@@ -263,7 +262,6 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
             },
             PixelRect::new(259, 261, 263, 265),
             &mut encoder,
-            true,
             None,
         )
         .unwrap();

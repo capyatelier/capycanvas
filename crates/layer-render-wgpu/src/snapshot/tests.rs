@@ -6,6 +6,14 @@ use std::io::Cursor;
 
 mod placement;
 
+fn gpu() -> SnapshotGpu {
+    static GPU: std::sync::OnceLock<SnapshotGpu> = std::sync::OnceLock::new();
+    GPU.get_or_init(|| WgpuRasterizer::new_native_headless(Default::default()).unwrap().snapshot_gpu()).clone()
+}
+fn capture(project: Project) -> Result<SnapshotRenderer, GpuRasterError> {
+    gpu().capture(project, [0.; 4], 0., Default::default())
+}
+
 #[test]
 fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
     let mut doc = Document::new("Animation phase", 32, 32);
@@ -38,7 +46,7 @@ fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
             else { assert_ne!(&pixels, previous_pixels, "playback advances"); }
         }
         let mut capture = live.snapshot_gpu().capture(Project { document: doc.clone(), assets: Default::default() },
-            [1.;4], elapsed, Default::default(), Default::default()).unwrap();
+            [1.;4], elapsed, Default::default()).unwrap();
         let exported = capture.renderer.effect_clocks.get(&LayerId(3)).unwrap().1.clone()
             .advance(doc.layers[0].effect.as_ref().unwrap(),elapsed);
         assert_eq!(exported, phase);
@@ -60,7 +68,7 @@ fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
     builder.push_row(&input.into_iter().flatten().flat_map(f32::to_le_bytes).collect::<Vec<_>>()).unwrap();
     document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
     let project = Project { document, assets: Default::default() };
-    let mut renderer = SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
+    let mut renderer = capture(project.clone()).unwrap();
     let before = renderer.preview_linear_document([3, 1]).unwrap().pixels;
     let mut output = Cursor::new(Vec::new());
     renderer.write_exr(&mut output).unwrap();
@@ -113,7 +121,7 @@ fn shared_float32_bands_and_exr_preserve_samples_across_column_boundaries() {
     let (live, rendered) = frame(&project);
     assert_eq!(rendered, expected);
     let mut capture = live.snapshot_gpu().capture(
-        project, [0.; 4], 0., Default::default(), Default::default(),
+        project, [0.; 4], 0., Default::default(),
     ).unwrap();
     let (rows, pixels) = capture.read_band(0).unwrap();
     assert_eq!(rows, extent[1]);
@@ -123,10 +131,10 @@ fn shared_float32_bands_and_exr_preserve_samples_across_column_boundaries() {
     let decoded = decode(exr.into_inner());
     assert_eq!(decoded.interpretation, target);
     assert_eq!(raw_rows(&decoded), straight);
-    let budget = capture.limits.planned_pixel_bytes;
-    capture.limits.planned_pixel_bytes = 1;
+    let budget = capture.planned_pixel_bytes;
+    capture.planned_pixel_bytes = 1;
     assert!(matches!(capture.read_band(0), Err(GpuRasterError::CaptureBudget { .. })));
-    capture.limits.planned_pixel_bytes = budget;
+    capture.planned_pixel_bytes = budget;
     capture.control().cancel();
     assert!(capture.read_band(0).is_err());
 }
@@ -151,12 +159,12 @@ fn hdr_flattened_storage_ignores_sdr_rendition() {
     layer.effect = Some(Arc::new(effect));
     document.layers.insert(0, layer);
     document.sdr_rendition = hdr::SdrRendition { exposure: -4., contrast: 2., headroom: 4., ..Default::default() };
-    let mut renderer = SnapshotRenderer::new(Project { document, assets: Default::default() }, [0.; 4], 0., Default::default()).unwrap();
+    let mut renderer = capture(Project { document, assets: Default::default() }).unwrap();
     let mut bytes = vec![0; 24];
     renderer.write_rows(&target, Default::default(), None, |_, _, read| read(0, &mut bytes)).unwrap();
     let expected: Vec<_> = input.into_iter().flat_map(|p| hdr::encode_pixel([2. * p[0], 2. * p[1], 2. * p[2], p[3]]).unwrap()).flat_map(u16::to_le_bytes).collect();
     assert_eq!(bytes, expected, "flattening a floating master must retain HDR values");
-    let master = renderer.preview_document_for_display([3, 1], RgbSpace::Srgb, 49.).unwrap();
+    let master = renderer.preview_document_with_coverage([3, 1], RgbSpace::Srgb, 49.).unwrap().0;
     let linear = renderer.preview_linear_document([3, 1]).unwrap();
     assert_eq!(linear.pixels, master.pixels, "Proof control cache must not bake SDR mapping into HDR samples");
     let reduced = renderer.preview_linear_document([1, 1]).unwrap();
@@ -174,9 +182,9 @@ fn hdr_flattened_storage_ignores_sdr_rendition() {
     assert!(sdr.pixels[0][0] < 1.);
     assert!(master.pixels[0][0] > 1.);
     renderer.sdr_rendition = Some(hdr::SdrRendition::default());
-    assert_eq!(renderer.preview_document_for_display([3, 1], RgbSpace::Srgb, 49.).unwrap().pixels, master.pixels,
+    assert_eq!(renderer.preview_document_with_coverage([3, 1], RgbSpace::Srgb, 49.).unwrap().0.pixels, master.pixels,
         "saved SDR appearance must not affect the HDR master preview");
-    assert!(renderer.preview_document_for_display([3, 1], RgbSpace::Srgb, f32::NAN).is_err());
+    assert!(renderer.preview_document_with_coverage([3, 1], RgbSpace::Srgb, f32::NAN).is_err());
 }
 
 fn source_project(color: DocumentColor, extent: [u32; 2]) -> Project {
@@ -278,7 +286,7 @@ fn snapshot_identity_png_tiff_preserve_every_code_and_hidden_rgb() {
             let expected = raw_rows(&source);
             let target = source.interpretation.clone();
             let mut reader =
-                SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+                capture(project).unwrap();
             for tiff in [false, true] {
                 let mut output = Cursor::new(Vec::new());
                 let stats = if tiff {
@@ -337,7 +345,7 @@ fn snapshot_gray_identity_and_explicit_matte_keep_their_output_contracts() {
     let gray = Arc::new(builder.finish().unwrap());
     let expected = raw_rows(&gray);
     project.document.layers[0].source = Some(gray);
-    let mut reader = SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+    let mut reader = capture(project).unwrap();
     for tiff in [false, true] {
         let mut file = Cursor::new(Vec::new());
         if tiff {
@@ -368,7 +376,7 @@ fn snapshot_gray_identity_and_explicit_matte_keep_their_output_contracts() {
         .unwrap()
         .interpretation
         .clone();
-    let mut reader = SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+    let mut reader = capture(project).unwrap();
     let matte = [0.2, 0.4, 0.6];
     let mut output = Vec::new();
     reader
@@ -402,7 +410,7 @@ fn snapshot_legacy_project_images_use_native_primary_conversion_without_full_upl
             bytes: bytes.clone().into(),
         },
     );
-    let mut reader = SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+    let mut reader = capture(project).unwrap();
     let actual = reader.read_region([0, 0, 33, 17]).unwrap();
     let decoder = layer_color::WorkingDecoder::new(
         &source.interpretation,
@@ -563,7 +571,6 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
                 [0.; 4],
                 0.,
                 Default::default(),
-                Default::default(),
             )
             .unwrap();
         assert!(
@@ -637,7 +644,7 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
     let project = rich_project(color, 1);
     let control = CaptureControl::with_allocation_tracking();
     let mut reader =
-        SnapshotRenderer::with_control(project, [0.; 4], 0., Default::default(), control.clone())
+        gpu().capture(project, [0.; 4], 0., control.clone())
             .unwrap();
     let [width, height] = reader.extent();
     let mut reference = Vec::new();
@@ -678,7 +685,7 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
 
     // Budget rejections happen during dependency planning. Let exactly the
     // original 16-row request fit and require the wider band to shrink to it.
-    reader.limits.planned_pixel_bytes = 0;
+    reader.planned_pixel_bytes = 0;
     let required = |error| match error {
         GpuRasterError::CaptureBudget { required, .. } => required,
         other => panic!("unexpected capture error: {other}"),
@@ -686,14 +693,14 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
     let small = required(reader.read_region([0, 0, width, 16]).unwrap_err());
     let large = required(reader.read_region([0, 0, width, 256]).unwrap_err());
     assert!(large > small);
-    reader.limits.planned_pixel_bytes = small;
+    reader.planned_pixel_bytes = small + u64::from(width) * 16 * 16;
     let observations = control.allocation_peaks().unwrap().observations;
     let (rows, pixels) = reader.read_band(0).unwrap();
     assert_eq!(rows, 16);
     assert_eq!(pixels, reference[..width as usize * 16]);
     assert_eq!(
         control.allocation_peaks().unwrap().observations,
-        observations + u64::from(allocation_reports)
+        observations + u64::from(allocation_reports) * u64::from(width.div_ceil(512))
     );
     reader.control().cancel();
     assert!(reader.read_band(0).is_err());
@@ -707,7 +714,7 @@ fn shared_snapshot_chunks_preserve_masked_effect_pixels_across_column_boundaries
         if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.0[4] += 800.; }
     }
     let (live, expected) = frame(&project);
-    let mut capture = live.snapshot_gpu().capture(project, [0.; 4], 0., Default::default(), Default::default()).unwrap();
+    let mut capture = live.snapshot_gpu().capture(project, [0.; 4], 0., Default::default()).unwrap();
     let mut actual = Vec::new();
     let mut y = 0;
     while y < capture.extent()[1] {
@@ -733,7 +740,7 @@ fn gpu_tone_snapshot_matches_composited_masked_filtered_document() {
     let mut cpu = layer_core::color::hdr::LocalToneBuilder::new(extent,color.space).unwrap();
     for row in pixels.chunks_exact(extent[0] as usize) { cpu.push(row).unwrap(); }
     let expected = cpu.finish(||false).unwrap();
-    let mut capture = live.snapshot_gpu().capture(project,[0.;4],0.,Default::default(),Default::default()).unwrap();
+    let mut capture = live.snapshot_gpu().capture(project,[0.;4],0.,Default::default()).unwrap();
     let gpu = capture.gpu_local_tone_guide().unwrap();
     assert!(Arc::ptr_eq(&gpu,&capture.gpu_local_tone_guide().unwrap()));
     let actual = capture.local_tone_guide().unwrap();
@@ -746,7 +753,7 @@ fn gpu_tone_snapshot_matches_composited_masked_filtered_document() {
     assert!(capture.local_tone_guide().is_err(),"CPU delivery observes the same cancellation");
     capture.control = Default::default();
     capture.gpu_local_tone = None;
-    capture.limits.planned_pixel_bytes = 1;
+    capture.planned_pixel_bytes = 1;
     assert!(capture.gpu_local_tone_guide().unwrap_err().contains("limit is 1"));
 }
 
@@ -780,7 +787,7 @@ fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
                 }
             }
             let mut reader =
-                SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+                capture(project).unwrap();
             assert!(reader.renderer.composite_texture.is_none());
             for rect in [
                 [257, 19, 31, 33],
@@ -828,7 +835,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
         .map(|l| l.raster.identity())
         .collect::<Vec<_>>();
     let mut reader =
-        SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
+        capture(project.clone()).unwrap();
     for depth in [SampleDepth::U8, SampleDepth::U16] {
         for space in [RgbSpace::Srgb, RgbSpace::DisplayP3] {
             for tiff in [false, true] {
@@ -886,7 +893,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
             .map(|l| l.raster.identity())
             .collect::<Vec<_>>()
     );
-    reader.limits.planned_pixel_bytes = 1;
+    reader.planned_pixel_bytes = 1;
     assert!(reader.read_region([0, 0, 17, 17]).is_err());
     assert!(reader.renderer.composite_texture.is_none());
     reader.control().cancel();
@@ -913,11 +920,10 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
 fn cancelled_snapshot_does_not_initialize_a_device_or_resolve_backing() {
     let control = CaptureControl::default();
     control.cancel();
-    let result = SnapshotRenderer::with_control(
+    let result = gpu().capture(
         source_project(DocumentColor::default(), [8, 8]),
         [0.; 4],
         0.,
-        Default::default(),
         control.clone(),
     );
     assert!(matches!(result, Err(GpuRasterError::Color(e)) if e.contains("cancelled")));
@@ -933,7 +939,7 @@ fn snapshot_jpeg_applies_profile_and_linear_matte_before_lossy_encoding() {
         },
         [33, 17],
     );
-    let mut reader = SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+    let mut reader = capture(project).unwrap();
     for space in RgbSpace::ALL {
         let target = SourceInterpretation {
             channels: SourceChannels::Rgb,
@@ -979,7 +985,7 @@ fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_sa
     let project = source_project(color, [513, 35]);
     let original = project.clone();
     let mut reader =
-        SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
+        capture(project.clone()).unwrap();
     let target = SourceInterpretation {
         channels: SourceChannels::Rgba,
         depth: SampleDepth::U8,
@@ -1029,7 +1035,7 @@ fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_sa
         [513, 35],
     );
     let source = project.document.layers[0].source.as_ref().unwrap().clone();
-    let mut reader = SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+    let mut reader = capture(project).unwrap();
     let mut bytes = Vec::new();
     reader
         .write_png(&mut bytes, &source.interpretation, options, None)
@@ -1051,7 +1057,7 @@ fn flattened_copy_preserves_complete_composition_precision_extent_and_resolution
     original.document.resolution = Some(layer_core::ImageResolution::ppi(300));
     let (_, full) = frame(&original);
     let mut reader =
-        SnapshotRenderer::new(original.clone(), [0.; 4], 0., Default::default()).unwrap();
+        capture(original.clone()).unwrap();
     let color = DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,

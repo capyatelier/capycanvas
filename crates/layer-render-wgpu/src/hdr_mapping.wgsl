@@ -65,10 +65,6 @@ fn hdr_map_sdr(paint:vec4<f32>,options:vec4<f32>,appearance:vec4<f32>)->vec4<f32
     if options.w==0. {return paint;}
     return hdr_gamut_sdr(hdr_tone_sdr(paint,options,appearance),appearance.x);
 }
-fn hdr_map_proof(paint:vec4<f32>,options:vec4<f32>,appearance:vec4<f32>)->vec4<f32> {
-    if options.w==0. {return paint;}
-    return hdr_gamut_proof(hdr_tone_sdr(paint,options,appearance),appearance.x);
-}
 fn hdr_compress_gamut(rgb:vec3<f32>,weights:vec3<f32>)->vec3<f32> {
     let y=dot(rgb,weights);
     if y<=0. {return vec3(0.);}

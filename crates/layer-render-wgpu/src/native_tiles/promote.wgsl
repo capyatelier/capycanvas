@@ -1,4 +1,4 @@
-struct PublicationStatus { invalid:u32, clipped:u32 }
+struct PublicationStatus { invalid:u32 }
 TEXTURES
 @group(0) @binding(STATUS_BINDING) var<storage,read> status:PublicationStatus;
 @group(0) @binding(REGION_BINDING) var<uniform> region:vec4<u32>;

@@ -1,4 +1,4 @@
-struct Status { invalid:atomic<u32>, clipped:atomic<u32> }
+struct Status { invalid:atomic<u32> }
 TEXTURES
 @group(0) @binding(STATUS_BINDING) var<storage,read_write> status:Status;
 @compute @workgroup_size(8,8)

@@ -64,9 +64,7 @@ impl PaintTransforms {
         encoder: &mut crate::submission::CommandEncoder,
         layer: LayerId,
         operation: &layer_core::LayerOperation,
-        extent: [u32; 2],
     ) -> Result<(), GpuRasterError> {
-        let _ = extent;
         self.0[0].apply(r, encoder, layer, operation, r.target_extent(layer))
     }
     pub fn consume_commit(&mut self, packet: FramePacket<'_>) -> Vec<(LayerId, u32)> {
@@ -98,11 +96,9 @@ impl PaintTransforms {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         next: &layer_render::TransformPreview,
-        extent: [u32; 2],
         layers: &[Layer],
     ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
         let companion = next.companion(layers);
-        let _ = extent;
         let mut damage = self.0[0].update_preview(r, encoder, next, r.target_extent(next.layer))?;
         if let Some(companion) = companion {
             damage.extend(self.0[1].update_preview(r, encoder, &companion, r.target_extent(companion.layer))?);
@@ -801,7 +797,6 @@ impl ImageTransformState {
         let offsets = pass
             .prepare_tiled(
                 &r.device,
-                &r.queue,
                 &mut r.uploads,
                 encoder,
                 bounds,
@@ -1204,7 +1199,6 @@ impl ImageTransformState {
             .color
             .prepare_tiled(
                 &r.device,
-                &r.queue,
                 &mut r.uploads,
                 encoder,
                 bounds,

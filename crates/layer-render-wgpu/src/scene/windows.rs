@@ -84,7 +84,6 @@ impl Scene {
         packet: FramePacket<'_>,
         dirty: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
-        overlay: bool,
         plan: Plan,
     ) -> Result<(), GpuRasterError> {
         let extent = packet.document_extent;
@@ -133,7 +132,7 @@ impl Scene {
                     .metrics
                     .image_window_peak_bytes
                     .max(self.images.storage_bytes());
-                self.compose_pixels(r, packet, output, encoder, overlay, None)?;
+                self.compose_pixels(r, packet, output, encoder, None)?;
                 Self::submit_chunk(r, encoder, "after bounded filter window")?;
                 r.metrics.image_window_submissions += 1;
             }

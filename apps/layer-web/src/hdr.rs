@@ -128,7 +128,6 @@ impl WebApp {
                     project,
                     background,
                     time,
-                    Default::default(),
                     control.clone(),
                 )
                 .map_err(js)?;
@@ -195,7 +194,6 @@ pub(super) async fn preview_document(
             project,
             background,
             time,
-            Default::default(),
             control.clone(),
         )
         .map_err(js)?;

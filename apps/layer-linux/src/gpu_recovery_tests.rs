@@ -11,7 +11,7 @@ fn snapshot_pixels(w: &Workspace) -> Vec<[f32; 4]> {
     };
     glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
         let extent = [project.document.width, project.document.height];
-        let mut renderer = gpu.capture(project, background, time, Default::default(), Default::default()).unwrap();
+        let mut renderer = gpu.capture(project, background, time, Default::default()).unwrap();
         renderer.read_region([0, 0, extent[0], extent[1]]).unwrap()
     })).unwrap()
 }

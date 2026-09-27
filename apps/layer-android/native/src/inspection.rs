@@ -92,7 +92,7 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionHistogram(
         std::thread::Builder::new().name("capy-inspection".into()).stack_size(8 * 1024 * 1024).spawn(move || {
             let revision = job.project.document.revision;
             let sampled_time = job.project.document.has_animated_effects().then_some(job.time);
-            let mut renderer = job.gpu.capture(job.project, job.background, job.time, Default::default(), job.control).map_err(error)?;
+            let mut renderer = job.gpu.capture(job.project, job.background, job.time, job.control).map_err(error)?;
             let histogram = renderer.histogram().map_err(error)?;
             serde_json::to_string(&serde_json::json!({"epoch":job.epoch,"revision":revision,"axis":histogram.axis(),"histogram":histogram,"sampled_time":sampled_time})).map_err(error)
         }).map_err(error)?.join().map_err(|_| "Histogram worker failed".to_string())?
@@ -139,7 +139,7 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionOutput(
         let recipe: layer_ui::ExportRecipe =
             serde_json::from_str(&crate::android::read(&mut env, &recipe)?).map_err(error)?;
         let (previews,stats)=std::thread::Builder::new().name("capy-output-preview".into()).stack_size(8*1024*1024).spawn(move || {
-            let mut renderer=job.gpu.capture(job.project,job.background,job.time,Default::default(),job.control).map_err(error)?;
+            let mut renderer=job.gpu.capture(job.project,job.background,job.time,job.control).map_err(error)?;
             let before=renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?;
             let output=layer_host::export::preview_recipe(&mut renderer,[512,384],layer_core::color::RgbSpace::Srgb,1.,&recipe)?;
             let json=serde_json::json!({"extent":recipe.size.extent(renderer.extent())?,"clipped_channels":output.clipped,"range_blocked":output.range_blocked});

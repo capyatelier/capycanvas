@@ -1,5 +1,5 @@
 //! A bounded GPU loupe. It reads the presenter's existing artwork bindings.
-use crate::{GpuRasterError, Uploads, WgpuRasterizer};
+use crate::{GpuRasterError, Uploads};
 use layer_render::ColorPickerOverlay;
 
 #[derive(Default)]
@@ -73,7 +73,6 @@ impl Picker {
     pub fn upload(
         &mut self,
         uploads: &mut Uploads,
-        renderer: &WgpuRasterizer,
         encoder: &mut wgpu::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         if self.dirty
@@ -85,7 +84,6 @@ impl Picker {
             }
             uploads.write(
                 encoder,
-                renderer.queue(),
                 self.buffer.as_ref().unwrap(),
                 &bytes,
             )?;

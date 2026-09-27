@@ -353,7 +353,6 @@ impl WgpuRasterizer {
                         encoder,
                         batch.layer_id,
                         operation,
-                        self.target_extent(batch.layer_id),
                     );
                     self.transforms = Some(transforms);
                     result?;

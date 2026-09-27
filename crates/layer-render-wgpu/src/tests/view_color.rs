@@ -741,7 +741,7 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
         )
         .unwrap();
         presenter
-            .set_local_tone_guide(&r, Some(guide.clone()))
+            .set_gpu_local_tone_guide(&r, Some(Arc::new(crate::local_tone::GpuToneGuide::from_cpu(&r, &guide))))
             .unwrap();
         let mut capture = ViewportPresenter::for_surface(
             &r,

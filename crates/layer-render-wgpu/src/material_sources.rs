@@ -336,7 +336,6 @@ impl WgpuRasterizer {
             // replace every pass's coordinates before any of them executes.
             self.uploads.write(
                 encoder,
-                &self.queue,
                 &self.material_gather.as_ref().unwrap().pages,
                 &descriptor_bytes(1, pages),
             )?;

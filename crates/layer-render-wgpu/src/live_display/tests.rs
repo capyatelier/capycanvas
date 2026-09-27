@@ -1014,7 +1014,7 @@ fn in_surface_navigator_keeps_clipped_geometry() {
         wgpu::TextureFormat::Rgba8Unorm,
         "coarse native Navigator",
     );
-    let mut presenter = ViewportPresenter::for_overviews(&r, wgpu::TextureFormat::Rgba8Unorm);
+    let mut presenter = ViewportPresenter::for_overview_surface(&r, wgpu::TextureFormat::Rgba8Unorm, crate::SdrSurfaceColor::Srgb).unwrap();
     for clipped in [false, true] {
         presenter.set_overviews(
             &r,

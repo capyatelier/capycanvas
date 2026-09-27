@@ -401,7 +401,6 @@ impl PixelTransform {
     pub fn prepare_tiled(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         uploads: &mut Uploads,
         encoder: &mut crate::submission::CommandEncoder,
         bounds: [i32; 4],
@@ -486,7 +485,6 @@ impl PixelTransform {
         uploads
             .write_at(
                 encoder,
-                queue,
                 &self.uniforms.as_ref().unwrap().0,
                 self.next_record,
                 &self.records,
@@ -495,7 +493,6 @@ impl PixelTransform {
         uploads
             .write_at(
                 encoder,
-                queue,
                 &self.source_records,
                 self.source_next_record,
                 &self.source_upload,

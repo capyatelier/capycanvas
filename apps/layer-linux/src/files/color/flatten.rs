@@ -11,7 +11,7 @@ pub(super) fn prepare(
     time: f32,
     control: CaptureControl,
 ) -> Result<layer_color::PreparedDocumentColor, String> {
-    gpu.capture(project, background, time, Default::default(), control)
+    gpu.capture(project, background, time, control)
         .map_err(|e| e.to_string())?
         .flattened_document(
             color,

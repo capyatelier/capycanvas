@@ -37,7 +37,6 @@ pub fn compare(
                     project.clone(),
                     background,
                     time,
-                    Default::default(),
                     control.clone(),
                 )
                 .map_err(|e| e.to_string())?;
@@ -147,7 +146,6 @@ impl ColorTask {
                         self.workflow.original.clone(),
                         self.view.background_rgba_linear,
                         self.time,
-                        Default::default(),
                         control.clone(),
                     )
                     .map_err(|e| e.to_string())?

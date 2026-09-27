@@ -35,7 +35,6 @@ fn samples(app: &App) -> Vec<[f32; 4]> {
             s.engine().view().background_rgba_linear,
             0.,
             Default::default(),
-            Default::default(),
         )
         .unwrap();
     snapshot.read_region([0, 0, 128, 96]).unwrap()

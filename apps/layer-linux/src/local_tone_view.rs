@@ -199,7 +199,7 @@ impl LocalToneView {
                 let background = key.tone.background();
                 let result = gio::spawn_blocking(move || {
                     let mut renderer = gpu
-                        .capture(project, background, time, Default::default(), c)
+                        .capture(project, background, time, c)
                         .map_err(|e| e.to_string())?;
                     renderer.gpu_local_tone_guide()
                 })

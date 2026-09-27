@@ -1542,19 +1542,18 @@ impl Scene {
         packet: FramePacket<'_>,
         dirty: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
-        overlay: bool,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
         self.prepare_placement_mips(r, packet, encoder)?;
         if let Some(native) = &r.native_edit
             && let Some(plan) = windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(r, packet.layers, packet.document_extent)?)?
         {
-            return self.compose_windows(r, packet, dirty, encoder, overlay, plan);
+            return self.compose_windows(r, packet, dirty, encoder, plan);
         }
         self.image_window = None;
         self.effects.retain(packet.layers);
         let dirty = self.update_images(r, packet, dirty, encoder)?;
-        self.compose_pixels(r, packet, dirty, encoder, overlay, tiles)
+        self.compose_pixels(r, packet, dirty, encoder, tiles)
     }
 
     fn compose_pixels(
@@ -1563,11 +1562,10 @@ impl Scene {
         packet: FramePacket<'_>,
         dirty: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
-        overlay: bool,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
         self.display_sources = r.live_display.is_some();
-        let result = self.compose_display_pixels(r, packet, dirty, encoder, overlay, tiles);
+        let result = self.compose_display_pixels(r, packet, dirty, encoder, tiles);
         self.display_sources = false;
         result
     }
@@ -1578,7 +1576,6 @@ impl Scene {
         packet: FramePacket<'_>,
         dirty: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
-        overlay: bool,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
         if dirty.is_empty() {
@@ -1596,11 +1593,10 @@ impl Scene {
                 .effect
                 .as_ref()
                 .is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
-            && (!overlay
-                || !packet
-                    .layers
-                    .iter()
-                    .any(|l| l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area)))
+            && !packet
+                .layers
+                .iter()
+                .any(|l| l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area))
             && let Some(source) = self.images.scene_texture(top)
         {
             if let Some(mut cache) = r.live_display.take() {
@@ -1694,30 +1690,28 @@ impl Scene {
             composited += page_rect(tile).intersect(dirty).area();
             let first_job = self.jobs.len();
             let mut output = self.group(r, packet, None, tile)?;
-            if overlay {
-                for layer in packet.layers {
-                    if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled && m.show_area) {
-                        let m = self.mask_at(r, mask, layer_core::target_transform(packet.layers, mask.id), layer.local_extent(packet.document_extent), tile)?;
-                        let tint = self.alloc(r, wgpu::Color::TRANSPARENT);
-                        self.draw(
-                            r,
-                            tint,
-                            self.pool[m].view.clone(),
-                            None,
-                            [0., 0., 256., 256.],
-                            [5., 1., 0., 0.],
-                            false,
-                        );
-                        self.free(m);
-                        output = self.combine(
-                            r,
-                            tint,
-                            output,
-                            1.,
-                            layer_core::LayerBlend::Normal,
-                            false,
-                        );
-                    }
+            for layer in packet.layers {
+                if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled && m.show_area) {
+                    let m = self.mask_at(r, mask, layer_core::target_transform(packet.layers, mask.id), layer.local_extent(packet.document_extent), tile)?;
+                    let tint = self.alloc(r, wgpu::Color::TRANSPARENT);
+                    self.draw(
+                        r,
+                        tint,
+                        self.pool[m].view.clone(),
+                        None,
+                        [0., 0., 256., 256.],
+                        [5., 1., 0., 0.],
+                        false,
+                    );
+                    self.free(m);
+                    output = self.combine(
+                        r,
+                        tint,
+                        output,
+                        1.,
+                        layer_core::LayerBlend::Normal,
+                        false,
+                    );
                 }
             }
             let origin = [tile[0] * PAGE_SIZE, tile[1] * PAGE_SIZE];
@@ -1956,7 +1950,6 @@ impl Scene {
         if !self.upload.is_empty() {
             r.uploads.write_at(
                 encoder,
-                &r.queue,
                 &self.buffer,
                 (base * self.stride) as u64,
                 &self.upload,

@@ -79,7 +79,7 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
             .inverse()
             .unwrap();
         let mut capture =
-            SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
+            capture(project.clone()).unwrap();
         let mut painted = 0;
         // Visit distant windows and then return to force retirement/restoration.
         for rect in [
@@ -159,7 +159,7 @@ fn snapshot_export_does_not_bypass_placement_when_source_matches_canvas_extent()
         .interpretation
         .clone();
     project.document.layers[0].properties.placement = Affine::translation(Point { x: 7., y: -3. });
-    let mut capture = SnapshotRenderer::new(project, [0.; 4], 0., Default::default()).unwrap();
+    let mut capture = capture(project).unwrap();
     assert!(
         capture.identity_source(&target).is_none(),
         "source passthrough must honor placement"

@@ -18,15 +18,28 @@ pub struct GpuToneGuide {
     pub(crate) buffer: wgpu::Buffer,
 }
 impl GpuToneGuide {
+    #[cfg(test)]
+    pub(crate) fn from_cpu(renderer: &crate::WgpuRasterizer, guide: &layer_core::color::hdr::LocalToneGuide) -> Self {
+        use wgpu::util::DeviceExt;
+        let header = [guide.extent[0], guide.extent[1], guide.document_extent[0], guide.document_extent[1]];
+        let mut packed: Vec<u8> = header.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        packed.extend(guide.samples.iter().flatten().flat_map(|v| v.to_ne_bytes()));
+        let buffer = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("local Laplacian Float32 guide"),
+            contents: &packed,
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        Self {
+            extent: guide.extent,
+            document_extent: guide.document_extent,
+            space: renderer.document_color.space,
+            peak: guide.peak,
+            device: (*renderer.device).clone(),
+            buffer,
+        }
+    }
     pub fn byte_len(&self) -> u64 {
         self.buffer.size()
-    }
-
-    /// CPU codecs can reuse the same analysis by downloading only the bounded
-    /// guide. Interactive presentation never calls this method.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn download(&self, queue: &wgpu::Queue) -> Result<LocalToneGuide, String> {
-        pollster::block_on(self.download_async(queue))
     }
 
     pub async fn download_async(&self, queue: &wgpu::Queue) -> Result<LocalToneGuide, String> {
@@ -828,7 +841,7 @@ mod tests {
                 }
                 let expected = cpu.finish(|| false).unwrap();
                 let gpu = build(&r, extent, &pixels, 127).unwrap();
-                let actual = gpu.download(&r.queue).unwrap();
+                let actual = pollster::block_on(gpu.download_async(&r.queue)).unwrap();
                 assert_eq!(actual.extent, expected.extent);
                 assert_eq!(actual.document_extent, extent);
                 assert!((actual.peak - expected.peak).abs() <= 2e-6 * expected.peak);
@@ -849,7 +862,7 @@ mod tests {
                 );
                 // Source/working pixels are input-only, output handles remain immutable.
                 let second = build(&r, [1, 1], &[[16., 16., 16., 1.]], 1).unwrap();
-                assert_eq!(gpu.download(&r.queue).unwrap().samples, actual.samples);
+                assert_eq!(pollster::block_on(gpu.download_async(&r.queue)).unwrap().samples, actual.samples);
                 assert_eq!(second.document_extent, [1, 1]);
             }
             for pixel in [

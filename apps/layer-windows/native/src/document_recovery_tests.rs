@@ -223,7 +223,7 @@ fn viewport_upload_returns_device_failure_without_unwinding() {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-    let mut presenter = layer_render_wgpu::ViewportPresenter::new(gpu.device(), format);
+    let mut presenter = layer_render_wgpu::ViewportPresenter::for_renderer(gpu, format);
     f.remove_device();
     let error = presenter
         .present(

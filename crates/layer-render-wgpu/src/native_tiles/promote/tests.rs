@@ -40,7 +40,7 @@ fn floats(values: impl Iterator<Item = f32>) -> Vec<u8> {
 #[test]
 fn promotion_preserves_float32_bits_and_pixels_outside_each_region() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let promoter = NativePromoter::new(&r.device);
+    let promoter = NativePromoter::with_device(&r.device);
     let status = NativeEncodeStatus::new(&r.device);
     for format in [
         wgpu::TextureFormat::Rgba32Float,
@@ -62,13 +62,7 @@ fn promotion_preserves_float32_bits_and_pixels_outside_each_region() {
         ] {
             for invalid in [false, true] {
                 upload(&r, &working, &original);
-                // Gamut clipping is reported separately and does not reject an
-                // otherwise valid native publication.
-                r.queue.write_buffer(
-                    status.buffer(),
-                    0,
-                    &[u32::from(invalid).to_le_bytes(), 65536u32.to_le_bytes()].concat(),
-                );
+                r.queue.write_buffer(status.buffer(), 0, &u32::from(invalid).to_le_bytes());
                 let batch = promoter
                     .prepare(
                         &r.device,
@@ -77,7 +71,7 @@ fn promotion_preserves_float32_bits_and_pixels_outside_each_region() {
                             working: &working,
                             region,
                         }],
-                        &status,
+                        &status, &mut Default::default(),
                     )
                     .unwrap();
                 assert_eq!(batch.is_empty(), region[2] == 0 || region[3] == 0);

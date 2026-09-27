@@ -81,7 +81,6 @@ pub(crate) fn write_snapshot(
             snapshot.project,
             snapshot.background,
             snapshot.time,
-            Default::default(),
             job.control.clone(),
         )
         .map_err(|e| e.to_string())?;

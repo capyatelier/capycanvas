@@ -46,7 +46,6 @@ mod view_color;
 mod working_color;
 pub use view_color::SdrSurfaceColor;
 mod raster;
-pub use raster::{CaptureSource, RasterCapture, TileCapture};
 mod deferred;
 mod paint_transform;
 mod pixel_transform;
@@ -171,16 +170,14 @@ impl Uploads {
     fn write(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
         target: &wgpu::Buffer,
         bytes: &[u8],
     ) -> Result<(), GpuRasterError> {
-        self.write_at(encoder, queue, target, 0, bytes)
+        self.write_at(encoder, target, 0, bytes)
     }
     fn write_at(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
-        _queue: &wgpu::Queue,
         target: &wgpu::Buffer,
         offset: u64,
         bytes: &[u8],
@@ -839,7 +836,6 @@ pub struct WgpuRasterizer {
     adapter: wgpu::Adapter,
     device: PipelineDevice,
     queue: wgpu::Queue,
-    surface_extent: [u32; 2],
     document_extent: [u32; 2],
     target_geometry: target_geometry::TargetGeometry,
     paint_layers: Vec<PaintLayer>,
@@ -890,7 +886,6 @@ pub struct WgpuRasterizer {
     layer_style_records: std::collections::HashMap<LayerId, u32>,
     artwork_frame: Option<Arc<artwork::Frame>>,
     effect_clocks: effects::Clocks,
-    last_time_seconds: f32,
     filter_source_epoch: u64,
     image_sources: std::collections::HashMap<AssetId, layer_core::ProjectAsset>,
     tiled_sources: std::collections::BTreeMap<LayerId, Arc<layer_core::color::source::SourceImage>>,
@@ -1162,7 +1157,6 @@ impl WgpuRasterizer {
             adapter,
             device,
             queue,
-            surface_extent: [0, 0],
             document_extent: [0, 0],
             target_geometry: Default::default(),
             layer_masks,
@@ -1191,7 +1185,6 @@ impl WgpuRasterizer {
             layer_style_records: std::collections::HashMap::new(),
             artwork_frame: None,
             effect_clocks: Default::default(),
-            last_time_seconds: 0.,
             filter_source_epoch: 0,
             display_pipelines: None,
             live_display: None,
@@ -2288,7 +2281,6 @@ impl WgpuRasterizer {
         if !packet.dabs.is_empty() {
             self.uploads.write(
                 encoder,
-                &self.queue,
                 &self.dab_buffer,
                 dab_bytes(&self.dab_upload),
             )?;
@@ -2328,7 +2320,7 @@ impl WgpuRasterizer {
         }
         if !self.style_upload.is_empty() {
             self.uploads
-                .write(encoder, &self.queue, &self.style_buffer, &self.style_upload)?;
+                .write(encoder, &self.style_buffer, &self.style_upload)?;
         }
         Ok(())
     }
@@ -3360,7 +3352,6 @@ impl CanvasRenderer for WgpuRasterizer {
         if width == 0 || height == 0 {
             return Err(GpuRasterError::InvalidExtent);
         }
-        self.surface_extent = [width, height];
         Ok(())
     }
 
@@ -3451,7 +3442,6 @@ impl CanvasRenderer for WgpuRasterizer {
                 clock.1.advance(effect, packet.time_seconds);
             }
         }
-        self.last_time_seconds = packet.time_seconds;
         if packet.reset_layers
             || !packet.dabs.is_empty()
             || packet
@@ -3712,7 +3702,7 @@ impl CanvasRenderer for WgpuRasterizer {
 
         // Style records serve brush batches, then composition layers.
         if let Some(cache) = &self.live_display {
-            self.uploads.write(&mut encoder, &self.queue, &cache.geometry, &cache.geometry_bytes())?;
+            self.uploads.write(&mut encoder, &cache.geometry, &cache.geometry_bytes())?;
         }
         self.prepare_uploads(packet, &mut batch_tiles, &mut encoder)?;
         self.layer_masks.prepare(
@@ -3894,7 +3884,6 @@ impl CanvasRenderer for WgpuRasterizer {
                         &mut encoder,
                         batch.layer_id,
                         operation,
-                        self.target_extent(batch.layer_id),
                     );
                     self.transforms = Some(transforms);
                     result?;
@@ -4288,7 +4277,6 @@ impl CanvasRenderer for WgpuRasterizer {
                     self,
                     &mut encoder,
                     &preview,
-                    packet.document_extent,
                     packet.layers,
                 );
                 self.transforms = Some(transforms);
@@ -4440,7 +4428,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 }
             }
             let started = web_time::Instant::now();
-            scene.compose(self, packet, dirty, &mut encoder, true, composite_tiles.as_ref())?;
+            scene.compose(self, packet, dirty, &mut encoder, composite_tiles.as_ref())?;
             if recomposing > 0 && self.recompose.is_some() {
                 self.recompose_tiles = if started.elapsed().as_secs_f64() * 1000. > RECOMPOSE_MS {
                     (recomposing / 2).max(1)
