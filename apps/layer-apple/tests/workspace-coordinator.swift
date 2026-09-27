@@ -21,7 +21,7 @@ import SQLite3
             try await first.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
             try await first.apply(["type": "invoke", "command": "zen_mode"])
             precondition(first.state["workspace"]["zen_mode"].bool)
-            precondition(try await workspaces.workspaceRows().count == 3, "Initialize only the shared default workspaces")
+            try require(await workspaces.workspaceRows().count == 3, "Initialize only the shared default workspaces")
             try await first.apply(["type": "set_brush_size", "value": 73])
             try await first.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": true]])
             try await workspaces.flushed()
@@ -58,7 +58,7 @@ import SQLite3
             let restored = reopened.workspaces!
             try await restored.started("reopened scene")
             precondition(restored.view["id"].string == original && reopened.state["brush"]["diameter"].number == 91)
-            precondition(try await restored.workspaceRows().count == 4,
+            try require(await restored.workspaceRows().count == 4,
                 "Scene restoration must not create an unused workspace beside another live window")
             try await restored.closed(); try await second.workspaces!.closed()
             let badRoot = root.appendingPathComponent("corrupt-library")
@@ -69,7 +69,7 @@ import SQLite3
             let blocked = EditorStore(platform: platform, persistence: EditorPersistence(root: badRoot))
             try await wait("corrupt database error") { blocked.failure != nil || blocked.workspaces?.error != nil }
             precondition(blocked.workspaces?.ready != true)
-            precondition(try Data(contentsOf: badFile) == badData, "A corrupt library must not be replaced")
+            try require(Data(contentsOf: badFile) == badData, "A corrupt library must not be replaced")
             print("PASS: platform \(platform), SQLite startup, scene restoration, latest-edit switching, failure unlock, suspension, ownership recovery and restart")
         }
     }
@@ -141,7 +141,7 @@ import SQLite3
         try await workspaces.answer(["type": "save_toolbar", "value": "toolbar"], name: "Studio")
         let reusable = try await saved("Studio")
         try await workspaces.answer(["type": "rename", "value": reusable], name: "Studio Tools", description: "Independent toolbar")
-        precondition(try await saved("Studio Tools") == reusable)
+        try require(await saved("Studio Tools") == reusable, "Renaming a saved workspace keeps its identity")
         try await workspaces.answer(["type": "reset", "value": original])
         precondition(editor.state["brush"]["diameter"].number == 91, "Layout reset must preserve current working values")
         try await workspaces.answer(["type": "update_toolbar", "value": reusable])

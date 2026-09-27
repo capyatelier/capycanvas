@@ -142,7 +142,7 @@ import SwiftUI
                     }
                 }
             }
-            try await library.close()
+            try await workspaces.closed()
             print("PASS: platform \(platform), 72 real header captures with three task workspaces, fixed clock/battery, narrow/wide geometry and two backgrounds/themes")
         }
         try JSON(["schema": 2, "scope": "Complete shared header components; no Metal or UIKit pixels", "fixtures": fixtures.map(\.raw)])

@@ -12,7 +12,7 @@ import QuartzCore
             let store = EditorStore(platform: platform, scene: scene, persistence: EditorPersistence(root: root))
             try await wait("Workspace startup") { store.workspaces?.ready == true || store.failure != nil }
             try require(store.failure == nil, store.failure ?? "")
-            _ = attachSurface(store, CGSize(width: 128, height: 128))
+            let surface = attachSurface(store, CGSize(width: 128, height: 128))
             try await wait("Metal startup", failure: { store.failure }, step: {
                 try await prepare(store.native!, "Metal startup")
                 await frame(store.native!)

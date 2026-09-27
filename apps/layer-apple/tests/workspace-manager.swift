@@ -56,7 +56,7 @@ import SwiftUI
             try await selectionPreview(editor, target: inking)
             editor.input(["type": "pointer", "id": 900, "phase": "down", "kind": "pen", "button": "primary", "position": [500, 400]])
             try await workspaces.answer(["type": "rename", "value": inking], name: "Inking v2")
-            precondition(try await workspaces.workspaceRows().contains { $0["title"].string == "Inking v2" })
+            try require(await workspaces.workspaceRows().contains { $0["title"].string == "Inking v2" }, "Renaming during a pen contact keeps the new name")
             editor.input(["type": "pointer", "id": 900, "phase": "up", "kind": "pen", "button": "primary", "position": [500, 400]])
             try await startingLayoutPreview(editor)
             precondition(editor.state["brush"]["diameter"].number == 67)
@@ -66,7 +66,7 @@ import SwiftUI
             precondition(!beforeReset["working"]["tools"]["overrides"].object.isEmpty)
             try await workspaces.perform(["type": "form", "action": ["type": "reset_brushes"]])
             workspaces.cancelPrompt(); try await workspaces.settle()
-            precondition(SnapshotProjection.equal(try await workspaces.capture().raw, beforeReset.raw))
+            try require(SnapshotProjection.equal(await workspaces.capture().raw, beforeReset.raw), "Cancelling Reset Brushes leaves the workspace unchanged")
             try await workspaces.answer(["type": "reset_brushes"])
             let afterReset = try await workspaces.capture()
             precondition(afterReset["working"]["tools"]["overrides"].object.isEmpty)
@@ -122,7 +122,7 @@ import SwiftUI
         try await workspaces.perform(["type": "select", "id": target])
         precondition(!SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, layout.raw), "Selecting a row previews its layout")
         precondition(workspaces.view["id"].string == active)
-        precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw), "Selecting a row must not apply or persist its layout")
+        try require(SnapshotProjection.equal(await workspaces.capture().raw, before.raw), "Selecting a row must not apply or persist its layout")
         try await workspaces.perform(["type": "search", "query": "no matching workspace"])
         precondition(workspaces.view["selected"].isNull && workspaces.view["details"].isNull && workspaces.view["rows"].array.isEmpty)
         precondition(SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, layout.raw))
@@ -151,18 +151,18 @@ import SwiftUI
             try await workspaces.perform(["type": "select", "id": earlier])
         }
         try await browse()
-        precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw), "Preview must never enter the durable capture")
+        try require(SnapshotProjection.equal(await workspaces.capture().raw, before.raw), "Preview must never enter the durable capture")
         precondition(!SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, JSON(revisions[current]!)["layout"].raw))
         precondition(editor.state["layers"].stableKey == document)
         try await capture(workspaces, platform: platform, phase: "history")
         try await workspaces.perform(["type": "dismiss"])
-        precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw))
+        try require(SnapshotProjection.equal(await workspaces.capture().raw, before.raw), "Dismissing history leaves the workspace unchanged")
         try await browse()
         workspaces.suspend()
         try await wait("suspended history cancellation") { !workspaces.presented && !workspaces.busy }
         workspaces.resume()
         try await workspaces.settle()
-        precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw))
+        try require(SnapshotProjection.equal(await workspaces.capture().raw, before.raw), "Suspending history browsing leaves the workspace unchanged")
         try await browse()
         try await workspaces.perform(["type": "confirm"])
         precondition(!workspaces.presented)
@@ -171,7 +171,7 @@ import SwiftUI
         precondition(SnapshotProjection.equal(restored["working"].raw, before["working"].raw))
         precondition(workspaces.view["id"].string == id && editor.state["layers"].stableKey == document)
         try await editor.apply(["type": "invoke", "command": "undo_workspace"])
-        precondition(try await workspaces.capture()["history"]["current"].string == current)
+        try require(await workspaces.capture()["history"]["current"].string == current, "Undo Workspace returns to the current history entry")
     }
     @MainActor static func startingLayoutPreview(_ editor: EditorStore) async throws {
         let workspaces = editor.workspaces!
@@ -185,7 +185,7 @@ import SwiftUI
             precondition(workspaces.view["prompt"]["confirm"].string == "Restore")
             baseline = editor.state["workspace"]["layout"].stableKey
             precondition(baseline != original, "The starting layout must be visible before its confirmation")
-            precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw),
+            try require(SnapshotProjection.equal(await workspaces.capture().raw, before.raw),
                 "Starting-layout preview must not enter persistence or history")
             precondition(editor.state["layers"].stableKey == layers)
             if response == "cancel" { workspaces.cancelPrompt() }
@@ -195,7 +195,7 @@ import SwiftUI
             precondition(!workspaces.presented)
             if response != "restore" {
                 precondition(editor.state["workspace"]["layout"].stableKey == original)
-                precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw))
+                try require(SnapshotProjection.equal(await workspaces.capture().raw, before.raw), "Declining the history prompt leaves the workspace unchanged")
             }
         }
         let restored = try await workspaces.capture()
@@ -246,7 +246,7 @@ import SwiftUI
         try bytes.write(to: destination)
         workspaces.openURL(destination, kind: .toolbar)
         try await wait("invalid external toolbar import") { workspaces.error != nil && !workspaces.busy }
-        precondition(try Data(contentsOf: destination) == bytes, "Import must not modify the opened package")
+        try require(Data(contentsOf: destination) == bytes, "Import must not modify the opened package")
         workspaces.dismiss()
         workspaces.send(["type": "cancel"])
         try await workspaces.settle()
