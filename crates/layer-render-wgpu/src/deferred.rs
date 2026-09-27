@@ -159,6 +159,12 @@ impl<T> Deferred<T> {
             Ok(())
         })
     }
+    /// Whether an asynchronous compilation holds the recipe, so the value
+    /// can be neither used nor compiled until it completes.
+    #[cfg(target_arch = "wasm32")]
+    pub fn compiling(&self) -> bool {
+        self.0.value.get().is_none() && self.0.factory.lock().unwrap().is_none()
+    }
     pub fn ready(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         if self.0.validating.get() {
