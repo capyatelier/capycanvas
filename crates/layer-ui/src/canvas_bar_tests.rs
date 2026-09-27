@@ -306,9 +306,6 @@ fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
         ]
     );
     assert_eq!(bar.label, None);
-    s.set_platform(Platform::Mac);
-    s.frame(1, 1).unwrap();
-    assert!(s.state.canvas_bar.is_none(), "hosts without the bar keep their own controls");
 }
 
 #[test]

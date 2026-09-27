@@ -89,6 +89,16 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
   SwiftUI accessibility container's frame as the union of its children, so do not
   compare iPad widths against values measured on macOS. The software keyboard
   covers the lower part of the window; keep taps above it.
+- **Queries that decide visibility.** SwiftUI never runs `.task` or `.onAppear`
+  on an empty `Group`. Attach a query that decides whether content appears (such
+  as `canvas_bar_layout`) to a container that is always present.
+- **Window size in Mac journeys.** macOS saves window frames per build, even
+  with `-ApplePersistenceIgnoreState`, so a zoomed window carries into the next
+  test. For a wider work area, enter full screen and leave it in a teardown
+  block.
+- **Editor menus.** An open `EditorMenuButton` menu is modal to accessibility,
+  so its button cannot be queried while it is open. Close it by pressing the
+  button's recorded frame, and reveal rows in long menus before activating them.
 - **UIKit fields in SwiftUI.** iPadOS consumes Escape before SwiftUI key
   handlers; use the UIKit text field with priority key commands. Give it an
   explicit height and assign fonts and placeholders only when they change, or

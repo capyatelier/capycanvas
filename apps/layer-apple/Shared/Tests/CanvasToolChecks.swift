@@ -5,7 +5,7 @@ import ImageIO
 extension XCTestCase {
     @MainActor func revealEditorControl(_ element: XCUIElement, in scroll: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 5))
-        for _ in 0..<10 {
+        for _ in 0..<30 {
             let viewport = scroll.frame.insetBy(dx: 0, dy: 2), frame = element.frame
             if frame.minY >= viewport.minY && frame.maxY <= viewport.maxY { return }
             let upward = frame.maxY > viewport.maxY

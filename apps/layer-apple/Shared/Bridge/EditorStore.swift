@@ -61,6 +61,7 @@ import SwiftUI
     lazy var proof = ProofController(store: self)
     lazy var palettes = PaletteController(store: self)
     lazy var strokeRecording = StrokeRecording(store: self)
+    let canvasBar = CanvasBarPresence()
     lazy var glass = GlassRegistry(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
@@ -107,6 +108,9 @@ import SwiftUI
             if usesWorkspaceLibrary, let root = storage.root {
                 workspaces = WorkspaceController(store: self, root: root, scene: scene)
             }
+            native?.canvasBarContactChanged = { [weak self] hidden in
+                DispatchQueue.main.async { self?.canvasBar.hold(.contact, hidden) }
+            }
             if let workload { drawingWorkload = DrawingWorkload(store: self, plan: workload) }
         } catch { failure = error.localizedDescription }
         Self.instances.add(self)
@@ -122,7 +126,7 @@ import SwiftUI
                 return
             }
             let hadRenderer = snapshot["gpu_ready"].bool
-            let documentEpoch = state["document_file"]["epoch"].uint, hand = handCursor
+            let documentEpoch = state["document_file"]["epoch"].uint, hand = handCursor, previousCamera = cameraRevision
             switch ui.receive(next) {
             case .full:
                 if hand != handCursor { cursorChanged?() }
@@ -162,6 +166,8 @@ import SwiftUI
             case .ignored: break
             }
             cameraRevision = state["camera"]["revision"].uint
+            canvasBar.hold(.workspace, ui.workspace.movingGroup)
+            if cameraRevision != previousCamera && state["canvas_bar"]["placement"].string == "near_object" { canvasBar.interrupt() }
         }
         wake?()
     }

@@ -34,7 +34,7 @@ extension EditorStore {
     }
 }
 
-private func textWidth(_ text: String, size: CGFloat, bold: Bool = false) -> CGFloat {
+func toolbarTextWidth(_ text: String, size: CGFloat, bold: Bool = false) -> CGFloat {
     #if canImport(AppKit)
     let font = NSFont.systemFont(ofSize: size, weight: bold ? .bold : .regular)
     #else
@@ -369,7 +369,8 @@ private struct ToolOptionsComponent: View {
         let style = ToolbarUI.cached(["type": "style", "style": panel["tile_style"].raw])
         let tileSize = CGSize(width: style["size"][0].number, height: style["size"][1].number)
         let options = model["options"].array
-        let sizes = options.map { fieldSize($0, tile: tileSize) }
+        let sizes = options.map { toolOptionSize($0, vertical: vertical, width: size.width, tile: tileSize,
+            preferences: preferences, textSize: textSize) }
         let layout = ToolbarUI.cached(["type": "options_layout", "width": size.width, "height": size.height,
             "axis": vertical ? "vertical" : "horizontal", "sizes": sizes.map { [$0.width, $0.height] },
             "button": style["size"].raw, "gap": vertical ? style["gap"].number : 10])
@@ -379,9 +380,11 @@ private struct ToolOptionsComponent: View {
             ForEach(options.indices, id: \.self) { index in
                 let bounds = layout["fields"][index]
                 if !bounds.isNull {
-                    ToolOptionField(store: store, panel: panel, option: options[index], component: model, vertical: vertical,
-                        labeled: style["labeled"].bool, style: panel["tile_style"].string, preferences: preferences,
-                        stacked: bounds["width"].number < tileSize.width * CGFloat(options[index]["Choice"]["items"].array.count))
+                    ToolOptionField(store: store, option: options[index], iconSize: CGFloat(panel["tile_icon_size"].number),
+                        vertical: vertical, labeled: style["labeled"].bool, style: panel["tile_style"].string, preferences: preferences,
+                        stacked: bounds["width"].number < tileSize.width * CGFloat(options[index]["Choice"]["items"].array.count)) {
+                        store.toolbarEdit(model, $0, completion: $1)
+                    }
                         .frame(width: bounds["width"].number, height: bounds["height"].number)
                         .modifier(WorkspaceControlSurface(workspace: store.workspace))
                         .offset(x: bounds["x"].number, y: bounds["y"].number)
@@ -390,23 +393,6 @@ private struct ToolOptionsComponent: View {
             ToolOptionsMore(store: store, panel: panel, tile: tile, item: item)
                 .placed(layout["more"])
         }
-    }
-    private func fieldSize(_ option: JSON, tile: CGSize) -> CGSize {
-        if !option["Range"].isNull { return CGSize(width: preferences["sliders"].bool ? 280 : 100, height: 28) }
-        let choice = option["Choice"]
-        if !choice.isNull && choice["segmented"].bool {
-            let count = CGFloat(choice["items"].array.count)
-            return vertical ? CGSize(width: size.width, height: tile.height * (size.width < tile.width * count ? count : 1))
-                : CGSize(width: tile.width * count, height: 24)
-        }
-        if vertical || !option["Action"].isNull { return tile }
-        if !choice.isNull { return CGSize(width: 168, height: 24) }
-        let field = option["Numeric"]
-        let samples = ToolbarUI.cached(["type": "numeric_info", "id": field["id"].raw, "control": field["numeric"].raw,
-            "compact": true, "units": true])["samples"].array
-        let valueWidth = (samples.map { textWidth($0.string.map { $0.isNumber ? "8" : String($0) }.joined(), size: textSize) }.max() ?? 0) + 14
-        let labelWidth = preferences["text"].bool ? textWidth(field["label"].string, size: textSize) : 16
-        return CGSize(width: labelWidth + 4 + valueWidth + (preferences["sliders"].bool ? 60 : 0), height: 24)
     }
 }
 
@@ -434,39 +420,98 @@ private struct ToolOptionsMore: View {
     }
 }
 
-private struct ToolOptionField: View {
+typealias ToolOptionEdit = (Any, @escaping @MainActor (String?) -> Void) -> Void
+
+private let captionPadding: CGFloat = 10, captionGap: CGFloat = 6, captionIcon: CGFloat = 20, choicePadding: CGFloat = 8
+
+@MainActor func toolOptionSize(_ option: JSON, vertical: Bool, width: CGFloat, tile: CGSize, preferences: JSON, textSize: CGFloat,
+    caption: String? = nil) -> CGSize {
+    func captioned(_ text: String) -> CGFloat { captionPadding * 2 + captionIcon + captionGap + ceil(toolbarTextWidth(text, size: textSize)) }
+    if !option["Range"].isNull { return CGSize(width: preferences["sliders"].bool ? 280 : 100, height: 28) }
+    let choice = option["Choice"]
+    if !choice.isNull && choice["segmented"].bool {
+        let items = choice["items"].array, count = CGFloat(items.count)
+        if caption != nil { return CGSize(width: items.map { captioned($0["label"].string) }.reduce(0, +), height: tile.height) }
+        return vertical ? CGSize(width: width, height: tile.height * (width < tile.width * count ? count : 1))
+            : CGSize(width: tile.width * count, height: 24)
+    }
+    if !option["Action"].isNull, let caption { return CGSize(width: caption.isEmpty ? tile.height : captioned(caption), height: tile.height) }
+    if vertical || !option["Action"].isNull { return tile }
+    if !choice.isNull && caption != nil {
+        let widest = choice["items"].array.map { ceil(toolbarTextWidth($0["label"].string, size: textSize)) }.max() ?? 0
+        return CGSize(width: captionPadding * 2 + captionIcon * 2 + captionGap * 2 + widest, height: tile.height)
+    }
+    if !choice.isNull { return CGSize(width: 168, height: 24) }
+    let field = option["Numeric"]
+    let samples = ToolbarUI.cached(["type": "numeric_info", "id": field["id"].raw, "control": field["numeric"].raw,
+        "compact": true, "units": true])["samples"].array
+    let valueWidth = (samples.map { toolbarTextWidth($0.string.map { $0.isNumber ? "8" : String($0) }.joined(), size: textSize) }.max() ?? 0) + 14
+    let labelWidth = preferences["text"].bool ? toolbarTextWidth(field["label"].string, size: textSize) : 16
+    return CGSize(width: labelWidth + 4 + valueWidth + (preferences["sliders"].bool ? 60 : 0), height: 24)
+}
+
+struct ToolOptionField: View {
     @ObservedObject var store: EditorStore
-    let panel: JSON
     let option: JSON
-    let component: JSON
+    let iconSize: CGFloat
     let vertical: Bool
     let labeled: Bool
     let style: String
     let preferences: JSON
     let stacked: Bool
+    var caption: String?
+    var prefix = "toolbar"
+    var accent = false
+    var reason: String?
+    let edit: ToolOptionEdit
     var body: some View {
         if !option["Numeric"].isNull {
-            ToolbarNumberField(store: store, field: option["Numeric"], component: component, vertical: vertical,
-                labeled: labeled, style: style, preferences: preferences)
+            ToolbarNumberField(store: store, field: option["Numeric"], vertical: vertical,
+                labeled: labeled, style: style, preferences: preferences, edit: edit)
         } else if !option["Choice"].isNull {
-            ToolbarChoiceField(store: store, choice: option["Choice"], component: component, vertical: vertical,
-                labeled: labeled, stacked: stacked, iconSize: CGFloat(panel["tile_icon_size"].number))
+            ToolbarChoiceField(store: store, choice: option["Choice"], vertical: vertical, labeled: labeled, stacked: stacked,
+                iconSize: iconSize, captions: caption != nil, prefix: prefix, edit: edit)
         } else if !option["Range"].isNull {
             let range = option["Range"], bounds = range["bounds"].array
-            RangeControl(store: store, bounds: bounds, label: range["label"].string, prefix: "toolbar",
+            RangeControl(store: store, bounds: bounds, label: range["label"].string, prefix: prefix,
                 showSlider: preferences["sliders"].bool) { index, value, completion in
-                store.toolbarEdit(component, ["type": "set_tool_setting", "id": bounds[index]["id"].raw, "value": value], completion: completion)
+                edit(["type": "set_tool_setting", "id": bounds[index]["id"].raw, "value": value], completion)
             }
         } else if !option["Action"].isNull {
-            let command = option["Action"]["state"]
-            Button { store.toolbarEdit(component, ["type": "invoke", "command": command["id"].raw]) } label: {
-                SharedIcon(name: command["icon"].string, size: CGFloat(panel["tile_icon_size"].number))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-            }.buttonStyle(EditorControlButtonStyle(selected: option["Action"]["checkable"].bool && command["selected"].bool, corner: .half))
-                .disabled(!command["enabled"].bool).opacity(command["enabled"].bool ? 1 : 0.36)
-                .accessibilityLabel(command["label"].string).help(command["tooltip"].string)
-                .accessibilityIdentifier("toolbar-action-" + command["id"].string)
+            ToolOptionAction(store: store, command: option["Action"]["state"], checkable: option["Action"]["checkable"].bool,
+                iconSize: iconSize, caption: caption, prefix: prefix, accent: accent, reason: reason, edit: edit)
         }
+    }
+}
+
+private struct ToolOptionAction: View {
+    @ObservedObject var store: EditorStore
+    let command: JSON
+    let checkable: Bool
+    let iconSize: CGFloat
+    let caption: String?
+    let prefix: String
+    let accent: Bool
+    let reason: String?
+    let edit: ToolOptionEdit
+    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    var body: some View {
+        let enabled = command["enabled"].bool, highlighted = accent && enabled
+        let explanation = enabled ? nil : reason
+        Button { edit(["type": "invoke", "command": command["id"].raw], { _ in }) } label: {
+            HStack(spacing: captionGap) {
+                SharedIcon(name: command["icon"].string, size: caption == nil ? iconSize : captionIcon)
+                if let caption, !caption.isEmpty { Text(caption).lineLimit(1).fixedSize() }
+            }.padding(.horizontal, caption?.isEmpty == false ? captionPadding : 0)
+                .foregroundStyle(highlighted ? palette.accentForeground : palette["text"])
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(highlighted ? palette.accent : .clear, in: SquircleShape.control)
+                .contentShape(Rectangle())
+        }.buttonStyle(EditorControlButtonStyle(selected: checkable && command["selected"].bool, corner: .half))
+            .disabled(!enabled).opacity(enabled ? 1 : 0.36)
+            .accessibilityLabel(command["label"].string).accessibilityHint(explanation ?? "")
+            .help(explanation ?? command["tooltip"].string)
+            .accessibilityIdentifier("\(prefix)-action-" + command["id"].string)
     }
 }
 
@@ -479,6 +524,7 @@ struct SegmentedChoiceBar: View {
     let iconSize: CGFloat
     var shape = SquircleShape.control
     var stacked = false
+    var captions = false
     let palette: EditorPalette
     let send: (JSON) -> Void
     var body: some View {
@@ -486,7 +532,10 @@ struct SegmentedChoiceBar: View {
         let segments = ForEach(items.indices, id: \.self) { index in
             let item = items[index]
             Button { send(item) } label: {
-                SharedIcon(name: item["icon"].string, size: iconSize)
+                HStack(spacing: captionGap) {
+                    SharedIcon(name: item["icon"].string, size: iconSize)
+                    if captions { Text(item["label"].string).lineLimit(1).fixedSize() }
+                }.padding(.horizontal, captions ? captionPadding : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(item["selected"].bool ? surface.active : palette["input"],
                         in: shape.segment(index, of: items.count, stacked: stacked))
@@ -507,41 +556,44 @@ struct SegmentedChoiceBar: View {
 private struct ToolbarChoiceField: View {
     @ObservedObject var store: EditorStore
     let choice: JSON
-    let component: JSON
     let vertical: Bool
     let labeled: Bool
     let stacked: Bool
     let iconSize: CGFloat
+    let captions: Bool
+    let prefix: String
+    let edit: ToolOptionEdit
     @State private var open = false
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var items: [JSON] { choice["items"].array }
     var body: some View {
         if choice["segmented"].bool {
-            SegmentedChoiceBar(choice: choice, prefix: "toolbar", height: vertical ? nil : 24, iconSize: vertical ? iconSize : 16,
-                shape: vertical ? SquircleShape.tile : SquircleShape.control, stacked: vertical && stacked, palette: palette) { item in
-                store.toolbarEdit(component, item["action"].raw)
+            SegmentedChoiceBar(choice: choice, prefix: prefix, height: vertical || captions ? nil : 24, iconSize: vertical ? iconSize : captions ? captionIcon : 16,
+                shape: vertical ? SquircleShape.tile : SquircleShape.control, stacked: vertical && stacked, captions: captions,
+                palette: palette) { item in
+                edit(item["action"].raw, { _ in })
             }
         } else {
             let selected = items.first { $0["selected"].bool } ?? items.first ?? JSON()
             Button { open = true } label: {
-                HStack(spacing: 6) {
-                    SharedIcon(name: selected["icon"].string)
+                HStack(spacing: captionGap) {
+                    SharedIcon(name: selected["icon"].string, size: captions ? captionIcon : 16)
                     if !vertical || labeled { Text(selected["label"].string).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading) }
-                    if !vertical { SharedIcon(name: "chevron-down", size: 12) }
-                }.padding(.horizontal, vertical && !labeled ? 2 : 8)
-                    .frame(maxWidth: .infinity, maxHeight: vertical ? .infinity : 24)
+                    if !vertical { SharedIcon(name: "chevron-down", size: captions ? captionIcon : 12) }
+                }.padding(.horizontal, vertical && !labeled ? 2 : captions ? captionPadding : choicePadding)
+                    .frame(maxWidth: .infinity, maxHeight: vertical || captions ? .infinity : 24)
                     .background(vertical ? Color.clear : palette["input"], in: SquircleShape.control)
                     .contentShape(Rectangle())
             }.buttonStyle(.plain)
                 .accessibilityLabel(choice["label"].string).accessibilityValue(selected["label"].string)
                 .help(choice["label"].string)
-                .accessibilityIdentifier("toolbar-choice-" + choice["id"].string)
+                .accessibilityIdentifier("\(prefix)-choice-" + choice["id"].string)
                 .editorPopover(isPresented: $open) {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(items.indices, id: \.self) { index in
                             let item = items[index]
                             Button {
-                                open = false; store.toolbarEdit(component, item["action"].raw)
+                                open = false; edit(item["action"].raw, { _ in })
                             } label: {
                                 HStack(spacing: 8) {
                                     SharedIcon(name: item["icon"].string)
@@ -549,7 +601,7 @@ private struct ToolbarChoiceField: View {
                                     if item["selected"].bool { SharedIcon(name: "selection-checked", size: 12) }
                                 }.padding(.horizontal, 10).frame(minHeight: 32).contentShape(Rectangle())
                             }.buttonStyle(EditorControlButtonStyle(selected: item["selected"].bool))
-                                .accessibilityIdentifier("toolbar-choice-\(choice["id"].string)-\(index)")
+                                .accessibilityIdentifier("\(prefix)-choice-\(choice["id"].string)-\(index)")
                         }
                     }.padding(6).frame(width: 220)
                 }
@@ -560,18 +612,18 @@ private struct ToolbarChoiceField: View {
 private struct ToolbarNumberField: View {
     @ObservedObject var store: EditorStore
     let field: JSON
-    let component: JSON
     let vertical: Bool
     let labeled: Bool
     let style: String
     let preferences: JSON
+    let edit: ToolOptionEdit
     @State private var open = false
     @State private var scrubStart: Double?
     private var id: String { field["id"].string }
     private var control: JSON { field["numeric"] }
     private var value: Double { field["value"].number }
     private func change(_ next: Double, _ completion: @escaping @MainActor (String?) -> Void = { _ in }) {
-        store.toolbarEdit(component, ["type": "set_tool_setting", "id": id, "value": next], completion: completion)
+        edit(["type": "set_tool_setting", "id": id, "value": next], completion)
     }
     private func resolve(_ operation: [String: Any]) {
         if let result = try? store.resolveNumber(control, value: value, operation: operation) { change(result["value"].number) }
@@ -615,7 +667,7 @@ private struct ToolbarNumberField: View {
                     if preferences["text"].bool { Text(field["label"].string).lineLimit(1) }
                     else { SharedIcon(name: icon) }
                 }.accessibilityLabel(field["label"].string)
-                    .onTapGesture(count: 2) { store.toolbarEdit(component, ["type": "reset_tool_setting", "id": id]) }
+                    .onTapGesture(count: 2) { edit(["type": "reset_tool_setting", "id": id], { _ in }) }
                 NumberControl(store: store, label: field["label"].string, value: value, control: control,
                     identifier: "toolbar-" + id, inline: true,
                     toolbar: NumberControl.Toolbar(slider: preferences["sliders"].bool)) { next, completion in

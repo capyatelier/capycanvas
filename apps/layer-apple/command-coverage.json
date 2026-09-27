@@ -3,40 +3,9 @@
   "scope": "Command and shared-control catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
   "unavailable": {
     "ios": {
-      "fullscreen": "Use the native iPadOS window control, explicitly accepted by the user on 2026-09-16. The installed UIKit SDK has no app-callable full-screen toggle; Mac Catalyst's geometry API does not apply to this target. The shared in-app command remains unavailable.",
-      "mask_selection": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "remove_selection_point": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "reset_transform": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "show_canvas_action_bar": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_bicubic": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_bilinear": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_distort": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_flip_horizontal": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_flip_vertical": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_free": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_nearest": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_perspective": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_rotate_left": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_rotate_right": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_uniform": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md."
+      "fullscreen": "Use the native iPadOS window control, explicitly accepted by the user on 2026-09-16. The installed UIKit SDK has no app-callable full-screen toggle; Mac Catalyst's geometry API does not apply to this target. The shared in-app command remains unavailable."
     },
-    "mac": {
-      "mask_selection": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "remove_selection_point": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "reset_transform": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "show_canvas_action_bar": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_bicubic": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_bilinear": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_distort": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_flip_horizontal": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_flip_vertical": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_free": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_nearest": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_perspective": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_rotate_left": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_rotate_right": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md.",
-      "transform_uniform": "The shared canvas action bar and its transform, polygon and selection commands are offered only where a host presents the bar (Platform::canvas_bar). Apple keeps its placement controls until it adopts the bar; see docs/ui/canvas-action-bar.md."
-    }
+    "mac": {}
   },
   "groups": [
     {
@@ -192,9 +161,9 @@
     {
       "name": "Canvas action bar and transform modes",
       "commands": ["show_canvas_action_bar", "transform_free", "transform_uniform", "transform_distort", "transform_perspective", "transform_flip_horizontal", "transform_flip_vertical", "transform_rotate_left", "transform_rotate_right", "reset_transform", "transform_nearest", "transform_bilinear", "transform_bicubic", "remove_selection_point", "mask_selection"],
-      "checks": ["../../crates/layer-ui/src/canvas_bar_tests.rs", "../../docs/ui/canvas-action-bar.md"],
-      "ios": "unavailable: the shared bar is not yet presented on iPadOS; transforms and placements keep the existing Apply/Cancel controls.",
-      "mac": "unavailable: the shared bar is not yet presented on macOS; transforms and placements keep the existing Apply/Cancel controls."
+      "checks": ["Shared/Editor/CanvasBar.swift", "Shared/Editor/ToolbarComponents.swift", "Shared/Tests/CanvasActionBarChecks.swift", "../../crates/layer-ui/src/canvas_bar_tests.rs", "../../docs/ui/canvas-action-bar.md"],
+      "ios": "partial: the shared bar is a panel-glass SwiftUI row built from the Tool Options fields, placed by canvas_bar_layout, hidden during canvas contacts and camera motion and restored after the shared delay; EditorLaunchTests/testCanvasActionBar drives the transform and selection bars.",
+      "mac": "partial: same presentation and journey through AppKit input; placements and transforms no longer use the separate Apple placement controls."
     }
   ],
   "workspace_commands": {

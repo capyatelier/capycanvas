@@ -34,6 +34,8 @@ mod recovery;
 mod region;
 #[path = "selection_tests.rs"]
 mod selection;
+#[path = "canvas_bar_tests.rs"]
+mod canvas_bar;
 #[path = "renderer_tests.rs"]
 mod renderer;
 #[path = "workspace_tests.rs"]

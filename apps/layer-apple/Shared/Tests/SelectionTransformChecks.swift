@@ -26,6 +26,13 @@ extension XCTestCase {
     @MainActor private func revealTransform(_ element: XCUIElement, in app: XCUIApplication) {
         revealEditorControl(element, in: app.scrollViews.containing(.button, identifier: "number-value-tool-transform_x").firstMatch)
     }
+    @MainActor private func transformMode(_ mode: String, in app: XCUIApplication) {
+        let button = app.buttons["tool-action-transform_" + mode]
+        revealTransform(button, in: app)
+        if !button.isSelected { workspaceActivate(button) }
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: button)
+        waitForExpectations(timeout: 5)
+    }
     @MainActor private func editTransform(_ id: String, _ expression: String, in app: XCUIApplication) {
         let entry = app.textFields["number-entry-tool-transform_" + id]
         if entry.exists {
@@ -42,7 +49,7 @@ extension XCTestCase {
         waitForExpectations(timeout: 5)
     }
 
-    @MainActor private func bluePaperBounds(in app: XCUIApplication) -> CGRect {
+    @MainActor func bluePaperBounds(in app: XCUIApplication) -> CGRect {
         // Locate the visible blue paper, without reading document geometry.
         let scan = stride(from: 0.2, through: 0.8, by: 0.001).map { CGFloat($0) }
         let horizontal = editorPixelSamples(in: app, at: scan.map { CGPoint(x: $0, y: 0.55) }, size: 1)
@@ -58,7 +65,7 @@ extension XCTestCase {
         return bounds
     }
 
-    @MainActor private func expectBluePaper(_ expected: [Bool], at points: [CGPoint], in app: XCUIApplication) {
+    @MainActor func expectBluePaper(_ expected: [Bool], at points: [CGPoint], in app: XCUIApplication) {
         XCTAssertEqual(expected.count, points.count)
         expectation(for: NSPredicate { _, _ in
             let actual = self.editorPixelSamples(in: app, at: points, size: 8)
@@ -116,14 +123,10 @@ extension XCTestCase {
         for apply in [false, true] {
             menu("Edit", "scale_rotate", "Transform")
             XCTAssertTrue(value("x").waitForExistence(timeout: 5))
-            let aspect = app.buttons["tool-action-transform_aspect"]
-            reveal(aspect)
-            if !aspect.isSelected { workspaceActivate(aspect) }
-            XCTAssertTrue(aspect.isSelected)
+            transformMode("uniform", in: app)
             edit("width", "50")
             expectField("width", "50 %"); expectField("height", "50 %")
-            reveal(aspect); workspaceActivate(aspect)
-            XCTAssertFalse(aspect.isSelected)
+            transformMode("free", in: app)
             edit("height", "75")
             expectField("width", "50 %"); expectField("height", "75 %")
             // Zero scale is a semantic rejection, not a valid empty preview.
@@ -155,6 +158,7 @@ extension XCTestCase {
     @MainActor func checkTransformRotationAndHandles(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)
+        editorMenu(in: app, menu: "View", id: "show_canvas_action_bar", label: "Show canvas action bar")
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
         editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
         func blue(_ p: Data) -> Bool { Int(p[2]) > Int(p[0]) + 50 }
@@ -166,8 +170,8 @@ extension XCTestCase {
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
         let rotationHeight = bounds.width * originalFrame.width / originalFrame.height
         let points = [CGPoint(x: bounds.minX + bounds.width * 0.1, y: center.y), center,
-            CGPoint(x: center.x + bounds.width * 0.2, y: center.y),
-            CGPoint(x: center.x, y: center.y - rotationHeight * 0.2),
+            CGPoint(x: center.x + bounds.width * 0.2, y: center.y + bounds.height * 0.06),
+            CGPoint(x: center.x - bounds.width * 0.06, y: center.y - rotationHeight * 0.2),
             CGPoint(x: bounds.maxX - bounds.width * 0.1, y: center.y)]
         func expectInk(_ expected: [Bool]) {
             expectBluePaper(expected, at: points, in: app)
@@ -175,9 +179,7 @@ extension XCTestCase {
         let filled = [true, true, true, true, true], blank = [false, false, false, false, false]
         func begin() {
             editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
-            let aspect = app.buttons["tool-action-transform_aspect"]
-            revealTransform(aspect, in: app)
-            if aspect.isSelected { workspaceActivate(aspect) }
+            transformMode("free", in: app)
         }
         func finish(_ apply: Bool) {
             let button = app.buttons["tool-action-" + (apply ? "apply_transform" : "cancel_transform")]
@@ -423,9 +425,7 @@ extension XCTestCase {
         expectLayerCount(initialCount + 1)
         fill()
         editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
-        let aspect = app.buttons["tool-action-transform_aspect"]
-        revealTransform(aspect, in: app)
-        if aspect.isSelected { workspaceActivate(aspect) }
+        transformMode("free", in: app)
         editTransform("width", "50", in: app)
         finishTransform(true, in: app)
         workspaceActivate(app.buttons["layer-Delete selected layers"])
@@ -557,9 +557,7 @@ extension XCTestCase {
         // A bounded paint layer exposes loss of alpha or accidental edits to
         // the source when clearing, recoloring and removing its duplicate.
         editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
-        let aspect = app.buttons["tool-action-transform_aspect"]
-        revealTransform(aspect, in: app)
-        if aspect.isSelected { workspaceActivate(aspect) }
+        transformMode("free", in: app)
         editTransform("width", "50", in: app); finishTransform(true, in: app)
         editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
         expectInk(blue)
@@ -672,9 +670,7 @@ extension XCTestCase {
         // The inverted full-selection mask hides the paper. Shrinking only the
         // mask leaves a blue border around a white center, all through native UI.
         editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
-        let aspect = app.buttons["tool-action-transform_aspect"]
-        revealTransform(aspect, in: app)
-        if !aspect.isSelected { workspaceActivate(aspect) }
+        transformMode("uniform", in: app)
         editTransform("width", "50", in: app)
         finishTransform(true, in: app)
         let baseline = [true, false, false, true]
@@ -745,9 +741,7 @@ extension XCTestCase {
                 editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
             }
             editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
-            let aspect = app.buttons["tool-action-transform_aspect"]
-            revealTransform(aspect, in: app)
-            if aspect.isSelected { workspaceActivate(aspect) }
+            transformMode("free", in: app)
             editTransform("width", "25", in: app); editTransform("height", "50", in: app)
             editTransform("x", String(x), in: app)
             expectTransform("width", "25 %", in: app); expectTransform("height", "50 %", in: app)
@@ -866,10 +860,13 @@ extension XCTestCase {
                 let canvas = app.descendants(matching: .any)["canvas"].firstMatch
                 XCTAssertTrue(canvas.waitForExistence(timeout: 20), "Returning to the app must restore the editor")
                 XCTAssertEqual(viewport.frame, frame)
-            } else { editorTool("Pen", in: app) }
+                XCTAssertTrue(app.buttons["number-value-tool-transform_x"].exists, "Leaving the app keeps the open transform")
+                expectInk(blank); attachEditor(in: app, name: "transform-after-background")
+            }
+            editorTool("Pen", in: app)
             XCTAssertTrue(app.buttons["number-value-tool-transform_x"].waitForNonExistence(timeout: 5))
             expectInk(baseline)
-            attachEditor(in: app, name: leaveApp ? "transform-after-background" : "transform-after-tool-change")
+            attachEditor(in: app, name: leaveApp ? "transform-cancelled-after-background" : "transform-after-tool-change")
             // The preceding artwork edit must still be the very next Undo.
             editorHistory("Undo", in: app); expectInk(previous)
             editorHistory("Redo", in: app); expectInk(baseline)

@@ -3,6 +3,7 @@ import SwiftUI
 struct EditorMenuButton<Label: View>: View {
     let menu: () -> AppleContextMenu
     var identifier = "editor-action-menu"
+    var rootFocusesSelection = true
     @ViewBuilder let label: () -> Label
     @Environment(\.editorPopupStore) private var store
     @State private var active: AppleContextMenu?
@@ -11,7 +12,8 @@ struct EditorMenuButton<Label: View>: View {
         Button { active = active == nil ? menu() : nil } label: { label().contentShape(Rectangle()) }
             .accessibilityValue(active == nil ? "Collapsed" : "Expanded")
             .editorPopover(isPresented: Binding(get: { active != nil }, set: { if !$0 { active = nil } })) {
-                EditorActionMenu(model: active ?? AppleContextMenu(JSON()) { _ in }, identifier: identifier) { active = nil }
+                EditorActionMenu(model: active ?? AppleContextMenu(JSON()) { _ in }, identifier: identifier,
+                    rootFocusesSelection: rootFocusesSelection) { active = nil }
             }
             .onChange(of: active != nil) { _, open in store?.workspace.popover(popupID, open: open) }
             .onDisappear { store?.workspace.popover(popupID, open: false) }
@@ -25,13 +27,16 @@ struct EditorActionMenu: View {
     let model: AppleContextMenu
     var width: CGFloat? = 340
     var identifier = "editor-action-menu"
+    var rootFocusesSelection = true
     var dismiss: () -> Void
     @State private var pages: [(item: AppleContextMenu.Item, index: Int)] = []
     @State private var focus: Int?
     private var sections: [[AppleContextMenu.Item]] { pages.last?.item.sections ?? model.sections }
     private var entries: [AppleContextMenu.Item] { sections.flatMap { $0 } }
     private var enabled: [Int] { entries.indices.filter { entries[$0].enabled } }
-    private var initialFocus: Int? { enabled.first { entries[$0].selected == true } ?? enabled.first }
+    private var initialFocus: Int? {
+        (rootFocusesSelection || !pages.isEmpty ? enabled.first { entries[$0].selected == true } : nil) ?? enabled.first
+    }
     var body: some View {
         ScrollViewReader { reader in
             EditorScrollView {

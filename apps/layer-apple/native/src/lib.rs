@@ -676,6 +676,13 @@ pub unsafe extern "C" fn capy_apple_frame(
 /// # Safety
 /// Valid handle on its serial owner.
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_canvas_bar_hidden(app: *const CapyApple) -> i32 {
+    unsafe { app.as_ref() }.is_some_and(|a| a.host.canvas_bar_hidden) as i32
+}
+
+/// # Safety
+/// Valid handle on its serial owner.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_shader_input(app: *const CapyApple) {
     if let Some(gpu) = unsafe { app.as_ref() }.and_then(|a| a.host.session.engine().backend().0.as_ref()) {
         gpu.shader_input();

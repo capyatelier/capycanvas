@@ -261,8 +261,8 @@ eighty groups cover mouse/Pencil modifier flags, stale control flags, interrupti
 touch identity reuse and palm rejection; saved ruler geometry; all figure and
 gradient variants; constrained/free painting with all three ruler types; and
 transform edge/corner scaling, movement, rotation, Shift/Alt constraints and
-Apply/Cancel. The Scale / rotate command is labelled Transform. Apple keeps its
-earlier placement controls until it adopts the
+Apply/Cancel. The Scale / rotate command is labelled Transform. Selections,
+transforms and photo placements show the shared
 [canvas action bar](../../docs/ui/canvas-action-bar.md).
 Cancellation and Undo/Redo compare every decoded PNG pixel. The same suite passes
 on simulator and the physical iPad GPU without XCTest, using temporary storage

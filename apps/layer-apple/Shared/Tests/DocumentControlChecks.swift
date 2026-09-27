@@ -206,7 +206,7 @@ extension XCTestCase {
             let item = NSPasteboardItem(); XCTAssertTrue(item.setData(data, forType: type)); return item
         }
         let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
-        let apply = app.buttons["photo-placement-apply"]
+        let apply = app.buttons["canvas-bar-action-apply_transform"]
         func paste() { editorMenu(in: app, menu: "Edit", id: "paste_image", label: "Paste Image as Layer") }
         func expect(_ count: Int, _ pixels: Data) {
             expectation(for: NSPredicate { _, _ in
@@ -218,7 +218,7 @@ extension XCTestCase {
         for cancel in [true, false] {
             try clipboard.replace([item(original), item(original)])
             paste(); XCTAssertTrue(apply.waitForExistence(timeout: 20)); XCTAssertEqual(rows.count, 4)
-            workspaceActivate(cancel ? app.buttons["photo-placement-cancel"] : apply)
+            workspaceActivate(cancel ? app.buttons["canvas-bar-action-cancel_transform"] : apply)
             XCTAssertTrue(apply.waitForNonExistence(timeout: 10))
             if cancel { expect(2, paper) }
         }
@@ -240,7 +240,7 @@ extension XCTestCase {
         }
         try clipboard.replace([item(photo.dataRepresentation, type: .fileURL)])
         paste(); XCTAssertTrue(apply.waitForExistence(timeout: 20)); XCTAssertEqual(rows.count, 5)
-        workspaceActivate(app.buttons["photo-placement-cancel"])
+        workspaceActivate(app.buttons["canvas-bar-action-cancel_transform"])
         XCTAssertTrue(apply.waitForNonExistence(timeout: 10)); expect(4, painted)
         XCTAssertEqual(try Data(contentsOf: photo), original)
         XCTAssertFalse(app.sheets.firstMatch.exists)
@@ -281,12 +281,12 @@ extension XCTestCase {
             starts += 1
             XCTAssertEqual(sourceView.value as? String, String(starts), "The external source must receive the native drag")
         }
-        let apply = app.buttons["photo-placement-apply"]
+        let apply = app.buttons["canvas-bar-action-apply_transform"]
         drag(to: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
         XCTAssertTrue(apply.waitForExistence(timeout: 20), "A native external canvas drop must start placement")
         XCTAssertEqual(rows.count, 3)
         attachEditor(in: app, name: "native-canvas-photo-drop")
-        workspaceActivate(app.buttons["photo-placement-cancel"])
+        workspaceActivate(app.buttons["canvas-bar-action-cancel_transform"])
         XCTAssertTrue(apply.waitForNonExistence(timeout: 10)); XCTAssertEqual(rows.count, 2)
         let paper = app.descendants(matching: .any)["layer-row-2"].firstMatch
         XCTAssertTrue(paper.isHittable)
@@ -438,7 +438,7 @@ extension XCTestCase {
             waitForExpectations(timeout: 30)
         }
         chooseBatch()
-        let apply = app.buttons["photo-placement-apply"], cancel = app.buttons["photo-placement-cancel"]
+        let apply = app.buttons["canvas-bar-action-apply_transform"], cancel = app.buttons["canvas-bar-action-cancel_transform"]
         XCTAssertTrue(apply.waitForExistence(timeout: 10)); XCTAssertTrue(cancel.isHittable)
         editorMenu(in: app, menu: "View", id: "zen_mode", label: "Zen mode")
         XCTAssertTrue(apply.isHittable); XCTAssertTrue(cancel.isHittable)
@@ -450,7 +450,7 @@ extension XCTestCase {
         waitForExpectations(timeout: 15)
         XCTAssertEqual(editorPixels(in: app), paper, "Cancel removes the complete provisional batch")
         chooseBatch()
-        workspaceActivate(app.buttons["photo-placement-original-size"])
+        workspaceActivate(app.buttons["canvas-bar-action-placement_original_size"])
         workspaceActivate(apply)
         XCTAssertTrue(apply.waitForNonExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts[url.deletingPathExtension().lastPathComponent].firstMatch.exists, "Use the selected photo name for its layer")

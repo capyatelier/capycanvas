@@ -221,9 +221,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn canvas_bar_plan(&self) -> Option<Plan> {
-        if !self.state.platform.canvas_bar() {
-            return None;
-        }
         if !self.operation.active() {
             let polygon = self.layer_interaction.tool
                 == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon })

@@ -623,7 +623,16 @@ final class NativeOwner: @unchecked Sendable {
                 }
             }
             succeeded = true
+            syncCanvasBarContact()
         }
+    }
+    private var canvasBarContact = false
+    var canvasBarContactChanged: (@Sendable (Bool) -> Void)?
+    private func syncCanvasBarContact() {
+        let hidden = capy_apple_canvas_bar_hidden(handle) != 0
+        guard hidden != canvasBarContact else { return }
+        canvasBarContact = hidden
+        canvasBarContactChanged?(hidden)
     }
     func observeTick(now: UInt64, target: UInt64, admitted: Bool, denial: UInt64 = 0) {
         if let trace, trace.isRecording {

@@ -473,22 +473,6 @@ command_ids! {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::SearchCommands => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
-            Self::ShowCanvasActionBar
-            | Self::TransformFlipHorizontal
-            | Self::TransformFlipVertical
-            | Self::TransformRotateLeft
-            | Self::TransformRotateRight
-            | Self::ResetTransform
-            | Self::RemoveSelectionPoint
-            | Self::MaskSelection
-            | Self::TransformFree
-            | Self::TransformUniform
-            | Self::TransformDistort
-            | Self::TransformPerspective
-            | Self::TransformNearest
-            | Self::TransformBilinear
-            | Self::TransformBicubic => platform.canvas_bar(),
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows),
             Self::NewWindow => platform.native_windows(),
             _ => true,

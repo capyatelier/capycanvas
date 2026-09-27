@@ -93,6 +93,8 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testSelectionAndTransform() { checkSelectionAndTransform(in: editorCaptureApplication()) }
 
+    @MainActor func testCanvasActionBar() { checkCanvasActionBar(in: ignoringSavedWindows(editorCaptureApplication())) }
+
     @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
 
     @MainActor func testWorkspaceSwitcher() {
