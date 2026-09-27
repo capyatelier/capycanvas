@@ -24,6 +24,7 @@ pub(crate) struct Recorder {
     pub(crate) selection_wait: bool,
     pub(crate) region_requests: Vec<layer_render::RegionRequest>,
     pub(crate) region_reply: Option<layer_render::RegionResult>,
+    pub(crate) region_fails: bool,
     pub(crate) transform: Option<layer_render::TransformPreview>,
     pub(crate) moving_layer: Option<layer_core::LayerId>,
     pub(crate) overlay: Option<layer_render::SelectionOverlay>,
@@ -72,7 +73,8 @@ impl CanvasRenderer for Recorder {
         Ok(true)
     }
     fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
-        self.region_reply.take().map(Ok)
+        let fails = self.region_fails;
+        self.region_reply.take().map(|reply| if fails { Err(BackendError("readback failed")) } else { Ok(reply) })
     }
     fn request_color_sample(
         &mut self,

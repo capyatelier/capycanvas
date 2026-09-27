@@ -2134,7 +2134,7 @@ class AndroidInteractionTest {
                     tap(bounds("canvas-bar-more").center)
                     waitFor("More reopens", 5_000) { popupCount() == 1 && textBounds("Show canvas action bar") != null }
                     tap(textBounds("Show canvas action bar")!!.center)
-                    waitFor("Hide the bar from More", 5_000) { popupCount() == 0 && !state().getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_bar").getBoolean("visible") }
+                    waitFor("Hide the bar from More", 5_000) { popupCount() == 0 && !state().getJSONObject("workspace").getJSONObject("layout").getBoolean("canvas_bar") }
                     waitFor("completion-only bar", 5_000) { shown("canvas-bar-action-apply_transform") && !shown("canvas-bar-action-transform_flip_horizontal") }
                     settle()
                     val edge = bounds("canvas-action-bar")

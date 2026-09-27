@@ -162,14 +162,28 @@ pub struct UiSession<R: CanvasRenderer> {
     files: document_files::DocumentFiles,
 }
 
-fn warp_preset(command: CommandId) -> Option<[u16; 2]> {
-    let index = match command {
-        CommandId::WarpGridThree => 0,
-        CommandId::WarpGridFour => 1,
-        CommandId::WarpGridFive => 2,
+enum TransformChoice {
+    Mode(operation::TransformMode, bool),
+    Interpolation(layer_core::Interpolation),
+    Cells([u16; 2]),
+}
+fn transform_choice(command: CommandId) -> Option<TransformChoice> {
+    use operation::TransformMode::*;
+    use layer_core::Interpolation::*;
+    let cells = layer_core::MeshMap::PRESETS;
+    Some(match command {
+        CommandId::TransformFree => TransformChoice::Mode(Free, false),
+        CommandId::TransformUniform => TransformChoice::Mode(Free, true),
+        CommandId::TransformDistort => TransformChoice::Mode(Distort, false),
+        CommandId::TransformWarp => TransformChoice::Mode(Warp, false),
+        CommandId::TransformNearest => TransformChoice::Interpolation(Nearest),
+        CommandId::TransformBilinear => TransformChoice::Interpolation(Linear),
+        CommandId::TransformBicubic => TransformChoice::Interpolation(Bicubic),
+        CommandId::WarpGridThree => TransformChoice::Cells(cells[0]),
+        CommandId::WarpGridFour => TransformChoice::Cells(cells[1]),
+        CommandId::WarpGridFive => TransformChoice::Cells(cells[2]),
         _ => return None,
-    };
-    Some(layer_core::MeshMap::PRESETS[index])
+    })
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -2028,7 +2042,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 idle && self.operation.active() && !self.region_tools.applying_transform()
             }
             CommandId::CancelTransform
-            | CommandId::TransformAspect
             | CommandId::TransformFlipHorizontal
             | CommandId::TransformFlipVertical
             | CommandId::TransformRotateLeft
@@ -2170,29 +2183,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
             )
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
-            || (id == CommandId::ShowCanvasActionBar && self.state.workspace.layout.canvas_bar.visible)
+            || (id == CommandId::ShowCanvasActionBar && self.state.workspace.layout.canvas_bar)
             || (id == CommandId::Fullscreen && self.state.fullscreen)
             || (id == CommandId::PreviewSdr && self.state.preview_sdr)
             || (id == CommandId::SoftProof && (self.state.soft_proof || self.state.preview_sdr))
             || (id == CommandId::GamutWarning && self.state.gamut_warning)
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
-            || (id == CommandId::TransformAspect && self.operation.aspect)
-            || match (id, self.transform_mode()) {
-                (CommandId::TransformFree, Some((operation::TransformMode::Free, _))) => !self.operation.aspect,
-                (CommandId::TransformUniform, Some((operation::TransformMode::Free, _))) => self.operation.aspect,
-                (CommandId::TransformDistort, Some((operation::TransformMode::Distort, _))) => true,
-                (CommandId::TransformWarp, Some((operation::TransformMode::Warp, _))) => true,
-                (CommandId::TransformPerspective, Some((_, perspective))) => perspective,
-                _ => false,
-            }
-            || self.warp_cells().is_some_and(|cells| warp_preset(id) == Some(cells))
-            || match (id, self.transform_interpolation()) {
-                (CommandId::TransformNearest, Some(layer_core::Interpolation::Nearest))
-                | (CommandId::TransformBilinear, Some(layer_core::Interpolation::Linear))
-                | (CommandId::TransformBicubic, Some(layer_core::Interpolation::Bicubic)) => true,
-                _ => false,
-            }
+            || (id == CommandId::TransformPerspective && self.transform_mode().is_some_and(|(_, perspective)| perspective))
+            || transform_choice(id).is_some_and(|choice| match choice {
+                TransformChoice::Mode(mode, uniform) => self.transform_mode().is_some_and(|(current, _)| {
+                    current == mode && (mode != operation::TransformMode::Free || uniform == self.operation.aspect)
+                }),
+                TransformChoice::Interpolation(interpolation) => self.transform_interpolation() == Some(interpolation),
+                TransformChoice::Cells(cells) => self.warp_cells() == Some(cells),
+            })
             || (id == CommandId::FlipHorizontal && self.state.camera.flipped[0])
             || (id == CommandId::FlipVertical && self.state.camera.flipped[1])
             || (id == CommandId::ToggleTheme
@@ -3826,11 +3831,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             changed |= regions::DOCUMENT;
         }
         changed |= self.poll_document_close();
+        if self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision!=self.engine.document().revision) {self.cancel_tonal();}
+        changed |= self.poll_region_tool()?;
         if std::mem::take(&mut self.operation.changed) {
             changed |= regions::BRUSH;
         }
-        if self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision!=self.engine.document().revision) {self.cancel_tonal();}
-        self.poll_region_tool()?;
         let sample_space = self.engine.document().color.space;
         if let Some(color) = self.eyedropper.poll(self.engine.backend_mut(), sample_space)? {
             if self.eyedropper.picking.previous.is_some() {
@@ -3992,11 +3997,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.finish_transform(command == CommandId::ApplyTransform)?;
                 Ok((BRUSH | DOCUMENT, true))
             }
-            CommandId::TransformAspect => {
-                self.operation.aspect = !self.operation.aspect;
-                self.refresh_tools();
-                Ok((BRUSH, false))
-            }
             CommandId::TransformFlipHorizontal
             | CommandId::TransformFlipVertical
             | CommandId::TransformRotateLeft
@@ -4005,25 +4005,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.reorient_transform(command)?;
                 Ok((BRUSH | DOCUMENT, true))
             }
-            CommandId::WarpGridThree | CommandId::WarpGridFour | CommandId::WarpGridFive => {
-                self.set_warp_cells(warp_preset(command).expect("warp preset"))?;
-                Ok((BRUSH | DOCUMENT | COMMANDS, true))
-            }
-            CommandId::TransformFree | CommandId::TransformUniform | CommandId::TransformDistort | CommandId::TransformWarp => {
-                let mode = match command {
-                    CommandId::TransformDistort => operation::TransformMode::Distort,
-                    CommandId::TransformWarp => operation::TransformMode::Warp,
-                    _ => operation::TransformMode::Free,
-                };
-                self.set_transform_mode(mode, command == CommandId::TransformUniform)?;
-                Ok((BRUSH | DOCUMENT | COMMANDS, true))
-            }
-            CommandId::TransformNearest | CommandId::TransformBilinear | CommandId::TransformBicubic => {
-                self.set_transform_interpolation(match command {
-                    CommandId::TransformNearest => layer_core::Interpolation::Nearest,
-                    CommandId::TransformBilinear => layer_core::Interpolation::Linear,
-                    _ => layer_core::Interpolation::Bicubic,
-                })?;
+            CommandId::TransformFree
+            | CommandId::TransformUniform
+            | CommandId::TransformDistort
+            | CommandId::TransformWarp
+            | CommandId::TransformNearest
+            | CommandId::TransformBilinear
+            | CommandId::TransformBicubic
+            | CommandId::WarpGridThree
+            | CommandId::WarpGridFour
+            | CommandId::WarpGridFive => {
+                match transform_choice(command).expect("a transform choice") {
+                    TransformChoice::Mode(mode, uniform) => self.set_transform_mode(mode, uniform)?,
+                    TransformChoice::Interpolation(interpolation) => self.set_transform_interpolation(interpolation)?,
+                    TransformChoice::Cells(cells) => self.set_warp_cells(cells)?,
+                }
                 Ok((BRUSH | DOCUMENT | COMMANDS, true))
             }
             CommandId::TransformPerspective => {
@@ -4341,8 +4337,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((HOST, false))
             }
             CommandId::ShowCanvasActionBar => {
-                let bar = &mut self.state.workspace.layout.canvas_bar;
-                bar.visible = !bar.visible;
+                self.state.workspace.layout.canvas_bar ^= true;
                 Ok((LAYOUT | COMMANDS, false))
             }
             CommandId::Website | CommandId::SourceCode => {
@@ -4531,6 +4526,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 CommandId::TransformUniform,
                 CommandId::TransformDistort,
                 CommandId::TransformWarp,
+                CommandId::PlacementOriginalSize,
                 CommandId::TransformPerspective,
                 CommandId::WarpGridThree,
                 CommandId::WarpGridFour,
@@ -4547,17 +4543,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 CommandId::CancelTransform,
             ]
             .into_iter()
-            .filter(|c| c.available_on(self.state.platform))
-            .filter(|c| {
-                *c != CommandId::TransformPerspective
-                    || self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
+            .filter(|c| match (c, transform_choice(*c)) {
+                (_, Some(TransformChoice::Interpolation(_))) => !self.operation.placing(),
+                (_, Some(TransformChoice::Cells(_))) => self.warp_cells().is_some(),
+                (CommandId::PlacementOriginalSize, _) => self.operation.placing(),
+                (CommandId::TransformPerspective, _) => {
+                    self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
+                }
+                _ => true,
             })
-            .filter(|c| {
-                !self.operation.placing()
-                    || !matches!(c, CommandId::TransformNearest | CommandId::TransformBilinear | CommandId::TransformBicubic)
-            })
-            .filter(|c| warp_preset(*c).is_none() || self.warp_cells().is_some())
-            .chain(self.operation.placing().then_some(CommandId::PlacementOriginalSize))
             .map(|command| ToolSettingAction {
                 command,
                 checkable: command.is_toggle(),

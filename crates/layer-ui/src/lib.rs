@@ -409,7 +409,6 @@ command_ids! {
     ScaleRotate,
     ApplyTransform,
     CancelTransform,
-    TransformAspect,
     PlacementOriginalSize,
     Hand,
     Eyedropper,
@@ -505,7 +504,6 @@ impl CommandId {
                 | Self::FlipVertical
                 | Self::ShowRulers
                 | Self::SnapRulers
-                | Self::TransformAspect
                 | Self::PreviewSdr
                 | Self::SoftProof
                 | Self::GamutWarning
@@ -575,7 +573,6 @@ impl CommandId {
             Self::ScaleRotate => "transform",
             Self::ApplyTransform => "check",
             Self::CancelTransform => "close",
-            Self::TransformAspect => "link",
             Self::PlacementOriginalSize => "transform",
             Self::Hand => "hand",
             Self::Eyedropper => "eyedropper",
@@ -742,7 +739,6 @@ impl CommandId {
             Self::ScaleRotate => "Transform",
             Self::ApplyTransform => "Apply transform",
             Self::CancelTransform => "Cancel transform",
-            Self::TransformAspect => "Keep proportions",
             Self::PlacementOriginalSize => "Original Size (100%)",
             Self::Hand => "Hand",
             Self::Eyedropper => "Eyedropper",

@@ -704,15 +704,7 @@ fn unchanged_source_profile_on_painted_layer_does_not_claim_to_add_a_layer() {
 
 #[test]
 fn window_blur_keeps_an_image_placement_open() {
-    use layer_core::color::{SampleDepth, source::*};
-    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
-    let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("blur placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
-    session.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    let mut session = placed_photo("blur placement");
     assert!(session.operation.placing());
     session.input(UiInput::Blur).unwrap();
     assert!(session.operation.placing(), "losing window focus keeps the placement");
@@ -722,15 +714,7 @@ fn window_blur_keeps_an_image_placement_open() {
 
 #[test]
 fn skewed_photo_placements_reopen_with_their_skew() {
-    use layer_core::color::{SampleDepth, source::*};
-    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
-    let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("skew placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
-    session.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    let mut session = placed_photo("skew placement");
     let skew = |s: &UiSession<Recorder>| s.state.tool_settings.iter().find(|f| f.id == "transform_skew").unwrap().value;
     session.dispatch(UiAction::SetToolSetting { id: "transform_skew".into(), value: 0.4 }).unwrap();
     invoke(&mut session, CommandId::ApplyTransform);

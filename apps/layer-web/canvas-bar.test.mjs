@@ -62,7 +62,7 @@ function action(id, label, { enabled = true, selected = false, checkable = false
 function view({ kind = "transform", generation = 1n, items, completion, placement = "near_object", label = null } = {}) {
   return {
     context: { generation, kind }, label, placement, anchor: [0, 0, 100, 100],
-    items: items ?? [action("transform_aspect", "Uniform", { checkable: true }), action("transform_flip_horizontal", "Flip H"), action("reset_transform", "Reset")],
+    items: items ?? [action("transform_uniform", "Uniform", { checkable: true }), action("transform_flip_horizontal", "Flip H"), action("reset_transform", "Reset")],
     completion: completion ?? [action("cancel_transform", "Cancel"), action("apply_transform", "Apply")],
   };
 }
@@ -116,7 +116,7 @@ test("natural control sizes reach the shared fitter, with completion after More"
   assert.equal(measure.more, 40);
   assert.deepEqual([measure.gap, measure.padding, measure.height], [GAP, PADDING, 36 + 2 * PADDING]);
   const order = h.bar.root.children.filter(n => !n.hidden).map(n => n.className.includes("more") ? "more" : n.children[0]?.dataset?.command ?? "label");
-  assert.deepEqual(order, ["label", "transform_aspect", "transform_flip_horizontal", "reset_transform", "more", "cancel_transform", "apply_transform"]);
+  assert.deepEqual(order, ["label", "transform_uniform", "transform_flip_horizontal", "reset_transform", "more", "cancel_transform", "apply_transform"]);
   assert.ok(h.find("apply_transform").classList.contains("suggested-action"));
   assert.ok(!h.find("cancel_transform").classList.contains("suggested-action"));
   assert.equal(h.bar.root.style.transform, "translate(100px, 50px)", "Moves align to device pixels");
@@ -142,10 +142,10 @@ test("overflowed items hide, completion items never do, and placement reuses mea
 test("state changes update retained controls; schema changes rebuild them", () => {
   const h = harness();
   h.bar.refresh(view());
-  const uniform = h.find("transform_aspect");
+  const uniform = h.find("transform_uniform");
   assert.equal(uniform.getAttribute("aria-pressed"), "false");
-  h.bar.refresh(view({ items: [action("transform_aspect", "Uniform", { checkable: true, selected: true }), action("transform_flip_horizontal", "Flip H", { enabled: false }), action("reset_transform", "Reset")] }));
-  assert.equal(h.find("transform_aspect"), uniform, "Toggling retains the control");
+  h.bar.refresh(view({ items: [action("transform_uniform", "Uniform", { checkable: true, selected: true }), action("transform_flip_horizontal", "Flip H", { enabled: false }), action("reset_transform", "Reset")] }));
+  assert.equal(h.find("transform_uniform"), uniform, "Toggling retains the control");
   assert.equal(uniform.getAttribute("aria-pressed"), "true");
   assert.equal(h.find("transform_flip_horizontal").getAttribute("aria-disabled"), "true");
   assert.equal(h.find("transform_flip_horizontal").disabled, false, "Disabled items keep pointer events for their reason tooltip");
@@ -155,7 +155,7 @@ test("state changes update retained controls; schema changes rebuild them", () =
   h.bar.refresh(view());
   assert.equal(h.find("transform_flip_horizontal").title, "Flip H tooltip", "an enabled item returns to its tooltip");
   h.bar.refresh(view({ generation: 2n }));
-  assert.notEqual(h.find("transform_aspect"), uniform, "A new context rebuilds the controls");
+  assert.notEqual(h.find("transform_uniform"), uniform, "A new context rebuilds the controls");
 });
 
 test("every item dispatches a canvas bar edit for its context; disabled items explain themselves on tap", () => {

@@ -182,6 +182,18 @@ impl ToolOption {
     }
 }
 
+impl CommandState {
+    pub(crate) fn choice_item(&self, label: &'static str) -> ToolSetItem {
+        ToolSetItem {
+            label,
+            icon: self.icon.unwrap_or("select"),
+            action: UiAction::Invoke { command: self.id },
+            selected: self.selected,
+            preview: None,
+        }
+    }
+}
+
 impl UiState {
     pub fn toolbar_component(&self, control: ToolbarControl) -> Option<ToolbarComponentView> {
         control.is_component().then(|| ToolbarComponentView {
@@ -326,13 +338,7 @@ impl UiState {
                 .iter()
                 .filter(|a| a.group() == Some(group))
                 .filter_map(|a| self.commands.iter().find(|c| c.id == a.command))
-                .map(|c| ToolSetItem {
-                    label: c.label,
-                    icon: c.icon.unwrap_or("select"),
-                    action: UiAction::Invoke { command: c.id },
-                    selected: c.selected,
-                    preview: None,
-                })
+                .map(|c| c.choice_item(c.label))
                 .collect();
             options.extend(choice(group.id(), group.label(), group.segmented(), items));
         }

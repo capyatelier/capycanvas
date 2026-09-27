@@ -60,7 +60,7 @@
     },
     {
       "name": "Object transforms",
-      "commands": ["move", "scale_rotate", "apply_transform", "cancel_transform", "transform_aspect"],
+      "commands": ["move", "scale_rotate", "apply_transform", "cancel_transform"],
       "checks": ["native/src/tests.rs", "Shared/Tests/SelectionTransformChecks.swift", "tests/canvas-modifiers.swift"],
       "ios": "partial: numeric scale/rotation and linked/unlinked mask/content transforms, validation, Apply/Cancel/history, Move controls and tool-change/background cancellation with sampled artwork and stable window bounds; supplied UIKit mouse/Pencil callbacks on simulator and physical iPad GPU cover edge/corner scaling, Shift proportions/movement/rotation, Alt centered scaling, contact cancellation, Apply/Cancel and exact decoded PNG history; physical sensor/key delivery, visible editor handle hit targets and mask/group Move remain",
       "mac": "partial: numeric scale/rotation and validation, linked/unlinked mask/content numeric transforms and actual mouse Move with Apply/Cancel/history, layer/group Move release/history and edge scaling, Shift proportions/movement/rotation snapping, Option centered scaling, Escape/tool-change/background cancellation and sampled artwork; all four actual mouse corner handles also pass scale/position, fixed opposite corner, sampled artwork, Apply and one-step Undo/Redo; physical tablet and interrupted contacts remain"

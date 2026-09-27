@@ -18,11 +18,16 @@ struct Target {
     generation: u64,
     revision: u64,
     layer: LayerId,
-    operation: Option<layer_core::LayerOperationKind>,
-    tonal: bool,
-    transform: bool,
-    color: Option<layer_core::color::RgbColor>,
-    basis: layer_core::Affine,
+    purpose: Purpose,
+}
+enum Purpose {
+    Region {
+        operation: Option<layer_core::LayerOperationKind>,
+        color: Option<layer_core::color::RgbColor>,
+        basis: layer_core::Affine,
+    },
+    Tonal,
+    Transform,
 }
 impl Default for RegionTools {
     fn default() -> Self {
@@ -118,7 +123,7 @@ impl RegionTools {
         self.pending || self.queued.is_some()
     }
     pub fn applying_transform(&self) -> bool {
-        self.target.as_ref().is_some_and(|t| t.transform)
+        self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform))
     }
     pub fn cancellable(&self) -> bool {
         self.contact.is_some() || self.target.is_some()
@@ -199,97 +204,86 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if let Err(error) = self.queue_mask_region(target, request, basis, true) { self.notify(error); }
                     return;
                 }
-                self.region_tools.queued = Some(request);
-                self.region_tools.target = Some(Target {
-                    generation: self.region_tools.generation,
-                    revision: doc.revision,
-                    layer: doc.active_layer,
-                    tonal: false,
-                    transform: false,
+                let purpose = Purpose::Region {
                     operation: fill.then(|| self.fill_operation()),
                     color: (fill
                         && !self.state.colors.transparent()
                         && self.state.brush.opacity > 0.)
                         .then(|| self.state.colors.definition()),
                     basis: if !fill && self.selection_refinement(basis).is_some() { layer_core::Affine::IDENTITY } else { basis },
-                });
+                };
+                self.queue_region(request, purpose);
             }
             PenPhase::Cancel => self.region_tools.cancel(),
             _ => (),
         }
     }
-    pub(super) fn queue_selection(&mut self, selection: Selection, options: layer_render::SelectionRefinement) {
+    fn queue_region(&mut self, mut request: RegionRequest, purpose: Purpose) {
         self.region_tools.cancel();
-        let doc = self.engine.document();
-        self.region_tools.queued = Some(RegionRequest {
-            request_id: self.region_tools.generation, contiguous: false, selection: Some(options),
-            source: layer_render::RegionSource::Selection(std::sync::Arc::new(selection)),
-            position: [0,0], tolerance: 0., refinement: Default::default(), limit: None,
-        });
-        self.region_tools.target = Some(Target {
-            generation: self.region_tools.generation,
-            revision: doc.revision,
-            layer: doc.active_layer,
-            operation: None,
-            color: None,
-            tonal: false,
-            transform: false,
-            basis: layer_core::Affine::IDENTITY,
-        });
-    }
-    pub(super) fn queue_transform_selection(&mut self) -> bool {
-        self.region_tools.cancel();
-        let Some(request) = self.engine.transform_selection_request(self.region_tools.generation) else {
-            return false;
-        };
+        request.request_id = self.region_tools.generation;
         let doc = self.engine.document();
         self.region_tools.target = Some(Target {
             generation: request.request_id,
             revision: doc.revision,
             layer: doc.active_layer,
-            operation: None,
-            color: None,
-            tonal: false,
-            transform: true,
-            basis: layer_core::Affine::IDENTITY,
+            purpose,
         });
         self.region_tools.queued = Some(request);
+    }
+    pub(super) fn queue_selection(&mut self, selection: Selection, options: layer_render::SelectionRefinement) {
+        let request = RegionRequest {
+            request_id: 0, contiguous: false, selection: Some(options),
+            source: layer_render::RegionSource::Selection(std::sync::Arc::new(selection)),
+            position: [0, 0], tolerance: 0., refinement: Default::default(), limit: None,
+        };
+        let basis = layer_core::Affine::IDENTITY;
+        self.queue_region(request, Purpose::Region { operation: None, color: None, basis });
+    }
+    pub(super) fn queue_transform_selection(&mut self) -> bool {
+        self.region_tools.cancel();
+        let Some(request) = self.engine.transform_selection_request(0) else {
+            return false;
+        };
+        self.queue_region(request, Purpose::Transform);
         true
     }
-    pub(super) fn queue_tonal_region(&mut self, mut request: RegionRequest) {
-        self.region_tools.cancel();
-        request.request_id=self.region_tools.generation;
-        let doc=self.engine.document();
-        self.region_tools.target=Some(Target {generation:request.request_id,revision:doc.revision,layer:doc.active_layer,operation:None,color:None,tonal:true,transform:false,basis:layer_core::Affine::IDENTITY});
-        self.region_tools.queued=Some(request);
+    pub(super) fn queue_tonal_region(&mut self, request: RegionRequest) {
+        self.queue_region(request, Purpose::Tonal);
     }
-    pub(super) fn poll_region_tool(&mut self) -> Result<(), String> {
+    pub(super) fn poll_region_tool(&mut self) -> Result<u32, String> {
         if self.region_tools.pending
             && let Some(result) = self.engine.backend_mut().take_region()
         {
             self.region_tools.pending = false;
+            let queued = self.region_tools.queued.is_some();
+            let target = self.region_tools.target.take_if(|t| {
+                result.as_ref().map_or(!queued, |result| t.generation == result.request_id)
+            });
             let result = result.map_err(error)?;
-            if self
-                .region_tools
-                .target
-                .as_ref()
-                .is_some_and(|t| t.generation == result.request_id)
-            {
-                let target = self.region_tools.target.take().unwrap();
-                let doc = self.engine.document();
-                if doc.revision == target.revision && doc.active_layer == target.layer {
-                    if target.tonal {self.tonal_result(result)?;return Ok(());}
-                    if target.transform {
-                        return self.apply_transform_selection(result.pixels);
+            let doc = self.engine.document();
+            if let Some(target) = target.filter(|t| doc.revision == t.revision && doc.active_layer == t.layer) {
+                match target.purpose {
+                    Purpose::Tonal => {
+                        self.tonal_result(result)?;
+                        return Ok(0);
                     }
-                    if target.operation.is_some() && result.pixels.bounds() == [0; 4] {
-                        return Ok(()); // No paint and no empty undo entry.
+                    Purpose::Transform => {
+                        let Err(cause) = self.apply_transform_selection(result.pixels) else {
+                            return Ok(0);
+                        };
+                        self.state.host_error = Some(cause);
+                        return Ok(regions::HOST);
                     }
-                    let selection = Selection::pixels(result.pixels).transformed(target.basis).map_err(error)?;
-                    if let Some(operation) = target.operation {
-                        self.paint_operation(Some(selection), operation, target.color.as_slice())?;
-                    } else {
-                        self.layer_edit(Edit::SetSelection(Some(selection)))?;
+                    Purpose::Region { operation, .. } if operation.is_some() && result.pixels.bounds() == [0; 4] => {
+                        return Ok(0);
+                    }
+                    Purpose::Region { operation, color, basis } => {
+                        let selection = Selection::pixels(result.pixels).transformed(basis).map_err(error)?;
+                        if let Some(operation) = operation {
+                            self.paint_operation(Some(selection), operation, color.as_slice())?;
+                        } else {
+                            self.layer_edit(Edit::SetSelection(Some(selection)))?;
+                        }
                     }
                 }
             }
@@ -305,6 +299,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.region_tools.queued = None;
             self.region_tools.pending = true;
         }
-        Ok(())
+        Ok(0)
     }
 }

@@ -1029,7 +1029,6 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::ScaleRotate => "Scale or rotate the selected paint",
                 CommandId::ApplyTransform => "Keep the displayed transform",
                 CommandId::CancelTransform => "Restore the original artwork",
-                CommandId::TransformAspect => "Keep width and height proportional",
                 CommandId::PlacementOriginalSize => "Restore the photo to its original pixel size",
                 CommandId::Hand => "Drag to move the canvas view",
                 CommandId::Eyedropper => "Pick a color from the canvas",

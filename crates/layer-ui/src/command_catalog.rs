@@ -1035,9 +1035,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::RepairSourceProfile | C::RasterizeSource if document.active_mask => "Return to the layer's artwork first",
             C::RepairSourceProfile | C::RasterizeSource => "Select an unlocked retained image layer",
             C::ApplyTransform if self.region_tools.applying_transform() => "Applying the transform",
+            C::TransformPerspective if self.operation.active() => "Choose Distort first",
             C::ApplyTransform
             | C::CancelTransform
-            | C::TransformAspect
             | C::TransformFlipHorizontal
             | C::TransformFlipVertical
             | C::TransformRotateLeft

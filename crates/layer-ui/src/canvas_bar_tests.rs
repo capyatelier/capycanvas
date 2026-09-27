@@ -86,6 +86,53 @@ fn bar_commands(items: &[CanvasBarItem]) -> Vec<CommandId> {
         .collect()
 }
 
+fn placed_photo(name: &str) -> UiSession<Recorder> {
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
+        Document::new(name, 200, 150), [800, 600], Platform::Gtk).unwrap();
+    let photo = layer_core::color::source::rgba8_source([20, 10], |_, _| [255; 4]);
+    s.place_layer_source("Photo", std::sync::Arc::unwrap_or_clone(photo), None).unwrap();
+    s
+}
+
+fn measure(bar: &CanvasBarView, item: f32) -> CanvasBarMeasure {
+    CanvasBarMeasure {
+        context: bar.context,
+        label: 0.,
+        items: vec![item; bar.items.len()],
+        completion: vec![80., 80.],
+        more: 40.,
+        height: 48.,
+        gap: 4.,
+        padding: 6.,
+    }
+}
+
+#[test]
+fn every_command_on_a_transform_bar_is_a_tool_action() {
+    let mut transform = filled_selection_session();
+    invoke(&mut transform, CommandId::ScaleRotate);
+    let mut placement = placed_photo("placement actions");
+    for (s, mode) in [(&mut transform, CommandId::TransformDistort), (&mut placement, CommandId::TransformUniform)] {
+        for mode in [mode, CommandId::TransformWarp] {
+            let _ = s.dispatch(UiAction::Invoke { command: mode });
+            let bar = s.state.canvas_bar.clone().unwrap();
+            for item in bar.items.iter().chain(&bar.completion) {
+                let commands = match &item.option {
+                    ToolOption::Action { state, .. } => vec![state.id],
+                    ToolOption::Choice { items, .. } => items.iter().filter_map(|i| match i.action {
+                        UiAction::Invoke { command } => Some(command),
+                        _ => None,
+                    }).collect(),
+                    ToolOption::Numeric(_) | ToolOption::Range { .. } => Vec::new(),
+                };
+                for command in commands {
+                    assert!(s.state.tool_actions.iter().any(|a| a.command == command), "{mode:?}: {command:?}");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn transform_publishes_a_bar_whose_edits_expire_with_the_transform() {
     let mut s = filled_selection_session();
@@ -166,7 +213,7 @@ fn hiding_the_canvas_bar_keeps_apply_and_cancel_at_the_bottom_edge() {
     let mut s = filled_selection_session();
     assert!(s.command(CommandId::ShowCanvasActionBar).selected);
     invoke(&mut s, CommandId::ShowCanvasActionBar);
-    assert!(!s.state.workspace.layout.canvas_bar.visible);
+    assert!(!s.state.workspace.layout.canvas_bar);
     assert!(!s.command(CommandId::ShowCanvasActionBar).selected);
     invoke(&mut s, CommandId::ScaleRotate);
     let bar = s.state.canvas_bar.clone().unwrap();
@@ -175,7 +222,7 @@ fn hiding_the_canvas_bar_keeps_apply_and_cancel_at_the_bottom_edge() {
     assert_eq!(bar.placement, CanvasBarPlacement::BottomEdge);
     invoke(&mut s, CommandId::CancelTransform);
     invoke(&mut s, CommandId::UndoWorkspace);
-    assert!(s.state.workspace.layout.canvas_bar.visible, "the toggle is one workspace history step");
+    assert!(s.state.workspace.layout.canvas_bar, "the toggle is one workspace history step");
 }
 
 #[test]
@@ -183,17 +230,7 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
     let bar = s.state.canvas_bar.clone().unwrap();
-    let measure = |width: f32| CanvasBarMeasure {
-        context: bar.context,
-        label: 0.,
-        items: vec![width; bar.items.len()],
-        completion: vec![80., 80.],
-        more: 40.,
-        height: 48.,
-        gap: 4.,
-        padding: 6.,
-    };
-    let layout = s.canvas_bar_layout(&measure(100.)).expect("current context");
+    let layout = s.canvas_bar_layout(&measure(&bar, 100.)).expect("current context");
     assert_eq!(layout.items, bar.items.len());
     assert_eq!(layout.side, CanvasBarSide::Below);
     let lowest = s
@@ -202,10 +239,10 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
         .map(|[_, y]| y)
         .fold(f32::NEG_INFINITY, f32::max);
     assert!(layout.bounds.y > lowest + canvas_bar::CANVAS_BAR_MARGIN);
-    assert_eq!(s.canvas_bar_layout(&measure(5000.)).unwrap().items, 0, "items that do not fit go to More");
+    assert_eq!(s.canvas_bar_layout(&measure(&bar, 5000.)).unwrap().items, 0, "items that do not fit go to More");
     let stale = CanvasBarMeasure {
         context: CanvasBarContext { generation: bar.context.generation + 1, ..bar.context },
-        ..measure(100.)
+        ..measure(&bar, 100.)
     };
     assert!(s.canvas_bar_layout(&stale).is_none());
     let menu = s.canvas_bar_menu(bar.context, 0).unwrap();
@@ -232,18 +269,7 @@ fn canvas_bar_stays_in_the_window_when_docks_leave_no_work_area() {
     assert!(s.layout([360., 640.]).work_area.width < 200., "the docks fill a phone-width window");
     invoke(&mut s, CommandId::ScaleRotate);
     let bar = s.state.canvas_bar.clone().unwrap();
-    let layout = s
-        .canvas_bar_layout(&CanvasBarMeasure {
-            context: bar.context,
-            label: 0.,
-            items: vec![90.; bar.items.len()],
-            completion: vec![80., 80.],
-            more: 40.,
-            height: 48.,
-            gap: 4.,
-            padding: 6.,
-        })
-        .unwrap();
+    let layout = s.canvas_bar_layout(&measure(&bar, 90.)).unwrap();
     assert_eq!(layout.side, CanvasBarSide::BottomEdge);
     assert!(layout.bounds.x >= 0. && layout.bounds.x + layout.bounds.width <= 360., "{layout:?}");
     assert!(layout.items < bar.items.len(), "items that do not fit the window go to More");
@@ -251,7 +277,6 @@ fn canvas_bar_stays_in_the_window_when_docks_leave_no_work_area() {
 
 #[test]
 fn transactions_hint_the_layer_their_drags_may_move() {
-    use layer_core::color::{SampleDepth, source::*};
     let mut s = filled_selection_session();
     let layer = s.engine.document().active_layer;
     assert_eq!(s.engine.backend().moving_layer, None);
@@ -263,14 +288,7 @@ fn transactions_hint_the_layer_their_drags_may_move() {
     invoke(&mut s, CommandId::ApplyTransform);
     assert_eq!(s.engine.backend().moving_layer, None, "applying clears the hint");
 
-    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
-    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("hinted placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
-    s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    let mut s = placed_photo("hinted placement");
     let photo = s.engine.document().active_layer;
     assert_eq!(s.engine.backend().moving_layer, Some(photo), "a placement hints its photo");
     invoke(&mut s, CommandId::ApplyTransform);
@@ -279,18 +297,7 @@ fn transactions_hint_the_layer_their_drags_may_move() {
 
 #[test]
 fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
-    use layer_core::color::{SampleDepth, source::*};
-    let source = || {
-        let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
-            channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-            profile: Default::default(), profile_assumed: false,
-        }, 1024 * 1024).unwrap();
-        for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
-        builder.finish().unwrap()
-    };
-    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("bar placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
-    s.place_layer_source("Photo", source(), None).unwrap();
+    let mut s = placed_photo("bar placement");
     s.frame(0, 0).unwrap();
     let bar = s.state.canvas_bar.clone().expect("placement bar");
     assert_eq!(bar.context.kind, CanvasBarKind::Placement);
@@ -348,15 +355,7 @@ fn transform_flips_quarter_turns_and_reset_keep_the_box_centred() {
 
 #[test]
 fn flipping_a_placement_stays_lossless_and_applies_as_one_step() {
-    use layer_core::color::{SampleDepth, source::*};
-    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
-    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("flip placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
-    s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    let mut s = placed_photo("flip placement");
     invoke(&mut s, CommandId::ApplyTransform);
     let placed = s.engine.document().clone();
     invoke(&mut s, CommandId::ScaleRotate);
@@ -477,41 +476,35 @@ fn a_stroke_that_misses_the_transform_publishes_nothing() {
 }
 
 #[test]
-fn a_handle_drag_leaves_command_availability_alone() {
-    let mut s = filled_selection_session();
-    invoke(&mut s, CommandId::ScaleRotate);
-    s.frame(2, 2).unwrap();
-    let quad = s.operation.quad();
-    let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
-    let moved = Point { x: centre.x + 20., y: centre.y };
-    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), centre).unwrap();
-    assert_eq!(s.frame(3, 3).unwrap().regions, 0, "a drag starts without publishing");
-    assert!(!s.command(CommandId::CancelSelection).enabled, "a transform drag is not a selection gesture");
-    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), moved).unwrap();
-    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), moved).unwrap();
-    assert_eq!(s.frame(4, 4).unwrap().regions & regions::COMMANDS, 0, "release publishes values, not availability");
-}
-
-#[test]
-fn transform_values_publish_when_a_handle_drag_ends() {
-    let mut s = filled_selection_session();
-    invoke(&mut s, CommandId::ScaleRotate);
-    s.frame(2, 2).unwrap();
-    let value = |s: &UiSession<Recorder>| s.state.tool_settings.iter().find(|c| c.id == "transform_x").unwrap().value;
-    let before = value(&s);
-    let quad = s.operation.quad();
-    let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
-    let moved = Point { x: centre.x + 40., y: centre.y + 20. };
-    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), centre).unwrap();
-    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), moved).unwrap();
-    let change = s.frame(3, 3).unwrap();
-    assert_eq!(change.regions & regions::BRUSH, 0, "drag samples leave Tool Options alone");
-    assert_eq!(value(&s), before);
-    assert!(s.renderer_mut().transform.clone().unwrap().moving);
-    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), moved).unwrap();
-    let change = s.frame(4, 4).unwrap();
-    assert_ne!(change.regions & regions::BRUSH, 0, "release publishes the new values");
-    assert!((value(&s) - before - 40.).abs() < 0.01, "{} -> {}", before, value(&s));
+fn handle_drags_publish_values_and_the_document_only_on_release() {
+    for placing in [false, true] {
+        let mut s = if placing { placed_photo("placement drag") } else { filled_selection_session() };
+        if !placing {
+            invoke(&mut s, CommandId::ScaleRotate);
+        }
+        s.frame(2, 2).unwrap();
+        let value = |s: &UiSession<Recorder>| s.state.tool_settings.iter().find(|c| c.id == "transform_x").unwrap().value;
+        let placement = |s: &UiSession<Recorder>| s.engine.document().layer(s.engine.document().active_layer).unwrap().properties.placement;
+        let before = (value(&s), placement(&s));
+        let quad = s.operation.quad();
+        let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
+        let moved = Point { x: centre.x + 40., y: centre.y + 20. };
+        s.transform_pen(event(&s, 1, PenPhase::Down, 1.), centre).unwrap();
+        assert_eq!(s.frame(3, 3).unwrap().regions, 0, "a drag starts without publishing");
+        assert!(!s.command(CommandId::CancelSelection).enabled, "a transform drag is not a selection gesture");
+        s.transform_pen(event(&s, 2, PenPhase::Move, 1.), moved).unwrap();
+        let change = s.frame(4, 4).unwrap();
+        assert_eq!(change.regions & (regions::BRUSH | regions::DOCUMENT), 0, "drag samples leave the panels alone");
+        assert_eq!(value(&s), before.0);
+        assert!(placing || s.renderer_mut().transform.clone().unwrap().moving);
+        assert!(!placing || placement(&s) != before.1, "the preview still moves the photo");
+        s.transform_pen(event(&s, 3, PenPhase::Up, 1.), moved).unwrap();
+        let change = s.frame(5, 5).unwrap();
+        assert_ne!(change.regions & regions::BRUSH, 0, "release publishes the new values");
+        assert!(!placing || change.regions & regions::DOCUMENT != 0, "release publishes the placed photo");
+        assert!(placing || change.regions & regions::COMMANDS == 0, "release publishes values, not availability");
+        assert!((value(&s) - before.0 - 40.).abs() < 0.01, "{} -> {}", before.0, value(&s));
+    }
 }
 
 #[test]
@@ -541,14 +534,9 @@ fn distort_moves_corners_folds_back_and_resets() {
     let bar = s.state.canvas_bar.clone().unwrap();
     assert!(bar_commands(&bar.items).contains(&CommandId::TransformPerspective), "Perspective appears with Distort");
     let quad = s.operation.quad();
-    let drag = |s: &mut UiSession<Recorder>, from: Point, to: Point| {
-        s.transform_pen(event(s, 1, PenPhase::Down, 1.), from).unwrap();
-        s.transform_pen(event(s, 2, PenPhase::Move, 1.), to).unwrap();
-        s.transform_pen(event(s, 3, PenPhase::Up, 1.), to).unwrap();
-        s.frame(3, 3).unwrap();
-    };
     let target = Point { x: quad[1].x + 40., y: quad[1].y - 30. };
-    drag(&mut s, quad[1], target);
+    drag_to(&mut s, quad[1], target);
+    s.frame(3, 3).unwrap();
     assert!(matches!(preview(&mut s), layer_core::TransformMap::Projective(_)), "a lone corner drag is perspective");
     let moved = s.operation.quad();
     for (i, corner) in moved.iter().enumerate() {
@@ -564,7 +552,7 @@ fn distort_moves_corners_folds_back_and_resets() {
     invoke(&mut s, CommandId::TransformDistort);
     let quad = s.operation.quad();
     let edge = Point { x: (quad[0].x + quad[1].x) * 0.5, y: (quad[0].y + quad[1].y) * 0.5 };
-    drag(&mut s, edge, Point { x: edge.x + 50., y: edge.y });
+    drag_to(&mut s, edge, Point { x: edge.x + 50., y: edge.y });
     invoke(&mut s, CommandId::TransformFree);
     s.frame(5, 5).unwrap();
     assert!(!s.operation.distorted(), "a parallelogram folds back into the pose exactly");
@@ -588,19 +576,14 @@ fn perspective_mirrors_a_corner_drag_onto_its_neighbour() {
 }
 
 #[test]
-fn distort_is_refused_on_photo_placements_with_the_route_that_works() {
-    use layer_core::color::{SampleDepth, source::*};
-    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
-    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("distort placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
-    s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
-    assert!(!s.command(CommandId::TransformDistort).enabled);
-    assert_eq!(s.command_disabled_reason(CommandId::TransformDistort).as_deref(), Some(operation::DISTORT_PLACEMENT));
-    assert!(s.dispatch(UiAction::Invoke { command: CommandId::TransformDistort }).is_err());
+fn distort_and_warp_are_refused_on_photo_placements_with_the_route_that_works() {
+    let mut s = placed_photo("distort placement");
+    for command in [CommandId::TransformDistort, CommandId::TransformWarp] {
+        assert!(!s.command(command).enabled);
+        assert_eq!(s.command_disabled_reason(command).as_deref(), Some(operation::DISTORT_PLACEMENT));
+        assert!(s.dispatch(UiAction::Invoke { command }).is_err());
+    }
+    assert!(!s.command(CommandId::WarpGridFour).enabled);
     assert!(interpolation_choice(&s).is_none(), "placed photos keep their pixels");
     assert!(!s.command(CommandId::TransformBicubic).enabled);
     assert!(s.dispatch(UiAction::Invoke { command: CommandId::TransformNearest }).is_err());
@@ -676,10 +659,7 @@ fn distorted_pixel_selection() -> UiSession<Recorder> {
     s.frame(2, 2).unwrap();
     invoke(&mut s, CommandId::TransformDistort);
     let quad = s.operation.quad();
-    let target = Point { x: quad[1].x + 40., y: quad[1].y - 30. };
-    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), quad[1]).unwrap();
-    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), target).unwrap();
-    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), target).unwrap();
+    drag_to(&mut s, quad[1], Point { x: quad[1].x + 40., y: quad[1].y - 30. });
     s.frame(3, 3).unwrap();
     s
 }
@@ -712,6 +692,7 @@ fn applying_a_distorted_pixel_selection_waits_for_its_resampled_coverage() {
     let change = s.frame(5, 5).unwrap();
     assert!(!s.operation.active());
     assert_ne!(change.regions & regions::DOCUMENT, 0);
+    assert_ne!(change.regions & regions::BRUSH, 0, "Tool Options follow the Apply in the same frame");
     assert!(s.engine.document().selection.is_some());
     invoke(&mut s, CommandId::Undo);
     assert_eq!(s.engine.document().layers, before, "Apply is one undo step");
@@ -741,6 +722,52 @@ fn cancelling_or_editing_a_pending_apply_discards_its_coverage() {
     assert!(s.operation.active(), "the stale coverage is discarded");
 }
 
+#[test]
+fn a_press_that_moves_nothing_keeps_the_pending_apply() {
+    let mut s = distorted_pixel_selection();
+    invoke(&mut s, CommandId::ApplyTransform);
+    s.frame(4, 4).unwrap();
+    let reply = resampled_reply(&mut s);
+    let quad = s.operation.quad();
+    let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
+    for corner in [centre, quad[2]] {
+        drag_to(&mut s, corner, corner);
+        s.frame(5, 5).unwrap();
+        assert!(!s.command(CommandId::ApplyTransform).enabled, "the Apply is still pending");
+    }
+    s.renderer_mut().region_reply = Some(reply);
+    s.frame(6, 6).unwrap();
+    assert!(!s.operation.active(), "the pending Apply completes");
+}
+
+#[test]
+fn a_failed_apply_leaves_the_transform_ready_to_apply_again() {
+    let mut s = distorted_pixel_selection();
+    invoke(&mut s, CommandId::ApplyTransform);
+    s.frame(4, 4).unwrap();
+    let reply = resampled_reply(&mut s);
+    s.renderer_mut().region_reply = Some(reply.clone());
+    s.renderer_mut().region_fails = true;
+    assert!(s.frame(5, 5).is_err(), "the failed readback is reported");
+    s.renderer_mut().region_fails = false;
+    assert!(s.command(CommandId::ApplyTransform).enabled, "a failed readback ends the pending Apply");
+    s.frame(6, 6).unwrap();
+    assert!(s.state.commands.iter().any(|c| c.id == CommandId::ApplyTransform && c.enabled));
+
+    invoke(&mut s, CommandId::ApplyTransform);
+    s.frame(7, 7).unwrap();
+    let pixels = layer_core::SelectionPixels::bytes([4, 4], [0, 0, 4, 4], vec![u32::MAX; 4]).unwrap();
+    s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+        request_id: s.renderer_mut().region_requests.last().unwrap().request_id,
+        pixels: std::sync::Arc::new(pixels),
+        ..reply
+    });
+    let change = s.frame(8, 8).unwrap();
+    assert!(s.operation.active() && s.state.host_error.is_some(), "a refused result keeps the transform open");
+    assert_ne!(change.regions & regions::COMMANDS, 0, "the same frame publishes Apply again");
+    assert!(s.state.commands.iter().any(|c| c.id == CommandId::ApplyTransform && c.enabled));
+}
+
 fn preview_map(s: &mut UiSession<Recorder>) -> layer_core::TransformMap {
     s.renderer_mut().transform.clone().unwrap().transform.map
 }
@@ -766,6 +793,7 @@ fn warp_seeds_from_the_transform_and_bends_through_nodes_and_tangents() {
     s.frame(3, 3).unwrap();
     assert!(s.command(CommandId::TransformWarp).selected);
     assert!(s.command(CommandId::WarpGridThree).selected, "three by three cells by default");
+    assert_eq!(s.command_disabled_reason(CommandId::TransformPerspective).as_deref(), Some("Choose Distort first"));
     assert_eq!(s.transform_interpolation(), Some(layer_core::Interpolation::Bicubic));
     let mesh = s.operation.mesh().expect("Warp seeds a mesh");
     assert_eq!(mesh.node_count(), 16);
@@ -819,48 +847,3 @@ fn warp_seeds_from_the_transform_and_bends_through_nodes_and_tangents() {
     invoke(&mut s, CommandId::ApplyTransform);
     assert!(!s.operation.active(), "an unbent warp applies at once");
 }
-
-#[test]
-fn warp_is_refused_on_photo_placements() {
-    use layer_core::color::{SampleDepth, source::*};
-    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
-    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("warp placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
-    s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
-    assert!(!s.command(CommandId::TransformWarp).enabled);
-    assert_eq!(s.command_disabled_reason(CommandId::TransformWarp).as_deref(), Some(operation::DISTORT_PLACEMENT));
-    assert!(s.dispatch(UiAction::Invoke { command: CommandId::TransformWarp }).is_err());
-    assert!(!s.command(CommandId::WarpGridFour).enabled);
-}
-
-#[test]
-fn a_placement_drag_publishes_the_document_on_release() {
-    use layer_core::color::{SampleDepth, source::*};
-    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
-    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("placement drag", 200, 150), [800, 600], Platform::Gtk).unwrap();
-    s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
-    s.frame(1, 1).unwrap();
-    let quad = s.operation.quad();
-    let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
-    let moved = Point { x: centre.x + 12., y: centre.y + 8. };
-    let placement = |s: &UiSession<Recorder>| s.engine.document().layers[0].properties.placement;
-    let before = placement(&s);
-    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), centre).unwrap();
-    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), moved).unwrap();
-    let change = s.frame(2, 2).unwrap();
-    assert_eq!(change.regions & regions::DOCUMENT, 0, "drag samples leave the document panels alone");
-    assert_ne!(placement(&s), before, "the preview still moves the photo");
-    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), moved).unwrap();
-    let change = s.frame(3, 3).unwrap();
-    assert_ne!(change.regions & regions::DOCUMENT, 0, "release publishes the placed photo");
-}
-
