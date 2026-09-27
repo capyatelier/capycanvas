@@ -217,7 +217,7 @@ fn shortcut_page_categories_filters_and_key_search() {
     let ids: Vec<_> = page.categories.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids[0], "Modifier keys", "modifier keys come first");
     assert_eq!(ids[1..], crate::shortcuts::SHORTCUT_SECTIONS);
-    assert_eq!(page.categories.iter().find(|c| c.id == "Brush presets").unwrap().count, 34);
+    assert_eq!(page.categories.iter().find(|c| c.id == "Brush presets").unwrap().count, 38);
     assert!(view.shortcuts.iter().all(|r| !r.visible), "the category list shows no rows until one is opened");
     let row = |view: &PreferencesView, id: &str| view.shortcuts.iter().find(|r| r.id == id).unwrap().clone();
 
@@ -225,7 +225,7 @@ fn shortcut_page_categories_filters_and_key_search() {
     let view = s.preferences().unwrap();
     assert_eq!(view.shortcut_page.category.as_deref(), Some("Brush presets"));
     let visible: Vec<_> = view.shortcuts.iter().filter(|r| r.visible).collect();
-    assert_eq!(visible.len(), 34);
+    assert_eq!(visible.len(), 38);
     assert!(visible.iter().all(|r| r.group == "Brush presets" && !r.subgroup.is_empty() && r.detail.is_empty()));
     assert_eq!(row(&view, "brush.2").subgroup, "Pencil", "presets are grouped under their tool");
     preference(&mut s, PreferenceAction::ShortcutCategory { id: Some("Nope".into()) });

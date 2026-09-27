@@ -257,6 +257,27 @@ runs it on a tablet. With `CAPY_ANDROID_SERIAL` set, it also opens the readout
 and chooses 200% with real OS touch, stylus and mouse taps. It shows the footer
 if the test origin's workspace hides it, and restores the workspace afterwards.
 
+[`effects.js`](../../apps/layer-web/effects.js) draws effect properties from the
+shared `layer_properties` view. Each Color control is a labelled row. When the
+control has a `color_action`, a bucket after the swatch dispatches it to use
+the current colour. The bucket's `data-action` is the control key with dashes
+and `-bucket`, such as `paper-color-bucket`, `tint-color-bucket` or
+`mask-color-bucket`. The Solid Color and Gradient Fill generators are in the
+Adjustments picker's Fill category and in Layer › New. A new fill layer starts
+in the current colour, masked by the selection, or with a reveal-all mask.
+`--adjustments` inserts all 42 filters, including both generators, and checks
+every Color row's label and bucket.
+
+Run `node apps/layer-web/test.mjs --headless --photo-edit` for the photo-editing
+journey. With mouse, touch and pen, it makes a lasso selection and chooses
+Layer › New › Solid Color Fill. It checks the fill's mask, colour and place in
+the stack, and one undo step. Headless screenshots omit WebGPU pixels, so it
+samples the composite inside and outside the selection with the Eyedropper. It
+then inserts Black & White from the Filter menu, checks the labelled Tint color
+row, and applies the current colour with its bucket in one undo step. It writes
+light and dark captures of the row to `artifacts/photo-edit/web`.
+`device.test.mjs --photo-edit` runs it on a tablet.
+
 For clipped workspace drags and content-aware release, run
 `bash tools/performance/workspace-motion.sh web --workspace-rendering` on Linux,
 or `node apps/layer-web/test.mjs --headless --workspace-rendering` against the

@@ -116,9 +116,9 @@ fn sample_bounds(batch: &DabBatch, dabs: &[Dab], at: [u32; 2], extent: [u32; 2])
                 }
                 LiquifyMode::Pinch | LiquifyMode::Expand => {
                     let direction = if batch.style.deform.mode == LiquifyMode::Pinch {
-                        -1.
-                    } else {
                         1.
+                    } else {
+                        -1.
                     };
                     let scale = 1. + direction * amount * 0.35;
                     let scaled = Rect {

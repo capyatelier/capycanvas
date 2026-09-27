@@ -552,7 +552,7 @@ class AndroidRasterTest {
         compose.waitForIdle()
         automation.takeScreenshot()?.let { image -> try { File(activity.getExternalFilesDir(null),"quick-mask-properties.png").outputStream().use {image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)} } finally {image.recycle()} }
         send(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(0,.5,1,1))))
-        compose.onNodeWithTag("paper-color-bucket").performClick()
+        compose.onNodeWithTag("mask-color-bucket").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_color" }.getJSONObject("value").getJSONObject("value").getJSONArray("rgba").getDouble(1)==.5 }
         send(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to false)))
         compose.onNodeWithTag("selection-load-0").performClick()

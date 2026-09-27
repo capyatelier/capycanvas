@@ -133,6 +133,7 @@ fn category_icon(id: &str) -> &'static str {
         "artistic" => "paint",
         "distort" => "domain-warp",
         "texture" => "grain",
+        "fill" => "fill",
         _ => "adjustments",
     }
 }
@@ -352,7 +353,7 @@ pub enum PropertyKind {
     Curve,
     Gradient,
 }
-fn control(p: &layer_core::EffectParameter, value: EffectValue) -> PropertyControl {
+fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue) -> PropertyControl {
     let kind = match &p.kind {
         EffectParameterKind::Number {
             min,
@@ -392,9 +393,13 @@ fn control(p: &layer_core::EffectParameter, value: EffectValue) -> PropertyContr
     } else {
         Vec::new()
     };
+    let color_action = matches!(kind, PropertyKind::Color).then(|| UiAction::Effect {
+        action: EffectAction::UseCurrentColor { layer, key: p.key.to_string() },
+    });
     PropertyControl {
         plot,
         section: p.section.as_ref().map(ToString::to_string),
+        color_action,
         ..PropertyControl::new(&p.key, &p.label, kind, value, p.default.clone())
     }
 }
@@ -434,7 +439,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
                 .parameters
                 .iter()
                 .zip(&effect.values)
-                .map(|(p, v)| control(p, v.clone())),
+                .map(|(p, v)| control(layer.id.0, p, v.clone())),
         );
         if effect.program.id.as_ref() == "curves" {
             if let (Some(space), Some(EffectValue::Number(stops))) = (effect.choice("domain"), effect.value("hdr_stops")) {
@@ -732,9 +737,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             EffectAction::Insert { effect } => {
                 let choosing = self.filter_drawer_open();
                 let effect = self.effect_catalog.get(&effect).ok_or("Unknown filter")?;
+                let generator = effect.program.kind == layer_core::EffectKind::Generator;
                 let doc = self.engine.document();
                 let current = doc.layer(doc.active_layer).ok_or("Select a layer first")?;
-                let replacing = choosing && current.effect.is_some();
+                let replacing = choosing && current.effect.as_ref().is_some_and(|fx| fx.program.kind == effect.program.kind);
                 let masked = !replacing && doc.selection.is_some();
                 if replacing && doc.is_locked(current.id) { return Err("This layer is locked".into()); }
                 if replacing && current.effect.as_ref().is_some_and(|fx| fx.program.id == effect.program.id) {
@@ -757,8 +763,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 layer.properties.parent = parent;
                 let mut instance = EffectInstance::new(float32_program(&effect.program(), depth));
                 if hdr && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
+                if generator && let Some(color) = instance.program.parameters.iter().find(|p| p.kind == EffectParameterKind::Color) {
+                    instance.set(&color.key.clone(), EffectValue::Color(self.state.colors.definition())).map_err(str::to_string)?;
+                }
                 layer.effect = Some(Arc::new(instance));
-                if masked {
+                if masked || (generator && layer.mask.is_none()) {
                     layer.mask = Some(self.selection_mask(&layer, false)?);
                 }
                 self.layer_edit(if replacing {

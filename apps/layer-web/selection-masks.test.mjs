@@ -65,7 +65,7 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   const propertyMaskPixels=await evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${propertiesShot.data}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(i,0,0);const p=g.getImageData(0,100,c.width*.75,c.height-100).data;let red=0;for(let n=0;n<p.length;n+=4)if(p[n]>p[n+1]+40&&p[n]>p[n+2]+40)red++;return red;})()`);
   assert.ok(propertyMaskPixels>100,'Changing painting convention preserves the visible mask');
   await send({type:'set_color',rgba:[0,.5,1,1]});
-  await evaluate(`document.querySelector('.effect-properties [data-action="paper-color-bucket"]').click()`);await settle();
+  await evaluate(`document.querySelector('.effect-properties [data-action="mask-color-bucket"]').click()`);await settle();
   assert.deepEqual(await evaluate('layerApp.state().layer_properties.controls.find(c=>c.key==="mask_color").value.value.rgba'),[0,.5,1,1],'Bucket copies the mask painting color');
   await send({type:'customize',action:{type:'set_panel_visible',panel:'properties',visible:false}});
   await toggleLayers();

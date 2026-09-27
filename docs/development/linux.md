@@ -224,6 +224,16 @@ the native project saves the rasterized role and pixels. The native
 `workspace::tests::source_rasterize::native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen`
 check covers these boundaries, reopen and continued painting.
 
+Edit → Revert to Original Photo, also under Layer Settings in the layer context
+menu, discards the painting, erasing and applied masks on a placed photo in one
+undo step, keeping its source, placement, mask, opacity and blend mode. It
+explains why it is unavailable: no edits, a rasterized or locked photo, or an
+edited mask. `workspace::tests::photo_edit::native_revert_to_original_after_painting_on_a_placed_photo`
+paints over a photo and reverts from the Edit menu with the mouse.
+`native_layer_new_solid_color_fill_masks_to_the_selection` adds a fill layer from
+Layer › New over a lasso selection, and `native_liquify_pinch_stroke_on_a_pattern`
+(with `--tablet`) pinches striped paint with the pen.
+
 Edit → Assign Profile, Convert Color Space and Change Bit Depth prepare a complete
 Before/After comparison before changing the drawing. Assign retains committed RGB
 numbers; Convert transforms editable backing with the selected intent, or creates

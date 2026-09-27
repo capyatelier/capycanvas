@@ -2,7 +2,7 @@
 
 [Technical documentation](../README.md)
 
-Implemented and validated on 2026-09-10. All forty built-ins and custom filters use
+Implemented and validated on 2026-09-10. All forty-two built-ins and custom filters use
 one runtime JSON/WGSL format and shared renderer. **Curves and Gradient Map are
 the agreed exceptions:** their custom controls and parameter preparation remain
 in Rust; GPU shaders evaluate the prepared segments/stops. Generic preparation,
@@ -57,6 +57,15 @@ in the document space. Assignment, conversion and depth changes retain the
 original endpoint definitions. The GPU record layout and shader contract remain
 ABI 3. Individual effects decide how alpha contributes: Gradient Map uses stop
 alpha as mapping strength; the built-in tint/ink/paper controls use RGB only.
+
+A `"kind":"generator"` program ignores its input and supplies color and coverage.
+The Fill category's Solid Color (`solid_color`, the color's alpha is coverage)
+and Gradient Fill (`gradient_fill`: Linear or Radial, Angle counterclockwise from
+the x axis, Scale, Center and Reverse, with stops evaluated as in Gradient Map)
+are generators. Layer › New inserts them with a reveal-all mask, or the
+selection as the mask, so painting edits the mask; Solid Color starts from the
+current color. The Filter menu and the selection bar's Adjust menu list
+adjustments only; the effect browser lists both.
 
 For timed programs, `fx_time` supplies accumulated playback phase in seconds.
 The shared clock integrates the numeric `speed` parameter (default 1), so speed
@@ -258,7 +267,8 @@ The small Unsharp unrelated CPU tail increase is also retained above.
 Same 2,048 × 1,536 canvas, 180 updates per case, last 120 render samples. The
 forty single-filter tests plus baseline, three expensive-stack modes and four
 preparation-edit cases all pass (48 cases). Five expensive filters are Motion
-Blur, Gaussian Blur, Domain Warp, Painterly and Denoise.
+Blur, Gaussian Blur, Domain Warp, Painterly and Denoise (now labelled
+Edge-Preserving Smooth).
 
 | Case | CPU before | CPU final | GPU before | GPU final |
 | --- | --- | --- | --- | --- |

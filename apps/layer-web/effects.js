@@ -145,9 +145,9 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
         else if(c.kind.kind==="curve"){field=curveEditor(view.layer,c.key);field.node.dataset.key=c.key;field.node.toggleAttribute("hidden",c!==curves[0]);curveBox.append(field.node);}
         else if(c.kind.kind==="toggle"){const n=element("input");n.type="checkbox";n.onchange=()=>change(n.checked);field={node:row(c.label,n),update:c=>n.checked=c.value.value,disable:x=>n.disabled=x};}
         else if(c.kind.kind==="choice"){const n=element("select");c.kind.options.forEach((label,i)=>{const o=element("option","",label);o.value=i;n.append(o);});n.onchange=()=>change(Number(n.value));field={node:row(c.label,n),update:c=>n.value=c.value.value,disable:x=>n.disabled=x};}
-        else if(c.kind.kind==="color"){const n=colorButton({app,label:c.label,element,button,change,current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}`});const line=c.color_action?element("div","paper-color-property"):row(c.label,n.node);let bucket;
-          if(c.color_action){bucket=button("",()=>dispatch(c.color_action));bucket.dataset.action="paper-color-bucket";bucket.title="Use selected color";bucket.append(icon("fill"));line.append(n.node,bucket);}
-          field={node:line,update:c=>n.update(c.value.value),disable:x=>{n.disable(x);if(bucket)bucket.disabled=x;}};}
+        else if(c.kind.kind==="color"){const n=colorButton({app,label:c.label,element,button,change,current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}`});let input=n.node,bucket;
+          if(c.color_action){bucket=button("",()=>dispatch(c.color_action));bucket.dataset.action=`${c.key.replaceAll("_","-")}-bucket`;bucket.title="Use selected color";bucket.append(icon("fill"));input=element("div","color-action-property");input.append(n.node,bucket);}
+          field={node:row(c.label,input),update:c=>n.update(c.value.value),disable:x=>{n.disable(x);if(bucket)bucket.disabled=x;}};}
         else if(c.kind.kind==="gradient")field=gradientEditor(view.layer,c.key);
         if(field){if(c.kind.kind!=="curve")body.append(field.node);fields.set(c.key,field);}
       }

@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1, M2.2 and M2.6. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1, M2.2, M2.5 and M2.6. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -704,10 +704,19 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - a zoom readout that opens a zoom field and the shared zoom menu;
   - lossless WebP export ("WebP · lossless", 8-bit RGB, refused above 16,384 px before rendering).
   - The Web and Android readout keeps pan at 118.8 Hz and pinch at 117.7 Hz on the MovinkPad 14, unchanged.
+- **M2.5** on GTK, Web and Android:
+  - Liquify Twirl Clockwise, Pinch, Expand and Crystals presets (36–39), with Pinch and Expand now matching Photoshop's Pucker and Bloat. The existing preset 13 measured counterclockwise, so it is now labelled "Liquify Twirl Counterclockwise".
+  - Solid Color and Gradient Fill layers in Layer › New, masked by the selection.
+  - "Use current colour" buckets on every effect colour, in labelled rows.
+  - Vignette down to −100; Denoise renamed "Edge-Preserving Smooth"; Revert to Original Photo.
+  - A stylus Pinch stroke on the MovinkPad 14 completes GPU work every 2.6 ms (p50), 5.0 ms (p99).
 
 **Follow-ups**
 - **Erase right after a stroke:** an Erase on a raster that is still pending, or that holds watercolor or wet state, damages the whole layer so the layer settles. Clearing right after a stroke therefore rewrites every page. It is a still-frame cost.
 - **Copy to New Layer** drops the source's mask and clipping, and the copy is unlocked. Copying from a locked layer is allowed; cutting is not.
+- **Liquify render rate:** a 240 Hz stylus Liquify stroke renders about 400 times a second on Android, more than its input rate. Check whether contacts are rendered more than once.
+- **Stale Web filter copy:** `apps/layer-web/filters` was committed in `3618b3c2`, although nothing reads it (filters load from `assets/filters`). It is out of date; delete it or regenerate it.
+- **Headless Web `--selection-tools`:** it now stops at its first workspace submit on `origin/main` too.
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
 - **Apple and Windows:**
@@ -716,6 +725,7 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - retire `canvas_bar_reason` once Apple reads the field;
   - open bar menu items (`CanvasBarItem.menu` and `icon`, through `canvas_bar_choice_menu`);
   - add icons for the new commands to Apple's coverage list;
+  - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M2.3 to M2.5, M3 and M4. Record milestone completion in the research record's section 7.
+**Remaining:** M2.3 and M2.4, M3 and M4. Record milestone completion in the research record's section 7.

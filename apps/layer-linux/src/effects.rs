@@ -644,14 +644,12 @@ impl EffectPanels {
                             input.bind(w, move |_, color| dispatch(EffectValue::Color(color)));
                             if let Some(action) = &control.color_action {
                                 let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                                input.widget.set_hexpand(true);
-                                input.widget.set_height_request(36);
                                 line.append(&input.widget);
                                 let bucket = w.action_button("Use selected color", action.clone());
-                                bucket.set_widget_name("paper-color-bucket");
+                                bucket.set_widget_name(&format!("{}-bucket", control.key.replace('_', "-")));
                                 crate::icons::set_button(&bucket, "layer-fill-symbolic");
                                 line.append(&bucket);
-                                self.body.append(&line);
+                                self.body.append(&row(&control.label, &line));
                             } else { self.body.append(&row(&control.label, &input.widget)); }
                             Field::Color(input)
                         }

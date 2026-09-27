@@ -156,6 +156,73 @@ mod selection_pixel_checks {
     }
 
     #[test]
+    fn revert_to_original_discards_photo_edits_in_one_step_and_keeps_the_rest() {
+        let mut s = photo_session();
+        let id = s.engine.document().active_layer;
+        let reason = |s: &UiSession<Recorder>| s.command_disabled_reason(CommandId::RevertToOriginal);
+        assert_eq!(reason(&s).as_deref(), Some("This photo has no edits"));
+        let source = s.engine.document().layer(id).unwrap().source.clone().unwrap();
+        select(&mut s, rectangle([20., 20., 60., 50.]));
+        invoke(&mut s, CommandId::ClearSelected);
+        submitted(&mut s);
+        s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id: id.0, replace: false } }).unwrap();
+        assert_eq!(reason(&s).as_deref(), Some("Return to the layer's artwork first"));
+        s.dispatch(UiAction::Layer { action: LayerAction::Select { id: id.0, mask: false } }).unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::Blend { id: id.0, value: 2 } }).unwrap();
+        s.set_layer_opacity(Some(id.0), 0.5).unwrap();
+        let edited = s.engine.document().layer(id).unwrap().clone();
+        assert!(!edited.pending_operations.is_empty() || !edited.raster.is_empty());
+        assert_eq!(reason(&s), None);
+        let edit_menu = s.application_menu(ApplicationMenu::Edit);
+        let labels = |sections: &[Vec<ContextMenuItem>]| sections.iter().flatten().map(|i| i.label.clone()).collect::<Vec<_>>();
+        let edit = labels(&edit_menu.sections);
+        let rasterize = edit.iter().position(|l| l == "Rasterize Source…").unwrap();
+        assert_eq!(edit[rasterize + 1], "Revert to Original Photo");
+        let layer_menu = s.layer_menu(id.0, false).unwrap();
+        let settings = layer_menu.sections.iter().flatten().find(|i| i.label == "Layer Settings").unwrap();
+        let settings = labels(&settings.sections);
+        let rasterize = settings.iter().position(|l| l == "Rasterize Source…").unwrap();
+        assert_eq!(settings[rasterize + 1], "Revert to Original Photo");
+
+        invoke(&mut s, CommandId::RevertToOriginal);
+        let reverted = s.engine.document().layer(id).unwrap().clone();
+        let mut expected = edited.clone();
+        expected.raster = Default::default();
+        expected.pending_operations.clear();
+        assert_eq!(reverted, expected, "only the edits go; placement, mask, opacity and blend stay");
+        assert!(Arc::ptr_eq(reverted.source.as_ref().unwrap(), &source), "the original is shared, not copied");
+        assert_eq!(reason(&s).as_deref(), Some("This photo has no edits"));
+        assert_eq!(
+            s.dispatch(UiAction::Invoke { command: CommandId::RevertToOriginal }).unwrap_err(),
+            "This photo has no edits"
+        );
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().layer(id), Some(&edited), "one undo step");
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.engine.document().layer(id), Some(&expected));
+        invoke(&mut s, CommandId::Undo);
+
+        s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: id.0, value: true } }).unwrap();
+        assert_eq!(reason(&s).as_deref(), Some("The active layer is locked"));
+        s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: id.0, value: false } }).unwrap();
+        invoke(&mut s, CommandId::ScaleRotate);
+        assert_eq!(reason(&s).as_deref(), Some("Finish the current canvas operation first"));
+        invoke(&mut s, CommandId::CancelTransform);
+        invoke(&mut s, CommandId::QuickMask);
+        assert_eq!(reason(&s).as_deref(), Some("Return to the artwork first"));
+        invoke(&mut s, CommandId::ReturnToArtwork);
+        s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
+        assert_eq!(reason(&s).as_deref(), Some("Select a placed photo layer"));
+        s.dispatch(UiAction::SelectLayer { id: id.0 }).unwrap();
+        let mut rasterized = s.engine.document().layer(id).unwrap().clone();
+        let mut converted = (*source).clone();
+        converted.kind = layer_core::color::source::SourceKind::Rasterized;
+        rasterized.source = Some(Arc::new(converted));
+        s.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(rasterized))).unwrap();
+        assert_eq!(reason(&s).as_deref(), Some("A rasterized photo has no original to return to"));
+    }
+
+    #[test]
     fn copy_and_cut_to_a_new_layer_share_the_photo_and_sit_above_its_clipping_stack() {
         for cut in [false, true] {
             let command = if cut { CommandId::CutSelectionToLayer } else { CommandId::CopySelectionToLayer };

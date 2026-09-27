@@ -992,8 +992,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .filter-types .filter-type { display:flex; align-items:center; gap:6px; min-height:44px; padding:0 6px; text-align:left; }
 .filter-types .cancel-filter { align-self:flex-start; }
 .content-drawer :is(.filter-types,.filter-picker,.effect-properties) { margin:8px; }
-.paper-color-property { display:flex; gap:6px; }
-.paper-color-property > :first-child { flex:1; min-width:0; max-width:none; height:36px; }
+.color-action-property { display:flex; align-items:center; gap:6px; }
 .drawer-column > .layers-panel { padding:8px; }
 
 .layer-swipe { position: relative; overflow: hidden; flex: none; --swipe: 0px; }

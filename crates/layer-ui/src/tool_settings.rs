@@ -1,7 +1,7 @@
 //! Brush controls are a shared schema, not a GTK form. Field access is kept
 //! beside its label, constraints and visibility so native hosts never guess.
 use crate::NumericControl;
-use layer_core::{BrushExecution, BrushSnapshot, BrushTip};
+use layer_core::{BrushExecution, BrushSnapshot, BrushTip, LiquifyMode};
 use serde::Serialize;
 
 /// Reusable tool settings actions. Labels, enabled/checked state and shortcuts
@@ -243,7 +243,25 @@ const DEFINITIONS: &[Definition] = &[
         numeric: NumericControl::percent,
         field: |b| (b.execution == BrushExecution::Liquify).then_some(&mut b.deform.strength),
     },
+    Definition {
+        id: "distortion",
+        label: "Distortion",
+        group: "Liquify",
+        numeric: NumericControl::percent,
+        field: |b| liquify(b, LiquifyMode::Crystals).then_some(&mut b.deform.distortion),
+    },
+    Definition {
+        id: "momentum",
+        label: "Momentum",
+        group: "Liquify",
+        numeric: NumericControl::percent,
+        field: |b| liquify(b, LiquifyMode::Push).then_some(&mut b.deform.momentum),
+    },
 ];
+
+fn liquify(b: &BrushSnapshot, mode: LiquifyMode) -> bool {
+    b.execution == BrushExecution::Liquify && b.deform.mode == mode
+}
 
 pub(crate) fn controls(brush: &BrushSnapshot) -> Vec<ToolSetting> {
     let mut brush = brush.clone();
@@ -298,11 +316,32 @@ mod tests {
     }
 
     #[test]
+    fn liquify_shows_distortion_for_crystals_and_momentum_for_push() {
+        let ids = |preset| -> Vec<_> { controls(&default_brush(preset)).iter().map(|c| c.id).collect() };
+        for (preset, distortion, momentum) in [
+            (DefaultBrushPreset::LiquifyPush, false, true),
+            (DefaultBrushPreset::LiquifyTwirl, false, false),
+            (DefaultBrushPreset::LiquifyPinch, false, false),
+            (DefaultBrushPreset::LiquifyCrystals, true, false),
+        ] {
+            let ids = ids(preset);
+            assert!(ids.contains(&"strength"), "{preset:?}");
+            assert_eq!(ids.contains(&"distortion"), distortion, "{preset:?}");
+            assert_eq!(ids.contains(&"momentum"), momentum, "{preset:?}");
+        }
+        let crystals = default_brush(DefaultBrushPreset::LiquifyCrystals);
+        assert_eq!(edit(&crystals, "distortion", 0.9).unwrap().deform.distortion, 0.9);
+        assert!(edit(&crystals, "momentum", 0.5).is_err());
+    }
+
+    #[test]
     fn irrelevant_or_invalid_edits_are_rejected() {
         let brush = default_brush(DefaultBrushPreset::GPen);
         for (id, value) in [
             ("water_load", 0.5),
             ("strength", 0.5),
+            ("distortion", 0.5),
+            ("momentum", 0.5),
             ("nope", 1.0),
             ("flow", f32::NAN),
             ("size", 3000.0),

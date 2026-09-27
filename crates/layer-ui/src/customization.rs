@@ -1047,6 +1047,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::ClearOutside => "Erase the pixels outside the selection",
                 CommandId::CopySelectionToLayer => "Copy the selected pixels to a new layer; without a selection, duplicate the layer",
                 CommandId::CutSelectionToLayer => "Move the selected pixels to a new layer",
+                CommandId::RevertToOriginal => "Discard every edit on a placed photo, keeping its placement and mask",
                 CommandId::FillSelection => "Fill selected pixels with the drawing color",
                 CommandId::SelectAll => "Select the entire canvas",
                 CommandId::Deselect => "Remove the pixel selection",

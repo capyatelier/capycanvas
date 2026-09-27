@@ -320,6 +320,26 @@ Backspace over a selection. A focused text field keeps both keys, and a focused
 drawing tab keeps Delete, which closes that drawing: `MainActivity` does not
 forward that Delete to the core.
 
+[`Effects.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Effects.kt)
+draws effect properties from the shared `layer_properties` view. Each Color
+control is a labelled `ManagedColorButton` row. When the control has a
+`color_action`, a bucket after the swatch dispatches it to use the current
+colour. The bucket's test tag is the control key with dashes and `-bucket`,
+such as `paper-color-bucket`, `tint-color-bucket` or `mask-color-bucket`.
+`AndroidInteractionTest#solidColorFillMasksTheSelectionAcrossDevices` chooses
+Layer › New › Solid Color Fill over a rectangle selection with mouse, finger
+and stylus. It checks the fill's mask, colour and pixels, and one undo step.
+`#blackWhiteTintRowAppliesTheCurrentColorAcrossDevices` inserts Black & White
+from the Filter menu, checks the labelled Tint color row, and applies the
+current colour with its bucket in one undo step.
+`#liquifyPinchStrokeMovesThePixelsUnderTheStylus` pinches striped paint with an
+OS-injected 240 Hz stylus stroke. It checks the pixels under and far from the
+stroke and one undo step, and writes the stroke's frame timing to
+`validation/photo-edit/pinch-frames.json`. On the MovinkPad 14 debug build,
+three runs completed about 400 canvas updates per second on the 120 Hz display,
+with GPU completion intervals of 2.6 ms p50 and 4.9–5.1 ms p99, none over
+8.33 ms. Captures are in `validation/photo-edit`.
+
 `AndroidInteractionTest#zoomReadoutMenuAndFieldAcrossDevices` opens the
 readout with mouse, finger and stylus. It chooses 200%, uses Actual Pixels at a
 quarter turn, types 50, and closes the menu with Back. It checks whole-pixel

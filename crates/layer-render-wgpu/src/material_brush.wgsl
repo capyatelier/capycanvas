@@ -478,7 +478,7 @@ fn deform_coordinate(initial: vec2<f32>, first: u32, count: u32) -> vec2<f32> {
             let angle = direction * strength * 0.75;
             coordinate = dab.center + rotate(coordinate - dab.center, cos(angle), sin(angle));
         } else if mode < 4.5 {
-            let direction = select(1.0, -1.0, mode < 3.5);
+            let direction = select(-1.0, 1.0, mode < 3.5);
             coordinate = dab.center + (coordinate - dab.center) * (1.0 + direction * strength * 0.35);
         } else if mode < 5.5 {
             let noise = random_unit(floor(coordinate * 0.25) + dab.center);

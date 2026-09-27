@@ -21,6 +21,8 @@ mod transform_oracles;
 mod placement;
 #[path = "erase_tests.rs"]
 mod erase;
+#[path = "liquify_tests.rs"]
+mod liquify;
 
 fn view() -> ViewState {
     ViewState {

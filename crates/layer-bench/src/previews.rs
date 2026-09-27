@@ -14,7 +14,7 @@ pub fn generate(directory: &Path) -> Result<(), Box<dyn Error>> {
             let mut canvas = Canvas::configured([400, 80], [0.0; 4])?;
             // Destination-reading tools need existing color to demonstrate
             // their effect. These seeds are on the same editable paint layer.
-            if choice.category == "Blend" || choice.category == "Shape" || choice.id == 3 {
+            if choice.category == "Blend" || choice.category == "Liquify" || choice.id == 3 {
                 canvas.set_brush(brush(Preset::GPen, 44.0, 0.9, [0.06, 0.3, 0.65, 1.0]))?;
                 stroke(&mut canvas, 0.0)?;
                 canvas.set_brush(brush(Preset::GPen, 20.0, 0.9, [0.85, 0.35, 0.06, 1.0]))?;

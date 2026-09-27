@@ -111,6 +111,13 @@ fn native_effect_colors_gradients_and_retained_controls() {
             effect: "black_white".into(),
         },
     });
+    let bucket = find_named(w.window.upcast_ref(), "tint-color-bucket").expect("each color parameter has its bucket");
+    let label = bucket.parent().and_then(|line| line.parent()).and_then(|row| row.first_child());
+    assert_eq!(label.and_downcast::<gtk::Label>().map(|l| l.text()).as_deref(), Some("Tint color"));
+    w.dispatch(UiAction::SetColor { rgba: [0.2, 0.5, 0.1, 1.] });
+    bucket.downcast::<gtk::Button>().unwrap().emit_clicked();
+    ready(&w);
+    assert_eq!(value(&w, "tint_color"), EffectValue::Color(state(&w).colors.definition()));
     set(&w, "tint_color", EffectValue::Color(original));
     let before = snapshot(&w);
     press(&w, "effect-color-tint_color");

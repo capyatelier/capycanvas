@@ -4,6 +4,8 @@ use layer_core::{EffectInstance, EffectKind, EffectPass, EffectSampling, EffectV
 
 #[path = "native_effects/tone.rs"]
 mod tone;
+#[path = "native_effects/fills.rs"]
+mod fills;
 
 fn effect(id: u64, name: &str, image: bool) -> Layer {
     let mut program = (*fixture(name).program()).clone();

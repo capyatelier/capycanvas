@@ -6,7 +6,8 @@
     {"id":"blur","label":"Blur"},
     {"id":"artistic","label":"Artistic"},
     {"id":"distort","label":"Distort"},
-    {"id":"texture","label":"Texture"}
+    {"id":"texture","label":"Texture"},
+    {"id":"fill","label":"Fill"}
   ],
   "filters": [
     {
@@ -632,7 +633,7 @@
         "entry": "capy_denoise",
         "id": "denoise",
         "kind": "adjustment",
-        "label": "Denoise",
+        "label": "Edge-Preserving Smooth",
         "parameters": [
           {
             "default": {"kind":"number","value":2},
@@ -779,7 +780,7 @@
           {
             "default": {"kind":"number","value":40},
             "key": "strength",
-            "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
+            "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},
             "label": "Strength"
           },
           {
@@ -1803,6 +1804,86 @@
           }
         ],
         "time": true,
+        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+      }
+    },
+    {
+      "category": "fill",
+      "icon": "fill",
+      "program": {
+        "abi": 3,
+        "entry": "capy_solid_color",
+        "id": "solid_color",
+        "kind": "generator",
+        "label": "Solid Color",
+        "parameters": [
+          {
+            "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.16,0.33,0.58,1]}},
+            "key": "color",
+            "kind": {"kind":"color"},
+            "label": "Color"
+          }
+        ],
+        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+      }
+    },
+    {
+      "category": "fill",
+      "icon": "gradient",
+      "program": {
+        "abi": 3,
+        "entry": "capy_gradient_fill",
+        "id": "gradient_fill",
+        "kind": "generator",
+        "label": "Gradient Fill",
+        "parameters": [
+          {
+            "default": {
+              "kind": "gradient",
+              "value": [{"color":{"space":"Srgb","rgba":[0,0,0,1]},"position":0},{"color":{"space":"Srgb","rgba":[1,1,1,1]},"position":1}]
+            },
+            "key": "gradient",
+            "kind": {"kind":"gradient"},
+            "label": "Gradient"
+          },
+          {
+            "default": {"kind":"toggle","value":false},
+            "key": "reverse",
+            "kind": {"kind":"toggle"},
+            "label": "Reverse"
+          },
+          {
+            "default": {"kind":"choice","value":0},
+            "key": "style",
+            "kind": {"kind":"choice","options":["Linear","Radial"]},
+            "label": "Style"
+          },
+          {
+            "default": {"kind":"number","value":90},
+            "key": "angle",
+            "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
+            "label": "Angle"
+          },
+          {
+            "default": {"kind":"number","value":100},
+            "key": "scale",
+            "kind": {"decimals":0,"kind":"number","max":400,"min":10,"step":1,"unit":"%"},
+            "label": "Scale"
+          },
+          {
+            "default": {"kind":"number","value":50},
+            "key": "center_x",
+            "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
+            "label": "Center X",
+            "section": "Position"
+          },
+          {
+            "default": {"kind":"number","value":50},
+            "key": "center_y",
+            "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
+            "label": "Center Y"
+          }
+        ],
         "wgsl": ["effects.wgsl","filter_library.wgsl"]
       }
     }

@@ -15,9 +15,10 @@ on-device copy-bandwidth calibration, large-brush controls and CPU costs.
 
 ## What is measured
 
-`layer-bench` submits 15 legacy and 10 painter-focused 4096×4096 workloads
-through `CanvasEngine`. Every scenario has at least 32 visible paint layers
-and every frame contains eight simulated coalesced pen samples.
+`layer-bench` submits 15 legacy, 10 painter-focused and 3 sculpt (Liquify
+Pinch, Expand and Crystals) 4096×4096 workloads through `CanvasEngine`. Every
+scenario has at least 32 visible paint layers and every frame contains eight
+simulated coalesced pen samples.
 
 The current diagnostic factory uses GTK's native integer-backed SDR renderer
 with Float32 working tiles. Select `--space srgb|p3|adobe-rgb|prophoto` and
@@ -257,7 +258,8 @@ cargo run --release -p layer-bench -- \
 
 The first command writes ten explicit-export PNGs and a labeled HTML gallery.
 The generated contact sheet provides a compact montage. Use
-`--scenario all` for all 25 workloads or a scenario name to isolate one brush.
+`--scenario sculpt` for the Liquify Pinch, Expand and Crystals workloads,
+`--scenario all` for all 28 workloads, or a scenario name to isolate one brush.
 
 ### GTK native pen-up and following strokes
 

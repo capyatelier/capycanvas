@@ -422,6 +422,7 @@ fn native_large_photo_placement_workflow() {
         for (preset, command, label, diameter) in [
             (layer_core::DefaultBrushPreset::Smudge, CommandId::Blend, "smudge", 1024.),
             (layer_core::DefaultBrushPreset::LiquifyTwirl, CommandId::Liquify, "liquify-twirl", 240.),
+            (layer_core::DefaultBrushPreset::LiquifyPinch, CommandId::Liquify, "liquify-pinch", 240.),
         ] {
             invoke(&w, command);
             w.dispatch(UiAction::SelectBrush { id: preset as u32 });

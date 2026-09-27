@@ -291,7 +291,27 @@ const PRESETS: &[(DefaultBrushPreset, &str, ToolGroup)] = &[
     ),
     (
         DefaultBrushPreset::LiquifyTwirl,
-        "Liquify Twirl",
+        "Liquify Twirl Counterclockwise",
+        ToolGroup::Liquify,
+    ),
+    (
+        DefaultBrushPreset::LiquifyTwirlClockwise,
+        "Liquify Twirl Clockwise",
+        ToolGroup::Liquify,
+    ),
+    (
+        DefaultBrushPreset::LiquifyPinch,
+        "Liquify Pinch",
+        ToolGroup::Liquify,
+    ),
+    (
+        DefaultBrushPreset::LiquifyExpand,
+        "Liquify Expand",
+        ToolGroup::Liquify,
+    ),
+    (
+        DefaultBrushPreset::LiquifyCrystals,
+        "Liquify Crystals",
         ToolGroup::Liquify,
     ),
 ];
@@ -716,7 +736,7 @@ mod tests {
 
     #[test]
     fn every_brush_has_one_tool_and_group_and_every_group_is_populated() {
-        assert_eq!(PRESETS.len(), 34);
+        assert_eq!(PRESETS.len(), 38);
         let mut ids = std::collections::BTreeSet::new();
         for &(preset, _, group) in PRESETS {
             assert!(ids.insert(preset as u32));

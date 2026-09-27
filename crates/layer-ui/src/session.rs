@@ -2096,6 +2096,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.require_document_idle().is_ok()
                     && self.selection_to_layer_refusal(id == CommandId::CutSelectionToLayer).is_none()
             }
+            CommandId::RevertToOriginal => {
+                self.require_document_idle().is_ok() && self.revert_to_original_refusal().is_none()
+            }
             CommandId::ClearLayer | CommandId::FillSelection => {
                 self.require_document_idle().is_ok()
                     && editable
@@ -4105,6 +4108,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::CopySelectionToLayer | CommandId::CutSelectionToLayer => {
                 self.selection_to_layer(command == CommandId::CutSelectionToLayer)?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::RevertToOriginal => {
+                self.revert_to_original()?;
+                Ok((DOCUMENT | COMMANDS, true))
             }
             CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect
             | CommandId::SelectionAntialias | CommandId::SelectionConstrainAngles => {
@@ -8303,7 +8310,7 @@ mod tests {
                 result: Ok(()),
             });
             s.frame(0, 0).unwrap();
-            assert_eq!(s.state.adjustments.len(), 41);
+            assert_eq!(s.state.adjustments.len(), 43);
             assert_eq!(
                 s.state.filter_categories.last().unwrap().label.as_ref(),
                 "Examples"

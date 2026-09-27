@@ -1573,6 +1573,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             if l.source.as_ref().is_some_and(|s| s.is_original()) {
                 protection.push(item("Repair Source Profile…", A::RepairSourceProfile { id }));
                 protection.push(item("Rasterize Source…", A::RasterizeSource { id }));
+                if l.id == doc.active_layer {
+                    let state = self.command(CommandId::RevertToOriginal);
+                    let mut revert = ContextMenuItem::command(state.label, UiAction::Invoke { command: state.id });
+                    revert.enabled = state.enabled;
+                    protection.push(revert);
+                }
             }
             let mut destructive = Vec::new();
             if paint {
@@ -1616,6 +1622,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ),
             ]];
             if l.id == doc.active_layer {
+                new.push(self.fill_layer_items());
                 new.push(
                     [CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer]
                         .map(|command| {
@@ -1645,6 +1652,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 destructive,
             ]
         };
+        if !editable && l.id == doc.active_layer {
+            sections[0].extend(self.fill_layer_items());
+        }
         if mask { sections.push(vec![ContextMenuItem::submenu("Pixel Selection",vec![self.coverage_menu_items(id,true)])]); }
         if l.kind == LayerKind::Group {
             sections.insert(0, vec![

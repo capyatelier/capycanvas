@@ -26,10 +26,11 @@ Status: shared model, GTK, Web, Android, Windows, macOS and iPadOS hosts impleme
 - **Menu items:** an item can carry a menu. It opens from the bar as a dropdown, and in More it is a submenu.
   - **Copy to Layer ▾:** Copy Selection to New Layer (the primary command) and Cut Selection to New Layer.
   - **Refine ▾:** Grow… and Shrink….
-  - **Adjust ▾:** the Filter menu's categories. The new effect layer takes the selection as its mask and consumes it, in one undo step.
+  - **Adjust ▾:** the Filter menu's categories, which hold adjustments only. The new effect layer takes the selection as its mask and consumes it, in one undo step.
   - **Clear ▾:** Clear Selected Pixels (the primary command) and Clear Outside Selection.
 - **More:** lists the items that did not fit, then the context's own menu (the full Select menu for selections), then the bar toggle.
 - **Distort on photo placements:** refused with the route that works: select all, then transform the pixels.
+- **Not on the bar:** Layer › New › Solid Color Fill and Gradient Fill (which also take the selection as their mask) and Revert to Original Photo have no bar item; menus and command search reach them.
 
 ## Placement
 

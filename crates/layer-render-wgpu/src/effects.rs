@@ -684,7 +684,7 @@ mod tests {
         validate(
             &programs
                 .into_iter()
-                .filter(|p| !p.image_boundary())
+                .filter(|p| !p.image_boundary() && p.kind == EffectKind::Adjustment)
                 .collect::<Vec<_>>(),
             Execution::Fused,
         );

@@ -257,6 +257,15 @@ Liquify depends directly on the preceding destination and uses one contact per
 source/destination swap. All pixels inside each step remain parallel. No public
 API exposes contact reordering.
 
+The Liquify presets are Push, Twirl Counterclockwise, Twirl Clockwise, Pinch,
+Expand and Crystals. Pinch shrinks content toward the dab centre and Expand
+bulges it. `LiquifyMode::TwirlClockwise` turns content counterclockwise on the
+y-down canvas (its name follows the rotation of the sampled coordinate), so the
+presets are labelled by the turn they make. Crystals scatters by the preset's
+Distortion, which must be above zero; Push carries its Momentum. The GPU oracle
+`liquify_modes_move_a_marker_in_their_labelled_direction` measures each
+direction, and the CPU source bounds in `material_sources.rs` mirror the shader.
+
 ## Persistence and undo
 
 All current state is a deterministic derivative of immutable strokes and can be

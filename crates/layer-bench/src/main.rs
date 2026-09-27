@@ -76,6 +76,9 @@ enum ScenarioKind {
     LoadedOil,
     PaletteKnife,
     NaturalBlender,
+    LiquifyPinch,
+    LiquifyExpand,
+    LiquifyCrystals,
 }
 
 impl ScenarioKind {
@@ -108,6 +111,7 @@ impl ScenarioKind {
         Self::PaletteKnife,
         Self::NaturalBlender,
     ];
+    const SCULPT: [Self; 3] = [Self::LiquifyPinch, Self::LiquifyExpand, Self::LiquifyCrystals];
 
     fn name(self) -> &'static str {
         match self {
@@ -136,6 +140,9 @@ impl ScenarioKind {
             Self::LoadedOil => "loaded_oil_mixer",
             Self::PaletteKnife => "palette_knife",
             Self::NaturalBlender => "natural_blender",
+            Self::LiquifyPinch => "liquify_pinch",
+            Self::LiquifyExpand => "liquify_expand",
+            Self::LiquifyCrystals => "liquify_crystals",
         }
     }
 
@@ -151,7 +158,11 @@ impl ScenarioKind {
             Self::LoadedOil => "reservoir + wetness",
             Self::PaletteKnife => "reservoir + wetness",
             Self::Smudge | Self::NaturalBlender => "smudge advection",
-            Self::LiquifyPush | Self::LiquifyTwirl => "bilinear deformation",
+            Self::LiquifyPush
+            | Self::LiquifyTwirl
+            | Self::LiquifyPinch
+            | Self::LiquifyExpand
+            | Self::LiquifyCrystals => "bilinear deformation",
             Self::WetRound => "reservoir + Oklab mixing",
             _ => "existing path",
         }
@@ -161,6 +172,7 @@ impl ScenarioKind {
         Self::LEGACY
             .into_iter()
             .chain(Self::PAINTER)
+            .chain(Self::SCULPT)
             .find(|kind| kind.name() == value)
     }
 }
@@ -505,11 +517,14 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                     ScenarioKind::LEGACY
                         .into_iter()
                         .chain(ScenarioKind::PAINTER)
+                        .chain(ScenarioKind::SCULPT)
                         .collect()
                 } else if value == "legacy" {
                     ScenarioKind::LEGACY.to_vec()
                 } else if value == "painter" {
                     ScenarioKind::PAINTER.to_vec()
+                } else if value == "sculpt" {
+                    ScenarioKind::SCULPT.to_vec()
                 } else if value == "dry" {
                     ScenarioKind::LEGACY[..9].to_vec()
                 } else if value == "watercolor" {
@@ -819,11 +834,20 @@ fn prepare_scenario(
                 ),
             }]
         }
-        ScenarioKind::LiquifyTwirl => {
+        ScenarioKind::LiquifyTwirl
+        | ScenarioKind::LiquifyPinch
+        | ScenarioKind::LiquifyExpand
+        | ScenarioKind::LiquifyCrystals => {
             prepare_destination_base(canvas)?;
+            let preset = match kind {
+                ScenarioKind::LiquifyPinch => Preset::LiquifyPinch,
+                ScenarioKind::LiquifyExpand => Preset::LiquifyExpand,
+                ScenarioKind::LiquifyCrystals => Preset::LiquifyCrystals,
+                _ => Preset::LiquifyTwirl,
+            };
             vec![StrokeSpec {
                 layer: 1,
-                brush: brush(Preset::LiquifyTwirl, 720.0, 1.0, [0.0; 4]),
+                brush: brush(preset, 720.0, 1.0, [0.0; 4]),
                 samples: lissajous(240, 980.0, 760.0, 0.2, 0.5),
             }]
         }

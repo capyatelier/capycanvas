@@ -224,7 +224,7 @@ pub const EDIT_MENU: MenuSpec = MenuSpec {
         &[CommandId::SearchCommands],
         &[CommandId::Undo, CommandId::Redo],
         &[CommandId::PasteImage],
-        &[CommandId::RasterizeSource, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer],
+        &[CommandId::RasterizeSource, CommandId::RevertToOriginal, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer],
         &[CommandId::ScaleRotate],
         &[CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth],
         &[CommandId::Settings],
@@ -481,6 +481,7 @@ command_ids! {
     CopySelectionToLayer,
     CutSelectionToLayer,
     ActualPixels,
+    RevertToOriginal,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -642,6 +643,7 @@ impl CommandId {
             Self::CopySelectionToLayer => "copy-to-layer",
             Self::CutSelectionToLayer => "cut-to-layer",
             Self::ActualPixels => "actual-pixels",
+            Self::RevertToOriginal => "reset",
         })
     }
     pub const TOOLS: [Self; 25] = [
@@ -821,6 +823,7 @@ impl CommandId {
             Self::CopySelectionToLayer => "Copy Selection to New Layer",
             Self::CutSelectionToLayer => "Cut Selection to New Layer",
             Self::ActualPixels => "Actual Pixels",
+            Self::RevertToOriginal => "Revert to Original Photo",
         }
     }
 }

@@ -317,6 +317,7 @@ fn entry(
                 | CommandId::ClearOutside
                 | CommandId::CopySelectionToLayer
                 | CommandId::CutSelectionToLayer
+                | CommandId::RevertToOriginal
                 | CommandId::SelectAll
                 | CommandId::Deselect
                 | CommandId::InvertSelection,
@@ -438,6 +439,7 @@ fn action_description(action: &UiAction) -> &'static str {
             ClearOutside => "Erase the pixels of the active layer outside the selection.",
             CopySelectionToLayer => "Copy the selected pixels to a new layer above, in place. Without a selection, duplicate the layer.",
             CutSelectionToLayer => "Move the selected pixels from the active layer to a new layer above, in place.",
+            RevertToOriginal => "Discard painting, erasing and applied masks on a placed photo, keeping its placement, mask, opacity and blend mode.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -975,7 +977,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::ClearSelected
             | C::ClearOutside
             | C::CopySelectionToLayer
-            | C::CutSelectionToLayer => self.require_document_idle(),
+            | C::CutSelectionToLayer
+            | C::RevertToOriginal => self.require_document_idle(),
             C::SaveDocument | C::SaveDocumentAs => self.require_raster_snapshot(),
             C::CloseDocument => self.require_document_snapshot_idle(),
             C::ResetLayout if self.managed_workspace.is_some() => self.require_workspace_idle(),
@@ -1086,6 +1089,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::CopySelectionToLayer | C::CutSelectionToLayer => {
                 self.selection_to_layer_refusal(command == C::CutSelectionToLayer).unwrap_or(UNAVAILABLE)
             }
+            C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or(UNAVAILABLE),
             C::MaskSelection if self.engine.document().selection.is_none() => "Make a selection first",
             C::MaskSelection => "Select an unlocked artwork layer",
             C::SelectionVisible | C::SelectionEditing | C::SelectionReference => "Choose a selection tool first",

@@ -99,7 +99,8 @@ export async function checkAdjustments({call,evaluate,settle}) {
   await send({type:"filter_picker",action:{op:"toggle_search"}});
   await send({type:"filter_picker",action:{op:"category",category:null}});
   const choices=await evaluate("layerApp.state().adjustments.map(x=>x.id)");
-  assert.equal(choices.length,40);
+  assert.equal(choices.length,42);
+  assert.deepEqual(choices.filter(id=>["solid_color","gradient_fill"].includes(id)),["solid_color","gradient_fill"],"The picker lists both fill generators");
   for(const [index,effect] of choices.entries()) {
     await evaluate("document.querySelector('.dock-tab[data-panel=adjustments]').click()");
     await evaluate(`document.querySelector('[data-effect="${effect}"]').click()`);await settle();
@@ -107,6 +108,15 @@ export async function checkAdjustments({call,evaluate,settle}) {
     assert.ok(view.controls.length>0);
     if(effect==="color_balance")assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.property-section'),e=>e.textContent)"),["Shadows","Midtones","Highlights"]);
     assert.equal(await evaluate("document.querySelector('.effect-properties').getClientRects().length>0"),true);
+    for(const color of view.controls.filter(c=>c.kind.kind==="color")) {
+      assert.ok(color.color_action,`${effect}: ${color.key} offers the current colour`);
+      assert.equal(await evaluate(`document.querySelector('.effect-properties [data-action="${color.key.replaceAll("_","-")}-bucket"]')?.closest('.property-row').firstChild.textContent`),color.label,`${effect}: ${color.key} keeps its labelled row`);
+    }
+    if(["solid_color","gradient_fill"].includes(effect)) {
+      const layer=await evaluate(`JSON.parse(JSON.stringify(layerApp.state().layers.find(l=>Number(l.id)===${view.layer}),(_,v)=>typeof v==='bigint'?Number(v):v))`);
+      assert.equal(layer.has_mask,true,`${effect}: a fill layer starts with a reveal-all mask`);
+    }
+    if(effect==="solid_color")assert.deepEqual(view.controls[0].value.value,await evaluate("JSON.parse(JSON.stringify(layerApp.state().colors.foreground))"),"Solid Color starts in the current colour");
     const curve=view.controls.find(c=>c.kind.kind==="curve");
     const number=view.controls.find(c=>c.kind.kind==="number");
     const gradient=view.controls.find(c=>c.kind.kind==="gradient");
@@ -120,7 +130,7 @@ export async function checkAdjustments({call,evaluate,settle}) {
       await evaluate("document.querySelector('.gradient-ramp').click()");
       await send({type:"effect",action:{op:"gradient_stop",layer:view.layer,key:gradient.key,index:null,position:.5,color:{space:"Srgb",rgba:[.8,.2,.1,1]},remove:false}});
       assert.equal(await evaluate("document.querySelectorAll('.gradient-stops button').length"),3);
-      await send({type:"effect",action:{op:"reset",layer:view.layer,key:"amount"}});
+      if(view.controls.some(c=>c.key==="amount"))await send({type:"effect",action:{op:"reset",layer:view.layer,key:"amount"}});
     }
     await capture(`${String(index+2).padStart(2,"0")}-${effect}`);
     await send({type:"set_layer_visibility",id:view.layer,visible:false});

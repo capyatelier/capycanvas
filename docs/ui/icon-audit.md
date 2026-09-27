@@ -141,7 +141,7 @@ The Reference column identifies the relevant functional/conventional family. The
 | `chromatic-aberration` | Chromatic Aberration | Offset overlapping channels | Added in second pass | [function](https://docs.krita.org/en/reference_manual/filters.html) |
 | `crosshatch` | Crosshatch | Evenly spaced crossing strips | Added in second pass | [function](https://docs.krita.org/en/reference_manual/filters.html) |
 | `crt` | CRT | Monitor and scan lines | Added in second pass | [function](https://docs.krita.org/en/reference_manual/filters.html) |
-| `denoise` | Denoise | Scattered samples beside a clean solid region | Added in second pass | [function](https://docs.krita.org/en/reference_manual/filters.html) |
+| `denoise` | Edge-Preserving Smooth (id `denoise`) | Scattered samples beside a clean solid region | Added in second pass | [function](https://docs.krita.org/en/reference_manual/filters.html) |
 | `domain-warp` | Domain Warp / Distort category | Displaced grid bands | Added in second pass | [function](https://docs.krita.org/en/reference_manual/filters.html) |
 | `edge-detect` | Edge Detect | Isolated nested boundaries | Added in second pass | [function](https://docs.krita.org/en/reference_manual/filters.html) |
 | `ellipse-both` | Ellipse outline and fill | Rim and separated interior | Added in second pass | [function](https://docs.krita.org/en/reference_manual/tools.html) |
@@ -180,7 +180,7 @@ The Reference column identifies the relevant functional/conventional family. The
 
 ## Control coverage added in the second pass
 
-The authoritative inventory is `ToolGroup::ALL`, the 24 built-in brush presets, `CommandId::TOOLS` plus Lasso Fill, the tool-specific mode projections, and the 40 entries in `assets/filters/manifest.json`. Both production hosts are exercised from these models; an asset existing on disk is insufficient.
+The authoritative inventory is `ToolGroup::ALL`, the 24 built-in brush presets, `CommandId::TOOLS` plus Lasso Fill, the tool-specific mode projections, and the 42 entries in `assets/filters/manifest.json`. Both production hosts are exercised from these models; an asset existing on disk is insufficient.
 
 ### Painting categories
 
@@ -239,7 +239,7 @@ Thirty bundled filters previously inherited the generic adjustment-sliders icon.
 | Unsharp Mask | `sharpen` |
 | High Pass | `high-pass` |
 | Motion Blur | `motion-blur` |
-| Denoise | `denoise` |
+| Edge-Preserving Smooth | `denoise` |
 | Edge Detect | `edge-detect` |
 | White Balance | `white-balance` |
 | Split Tone | `split-tone` |
@@ -265,8 +265,10 @@ Thirty bundled filters previously inherited the generic adjustment-sliders icon.
 | Heat Haze | `heat-haze` |
 | Iridescence | `iridescence` |
 | Domain Warp | `domain-warp` |
+| Solid Color | `fill` |
+| Gradient Fill | `gradient` |
 
-Category mapping: Tone → Levels; Color → hue/saturation swatches; Detail → sharpened edge; Blur → diffuse disk; Artistic → flat brush; Distort → warped grid; Texture → grain. Native select-menu values, numeric fields, ordinary text menu entries, and noninteractive section headings remain text controls; they do not depend on a glyph to identify their action.
+Category mapping: Tone → Levels; Color → hue/saturation swatches; Detail → sharpened edge; Blur → diffuse disk; Artistic → flat brush; Distort → warped grid; Texture → grain; Fill → the Fill tool's bucket. Native select-menu values, numeric fields, ordinary text menu entries, and noninteractive section headings remain text controls; they do not depend on a glyph to identify their action.
 
 ## Canvas action bar — 2026-09-26
 
@@ -284,6 +286,8 @@ Category mapping: Tone → Levels; Color → hue/saturation swatches; Detail →
 | Remove last point | `back` | The back arrow. |
 | Mask to selection | `mask` | The layer mask glyph. |
 | Show canvas action bar | `toolbar` | The toolbar glyph. |
+
+Revert to Original Photo (Edit menu, Layer Settings and command search, not the bar) reuses `reset`. The Liquify Distortion and Momentum tool settings reuse `distort` and `motion-blur`.
 
 ## Host integration
 

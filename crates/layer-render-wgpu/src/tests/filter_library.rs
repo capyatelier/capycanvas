@@ -191,7 +191,8 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
             "{} must not erase the image",
             id.label()
         );
-        if layers[0].effect.as_ref().unwrap().program.alpha == EffectAlpha::Preserve {
+        let program = &layers[0].effect.as_ref().unwrap().program;
+        if program.kind == layer_core::EffectKind::Adjustment && program.alpha == EffectAlpha::Preserve {
             assert!(
                 output
                     .chunks_exact(4)

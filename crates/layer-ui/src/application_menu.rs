@@ -69,21 +69,40 @@ impl ApplicationMenu {
 
 impl<R: CanvasRenderer> UiSession<R> {
     /// One submenu per filter category, shared by the Filter menu and the
-    /// selection bar's Adjust menu. It ignores the panel's search and category
-    /// and never requests thumbnails.
+    /// selection bar's Adjust menu. It ignores the panel's search and category,
+    /// leaves fill generators to Layer › New and never requests thumbnails.
     pub(crate) fn filter_category_items(&self) -> Vec<ContextMenuItem> {
         let choices = effects::catalog(&self.effect_catalog, &Default::default());
-        let enabled = self.selection_masks.target().is_none() && self.require_document_idle().is_ok();
+        let enabled = self.effect_insert_enabled();
+        let generators: Vec<_> = self.effect_catalog.filters().iter()
+            .filter(|d| d.program.kind == layer_core::EffectKind::Generator)
+            .map(|d| d.program.id.clone())
+            .collect();
         self.effect_catalog
             .categories()
             .iter()
-            .map(|category| {
-                let items = choices
+            .filter_map(|category| {
+                let items: Vec<_> = choices
                     .iter()
-                    .filter(|f| f.category == category.id)
+                    .filter(|f| f.category == category.id && !generators.contains(&f.id))
                     .map(|f| ContextMenuItem { enabled, ..ContextMenuItem::command(f.label.to_string(), f.action.clone()) })
                     .collect();
-                ContextMenuItem::submenu(&category.label, vec![items])
+                (!items.is_empty()).then(|| ContextMenuItem::submenu(&category.label, vec![items]))
+            })
+            .collect()
+    }
+    fn effect_insert_enabled(&self) -> bool {
+        self.selection_masks.target().is_none() && self.require_document_idle().is_ok()
+    }
+    /// Layer › New entries for the bundled fill generators.
+    pub(crate) fn fill_layer_items(&self) -> Vec<ContextMenuItem> {
+        let enabled = self.effect_insert_enabled();
+        [("Solid Color Fill", "solid_color"), ("Gradient Fill", "gradient_fill")]
+            .into_iter()
+            .filter(|(_, id)| self.effect_catalog.get(id).is_some())
+            .map(|(label, id)| ContextMenuItem {
+                enabled,
+                ..ContextMenuItem::command(label, UiAction::Effect { action: EffectAction::Insert { effect: id.into() } })
             })
             .collect()
     }

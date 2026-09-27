@@ -2559,4 +2559,204 @@ class AndroidInteractionTest {
         waitFor("the second drawing closes", 30_000) { !host.drawingTabs.switching && host.drawingTabs.rows.size == 1 }
         println("PASS hardware Delete and Backspace clear selected pixels in one undo step each; a text field and a focused drawing tab keep them")
     }
+
+    /** Open an application menu from the title bar, or through the compact menu, and choose `path` in it. */
+    private fun chooseFromApplicationMenu(menu: String, path: List<String>) {
+        val label = snapshot().array("application_menus").objects().first { it.getString("id") == menu }.getString("label")
+        val labelled = shown("application-menu-$menu")
+        tap(bounds(if (labelled) "application-menu-$menu" else "header-menu-labels-compact").center)
+        waitFor("the $label menu opens", 5_000) { popupCount() == 1 }
+        for (text in if (labelled) path else listOf(label) + path) {
+            waitFor("$text in the $label menu", 5_000) { menuText(text) != null }
+            settle()
+            tap(menuText(text)!!.center)
+        }
+        waitFor("the $label menu closes", 5_000) { popupCount() == 0 }
+    }
+    /** Remove the layers a journey added and return the document's extent. */
+    private fun cleanDocument(keep: Set<Long>): Pair<Double, Double> {
+        restore()
+        if (hasSelection()) command("deselect")
+        layerStates().map { it.getLong("id") }.filter { it !in keep }.forEach { layerAction(obj("op" to "delete", "id" to it)) }
+        command("fit_canvas")
+        SystemClock.sleep(300)
+        val extent = state().array("tabs").objects().first { it.getBoolean("active") }
+        return extent.getInt("width").toDouble() to extent.getInt("height").toDouble()
+    }
+    private fun control(key: String) = state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key") == key }
+        .getJSONObject("value").getJSONObject("value")
+    private fun shows(pixel: Int, rgba: List<Double>) = listOf(android.graphics.Color.red(pixel), android.graphics.Color.green(pixel), android.graphics.Color.blue(pixel))
+        .zip(rgba).all { (value, expected) -> kotlin.math.abs(value - 255 * expected) < 45 }
+    private fun same(a: Int, b: Int) = listOf(16, 8, 0).all { shift -> kotlin.math.abs((a shr shift and 0xff) - (b shr shift and 0xff)) <= 12 }
+
+    @Test fun solidColorFillMasksTheSelectionAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val colors = listOf(listOf(.85, .08, .05, 1.0), listOf(.05, .6, .1, 1.0), listOf(.8, .1, .7, 1.0))
+        popupInput = true
+        try {
+            for ((index, device) in pointerTools.withIndex()) {
+                val name = listOf("mouse", "finger", "stylus")[index]
+                val (width, height) = cleanDocument(keep)
+                val inside = documentPoint(width * .5, height * .45)
+                val outside = documentPoint(width * .2, height * .45)
+                val rgba = colors[index]
+                action(obj("type" to "set_color", "rgba" to JSONArray(rgba)))
+                command("rectangle_select")
+                tool = MotionEvent.TOOL_TYPE_STYLUS
+                drag(documentPoint(width * .4, height * .35), documentPoint(width * .6, height * .55))
+                waitFor("$name: the selection", 5_000) { hasSelection() && barKind() == "selection" && shown("canvas-action-bar") }
+                settle()
+                tool = device
+                val before = screenPixels(listOf(inside, outside))
+                val count = layerStates().size
+                val base = editingLayer()
+                chooseFromApplicationMenu("layer", listOf("New", "Solid Color Fill"))
+                waitFor("$name: Layer › New › Solid Color Fill adds a fill layer masked by the selection, which it consumes", 5_000) {
+                    val active = layerStates().first { it.getLong("id") == editingLayer() }
+                    layerStates().size == count + 1 && active.getString("label") == "Solid Color" && active.getBoolean("has_mask") && !hasSelection()
+                }
+                val layers = layerStates()
+                assertEquals("$name: the fill sits directly above the active layer",
+                    layers.indexOfFirst { it.getLong("id") == base }, layers.indexOfFirst { it.getLong("id") == editingLayer() } + 1)
+                val fill = control("color").getJSONArray("rgba")
+                assertTrue("$name: the fill uses the current colour: $fill", rgba.indices.all { kotlin.math.abs(fill.getDouble(it) - rgba[it]) < 1e-5 })
+                awaitPixels("$name: the current colour fills the selection and nothing else", listOf(inside, outside)) { (i, o) ->
+                    shows(i, rgba) && same(o, before[1])
+                }
+                if (index == 0) captureCanvasBar("solid-color-fill", "photo-edit")
+                command("undo")
+                waitFor("$name: one undo step removes the fill", 5_000) { layerStates().size == count && editingLayer() == base }
+                awaitPixels("$name: undo shows the layer beneath again", listOf(inside)) { (i) -> same(i, before[0]) }
+                println("PASS solid color fill $name")
+            }
+        } finally { popupInput = false }
+        println("PASS Layer › New › Solid Color Fill masks a selection in the current colour in one undo step, with mouse, finger and stylus")
+    }
+
+    @Test fun blackWhiteTintRowAppliesTheCurrentColorAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val category = filterCategory("Black & White")
+        val tints = listOf(listOf(.2, .5, .1, 1.0), listOf(.7, .3, .9, 1.0), listOf(.9, .7, .1, 1.0))
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        popupInput = true
+        try {
+            for ((index, device) in pointerTools.withIndex()) {
+                val name = listOf("mouse", "finger", "stylus")[index]
+                cleanDocument(keep)
+                tool = device
+                val count = layerStates().size
+                chooseFromApplicationMenu("filter", listOf(category, "Black & White"))
+                waitFor("$name: the Filter menu inserts Black & White", 5_000) {
+                    layerStates().size == count + 1 && state().getJSONObject("layer_properties").getString("title") == "Black & White"
+                }
+                if (!shown("layer-properties")) action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "properties"))
+                waitFor("$name: the Tint row", 5_000) { shown("tint-color-bucket") && textBounds("Tint color") != null }
+                val bucket = bounds("tint-color-bucket")
+                val swatch = bounds("property-color-Tint color")
+                val label = textBounds("Tint color")!!
+                assertTrue("$name: Tint keeps a labelled row: label $label, swatch $swatch, bucket $bucket",
+                    label.right <= swatch.left && swatch.right <= bucket.left
+                        && listOf(label, swatch).all { it.center.y in bucket.top..bucket.bottom })
+                if (index == 0) for (theme in listOf("light", "dark")) {
+                    action(obj("type" to "set_theme", "theme" to theme))
+                    captureCanvasBar("tint-row-$theme", "photo-edit")
+                }
+                val original = control("tint_color").toString()
+                action(obj("type" to "set_color", "rgba" to JSONArray(tints[index])))
+                tap(bounds("tint-color-bucket").center)
+                waitFor("$name: the bucket applies the current colour to Tint", 5_000) {
+                    control("tint_color").toString() == state().getJSONObject("colors").getJSONObject("foreground").toString()
+                }
+                command("undo")
+                waitFor("$name: one undo step restores the Tint", 5_000) { control("tint_color").toString() == original }
+                command("undo")
+                waitFor("$name: undo removes Black & White", 5_000) { layerStates().size == count }
+                println("PASS black and white tint $name")
+            }
+        } finally {
+            popupInput = false
+            action(obj("type" to "set_theme", "theme" to originalTheme))
+        }
+        println("PASS Black & White keeps a labelled Tint row whose bucket applies the current colour in one undo step, with mouse, finger and stylus")
+    }
+
+    @Test fun liquifyPinchStrokeMovesThePixelsUnderTheStylus() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val (width, height) = cleanDocument(keep)
+        tool = MotionEvent.TOOL_TYPE_STYLUS
+        layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+        val paint = editingLayer()
+        command("brush")
+        action(obj("type" to "select_brush", "id" to 1))
+        action(obj("type" to "set_brush_size", "value" to height * .03))
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.05, .1, .6, 1.0))))
+        for (row in 0..6) {
+            val y = height * (.25 + .07 * row)
+            drag(documentPoint(width * .15, y), documentPoint(width * .85, y), 12)
+        }
+        waitFor("the striped pattern is painted", 5_000) { paintRevision(paint) > 0 }
+        command("liquify")
+        action(obj("type" to "select_brush", "id" to 37))
+        action(obj("type" to "set_brush_size", "value" to height * .3))
+        waitFor("Liquify Pinch", 5_000) { state().getJSONObject("brush").getInt("preset") == 37 && host.snapshot?.optBoolean("brush_ready") == true }
+        SystemClock.sleep(500)
+        val probes = (0..8).flatMap { i -> listOf(.39, .42, .48, .51).map { y -> documentPoint(width * (.3 + .05 * i), height * y) } }
+        val far = documentPoint(width * .5, height * .9)
+        val before = screenPixels(probes + far)
+        val revision = paintRevision(paint)
+        val from = documentPoint(width * .3, height * .45)
+        val to = documentPoint(width * .7, height * .45)
+        val base = IntArray(2)
+        onMain { owner.view.getLocationOnScreen(base) }
+        val interval = 1000.0 / 240
+        val duration = 1500
+        fun inject(action: Int, down: Long, at: Offset) {
+            val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 7; toolType = MotionEvent.TOOL_TYPE_STYLUS })
+            val coords = arrayOf(MotionEvent.PointerCoords().apply {
+                x = at.x + base[0]; y = at.y + base[1]; pressure = if (action == MotionEvent.ACTION_UP) 0f else .7f
+            })
+            val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_STYLUS, 0)
+            try { assertTrue("the system accepts the stylus stroke", instrumentation.uiAutomation.injectInputEvent(event, false)) } finally { event.recycle() }
+        }
+        kotlinx.coroutines.runBlocking { host.withNative { Native.completionTimings(it, true) } }
+        host.measurementReport(true)
+        val count = (duration / interval).toInt()
+        val began = System.nanoTime()
+        val down = SystemClock.uptimeMillis()
+        for (i in 0..count) {
+            val left = began + (i * interval * 1e6).toLong() - System.nanoTime()
+            if (left > 0) java.util.concurrent.locks.LockSupport.parkNanos(left)
+            inject(if (i == 0) MotionEvent.ACTION_DOWN else if (i == count) MotionEvent.ACTION_UP else MotionEvent.ACTION_MOVE, down, from + (to - from) * (i / count.toFloat()))
+        }
+        val ended = System.nanoTime()
+        SystemClock.sleep(300)
+        val completions = kotlinx.coroutines.runBlocking { host.withNative { JSONArray(Native.completionTimings(it, false)) } }
+        val frames = host.measurementReport(false).getJSONArray("frames").let { rows -> (0 until rows.length()).map { rows.getJSONArray(it) } }
+            .filter { it.getLong(1) in began..ended && it.getLong(6) > 0 }
+        waitFor("the Pinch stroke edits the pattern", 5_000) { paintRevision(paint) != revision }
+        assertNull(host.actionError)
+        awaitPixels("the Pinch stroke moves the stripes under it and nothing far from it", probes + far) { after ->
+            probes.indices.count { !same(after[it], before[it]) } >= probes.size / 4 && same(after.last(), before.last())
+        }
+        fun quantiles(values: List<Double>) = values.sorted().let { v ->
+            if (v.isEmpty()) obj("n" to 0)
+            else obj("n" to v.size, "p50" to v[(v.size - 1) / 2], "p99" to v[((v.size - 1) * .99).toInt()], "max" to v.last(), "over_8_33" to v.count { it > 8.333 })
+        }
+        val completed = (0 until completions.length()).map { completions.getJSONArray(it) }.filter { it.getLong(1) in began..ended }.map { it.getLong(2) }.sorted()
+        val seconds = (ended - began) / 1e9
+        var refresh = 0f
+        onMain { refresh = owner.view.display.refreshRate }
+        val result = obj("display_hz" to refresh, "seconds" to seconds, "debuggable" to BuildConfig.DEBUG, "input_hz" to 1000 / interval,
+            "submitted_hz" to frames.size / seconds, "completed_hz" to completed.size / seconds,
+            "submitted_vsync_interval_ms" to quantiles(frames.map { it.getLong(0) }.sorted().zipWithNext { a, b -> (b - a) / 1e6 }),
+            "gpu_completion_interval_ms" to quantiles(completed.zipWithNext { a, b -> (b - a) / 1e6 }),
+            "owner_cpu_ms" to quantiles(frames.map { it.getLong(17) / 1e6 }))
+        File(instrumentation.targetContext.getExternalFilesDir(null), "validation/photo-edit/pinch-frames.json").apply { parentFile!!.mkdirs() }.writeText(result.toString(2))
+        println("PINCH FRAMES $result")
+        assertTrue("the stroke presents frames throughout: $result", completed.size > 60 * seconds)
+        captureCanvasBar("liquify-pinch", "photo-edit")
+        command("undo")
+        awaitPixels("one undo step restores the pattern", probes) { after -> probes.indices.all { same(after[it], before[it]) } }
+        println("PASS Liquify Pinch: a stylus stroke moves the striped pixels under it, leaves distant pixels, and undoes in one step")
+    }
 }

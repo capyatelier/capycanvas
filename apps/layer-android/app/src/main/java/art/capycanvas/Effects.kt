@@ -197,11 +197,10 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
                     Text(label,Modifier.weight(1f))
                     Box(Modifier.weight(2f)){PropertyChoice(label,kind.array("options").values().map{it.toString()},(value as Number).toInt(),enabled){change(it)}}
                 }
-                "color" -> if(control.isNull("color_action")) ManagedColorButton(host,label,value as JSONObject,enabled) { change(it) }
-                    else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalAlignment=Alignment.CenterVertically) {
-                        Box(Modifier.weight(1f)) { ManagedColorButton(host,label,value as JSONObject,enabled,swatchOnly=true) { change(it) } }
-                        Box(Modifier.size(40.dp,36.dp).testTag("paper-color-bucket").clickable(enabled=enabled){host.dispatch(control.getJSONObject("color_action"))},contentAlignment=Alignment.Center) { SharedIcon("fill","Use selected color") }
-                    }
+                "color" -> ManagedColorButton(host,label,value as JSONObject,enabled,trailing = {
+                    if(!control.isNull("color_action")) Box(Modifier.size(40.dp,36.dp).testTag("${key.replace('_','-')}-bucket")
+                        .clickable(enabled=enabled){host.dispatch(control.getJSONObject("color_action"))},contentAlignment=Alignment.Center) { SharedIcon("fill","Use selected color") }
+                }) { change(it) }
                 "gradient" -> GradientControl(host,layer,control,enabled)
             }
         }

@@ -52,6 +52,10 @@ pub enum DefaultBrushPreset {
     WetInk = 32,
     BlottyInk = 33,
     BrushedInk = 34,
+    LiquifyTwirlClockwise = 36,
+    LiquifyPinch = 37,
+    LiquifyExpand = 38,
+    LiquifyCrystals = 39,
 }
 
 /// Returns a complete immutable preset snapshot. Callers may override color,
@@ -255,6 +259,49 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
                 pressure: 1.0,
                 momentum: 0.0,
                 distortion: 0.0,
+            },
+            mappings: Arc::from([BrushMapping::pressure_size()]),
+            ..BrushSnapshot::default()
+        },
+        DefaultBrushPreset::LiquifyTwirlClockwise => BrushSnapshot {
+            deform: BrushDeform {
+                mode: LiquifyMode::TwirlCounterClockwise,
+                ..default_brush(DefaultBrushPreset::LiquifyTwirl).deform
+            },
+            ..default_brush(DefaultBrushPreset::LiquifyTwirl)
+        },
+        DefaultBrushPreset::LiquifyPinch | DefaultBrushPreset::LiquifyExpand => BrushSnapshot {
+            diameter: 520.0,
+            hardness: 0.3,
+            flow: 1.0,
+            spacing: 0.16,
+            execution: BrushExecution::Liquify,
+            deform: BrushDeform {
+                mode: if preset == DefaultBrushPreset::LiquifyPinch {
+                    LiquifyMode::Pinch
+                } else {
+                    LiquifyMode::Expand
+                },
+                strength: 0.5,
+                pressure: 1.0,
+                momentum: 0.0,
+                distortion: 0.0,
+            },
+            mappings: Arc::from([BrushMapping::pressure_size()]),
+            ..BrushSnapshot::default()
+        },
+        DefaultBrushPreset::LiquifyCrystals => BrushSnapshot {
+            diameter: 360.0,
+            hardness: 0.4,
+            flow: 1.0,
+            spacing: 0.1,
+            execution: BrushExecution::Liquify,
+            deform: BrushDeform {
+                mode: LiquifyMode::Crystals,
+                strength: 0.7,
+                pressure: 1.0,
+                momentum: 0.0,
+                distortion: 0.6,
             },
             mappings: Arc::from([BrushMapping::pressure_size()]),
             ..BrushSnapshot::default()
@@ -633,6 +680,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn liquify_presets_use_their_modes_and_crystals_distorts() {
+        for (preset, mode) in [
+            (DefaultBrushPreset::LiquifyPush, LiquifyMode::Push),
+            (DefaultBrushPreset::LiquifyTwirl, LiquifyMode::TwirlClockwise),
+            (DefaultBrushPreset::LiquifyTwirlClockwise, LiquifyMode::TwirlCounterClockwise),
+            (DefaultBrushPreset::LiquifyPinch, LiquifyMode::Pinch),
+            (DefaultBrushPreset::LiquifyExpand, LiquifyMode::Expand),
+            (DefaultBrushPreset::LiquifyCrystals, LiquifyMode::Crystals),
+        ] {
+            let brush = default_brush(preset);
+            assert_eq!(brush.execution, BrushExecution::Liquify, "{preset:?}");
+            assert_eq!(brush.deform.mode, mode, "{preset:?}");
+            assert!(brush.deform.strength > 0., "{preset:?}");
+        }
+        assert!(default_brush(DefaultBrushPreset::LiquifyCrystals).deform.distortion > 0.);
+    }
+
+    #[test]
     fn every_builtin_is_valid() {
         for preset in crate::CONTACT_BRUSH_PRESETS {
             default_brush(preset).validate().unwrap();
@@ -651,6 +716,10 @@ mod tests {
             DefaultBrushPreset::WetRound,
             DefaultBrushPreset::LiquifyPush,
             DefaultBrushPreset::LiquifyTwirl,
+            DefaultBrushPreset::LiquifyTwirlClockwise,
+            DefaultBrushPreset::LiquifyPinch,
+            DefaultBrushPreset::LiquifyExpand,
+            DefaultBrushPreset::LiquifyCrystals,
             DefaultBrushPreset::MultiplyGlaze,
             DefaultBrushPreset::TexturedFlat,
             DefaultBrushPreset::DryScumble,

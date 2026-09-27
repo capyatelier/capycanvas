@@ -165,6 +165,7 @@ fn preset_history(masked: bool) {
     let presets = CONTACT_BRUSH_PRESETS.into_iter().chain([
         Spray, WetRound, MultiplyGlaze, OpaqueGouache, WatercolorWash, WetWatercolor,
         LoadedOil, PaletteKnife, Smudge, NaturalBlender, LiquifyPush, LiquifyTwirl,
+        LiquifyTwirlClockwise, LiquifyPinch, LiquifyExpand, LiquifyCrystals,
     ]);
     for (index, preset) in presets.enumerate() {
         let time = (index as u64 + 1) * 100_000_000;

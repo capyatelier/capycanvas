@@ -101,7 +101,9 @@ fn capy_split_tone(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
 fn capy_vignette(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let center=vec2<f32>(fx_parameter(b,3u).x,fx_parameter(b,4u).x)/100.;
     let d=length((p/fx_extent()-center)*2.);let radius=fx_parameter(b,1u).x/100.;let soft=max(.01,fx_parameter(b,2u).x/100.);
-    let mask=smoothstep(radius*(1.-soft),radius,d);return vec4<f32>(c.rgb*exp2(-2.*mask*fx_parameter(b,0u).x/100.),c.a);
+    let mask=smoothstep(radius*(1.-soft),radius,d);var rgb=c.rgb*exp2(-2.*mask*fx_parameter(b,0u).x/100.);
+    if !FX_HDR {rgb=min(rgb,vec3<f32>(c.a));}
+    return vec4<f32>(rgb,c.a);
 }
 fn capy_film_grain(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let size=fx_parameter(b,1u).x;let frame=u32(floor(fx_time(b)*24.));
@@ -218,4 +220,14 @@ fn capy_domain_warp(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let bend=vec2<f32>(fx_fbm(q,octaves,3u),fx_fbm(q+19.3,octaves,31u));
     let warp=vec2<f32>(fx_fbm(q+bend*1.4,octaves,71u),fx_fbm(q+bend*1.4+7.9,octaves,113u));
     return fx_sample(p+warp*fx_parameter(b,0u).x);
+}
+fn capy_solid_color(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
+    let color=fx_parameter(b,0u);return fx_rgba(color.rgb,color.a);
+}
+fn capy_gradient_fill(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
+    let extent=fx_extent();let delta=p-extent*vec2<f32>(fx_parameter(b,69u).x,fx_parameter(b,70u).x)/100.;
+    let scale=fx_parameter(b,68u).x/100.;var t=length(delta)/(.5*length(extent)*scale);
+    if fx_parameter(b,66u).x<.5 {let axis=fx_axis(-fx_parameter(b,67u).x);t=dot(delta,axis)/((abs(axis.x)*extent.x+abs(axis.y)*extent.y)*scale)+.5;}
+    let mapped=fx_lut(b,0u,select(t,1.-t,fx_parameter(b,65u).x>.5));
+    return fx_rgba(mapped.rgb,mapped.a);
 }

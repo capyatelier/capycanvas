@@ -499,10 +499,16 @@ pub enum ColorMixSpace {
 pub enum LiquifyMode {
     #[default]
     Push,
+    /// Turns content counterclockwise on the y-down canvas. The name follows
+    /// the rotation applied to the sampled coordinate.
     TwirlClockwise,
+    /// Turns content clockwise on the y-down canvas.
     TwirlCounterClockwise,
+    /// Shrinks content toward the dab centre.
     Pinch,
+    /// Bulges content away from the dab centre.
     Expand,
+    /// Scatters content in 4 px cells by up to `12 * distortion` pixels.
     Crystals,
     Edge,
     Reconstruct,

@@ -93,6 +93,44 @@ impl<R: CanvasRenderer> UiSession<R> {
                 l.kind == LayerKind::Paint && l.source.as_ref().is_some_and(|s| s.is_original())
             })
     }
+    /// Why Revert to Original Photo can't run on the active layer once the
+    /// document is idle.
+    pub(super) fn revert_to_original_refusal(&self) -> Option<&'static str> {
+        let document = self.engine.document();
+        if self.selection_masks.target().is_some() {
+            return Some("Return to the artwork first");
+        }
+        if document.active_mask {
+            return Some("Return to the layer's artwork first");
+        }
+        if self.state.document_file.busy {
+            return Some("Wait for the current file operation");
+        }
+        let Some(layer) = document.layer(document.active_layer).filter(|l| l.kind == LayerKind::Paint) else {
+            return Some("Select a placed photo layer");
+        };
+        match &layer.source {
+            None => Some("Select a placed photo layer"),
+            Some(source) if !source.is_original() => Some("A rasterized photo has no original to return to"),
+            Some(_) if document.is_locked(layer.id) => Some("The active layer is locked"),
+            Some(_) => (!baked(layer)).then_some("This photo has no edits"),
+        }
+    }
+    /// Discards the active photo's raster edits in one undo step, keeping its
+    /// source, placement, mask, opacity and blend mode.
+    pub(super) fn revert_to_original(&mut self) -> Result<(), String> {
+        self.require_document_idle()?;
+        if let Some(reason) = self.revert_to_original_refusal() {
+            return Err(reason.into());
+        }
+        let document = self.engine.document();
+        let mut layer = document.layer(document.active_layer).ok_or("Select a placed photo layer")?.clone();
+        layer.raster = Default::default();
+        layer.pending_operations.clear();
+        self.layer_edit(Edit::ReplaceLayer(Box::new(layer)))?;
+        self.layer_interaction.changed = true;
+        Ok(())
+    }
     pub(super) fn request_source_edit(&mut self, id: LayerId, request: DocumentRequest) -> Result<(), String> {
         if !self.can_edit_original(id) {
             return Err("Select an unlocked retained image layer".into());

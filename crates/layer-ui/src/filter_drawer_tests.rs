@@ -255,3 +255,95 @@ fn curve_points_detach_off_the_graph_until_release_and_commit_one_step() {
     assert_eq!(curve(&s), [[0., 0.], [1., 1.]]);
     assert!(!modified(&s), "Reset hides the on-chart reset control");
 }
+
+fn menu_item<'a>(sections: &'a [Vec<ContextMenuItem>], label: &str) -> Option<&'a ContextMenuItem> {
+    sections.iter().flatten().find_map(|item| if item.label == label { Some(item) } else { menu_item(&item.sections, label) })
+}
+
+#[test]
+fn fill_layers_start_from_the_current_color_and_mask_to_the_selection() {
+    let mut s = session(Platform::Gtk);
+    s.dispatch(UiAction::SetColor { rgba: [0.9, 0.2, 0.1, 1.] }).unwrap();
+    let base = s.engine.document().active_layer;
+    let menu = s.application_menu(ApplicationMenu::Layer);
+    let new = menu_item(&menu.sections, "New").unwrap();
+    let solid = menu_item(&new.sections, "Solid Color Fill").unwrap().clone();
+    assert!(solid.enabled);
+    assert!(menu_item(&new.sections, "Gradient Fill").is_some());
+    let before = s.engine.document().layers.clone();
+    s.dispatch(solid.action.unwrap()).unwrap();
+    let doc = s.engine.document();
+    let fill = doc.layer(doc.active_layer).unwrap();
+    assert_eq!((fill.kind, fill.name.as_ref()), (LayerKind::Effect, "Solid Color"));
+    let effect = fill.effect.as_ref().unwrap();
+    assert_eq!(effect.program.kind, layer_core::EffectKind::Generator);
+    assert_eq!(effect.value("color"), Some(&layer_core::EffectValue::Color(s.state.colors.definition())));
+    let mask = fill.mask.as_ref().expect("painting on a fill goes to its mask");
+    assert_eq!((mask.initial.as_ref(), mask.default_coverage), (None, 1.), "a reveal-all mask");
+    assert_eq!(doc.layers.iter().position(|l| l.id == fill.id).unwrap() + 1, doc.layers.iter().position(|l| l.id == base).unwrap());
+    assert_eq!(doc.drawing_target(), Some(mask.id));
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().layers, before, "inserting is one undo step");
+
+    let selection = layer_core::Selection::polygon(vec![
+        Point { x: 40., y: 40. },
+        Point { x: 240., y: 60. },
+        Point { x: 120., y: 200. },
+    ])
+    .unwrap();
+    s.layer_edit(layer_core::Edit::SetSelection(Some(selection.clone()))).unwrap();
+    s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "gradient_fill".into() } }).unwrap();
+    let doc = s.engine.document();
+    let fill = doc.layer(doc.active_layer).unwrap();
+    assert_eq!(fill.effect.as_ref().unwrap().program.id.as_ref(), "gradient_fill");
+    assert_eq!(fill.mask.as_ref().unwrap().initial.as_ref(), Some(&selection), "the selection becomes the mask");
+    assert_eq!(doc.selection, None, "and is consumed");
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().selection, Some(selection), "undo restores the selection");
+}
+
+#[test]
+fn the_filter_menu_leaves_fill_generators_to_layer_new() {
+    let s = session(Platform::Gtk);
+    let generators: Vec<_> = s.effect_catalog.filters().iter()
+        .filter(|f| f.program.kind == layer_core::EffectKind::Generator)
+        .map(|f| f.label().to_string())
+        .collect();
+    assert_eq!(generators, ["Solid Color", "Gradient Fill"]);
+    let menu = s.application_menu(ApplicationMenu::Filter);
+    assert!(menu.sections[0].iter().all(|c| c.label != "Fill" && !c.sections.is_empty()));
+    for label in &generators {
+        assert!(menu_item(&menu.sections, label).is_none(), "{label} is not a filter");
+    }
+    assert!(menu_item(&menu.sections, "Curves").is_some());
+    assert!(s.state.adjustments.iter().any(|c| c.id.as_ref() == "solid_color" && c.category_icon == "fill"),
+        "the effect browser still lists fills");
+}
+
+#[test]
+fn every_effect_color_control_offers_the_current_color() {
+    let mut s = session(Platform::Gtk);
+    s.dispatch(UiAction::SetColor { rgba: [0.1, 0.7, 0.3, 1.] }).unwrap();
+    let with_colors: Vec<_> = s.effect_catalog.filters().iter()
+        .filter(|f| f.program.parameters.iter().any(|p| p.kind == layer_core::EffectParameterKind::Color))
+        .map(|f| f.id().to_string())
+        .collect();
+    for id in ["black_white", "split_tone", "halftone", "crosshatch", "pencil", "solid_color"] {
+        assert!(with_colors.iter().any(|c| c == id), "{id}");
+    }
+    for id in with_colors {
+        s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: id.as_str().into() } }).unwrap();
+        let layer = s.engine.document().active_layer.0;
+        let colors: Vec<_> = s.state.layer_properties.controls.iter()
+            .filter(|c| c.kind == PropertyKind::Color).cloned().collect();
+        assert!(!colors.is_empty(), "{id}");
+        for control in colors {
+            let action = UiAction::Effect { action: EffectAction::UseCurrentColor { layer, key: control.key.clone() } };
+            assert_eq!(control.color_action.as_ref(), Some(&action), "{id}.{}", control.key);
+            assert!(!control.label.is_empty());
+            s.dispatch(action).unwrap();
+            let value = s.engine.document().layer(LayerId(layer)).unwrap().effect.as_ref().unwrap().value(&control.key).cloned();
+            assert_eq!(value, Some(layer_core::EffectValue::Color(s.state.colors.definition())), "{id}.{}", control.key);
+        }
+    }
+}

@@ -511,6 +511,8 @@ pub fn tool_setting_icon(id: &str) -> &'static str {
         "gap_closing" => "close-gap",
         "expansion" => "expand",
         "strength" => "strength",
+        "distortion" => "distort",
+        "momentum" => "motion-blur",
         "tolerance" => "color-select",
         _ => "settings",
     }
