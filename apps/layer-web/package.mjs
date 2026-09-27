@@ -39,7 +39,7 @@ function replaceRequired(text, from, to) {
 
 // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
 // Hash final bytes after rewriting dependencies; no bundler required.
-const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","glass.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "canvas-bar.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "pkg/layer_web.js", "app.js"];
+const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","glass.js","documents.js","preferences.js", "command-bar.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "canvas-bar.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "pkg/layer_web.js", "app.js"];
 const workers = ["workspace-worker.js", "raster-worker.js", "proof-worker.js"];
 
 export function fingerprintAssets(directory) {
@@ -97,6 +97,7 @@ export function fingerprintAssets(directory) {
   for (const path of ["drawing-tabs.js", "document-recovery.js", "export-controls.js", "histogram.js","document-color.js","proof.js","image-import.js"]) documents = replaceRequired(documents, `from './${path}'`, `from "./${names[path]}"`);
   publish("documents.js", documents);
   publish("preferences.js", replaceRequired(read(join(directory, "preferences.js")), "from './export-controls.js'", `from "./${names["export-controls.js"]}"`));
+  publish("command-bar.js");
   publish("gpu.js");
   let toolbarComponents = read(join(directory, "toolbar-components.js"));
   for (const path of ["numeric.js", "range-control.js"]) toolbarComponents = replaceRequired(toolbarComponents, `from './${path}'`, `from "./${names[path]}"`);
@@ -188,7 +189,9 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    for (const path of [...modules.filter(path => !path.startsWith("pkg/")), ...workers, "style.css"])
+    // Copy every runtime module, not only listed ones, so fingerprinting rejects a
+    // module missing from the dependency order instead of shipping its unresolved import.
+    for (const path of [...readdirSync(web).filter(path => path.endsWith(".js") && path !== "sw.js"), "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
       mkdirSync(join(runtime, directory));
