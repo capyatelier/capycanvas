@@ -255,7 +255,7 @@ function applyChange(change) {
   }
   if(change.regions & 256) editor?.refreshColorPreview();
   if(change.regions===256){if(change.canvas_wake)wake();return;}
-  if (change.regions & (1 | 2 | 4 | 128)) workspaceManager?.observe();
+  if (change.regions & (1 | 2 | 4 | 8 | 128)) workspaceManager?.observe();
   if (change.regions) {
     const presentation = app.workspace_update();
     if (workspaceModelRevision !== presentation.model_revision) {
@@ -901,7 +901,7 @@ function update(regions) {
               });
               input.click();
             }
-            else if (request.kind.type === "workspace") { workspaceManager?.handle(request); }
+            else if (request.kind.type === "workspace") { workspaceManager?.wake(); continue; }
             else if (request.kind.type !== "save_settings") { documents.handle(request); continue; }
             else
             localStorage.setItem(settingsKey, JSON.stringify(request.kind.settings));
@@ -1728,7 +1728,7 @@ try {
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
-  workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message, dispatch });
+  workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message });
   selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch});
   editor = createEditorPanels({selectionUi,app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged});
   palettes = createPalettes({ app, state: () => state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker,

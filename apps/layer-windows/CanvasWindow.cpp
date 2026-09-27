@@ -1168,7 +1168,7 @@ void CanvasWindow::Popup(bool open) {
 void CanvasWindow::UpdatePopup() {
     if(closing||closed)return;
     auto storage=CapyUi::object(lastModel,L"windows_workspace");
-    bool unavailable=storage.Size()&&(!CapyUi::flag(storage,L"ready")||CapyUi::flag(storage,L"busy")||CapyUi::flag(storage,L"owner_lost")||CapyUi::flag(storage,L"close_requested"));
+    bool unavailable=storage.Size()&&(!CapyUi::flag(storage,L"ready")||CapyUi::flag(storage,L"busy")||CapyUi::flag(storage,L"owner_lost")||CapyUi::flag(storage,L"closing"));
     unavailable|=CapyUi::flag(CapyUi::object(lastModel,L"windows_settings_close"),L"requested");
     bool blocked=unavailable||(settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(selectionDialog&&selectionDialog->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen());
     canvasFocus.IsEnabled(!blocked);
@@ -1222,7 +1222,7 @@ void CanvasWindow::SendLaunchFiles(Windows::Data::Json::JsonObject const& model)
     Send(to_string(O({{L"operation",S(L"open_paths")},{L"paths",paths}}).Stringify()),CanvasCommandKind::Document);
 }
 void CanvasWindow::RefreshWorkspaceSwitcher() {
-    if(!closing&&!closed)Send(R"({"operation":"refresh_switcher"})",CanvasCommandKind::Workspace);
+    if(!closing&&!closed)Send(R"({"operation":"input","input":{"type":"refresh_switcher"}})",CanvasCommandKind::Workspace);
 }
 void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     using namespace CapyUi;
@@ -1259,7 +1259,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
         }
     }
     auto preferencesClose=object(model,L"windows_settings_close");
-    if(flag(object(model,L"windows_tabs"),L"window_ready")&&flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"close_ready"))
+    if(flag(object(model,L"windows_tabs"),L"window_ready")&&flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"closed"))
         &&(!preferencesClose.Size()||flag(preferencesClose,L"ready"))
         &&(!object(model,L"windows_recovery").Size()||flag(object(model,L"windows_recovery"),L"ready"))){Stop();return;}
     if(!statusFailed){

@@ -82,7 +82,7 @@ try {
     const capture=await evaluate('layerApp.app.workspace_capture()');
     const theme=await evaluate('layerApp.state().settings.theme ?? null');
     if(process.argv.includes('--color-panel')){await workspaceInput({type:'switch',id:'builtin:workspace:photographer'});await workspaceIdle();}
-    await workspaceInput({type:'form',kind:'new'});
+    await workspaceInput({type:'form',action:{type:'new'}});
     await workspaceInput({type:'submit',name:`Tablet regression ${Date.now()}`});
     const created=(await workspaceIdle()).id; assert.notEqual(created,original);
     workspaceIsolation={original,created,capture,theme};
@@ -237,7 +237,7 @@ try {
     await workspaceInput({type:'cancel'}); await workspaceInput({type:'cancel'});
     await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(workspaceIsolation.theme)}})`);
     await workspaceInput({type:'switch',id:workspaceIsolation.original}); await workspaceIdle();
-    await workspaceInput({type:'form',kind:'delete',id:workspaceIsolation.created});
+    await workspaceInput({type:'form',action:{type:'delete',value:workspaceIsolation.created}});
     await workspaceInput({type:'submit',name:''}); await workspaceIdle();
     const normalize=text=>JSON.stringify(JSON.parse(text),(key,value)=>key==='timestamp_ms'?'date':value);
     assert.equal(normalize(await evaluate('layerApp.app.workspace_capture()')),normalize(workspaceIsolation.capture),'The original workspace and its history remain intact');

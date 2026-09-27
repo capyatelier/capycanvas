@@ -8,7 +8,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/manager-focus/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-function Manager {(Model).windows_workspace_manager}
+function Manager {$w=(Model).windows_workspace;if($w -and ($null -ne $w.page -or $null -ne $w.prompt)){$w}}
 function Layout {(Model).state.workspace | ConvertTo-Json -Depth 80 -Compress}
 function Edit([string]$Id,[string]$Value){(Control $Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)}
 function Button([string]$Name){
@@ -69,7 +69,7 @@ try {
     $secondWorkspace=(Manager).selected
     if($secondWorkspace -eq $original){throw 'Concurrent windows share one active workspace'}
     $null=Select-Row $original
-    if((Manager).apply_label -ne 'Switch to Window'){throw 'Owned workspace did not offer Switch to Window'}
+    if((Manager).primary -ne 'Switch to Window'){throw 'Owned workspace did not offer Switch to Window'}
     Capture 'owned-workspace'
     Choose 'Switch to Window'
     Wait-Until {$null -eq (Find 'workspace-manager')} 'Switch to Window did not dismiss the source manager'

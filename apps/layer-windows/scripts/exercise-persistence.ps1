@@ -72,7 +72,7 @@ try {
     Wait-Until {$null -ne (Find 'workspace-close-error')} 'Close recovery dialog did not appear'
     & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'close-recovery.png') -ClientOnly *> (Join-Path $run 'close-recovery.json')
     Dialog 'Keep open'
-    Wait-Until {!(Model).windows_workspace.close_requested -and !(Model).state.document_file.close_ready} 'Keep open did not cancel window close'
+    Wait-Until {!(Model).windows_workspace.closing -and !(Model).state.document_file.close_ready} 'Keep open did not cancel window close'
     # These files were created by this fixture in its unique local directory.
     Move-Item -LiteralPath $database -Destination (Join-Path $broken 'unreadable-original')
     Copy-Item -LiteralPath (Join-Path $profile 'workspaces.sqlite3') -Destination $database

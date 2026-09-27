@@ -39,7 +39,7 @@ class AndroidWorkspaceSwitcherTest {
         return checkNotNull(result) { "Missing $tag" }
     }
     private fun waitFor(label: String, timeout: Long = 15000, condition: () -> Boolean) = host.awaitMain(label, timeout, { "${view()}" }, condition)
-    private fun rowsEnabled() = view().optString("page") != "workspaces" || !view().isNull("form") || view().array("rows").objects()
+    private fun rowsEnabled() = view().optString("page") != "workspaces" || !view().isNull("prompt") || view().array("rows").objects()
         .all { node("workspace-row-${it.getString("id")}")?.second?.config?.getOrNull(SemanticsProperties.Disabled) == null }
     private fun idle() {
         SystemClock.sleep(220)
@@ -70,7 +70,7 @@ class AndroidWorkspaceSwitcherTest {
     private fun open() { send(obj("type" to "open", "page" to "workspaces")); waitFor("dialog focus") { node("workspace-manager")?.first?.view?.hasWindowFocus() == true } }
     private fun options(id: String, action: String) { tap("workspace-options-$id"); tap("workspace-$action") }
     private fun newWorkspace(name: String): String {
-        send(obj("type" to "form", "kind" to "new")); send(obj("type" to "submit", "name" to name))
+        send(obj("type" to "form", "action" to obj("type" to "new"))); send(obj("type" to "submit", "name" to name))
         return view().getString("id")
     }
     private fun shot(name: String) = screenshot("validation/workspace-switcher/$name.png")

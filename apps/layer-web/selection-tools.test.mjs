@@ -20,7 +20,7 @@ export async function checkSelectionTools({call, evaluate, settle}) {
   const original = await evaluate('JSON.parse(layerApp.app.workspace_view()).id');
   const theme = await evaluate('layerApp.state().settings.theme ?? null');
   await workspace({type:'switch',id:'builtin:workspace:painter'});
-  await workspace({type:'form',kind:'new'});
+  await workspace({type:'form',action:{type:'new'}});
   await workspace({type:'submit',name:`Selection test ${Date.now()}`});
   const created = await evaluate('JSON.parse(layerApp.app.workspace_view()).id');
   assert.notEqual(created,'builtin:workspace:painter');
@@ -131,7 +131,7 @@ export async function checkSelectionTools({call, evaluate, settle}) {
   } finally {
     await send({type:'set_theme',theme});
     await workspace({type:'switch',id:original});
-    await workspace({type:'form',kind:'delete',id:created});
+    await workspace({type:'form',action:{type:'delete',value:created}});
     await workspace({type:'submit',name:''});
     await evaluate('delete window.selectionDrawer;window.selectionTestWake?.release();delete window.selectionTestWake');
   }

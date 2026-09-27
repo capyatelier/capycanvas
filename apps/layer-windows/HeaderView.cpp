@@ -146,7 +146,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPointerOver"),hover);
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPressed"),hover);
                 item.Resources().Insert(box_value(L"ToggleButtonForegroundChecked"),data->brush(L"text"));
-                AutomationProperties::SetAutomationId(item,L"workspace-switch-"+str(choice,L"key"));
+                AutomationProperties::SetAutomationId(item,L"workspace-switch-"+id);
                 auto label=CapyUi::label(data,L"");label.UseLayoutRounding(false);label.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
                 label.TextTrimming(TextTrimming::CharacterEllipsis);label.MaxWidth(110);item.Content(label);
                 item.Click([weak=weak_from_this(),id](auto&&,auto&&){
@@ -159,7 +159,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 });
                 switches.Children().Append(item);workspaces.emplace_back(item,id);found=std::prev(workspaces.end());
             }
-            auto const& item=found->first;auto name=str(choice,L"name");
+            auto const& item=found->first;auto name=str(choice,L"title");
             auto content=item.Content().as<TextBlock>();
             if(content.Text()!=name){
                 content.Text(name);
@@ -272,7 +272,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         workspaceOverflow.Flyout(menu([weak=weak_from_this()](auto target){if(auto self=weak.lock()){
             auto storage=object(self->data->model,L"windows_workspace");
             for(auto value:array(storage,L"switcher_display")){
-                auto choice=value.GetObject();auto id=str(choice,L"id");ToggleMenuFlyoutItem item;item.Text(str(choice,L"name"));
+                auto choice=value.GetObject();auto id=str(choice,L"id");ToggleMenuFlyoutItem item;item.Text(str(choice,L"title"));
                 item.IsChecked(id==str(storage,L"id"));item.IsEnabled(flag(storage,L"can_switch"));
                 item.Click([data=self->data,id](auto&&,auto&&){data->dispatch(O({{L"type",S(L"workspace_manager")},{L"command",O({{L"type",S(L"switch")},{L"id",S(id)}})}}));});
                 target.Append(item);

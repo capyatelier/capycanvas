@@ -9,7 +9,7 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/switcher-drag/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 function Storage {(Model).windows_workspace}
-function Manager {(Model).windows_workspace_manager}
+function Manager {$w=(Model).windows_workspace;if($w -and ($null -ne $w.page -or $null -ne $w.prompt)){$w}}
 function Layout($Value=(Model)) {$Value.state.workspace|ConvertTo-Json -Depth 80 -Compress}
 function Choose([string]$Name){
     (Control $Name -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
@@ -96,7 +96,7 @@ function Move-To($At){
 function Preview-Intact {
     $current=Model
     if(!$current){throw 'Owned atomic snapshot is unavailable'}
-    if($current.windows_workspace_manager.selected -ne $preview){throw 'Pointer activity changed the selected workspace row'}
+    if($current.windows_workspace.selected -ne $preview){throw 'Pointer activity changed the selected workspace row'}
     $actual=Layout $current
     if($actual -ne $previewLayout){
         [IO.File]::WriteAllText((Join-Path $run 'expected-preview.json'),$previewLayout)

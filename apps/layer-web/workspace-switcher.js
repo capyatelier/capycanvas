@@ -2,7 +2,7 @@
 export function workspaceSwitcherMenu(view) {
   return {title:"Workspaces", sections:[(view?.switcher_display || []).map(row => ({
     label:row.title, selected:row.id === view.id,
-    enabled:view.ready && !view.busy && !view.page && !view.form,
+    enabled:view.ready && !view.busy && !view.page && !view.prompt,
     action:{type:"workspace_manager", command:{type:"switch", id:row.id}}, sections:[],
   }))]};
 }
@@ -40,9 +40,11 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     action("Show in top bar", "pin", () => edit({type:"show", id:item.id, visible:!pinned}), true, pinned);
     action("Move Up", "up", () => edit({type:"move", id:item.id, before:view.order[index-1]}), index > 0);
     action("Move Down", "down", () => edit({type:"move", id:item.id, before:view.order[index+2] ?? null}), index < view.order.length-1);
-    if (item.options || item.delete) menu.append(element("hr"));
-    if (item.options) action("Rename…", "rename", () => send({type:"form", kind:"rename", id:item.id}));
-    if (item.delete) action("Delete…", "delete", () => send({type:"form", kind:"delete", id:item.id}));
+    const offered = type => item.actions.some(button => button.enabled && button.action.type === type);
+    const rename = offered("rename"), remove = offered("delete");
+    if (rename || remove) menu.append(element("hr"));
+    if (rename) action("Rename…", "rename", () => send({type:"form", action:{type:"rename", value:item.id}}));
+    if (remove) action("Delete…", "delete", () => send({type:"form", action:{type:"delete", value:item.id}}));
     row.querySelector(".workspace-options").setAttribute("aria-expanded", "true");
     menu.showPopover();
     const r = menu.getBoundingClientRect();
@@ -170,7 +172,7 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
   function render(view) {
     const previousFirst = root.firstElementChild?.dataset.workspaceId;
     // A background preference refresh leaves workspace switching available.
-    const switchUnavailable = !view.ready || view.busy || !!view.page || !!view.form;
+    const switchUnavailable = !view.ready || view.busy || !!view.page || !!view.prompt;
     const ids = new Set(view.switcher_display.map(row => row.id));
     for (const [id, node] of buttons) if (!ids.has(id)) { node.remove(); buttons.delete(id); }
     for (const [index, item] of view.switcher_display.entries()) {
@@ -182,7 +184,7 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     }
     root.hidden = !ids.size;
     if (view.id !== previousFirst && view.switcher_display[0]?.id === view.id) root.scrollLeft = 0;
-    if (!view.page || view.form || (contact && !view.order.includes(contact.row.dataset.id))) { finish(); closeMenu(); }
+    if (!view.page || view.prompt || (contact && !view.order.includes(contact.row.dataset.id))) { finish(); closeMenu(); }
     for (const more of list.querySelectorAll(".workspace-options")) more.disabled = unavailable();
   }
   return {root, render, decorate, closeMenu, dragging:() => !!contact, cancel:() => { finish(); closeMenu(); }};

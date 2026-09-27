@@ -1,490 +1,140 @@
-//! Windows lifecycle adapter for shared workspace policy. Futures run on the
-//! canvas owner; StoreWorker performs every SQLite operation on its I/O thread.
+//! Windows lifecycle adapter for the shared workspace controller. Futures run on
+//! the canvas owner; StoreWorker performs every SQLite operation on its I/O thread.
 use crate::workspace_async::AsyncTask;
 use layer_host::NativeHost;
-use layer_ui::{Platform, PreparedWorkspace, regions};
+use layer_ui::Platform;
 use layer_workspace::{
-    ErrorKind, StoreError, StoreRequest, StoredEntity, WorkspaceManager, WorkspaceStore,
+    ErrorKind, StoreError, WorkspaceController, WorkspaceInput, WorkspaceStore, WorkspaceView,
 };
 use serde::Serialize;
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
-
-#[path = "workspace_manager.rs"]
-mod manager_ui;
-#[path = "workspace_switcher.rs"]
-mod switcher;
-pub(crate) use manager_ui::ManagerInput;
-#[cfg(target_os = "windows")]
-pub(crate) use manager_ui::ManagerView;
+use std::sync::Arc;
 
 type Result<T> = std::result::Result<T, StoreError>;
-enum Completion {
-    Open(Result<Box<StoredEntity>>),
-    Save(Result<()>),
-    Close(Result<()>),
-    Manager(Result<Option<Box<StoredEntity>>>),
-    Toolbar(
-        Result<(
-            layer_workspace::ToolbarDefinition,
-            Option<layer_ui::Panel>,
-            Option<u32>,
-        )>,
-    ),
-    Released,
-    Export(std::result::Result<(), String>),
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct WorkspaceShortcut {
-    pub id: String,
-    pub key: String,
-    pub name: String,
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-pub(crate) struct WorkspaceStatus {
-    pub ready: bool,
-    pub id: Option<String>,
-    pub defaults: Vec<WorkspaceShortcut>,
-    pub switcher: Vec<WorkspaceShortcut>,
-    pub switcher_display: Vec<WorkspaceShortcut>,
-    pub order: Vec<String>,
-    pub switcher_busy: bool,
-    pub switcher_error: Option<String>,
-    pub switcher_revision: u64,
-    pub can_switch: bool,
-    pub owner: Option<String>,
-    pub busy: bool,
-    pub dirty: bool,
-    pub saving: bool,
-    pub owner_lost: bool,
-    pub close_requested: bool,
-    pub close_ready: bool,
-    pub close_attempt: u32,
-    pub name: Option<String>,
-    pub error: Option<String>,
-    pub notice: Option<String>,
+/// The shared controller view plus the Windows window-close and backup state.
+#[derive(Serialize)]
+pub(crate) struct WorkspaceStatus<'a> {
+    #[serde(flatten)]
+    view: &'a WorkspaceView,
+    can_switch: bool,
+    close_attempt: u32,
+    notice: Option<&'a str>,
 }
 
 pub(crate) struct WorkspaceService<S: WorkspaceStore + 'static> {
-    manager: Rc<WorkspaceManager<S>>,
+    controller: WorkspaceController<S>,
     directory: std::path::PathBuf,
-    operation: AsyncTask<Completion>,
-    ownership: AsyncTask<Result<()>>,
-    preferences: AsyncTask<Result<()>>,
-    preferences_edited: bool,
-    refresh_preferences: bool,
-    incoming: Option<StoredEntity>,
-    ui: manager_ui::ManagerUi,
-    status: WorkspaceStatus,
-    captured_generation: Option<u64>,
-    layout_pending: bool,
-    last_edit: Instant,
-    last_save: Instant,
-    last_renew: Instant,
+    export: AsyncTask<std::result::Result<(), String>>,
+    notice: Option<String>,
+    close_attempt: u32,
+    owner_lost: bool,
+    published: String,
 }
 impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     pub(crate) fn new(
         store: S,
         directory: std::path::PathBuf,
-        wake: impl Fn() + Clone + Send + 'static,
+        wake: impl Fn() + Clone + Send + Sync + 'static,
     ) -> Self {
-        let now = Instant::now();
-        let manager = Rc::new(WorkspaceManager::new(store, Platform::Windows));
-        let owner = manager.owner.id.clone();
+        let mut controller = WorkspaceController::new(store, Platform::Windows, now_ms());
+        controller.set_wake(Arc::new(wake.clone()));
         Self {
-            manager,
+            controller,
             directory,
-            operation: AsyncTask::new(wake.clone()),
-            ownership: AsyncTask::new(wake.clone()),
-            preferences: AsyncTask::new(wake.clone()),
-            preferences_edited: false,
-            refresh_preferences: false,
-            ui: manager_ui::ManagerUi::new(wake),
-            incoming: None,
-            status: WorkspaceStatus {
-                busy: true,
-                owner: Some(owner),
-                ..Default::default()
-            },
-            captured_generation: None,
-            layout_pending: false,
-            last_edit: now,
-            last_save: now,
-            last_renew: now,
+            export: AsyncTask::new(wake),
+            notice: None,
+            close_attempt: 0,
+            owner_lost: false,
+            published: String::new(),
         }
+    }
+    pub(crate) fn view(&self) -> &WorkspaceView {
+        &self.controller.view
+    }
+    pub(crate) fn status(&self, native: &NativeHost) -> WorkspaceStatus<'_> {
+        WorkspaceStatus {
+            view: &self.controller.view,
+            can_switch: self.accepts_input(now_ms())
+                && native.session.require_workspace_idle().is_ok(),
+            close_attempt: self.close_attempt,
+            notice: self.notice.as_deref(),
+        }
+    }
+    pub(crate) fn input(&mut self, native: &mut NativeHost, input: WorkspaceInput) -> Result<()> {
+        let view = &self.controller.view;
+        if matches!(input, WorkspaceInput::Close)
+            || (matches!(input, WorkspaceInput::Retry) && view.closing)
+        {
+            self.close_attempt = self.close_attempt.saturating_add(1);
+        }
+        let before = native.session.state().revision;
+        let result = self
+            .controller
+            .input(&mut native.session, input, now_ms())
+            .map(|change| native.apply_change(before, change));
+        self.publish(native);
+        result
     }
     pub(crate) fn report_error(&mut self, native: &mut NativeHost, error: StoreError) {
-        self.ui_error(native, error);
+        self.controller.view.error = Some(error.to_string());
+        self.publish(native);
     }
-    pub(crate) fn status(&self) -> &WorkspaceStatus {
-        &self.status
-    }
-    pub(crate) fn start(&mut self, wall_ms: u64) {
-        if self.operation.busy() || self.incoming.is_some() || self.status.ready {
-            return;
-        }
-        self.status.busy = true;
-        self.status.error = None;
-        let manager = self.manager.clone();
-        let _ = self.operation.start(async move {
-            let result = async {
-                manager.store.execute(StoreRequest::Reopen).await?;
-                manager.refresh_switcher().await?;
-                manager.initialize(wall_ms).await
-            }
-            .await;
-            Completion::Open(result.map(Box::new))
-        });
-    }
-    fn observe(
-        &mut self,
-        native: &mut NativeHost,
-        now: Instant,
-        wall_ms: u64,
-        force: bool,
-    ) -> Result<()> {
-        let changed = native.take_service_changes();
-        self.layout_pending |= changed & (regions::LAYOUT | regions::CUSTOMIZATION) != 0;
-        let generation = native.session.workspace_layout_generation();
-        if force
-            || (self.layout_pending
-                && generation.is_some()
-                && generation != self.captured_generation)
-        {
-            let capture = native
-                .session
-                .capture_workspace()
-                .map_err(StoreError::invalid)?;
-            self.manager.observe(capture, wall_ms);
-            self.captured_generation = generation;
-            self.layout_pending = false;
-            self.last_edit = now;
-        } else {
-            if changed & (regions::BRUSH | regions::COMMANDS | regions::LAYOUT) != 0 {
-                self.manager
-                    .observe_working(native.session.workspace_working_state());
-                self.last_edit = now;
-            }
-            if generation.is_some() && generation == self.captured_generation {
-                self.layout_pending = false;
-            }
-        }
-        if force || changed != 0 {
-            self.status.dirty = self.manager.dirty();
-        }
-        Ok(())
-    }
-    fn adopt(
-        &mut self,
-        native: &mut NativeHost,
-        incoming: StoredEntity,
-        now: Instant,
-    ) -> Result<()> {
-        let prepared =
-            PreparedWorkspace::new(incoming.entity.capture()?).map_err(StoreError::invalid)?;
-        let revision = native.session.state().revision;
-        let change = native
-            .session
-            .adopt_workspace(prepared)
-            .map_err(StoreError::invalid)?;
-        native.apply_change(revision, change);
-        // Startup has no outgoing editable workspace. Switches will release
-        // their old claim after adoption through a separate manager operation.
-        self.manager.activate(incoming);
-        self.sync_binding(native)?;
-        native.session.set_workspace_read_only(false);
-        native.take_service_changes();
-        self.captured_generation = native.session.workspace_layout_generation();
-        self.layout_pending = false;
-        self.status.ready = true;
-        self.status.busy = false;
-        self.status.owner_lost = false;
-        self.status.dirty = false;
-        self.status.name = self.manager.active_name();
-        self.status.error = None;
-        self.last_renew = now;
-        Ok(())
-    }
-    /// Called after accepted changes and on the host's idle service deadline.
-    /// This never waits for a reply or repeatedly polls an unwoken future.
-    pub(crate) fn poll(&mut self, native: &mut NativeHost, now: Instant, wall_ms: u64) {
-        let previous = self.status.clone();
-        self.poll_switcher(native, wall_ms);
-        if self.status.ready
-            && !self.ui.active()
-            && !self.status.busy
-            && !self.status.close_requested
-            && let Err(error) = self.observe(native, now, wall_ms, false)
-        {
-            self.status.error = Some(error.to_string());
-        }
-        if let Some(completion) = self.operation.poll() {
-            match completion {
-                Completion::Manager(result) => self.manager_completed(native, result, now),
-                Completion::Toolbar(result) => self.toolbar_completed(native, result, now, wall_ms),
-                Completion::Released => {}
-                Completion::Open(Ok(incoming)) => self.incoming = Some(*incoming),
-                Completion::Open(Err(error)) => {
-                    self.status.busy = false;
-                    self.status.error = Some(error.to_string());
-                }
-                Completion::Save(result) => {
-                    self.status.busy = self.ownership.busy() && self.status.owner_lost;
-                    self.status.saving = false;
-                    self.status.dirty = self.manager.dirty();
-                    match result {
-                        Err(error) => self.status.error = Some(error.to_string()),
-                        Ok(()) if !self.status.owner_lost => self.status.error = None,
-                        Ok(()) => {}
-                    }
-                }
-                Completion::Export(result) => {
-                    self.status.busy = false;
-                    self.status.notice = Some(match result {
-                        Ok(()) => "Workspace backup saved.".into(),
-                        Err(error) => error,
-                    });
-                }
-                Completion::Close(result) => {
-                    self.status.busy = false;
-                    match result {
-                        Ok(()) => {
-                            self.status.close_ready = true;
-                            self.status.dirty = false;
-                            self.status.error = None;
-                        }
-                        Err(error) => self.status.error = Some(error.to_string()),
-                    }
-                }
-            }
-        }
-        if self.status.close_requested
-            && !self.status.ready
-            && self.incoming.is_some()
-            && self.status.error.is_none()
-            && !self.operation.busy()
-            && !self.ownership.busy()
-            && !self.preferences.busy()
-        {
-            // No editor edits have been accepted before startup adoption.
-            // Release this incoming claim without waiting for a canvas that
-            // has already authorized close, or saving its provisional layout.
-            if let Err(error) = self.discard_close(native) {
-                self.status.error = Some(error.to_string());
-            }
-        }
-        if self.incoming.is_some()
-            && self.status.error.is_none()
-            // Current document/brush readiness is sufficient. Optional catalog
-            // shaders continue warming on the normal renderer startup path.
-            && native.startup.brush_ready
-            && native.session.require_workspace_idle().is_ok()
-        {
-            let incoming = self.incoming.take().unwrap();
-            if let Err(error) = self.adopt(native, incoming.clone(), now) {
-                // Retain its claim for retry/close instead of silently leaking
-                // or replacing this accepted startup operation.
-                self.incoming = Some(incoming);
-                self.status.busy = false;
-                self.status.error = Some(error.to_string());
-            }
-        }
-        if let Some(result) = self.ownership.poll() {
-            match result {
-                Ok(()) => {
-                    self.status.owner_lost = false;
-                    if !self.status.close_requested {
-                        self.status.busy = false;
-                    }
-                    native.session.set_workspace_read_only(false);
-                }
-                Err(error) => {
-                    self.status.error = Some(error.to_string());
-                    self.status.owner_lost =
-                        matches!(error.kind, ErrorKind::OwnedElsewhere | ErrorKind::Conflict)
-                            || !self.manager.lease_valid(wall_ms);
-                    native
-                        .session
-                        .set_workspace_read_only(self.status.owner_lost);
-                    self.status.busy = false;
-                }
-            }
-        }
-        if self.status.ready && !self.status.close_ready {
-            if !self.manager.lease_valid(wall_ms) {
-                if !self.status.owner_lost {
-                    // An expired lease is checked before every input batch by
-                    // the host. Cancel live input once, then require recovery.
-                    let _ = native.input(layer_ui::UiInput::Blur);
-                }
-                self.status.owner_lost = true;
-                native.session.set_workspace_read_only(true);
-            }
-            if !self.ownership.busy()
-                && !self.status.close_requested
-                && (now.duration_since(self.last_renew)
-                    >= Duration::from_millis(layer_workspace::OWNER_RENEW_MS)
-                    || (self.status.owner_lost && self.status.error.is_none()))
-            {
-                let manager = self.manager.clone();
-                let expired = self.status.owner_lost;
-                self.status.busy |= expired;
-                let _ = self.ownership.start(async move {
-                    if expired {
-                        manager.revalidate_owner(wall_ms).await
-                    } else {
-                        manager.renew().await
-                    }
-                });
-                self.last_renew = now;
-            }
-            if !self.ui.active()
-                && !self.operation.busy()
-                && !self.ownership.busy()
-                && !self.preferences.busy()
-            {
-                if self.status.close_requested && self.status.error.is_none() {
-                    // Stop accepting editor mutations before taking this final
-                    // snapshot. A prior immutable save may have newer edits.
-                    let captured = self.observe(native, now, wall_ms, true);
-                    if let Err(error) = captured {
-                        self.status.busy = false;
-                        self.status.error = Some(error.to_string());
-                    } else {
-                        self.status.busy = true;
-                        let manager = self.manager.clone();
-                        let _ = self
-                            .operation
-                            .start(async move { Completion::Close(manager.close().await) });
-                    }
-                } else if !self.status.owner_lost
-                    && self.status.dirty
-                    && self.status.error.is_none()
-                    && (now.duration_since(self.last_edit) >= Duration::from_millis(250)
-                        || now.duration_since(self.last_save) >= Duration::from_secs(2))
-                {
-                    self.status.saving = true;
-                    self.last_save = now;
-                    let manager = self.manager.clone();
-                    let _ = self
-                        .operation
-                        .start(async move { Completion::Save(manager.save_once().await) });
-                }
-            }
-        }
-        self.poll_manager(native, now, wall_ms);
-        if self.status.close_requested && !self.status.close_ready {
-            self.status.busy = self.operation.busy()
-                || self.ownership.busy()
-                || self.preferences.busy()
-                || self.incoming.is_some();
-        }
-        self.status.can_switch =
-            self.accepts_input(wall_ms) && native.session.require_workspace_idle().is_ok();
-        if self.status != previous {
+    fn publish(&mut self, native: &mut NativeHost) {
+        let status = serde_json::to_string(&self.status(native)).unwrap_or_default();
+        if status != self.published {
+            self.published = status;
             native.invalidate_snapshot();
         }
     }
+    /// Called after accepted changes and on the host's idle service deadline.
+    /// This never waits for a reply or repeatedly polls an unwoken future.
+    pub(crate) fn poll(&mut self, native: &mut NativeHost, wall_ms: u64) {
+        let changed = native.take_service_changes();
+        self.controller
+            .observe_regions(&mut native.session, changed, wall_ms);
+        let view = &self.controller.view;
+        if view.ready || view.closing || native.startup.brush_ready {
+            let before = native.session.state().revision;
+            let change = self.controller.tick(&mut native.session, wall_ms);
+            native.apply_change(before, change);
+        }
+        if let Some(result) = self.export.poll() {
+            self.notice = Some(match result {
+                Ok(()) => "Workspace backup saved.".into(),
+                Err(error) => error,
+            });
+        }
+        let lost = self.controller.view.owner_lost;
+        if lost && !self.owner_lost {
+            let _ = native.input(layer_ui::UiInput::Blur);
+        }
+        self.owner_lost = lost;
+        self.publish(native);
+    }
     pub(crate) fn accepts_input(&self, wall_ms: u64) -> bool {
-        self.status.ready
-            && !self.ui.active()
-            && !self.status.busy
-            && !self.status.owner_lost
-            && !self.status.close_requested
-            && self.manager.lease_valid(wall_ms)
-    }
-    pub(crate) fn request_close(&mut self, native: &mut NativeHost) {
-        self.refresh_preferences = false;
-        if !self.preferences_edited {
-            self.preferences.cancel_read();
-            self.status.switcher_busy = false;
-        }
-        if self.ui.active() && !self.ui.has_accepted_write() {
-            self.close_manager(native);
-        }
-        self.status.close_attempt = self.status.close_attempt.saturating_add(1);
-        self.status.close_requested = true;
-        self.status.close_ready = false;
-        if self.status.ready {
-            self.status.error = None;
-        }
-        self.status.busy = self.status.ready || self.operation.busy() || self.incoming.is_some();
-        native.invalidate_snapshot();
-    }
-    pub(crate) fn keep_open(&mut self, native: &mut NativeHost) {
-        // A submitted close cannot be cancelled after its claim was released.
-        if self.operation.busy() || self.status.close_ready {
-            return;
-        }
-        self.status.close_requested = false;
-        self.status.busy = false;
-        native.session.reset_document_close();
-        native.invalidate_snapshot();
-    }
-    pub(crate) fn retry(&mut self, native: &mut NativeHost, wall_ms: u64) {
-        if self.operation.busy() || self.ownership.busy() {
-            return;
-        }
-        self.status.error = None;
-        if self.status.close_requested {
-            self.status.close_attempt = self.status.close_attempt.saturating_add(1);
-        }
-        if !self.status.ready {
-            if self.incoming.is_some() {
-                self.status.busy = true;
-            } else {
-                self.start(wall_ms);
-            }
-        } else if self.manager.has_failed_operation() {
-            let manager = self.manager.clone();
-            self.status.busy = true;
-            let _ = self.operation.start(async move {
-                let outgoing = manager.current_record();
-                match manager.retry_failed_operation().await {
-                    Ok(Some(incoming)) => {
-                        if let Some(outgoing) = outgoing
-                            && outgoing.entity.id != incoming.entity.id
-                        {
-                            manager.release(&outgoing).await;
-                        }
-                        Completion::Open(Ok(Box::new(incoming)))
-                    }
-                    Ok(None) => Completion::Save(Ok(())),
-                    Err(error) => Completion::Open(Err(error)),
-                }
-            });
-        } else if self.status.owner_lost {
-            let manager = self.manager.clone();
-            self.status.busy = true;
-            let _ = self.ownership.start(async move {
-                manager.store.execute(StoreRequest::Reopen).await?;
-                manager.revalidate_owner(wall_ms).await
-            });
-        }
-        native.invalidate_snapshot();
+        let view = &self.controller.view;
+        view.ready
+            && !view.busy
+            && !view.owner_lost
+            && !view.closing
+            && !view.closed
+            && view.page.is_none()
+            && view.prompt.is_none()
+            && view.focus_window.is_none()
+            && self.controller.manager.lease_valid(wall_ms)
     }
     pub(crate) fn stop(&mut self) {
-        self.operation.close();
-        self.ownership.close();
-        self.preferences.close();
-        self.ui.stop();
+        self.controller.stop();
+        self.export.close();
     }
 }
 
 #[derive(serde::Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WorkspaceAction {
-    Manager { dialog: u64, command: ManagerInput },
-    RefreshSwitcher,
+    Input { input: WorkspaceInput },
     PreferencesRetry,
     PreferencesKeepOpen,
     PreferencesDiscardClose,
-    Retry,
-    KeepOpen,
-    DiscardClose,
-    SaveAsNew { name: String },
     ExportBackup { path: String },
     BackupDatabase { path: String },
     Failure { error: String },
@@ -496,40 +146,8 @@ pub(crate) fn now_ms() -> u64 {
         .as_millis() as u64
 }
 impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
-    pub(crate) fn save_as_new(
-        &mut self,
-        native: &mut NativeHost,
-        name: String,
-        wall_ms: u64,
-    ) -> Result<()> {
-        self.require_available()?;
-        layer_workspace::validate_name(&name)?;
-        native
-            .session
-            .require_workspace_idle()
-            .map_err(StoreError::invalid)?;
-        let capture = native
-            .session
-            .capture_workspace()
-            .map_err(StoreError::invalid)?;
-        let manager = self.manager.clone();
-        self.status.busy = true;
-        self.status.error = None;
-        let _ = self.operation.start(async move {
-            let outgoing = manager.current_record();
-            let result = manager.save_as_new(capture, &name, wall_ms).await;
-            if result.is_ok()
-                && let Some(outgoing) = outgoing
-            {
-                manager.release(&outgoing).await;
-            }
-            Completion::Open(result.map(Box::new))
-        });
-        native.invalidate_snapshot();
-        Ok(())
-    }
-    fn require_available(&self) -> Result<()> {
-        if self.operation.busy() || self.ownership.busy() || self.preferences.busy() {
+    fn require_idle(&self) -> Result<()> {
+        if self.controller.view.busy || self.export.busy() {
             Err(StoreError::new(
                 ErrorKind::Conflict,
                 "Wait for the current workspace operation.",
@@ -538,35 +156,18 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             Ok(())
         }
     }
-    pub(crate) fn discard_close(&mut self, native: &mut NativeHost) -> Result<()> {
-        self.require_available()?;
-        if !self.status.close_requested {
-            return Err(StoreError::invalid("Close the window first."));
-        }
-        let manager = self.manager.clone();
-        let outgoing = self.incoming.take().or_else(|| manager.current_record());
-        self.status.busy = true;
-        self.status.error = None;
-        let _ = self.operation.start(async move {
-            if let Some(outgoing) = outgoing {
-                manager.release(&outgoing).await;
-            }
-            Completion::Close(Ok(()))
-        });
-        native.invalidate_snapshot();
-        Ok(())
-    }
     pub(crate) fn export_backup(&mut self, native: &mut NativeHost, path: String) -> Result<()> {
         use std::{path::Path, sync::atomic::AtomicBool};
-        self.require_available()?;
+        self.require_idle()?;
         crate::document_io::location(&path).map_err(StoreError::invalid)?;
-        if !self.status.ready {
+        if !self.controller.view.ready {
             return Err(StoreError::invalid(
                 "Back up the original workspace database instead.",
             ));
         }
-        self.observe(native, Instant::now(), now_ms(), true)?;
+        self.controller.observe(&mut native.session, now_ms());
         let entity = self
+            .controller
             .manager
             .current()
             .ok_or_else(|| StoreError::invalid("No workspace is open."))?;
@@ -583,33 +184,27 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         .map_err(|_| {
             StoreError::new(ErrorKind::Unavailable, "Could not start workspace export.")
         })?;
-        self.status.busy = true;
-        self.status.notice = None;
-        let _ = self
-            .operation
-            .start(async move { Completion::Export(job.await.and_then(|r| r)) });
-        native.invalidate_snapshot();
+        self.notice = None;
+        let _ = self.export.start(async move { job.await.and_then(|r| r) });
+        self.publish(native);
         Ok(())
     }
 }
 impl WorkspaceService<layer_workspace::StoreWorker> {
     pub(crate) fn backup_database(&mut self, native: &mut NativeHost, path: String) -> Result<()> {
-        self.require_available()?;
+        self.require_idle()?;
         crate::document_io::location(&path).map_err(StoreError::invalid)?;
-        let manager = self.manager.clone();
-        self.status.busy = true;
-        self.status.notice = None;
-        let _ = self.operation.start(async move {
-            Completion::Export(
-                manager
-                    .store
-                    .backup_database(std::path::Path::new(&path))
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string()),
-            )
+        let manager = self.controller.manager.clone();
+        self.notice = None;
+        let _ = self.export.start(async move {
+            manager
+                .store
+                .backup_database(std::path::Path::new(&path))
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
         });
-        native.invalidate_snapshot();
+        self.publish(native);
         Ok(())
     }
 }

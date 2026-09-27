@@ -163,7 +163,7 @@ try {
     & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'preferences-close-error.png') -ClientOnly *> (Join-Path $run 'preferences-close-error.json')
     Recovery-Choice 'Keep open'
     Wait-Until {!(Model).windows_settings_close.requested -and !(Model).state.document_file.close_ready -and !(Close-Error)} 'Keep open did not cancel preferences close'
-    if((Model).state.settings.dark_base -ne '#304050' -or (Model).windows_workspace.id -ne $workspaceId -or (Model).windows_workspace.close_requested){throw 'Keep open lost preferences or released the workspace'}
+    if((Model).state.settings.dark_base -ne '#304050' -or (Model).windows_workspace.id -ne $workspaceId -or (Model).windows_workspace.closing){throw 'Keep open lost preferences or released the workspace'}
     Wait-Until {
         $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))

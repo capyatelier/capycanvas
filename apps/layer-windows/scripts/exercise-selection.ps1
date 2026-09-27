@@ -48,7 +48,7 @@ function Key([uint16]$Code){
 function Switch-Workspace([string]$Name,[string]$Id){
     $found=@{switch=$null;menu=$null}
     Wait-Until {
-        $found.switch=Find ('workspace-switch-'+$Name.ToLowerInvariant());$found.menu=Find 'header-workspace-menu'
+        $found.switch=Find ('workspace-switch-'+$Id);$found.menu=Find 'header-workspace-menu'
         $found.switch -or $found.menu
     } "No workspace switcher for $Name" 15
     $switch=$found.switch

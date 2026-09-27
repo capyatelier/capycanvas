@@ -108,7 +108,7 @@ try {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     (Control 'Workspaces' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     Invoke 'Manage Workspaces…' -Name
-    Wait-Until {$null -ne (Find 'workspace-manager') -and !(Model).windows_workspace_manager.loading} 'Workspace manager did not open'
+    Wait-Until {$null -ne (Find 'workspace-manager') -and !(Model).windows_workspace.loading} 'Workspace manager did not open'
     $owned=(Model $first).windows_workspace.id
     Wait-Until {!(Model).windows_workspace.switcher_busy} 'Switcher refresh did not settle'
     $firstRevision=(Model $first).windows_workspace.switcher_revision
@@ -130,9 +130,9 @@ try {
         $target=@((Model $first).windows_workspace.order) -join '|'
         $source -ne $before -and $target -eq $source
     } 'Workspace order did not propagate to the inactive window'
-    if((Model).windows_workspace_manager.selected -ne $secondWorkspace){throw 'Remote preferences changed the manager preview'}
+    if((Model).windows_workspace.selected -ne $secondWorkspace){throw 'Remote preferences changed the manager preview'}
     (Control ('workspace-manager-row-'+$owned)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    Wait-Until {(Model).windows_workspace_manager.selected -eq $owned -and (Model).windows_workspace_manager.apply_label -eq 'Switch to Window'} 'Owned workspace did not offer its native window'
+    Wait-Until {(Model).windows_workspace.selected -eq $owned -and (Model).windows_workspace.primary -eq 'Switch to Window'} 'Owned workspace did not offer its native window'
     Invoke 'Switch to Window' -Name -Within (Control 'workspace-manager')
     Wait-Until {$null -eq (Find 'workspace-manager') -and [CapyWindowTest]::GetForegroundWindow() -eq [IntPtr]$first.hwnd} 'Workspace manager did not activate the owning window'
     if((Model $second).windows_workspace.id -ne $secondWorkspace){throw 'Window activation changed the source workspace'}
@@ -230,7 +230,7 @@ try {
             } 'Closing preference failure did not remain in its owning window'
         }
         Wait-PreferenceRecovery
-        if((Model $first).windows_workspace.close_requested){throw 'Failed preferences close released the workspace before recovery'}
+        if((Model $first).windows_workspace.closing){throw 'Failed preferences close released the workspace before recovery'}
         if((Get-FileHash -LiteralPath $settingsFile).Hash -ne $savedHash){throw 'Denied preference replacement changed saved bytes'}
         Use-Window $second
         if(Find 'preferences-close-error'){throw 'Preference recovery appeared in the other window'}

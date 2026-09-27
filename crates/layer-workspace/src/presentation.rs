@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ManagerPage {
     Workspaces,
+    History,
     ThisWorkspace,
     ToolbarLibrary,
 }
@@ -13,6 +14,7 @@ impl ManagerPage {
     pub fn label(self) -> &'static str {
         match self {
             Self::Workspaces => "Workspaces",
+            Self::History => "Layout History",
             Self::ThisWorkspace => "This Workspace",
             Self::ToolbarLibrary => "Saved Toolbars",
         }
@@ -34,6 +36,7 @@ pub enum ManagerAction {
     Delete(String),
     AddToolbar(String),
     UpdateToolbar(String),
+    NewToolbar(Option<u32>),
     ShowToolbar(Panel, bool),
     RenameToolbar(Panel),
     DuplicateToolbar(Panel),
@@ -58,6 +61,7 @@ impl ManagerAction {
             Self::Delete(_) => "Delete…",
             Self::AddToolbar(_) => "Add to Workspace",
             Self::UpdateToolbar(_) => "Update from Workspace…",
+            Self::NewToolbar(_) => "New Toolbar…",
             Self::ShowToolbar(_, true) => "Show",
             Self::ShowToolbar(_, false) => "Hide",
             Self::SaveToolbar(_) => "Save to Toolbar Library…",
@@ -122,21 +126,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 current.metadata.name
             ),
             preview: None,
-            actions: [
-                ManagerAction::ShowToolbar(panel, !visible),
-                ManagerAction::RenameToolbar(panel),
-                ManagerAction::DuplicateToolbar(panel),
-                ManagerAction::SaveToolbar(panel),
-                ManagerAction::ReplaceToolbar(panel),
-                ManagerAction::DeleteToolbar(panel),
-            ]
-            .into_iter()
-            .enumerate()
-            .map(|(index, action)| ManagerButton::new(action, idle, index == 0))
-            .collect(),
+            actions: toolbar_actions(panel, visible, idle),
         })
     }
     pub fn rows(&self, page: ManagerPage, query: &str, now: u64) -> Vec<ManagerRow> {
+        if page == ManagerPage::History {
+            return Vec::new();
+        }
         if page == ManagerPage::ThisWorkspace {
             let Some(entity) = self.current() else {
                 return Vec::new();
@@ -300,6 +296,20 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             ),
         }
     }
+}
+pub fn toolbar_actions(panel: Panel, visible: bool, idle: bool) -> Vec<ManagerButton> {
+    [
+        ManagerAction::ShowToolbar(panel, !visible),
+        ManagerAction::RenameToolbar(panel),
+        ManagerAction::DuplicateToolbar(panel),
+        ManagerAction::SaveToolbar(panel),
+        ManagerAction::ReplaceToolbar(panel),
+        ManagerAction::DeleteToolbar(panel),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, action)| ManagerButton::new(action, idle, index == 0))
+    .collect()
 }
 /// Calendar dates are presentation only, never conflict/ownership ordering.
 pub fn date(timestamp_ms: u64) -> String {

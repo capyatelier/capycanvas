@@ -5504,7 +5504,7 @@ mod tests {
         if let PanelContent::Toolbar { name, .. } = &mut toolbar.content {
             *name = "Inking".into();
         }
-        let (panel, _) = s.install_workspace_toolbar(toolbar, None, None).unwrap();
+        let (panel, _) = s.install_workspace_toolbar(toolbar, None, None, false).unwrap();
         let history = s.capture_workspace().unwrap().history;
         assert_eq!(
             history.revisions[&history.current].description,
@@ -5727,7 +5727,7 @@ mod tests {
         invoke(&mut s, CommandId::ZenMode);
         let working = s.workspace_working_state();
         let (copy, _) = s
-            .install_workspace_toolbar(library.clone(), None, None)
+            .install_workspace_toolbar(library.clone(), None, None, false)
             .unwrap();
         assert_ne!(copy, source.id);
         assert_eq!(s.state.workspace.layout.panel(source.id).unwrap(), &source);
@@ -5746,7 +5746,7 @@ mod tests {
             tiles[0].control = ToolbarControl::Size { pixels: 30 };
         }
         let placement = s.state.workspace.layout.panel_group(copy);
-        s.install_workspace_toolbar(library, Some(copy), None)
+        s.install_workspace_toolbar(library, Some(copy), None, false)
             .unwrap();
         assert_eq!(s.state.workspace.layout.panel_group(copy), placement);
         assert_eq!(s.workspace_working_state(), working);
@@ -5811,7 +5811,7 @@ mod tests {
             tiles.clear();
         }
         let artwork = s.engine.document().clone();
-        s.install_workspace_toolbar(empty, Some(source.id), None)
+        s.install_workspace_toolbar(empty, Some(source.id), None, false)
             .unwrap();
         assert!(
             s.state

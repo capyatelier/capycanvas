@@ -9,11 +9,11 @@ export async function checkPaintColumns({call,evaluate,settle}) {
     while(!await evaluate(expression)){if(Date.now()>deadline)throw Error(`Timed out: ${expression}`);await new Promise(r=>setTimeout(r,50));}
   };
   const input=value=>evaluate(`layerApp.app.workspace_input(${JSON.stringify(JSON.stringify(value))});null`);
-  const idle=`(v=>v.ready&&!v.busy&&!v.form)(JSON.parse(layerApp.app.workspace_view()))`;
+  const idle=`(v=>v.ready&&!v.busy&&!v.prompt)(JSON.parse(layerApp.app.workspace_view()))`;
   await input({type:'switch',id:'builtin:workspace:illustrator'});
   await wait(`JSON.parse(layerApp.app.workspace_view()).id==='builtin:workspace:illustrator'&&${idle}`);
-  await input({type:'form',kind:'reset',id:null});
-  await wait(`!!JSON.parse(layerApp.app.workspace_view()).form`);
+  await input({type:'form',action:{type:'reset',value:'builtin:workspace:illustrator'}});
+  await wait(`!!JSON.parse(layerApp.app.workspace_view()).prompt`);
   await input({type:'submit',name:''});
   await wait(idle);
   assert.deepEqual(await evaluate('layerApp.state().workspace.layout.fit_height_groups'),[10,14]);

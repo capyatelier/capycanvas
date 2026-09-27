@@ -7,7 +7,7 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/switcher/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 function Storage {(Model).windows_workspace}
-function Manager {(Model).windows_workspace_manager}
+function Manager {$w=(Model).windows_workspace;if($w -and ($null -ne $w.page -or $null -ne $w.prompt)){$w}}
 function Layout {(Model).state.workspace|ConvertTo-Json -Depth 80 -Compress}
 function Choose([string]$Name){
     (Control $Name -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
@@ -77,7 +77,7 @@ try {
     Capture 'configured-preview'
     Choose 'Cancel';Closed
     if((Layout) -ne $original){throw 'Cancel did not restore the original layout'}
-    $key=((Storage).switcher_display|Where-Object id -eq $preview).key
+    $key=$preview
     (Control ('workspace-switch-'+$key)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Storage).id -eq $preview -and !(Storage).busy} 'Header switch did not complete'
     if((Storage).switcher_display.id -contains $active){throw 'Unpinned previous workspace remained in header'}

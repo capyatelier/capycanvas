@@ -33,11 +33,11 @@ import org.json.JSONArray
 @Composable internal fun WorkspaceManager(host: CanvasHost) {
     val view = host.workspaceManager ?: return
     val page = view.optString("page").takeUnless { it == "null" || it.isEmpty() }
-    val form = view.objectOrNull("form")
+    val form = view.objectOrNull("prompt")
     val error = view.optString("error").takeUnless { it == "null" || it.isEmpty() }
     val busy = view.optBoolean("busy")
     val rowInteraction = remember { WorkspaceRowInteraction() }
-    val focusWindow = view.optString("focus_window").takeUnless { it == "null" || it.isEmpty() }
+    val focusWindow = view.optJSONObject("focus_window")?.optString("id")
     LaunchedEffect(focusWindow) { if (focusWindow != null) host.reportActionError("This workspace is open in another window. Switch to that window to continue.") }
     val colors = LocalPalette.current
     fun send(type: String) = host.workspaceInput(obj("type" to type))
@@ -54,7 +54,7 @@ import org.json.JSONArray
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(view.getString("title"), Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                    if (page != "history") FilledTonalIconButton({ host.workspaceInput(obj("type" to "form", "kind" to "new")) },
+                    if (page != "history") FilledTonalIconButton({ host.workspaceInput(obj("type" to "form", "action" to obj("type" to "new"))) },
                         enabled = !busy, modifier = Modifier.size(32.dp).testTag("new-workspace").semantics { contentDescription = "New Workspace" }, shape = RoundedCornerShape(6.dp)) { SharedIcon("plus", null) }
                     IconButton(cancel, Modifier.size(32.dp).semantics { contentDescription = "Close" }) { SharedIcon("close", null) }
                 }
@@ -73,19 +73,20 @@ import org.json.JSONArray
         }
     }
     if (form != null) {
-        val kind = form.getString("kind")
-        var name by remember(kind, form.optString("id"), form.getString("name")) { mutableStateOf(form.getString("name")) }
+        val action = view.getJSONObject("prompt_action")
+        val named = !form.isNull("name")
+        var name by remember(action.toString(), form.optString("name")) { mutableStateOf(if (named) form.getString("name") else "") }
         val title = form.getString("title")
         AlertDialog(onDismissRequest = cancel, modifier = Modifier.testTag("workspace-form"), title = { Text(title) }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 form.getString("message").takeIf { it.isNotEmpty() }?.let { Text(it) }
-                if (kind !in listOf("delete", "reset", "reset_brushes")) CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("workspace-name"), label = { Text("Name") })
+                if (named) CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("workspace-name"), label = { Text("Name") })
                 if (error != null) Text(error, color = MaterialTheme.colorScheme.error)
             }
         }, dismissButton = { TextButton(cancel) { Text("Cancel") } }, confirmButton = {
             TextButton({ host.workspaceInput(obj("type" to "submit", "name" to name)) }, enabled = !busy,
-                modifier = Modifier.testTag("workspace-submit")) { Text(if (view.optBoolean("retry") && kind != "recover") "Retry" else form.getString("confirm"),
-                color = if (kind == "delete") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+                modifier = Modifier.testTag("workspace-submit")) { Text(if (view.optBoolean("retry") && action.getString("type") != "save_as_new") "Retry" else form.getString("confirm"),
+                color = if (form.optBoolean("destructive")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
         })
     }
     var dismissedError by remember { mutableStateOf<String?>(null) }
@@ -95,13 +96,13 @@ import org.json.JSONArray
         dismissButton = { TextButton({ dismissedError = error; send("resume") }) { Text("Keep Open") } }, confirmButton = {
             Column {
                 TextButton({ send("retry") }) { Text("Retry") }
-                TextButton({ host.workspaceInput(obj("type" to "form", "kind" to "recover")) }) { Text("Save as New Workspace…") }
+                TextButton({ host.workspaceInput(obj("type" to "form", "action" to obj("type" to "save_as_new"))) }) { Text("Save as New Workspace…") }
             }
         })
 }
 
 internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject {
-    val enabled = view != null && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("form")
+    val enabled = view != null && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("prompt")
     val choices = view?.array("switcher_display")?.objects() ?: emptyList()
     return obj("title" to "Workspaces", "sections" to JSONArray(listOf(JSONArray(choices.map { row ->
         val id = row.getString("id")
@@ -125,7 +126,7 @@ internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject {
             val selected = view.optString("id") == id
             Box(Modifier.widthIn(max = 128.dp).height(26.dp).clip(SquircleShape(50))
                 .background(if (selected) colors.switcherActive else Color.Transparent)
-                .selectable(selected, enabled = interactive && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("form"), role = Role.RadioButton) {
+                .selectable(selected, enabled = interactive && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("prompt"), role = Role.RadioButton) {
                     host.workspaceInput(obj("type" to "switch", "id" to id))
                 }.padding(horizontal = 8.dp).testTag("workspace-switch-$id"), contentAlignment = Alignment.Center) {
                 Text(row.getString("title"), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)

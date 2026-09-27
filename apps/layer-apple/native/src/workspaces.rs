@@ -107,22 +107,9 @@ pub(crate) fn session_request(host: &mut NativeHost, value: Value) -> Result<Val
             group,
             exact_name,
         } => {
-            // Explicit New Toolbar names use the shared collision validation.
-            // Adding an unnamed library copy still allocates a unique suffix.
-            if exact_name {
-                let layer_ui::PanelContent::Toolbar { name, .. } = &config.content else {
-                    return Err("Choose a toolbar".into());
-                };
-                let mut validation = host.session.state().workspace.layout.clone();
-                if let Some(panel) = replace {
-                    validation.rename_toolbar(panel, name)?;
-                } else {
-                    validation.validate_toolbar_name(name)?;
-                }
-            }
             let (panel, change) = host
                 .session
-                .install_workspace_toolbar(config, replace, group)?;
+                .install_workspace_toolbar(config, replace, group, exact_name)?;
             host.apply_change(previous, change);
             return Ok(json!({"panel":panel}));
         }

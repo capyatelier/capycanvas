@@ -30,7 +30,7 @@ function Drag($from,$to){
 function Release{[CapyRowPointer]::Up();Start-Sleep -Milliseconds 250}
 function Focus-Review{$null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle);Start-Sleep -Milliseconds 120}
 function Switch-Workspace([string]$Name,[string]$Id){
-    $switch=Find ('workspace-switch-'+$Name.ToLowerInvariant())
+    $switch=Find ('workspace-switch-'+$Id)
     if(!$switch -or $switch.Current.IsOffscreen){Invoke 'header-workspace-menu';$switch=Control $Name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
     $switch.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Model).windows_workspace.id -eq $Id -and !(Model).windows_workspace.busy} "$Name did not open" 20

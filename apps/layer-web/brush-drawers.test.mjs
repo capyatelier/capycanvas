@@ -12,7 +12,7 @@ export async function checkBrushDrawers({call, evaluate, settle}) {
   const original = await evaluate('JSON.parse(layerApp.app.workspace_view()).id');
   await send({type:'workspace_manager',command:{type:'switch',id:'builtin:workspace:painter'}});
   await wait('JSON.parse(layerApp.app.workspace_view()).id==="builtin:workspace:painter" && !JSON.parse(layerApp.app.workspace_view()).busy');
-  await send({type:'workspace_manager',command:{type:'form',kind:'new'}});
+  await send({type:'workspace_manager',command:{type:'form',action:{type:'new'}}});
   await send({type:'workspace_manager',command:{type:'submit',name:`Brush drawer test ${Date.now()}`}});
   await wait('!JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
   const created = await evaluate('JSON.parse(layerApp.app.workspace_view()).id');
@@ -91,7 +91,7 @@ export async function checkBrushDrawers({call, evaluate, settle}) {
     await send({type:'set_theme',theme});
     await send({type:'workspace_manager',command:{type:'switch',id:original}});
     await wait('!JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
-    await send({type:'workspace_manager',command:{type:'form',kind:'delete',id:created}});
+    await send({type:'workspace_manager',command:{type:'form',action:{type:'delete',value:created}}});
     await send({type:'workspace_manager',command:{type:'submit',name:''}});
     await evaluate('delete window.brushSetRoot');
   }

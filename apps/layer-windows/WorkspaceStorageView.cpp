@@ -23,6 +23,8 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
     uint32_t handledClose=0;
     uint64_t handledPreferencesClose=0;
     void dispatch(hstring operation) { send(to_string(O({{L"operation",S(operation)}}).Stringify())); }
+    static J input(J const& value) { return O({{L"operation",S(L"input")},{L"input",value}}); }
+    static J input(hstring const& type) { return input(O({{L"type",S(type)}})); }
     void failure() { send(to_string(O({{L"operation",S(L"failure")},{L"error",S(L"Windows could not show the workspace dialog. Try again.")}}).Stringify())); }
     void init() {
         root.HorizontalAlignment(HorizontalAlignment::Center);root.VerticalAlignment(VerticalAlignment::Bottom);
@@ -36,8 +38,9 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(retry,L"workspace-storage-retry");
         AutomationProperties::SetAutomationId(saveNew,L"workspace-storage-save-new");
         AutomationProperties::SetAutomationId(backup,L"workspace-storage-backup");
-        retry.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->dispatch(L"retry");});
-        saveNew.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->show(false);});
+        retry.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->send(to_string(input(L"retry").Stringify()));});
+        saveNew.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->send(to_string(input(
+            O({{L"type",S(L"form")},{L"action",O({{L"type",S(L"save_as_new")}})}})).Stringify()));});
         backup.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->exportBackup();});
         buttons.Children().Append(retry);buttons.Children().Append(saveNew);buttons.Children().Append(backup);
         content.Children().Append(buttons);root.Child(content);
@@ -46,12 +49,14 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
         HWND handle=nullptr;check_hresult(window.as<IWindowNative>()->get_WindowHandle(&handle));
         if(IsIconic(handle))ShowWindow(handle,SW_RESTORE);
     }
-    fire_and_forget show(bool closing,bool preferences=false) {
+    fire_and_forget show(bool preferences=false) {
         auto lifetime=shared_from_this();
         if(showing||stopping)co_return;
         showing=true;changed();
-        auto operation=[preferences](hstring const& value){return preferences?L"preferences_"+value:value;};
-        J response=O({{L"operation",S(operation(L"keep_open"))}});
+        auto reply=[preferences](hstring const& operation,hstring const& type){
+            return preferences?O({{L"operation",S(L"preferences_"+operation)}}):input(type);
+        };
+        J response=reply(L"keep_open",L"resume");
         try {
             restore();
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());
@@ -59,42 +64,26 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
             dialog.DefaultButton(ContentDialogButton::Close);
             StackPanel body;body.Spacing(12);body.MaxWidth(460);
             TextBlock explanation;explanation.TextWrapping(TextWrapping::Wrap);
-            TextBox name;
-            if(closing) {
-                bool ready=flag(object(model,L"windows_workspace"),L"ready");
-                dialog.Title(box_value(preferences?L"Preferences could not be saved":ready?L"Workspace changes could not be saved":L"Workspace could not be opened"));
-                dialog.PrimaryButtonText(L"Retry");
-                dialog.SecondaryButtonText(L"Close without saving");
-                dialog.CloseButtonText(L"Keep open");
-                hstring recovery=preferences?
-                    L"Keep this window open to retain the current preferences and try again. Closing without saving leaves the last saved preferences unchanged.":ready?
-                    L"Keep this window open to save a new workspace or export a backup. Closing without saving discards unsaved layout and tool changes.":
-                    L"Keep this window open to retry opening the workspace or export a database backup. Closing leaves the original workspace database unchanged.";
-                explanation.Text(str(object(model,preferences?L"windows_settings_close":L"windows_workspace"),L"error")+L"\n\n"+recovery);
-                body.Children().Append(explanation);
-                AutomationProperties::SetAutomationId(dialog,preferences?L"preferences-close-error":L"workspace-close-error");
-            } else {
-                dialog.Title(box_value(L"Save as new workspace"));
-                dialog.PrimaryButtonText(L"Save");dialog.CloseButtonText(L"Cancel");
-                explanation.Text(L"Preserve the current layout and tool settings in a new workspace.");
-                body.Children().Append(explanation);
-                name.Header(box_value(L"Name"));name.Text(L"Recovered Workspace");name.MaxLength(100);
-                AutomationProperties::SetAutomationId(name,L"workspace-recovery-name");body.Children().Append(name);
-                AutomationProperties::SetAutomationId(dialog,L"workspace-save-new-dialog");
-            }
+            bool ready=flag(object(model,L"windows_workspace"),L"ready");
+            dialog.Title(box_value(preferences?L"Preferences could not be saved":ready?L"Workspace changes could not be saved":L"Workspace could not be opened"));
+            dialog.PrimaryButtonText(L"Retry");
+            dialog.SecondaryButtonText(L"Close without saving");
+            dialog.CloseButtonText(L"Keep open");
+            hstring recovery=preferences?
+                L"Keep this window open to retain the current preferences and try again. Closing without saving leaves the last saved preferences unchanged.":ready?
+                L"Keep this window open to save a new workspace or export a backup. Closing without saving discards unsaved layout and tool changes.":
+                L"Keep this window open to retry opening the workspace or export a database backup. Closing leaves the original workspace database unchanged.";
+            explanation.Text(str(object(model,preferences?L"windows_settings_close":L"windows_workspace"),L"error")+L"\n\n"+recovery);
+            body.Children().Append(explanation);
+            AutomationProperties::SetAutomationId(dialog,preferences?L"preferences-close-error":L"workspace-close-error");
             dialog.Content(body);
             auto result=co_await dialog.ShowAsync();
-            if(closing) {
-                if(result==ContentDialogResult::Primary)response=O({{L"operation",S(operation(L"retry"))}});
-                else if(result==ContentDialogResult::Secondary)response=O({{L"operation",S(operation(L"discard_close"))}});
-            } else {
-                response=J{};
-                if(result==ContentDialogResult::Primary)response=O({{L"operation",S(L"save_as_new")},{L"name",S(name.Text())}});
-            }
+            if(result==ContentDialogResult::Primary)response=reply(L"retry",L"retry");
+            else if(result==ContentDialogResult::Secondary)response=reply(L"discard_close",L"discard_close");
         } catch(hresult_canceled const&) {
         } catch(...) { if(!stopping)failure(); }
         dialog=nullptr;
-        if(!stopping&&response.Size())send(to_string(response.Stringify()));
+        if(!stopping)send(to_string(response.Stringify()));
         showing=false;changed();
     }
     fire_and_forget exportBackup() {
@@ -124,14 +113,14 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
         hstring text=error;
         if(!notice.empty())text=text.empty()?notice:text+L"\n"+notice;
         if(text.empty()&&!flag(storage,L"ready"))text=L"Opening workspace…";
-        if(text.empty()&&flag(storage,L"close_requested"))text=L"Saving workspace…";
+        if(text.empty()&&flag(storage,L"closing"))text=L"Saving workspace…";
         message.Text(text);root.Visibility(text.empty()?Visibility::Collapsed:Visibility::Visible);
         auto preferences=object(model,L"windows_settings_close");
         if(flag(preferences,L"requested")&&!flag(preferences,L"ready")){
             root.Visibility(Visibility::Collapsed);
             auto attempt=uint64_t(num(preferences,L"attempt"));
             if(!blocked&&!showing&&!stopping&&!flag(preferences,L"busy")&&!str(preferences,L"error").empty()&&attempt!=handledPreferencesClose){
-                handledPreferencesClose=attempt;show(true,true);
+                handledPreferencesClose=attempt;show(true);
             }
             return;
         }
@@ -142,8 +131,8 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
         for(auto button:{retry,saveNew,backup})button.IsEnabled(!blocked&&!showing&&!flag(storage,L"busy"));
         saveNew.Visibility(flag(storage,L"ready")?Visibility::Visible:Visibility::Collapsed);
         auto attempt=uint32_t(num(storage,L"close_attempt"));
-        if(!blocked&&!showing&&!stopping&&flag(storage,L"close_requested")&&!flag(storage,L"busy")&&!error.empty()&&attempt!=handledClose) {
-            handledClose=attempt;show(true);
+        if(!blocked&&!showing&&!stopping&&flag(storage,L"closing")&&!flag(storage,L"busy")&&!error.empty()&&attempt!=handledClose) {
+            handledClose=attempt;show();
         }
     }
 };

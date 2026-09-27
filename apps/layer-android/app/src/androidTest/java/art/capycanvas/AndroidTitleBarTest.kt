@@ -471,12 +471,12 @@ class AndroidTitleBarTest {
         send(obj("type" to "switch", "id" to "builtin:workspace:photographer"))
         assertEquals("builtin:workspace:photographer", view().getString("id"))
         val before = capture()
-        send(obj("type" to "form", "kind" to "reset"))
+        send(obj("type" to "form", "action" to obj("type" to "reset", "value" to view().getString("id"))))
         waitFor("latest default preview") { node("panel-body-color") != null && node("panel-body-layers") != null }
         assertEquals("Preview is not saved", before, capture())
         send(obj("type" to "cancel"))
         assertEquals("Cancel retains the current layout", before, capture())
-        send(obj("type" to "form", "kind" to "reset"))
+        send(obj("type" to "form", "action" to obj("type" to "reset", "value" to view().getString("id"))))
         waitFor("starting layout confirmation") { node("workspace-submit") != null }
         tap("workspace-submit")
         fun checkColumns() {
@@ -523,7 +523,7 @@ class AndroidTitleBarTest {
         assertEquals("Default arrangement survives restart", committed, layout())
         shot("photo-default-restart")
         send(obj("type" to "switch", "id" to "builtin:workspace:illustrator"))
-        send(obj("type" to "form", "kind" to "reset"))
+        send(obj("type" to "form", "action" to obj("type" to "reset", "value" to view().getString("id"))))
         tap("workspace-submit")
         waitFor("original Paint panels") { node("panel-body-brushes") != null && node("panel-body-color") != null && node("panel-body-navigator") != null }
         assertEquals("Paint restores its left panel column", bounds("group-6").left, bounds("group-10").left, 1f)
@@ -535,7 +535,7 @@ class AndroidTitleBarTest {
     @Test fun paintColorAndNavigatorFitTheirContent() {
         waitFor("filter library", 60_000) { !state().getJSONObject("filter_load").optBoolean("pending") }
         send(obj("type" to "switch", "id" to "builtin:workspace:illustrator"))
-        send(obj("type" to "form", "kind" to "reset"))
+        send(obj("type" to "form", "action" to obj("type" to "reset", "value" to view().getString("id"))))
         waitFor("starting layout confirmation") { node("workspace-submit") != null }
         tap("workspace-submit")
         waitFor("restored fitted groups") { state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("fit_height_groups").toString() == "[10,14]" }
@@ -583,7 +583,7 @@ class AndroidTitleBarTest {
     @Test fun colorExpansionClosesPromptlyWithoutRemeasuringTheWheel() {
         waitFor("filter library", 60_000) { !state().getJSONObject("filter_load").optBoolean("pending") }
         send(obj("type" to "switch", "id" to "builtin:workspace:illustrator"))
-        send(obj("type" to "form", "kind" to "reset"))
+        send(obj("type" to "form", "action" to obj("type" to "reset", "value" to view().getString("id"))))
         waitFor("starting layout confirmation") { node("workspace-submit") != null }
         tap("workspace-submit")
         waitFor("docked Color panel") { node("panel-body-color") != null && node("color-wheel") != null }

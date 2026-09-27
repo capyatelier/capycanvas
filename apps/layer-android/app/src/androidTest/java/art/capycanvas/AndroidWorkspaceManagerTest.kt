@@ -143,7 +143,7 @@ class AndroidWorkspaceManagerTest {
         }
         menu("Manage Workspaces…")
         for (row in view().array("rows").objects().filter { it.getString("id").startsWith("builtin:workspace:") }) {
-            assertFalse(row.getBoolean("options")); assertFalse(row.getBoolean("delete"))
+            assertFalse(row.array("actions").objects().any { it.optBoolean("enabled") && it.getJSONObject("action").getString("type") in listOf("rename", "delete") })
         }
         tap("workspace-row-$painting"); tap("workspace-confirm"); idle()
         assertEquals(normalized(beforeRestart), normalized(capture()))

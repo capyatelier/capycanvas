@@ -59,13 +59,14 @@ function Start-Review([string]$Phase) {
     $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     if($Phase -eq 'initial'){
-        $choice=(Model).windows_workspace.switcher|Where-Object key -eq $Workspace|Select-Object -First 1
+        $workspaceId=@{sketch='builtin:workspace:painter';paint='builtin:workspace:illustrator';photo='builtin:workspace:photographer'}[$Workspace]
+        $choice=(Model).windows_workspace.switcher|Where-Object id -eq $workspaceId|Select-Object -First 1
         if(!$choice){throw 'Requested workspace is missing'}
         if((Model).windows_workspace.id -ne $choice.id){
-            $toggle=Find ('workspace-switch-'+$Workspace)
+            $toggle=Find ('workspace-switch-'+$choice.id)
             if(!$toggle -or $toggle.Current.IsOffscreen){
                 Invoke 'header-workspace-menu'
-                $toggle=Control $choice.name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+                $toggle=Control $choice.title -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
             }
             $toggle.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
             Wait-Until {(Model).windows_workspace.id -eq $choice.id -and !(Model).windows_workspace.busy} 'Requested workspace did not open'

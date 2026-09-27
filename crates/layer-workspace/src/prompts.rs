@@ -50,6 +50,23 @@ impl ManagerPrompt {
         self
     }
 }
+pub fn recover_prompt(changes: Vec<(String, String)>) -> Result<ManagerPrompt, StoreError> {
+    let choices = changes
+        .into_iter()
+        .map(|(id, label)| ManagerChoice { id, label })
+        .collect::<Vec<_>>();
+    if choices.is_empty() {
+        return Err(StoreError::invalid(
+            "There are no interrupted changes to recover.",
+        ));
+    }
+    Ok(ManagerPrompt::confirm(
+        "Recover Interrupted Changes",
+        "Recover the selected changes into independent copies with unique names. Existing items stay as they are.",
+        "Recover Copies",
+    )
+    .choices("Interrupted changes", choices, None))
+}
 impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn presentation_entity(&self, id: &str) -> Result<Entity, StoreError> {
         if self.active_id().as_deref() == Some(id) {
@@ -108,19 +125,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     ) -> Result<ManagerPrompt, StoreError> {
         use ManagerAction as A;
         if matches!(action, A::RecoverInterrupted) {
-            let choices = self
-                .interrupted_changes(now)
-                .await?
-                .into_iter()
-                .map(|(id, label)| ManagerChoice { id, label })
-                .collect::<Vec<_>>();
-            if choices.is_empty() {
-                return Err(StoreError::invalid(
-                    "There are no interrupted changes to recover.",
-                ));
-            }
-            return Ok(ManagerPrompt::confirm("Recover Interrupted Changes","Recover the selected changes into independent copies with unique names. Existing items stay as they are.","Recover Copies")
-                .choices("Interrupted changes",choices,None));
+            return recover_prompt(self.interrupted_changes(now).await?);
         }
         let source = match action {
             A::Rename(id) | A::Reset(id) | A::Delete(id) | A::UpdateToolbar(id) => {
@@ -158,13 +163,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             }
             A::Rename(_) => {
                 let s = source()?;
+                let reusable = s.kind == ItemKind::Toolbar;
                 let mut p = ManagerPrompt::confirm(
                     "Rename",
-                    "Choose a name and optional description.",
+                    if reusable {
+                        "Choose a name and optional description."
+                    } else {
+                        ""
+                    },
                     "Rename",
                 );
                 p.name = Some(s.name.clone());
-                p.description = Some(s.description.clone());
+                p.description = reusable.then(|| s.description.clone());
                 p
             }
             A::SaveToolbar(panel) => {
@@ -234,6 +244,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 ManagerPrompt::confirm("Update Saved Toolbar",format!("Choose a toolbar from {} to replace the saved {}. Existing workspace copies stay as they are.",current.metadata.name,source()?.name),"Update")
                     .choices("Toolbar",self.current_toolbar_choices()?,None)
             }
+            A::NewToolbar(_) => self.new_toolbar_prompt(),
             A::SaveAsNew => {
                 let mut p = ManagerPrompt::confirm(
                     "Save as New Workspace",

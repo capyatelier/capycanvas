@@ -227,15 +227,12 @@ impl CapyHost {
             if self.documents.as_ref().is_some_and(|d| d.window_close_ready(&self.native))
                 && self.services.as_ref().is_none_or(|s| s.close_status().ready)
                 && self.documents.as_ref().and_then(|d| d.recovery.as_ref()).is_none_or(|s| s.close_ready())
-                && !service.status().close_requested
+                && !service.view().closing
+                && !service.view().closed
             {
-                service.request_close(&mut self.native);
+                let _ = service.input(&mut self.native, layer_workspace::WorkspaceInput::Close);
             }
-            service.poll(
-                &mut self.native,
-                std::time::Instant::now(),
-                crate::workspace_service::now_ms(),
-            );
+            service.poll(&mut self.native, crate::workspace_service::now_ms());
         }
         Ok(())
     }
@@ -510,13 +507,12 @@ pub unsafe extern "C" fn capy_start_services(
             let context = context as usize;
             let directory = crate::settings::data_directory()?;
             let worker = layer_workspace::StoreWorker::shared(&directory).map_err(err)?;
-            let mut service =
+            let service =
                 crate::workspace_service::WorkspaceService::new(worker, directory, move || {
                     if let Some(wake) = wake {
                         wake(context as *mut c_void);
                     }
                 });
-            service.start(crate::workspace_service::now_ms());
             host.workspaces = Some(service);
             host.poll_services()?;
         }
@@ -685,7 +681,7 @@ pub unsafe extern "C" fn capy_pointer(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_workspace_action(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
-        use crate::workspace_service::{WorkspaceAction, now_ms};
+        use crate::workspace_service::WorkspaceAction;
         let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
         if matches!(
             action,
@@ -718,25 +714,7 @@ pub unsafe extern "C" fn capy_workspace_action(host: *mut CapyHost, json: *const
             WorkspaceAction::PreferencesRetry
             | WorkspaceAction::PreferencesKeepOpen
             | WorkspaceAction::PreferencesDiscardClose => unreachable!(),
-            WorkspaceAction::Manager { dialog, command } => {
-                service.manager_input(&mut host.native, dialog, command)
-            }
-            WorkspaceAction::RefreshSwitcher => {
-                service.refresh_switcher();
-                Ok(())
-            }
-            WorkspaceAction::Retry => {
-                service.retry(&mut host.native, now_ms());
-                Ok(())
-            }
-            WorkspaceAction::KeepOpen => {
-                service.keep_open(&mut host.native);
-                Ok(())
-            }
-            WorkspaceAction::DiscardClose => service.discard_close(&mut host.native),
-            WorkspaceAction::SaveAsNew { name } => {
-                service.save_as_new(&mut host.native, name, now_ms())
-            }
+            WorkspaceAction::Input { input } => service.input(&mut host.native, input),
             WorkspaceAction::ExportBackup { path } => service.export_backup(&mut host.native, path),
             WorkspaceAction::Failure { error } => Err(layer_workspace::StoreError::new(
                 layer_workspace::ErrorKind::Unavailable,
@@ -974,9 +952,8 @@ struct WindowsMetadata {
     windows_glass: serde_json::Value,
     windows_tab_styles: serde_json::Map<String, serde_json::Value>,
     windows_isolated_settings: bool,
-    windows_workspace: Option<crate::workspace_service::WorkspaceStatus>,
+    windows_workspace: Option<serde_json::Value>,
     windows_settings_close: Option<crate::settings::CloseStatus>,
-    windows_workspace_manager: Option<crate::workspace_service::ManagerView>,
 }
 /// # Safety
 /// `host` must be null or a live host exclusively accessed by this caller.
@@ -1011,13 +988,12 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .documents
                 .is_some()
                 .then(|| host.native.proof.observe(&host.native.session)),
-            windows_workspace: host.workspaces.as_ref().map(|s| s.status().clone()),
-            windows_settings_close: host.services.as_ref().map(|s| s.close_status().clone()),
-            windows_filter_load: host.filters.as_ref().map(|s| s.status().clone()),
-            windows_workspace_manager: host
+            windows_workspace: host
                 .workspaces
                 .as_ref()
-                .and_then(|s| s.manager_view().cloned()),
+                .and_then(|s| serde_json::to_value(s.status(&host.native)).ok()),
+            windows_settings_close: host.services.as_ref().map(|s| s.close_status().clone()),
+            windows_filter_load: host.filters.as_ref().map(|s| s.status().clone()),
             windows_isolated_settings: std::env::var_os("CAPY_SETTINGS_DIRECTORY")
                 .map(std::path::PathBuf::from)
                 .is_some_and(|path| path.is_absolute()),

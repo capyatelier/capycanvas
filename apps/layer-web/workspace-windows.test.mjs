@@ -52,7 +52,7 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     assert.deepEqual((await capture(evaluate)).working,ownCapture.working,'Ownership loss preserves outgoing edits');
     await wait(evaluate,`[...document.querySelectorAll('dialog')].some(d=>d.getAttribute('aria-label')==='Workspace could not be saved'&&d.open)`);
     await evaluate('[...document.querySelectorAll("dialog[open] button")].find(b=>b.textContent==="Save as New Workspace…").click()');
-    await wait(evaluate,'JSON.parse(layerApp.app.workspace_view()).form?.kind === "recover"');
+    await wait(evaluate,'JSON.parse(layerApp.app.workspace_view()).prompt_action?.type === "save_as_new"');
     await wait(evaluate,'!!document.querySelector(".workspace-form[open] input") && document.querySelector(".workspace-form[open] .suggested-action")?.disabled === false');
     await evaluate('document.querySelector(".workspace-form[open] input").value="Recovered browser window";document.querySelector(".workspace-form[open] .suggested-action").click()');
     await wait(evaluate,`${ready} && JSON.parse(layerApp.app.workspace_view()).name === "Recovered browser window"`);

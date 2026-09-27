@@ -50,11 +50,11 @@ try{
     $initial=@((Model).state.workspace.layout.panels).Count
     WindowCommand 'new_toolbar'
     $null=Control 'workspace-manager'
-    Wait-Until {$null -ne (Model).windows_workspace_manager.prompt -and !(Model).windows_workspace_manager.loading} 'New Toolbar form did not open'
+    Wait-Until {$null -ne (Model).windows_workspace.prompt -and !(Model).windows_workspace.loading} 'New Toolbar form did not open'
     Wait-Until {!(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Toolbar form did not block painting'
     Edit 'workspace-manager-name' ' '
     InvokeDialog 'workspace-manager' 'Add to Workspace'
-    Wait-Until {(Model).windows_workspace_manager.error} 'Invalid toolbar name was not rejected'
+    Wait-Until {(Model).windows_workspace.error} 'Invalid toolbar name was not rejected'
     $nameValue=(Control 'workspace-manager-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
     foreach($draft in @('W','Windows','Windows tools','Windows tools review')){$nameValue.SetValue($draft)}
     if($nameValue.Current.Value -ne 'Windows tools review'){throw 'A delayed snapshot overwrote the name draft'}
@@ -127,10 +127,10 @@ try{
     Wait-Until {@((Toolbar $toolbarId).tiles).Count -eq 1} 'Undo did not remove the inserted tool'
     WindowCommand 'manage_toolbars'
     $null=Control 'workspace-manager'
-    Wait-Until {!(Model).windows_workspace_manager.loading} 'Toolbar manager did not load'
-    $row=(Model).windows_workspace_manager.rows|Where-Object title -eq 'Windows tools review'
+    Wait-Until {!(Model).windows_workspace.loading} 'Toolbar manager did not load'
+    $row=(Model).windows_workspace.rows|Where-Object title -eq 'Windows tools review'
     (Control ('workspace-manager-row-'+$row.id)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    Wait-Until {(Model).windows_workspace_manager.selected -eq $row.id} 'Native manager did not select the owned toolbar'
+    Wait-Until {(Model).windows_workspace.selected -eq $row.id} 'Native manager did not select the owned toolbar'
     Invoke 'workspace-toolbar-actions';Invoke 'workspace-toolbar-delete_toolbar'
     $prompt=Control 'toolbar-prompt'
     Wait-Until {(Model).toolbar_prompt.destructive -and (Model).toolbar_prompt.message -like '*Windows tools review*'} 'Delete prompt does not name the owned toolbar'
@@ -139,9 +139,9 @@ try{
     if(@((Model).state.workspace.layout.panels).Count -ne $initial+1){throw 'Cancel deleted the toolbar'}
     WindowCommand 'manage_toolbars'
     $null=Control 'workspace-manager'
-    Wait-Until {!(Model).windows_workspace_manager.loading} 'Toolbar manager did not reload'
+    Wait-Until {!(Model).windows_workspace.loading} 'Toolbar manager did not reload'
     (Control ('workspace-manager-row-'+$row.id)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    Wait-Until {(Model).windows_workspace_manager.selected -eq $row.id} 'Native manager did not restore selection'
+    Wait-Until {(Model).windows_workspace.selected -eq $row.id} 'Native manager did not restore selection'
     Invoke 'workspace-toolbar-actions';Invoke 'workspace-toolbar-delete_toolbar'
     $null=Control 'toolbar-prompt'
     Capture 'delete-prompt'
@@ -155,7 +155,7 @@ try{
     WindowCommand 'new_toolbar'
     $null=Control 'workspace-manager'
     InvokeDialog 'workspace-manager' 'Cancel'
-    Wait-Until {$null -eq (Model).windows_workspace_manager -and $null -eq (Find 'workspace-manager') -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Cancel did not close New Toolbar and release painting'
+    Wait-Until {$null -eq (Model).windows_workspace.page -and $null -eq (Model).windows_workspace.prompt -and $null -eq (Find 'workspace-manager') -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Cancel did not close New Toolbar and release painting'
     Invoke 'Test stroke' -Name
     Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not dirty the review'
     WindowCommand 'new_toolbar'

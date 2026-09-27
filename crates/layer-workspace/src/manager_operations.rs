@@ -104,6 +104,62 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         result?;
         self.refresh().await
     }
+    pub async fn update_toolbar_from(
+        &self,
+        id: &str,
+        panel: layer_ui::Panel,
+        now: u64,
+    ) -> Result<()> {
+        let current = self
+            .current()
+            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+        let definition = ToolbarDefinition::capture(
+            current
+                .capture()?
+                .history
+                .layout()
+                .panel(panel)
+                .map_err(StoreError::invalid)?,
+        )?;
+        self.update_toolbar(id, definition, now).await
+    }
+    /// A saved toolbar copy, or an empty toolbar when `source` is empty, as an
+    /// installable panel. A typed `name` replaces the saved name.
+    pub async fn toolbar_config(
+        &self,
+        source: Option<&str>,
+        name: Option<&str>,
+    ) -> Result<layer_ui::PanelConfig> {
+        let mut definition = match source.filter(|id| !id.is_empty()) {
+            Some(id) => {
+                let stored = self.load(id).await?;
+                let ItemContent::Toolbar { mut definition } = stored.entity.content else {
+                    return Err(StoreError::invalid("Choose a saved toolbar."));
+                };
+                definition.name = stored.entity.metadata.name;
+                definition
+            }
+            None => ToolbarDefinition {
+                name: "New Toolbar".into(),
+                tiles: Vec::new(),
+                tile_style: layer_ui::TileStyle::Small,
+                hide_tab: false,
+            },
+        };
+        if let Some(name) = name {
+            definition.name = name.trim().into();
+        }
+        definition.validate()?;
+        Ok(layer_ui::PanelConfig {
+            id: layer_ui::Panel::Toolbar,
+            hide_tab: definition.hide_tab,
+            tile_style: definition.tile_style,
+            content: layer_ui::PanelContent::Toolbar {
+                name: definition.name,
+                tiles: definition.tiles,
+            },
+        })
+    }
     async fn publish_layout(
         &self,
         stored: &StoredEntity,

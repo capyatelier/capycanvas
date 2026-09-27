@@ -249,6 +249,7 @@ impl ManagerUi {
             }
             ManagerPage::ThisWorkspace => "Arrange the toolbars in this workspace.",
             ManagerPage::ToolbarLibrary => "Save toolbars to reuse in any workspace.",
+            ManagerPage::History => "",
         });
         self.intro.set_visible(true);
         self.dialog.set_title(if toolbar {

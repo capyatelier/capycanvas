@@ -18,7 +18,7 @@ function Tap($at,[string]$Device='mouse'){[CapyRowPointer]::Down($Device,$at.x,$
 function Switch-Workspace([string]$Name,[string]$Id){
     $found=@{switch=$null;menu=$null}
     Wait-Until {
-        $found.switch=Find ('workspace-switch-'+$Name.ToLowerInvariant());$found.menu=Find 'header-workspace-menu'
+        $found.switch=Find ('workspace-switch-'+$Id);$found.menu=Find 'header-workspace-menu'
         $found.switch -or $found.menu
     } "No workspace switcher for $Name" 15
     $switch=$found.switch

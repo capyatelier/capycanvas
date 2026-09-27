@@ -132,7 +132,7 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
     val colors = LocalPalette.current
     val rows = view.array("rows").objects()
     val workspaces = view.optString("page") == "workspaces"
-    val enabled = !view.optBoolean("busy") && !view.optBoolean("switcher_busy") && view.isNull("form")
+    val enabled = !view.optBoolean("busy") && !view.optBoolean("switcher_busy") && view.isNull("prompt")
     val pinned = view.array("switcher").objects().map { it.getString("id") }
     val order = view.array("order").values().map { it.toString() }
     val scroll = rememberScrollState()
@@ -140,8 +140,8 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
     val density = LocalDensity.current.density
     fun edit(value: JSONObject) { host.workspaceInput(obj("type" to "edit_switcher", "edit" to value)) }
     SideEffect { drag.order = rows.map { it.getString("id") }; drag.enabled = enabled && workspaces }
-    LaunchedEffect(view.optString("page"), view.optString("form"), rows.map { it.getString("id") }) {
-        if (!workspaces || !view.isNull("form") || (drag.active != null && drag.active !in drag.order)) drag.cancel()
+    LaunchedEffect(view.optString("page"), view.optString("prompt"), rows.map { it.getString("id") }) {
+        if (!workspaces || !view.isNull("prompt") || (drag.active != null && drag.active !in drag.order)) drag.cancel()
         if (drag.menu != null && drag.menu !in drag.order) drag.menu = null
     }
     DisposableEffect(drag) { onDispose { drag.cancel() } }
@@ -209,11 +209,12 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
                                     onClick = { closeEdit(obj("type" to "move", "id" to id, "before" to order.getOrNull(position - 1))) })
                                 DropdownMenuItem(text = { Text("Move Down") }, enabled = enabled && position >= 0 && position < order.lastIndex, modifier = Modifier.testTag("workspace-down"),
                                     onClick = { closeEdit(obj("type" to "move", "id" to id, "before" to order.getOrNull(position + 2))) })
-                                if (row.optBoolean("options") || row.optBoolean("delete")) HorizontalDivider()
-                                for ((kind, label) in listOf("rename" to "Rename…", "delete" to "Delete…")) {
-                                    if (row.optBoolean(if (kind == "rename") "options" else "delete")) DropdownMenuItem(text = { Text(label) },
-                                        enabled = enabled && row.optBoolean("options"), modifier = Modifier.testTag("workspace-$kind"), onClick = {
-                                            drag.menu = null; host.workspaceInput(obj("type" to "form", "kind" to kind, "id" to id))
+                                val offered = listOf("rename" to "Rename…", "delete" to "Delete…").filter { (kind, _) -> row.offers(kind) }
+                                if (offered.isNotEmpty()) HorizontalDivider()
+                                for ((kind, label) in offered) {
+                                    DropdownMenuItem(text = { Text(label) },
+                                        enabled = enabled, modifier = Modifier.testTag("workspace-$kind"), onClick = {
+                                            drag.menu = null; host.workspaceInput(obj("type" to "form", "action" to obj("type" to kind, "value" to id)))
                                         })
                                 }
                             }
@@ -226,3 +227,6 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
             .fillMaxWidth().height(2.dp).background(colors.accent).testTag("workspace-row-drop-hint")) }
     }
 }
+
+private fun JSONObject.offers(type: String) =
+    array("actions").objects().any { it.optBoolean("enabled") && it.getJSONObject("action").getString("type") == type }

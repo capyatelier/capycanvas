@@ -13,6 +13,7 @@ struct Backend {
     lose_reply: Cell<bool>,
     deliveries: RefCell<Vec<String>>,
     load_gate: RefCell<Option<async_channel::Receiver<()>>>,
+    fail_renew: RefCell<Option<ErrorKind>>,
 }
 #[derive(Clone)]
 struct Store(Rc<Backend>);
@@ -23,6 +24,11 @@ impl WorkspaceStore for Store {
             if let Some(gate) = gate {
                 let _ = gate.recv().await;
             }
+        }
+        if matches!(request, StoreRequest::Renew { .. })
+            && let Some(kind) = self.0.fail_renew.borrow().clone()
+        {
+            return Err(StoreError::new(kind, "Renewal failed"));
         }
         let commit = matches!(request, StoreRequest::Commit { .. });
         if let StoreRequest::Commit { batch } = &request {
@@ -181,7 +187,7 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
         f.input(serde_json::json!({"type":"switch","id":defaults[0]}));
         f.action(serde_json::json!({"type":"set_brush_size","value":73.0}));
         f.save();
-        f.input(serde_json::json!({"type":"form","kind":"new"}));
+        f.input(serde_json::json!({"type":"form","action":{"type":"new"}}));
         f.input(serde_json::json!({"type":"submit","name":"Delete Me"}));
         let deleted = f.controller.view.id.clone().unwrap();
         let capture = f.host.session.capture_workspace().unwrap();
@@ -195,12 +201,12 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
             .unwrap();
         }
         f.input(serde_json::json!({"type":"open","page":"workspaces"}));
-        f.input(serde_json::json!({"type":"form","kind":"delete","id":deleted}));
+        f.input(serde_json::json!({"type":"form","action":{"type":"delete","value":deleted}}));
         f.input(serde_json::json!({"type":"cancel"}));
         assert_eq!(f.controller.view.id.as_ref(), Some(&deleted));
         assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
         assert!(f.controller.manager.switcher_ids().contains(&deleted));
-        f.input(serde_json::json!({"type":"form","kind":"delete","id":deleted}));
+        f.input(serde_json::json!({"type":"form","action":{"type":"delete","value":deleted}}));
         f.input(serde_json::json!({"type":"submit","name":""}));
         let record = pollster::block_on(f.controller.manager.load(&deleted));
         if occupied == defaults.len() {
@@ -295,7 +301,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
         assert_ne!(before.history.layout(), &baseline);
         for confirm in [false, true] {
             let saved = f.controller.manager.current().unwrap();
-            f.input(serde_json::json!({"type":"form","kind":"reset"}));
+            f.input(serde_json::json!({"type":"form","action":{"type":"reset","value":saved.id}}));
             assert_eq!(layer_ui::durable_layout(&f.host.session.state().workspace.layout), baseline);
             assert_eq!(f.host.session.capture_workspace().unwrap(), before);
             f.save();
@@ -304,7 +310,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
                 saved,
                 "preview is never persisted"
             );
-            let prompt = f.controller.view.form.as_ref().unwrap();
+            let prompt = f.controller.view.prompt.as_ref().unwrap();
             let expected = f
                 .controller
                 .manager
@@ -352,7 +358,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
 fn previews_cancel_pending_replies_and_never_publish_temporary_layouts() {
     let mut f = Fixture::new();
     let original = f.controller.view.id.clone().unwrap();
-    f.input(serde_json::json!({"type":"form","kind":"new","id":null}));
+    f.input(serde_json::json!({"type":"form","action":{"type":"new"}}));
     f.input(serde_json::json!({"type":"submit","name":"Painting"}));
     let painting = f.controller.view.id.clone().unwrap();
     assert_ne!(painting, original);
@@ -448,10 +454,10 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
     f.input(serde_json::json!({"type":"switch","id":"builtin:workspace:photographer"}));
     f.input(serde_json::json!({"type":"switch","id":painter}));
     assert_eq!(f.host.session.capture_workspace().unwrap(), edited);
-    f.input(serde_json::json!({"type":"form","kind":"reset_brushes"}));
+    f.input(serde_json::json!({"type":"form","action":{"type":"reset_brushes"}}));
     f.input(serde_json::json!({"type":"cancel"}));
     assert_eq!(f.host.session.capture_workspace().unwrap(), edited);
-    f.input(serde_json::json!({"type":"form","kind":"reset_brushes"}));
+    f.input(serde_json::json!({"type":"form","action":{"type":"reset_brushes"}}));
     f.input(serde_json::json!({"type":"submit","name":""}));
     let reset = f.host.session.capture_workspace().unwrap();
     assert_eq!(reset.history, edited.history);
@@ -469,7 +475,7 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
             .working,
         expected
     );
-    f.input(serde_json::json!({"type":"form","kind":"rename","id":painter}));
+    f.input(serde_json::json!({"type":"form","action":{"type":"rename","value":painter}}));
     f.input(serde_json::json!({"type":"submit","name":"My Painter"}));
     assert!(
         f.controller
@@ -498,8 +504,9 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
         .iter()
         .find(|r| r.id == painter)
         .unwrap();
-    assert!(!row.options);
-    assert!(!row.delete);
+    assert!(!row.actions.iter().any(|b| {
+        b.enabled && matches!(b.action, ManagerAction::Rename(_) | ManagerAction::Delete(_))
+    }));
     f.input(serde_json::json!({"type":"cancel"}));
     assert!(
         pollster::block_on(
@@ -518,7 +525,7 @@ fn failed_creation_keeps_recovery_visible_and_retries_immutable_delivery() {
     let mut f = Fixture::new();
     let original = f.controller.view.id.clone();
     let pins = f.controller.manager.switcher_ids();
-    f.input(serde_json::json!({"type":"form","kind":"new"}));
+    f.input(serde_json::json!({"type":"form","action":{"type":"new"}}));
     f.backend.fail.set(true);
     f.input(serde_json::json!({"type":"submit","name":"Painting"}));
     assert!(f.controller.view.error.is_some());
@@ -531,7 +538,7 @@ fn failed_creation_keeps_recovery_visible_and_retries_immutable_delivery() {
         f.controller.view.error.is_some(),
         "Cancel keeps the failed delivery available for recovery"
     );
-    f.input(serde_json::json!({"type":"form","kind":"new"}));
+    f.input(serde_json::json!({"type":"form","action":{"type":"new"}}));
     f.backend.fail.set(false);
     f.input(serde_json::json!({"type":"submit","name":"Painting"}));
     assert!(f.controller.view.error.is_none());
@@ -571,10 +578,10 @@ fn new_workspaces_are_pinned_without_repinning_hidden_workspaces() {
     f.input(serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":painter,"visible":false}}));
     let pins = f.controller.manager.switcher_ids();
     let revision = f.controller.view.switcher_revision;
-    f.input(serde_json::json!({"type":"form","kind":"new"}));
+    f.input(serde_json::json!({"type":"form","action":{"type":"new"}}));
     f.input(serde_json::json!({"type":"cancel"}));
     assert_eq!(f.controller.manager.switcher_ids(), pins);
-    f.input(serde_json::json!({"type":"form","kind":"new"}));
+    f.input(serde_json::json!({"type":"form","action":{"type":"new"}}));
     f.input(serde_json::json!({"type":"submit","name":"Sketching"}));
     let created = f.controller.view.id.clone().unwrap();
     let expected: Vec<_> = pins.into_iter().chain([created.clone()]).collect();
@@ -752,4 +759,322 @@ fn unpinned_current_workspace_is_temporary_and_previews_do_not_replace_it() {
         other.refresh_switcher().await.unwrap();
     });
     assert!(other.switcher_display_ids().is_empty());
+}
+
+#[test]
+fn host_workspace_requests_complete_once() {
+    let mut f = Fixture::new();
+    let pending = |f: &Fixture| {
+        f.host
+            .session
+            .state()
+            .requests
+            .iter()
+            .filter(|r| matches!(r.kind, layer_ui::HostRequestKind::Workspace { .. }))
+            .count()
+    };
+    f.action(serde_json::json!({"type":"workspace_manager","command":{"type":"manage"}}));
+    f.action(serde_json::json!({"type":"workspace_manager","command":{"type":"new"}}));
+    assert_eq!(pending(&f), 2);
+    f.pump();
+    assert_eq!(pending(&f), 0);
+    assert_eq!(f.controller.view.page, Some(ManagerPage::Workspaces));
+    assert_eq!(f.controller.view.prompt_action, Some(ManagerAction::New));
+    f.input(serde_json::json!({"type":"cancel"}));
+    f.input(serde_json::json!({"type":"cancel"}));
+    f.pump();
+    assert!(f.controller.view.page.is_none());
+    assert!(
+        f.controller.view.prompt.is_none(),
+        "a completed request is never replayed"
+    );
+    f.action(serde_json::json!({"type":"workspace_manager","command":{"type":"manage_toolbars"}}));
+    f.pump();
+    assert_eq!(pending(&f), 0);
+    assert!(f.host.session.state().customization.is_open());
+    assert!(f.controller.view.page.is_none());
+}
+
+#[test]
+fn transient_renew_error_keeps_editing_but_takeover_goes_read_only() {
+    let mut f = Fixture::new();
+    let id = f.controller.view.id.clone().unwrap();
+    let brush = |size: f64| serde_json::json!({"type":"set_brush_size","value":size});
+    *f.backend.fail_renew.borrow_mut() = Some(ErrorKind::Unavailable);
+    f.backend.now.set(f.backend.now.get() + OWNER_RENEW_MS);
+    f.pump();
+    assert!(f.controller.view.error.is_some());
+    assert!(!f.controller.view.owner_lost);
+    f.action(brush(41.0));
+    *f.backend.fail_renew.borrow_mut() = None;
+    f.backend.now.set(f.backend.now.get() + OWNER_RENEW_MS);
+    f.pump();
+    assert!(f.controller.view.error.is_none());
+    f.save();
+    assert!(!f.controller.manager.dirty());
+    f.backend.now.set(f.backend.now.get() + OWNER_LEASE_MS + 1);
+    let other = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
+    let taken = pollster::block_on(other.prepare_switch(&id, f.backend.now.get())).unwrap();
+    other.activate(taken);
+    f.pump();
+    assert!(f.controller.view.owner_lost);
+    assert!(f.controller.view.error.is_some());
+    assert!(
+        f.host
+            .dispatch(serde_json::from_value::<UiAction>(brush(52.0)).unwrap())
+            .is_err()
+    );
+}
+
+fn action(action: ManagerAction) -> serde_json::Value {
+    serde_json::json!({"type":"action","action":action})
+}
+
+fn toolbar_names(f: &Fixture) -> Vec<String> {
+    f.host
+        .session
+        .state()
+        .workspace
+        .layout
+        .panels
+        .iter()
+        .filter(|p| p.id.kind() == layer_ui::PanelKind::Tiles)
+        .map(|p| p.title().to_string())
+        .collect()
+}
+
+fn saved_toolbar(f: &Fixture, name: &str) -> Option<ItemSummary> {
+    f.controller
+        .manager
+        .items()
+        .into_iter()
+        .find(|i| i.metadata.kind == ItemKind::Toolbar && i.metadata.name == name)
+}
+
+#[test]
+fn toolbar_install_is_one_undo_step_and_retry_flushes_without_reinstalling() {
+    let mut f = Fixture::new();
+    let before = f.host.session.state().workspace.layout.clone();
+    f.input(serde_json::json!({"type":"form","action":{"type":"new_toolbar","value":null}}));
+    let prompt = f.controller.view.prompt.clone().unwrap();
+    assert_eq!(prompt.name.as_deref(), Some("New Toolbar"));
+    assert_eq!(prompt.selected.as_deref(), Some(""));
+    let existing = toolbar_names(&f)[0].clone();
+    f.input(serde_json::json!({"type":"submit","name":existing}));
+    assert!(
+        f.controller.view.error.is_some(),
+        "typed toolbar names must not collide"
+    );
+    assert_eq!(f.host.session.state().workspace.layout, before);
+    f.backend.fail.set(true);
+    f.input(serde_json::json!({"type":"submit","name":"Inks"}));
+    f.save();
+    assert!(f.controller.view.error.is_some());
+    assert!(f.controller.view.retry);
+    assert!(f.controller.view.prompt.is_none());
+    let installed = |f: &Fixture| toolbar_names(f).iter().filter(|n| *n == "Inks").count();
+    assert_eq!(installed(&f), 1);
+    f.backend.fail.set(false);
+    f.input(serde_json::json!({"type":"retry"}));
+    assert!(f.controller.view.error.is_none());
+    assert!(!f.controller.manager.dirty());
+    assert_eq!(installed(&f), 1, "retry flushes without reinstalling");
+    let saved = f.controller.manager.current().unwrap().capture().unwrap();
+    let shown = f.host.session.capture_workspace().unwrap();
+    assert_eq!(saved.history.layout(), shown.history.layout());
+    f.action(serde_json::json!({"type":"invoke","command":"undo_workspace"}));
+    assert_eq!(
+        layer_ui::durable_layout(&f.host.session.state().workspace.layout),
+        layer_ui::durable_layout(&before)
+    );
+}
+
+#[test]
+fn saved_toolbar_save_add_rename_delete_are_independent_copies() {
+    let mut f = Fixture::new();
+    f.input(serde_json::json!({"type":"open","page":"this_workspace"}));
+    let row = f.controller.view.rows[0].clone();
+    let panel: layer_ui::Panel = serde_json::from_str(&row.id).unwrap();
+    f.input(serde_json::json!({"type":"select","id":row.id}));
+    assert!(f.controller.view.details.is_some());
+    f.input(action(ManagerAction::SaveToolbar(panel)));
+    assert_eq!(
+        f.controller.view.prompt.as_ref().unwrap().name.as_deref(),
+        Some(row.title.as_str())
+    );
+    f.input(serde_json::json!({"type":"submit","name":"Saved Ink"}));
+    let saved = saved_toolbar(&f, "Saved Ink").unwrap().id;
+    f.input(serde_json::json!({"type":"open","page":"toolbar_library"}));
+    f.input(serde_json::json!({"type":"select","id":saved}));
+    let details = f.controller.view.details.clone().unwrap();
+    assert!(
+        details
+            .actions
+            .iter()
+            .any(|b| b.action == ManagerAction::UpdateToolbar(saved.clone()) && b.enabled)
+    );
+    assert_eq!(f.controller.view.primary, "Add to Workspace");
+    f.input(serde_json::json!({"type":"confirm"}));
+    assert!(f.controller.view.page.is_none());
+    assert!(toolbar_names(&f).contains(&"Saved Ink".to_string()));
+    f.input(serde_json::json!({"type":"open","page":"toolbar_library"}));
+    f.input(serde_json::json!({"type":"form","action":{"type":"rename","value":saved}}));
+    assert!(f.controller.view.prompt.as_ref().unwrap().description.is_some());
+    f.input(serde_json::json!({"type":"submit","name":"Renamed Ink","description":"Pens"}));
+    let renamed = saved_toolbar(&f, "Renamed Ink").unwrap();
+    assert_eq!(renamed.metadata.description, "Pens");
+    assert!(toolbar_names(&f).contains(&"Saved Ink".to_string()));
+    f.input(serde_json::json!({"type":"form","action":{"type":"delete","value":saved}}));
+    f.input(serde_json::json!({"type":"submit"}));
+    assert!(saved_toolbar(&f, "Renamed Ink").is_none());
+    assert!(toolbar_names(&f).contains(&"Saved Ink".to_string()));
+    f.input(serde_json::json!({"type":"dismiss"}));
+    f.save();
+    let stored = f.controller.manager.current().unwrap().capture().unwrap();
+    assert!(
+        stored
+            .history
+            .layout()
+            .panels
+            .iter()
+            .any(|p| p.title() == "Saved Ink")
+    );
+}
+
+#[test]
+fn toolbar_pages_skip_layout_preview_and_reject_stale_actions() {
+    let mut f = Fixture::new();
+    f.input(serde_json::json!({"type":"open","page":"this_workspace"}));
+    let row = f.controller.view.rows[0].clone();
+    let panel: layer_ui::Panel = serde_json::from_str(&row.id).unwrap();
+    f.input(serde_json::json!({"type":"select","id":row.id}));
+    f.input(action(ManagerAction::SaveToolbar(panel)));
+    f.input(serde_json::json!({"type":"submit","name":"Library Ink"}));
+    let saved = saved_toolbar(&f, "Library Ink").unwrap().id;
+    let layout = f.host.session.state().workspace.layout.clone();
+    f.input(serde_json::json!({"type":"open","page":"toolbar_library"}));
+    let (release, gate) = async_channel::bounded(1);
+    *f.backend.load_gate.borrow_mut() = Some(gate);
+    f.input(serde_json::json!({"type":"select","id":saved}));
+    assert!(f.controller.view.loading);
+    assert_eq!(f.host.session.state().workspace.layout, layout);
+    f.input(serde_json::json!({"type":"open","page":"this_workspace"}));
+    let _ = release.try_send(());
+    f.pump();
+    assert!(
+        f.controller.view.details.is_none(),
+        "a late library read cannot replace the current page"
+    );
+    f.input(serde_json::json!({"type":"select","id":row.id}));
+    assert_eq!(f.host.session.state().workspace.layout, layout);
+    let names = toolbar_names(&f);
+    f.input(action(ManagerAction::AddToolbar(saved.clone())));
+    f.input(action(ManagerAction::DeleteToolbar(layer_ui::Panel::Layers)));
+    assert_eq!(toolbar_names(&f), names);
+    assert_eq!(f.controller.view.page, Some(ManagerPage::ThisWorkspace));
+    let visible = f.host.session.state().workspace.layout.panel_group(panel).is_some();
+    f.input(action(ManagerAction::ShowToolbar(panel, visible)));
+    assert_eq!(
+        f.host.session.state().workspace.layout.panel_group(panel).is_some(),
+        visible
+    );
+    f.input(action(ManagerAction::ShowToolbar(panel, !visible)));
+    assert_eq!(
+        f.host.session.state().workspace.layout.panel_group(panel).is_some(),
+        !visible
+    );
+    assert_eq!(
+        f.controller.view.details.as_ref().unwrap().actions[0].action,
+        ManagerAction::ShowToolbar(panel, visible)
+    );
+}
+
+#[test]
+fn discard_close_releases_claims_without_saving_and_resume_cancels() {
+    let mut f = Fixture::new();
+    let id = f.controller.view.id.clone().unwrap();
+    let saved = f.controller.manager.current_record().unwrap();
+    f.backend.fail.set(true);
+    f.action(serde_json::json!({"type":"set_brush_size","value":61.0}));
+    f.input(serde_json::json!({"type":"close"}));
+    assert!(f.controller.view.closing);
+    assert!(!f.controller.view.closed);
+    assert!(f.controller.view.error.is_some());
+    f.input(serde_json::json!({"type":"resume"}));
+    assert!(!f.controller.view.closing);
+    f.pump();
+    assert!(f.controller.manager.lease_valid(f.backend.now.get()));
+    f.input(serde_json::json!({"type":"close"}));
+    assert!(f.controller.view.closing);
+    assert!(f.controller.view.error.is_some());
+    f.input(serde_json::json!({"type":"discard_close"}));
+    assert!(f.controller.view.closed);
+    assert!(!f.controller.view.closing);
+    let stored = pollster::block_on(f.controller.manager.load(&id)).unwrap();
+    assert!(stored.claim.is_none());
+    assert_eq!(stored.entity, saved.entity);
+    f.input(serde_json::json!({"type":"resume"}));
+    assert!(f.controller.view.closed, "a finished close cannot be resumed");
+}
+
+#[test]
+fn wake_fires_on_store_reply_and_stop_disarms() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let mut f = Fixture::new();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let counter = wakes.clone();
+    f.controller.set_wake(Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+    f.input(serde_json::json!({"type":"open","page":"workspaces"}));
+    for (index, id) in [DEFAULT_WORKSPACES[0].0, DEFAULT_WORKSPACES[2].0]
+        .into_iter()
+        .enumerate()
+    {
+        if index == 1 {
+            f.controller.stop();
+        }
+        let (release, gate) = async_channel::bounded(1);
+        *f.backend.load_gate.borrow_mut() = Some(gate);
+        f.input(serde_json::json!({"type":"select","id":id}));
+        assert!(f.controller.view.loading);
+        let before = wakes.load(Ordering::SeqCst);
+        release.try_send(()).unwrap();
+        assert_eq!(wakes.load(Ordering::SeqCst), before + usize::from(index == 0));
+        f.pump();
+        assert!(!f.controller.view.loading);
+    }
+}
+
+#[test]
+fn focus_target_carries_owner_and_failed_focus_sets_error() {
+    let mut f = Fixture::new();
+    let original = f.controller.view.id.clone();
+    let painter = DEFAULT_WORKSPACES[0].0;
+    let other = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
+    let taken = pollster::block_on(other.prepare_switch(painter, f.backend.now.get())).unwrap();
+    other.activate(taken);
+    let target = Some(FocusTarget {
+        id: painter.into(),
+        owner: other.owner.id.clone(),
+    });
+    f.input(serde_json::json!({"type":"switch","id":painter}));
+    assert_eq!(f.controller.view.focus_window, target);
+    assert_eq!(f.controller.view.id, original);
+    f.input(serde_json::json!({"type":"focus_failed","error":"The other window is unavailable."}));
+    assert_eq!(
+        f.controller.view.error.as_deref(),
+        Some("The other window is unavailable.")
+    );
+    assert!(f.controller.view.focus_window.is_none());
+    f.input(serde_json::json!({"type":"open","page":"workspaces"}));
+    f.input(serde_json::json!({"type":"select","id":painter}));
+    assert_eq!(f.controller.view.primary, "Switch to Window");
+    f.input(serde_json::json!({"type":"confirm"}));
+    assert_eq!(f.controller.view.focus_window, target);
+    assert!(f.controller.view.page.is_none());
+    assert_eq!(f.controller.view.id, original);
 }

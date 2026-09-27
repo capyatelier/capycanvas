@@ -8,15 +8,15 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/manager/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-function Manager {(Model).windows_workspace_manager}
+function Manager {$w=(Model).windows_workspace;if($w -and ($null -ne $w.page -or $null -ne $w.prompt)){$w}}
 function Layout {(Model).state.workspace | ConvertTo-Json -Depth 80 -Compress}
 function HeaderChoice([string]$Id){
     $choice=(Model).windows_workspace.switcher_display|Where-Object id -eq $Id
     if(!$choice){throw "Workspace $Id is missing from the header model"}
-    $found=@{item=$null};Wait-Until {$found.item=Find ('workspace-switch-'+$choice.key);$found.item -or (Find 'header-workspace-menu')} "Missing workspace-switch-$($choice.key)"
+    $found=@{item=$null};Wait-Until {$found.item=Find ('workspace-switch-'+$choice.id);$found.item -or (Find 'header-workspace-menu')} "Missing workspace-switch-$($choice.id)"
     if($found.item){return $found.item}
     Invoke 'header-workspace-menu'
-    Control $choice.name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+    Control $choice.title -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
 }
 function Edit([string]$Id,[string]$Value){(Control $Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)}
 function Button([string]$Name){
@@ -79,7 +79,7 @@ try {
     Menu 'Manage Workspaces…'
     if((Manager).rows.Count -ne 3){throw 'Expected exactly three included workspaces'}
     if((Button 'Switch to Workspace').Current.IsEnabled){throw 'Current workspace switch must be disabled'}
-    if((Manager).rows|Where-Object {$_.delete -or $_.rename}){throw 'Included workspace options violate rename/delete policy'}
+    if((Manager).rows|Where-Object {$_.actions|Where-Object {$_.enabled -and $_.action.type -in 'rename','delete'}}){throw 'Included workspace options violate rename/delete policy'}
     $painter='builtin:workspace:painter'
     $item=Select-Row $painter
     if((Layout) -eq $before){throw 'Row selection did not preview Sketch'}

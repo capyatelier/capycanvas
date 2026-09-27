@@ -345,6 +345,9 @@ impl NativeWorkspaces {
                     result?;
                 }
             }
+            A::NewToolbar(group) => {
+                self.new_toolbar(w, group).await?;
+            }
             A::SaveAsNew | A::RetryStorage | A::RecoverInterrupted => {
                 self.storage_action(w, action).await?;
             }
@@ -523,6 +526,7 @@ impl NativeWorkspaces {
                 },
                 replace,
                 group,
+                false,
             )
             .map_err(StoreError::invalid);
         self.finish_operation(w);

@@ -58,7 +58,7 @@ function Choices([string]$Id){
 function Switch-Workspace([string]$Name,[string]$Id){
     $found=@{switch=$null;menu=$null}
     Wait-Until {
-        $found.switch=Find ('workspace-switch-'+$Name.ToLowerInvariant());$found.menu=Find 'header-workspace-menu'
+        $found.switch=Find ('workspace-switch-'+$Id);$found.menu=Find 'header-workspace-menu'
         ($found.switch -and !$found.switch.Current.IsOffscreen) -or ($found.menu -and !$found.menu.Current.IsOffscreen)
     } "No workspace switcher for $Name" 15
     $switch=$found.switch

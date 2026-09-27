@@ -3,43 +3,68 @@
 //! session and preview replies are fenced by a selection/lifetime generation.
 use crate::*;
 use layer_render::CanvasRenderer;
-use layer_ui::{DockLayout, Platform, PreparedWorkspace, UiChange, UiSession};
+use layer_ui::{
+    CustomizationAction, DockLayout, HostRequestKind, Panel, PanelConfig, Platform,
+    PreparedWorkspace, UiAction, UiChange, UiSession, WorkspaceCommand, regions,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     future::Future,
     pin::Pin,
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll, Wake, Waker},
 };
 
 type Result<T> = std::result::Result<T, StoreError>;
-struct Signal(std::sync::atomic::AtomicBool);
+type WakeSlot = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+/// Accepted editor changes that can alter the saved layout or working state.
+pub const OBSERVED_REGIONS: u32 = regions::LAYOUT
+    | regions::BRUSH
+    | regions::DOCUMENT
+    | regions::COMMANDS
+    | regions::CUSTOMIZATION;
+struct Signal {
+    ready: AtomicBool,
+    wake: WakeSlot,
+}
 impl Wake for Signal {
     fn wake(self: Arc<Self>) {
         self.wake_by_ref()
     }
     fn wake_by_ref(self: &Arc<Self>) {
-        self.0.store(true, std::sync::atomic::Ordering::Release);
+        self.ready.store(true, Ordering::Release);
+        if let Ok(slot) = self.wake.lock()
+            && let Some(wake) = slot.as_ref()
+        {
+            wake();
+        }
     }
+}
+fn merge(into: &mut UiChange, change: UiChange) {
+    into.regions |= change.regions;
+    into.canvas_wake |= change.canvas_wake;
+    into.revision = into.revision.max(change.revision);
 }
 struct Task<T> {
     future: Pin<Box<dyn Future<Output = Result<T>>>>,
     signal: Arc<Signal>,
 }
 impl<T> Task<T> {
-    fn new(future: impl Future<Output = Result<T>> + 'static) -> Self {
+    fn new(wake: &WakeSlot, future: impl Future<Output = Result<T>> + 'static) -> Self {
         Self {
             future: Box::pin(future),
-            signal: Arc::new(Signal(std::sync::atomic::AtomicBool::new(true))),
+            signal: Arc::new(Signal {
+                ready: AtomicBool::new(true),
+                wake: wake.clone(),
+            }),
         }
     }
     fn poll(&mut self) -> Option<Result<T>> {
-        if !self
-            .signal
-            .0
-            .swap(false, std::sync::atomic::Ordering::AcqRel)
-        {
+        if !self.signal.ready.swap(false, Ordering::AcqRel) {
             return None;
         }
         match self
@@ -52,32 +77,48 @@ impl<T> Task<T> {
         }
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct WorkspaceRow {
     pub id: String,
     pub title: String,
     pub subtitle: String,
-    pub options: bool,
-    pub delete: bool,
+    pub current: bool,
+    pub actions: Vec<ManagerButton>,
+}
+/// Another window owns this workspace; the host brings that window forward.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FocusTarget {
+    pub id: String,
+    pub owner: String,
 }
 #[derive(Clone, Serialize, Default)]
 pub struct WorkspaceView {
     pub ready: bool,
     pub busy: bool,
+    pub loading: bool,
     pub dirty: bool,
+    pub saving: bool,
     pub retry: bool,
+    pub owner_lost: bool,
+    pub closing: bool,
+    pub closed: bool,
     pub id: Option<String>,
     pub name: String,
-    pub page: Option<String>,
+    pub owner: String,
+    pub page: Option<ManagerPage>,
     pub title: String,
     pub intro: String,
+    pub query: String,
     pub rows: Vec<WorkspaceRow>,
     pub selected: Option<String>,
+    pub details: Option<ManagerDetails>,
     pub primary: String,
     pub enabled: bool,
-    pub form: Option<WorkspaceForm>,
+    pub prompt: Option<ManagerPrompt>,
+    pub prompt_action: Option<ManagerAction>,
     pub error: Option<String>,
-    pub focus_window: Option<String>,
+    pub interrupted: usize,
+    pub focus_window: Option<FocusTarget>,
     /// Persistently pinned choices, used by the manager's visibility controls.
     pub switcher: Vec<WorkspaceRow>,
     /// Header choices, including the current workspace when it is unpinned.
@@ -87,32 +128,34 @@ pub struct WorkspaceView {
     pub switcher_error: Option<String>,
     pub switcher_revision: u64,
 }
-#[derive(Clone, Serialize)]
-pub struct WorkspaceForm {
-    pub message: String,
-    pub confirm: String,
-    pub kind: String,
-    pub title: String,
-    pub name: String,
-    pub id: Option<String>,
-}
 #[derive(Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkspaceInput {
     Open {
-        page: String,
+        page: ManagerPage,
     },
     Select {
         id: Option<String>,
     },
+    Search {
+        query: String,
+    },
     Cancel,
+    Dismiss,
     Confirm,
     Form {
-        kind: String,
-        id: Option<String>,
+        action: ManagerAction,
+    },
+    Action {
+        action: ManagerAction,
     },
     Submit {
+        #[serde(default)]
         name: String,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        choice: Option<String>,
     },
     Switch {
         id: String,
@@ -125,31 +168,48 @@ pub enum WorkspaceInput {
     Suspend,
     Close,
     Resume,
+    DiscardClose,
+    FocusFailed {
+        error: String,
+    },
+}
+struct Install {
+    config: PanelConfig,
+    replace: Option<Panel>,
+    group: Option<u32>,
+    exact_name: bool,
 }
 enum Outcome {
     Adopt(Box<StoredEntity>),
     Done,
+    Dismiss,
     Closed,
-    Focus(String),
+    Focus(FocusTarget),
+    Install(Box<Install>),
 }
 impl Outcome {
     fn adopt(entity: StoredEntity) -> Self {
         Self::Adopt(Box::new(entity))
     }
 }
+type Selection = (Option<ManagerDetails>, Option<DockLayout>);
 pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     pub manager: Rc<WorkspaceManager<S>>,
     pub view: WorkspaceView,
+    wake: WakeSlot,
     task: Option<Task<Outcome>>,
+    quiet: bool,
     preferences: Option<Task<()>>,
     preferences_edited: bool,
     refresh_preferences: bool,
     incoming: Option<StoredEntity>,
     incoming_renew: Option<Task<StoredEntity>>,
+    install: Option<Box<Install>>,
     queued: Option<WorkspaceInput>,
     terminating: bool,
-    renew: Option<Task<()>>,
-    preview: Option<(u64, Task<DockLayout>)>,
+    renew: Option<Task<Vec<(String, String)>>>,
+    preview: Option<(u64, Task<Selection>)>,
+    interrupted: Vec<(String, String)>,
     selection_generation: u64,
     generation: Option<u64>,
     last_renew: u64,
@@ -161,6 +221,9 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     close_after_task: bool,
     binding_key: Option<String>,
     pending_binding: Option<layer_ui::ManagedWorkspace>,
+    selected_elsewhere: bool,
+    renew_error: Option<String>,
+    routed: UiChange,
 }
 impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     pub fn new(store: S, platform: Platform, now: u64) -> Self {
@@ -172,16 +235,20 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         let mut c = Self {
             manager: Rc::new(manager),
             view: Default::default(),
+            wake: Default::default(),
             task: None,
+            quiet: false,
             preferences: None,
             preferences_edited: false,
             refresh_preferences: false,
             incoming: None,
             incoming_renew: None,
+            install: None,
             queued: None,
             terminating: false,
             renew: None,
             preview: None,
+            interrupted: Vec::new(),
             selection_generation: 0,
             generation: None,
             last_renew: now,
@@ -193,15 +260,43 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             close_after_task: false,
             binding_key: None,
             pending_binding: None,
+            selected_elsewhere: false,
+            renew_error: None,
+            routed: UiChange::default(),
         };
+        c.view.owner = c.manager.owner.id.clone();
         c.initialize(now);
         c
     }
+    /// Storage replies call `wake` from any thread; the host then schedules
+    /// `tick` on its editor owner.
+    pub fn set_wake(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut slot) = self.wake.lock() {
+            *slot = Some(wake);
+        }
+    }
+    /// After `stop` returns, no storage reply calls the wake callback.
+    pub fn stop(&mut self) {
+        if let Ok(mut slot) = self.wake.lock() {
+            *slot = None;
+        }
+    }
+    fn spawn<T>(&self, future: impl Future<Output = Result<T>> + 'static) -> Option<Task<T>> {
+        Some(Task::new(&self.wake, future))
+    }
+    fn run(&mut self, future: impl Future<Output = Result<Outcome>> + 'static) {
+        self.task = self.spawn(future);
+        self.quiet = false;
+    }
+    /// Autosaves and releases keep editing available and are not shown as busy.
+    fn run_quietly(&mut self, future: impl Future<Output = Result<Outcome>> + 'static) {
+        self.task = self.spawn(future);
+        self.quiet = true;
+    }
     fn initialize(&mut self, now: u64) {
         let m = self.manager.clone();
-        self.task = Some(Task::new(async move {
+        self.run(async move {
             m.store.execute(StoreRequest::Reopen).await?;
-            m.initialize_catalog(now).await?;
             m.refresh_switcher().await?;
             let resume = m
                 .store
@@ -211,12 +306,13 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 .await?;
             Ok(Outcome::adopt(
                 if let StoreResponse::Binding(Some(id)) = resume {
+                    m.initialize_catalog(now).await?;
                     m.resume_startup(&id, now).await?
                 } else {
                     m.initialize(now).await?
                 },
             ))
-        }));
+        });
     }
     pub fn observe<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) {
         if !self.view.ready || self.transition || self.suspended {
@@ -235,6 +331,24 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             }
             self.last_edit = now;
         }
+    }
+    /// Observe the regions of accepted host changes, ignoring camera-only motion.
+    pub fn observe_regions<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        changed: u32,
+        now: u64,
+    ) {
+        if changed & OBSERVED_REGIONS != 0 {
+            self.observe(session, now);
+        }
+    }
+    fn capture<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) -> Result<()> {
+        let capture = session.capture_workspace().map_err(StoreError::invalid)?;
+        self.manager.observe(capture, now);
+        self.generation = session.workspace_layout_generation();
+        self.last_edit = now;
+        Ok(())
     }
     fn stop_preview<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>) -> UiChange {
         self.selection_generation = self.selection_generation.wrapping_add(1);
@@ -255,160 +369,238 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         }
         Ok(())
     }
-    fn rows(&mut self, now: u64) {
-        self.view.id = self.manager.active_id();
-        self.view.name = self.manager.active_name().unwrap_or_default();
-        self.view.order = self.manager.workspace_ids();
-        let items = self.manager.items();
+    fn close_prompt(&mut self) {
+        self.view.prompt = None;
+        self.view.prompt_action = None;
+    }
+    fn dismiss<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>) -> UiChange {
+        let change = self.stop_preview(session);
+        self.close_prompt();
+        self.view.page = None;
+        self.view.details = None;
+        self.view.selected = None;
+        self.view.query.clear();
+        if self.task.is_none() && self.incoming.is_none() && self.install.is_none() {
+            self.end_transition(session);
+        }
+        change
+    }
+    fn focus_target(&self, id: &str, now: u64) -> Option<FocusTarget> {
+        self.manager
+            .items()
+            .into_iter()
+            .find(|i| i.id == id)
+            .and_then(|i| i.claim)
+            .filter(|c| c.owner != self.manager.owner && c.expires_at_ms > now)
+            .map(|c| FocusTarget {
+                id: id.into(),
+                owner: c.owner.id,
+            })
+    }
+    fn present(&mut self, now: u64) {
+        let m = self.manager.clone();
+        self.view.id = m.active_id();
+        self.view.name = m.active_name().unwrap_or_default();
+        self.view.order = m.workspace_ids();
+        let items = m.items();
+        let active = self.view.id.clone();
         let switcher_rows = |ids: Vec<String>| {
             ids.into_iter()
                 .filter_map(|id| {
                     let item = items.iter().find(|item| item.id == id)?;
                     Some(WorkspaceRow {
-                        id,
+                        current: active.as_ref() == Some(&id),
                         title: item.metadata.name.clone(),
                         subtitle: String::new(),
-                        options: false,
-                        delete: false,
+                        actions: Vec::new(),
+                        id,
                     })
                 })
                 .collect()
         };
-        self.view.switcher = switcher_rows(self.manager.switcher_ids());
-        self.view.switcher_display = switcher_rows(self.manager.switcher_display_ids());
-        let page = self.view.page.as_deref();
-        self.view.title = match page {
-            Some("history") => format!("Layout History — {}", self.view.name),
-            _ => "Workspaces".into(),
+        self.view.switcher = switcher_rows(m.switcher_ids());
+        self.view.switcher_display = switcher_rows(m.switcher_display_ids());
+        let page = self.view.page;
+        let (title, intro) = match page {
+            Some(ManagerPage::History) => (format!("Layout History — {}", self.view.name), ""),
+            Some(ManagerPage::ThisWorkspace) => (
+                "Manage Toolbars".into(),
+                "Arrange the toolbars in this workspace.",
+            ),
+            Some(ManagerPage::ToolbarLibrary) => (
+                "Manage Toolbars".into(),
+                "Save toolbars to reuse in any workspace.",
+            ),
+            _ => (
+                "Workspaces".into(),
+                "Workspaces save your tool settings and layout for different tasks.",
+            ),
         };
-        self.view.intro = match page {
-            Some("workspaces") => {
-                "Workspaces save your tool settings and layout for different tasks."
-            }
-            _ => "",
-        }
-        .into();
-        self.view.primary = match page {
-            Some("history") => "Restore This Version",
-            _ => "Switch to Workspace",
-        }
-        .into();
-        self.view.rows = if page == Some("history") {
-            self.manager
-                .current()
-                .and_then(|e| e.capture().ok())
-                .map(|capture| {
-                    layout_history_versions(&capture.history)
-                        .into_iter()
-                        .map(|r| {
-                            let subtitle = if r.id == capture.history.current {
+        self.view.title = title;
+        self.view.intro = intro.into();
+        let history = m
+            .current()
+            .and_then(|e| e.capture().ok())
+            .map(|c| c.history);
+        self.view.rows = match (page, &history) {
+            (None, _) => Vec::new(),
+            (Some(ManagerPage::History), history) => history
+                .iter()
+                .flat_map(|history| {
+                    layout_history_versions(history).into_iter().map(|r| {
+                        let current = r.id == history.current;
+                        WorkspaceRow {
+                            subtitle: if current {
                                 format!("Current layout · {}", date(r.timestamp_ms))
                             } else {
                                 date(r.timestamp_ms)
-                            };
-                            WorkspaceRow {
-                                id: r.id,
-                                title: r.description,
-                                subtitle,
-                                options: false,
-                                delete: false,
-                            }
-                        })
-                        .collect()
+                            },
+                            current,
+                            id: r.id,
+                            title: r.description,
+                            actions: Vec::new(),
+                        }
+                    })
                 })
-                .unwrap_or_default()
-        } else {
-            self.manager
-                .rows(ManagerPage::Workspaces, "", now)
+                .collect(),
+            (Some(ManagerPage::ThisWorkspace), history) => m
+                .rows(ManagerPage::ThisWorkspace, &self.view.query, now)
                 .into_iter()
                 .map(|r| {
-                    let actions = self
-                        .manager
-                        .items()
-                        .iter()
-                        .find(|i| i.id == r.id)
-                        .map(|i| self.manager.summary_actions(i, true, now))
+                    let actions = serde_json::from_str::<Panel>(&r.id)
+                        .ok()
+                        .zip(history.as_ref())
+                        .map(|(panel, history)| {
+                            toolbar_actions(
+                                panel,
+                                history.layout().panel_group(panel).is_some(),
+                                true,
+                            )
+                        })
                         .unwrap_or_default();
-                    let options = actions
-                        .iter()
-                        .any(|b| b.enabled && matches!(b.action, ManagerAction::Rename(_)));
-                    let delete = actions
-                        .iter()
-                        .any(|b| b.enabled && matches!(b.action, ManagerAction::Delete(_)));
                     WorkspaceRow {
                         id: r.id,
                         title: r.title,
                         subtitle: r.subtitle,
-                        options,
-                        delete,
+                        current: false,
+                        actions,
                     }
                 })
-                .collect()
-        };
-        let current = if page == Some("history") {
-            self.manager
-                .current()
-                .and_then(|e| e.capture().ok())
-                .map(|c| c.history.current)
-        } else {
-            self.manager.active_id()
-        };
-        self.view.enabled = self.preview.is_none()
-            && self.view.selected.as_ref().is_some_and(|id| {
-                self.view.rows.iter().any(|r| &r.id == id) && current.as_ref() != Some(id)
-            });
-        if page == Some("workspaces")
-            && self.view.selected.as_ref().is_some_and(|id| {
-                self.manager.items().iter().any(|i| {
-                    &i.id == id
-                        && i.claim
-                            .as_ref()
-                            .is_some_and(|c| c.owner != self.manager.owner && c.expires_at_ms > now)
+                .collect(),
+            (Some(page), _) => m
+                .rows(page, &self.view.query, now)
+                .into_iter()
+                .map(|r| WorkspaceRow {
+                    actions: items
+                        .iter()
+                        .find(|i| i.id == r.id)
+                        .map(|i| m.summary_actions(i, true, now))
+                        .unwrap_or_default(),
+                    current: active.as_ref() == Some(&r.id),
+                    id: r.id,
+                    title: r.title,
+                    subtitle: r.subtitle,
                 })
-            })
-        {
-            self.view.primary = "Switch to Window".into();
+                .collect(),
+        };
+        let selected = self
+            .view
+            .selected
+            .clone()
+            .filter(|id| self.view.rows.iter().any(|r| &r.id == id));
+        self.selected_elsewhere = page == Some(ManagerPage::Workspaces)
+            && selected
+                .as_ref()
+                .is_some_and(|id| self.focus_target(id, now).is_some());
+        let idle = self.preview.is_none();
+        match page {
+            Some(ManagerPage::Workspaces | ManagerPage::History) => {
+                let current = if page == Some(ManagerPage::History) {
+                    history.map(|h| h.current)
+                } else {
+                    active
+                };
+                self.view.primary = if page == Some(ManagerPage::History) {
+                    "Restore This Version"
+                } else if self.selected_elsewhere {
+                    ManagerAction::SwitchToWindow(String::new()).label()
+                } else {
+                    "Switch to Workspace"
+                }
+                .into();
+                self.view.enabled = idle && selected.is_some_and(|id| current != Some(id));
+            }
+            Some(_) => {
+                let primary = self
+                    .view
+                    .details
+                    .as_ref()
+                    .and_then(|d| d.actions.iter().find(|a| a.primary));
+                self.view.primary = primary.map(|a| a.label.clone()).unwrap_or_default();
+                self.view.enabled =
+                    idle && selected.is_some() && primary.is_some_and(|a| a.enabled);
+            }
+            None => {
+                self.view.primary.clear();
+                self.view.enabled = false;
+            }
         }
+    }
+    fn offered(&self, action: &ManagerAction) -> bool {
+        self.view
+            .rows
+            .iter()
+            .flat_map(|r| &r.actions)
+            .chain(self.view.details.iter().flat_map(|d| &d.actions))
+            .any(|b| b.enabled && &b.action == action)
     }
     fn select<R: CanvasRenderer>(
         &mut self,
         session: &mut UiSession<R>,
         id: Option<String>,
+        now: u64,
     ) -> Result<UiChange> {
         let change = self.stop_preview(session);
         self.view.selected = id.clone();
+        self.view.details = None;
         self.view.enabled = false;
-        let Some(id) = id else {
+        let (Some(id), Some(page)) = (id, self.view.page) else {
             return Ok(change);
         };
-        session
-            .begin_workspace_layout_preview()
-            .map_err(StoreError::invalid)?;
-        self.preview_open = true;
+        if page == ManagerPage::ThisWorkspace {
+            let panel = serde_json::from_str(&id)
+                .map_err(|e| StoreError::invalid(format!("Invalid toolbar identity: {e}")))?;
+            self.view.details = Some(self.manager.toolbar_details(panel, true)?);
+            return Ok(change);
+        }
+        if page != ManagerPage::ToolbarLibrary {
+            session
+                .begin_workspace_layout_preview()
+                .map_err(StoreError::invalid)?;
+            self.preview_open = true;
+        }
         let m = self.manager.clone();
-        let page = self.view.page.clone();
-        self.preview = Some((
-            self.selection_generation,
-            Task::new(async move {
-                if page.as_deref() == Some("history") {
+        self.preview = self
+            .spawn(async move {
+                if page == ManagerPage::History {
                     return m
                         .current()
                         .and_then(|e| e.capture().ok())
                         .and_then(|c| c.history.revisions.get(&id).map(|r| r.layout.clone()))
+                        .map(|layout| (None, Some(layout)))
                         .ok_or_else(|| {
                             StoreError::invalid("This layout version is no longer retained.")
                         });
                 }
-                let stored = if m.active_id().as_deref() == Some(&id) {
-                    m.current_record().unwrap()
-                } else {
-                    m.load(&id).await?
+                let stored = match m.current_record().filter(|s| s.entity.id == id) {
+                    Some(stored) => stored,
+                    None => m.load(&id).await?,
                 };
-                m.details(&stored, true, 0)
-                    .preview
-                    .ok_or_else(|| StoreError::invalid("This item has no layout."))
-            }),
-        ));
+                let mut details = m.details(&stored, true, now);
+                let layout = details.preview.take();
+                Ok((Some(details), layout))
+            })
+            .map(|task| (self.selection_generation, task));
         Ok(change)
     }
     pub fn input<R: CanvasRenderer>(
@@ -421,9 +613,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             && self.manager.has_failed_operation()
             && self
                 .view
-                .form
+                .prompt_action
                 .as_ref()
-                .is_some_and(|form| form.kind != "recover")
+                .is_some_and(|action| *action != ManagerAction::SaveAsNew)
         {
             return self.input(session, WorkspaceInput::Retry, now);
         }
@@ -432,8 +624,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             WorkspaceInput::Resume
                 | WorkspaceInput::RefreshSwitcher
                 | WorkspaceInput::EditSwitcher { .. }
+                | WorkspaceInput::Search { .. }
+                | WorkspaceInput::FocusFailed { .. }
         ) {
-            self.view.error = if matches!(input, WorkspaceInput::Cancel) {
+            self.view.error = if matches!(input, WorkspaceInput::Cancel | WorkspaceInput::Dismiss) {
                 self.manager.error().map(|error| error.to_string())
             } else {
                 None
@@ -455,46 +649,90 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 self.view.switcher_error = None;
                 self.preferences_edited = true;
                 let manager = self.manager.clone();
-                self.preferences =
-                    Some(Task::new(async move { manager.edit_switcher(edit).await }));
+                self.preferences = self.spawn(async move { manager.edit_switcher(edit).await });
             }
             WorkspaceInput::RefreshSwitcher => self.refresh_preferences = true,
-            WorkspaceInput::Cancel => {
-                self.queued = None;
-                change = self.stop_preview(session);
-                if self.view.form.take().is_none() {
-                    self.view.page = None;
+            WorkspaceInput::FocusFailed { error } => self.view.error = Some(error),
+            WorkspaceInput::Search { query } => {
+                if self.view.page.is_some() && self.view.prompt.is_none() {
+                    self.view.query = query;
+                    self.present(now);
+                    if self
+                        .view
+                        .selected
+                        .as_ref()
+                        .is_some_and(|id| !self.view.rows.iter().any(|row| &row.id == id))
+                    {
+                        change = self.select(session, None, now)?;
+                    }
                 }
-                if self.view.page.is_none() && self.task.is_none() {
-                    self.end_transition(session);
-                } else if self.view.page.is_some() && self.task.is_none() {
-                    change = self.select(session, self.view.selected.clone())?;
+            }
+            WorkspaceInput::Cancel | WorkspaceInput::Dismiss => {
+                self.queued = None;
+                if matches!(input, WorkspaceInput::Dismiss) || self.view.prompt.is_none() {
+                    change = self.dismiss(session);
+                } else {
+                    change = self.stop_preview(session);
+                    self.close_prompt();
+                    if self.view.page.is_none() && self.task.is_none() {
+                        self.end_transition(session);
+                    } else if self.view.page.is_some() && self.task.is_none() {
+                        merge(
+                            &mut change,
+                            self.select(session, self.view.selected.clone(), now)?,
+                        );
+                    }
                 }
             }
             WorkspaceInput::Suspend | WorkspaceInput::Close => {
+                if self.view.closed {
+                    return Ok(change);
+                }
                 self.terminating |= matches!(input, WorkspaceInput::Close);
                 self.queued = None;
                 self.observe(session, now);
-                change = self.stop_preview(session);
-                self.view.page = None;
-                self.view.form = None;
-                if self.task.is_none() {
-                    self.end_transition(session);
-                }
+                change = self.dismiss(session);
                 self.suspended = true;
                 session.set_workspace_read_only(true);
                 self.close_after_task = true;
             }
             WorkspaceInput::Resume => {
+                if self.view.closed || (self.terminating && self.task.is_some()) {
+                    return Ok(change);
+                }
+                if self.terminating {
+                    self.terminating = false;
+                    session.reset_document_close();
+                }
                 self.suspended = false;
                 session.set_workspace_read_only(true);
                 self.close_after_task = false;
                 self.last_renew = 0;
                 self.refresh_preferences = true;
             }
+            WorkspaceInput::DiscardClose => {
+                if !self.terminating || self.view.closed {
+                    return Err(StoreError::invalid("Close the window first."));
+                }
+                if self.task.is_some() {
+                    return Err(StoreError::invalid(
+                        "Wait for the current workspace operation to finish.",
+                    ));
+                }
+                self.close_after_task = false;
+                let incoming = self.incoming.take();
+                let current = self.manager.current_record();
+                let m = self.manager.clone();
+                self.run(async move {
+                    for claimed in incoming.iter().chain(&current) {
+                        m.release(claimed).await;
+                    }
+                    Ok(Outcome::Closed)
+                });
+            }
             WorkspaceInput::Select { id } => {
-                if self.view.page.is_some() && self.view.form.is_none() {
-                    change = self.select(session, id)?;
+                if self.view.page.is_some() && self.view.prompt.is_none() {
+                    change = self.select(session, id, now)?;
                 }
             }
             input => {
@@ -507,11 +745,12 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     self.view.error = None;
                     return Ok(change);
                 }
-                if self.task.is_some() || self.incoming.is_some() {
+                if self.task.is_some() || self.incoming.is_some() || self.install.is_some() {
                     if matches!(
                         input,
                         WorkspaceInput::Open { .. }
                             | WorkspaceInput::Form { .. }
+                            | WorkspaceInput::Action { .. }
                             | WorkspaceInput::Switch { .. }
                             | WorkspaceInput::Retry
                     ) {
@@ -523,240 +762,507 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     ));
                 }
                 self.observe(session, now);
-                match input {
-                    WorkspaceInput::Open { page } => {
-                        self.start_transition(session)?;
-                        change = self.stop_preview(session);
-                        self.view.form = None;
-                        self.view.page = Some(page.clone());
-                        let id = if page == "workspaces" {
-                            self.manager.active_id()
-                        } else if page == "history" {
-                            self.manager
-                                .current()
-                                .and_then(|e| e.capture().ok())
-                                .map(|c| c.history.current)
-                        } else {
-                            None
-                        };
-                        self.view.selected = id.clone();
-                        let m = self.manager.clone();
-                        self.task = Some(Task::new(async move {
-                            m.refresh().await?;
-                            m.refresh_switcher().await?;
-                            Ok(Outcome::Done)
-                        }));
-                    }
-                    WorkspaceInput::Form { kind, id } => {
-                        let action = match kind.as_str() {
-                            "new" => ManagerAction::New,
-                            "rename" | "delete" => {
-                                let id = id
-                                    .clone()
-                                    .ok_or_else(|| StoreError::invalid("Choose an item."))?;
-                                if kind == "rename" {
-                                    ManagerAction::Rename(id)
-                                } else {
-                                    ManagerAction::Delete(id)
-                                }
-                            }
-                            "reset" => {
-                                ManagerAction::Reset(self.manager.active_id().ok_or_else(|| {
-                                    StoreError::invalid("Open a workspace first.")
-                                })?)
-                            }
-                            "reset_brushes" => ManagerAction::ResetBrushes,
-                            _ => ManagerAction::SaveAsNew,
-                        };
-                        let current = self.manager.current();
-                        let source = match &action {
-                            ManagerAction::Reset(_) => current.as_ref().map(|e| e.metadata.clone()),
-                            ManagerAction::Rename(id) | ManagerAction::Delete(id) => self
-                                .manager
-                                .items()
-                                .into_iter()
-                                .find(|i| &i.id == id)
-                                .map(|i| i.metadata),
-                            _ => None,
-                        };
-                        let prompt = self.manager.form_prompt(&action, source.as_ref())?;
-                        self.start_transition(session)?;
-                        change = self.stop_preview(session);
-                        if let (ManagerAction::Reset(_), Some(entity)) = (&action, &current) {
-                            session
-                                .begin_workspace_layout_preview()
-                                .map_err(StoreError::invalid)?;
-                            self.preview_open = true;
-                            let preview = session
-                                .preview_workspace_layout(
-                                    &entity.starting_layout(self.manager.platform)?,
-                                )
-                                .map_err(StoreError::invalid)?;
-                            change.regions |= preview.regions;
-                            change.revision = preview.revision;
-                        }
-                        self.view.form = Some(WorkspaceForm {
-                            message: prompt.message,
-                            confirm: prompt.confirm,
-                            kind,
-                            title: prompt.title,
-                            name: prompt.name.or(source.map(|m| m.name)).unwrap_or_default(),
-                            id,
-                        });
-                    }
-                    WorkspaceInput::Submit { name } => {
-                        let form =
-                            self.view.form.clone().ok_or_else(|| {
-                                StoreError::invalid("Open a workspace dialog first.")
-                            })?;
-                        if !matches!(form.kind.as_str(), "delete" | "reset" | "reset_brushes") {
-                            validate_name(&name)?;
-                        }
-                        change = self.stop_preview(session);
-                        self.start_transition(session)?;
-                        let m = self.manager.clone();
-                        if form.kind == "reset_brushes" {
-                            let reset = session
-                                .reset_workspace_brushes()
-                                .map_err(StoreError::invalid)?;
-                            change.regions |= reset.regions;
-                            change.revision = reset.revision;
-                            m.observe_working(session.workspace_working_state());
-                            self.task = Some(Task::new(async move {
-                                m.flush().await?;
-                                Ok(Outcome::Done)
-                            }));
-                            self.rows(now);
-                            self.view.busy = true;
-                            return Ok(change);
-                        }
-                        let capture = session.capture_workspace().map_err(StoreError::invalid)?;
-                        self.task = Some(Task::new(async move {
-                            Ok(match form.kind.as_str() {
-                                "new" => Outcome::adopt(
-                                    m.create_workspace(&name, now).await?,
-                                ),
-                                "rename" => {
-                                    let id = form
-                                        .id
-                                        .ok_or_else(|| StoreError::invalid("Choose an item."))?;
-                                    let description =
-                                        m.load(&id).await?.entity.metadata.description;
-                                    m.rename(&id, &name, &description, now).await?;
-                                    Outcome::Done
-                                }
-                                "delete" => {
-                                    let id = form
-                                        .id
-                                        .ok_or_else(|| StoreError::invalid("Choose an item."))?;
-                                    let replacement = m.replacement_for_delete(&id, now).await?;
-                                    match m.delete_item(&id, replacement.as_deref(), now).await? {
-                                        Some(s) => Outcome::adopt(s),
-                                        None => Outcome::Done,
-                                    }
-                                }
-                                "reset" => Outcome::adopt(
-                                    m.change_layout(
-                                        &m.active_id().ok_or_else(|| {
-                                            StoreError::invalid("Open a workspace.")
-                                        })?,
-                                        None,
-                                        now,
-                                    )
-                                    .await?,
-                                ),
-                                _ => Outcome::adopt(m.save_as_new(capture, &name, now).await?),
-                            })
-                        }));
-                    }
-                    WorkspaceInput::Confirm | WorkspaceInput::Switch { .. } => {
-                        let id = if let WorkspaceInput::Switch { id } = &input {
-                            id.clone()
-                        } else {
-                            if !self.view.enabled {
-                                return Ok(change);
-                            }
-                            self.view
-                                .selected
-                                .clone()
-                                .ok_or_else(|| StoreError::invalid("Choose an item."))?
-                        };
-                        if matches!(input, WorkspaceInput::Switch { .. })
-                            && self.manager.active_id().as_deref() == Some(&id)
-                        {
-                            return Ok(change);
-                        }
-                        if self.view.primary == "Switch to Window"
-                            && !matches!(input, WorkspaceInput::Switch { .. })
-                        {
-                            self.view.focus_window = Some(id);
-                            return Ok(change);
-                        }
-                        let page = if matches!(input, WorkspaceInput::Switch { .. }) {
-                            "workspaces".into()
-                        } else {
-                            self.view.page.clone().unwrap_or_default()
-                        };
-                        change = self.stop_preview(session);
-                        self.start_transition(session)?;
-                        let m = self.manager.clone();
-                        self.task = Some(Task::new(async move {
-                            if page != "history" {
-                                m.refresh().await?;
-                                if m.items().iter().any(|item| {
-                                    item.id == id
-                                        && item.claim.as_ref().is_some_and(|c| {
-                                            c.owner != m.owner && c.expires_at_ms > now
-                                        })
-                                }) {
-                                    return Ok(Outcome::Focus(id));
-                                }
-                            }
-                            Ok(Outcome::adopt(match page.as_str() {
-                                "history" => {
-                                    m.change_layout(
-                                        &m.active_id().ok_or_else(|| {
-                                            StoreError::invalid("Open a workspace.")
-                                        })?,
-                                        Some(&id),
-                                        now,
-                                    )
-                                    .await?
-                                }
-                                _ => m.prepare_switch(&id, now).await?,
-                            }))
-                        }));
-                    }
-                    WorkspaceInput::Retry => {
-                        if self.incoming.is_some() {
-                            // Retry validated adoption without re-publishing it.
-                        } else if !self.view.ready {
-                            self.initialize(now);
-                        } else {
-                            let m = self.manager.clone();
-                            self.start_transition(session)?;
-                            self.task = Some(Task::new(async move {
-                                m.store.execute(StoreRequest::Reopen).await?;
-                                m.revalidate_owner(now).await?;
-                                m.flush().await?;
-                                Ok(match m.retry_failed_operation().await? {
-                                    Some(s) => Outcome::adopt(s),
-                                    None => Outcome::Done,
-                                })
-                            }));
-                        }
-                    }
+                change = match input {
+                    WorkspaceInput::Open { page } => self.open(session, page)?,
+                    WorkspaceInput::Form { action } => self.form(session, action)?,
+                    WorkspaceInput::Action { action } => self.act(session, action, now)?,
+                    WorkspaceInput::Submit {
+                        name,
+                        description,
+                        choice,
+                    } => self.submit(session, name, description, choice, now)?,
+                    WorkspaceInput::Switch { id } => self.switch(session, id, now)?,
+                    WorkspaceInput::Confirm => self.confirm(session, now)?,
+                    WorkspaceInput::Retry => self.retry(session, now)?,
                     _ => unreachable!(),
+                };
+            }
+        }
+        self.present(now);
+        self.publish_flags();
+        Ok(change)
+    }
+    fn publish_flags(&mut self) {
+        self.view.switcher_busy = self.preferences.is_some();
+        self.view.busy = (self.task.is_some() && !self.quiet)
+            || self.incoming.is_some()
+            || self.install.is_some();
+        self.view.loading = self.preview.is_some();
+        self.view.dirty = self.manager.dirty();
+        self.view.saving = self.manager.saving();
+        self.view.closing = self.terminating && !self.view.closed;
+    }
+    fn open<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        page: ManagerPage,
+    ) -> Result<UiChange> {
+        let history = self
+            .manager
+            .current()
+            .and_then(|e| e.capture().ok())
+            .map(|c| c.history.current);
+        if page == ManagerPage::History && history.is_none() {
+            return Err(StoreError::invalid("Open a workspace first."));
+        }
+        self.start_transition(session)?;
+        let change = self.stop_preview(session);
+        self.close_prompt();
+        if self.view.page != Some(page) {
+            self.view.query.clear();
+        }
+        self.view.page = Some(page);
+        self.view.details = None;
+        self.view.selected = match page {
+            ManagerPage::Workspaces => self.manager.active_id(),
+            ManagerPage::History => history,
+            _ => None,
+        };
+        let m = self.manager.clone();
+        self.run(async move {
+            m.refresh().await?;
+            m.refresh_switcher().await?;
+            Ok(Outcome::Done)
+        });
+        Ok(change)
+    }
+    fn form<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        action: ManagerAction,
+    ) -> Result<UiChange> {
+        let current = self.manager.current();
+        let source = match &action {
+            ManagerAction::Reset(id) => {
+                if self.manager.active_id().as_ref() != Some(id) {
+                    return Err(StoreError::invalid(
+                        "Switch to this workspace before restoring its layout.",
+                    ));
+                }
+                current.as_ref().map(|e| e.metadata.clone())
+            }
+            ManagerAction::Rename(id)
+            | ManagerAction::Delete(id)
+            | ManagerAction::UpdateToolbar(id) => self
+                .manager
+                .items()
+                .into_iter()
+                .find(|i| &i.id == id)
+                .map(|i| i.metadata),
+            _ => None,
+        };
+        let prompt = match &action {
+            ManagerAction::RecoverInterrupted => recover_prompt(self.interrupted.clone())?,
+            _ => self.manager.form_prompt(&action, source.as_ref())?,
+        };
+        self.start_transition(session)?;
+        let mut change = self.stop_preview(session);
+        if let (ManagerAction::Reset(_), Some(entity)) = (&action, &current) {
+            session
+                .begin_workspace_layout_preview()
+                .map_err(StoreError::invalid)?;
+            self.preview_open = true;
+            merge(
+                &mut change,
+                session
+                    .preview_workspace_layout(&entity.starting_layout(self.manager.platform)?)
+                    .map_err(StoreError::invalid)?,
+            );
+        }
+        self.view.prompt = Some(prompt);
+        self.view.prompt_action = Some(action);
+        Ok(change)
+    }
+    fn submit<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        name: String,
+        description: Option<String>,
+        choice: Option<String>,
+        now: u64,
+    ) -> Result<UiChange> {
+        let (Some(action), Some(prompt)) =
+            (self.view.prompt_action.clone(), self.view.prompt.clone())
+        else {
+            return Err(StoreError::invalid("Open a workspace dialog first."));
+        };
+        if prompt.name.is_some() {
+            validate_name(&name)?;
+        }
+        let choice = choice.or(prompt.selected).unwrap_or_default();
+        if !prompt.choices.is_empty() && !prompt.choices.iter().any(|c| c.id == choice) {
+            return Err(StoreError::invalid("Choose one of the listed options."));
+        }
+        let mut change = self.stop_preview(session);
+        self.start_transition(session)?;
+        let m = self.manager.clone();
+        if action == ManagerAction::ResetBrushes {
+            merge(
+                &mut change,
+                session
+                    .reset_workspace_brushes()
+                    .map_err(StoreError::invalid)?,
+            );
+            m.observe_working(session.workspace_working_state());
+            self.run(async move {
+                m.flush().await?;
+                Ok(Outcome::Done)
+            });
+            return Ok(change);
+        }
+        let capture = (action == ManagerAction::SaveAsNew)
+            .then(|| session.capture_workspace())
+            .transpose()
+            .map_err(StoreError::invalid)?;
+        self.run(async move {
+            let install = |config, replace, group, exact_name| {
+                Outcome::Install(Box::new(Install {
+                    config,
+                    replace,
+                    group,
+                    exact_name,
+                }))
+            };
+            Ok(match action {
+                ManagerAction::New => Outcome::adopt(m.create_workspace(&name, now).await?),
+                ManagerAction::Rename(id) => {
+                    let metadata = m.load(&id).await?.entity.metadata;
+                    let description = match description {
+                        Some(text) if metadata.kind == ItemKind::Toolbar => text,
+                        _ => metadata.description,
+                    };
+                    m.rename(&id, &name, &description, now).await?;
+                    Outcome::Done
+                }
+                ManagerAction::Delete(id) => match m.delete_item(&id, None, now).await? {
+                    Some(s) => Outcome::adopt(s),
+                    None => Outcome::Done,
+                },
+                ManagerAction::Reset(id) => Outcome::adopt(m.change_layout(&id, None, now).await?),
+                ManagerAction::SaveAsNew => {
+                    Outcome::adopt(m.save_as_new(capture.unwrap(), &name, now).await?)
+                }
+                ManagerAction::SaveToolbar(panel) => {
+                    m.save_toolbar(panel, &name, now).await?;
+                    Outcome::Done
+                }
+                ManagerAction::UpdateToolbar(id) => {
+                    let panel = serde_json::from_str(&choice)
+                        .map_err(|_| StoreError::invalid("Choose a toolbar."))?;
+                    m.update_toolbar_from(&id, panel, now).await?;
+                    Outcome::Done
+                }
+                ManagerAction::ReplaceToolbar(panel) => {
+                    if choice.is_empty() {
+                        return Err(StoreError::invalid("Choose a saved toolbar."));
+                    }
+                    m.flush().await?;
+                    let config = m.toolbar_config(Some(&choice), None).await?;
+                    install(config, Some(panel), None, false)
+                }
+                ManagerAction::NewToolbar(group) => {
+                    m.flush().await?;
+                    let config = m.toolbar_config(Some(&choice), Some(&name)).await?;
+                    install(config, None, group, true)
+                }
+                ManagerAction::RecoverInterrupted => {
+                    match m.recover_interrupted(&choice, now).await? {
+                        Some(s) => Outcome::adopt(s),
+                        None => Outcome::Done,
+                    }
+                }
+                _ => {
+                    return Err(StoreError::invalid(
+                        "This action does not use a workspace form.",
+                    ));
+                }
+            })
+        });
+        Ok(change)
+    }
+    fn act<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        action: ManagerAction,
+        now: u64,
+    ) -> Result<UiChange> {
+        if self.view.page.is_some() && !self.offered(&action) {
+            return Ok(UiChange::default());
+        }
+        let customize = |action| UiAction::Customize { action };
+        Ok(match action {
+            ManagerAction::Switch(id) => self.switch(session, id, now)?,
+            ManagerAction::SwitchToWindow(id) => match self.focus_target(&id, now) {
+                Some(target) => {
+                    self.view.focus_window = Some(target);
+                    self.dismiss(session)
+                }
+                None => self.switch(session, id, now)?,
+            },
+            ManagerAction::History(_) => self.open(session, ManagerPage::History)?,
+            ManagerAction::RetryStorage => self.retry(session, now)?,
+            ManagerAction::AddToolbar(id) => {
+                self.start_transition(session)?;
+                let change = self.stop_preview(session);
+                let m = self.manager.clone();
+                self.run(async move {
+                    m.flush().await?;
+                    let config = m.toolbar_config(Some(&id), None).await?;
+                    Ok(Outcome::Install(Box::new(Install {
+                        config,
+                        replace: None,
+                        group: None,
+                        exact_name: false,
+                    })))
+                });
+                change
+            }
+            ManagerAction::ShowToolbar(panel, visible) => {
+                self.end_transition(session);
+                let result = session.dispatch(customize(CustomizationAction::SetPanelVisible {
+                    panel,
+                    visible,
+                }));
+                self.start_transition(session)?;
+                let mut change = result.map_err(StoreError::invalid)?;
+                self.capture(session, now)?;
+                merge(
+                    &mut change,
+                    self.select(session, self.view.selected.clone(), now)?,
+                );
+                change
+            }
+            ManagerAction::RenameToolbar(panel)
+            | ManagerAction::DuplicateToolbar(panel)
+            | ManagerAction::DeleteToolbar(panel) => {
+                let mut change = self.dismiss(session);
+                let action = match action {
+                    ManagerAction::RenameToolbar(_) => CustomizationAction::RenameToolbar { panel },
+                    ManagerAction::DuplicateToolbar(_) => {
+                        CustomizationAction::DuplicateToolbar { panel }
+                    }
+                    _ => CustomizationAction::DeleteToolbar { panel },
+                };
+                merge(
+                    &mut change,
+                    session
+                        .dispatch(customize(action))
+                        .map_err(StoreError::invalid)?,
+                );
+                change
+            }
+            action => self.form(session, action)?,
+        })
+    }
+    fn switch<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        id: String,
+        now: u64,
+    ) -> Result<UiChange> {
+        if self.manager.active_id().as_deref() == Some(&id) {
+            return Ok(UiChange::default());
+        }
+        let change = self.stop_preview(session);
+        self.start_transition(session)?;
+        let m = self.manager.clone();
+        self.run(async move {
+            m.refresh().await?;
+            if let Some(claim) = m
+                .items()
+                .into_iter()
+                .find(|item| item.id == id)
+                .and_then(|item| item.claim)
+                .filter(|c| c.owner != m.owner && c.expires_at_ms > now)
+            {
+                return Ok(Outcome::Focus(FocusTarget {
+                    id,
+                    owner: claim.owner.id,
+                }));
+            }
+            Ok(Outcome::adopt(m.prepare_switch(&id, now).await?))
+        });
+        Ok(change)
+    }
+    fn confirm<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        now: u64,
+    ) -> Result<UiChange> {
+        let Some(id) = self.view.selected.clone().filter(|_| self.view.enabled) else {
+            return Ok(UiChange::default());
+        };
+        match self.view.page {
+            Some(ManagerPage::History) => {
+                let change = self.stop_preview(session);
+                self.start_transition(session)?;
+                let m = self.manager.clone();
+                self.run(async move {
+                    let active = m
+                        .active_id()
+                        .ok_or_else(|| StoreError::invalid("Open a workspace."))?;
+                    Ok(Outcome::adopt(
+                        m.change_layout(&active, Some(&id), now).await?,
+                    ))
+                });
+                Ok(change)
+            }
+            Some(ManagerPage::Workspaces) => match self.focus_target(&id, now) {
+                Some(target) => {
+                    self.view.focus_window = Some(target);
+                    Ok(self.dismiss(session))
+                }
+                None => self.switch(session, id, now),
+            },
+            _ => {
+                let primary = self
+                    .view
+                    .details
+                    .as_ref()
+                    .and_then(|d| d.actions.iter().find(|a| a.primary && a.enabled))
+                    .map(|a| a.action.clone());
+                match primary {
+                    Some(action) => self.act(session, action, now),
+                    None => Ok(UiChange::default()),
                 }
             }
         }
-        self.rows(now);
-        self.view.switcher_busy = self.preferences.is_some();
-        self.view.busy = self.task.is_some() || self.incoming.is_some();
+    }
+    fn retry<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        now: u64,
+    ) -> Result<UiChange> {
+        if self.incoming.is_some() {
+            return Ok(UiChange::default());
+        }
+        if !self.view.ready {
+            self.initialize(now);
+            return Ok(UiChange::default());
+        }
+        self.close_after_task |= self.terminating;
+        let m = self.manager.clone();
+        self.start_transition(session)?;
+        self.run(async move {
+            m.store.execute(StoreRequest::Reopen).await?;
+            m.revalidate_owner(now).await?;
+            m.flush().await?;
+            Ok(match m.retry_failed_operation().await? {
+                Some(s) => Outcome::adopt(s),
+                None => Outcome::Done,
+            })
+        });
+        Ok(UiChange::default())
+    }
+    fn command_input<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        command: WorkspaceCommand,
+    ) -> Result<Option<WorkspaceInput>> {
+        let form = |action| Some(WorkspaceInput::Form { action });
+        let simple = matches!(self.manager.platform, Platform::Web | Platform::Android);
+        Ok(match command {
+            WorkspaceCommand::Manage => Some(WorkspaceInput::Open {
+                page: ManagerPage::Workspaces,
+            }),
+            WorkspaceCommand::LayoutHistory => Some(WorkspaceInput::Open {
+                page: ManagerPage::History,
+            }),
+            WorkspaceCommand::New => form(ManagerAction::New),
+            WorkspaceCommand::ResetBrushes => form(ManagerAction::ResetBrushes),
+            WorkspaceCommand::ResetLayout => {
+                form(ManagerAction::Reset(self.manager.active_id().ok_or_else(
+                    || StoreError::invalid("Open a workspace first."),
+                )?))
+            }
+            WorkspaceCommand::Switch { id } => Some(WorkspaceInput::Switch { id }),
+            WorkspaceCommand::SaveToolbar { panel } => form(ManagerAction::SaveToolbar(panel)),
+            WorkspaceCommand::ManageToolbars if !simple => Some(WorkspaceInput::Open {
+                page: ManagerPage::ThisWorkspace,
+            }),
+            WorkspaceCommand::NewToolbar { group } if !simple => {
+                form(ManagerAction::NewToolbar(group))
+            }
+            WorkspaceCommand::ManageToolbars | WorkspaceCommand::NewToolbar { .. } => {
+                let action = match command {
+                    WorkspaceCommand::NewToolbar { group } => {
+                        CustomizationAction::NewToolbar { group }
+                    }
+                    _ => CustomizationAction::ManageToolbars,
+                };
+                let customized = session
+                    .dispatch(UiAction::Customize { action })
+                    .map_err(StoreError::invalid)?;
+                merge(&mut self.routed, customized);
+                None
+            }
+        })
+    }
+    /// Complete each host workspace request once and run it as controller input.
+    fn route_requests<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) {
+        let requests: Vec<_> = session
+            .state()
+            .requests
+            .iter()
+            .filter_map(|r| match &r.kind {
+                HostRequestKind::Workspace { command } => Some((r.id, command.clone())),
+                _ => None,
+            })
+            .collect();
+        for (id, command) in requests {
+            match session.dispatch(UiAction::CompleteRequest { id, error: None }) {
+                Ok(c) => merge(&mut self.routed, c),
+                Err(error) => {
+                    self.view.error = Some(error);
+                    continue;
+                }
+            }
+            if self.terminating {
+                continue;
+            }
+            match self
+                .command_input(session, command)
+                .and_then(|input| match input {
+                    Some(input) => self.input(session, input, now),
+                    None => Ok(UiChange::default()),
+                }) {
+                Ok(c) => merge(&mut self.routed, c),
+                Err(error) => self.view.error = Some(error.to_string()),
+            }
+        }
+    }
+    fn install_toolbar<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        install: Install,
+        now: u64,
+    ) -> Result<UiChange> {
+        if self.view.owner_lost || !self.manager.lease_valid(now) {
+            return Err(StoreError::new(
+                ErrorKind::OwnedElsewhere,
+                "Workspace ownership changed while loading the toolbar. Try again.",
+            ));
+        }
+        let (_, change) = session
+            .install_workspace_toolbar(
+                install.config,
+                install.replace,
+                install.group,
+                install.exact_name,
+            )
+            .map_err(StoreError::invalid)?;
+        self.close_prompt();
+        self.capture(session, now)?;
+        let m = self.manager.clone();
+        self.run(async move {
+            m.flush().await?;
+            Ok(Outcome::Dismiss)
+        });
         Ok(change)
     }
     pub fn tick<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) -> UiChange {
-        let mut change = UiChange::default();
+        self.route_requests(session, now);
+        let mut change = std::mem::take(&mut self.routed);
         let mut presentation_changed = false;
         if !self.view.ready {
             session.set_workspace_read_only(true);
@@ -787,54 +1293,85 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         {
             self.refresh_preferences = false;
             let manager = self.manager.clone();
-            self.preferences = Some(Task::new(async move {
+            self.preferences = self.spawn(async move {
                 manager.refresh().await?;
                 manager.refresh_switcher().await
-            }));
+            });
         }
         if let Some(result) = self.task.as_mut().and_then(Task::poll) {
             self.task = None;
             presentation_changed = true;
             match result {
                 Ok(outcome) => {
-                    let adopting = matches!(outcome, Outcome::Adopt(_));
-                    if let Outcome::Adopt(incoming) = outcome {
-                        if self
-                            .view
-                            .switcher
-                            .iter()
-                            .map(|row| &row.id)
-                            .ne(self.manager.switcher_ids().iter())
-                        {
-                            self.view.switcher_revision =
-                                self.view.switcher_revision.wrapping_add(1);
+                    let keep_prompt = matches!(outcome, Outcome::Adopt(_) | Outcome::Install(_));
+                    match outcome {
+                        Outcome::Adopt(incoming) => {
+                            if self
+                                .view
+                                .switcher
+                                .iter()
+                                .map(|row| &row.id)
+                                .ne(self.manager.switcher_ids().iter())
+                            {
+                                self.view.switcher_revision =
+                                    self.view.switcher_revision.wrapping_add(1);
+                            }
+                            self.incoming = Some(*incoming);
                         }
-                        self.incoming = Some(*incoming);
-                    } else if let Outcome::Focus(id) = outcome {
-                        self.view.focus_window = Some(id);
-                    } else if matches!(outcome, Outcome::Closed) {
-                        self.close_after_task = false;
+                        Outcome::Focus(target) => {
+                            self.view.focus_window = Some(target);
+                            merge(&mut change, self.dismiss(session));
+                        }
+                        Outcome::Dismiss => merge(&mut change, self.dismiss(session)),
+                        Outcome::Closed => {
+                            self.close_after_task = false;
+                            if self.terminating {
+                                self.view.closed = true;
+                                session.set_workspace_read_only(true);
+                            }
+                        }
+                        Outcome::Install(install) => self.install = Some(install),
+                        Outcome::Done => {}
                     }
-                    if !adopting {
-                        self.view.form = None;
+                    if !keep_prompt {
+                        self.close_prompt();
                         if self.view.page.is_some() && !self.suspended {
-                            match self.select(session, self.view.selected.clone()) {
-                                Ok(c) => change = c,
+                            match self.select(session, self.view.selected.clone(), now) {
+                                Ok(c) => merge(&mut change, c),
                                 Err(e) => self.view.error = Some(e.to_string()),
                             }
                         }
                     }
-                    if self.view.page.is_none() && self.incoming.is_none() {
+                    if self.view.page.is_none() && self.incoming.is_none() && self.install.is_none()
+                    {
                         self.end_transition(session);
                     }
                     self.pending_binding = self.manager.binding();
                 }
                 Err(e) => {
                     self.view.error = Some(e.to_string());
-                    if self.view.page.is_none() && self.view.form.is_none() {
+                    if self.view.page.is_none() && self.view.prompt.is_none() {
                         self.end_transition(session);
                     }
                     self.close_after_task = false;
+                }
+            }
+        }
+        if self.install.is_some() && self.task.is_none() && session.require_workspace_idle().is_ok()
+        {
+            presentation_changed = true;
+            let install = *self.install.take().unwrap();
+            if self.terminating {
+                self.end_transition(session);
+            } else {
+                match self.install_toolbar(session, install, now) {
+                    Ok(c) => merge(&mut change, c),
+                    Err(e) => {
+                        self.view.error = Some(e.to_string());
+                        if self.view.page.is_none() && self.view.prompt.is_none() {
+                            self.end_transition(session);
+                        }
+                    }
                 }
             }
         }
@@ -852,11 +1389,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         {
             let incoming = self.incoming.take().unwrap();
             let m = self.manager.clone();
-            self.task = Some(Task::new(async move {
+            self.run(async move {
                 m.release(&incoming).await;
                 m.close().await?;
                 Ok(Outcome::Closed)
-            }));
+            });
         }
         if let Some(incoming) = &self.incoming
             && !self.terminating
@@ -869,14 +1406,14 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         {
             let m = self.manager.clone();
             let original = incoming.clone();
-            self.incoming_renew = Some(Task::new(async move {
+            self.incoming_renew = self.spawn(async move {
                 let claimed = m.claim(&original.entity.id).await?;
                 if claimed.generations != original.generations {
                     m.release(&claimed).await;
                     return Err(StoreError::conflict());
                 }
                 Ok(claimed)
-            }));
+            });
         }
         if self.incoming.is_some()
             && !self.terminating
@@ -892,21 +1429,28 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 .and_then(|c| PreparedWorkspace::new(c).map_err(StoreError::invalid));
             match prepared.and_then(|p| session.adopt_workspace(p).map_err(StoreError::invalid)) {
                 Ok(c) => {
-                    change = c;
+                    merge(&mut change, c);
                     let id = incoming.entity.id.clone();
                     if let Some(outgoing) = self.manager.activate(incoming)
                         && outgoing.entity.id != id
                     {
                         let m = self.manager.clone();
-                        self.task = Some(Task::new(async move {
+                        self.run_quietly(async move {
                             m.release(&outgoing).await;
                             Ok(Outcome::Done)
-                        }));
+                        });
+                    }
+                    if !self.view.ready {
+                        self.last_renew = 0;
                     }
                     self.view.ready = true;
                     self.view.error = None;
+                    self.view.owner_lost = false;
                     self.view.page = None;
-                    self.view.form = None;
+                    self.view.details = None;
+                    self.view.selected = None;
+                    self.view.query.clear();
+                    self.close_prompt();
                     self.generation = session.workspace_layout_generation();
                     session.set_workspace_read_only(self.suspended);
                     self.end_transition(session);
@@ -925,16 +1469,18 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         {
             self.preview = None;
             presentation_changed = true;
-            if generation == self.selection_generation
-                && self.preview_open
-                && self.view.page.is_some()
-            {
-                match result.and_then(|layout| {
-                    session
-                        .preview_workspace_layout(&layout)
-                        .map_err(StoreError::invalid)
-                }) {
-                    Ok(c) => change = c,
+            if generation == self.selection_generation && self.view.page.is_some() {
+                let shown = result.and_then(|(details, layout)| {
+                    self.view.details = details;
+                    match layout.filter(|_| self.preview_open) {
+                        Some(layout) => session
+                            .preview_workspace_layout(&layout)
+                            .map_err(StoreError::invalid),
+                        None => Ok(UiChange::default()),
+                    }
+                });
+                match shown {
+                    Ok(c) => merge(&mut change, c),
                     Err(e) => {
                         self.view.error = Some(e.to_string());
                         self.view.selected = None;
@@ -946,12 +1492,25 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             self.renew = None;
             presentation_changed = true;
             match result {
-                Ok(()) => {
+                Ok(interrupted) => {
+                    self.interrupted = interrupted;
+                    self.view.owner_lost = false;
                     session.set_workspace_read_only(self.suspended);
+                    if let Some(error) = self.renew_error.take()
+                        && self.view.error.as_ref() == Some(&error)
+                    {
+                        self.view.error = None;
+                    }
                 }
                 Err(e) => {
-                    session.set_workspace_read_only(true);
-                    self.view.error = Some(e.to_string());
+                    if matches!(e.kind, ErrorKind::OwnedElsewhere | ErrorKind::Conflict)
+                        || !self.manager.lease_valid(now)
+                    {
+                        self.view.owner_lost = true;
+                        session.set_workspace_read_only(true);
+                    }
+                    self.renew_error = Some(e.to_string());
+                    self.view.error = self.renew_error.clone();
                 }
             }
         }
@@ -964,17 +1523,21 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             self.last_renew = now;
             let m = self.manager.clone();
             if !m.lease_valid(now) {
+                self.view.owner_lost = true;
                 session.set_workspace_read_only(true);
             }
-            self.renew = Some(Task::new(async move { m.revalidate_owner(now).await }));
+            self.renew = self.spawn(async move {
+                m.revalidate_owner(now).await?;
+                Ok(m.interrupted_changes(now).await.unwrap_or_default())
+            });
         }
         if self.view.ready && self.task.is_none() && self.incoming.is_none() {
             if self.close_after_task && self.renew.is_none() {
                 let m = self.manager.clone();
-                self.task = Some(Task::new(async move {
+                self.run(async move {
                     m.close().await?;
                     Ok(Outcome::Closed)
-                }));
+                });
             } else if !self.transition
                 && !self.suspended
                 && self.manager.dirty()
@@ -984,41 +1547,35 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             {
                 self.last_observed = now;
                 let m = self.manager.clone();
-                self.task = Some(Task::new(async move {
+                self.run_quietly(async move {
                     m.save_once().await?;
                     Ok(Outcome::Done)
-                }));
+                });
             }
         }
         if self.task.is_none()
             && self.incoming.is_none()
+            && self.install.is_none()
             && !self.terminating
             && let Some(input) = self.queued.take()
         {
             match self.input(session, input, now) {
-                Ok(c) => {
-                    change.regions |= c.regions;
-                    change.canvas_wake |= c.canvas_wake;
-                    change.revision = change.revision.max(c.revision);
-                }
+                Ok(c) => merge(&mut change, c),
                 Err(e) => self.view.error = Some(e.to_string()),
             }
         }
         if presentation_changed {
-            self.rows(now);
-            if self.view.page.as_deref() == Some("workspaces")
+            self.present(now);
+            if self.view.page.is_some()
+                && self.view.prompt.is_none()
                 && self
                     .view
                     .selected
                     .as_ref()
                     .is_some_and(|id| !self.view.rows.iter().any(|row| &row.id == id))
             {
-                match self.select(session, None) {
-                    Ok(c) => {
-                        change.regions |= c.regions;
-                        change.canvas_wake |= c.canvas_wake;
-                        change.revision = change.revision.max(c.revision);
-                    }
+                match self.select(session, None, now) {
+                    Ok(c) => merge(&mut change, c),
                     Err(error) => self.view.error = Some(error.to_string()),
                 }
             }
@@ -1034,16 +1591,14 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 match session.configure_workspace_manager(binding) {
                     Ok(c) => {
                         self.binding_key = Some(key);
-                        change.regions |= c.regions;
-                        change.revision = c.revision;
+                        merge(&mut change, c);
                     }
                     Err(e) => self.view.error = Some(e),
                 }
             }
         }
-        self.view.switcher_busy = self.preferences.is_some();
-        self.view.busy = self.task.is_some() || self.incoming.is_some();
-        self.view.dirty = self.manager.dirty();
+        self.publish_flags();
+        self.view.interrupted = self.interrupted.len();
         self.view.retry = self.view.error.is_some()
             && (self.manager.has_failed_operation() || self.manager.dirty());
         change

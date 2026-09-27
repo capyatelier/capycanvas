@@ -101,7 +101,7 @@ try {
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));$null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Check-InputPreferences
-    $switch=Find 'workspace-switch-sketch'
+    $switch=Find 'workspace-switch-builtin:workspace:painter'
     if(!$switch -or $switch.Current.IsOffscreen){Invoke 'header-workspace-menu';$switch=Control 'Sketch' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
     $switch.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:painter' -and !(Model).windows_workspace.busy} 'Sketch did not open'

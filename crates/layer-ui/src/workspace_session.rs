@@ -70,11 +70,14 @@ impl PreparedWorkspace {
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
+    /// An `exact_name` is a typed name and must not collide; library copies
+    /// otherwise receive an unused name.
     pub fn install_workspace_toolbar(
         &mut self,
         mut config: PanelConfig,
         replace: Option<Panel>,
         group: Option<u32>,
+        exact_name: bool,
     ) -> Result<(Panel, UiChange), String> {
         self.require_workspace_idle()?;
         config.id = Panel::Toolbar;
@@ -85,6 +88,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let controls: Vec<_> = tiles.iter().map(|t| t.control).collect();
         let before = self.state.workspace.clone();
         let mut layout = before.layout.clone();
+        if exact_name {
+            layout.check_toolbar_name(name, replace)?;
+        }
         let panel = if let Some(panel) = replace {
             layout.panel(panel)?;
             if panel.kind() != PanelKind::Tiles {

@@ -1,9 +1,9 @@
 import { createWorkspaceSwitcher } from "./workspace-switcher.js";
-export function createWorkspaceManager({ app, store, applyChange, element, button, icon, message, dispatch }) {
+export function createWorkspaceManager({ app, store, applyChange, element, button, icon, message }) {
   const dialog = element("dialog", "workspace-manager"), formDialog = element("dialog", "workspace-form");
   const heading = element("h2"), header = element("header", "dialog-header");
   heading.id = "workspace-manager-title"; dialog.setAttribute("aria-labelledby", heading.id);
-  const add = button("", () => send({ type: "form", kind: "new" }), "workspace-add");
+  const add = button("", () => send({ type: "form", action: { type: "new" } }), "workspace-add");
   const close = button("", cancel, "dialog-close"); close.setAttribute("aria-label", "Close");
   close.append(element("span"));
   dialog.tabIndex = -1;
@@ -37,7 +37,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     node.addEventListener("close", () => {
       const expected = expectedCloses.get(node) || 0;
       if (expected) expectedCloses.set(node, expected - 1);
-      else if (node === formDialog ? view?.form : view?.page) cancel();
+      else if (node === formDialog ? view?.prompt : view?.page) cancel();
     });
     node.addEventListener("click", e => { if (e.target === node) { const r = node.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) cancel(); } });
   }
@@ -53,7 +53,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     switcher.render(view);
     if (switcherRevision != null && switcherRevision !== view.switcher_revision) channel.postMessage({switcher:true});
     switcherRevision = view.switcher_revision;
-    if (view.focus_window) { channel.postMessage({ focus: view.focus_window }); message("The workspace is open in another tab or window. Switch to that window to continue."); }
+    if (view.focus_window) { channel.postMessage({ focus: view.focus_window.id }); message("The workspace is open in another tab or window. Switch to that window to continue."); }
     if (view.page !== pageKey) { pageKey = view.page; list.scrollTop = 0; }
     heading.textContent = view.title; intro.textContent = view.intro; intro.hidden = !view.intro;
     add.hidden = view.page === "history"; add.disabled = view.busy || view.switcher_busy;
@@ -81,25 +81,25 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
       list.scrollTop = scroll;
     }
     for (const row of list.querySelectorAll(".workspace-choice")) { row.setAttribute("aria-selected", String(row.dataset.id === view.selected)); row.parentElement.dataset.selected = String(row.dataset.id === view.selected); row.disabled = view.busy; }
-    const form = view.form;
-    const key = form ? JSON.stringify([form.kind, form.id, form.name]) : null;
+    const form = view.prompt;
+    const key = form ? JSON.stringify([view.prompt_action, form.name]) : null;
     if (key !== formKey) {
-      formKey = key; formDialog.replaceChildren();
+      formKey = key; formDialog.replaceChildren(); formName = null;
       if (form) {
         const heading = element("h2", "", form.title); heading.id = "workspace-form-title";
         formDialog.setAttribute("aria-labelledby", heading.id); formDialog.append(heading);
         if (form.message) formDialog.append(element("p", "", form.message));
-        if (!["delete","reset","reset_brushes"].includes(form.kind)) {
+        if (form.name != null) {
           const label = element("label", "", "Name"); formName = element("input"); formName.value = form.name; formName.maxLength = 100;
           formName.setAttribute("aria-label", "Name"); label.append(formName); formDialog.append(label);
         }
         formError = element("p", "workspace-error"); const footer = element("footer");
         formSubmit = button(form.confirm, () => send({ type: "submit", name: formName?.value || "" }), "suggested-action");
-        if (form.kind === "delete") formSubmit.classList.add("destructive-action");
+        if (form.destructive) formSubmit.classList.add("destructive-action");
         footer.append(button("Cancel", cancel), formSubmit); formDialog.append(formError, footer);
       }
     }
-    if (form) { formError.textContent = view.error || ""; formSubmit.disabled = view.busy || view.switcher_busy; formSubmit.textContent = view.retry && form.kind !== "recover" ? "Retry" : form.confirm; }
+    if (form) { formError.textContent = view.error || ""; formSubmit.disabled = view.busy || view.switcher_busy; formSubmit.textContent = view.retry && view.prompt_action?.type !== "save_as_new" ? "Retry" : form.confirm; }
     show(dialog, !!view.page); show(formDialog, !!form);
     if (!view.page && !form && view.error) showRecovery(view.error);
   }
@@ -112,7 +112,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
       const hide = () => { recovery.close(); };
       recovery.addEventListener("cancel", e => { e.preventDefault(); dismissedError = view.error; hide(); send({type:"resume"}); });
       footer.append(button("Keep Open", () => { dismissedError = view.error; hide(); send({type:"resume"}); }), button("Retry", () => { dismissedError = null; hide(); send({ type: "retry" }); }),
-        button("Save as New Workspace…", () => { hide(); send({ type: "form", kind: "recover" }); }, "suggested-action"));
+        button("Save as New Workspace…", () => { hide(); send({ type: "form", action: { type: "save_as_new" } }); }, "suggested-action"));
       recovery.append(element("h2", "", "Workspace could not be saved"), recoveryText, footer); document.body.append(recovery);
     }
     recoveryText.textContent = text; if (!recovery.open) recovery.showModal();
@@ -157,15 +157,5 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     wake,
     observe() { observePending = true; },
     send,
-    handle(request) {
-      const c = request.kind.command;
-      const input = ({ manage: { type: "open", page: "workspaces" }, 
-        layout_history: { type: "open", page: "history" }, new: { type: "form", kind: "new" },
-        reset_layout: { type: "form", kind: "reset" }, reset_brushes: {type:"form",kind:"reset_brushes"} })[c.type];
-      if (input) send(input); else if (c.type === "switch") send({ type: "switch", id: c.id });
-      else if (c.type === "manage_toolbars") dispatch({ type: "customize", action: { type: "manage_toolbars" } });
-      else if (c.type === "new_toolbar") dispatch({ type: "customize", action: { type: "new_toolbar", group: c.group } });
-      else message("This toolbar command is unavailable.");
-    },
   };
 }

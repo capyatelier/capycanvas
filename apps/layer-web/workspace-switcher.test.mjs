@@ -149,7 +149,7 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
     // Create enough real workspace records to exercise the scrolling list and pill.
     const custom=[];
     for(let n=0;n<9;n++) {
-      await send({type:"form",kind:"new"}); await send({type:"submit",name:n?`Study ${n}`:"Sketching"}); custom.push((await view()).id);
+      await send({type:"form",action:{type:"new"}}); await send({type:"submit",name:n?`Study ${n}`:"Sketching"}); custom.push((await view()).id);
       assert.ok((await pins()).includes(custom[n]),"new workspace is pinned by default");
       assert.deepEqual(await shown(),await pins());
     }

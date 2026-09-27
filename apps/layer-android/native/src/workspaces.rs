@@ -1,5 +1,4 @@
 use crate::app::App;
-use layer_ui::{HostRequestKind, UiAction, WorkspaceCommand};
 use layer_workspace::{StoreWorker, WorkspaceController, WorkspaceInput};
 use serde_json::{Value, json};
 
@@ -31,15 +30,7 @@ impl App {
             return Ok(Value::Null);
         };
         let changes = self.host.take_service_changes();
-        if changes
-            & (layer_ui::regions::LAYOUT
-                | layer_ui::regions::BRUSH
-                | layer_ui::regions::DOCUMENT
-                | layer_ui::regions::CUSTOMIZATION)
-            != 0
-        {
-            c.observe(&mut self.host.session, time);
-        }
+        c.observe_regions(&mut self.host.session, changes, time);
         if !matches!(request["type"].as_str(), Some("start" | "tick" | "capture")) {
             let input: WorkspaceInput =
                 serde_json::from_value(request.clone()).map_err(|e| e.to_string())?;
@@ -52,62 +43,6 @@ impl App {
         if request["type"] == "capture" {
             return serde_json::to_value(self.host.session.capture_workspace()?)
                 .map_err(|e| e.to_string());
-        }
-        let requests: Vec<_> = self
-            .host
-            .session
-            .state()
-            .requests
-            .iter()
-            .filter_map(|r| match &r.kind {
-                HostRequestKind::Workspace { command } => Some((r.id, command.clone())),
-                _ => None,
-            })
-            .collect();
-        for (id, command) in requests {
-            let input = match command {
-                WorkspaceCommand::Manage => Some(WorkspaceInput::Open {
-                    page: "workspaces".into(),
-                }),
-                WorkspaceCommand::LayoutHistory => Some(WorkspaceInput::Open {
-                    page: "history".into(),
-                }),
-                WorkspaceCommand::New => Some(WorkspaceInput::Form {
-                    kind: "new".into(),
-                    id: None,
-                }),
-                WorkspaceCommand::ResetBrushes => Some(WorkspaceInput::Form {
-                    kind: "reset_brushes".into(),
-                    id: None,
-                }),
-                WorkspaceCommand::ResetLayout => Some(WorkspaceInput::Form {
-                    kind: "reset".into(),
-                    id: None,
-                }),
-                WorkspaceCommand::Switch { id } => Some(WorkspaceInput::Switch { id }),
-                WorkspaceCommand::ManageToolbars => {
-                    self.host.dispatch(UiAction::Customize {
-                        action: layer_ui::CustomizationAction::ManageToolbars,
-                    })?;
-                    None
-                }
-                WorkspaceCommand::NewToolbar { group } => {
-                    self.host.dispatch(UiAction::Customize {
-                        action: layer_ui::CustomizationAction::NewToolbar { group },
-                    })?;
-                    None
-                }
-                _ => None,
-            };
-            self.host
-                .dispatch(UiAction::CompleteRequest { id, error: None })?;
-            if let Some(input) = input {
-                let before = self.host.session.state().revision;
-                match c.input(&mut self.host.session, input, time) {
-                    Ok(change) => self.host.apply_change(before, change),
-                    Err(error) => c.view.error = Some(error.to_string()),
-                }
-            }
         }
         let before = self.host.session.state().revision;
         let change = c.tick(&mut self.host.session, time);

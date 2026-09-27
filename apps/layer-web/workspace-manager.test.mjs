@@ -101,7 +101,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     }
     await menu('Manage Workspaces…');
     for (const row of (await view()).rows.filter(r=>r.id.startsWith('builtin:workspace:'))) {
-      assert.equal(row.delete,false); assert.equal(row.options,false);
+      assert.ok(!row.actions.some(button=>button.enabled&&['rename','delete'].includes(button.action.type)));
       await click(`.workspace-row[data-id="${row.id}"] .workspace-options`);
       assert.equal(await evaluate(`!!document.querySelector('.workspace-row-menu [data-action="rename"]')`),false);
       await click(`.workspace-row[data-id="${row.id}"] .workspace-options`);
@@ -169,7 +169,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"cancel"}));null');
     if (created) {
       await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'switch',id:${JSON.stringify(original)}}));null`); await idle();
-      await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'form',kind:'delete',id:${JSON.stringify(created)}}));null`);
+      await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'form',action:{type:'delete',value:${JSON.stringify(created)}}}));null`);
       await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"submit",name:""}));null'); await idle();
     }
     assert.equal((await view()).id,original);
