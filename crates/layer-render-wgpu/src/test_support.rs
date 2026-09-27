@@ -45,6 +45,27 @@ pub(crate) fn complete(r: &WgpuRasterizer) {
         .unwrap();
 }
 
+pub(crate) fn receive_request(r: &mut WgpuRasterizer, request: layer_render::RegionRequest) -> layer_render::RegionResult {
+    assert!(r.request_region(request).unwrap());
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    loop {
+        if let Some(result) = r.take_region() {
+            return result.unwrap();
+        }
+        assert!(std::time::Instant::now() < deadline, "region readback timed out");
+        std::thread::yield_now();
+    }
+}
+
+/// Solve H(u, v) = p for row-major H. None without a nearby preimage where w > 0.
+pub(crate) fn preimage(h: [f64; 9], [x, y]: [f64; 2]) -> Option<[f64; 2]> {
+    let [a, b, c, d] = [h[0] - x * h[6], h[1] - x * h[7], h[3] - y * h[6], h[4] - y * h[7]];
+    let [e, f] = [x * h[8] - h[2], y * h[8] - h[5]];
+    let det = a * d - b * c;
+    let [u, v] = [(e * d - b * f) / det, (a * f - e * c) / det];
+    (det != 0. && h[6] * u + h[7] * v + h[8] > 0. && u.abs() < 1e9 && v.abs() < 1e9).then_some([u, v])
+}
+
 pub(crate) fn page_texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
     r.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("test page"),

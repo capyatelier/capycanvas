@@ -2,6 +2,8 @@
 //! the renderer's paint pages after a preview are compared with the
 //! premultiplied source, the selection and each filter evaluated on the CPU.
 use super::*;
+use super::transforms::{mask_values, masked, packed};
+use crate::test_support::preimage;
 use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::*};
 use layer_core::{
     Affine, ImageTransform, Interpolation, Projective, SelectionPixels, TransformMap,
@@ -25,7 +27,8 @@ fn straight(x: u32, y: u32) -> [f32; 4] {
     ]
 }
 
-fn source_image() -> Arc<SourceImage> {
+/// A Float32 sRGB photo of straight `pixel` colors.
+fn source_image(pixel: impl Fn(u32, u32) -> [f32; 4]) -> Arc<SourceImage> {
     let mut builder = SourceBuilder::new(
         EXTENT,
         SourceInterpretation {
@@ -39,7 +42,7 @@ fn source_image() -> Arc<SourceImage> {
     .unwrap();
     for y in 0..EXTENT[1] {
         let row: Vec<u8> = (0..EXTENT[0])
-            .flat_map(|x| straight(x, y))
+            .flat_map(|x| pixel(x, y))
             .flat_map(f32::to_le_bytes)
             .collect();
         builder.push_row(&row).unwrap();
@@ -59,21 +62,7 @@ fn coverage_byte(x: u32, y: u32) -> u32 {
 }
 
 fn selection_pixels() -> Arc<SelectionPixels> {
-    let words: Vec<u32> = (0..EXTENT[1])
-        .flat_map(|y| {
-            (0..EXTENT[0].div_ceil(4)).map(move |w| {
-                (0..4).fold(0, |word, i| {
-                    let x = w * 4 + i;
-                    word | if x < EXTENT[0] {
-                        coverage_byte(x, y) << (i * 8)
-                    } else {
-                        0
-                    }
-                })
-            })
-        })
-        .collect();
-    Arc::new(SelectionPixels::bytes(EXTENT, [40, 30, 230, 180], words).unwrap())
+    Arc::new(SelectionPixels::bytes(EXTENT, [40, 30, 230, 180], packed(EXTENT, 4, coverage_byte)).unwrap())
 }
 
 /// The CPU model: premultiplied source texels, coverage and each filter.
@@ -164,6 +153,39 @@ impl Oracle {
         }
         value
     }
+    /// The values of a nearest sample at `s` within `slack` of a texel edge.
+    fn nearest(&self, s: [f64; 2], slack: f64) -> Vec<[f64; 4]> {
+        let [xs, ys] = s.map(|v| [(v - slack).floor() as i32, (v + slack).floor() as i32]);
+        xs.into_iter().flat_map(|x| ys.map(|y| self.selected(x, y))).collect()
+    }
+    /// A filtered sample at `s`, or with `count` taps along either axis the
+    /// mean of that grid of bilinear taps, each at `tap` of its offset within
+    /// the pixel.
+    fn filtered(
+        &self,
+        interpolation: Interpolation,
+        s: [f64; 2],
+        [nx, ny]: [u32; 2],
+        tap: impl Fn([f64; 2]) -> Option<[f64; 2]>,
+    ) -> [f64; 4] {
+        match (nx, ny, interpolation) {
+            (1, 1, Interpolation::Bicubic) => self.bicubic(s),
+            (1, 1, _) => self.bilinear(s),
+            _ => {
+                let mut sum = [0.; 4];
+                for j in 0..ny {
+                    for i in 0..nx {
+                        let o = [(i as f64 + 0.5) / nx as f64 - 0.5, (j as f64 + 0.5) / ny as f64 - 0.5];
+                        let value = tap(o).map_or([0.; 4], |p| self.bilinear(p));
+                        for k in 0..4 {
+                            sum[k] += value[k] / (nx * ny) as f64;
+                        }
+                    }
+                }
+                sum
+            }
+        }
+    }
     /// Every value a destination pixel may take: its source footprint sets
     /// the tap grid, and a footprint on a grid boundary allows either count.
     fn moved(&self, h: [f64; 9], interpolation: Interpolation, x: u32, y: u32) -> Vec<[f64; 4]> {
@@ -172,11 +194,7 @@ impl Oracle {
             return vec![[0.; 4]];
         };
         if interpolation == Interpolation::Nearest {
-            let [xs, ys] = source.map(|v| [(v - 1e-3).floor() as i32, (v + 1e-3).floor() as i32]);
-            return xs
-                .into_iter()
-                .flat_map(|x| ys.map(|y| self.selected(x, y)))
-                .collect();
+            return self.nearest(source, 1e-3);
         }
         let step = 1e-4;
         let counts = [[step, 0.], [0., step]].map(|[dx, dy]| {
@@ -194,53 +212,18 @@ impl Oracle {
             }
             counts
         });
-        let mut values = Vec::new();
-        for &nx in &counts[0] {
-            for &ny in &counts[1] {
-                values.push(match (nx, ny, interpolation) {
-                    (1, 1, Interpolation::Bicubic) => self.bicubic(source),
-                    (1, 1, _) => self.bilinear(source),
-                    _ => {
-                        let mut sum = [0.; 4];
-                        for j in 0..ny {
-                            for i in 0..nx {
-                                let tap = [
-                                    center[0] + (i as f64 + 0.5) / nx as f64 - 0.5,
-                                    center[1] + (j as f64 + 0.5) / ny as f64 - 0.5,
-                                ];
-                                let tap = preimage(h, tap).map_or([0.; 4], |p| self.bilinear(p));
-                                for k in 0..4 {
-                                    sum[k] += tap[k] / (nx * ny) as f64;
-                                }
-                            }
-                        }
-                        sum
-                    }
-                });
-            }
-        }
-        values
+        let tap = |o: [f64; 2]| preimage(h, [center[0] + o[0], center[1] + o[1]]);
+        counts[0]
+            .iter()
+            .flat_map(|&nx| counts[1].iter().map(move |&ny| [nx, ny]))
+            .map(|count| self.filtered(interpolation, source, count, tap))
+            .collect()
     }
     fn composed(&self, x: u32, y: u32, moved: [f64; 4]) -> [f64; 4] {
         let base = self.color(x as i32, y as i32);
         let m = self.coverage(x as i32, y as i32);
         std::array::from_fn(|k| moved[k] + base[k] * (1. - m) * (1. - moved[3]))
     }
-}
-
-/// Solve H(u, v) = p directly. None where the point has no preimage with w > 0.
-fn preimage(h: [f64; 9], [x, y]: [f64; 2]) -> Option<[f64; 2]> {
-    let [a, b, c, d] = [
-        h[0] - x * h[6],
-        h[1] - x * h[7],
-        h[3] - y * h[6],
-        h[4] - y * h[7],
-    ];
-    let [e, f] = [x * h[8] - h[2], y * h[8] - h[5]];
-    let det = a * d - b * c;
-    let [u, v] = [(e * d - b * f) / det, (a * f - e * c) / det];
-    (det != 0. && h[6] * u + h[7] * v + h[8] > 0. && u.abs() < 1e9 && v.abs() < 1e9)
-        .then_some([u, v])
 }
 
 fn frame(r: &mut WgpuRasterizer, layer: &Layer, reset: bool) {
@@ -278,7 +261,7 @@ fn pages(r: &WgpuRasterizer) -> Vec<([u32; 2], [f32; 4])> {
 fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut layer = Layer::paint(LayerId(1), "oracle");
-    layer.source = Some(source_image());
+    layer.source = Some(source_image(straight));
     frame(&mut r, &layer, true);
     let pivot = Point { x: 150., y: 110. };
     let source = Rect {
@@ -364,30 +347,12 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
 
 #[test]
 fn minified_native_transforms_average_the_pixel_footprint() {
-    let mut builder = SourceBuilder::new(
-        EXTENT,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::F32,
-            profile: ColorProfile::Builtin(RgbSpace::Srgb),
-            profile_assumed: false,
-        },
-        64 * 1024 * 1024,
-    )
-    .unwrap();
-    for y in 0..EXTENT[1] {
-        let row: Vec<u8> = (0..EXTENT[0])
-            .flat_map(|x| {
-                let on = f32::from((x + y) % 2 == 0);
-                [on, on, on, 1.]
-            })
-            .flat_map(f32::to_le_bytes)
-            .collect();
-        builder.push_row(&row).unwrap();
-    }
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut layer = Layer::paint(LayerId(1), "checkerboard");
-    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    layer.source = Some(source_image(|x, y| {
+        let on = f32::from((x + y) % 2 == 0);
+        [on, on, on, 1.]
+    }));
     frame(&mut r, &layer, true);
     for (transaction, interpolation) in [Interpolation::Linear, Interpolation::Bicubic]
         .into_iter()
@@ -439,19 +404,7 @@ fn minified_native_transforms_average_the_pixel_footprint() {
 #[test]
 fn bicubic_mask_transforms_keep_scalar_coverage_within_the_unit_interval() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut layer = Layer::paint(LayerId(1), "masked");
-    let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
-    mask.default_coverage = 0.;
-    mask.initial = Some(
-        Selection::polygon(vec![
-            Point { x: 20., y: 20. },
-            Point { x: 60., y: 20. },
-            Point { x: 60., y: 60. },
-            Point { x: 20., y: 60. },
-        ])
-        .unwrap(),
-    );
-    layer.mask = Some(mask);
+    let layer = masked([[20., 20.], [60., 20.], [60., 60.], [20., 60.]]);
     frame(&mut r, &layer, true);
     r.set_transform_preview(Some(&layer_render::TransformPreview {
         transaction: 1,
@@ -465,16 +418,7 @@ fn bicubic_mask_transforms_keep_scalar_coverage_within_the_unit_interval() {
     }))
     .unwrap();
     frame(&mut r, &layer, false);
-    let mut values = Vec::new();
-    for (&(owner, _), page) in &r.layer_masks.pages {
-        if owner == LayerId(9) {
-            values.extend(
-                page_bytes(&r, &page.texture)
-                    .chunks_exact(4)
-                    .map(|v| f32::from_le_bytes(v.try_into().unwrap())),
-            );
-        }
-    }
+    let values: Vec<f32> = mask_values(&r).into_values().flatten().collect();
     assert!(!values.is_empty(), "the preview draws mask pages");
     assert!(
         values.iter().all(|v| (0. ..=1.).contains(v)),
@@ -555,11 +499,7 @@ impl Oracle {
             return vec![[0.; 4]];
         };
         if interpolation == Interpolation::Nearest {
-            let [xs, ys] = s.map(|v| [(v - 5e-3).floor() as i32, (v + 5e-3).floor() as i32]);
-            return xs
-                .into_iter()
-                .flat_map(|x| ys.map(|y| self.selected(x, y)))
-                .collect();
+            return self.nearest(s, 5e-3);
         }
         let step = |dx: i64, dy: i64| -> [f64; 2] {
             let [after, before] = [
@@ -584,8 +524,8 @@ impl Oracle {
                 counts.push(n);
             }
         }
-        for [nx, ny] in counts {
-            if [nx, ny] == [1, 1] && interpolation == Interpolation::Bicubic {
+        for n in counts {
+            if n == [1, 1] && interpolation == Interpolation::Bicubic {
                 // Its clamp follows the nearest four texels, which change
                 // across a texel boundary.
                 for [ox, oy] in [[0., 0.], [-5e-3, 0.], [5e-3, 0.], [0., -5e-3], [0., 5e-3]] {
@@ -593,29 +533,9 @@ impl Oracle {
                 }
                 continue;
             }
-            values.push(match (nx, ny, interpolation) {
-                (1, 1, Interpolation::Bicubic) => self.bicubic(s),
-                (1, 1, _) => self.bilinear(s),
-                _ => {
-                    let mut sum = [0.; 4];
-                    for j in 0..ny {
-                        for i in 0..nx {
-                            let o = [
-                                (i as f64 + 0.5) / nx as f64 - 0.5,
-                                (j as f64 + 0.5) / ny as f64 - 0.5,
-                            ];
-                            let tap = self.bilinear([
-                                s[0] + dx[0] * o[0] + dy[0] * o[1],
-                                s[1] + dx[1] * o[0] + dy[1] * o[1],
-                            ]);
-                            for k in 0..4 {
-                                sum[k] += tap[k] / (nx * ny) as f64;
-                            }
-                        }
-                    }
-                    sum
-                }
-            });
+            values.push(self.filtered(interpolation, s, n, |o| {
+                Some([s[0] + dx[0] * o[0] + dy[0] * o[1], s[1] + dx[1] * o[0] + dy[1] * o[1]])
+            }));
         }
         values
     }
@@ -627,7 +547,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
     use layer_core::MeshMap;
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut layer = Layer::paint(LayerId(1), "mesh oracle");
-    layer.source = Some(source_image());
+    layer.source = Some(source_image(straight));
     frame(&mut r, &layer, true);
     let source = Rect {
         min: Point { x: 40., y: 30. },
@@ -732,20 +652,6 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
 #[test]
 fn mask_warps_seeded_from_an_affine_match_the_affine() {
     use layer_core::MeshMap;
-    let mask_pages = |r: &WgpuRasterizer| -> std::collections::BTreeMap<[u32; 2], Vec<f32>> {
-        r.layer_masks
-            .pages
-            .iter()
-            .filter(|((owner, _), _)| *owner == LayerId(9))
-            .map(|((_, c), page)| {
-                let values = page_bytes(r, &page.texture)
-                    .chunks_exact(4)
-                    .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
-                    .collect();
-                (*c, values)
-            })
-            .collect()
-    };
     let affine = Affine::around(Point { x: 128., y: 96. }, [1.3, 0.8], 0.4, Point { x: 6.5, y: -3.25 });
     let bounds = Rect {
         min: Point::default(),
@@ -760,16 +666,7 @@ fn mask_warps_seeded_from_an_affine_match_the_affine() {
             .iter()
             .map(|map| {
                 let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-                let mut layer = Layer::paint(LayerId(1), "masked");
-                let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
-                mask.default_coverage = 0.;
-                mask.initial = Some(
-                    Selection::polygon(
-                        [[20., 20.], [150., 30.], [120., 160.], [30., 110.]].map(|[x, y]| Point { x, y }).to_vec(),
-                    )
-                    .unwrap(),
-                );
-                layer.mask = Some(mask);
+                let layer = masked([[20., 20.], [150., 30.], [120., 160.], [30., 110.]]);
                 frame(&mut r, &layer, true);
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
                     transaction: 1,
@@ -783,7 +680,7 @@ fn mask_warps_seeded_from_an_affine_match_the_affine() {
                 }))
                 .unwrap();
                 frame(&mut r, &layer, false);
-                mask_pages(&r)
+                mask_values(&r)
             })
             .collect();
         assert!(!drawn[0].is_empty(), "{interpolation:?}: the affine draws mask pages");

@@ -284,7 +284,7 @@ fn connected_and_global_regions_select_painted_disks() {
     disks.dab_count = 2;
     submit(&mut r, std::slice::from_ref(&layer), &[left, right], &[disks], true);
     for contiguous in [true, false] {
-        assert!(r.request_region(RegionRequest {
+        let result = crate::test_support::receive_request(&mut r, RegionRequest {
             contiguous,
             selection: None,
             request_id: 1,
@@ -293,16 +293,7 @@ fn connected_and_global_regions_select_painted_disks() {
             tolerance: 0.,
             refinement: Default::default(),
             limit: None,
-        }).unwrap());
-        r.wait_idle().unwrap();
-        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-        let result = loop {
-            if let Some(result) = r.take_region() {
-                break result.unwrap();
-            }
-            assert!(std::time::Instant::now() < deadline, "region timed out");
-            std::thread::yield_now();
-        };
+        });
         let [x0, y0, x1, y1] = result.pixels.bounds();
         assert!(x0 <= 20 && y0 <= 52 && y1 >= 76, "{contiguous}: {:?}", result.pixels.bounds());
         assert_eq!(x1 < 64, contiguous, "{:?}", result.pixels.bounds());

@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::receive_request;
 use layer_core::{
     Affine, SelectionMode,
     color::{
@@ -49,20 +50,6 @@ fn receive(
             }),
         },
     )
-}
-fn receive_request(r: &mut WgpuRasterizer, request: RegionRequest) -> RegionResult {
-    assert!(r.request_region(request).unwrap());
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    loop {
-        if let Some(result) = r.take_region() {
-            return result.unwrap();
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "tonal readback timed out"
-        );
-        std::thread::yield_now();
-    }
 }
 fn byte(p: &layer_core::SelectionPixels, x: u32, y: u32) -> u8 {
     (p.words()[(y * p.extent()[0].div_ceil(4) + x / 4) as usize] >> ((x % 4) * 8)) as u8

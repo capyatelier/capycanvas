@@ -35,8 +35,9 @@ fn receive_with_resize(
     antialias: bool,
     resize: i32,
 ) -> Arc<SelectionPixels> {
-    assert!(
-        r.request_region(RegionRequest {
+    let reply = crate::test_support::receive_request(
+        r,
+        RegionRequest {
             request_id: 42,
             source: RegionSource::Selection(Arc::new(incoming)),
             contiguous: false,
@@ -52,19 +53,10 @@ fn receive_with_resize(
             tolerance: 0.,
             refinement: Default::default(),
             limit: None,
-        })
-        .unwrap()
+        },
     );
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    loop {
-        if let Some(reply) = r.take_region() {
-            let reply = reply.unwrap();
-            assert_eq!(reply.request_id, 42);
-            return reply.pixels;
-        }
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::yield_now();
-    }
+    assert_eq!(reply.request_id, 42);
+    reply.pixels
 }
 
 #[test]

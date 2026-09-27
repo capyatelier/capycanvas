@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::{preimage, receive_request};
 use layer_core::{Affine, ImageTransform, Interpolation, TransformMap};
 
 fn operation(id: u64, affine: Affine, selection: Option<Selection>) -> LayerOperation {
@@ -21,6 +22,48 @@ fn op_batch(index: u32, operation: &LayerOperation) -> DabBatch {
         damage: operation.bounds([128; 2]),
         ..batch(1)
     }
+}
+fn frame(r: &mut WgpuRasterizer, layers: &[Layer], extent: [u32; 2], dabs: &[Dab], batches: &[DabBatch], reset: bool) {
+    r.submit(FramePacket {
+        dabs,
+        dab_batches: batches,
+        reset_layers: reset,
+        composite_all: false,
+        ..packet(layers, extent)
+    })
+    .unwrap();
+}
+/// Words of `extent` pixels' coverage `value`, `count` pixels per word.
+pub(super) fn packed(extent: [u32; 2], count: u32, value: impl Fn(u32, u32) -> u32) -> Vec<u32> {
+    let mut words = Vec::new();
+    for y in 0..extent[1] {
+        for w in 0..extent[0].div_ceil(count) {
+            let x = |i| w * count + i;
+            words.push((0..count).filter(|i| x(*i) < extent[0]).fold(0, |word, i| word | value(x(i), y) << (i * 32 / count)));
+        }
+    }
+    words
+}
+/// A layer whose mask, LayerId(9), reveals only the polygon `corners`.
+pub(super) fn masked(corners: [[f32; 2]; 4]) -> Layer {
+    let mut layer = Layer::paint(LayerId(1), "masked");
+    let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
+    mask.default_coverage = 0.;
+    mask.initial = Some(Selection::polygon(corners.map(|[x, y]| Point { x, y }).to_vec()).unwrap());
+    layer.mask = Some(mask);
+    layer
+}
+/// The coverage of each page of the mask LayerId(9).
+pub(super) fn mask_values(r: &WgpuRasterizer) -> std::collections::BTreeMap<[u32; 2], Vec<f32>> {
+    r.layer_masks
+        .pages
+        .iter()
+        .filter(|((owner, _), _)| *owner == LayerId(9))
+        .map(|((_, c), page)| {
+            let values = page_bytes(r, &page.texture).chunks_exact(4).map(|v| f32::from_le_bytes(v.try_into().unwrap())).collect();
+            (*c, values)
+        })
+        .collect()
 }
 
 #[test]
@@ -142,27 +185,12 @@ fn bicubic_transforms_clamp_overshoot_at_every_sample_depth() {
 #[test]
 fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_place() {
     let extent = [512, 384];
-    let view = ViewState {
-        width_px: extent[0],
-        height_px: extent[1],
-        ..view()
-    };
-    let frame = |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch]| {
-        r.submit(FramePacket {
-            view,
-            dabs,
-            dab_batches: batches,
-            composite_all: false,
-            ..packet(layers, extent)
-        })
-        .unwrap();
-    };
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let layer = Layer::paint(LayerId(1), "moving preview");
     let mut d = dab([0.9, 0.2, 0.1, 1.]);
     d.center = Point { x: 150., y: 140. };
     d.radii = [70.; 2];
-    frame(&mut r, std::slice::from_ref(&layer), &[d], &[batch(1)]);
+    frame(&mut r, std::slice::from_ref(&layer), extent, &[d], &[batch(1)], false);
     let affine = Affine::around(d.center, [2.3, 1.7], 0.4, Point { x: 60., y: 30. });
     let preview = |interpolation, moving, transaction| layer_render::TransformPreview {
         transaction,
@@ -181,7 +209,7 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
         (Interpolation::Bicubic, false),
     ] {
         r.set_transform_preview(Some(&preview(interpolation, moving, 1))).unwrap();
-        frame(&mut r, std::slice::from_ref(&layer), &[], &[]);
+        frame(&mut r, std::slice::from_ref(&layer), extent, &[], &[], false);
         shown.push(r.readback_srgb_rgba8().unwrap());
     }
     assert_eq!(shown[0], shown[1], "a moving bicubic preview draws bilinearly");
@@ -189,7 +217,7 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
     for moving in [true, false] {
         let preview = preview(Interpolation::Bicubic, moving, if moving { 2 } else { 3 });
         r.set_transform_preview(Some(&preview)).unwrap();
-        frame(&mut r, std::slice::from_ref(&layer), &[], &[]);
+        frame(&mut r, std::slice::from_ref(&layer), extent, &[], &[], false);
         let captures = r.transforms.as_ref().unwrap().source_captures();
         let mut op = operation(30, Affine::IDENTITY, None);
         op.kind = LayerOperationKind::Transform(preview.transform.clone());
@@ -200,7 +228,7 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
         let mut committed = layer.clone();
         committed.pending_operations.push(op);
         r.set_transform_preview(None).unwrap();
-        frame(&mut r, std::slice::from_ref(&committed), &[], &[apply]);
+        frame(&mut r, std::slice::from_ref(&committed), extent, &[], &[apply], false);
         assert_eq!(
             r.readback_srgb_rgba8().unwrap(),
             shown[2],
@@ -212,7 +240,6 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
             "only a still preview is kept as the commit"
         );
         r.submit(FramePacket {
-            view,
             dabs: &[d],
             dab_batches: &[batch(1)],
             reset_layers: true,
@@ -222,41 +249,20 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
     }
 }
 
-#[test]
-fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
+/// Previews of each map of a selection's `source` over paint and wetness
+/// match replaying it as an operation, cancelling restores the layer, and
+/// applying the last keeps its preview.
+fn live_previews_match_replay(maps: fn(Rect) -> Vec<TransformMap>) {
     use layer_core::DefaultBrushPreset::*;
-    use layer_core::Projective;
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [640, 384];
-    let view = ViewState {
-        width_px: extent[0],
-        height_px: extent[1],
-        ..view()
-    };
-    let frame =
-        |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch], reset| {
-            r.submit(FramePacket {
-                view,
-                dabs,
-                dab_batches: batches,
-                reset_layers: reset,
-                composite_all: false,
-                ..packet(layers, extent)
-            })
-            .unwrap();
-        };
     let source = Rect {
         min: Point { x: 60., y: 60. },
         max: Point { x: 300., y: 300. },
     };
-    let quads = [
-        [[90., 40.], [420., 90.], [460., 330.], [40., 250.]],
-        [[260., 70.], [300., 70.], [600., 370.], [10., 370.]],
-        [[300., 300.], [60., 300.], [60., 60.], [300., 60.]],
-    ];
     for preset in [GPen, WatercolorWash] {
-        let mut layer = Layer::paint(LayerId(1), "live perspective");
+        let mut layer = Layer::paint(LayerId(1), "live transform");
         layer.properties.offset = Point { x: 5., y: 7. };
         let mut b = batch(1);
         b.style = preset_style(preset);
@@ -269,7 +275,7 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
         d.radii = [100.; 2];
         d.material = [0.5, 0.8, 1., 0.8];
         let layers = std::slice::from_ref(&layer);
-        frame(&mut r, layers, &[d], &[b.clone()], true);
+        frame(&mut r, layers, extent, &[d], &[b.clone()], true);
         let original = r.readback_srgb_rgba8().unwrap();
         let selection = Selection::polygon(vec![
             Point { x: 60., y: 60. },
@@ -285,14 +291,14 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
             selection: Some(selection.clone()),
             transform: ImageTransform::default(),
         };
-        for quad in quads {
-            let map = Projective::rect_to_quad(source, quad.map(|[x, y]| Point { x, y })).unwrap();
+        for (n, map) in maps(source).into_iter().enumerate() {
             preview.transform = ImageTransform {
-                map: TransformMap::Projective(map),
+                map,
                 interpolation: Interpolation::Linear,
             };
             r.set_transform_preview(Some(&preview)).unwrap();
-            frame(&mut r, layers, &[], &[], false);
+            frame(&mut r, layers, extent, &[], &[], false);
+            assert_ne!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?} map {n} moves pixels");
             let mut expected = layer.clone();
             let mut op = operation(20, Affine::IDENTITY, Some(selection.clone()));
             op.kind = LayerOperationKind::Transform(preview.transform.clone());
@@ -301,19 +307,19 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
                 damage: op.bounds(extent),
                 ..op_batch(0, &op)
             };
-            frame(&mut reference, &[expected], &[d], &[b.clone(), operation], true);
+            frame(&mut reference, &[expected], extent, &[d], &[b.clone(), operation], true);
             assert_eq!(
                 r.readback_srgb_rgba8().unwrap(),
                 reference.readback_srgb_rgba8().unwrap(),
-                "{preset:?} {quad:?}"
+                "{preset:?} map {n}"
             );
         }
         r.set_transform_preview(None).unwrap();
-        frame(&mut r, layers, &[], &[], false);
+        frame(&mut r, layers, extent, &[], &[], false);
         assert_eq!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?} cancel");
         preview.transaction += 1;
         r.set_transform_preview(Some(&preview)).unwrap();
-        frame(&mut r, layers, &[], &[], false);
+        frame(&mut r, layers, extent, &[], &[], false);
         let before_commit = r.readback_srgb_rgba8().unwrap();
         let captures = r.transforms.as_ref().unwrap().source_captures();
         let mut op = operation(21, Affine::IDENTITY, preview.selection.clone());
@@ -324,7 +330,7 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
         };
         layer.pending_operations.push(op);
         r.set_transform_preview(None).unwrap();
-        frame(&mut r, &[layer], &[], &[operation], false);
+        frame(&mut r, &[layer], extent, &[], &[operation], false);
         assert_eq!(
             r.readback_srgb_rgba8().unwrap(),
             before_commit,
@@ -339,14 +345,24 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
 }
 
 #[test]
+fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
+    live_previews_match_replay(|source| {
+        [
+            [[90., 40.], [420., 90.], [460., 330.], [40., 250.]],
+            [[260., 70.], [300., 70.], [600., 370.], [10., 370.]],
+            [[300., 300.], [60., 300.], [60., 60.], [300., 60.]],
+        ]
+        .map(|quad| {
+            TransformMap::Projective(layer_core::Projective::rect_to_quad(source, quad.map(|[x, y]| Point { x, y })).unwrap())
+        })
+        .to_vec()
+    });
+}
+
+#[test]
 fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [768, 512];
-    let view = ViewState {
-        width_px: extent[0],
-        height_px: extent[1],
-        ..view()
-    };
     let mut layer = Layer::paint(LayerId(1), "selected transform");
     layer.properties.offset = Point { x: 5., y: 7. };
     let mut d = dab([1., 0., 0., 1.]);
@@ -357,18 +373,9 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
         min: Point { x: 80., y: 80. },
         max: Point { x: 176., y: 176. },
     };
-    let submit =
-        |r: &mut WgpuRasterizer, layer: &Layer, dabs: &[Dab], batches: &[DabBatch], reset| {
-            r.submit(FramePacket {
-                view,
-                dabs,
-                dab_batches: batches,
-                reset_layers: reset,
-                composite_all: false,
-                ..packet(std::slice::from_ref(layer), extent)
-            })
-            .unwrap();
-        };
+    let submit = |r: &mut WgpuRasterizer, layer: &Layer, dabs: &[Dab], batches: &[DabBatch], reset| {
+        frame(r, std::slice::from_ref(layer), extent, dabs, batches, reset)
+    };
     submit(&mut r, &layer, &[d], &[b.clone()], true);
     let before = r.readback_srgb_rgba8().unwrap();
     let selection = Selection::polygon(vec![
@@ -438,24 +445,8 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
             255 - (x * 3 + y) % 200
         }
     };
-    let bytes: Vec<u32> = (0..extent[1])
-        .flat_map(|y| {
-            (0..extent[0].div_ceil(4)).map(move |w| {
-                (0..4).fold(0, |word, i| {
-                    let x = w * 4 + i;
-                    word | if x < extent[0] { soft(x, y) << (i * 8) } else { 0 }
-                })
-            })
-        })
-        .collect();
-    let nibbles: Vec<u32> = (0..extent[1])
-        .flat_map(|y| {
-            (0..extent[0].div_ceil(8)).map(move |w| {
-                (0..8).fold(0, |word, i| word | (soft(w * 8 + i, y) * 4 / 255) << (i * 4))
-            })
-        })
-        .collect();
-    let byte_pixels = SelectionPixels::bytes(extent, [20, 30, 90, 100], bytes).unwrap();
+    let byte_pixels = SelectionPixels::bytes(extent, [20, 30, 90, 100], packed(extent, 4, soft)).unwrap();
+    let nibbles = packed(extent, 8, |x, y| soft(x, y) * 4 / 255);
     let nibble_pixels = SelectionPixels::new(extent, [20, 30, 90, 100], nibbles).unwrap();
     let placement = Affine::around(Point::default(), [1.1, 0.9], 0.2, Point { x: 3., y: -4. });
     let map = Projective::rect_to_quad(
@@ -471,16 +462,6 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
         let m = map.0.map(f64::from);
         let p = [a, c, x, b, d, y, 0., 0., 1.];
         std::array::from_fn(|i| (0..3).map(|k| m[i / 3 * 3 + k] * p[k * 3 + i % 3]).sum())
-    };
-    let receive = |r: &mut WgpuRasterizer| {
-        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-        loop {
-            if let Some(result) = r.take_region() {
-                break result.unwrap();
-            }
-            assert!(std::time::Instant::now() < deadline, "region callback timed out");
-            std::thread::yield_now();
-        }
     };
     for (n, pixels) in [byte_pixels, nibble_pixels].into_iter().enumerate() {
         let scale = if pixels.coverage_format() == 2 { 255. } else { 4. };
@@ -514,31 +495,20 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
                 refinement: Default::default(),
                 limit: None,
             };
-            assert!(r.request_region(request).unwrap());
-            r.wait_idle().unwrap();
-            let result = receive(&mut r);
+            let result = receive_request(&mut r, request);
             assert_eq!(result.request_id, id);
             assert_eq!(result.pixels.extent(), extent);
             assert_eq!(result.pixels.coverage_format(), 2);
             let mut bounds = [u32::MAX, u32::MAX, 0, 0];
             for y in 0..extent[1] {
                 for x in 0..extent[0] {
-                    let [px, py] = [x as f64 + 0.5, y as f64 + 0.5];
-                    let h = forward;
-                    let [a, b, c, d] = [
-                        h[0] - px * h[6],
-                        h[1] - px * h[7],
-                        h[3] - py * h[6],
-                        h[4] - py * h[7],
-                    ];
-                    let [e, f] = [px * h[8] - h[2], py * h[8] - h[5]];
-                    let det = a * d - b * c;
-                    let [u, v] = [(e * d - b * f) / det - 0.5, (a * f - e * c) / det - 0.5];
-                    let [ix, iy] = [u.floor() as i32, v.floor() as i32];
-                    let [tx, ty] = [u - u.floor(), v - v.floor()];
-                    let value = (coverage(ix, iy) * (1. - tx) + coverage(ix + 1, iy) * tx)
-                        * (1. - ty)
-                        + (coverage(ix, iy + 1) * (1. - tx) + coverage(ix + 1, iy + 1) * tx) * ty;
+                    let value = preimage(forward, [x as f64 + 0.5, y as f64 + 0.5]).map_or(0., |[u, v]| {
+                        let [u, v] = [u - 0.5, v - 0.5];
+                        let [ix, iy] = [u.floor() as i32, v.floor() as i32];
+                        let [tx, ty] = [u - u.floor(), v - v.floor()];
+                        (coverage(ix, iy) * (1. - tx) + coverage(ix + 1, iy) * tx) * (1. - ty)
+                            + (coverage(ix, iy + 1) * (1. - tx) + coverage(ix + 1, iy + 1) * tx) * ty
+                    });
                     let expected = (value * 255.).round() as u32;
                     let word = result.pixels.words()[(y * extent[0].div_ceil(4) + x / 4) as usize];
                     let actual = (word >> ((x % 4) * 8)) & 255;
@@ -580,10 +550,7 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
         refinement: Default::default(),
         limit: None,
     };
-    assert!(
-        r.request_region(contours).is_err(),
-        "contours map exactly on the CPU"
-    );
+    assert!(r.request_region(contours).is_err(), "contours map exactly on the CPU");
 }
 
 /// Warps seeded from perspectives, with a node and a tangent moved, and a net
@@ -609,151 +576,18 @@ fn warps(source: Rect) -> Vec<layer_core::MeshMap> {
 
 #[test]
 fn live_warps_match_replay_cancel_exactly_and_commit_without_jump() {
-    use layer_core::DefaultBrushPreset::*;
-    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let extent = [640, 384];
-    let view = ViewState {
-        width_px: extent[0],
-        height_px: extent[1],
-        ..view()
-    };
-    let frame =
-        |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch], reset| {
-            r.submit(FramePacket {
-                view,
-                dabs,
-                dab_batches: batches,
-                reset_layers: reset,
-                composite_all: false,
-                ..packet(layers, extent)
-            })
-            .unwrap();
-        };
-    let source = Rect {
-        min: Point { x: 60., y: 60. },
-        max: Point { x: 300., y: 300. },
-    };
-    for preset in [GPen, WatercolorWash] {
-        let mut layer = Layer::paint(LayerId(1), "live warp");
-        layer.properties.offset = Point { x: 5., y: 7. };
-        let mut b = batch(1);
-        b.style = preset_style(preset);
-        b.damage = Rect {
-            min: Point { x: 70., y: 70. },
-            max: Point { x: 280., y: 280. },
-        };
-        let mut d = dab([0.8, 0.1, 0.6, 0.7]);
-        d.center = Point { x: 175., y: 175. };
-        d.radii = [100.; 2];
-        d.material = [0.5, 0.8, 1., 0.8];
-        let layers = std::slice::from_ref(&layer);
-        frame(&mut r, layers, &[d], &[b.clone()], true);
-        let original = r.readback_srgb_rgba8().unwrap();
-        let selection = Selection::polygon(vec![
-            Point { x: 60., y: 60. },
-            Point { x: 300., y: 60. },
-            Point { x: 300., y: 300. },
-            Point { x: 60., y: 300. },
-        ])
-        .unwrap();
-        let mut preview = layer_render::TransformPreview {
-            transaction: 1,
-            moving: false,
-            layer: layer.id,
-            selection: Some(selection.clone()),
-            transform: ImageTransform::default(),
-        };
-        for (n, mesh) in warps(source).into_iter().enumerate() {
-            preview.transform = ImageTransform {
-                map: TransformMap::Mesh(std::sync::Arc::new(mesh)),
-                interpolation: Interpolation::Linear,
-            };
-            r.set_transform_preview(Some(&preview)).unwrap();
-            frame(&mut r, layers, &[], &[], false);
-            assert_ne!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?} warp {n} moves pixels");
-            let mut expected = layer.clone();
-            let mut op = operation(20, Affine::IDENTITY, Some(selection.clone()));
-            op.kind = LayerOperationKind::Transform(preview.transform.clone());
-            expected.pending_operations.push(op.clone());
-            let operation = DabBatch {
-                damage: op.bounds(extent),
-                ..op_batch(0, &op)
-            };
-            frame(&mut reference, &[expected], &[d], &[b.clone(), operation], true);
-            assert_eq!(
-                r.readback_srgb_rgba8().unwrap(),
-                reference.readback_srgb_rgba8().unwrap(),
-                "{preset:?} warp {n}"
-            );
-        }
-        r.set_transform_preview(None).unwrap();
-        frame(&mut r, layers, &[], &[], false);
-        assert_eq!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?} cancel");
-        preview.transaction += 1;
-        r.set_transform_preview(Some(&preview)).unwrap();
-        frame(&mut r, layers, &[], &[], false);
-        let before_commit = r.readback_srgb_rgba8().unwrap();
-        let captures = r.transforms.as_ref().unwrap().source_captures();
-        let mut op = operation(21, Affine::IDENTITY, preview.selection.clone());
-        op.kind = LayerOperationKind::Transform(preview.transform.clone());
-        let operation = DabBatch {
-            damage: op.bounds(extent),
-            ..op_batch(0, &op)
-        };
-        layer.pending_operations.push(op);
-        r.set_transform_preview(None).unwrap();
-        frame(&mut r, &[layer], &[], &[operation], false);
-        assert_eq!(
-            r.readback_srgb_rgba8().unwrap(),
-            before_commit,
-            "{preset:?} apply must not jump"
-        );
-        assert_eq!(
-            r.transforms.as_ref().unwrap().source_captures(),
-            captures,
-            "apply reuses the matching preview result"
-        );
-    }
+    live_previews_match_replay(|source| {
+        warps(source).into_iter().map(|mesh| TransformMap::Mesh(std::sync::Arc::new(mesh))).collect()
+    });
 }
 
 #[test]
 fn mask_warps_commit_and_replay_as_previewed() {
     let extent = [384, 256];
-    let view = ViewState {
-        width_px: extent[0],
-        height_px: extent[1],
-        ..view()
-    };
     let frame = |r: &mut WgpuRasterizer, layer: &Layer, batches: &[DabBatch], reset| {
-        r.submit(FramePacket {
-            view,
-            dab_batches: batches,
-            reset_layers: reset,
-            composite_all: false,
-            ..packet(std::slice::from_ref(layer), extent)
-        })
-        .unwrap();
+        frame(r, std::slice::from_ref(layer), extent, &[], batches, reset)
     };
-    let mask_pages = |r: &WgpuRasterizer| -> Vec<([u32; 2], Vec<u8>)> {
-        let mut pages: Vec<_> = r
-            .layer_masks
-            .pages
-            .iter()
-            .filter(|((owner, _), _)| *owner == LayerId(9))
-            .map(|((_, c), page)| (*c, page_bytes(r, &page.texture)))
-            .collect();
-        pages.sort_by_key(|(c, _)| *c);
-        pages
-    };
-    let mut layer = Layer::paint(LayerId(1), "masked warp");
-    let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
-    mask.default_coverage = 0.;
-    mask.initial = Some(
-        Selection::polygon([[20., 20.], [260., 30.], [230., 200.], [30., 180.]].map(|[x, y]| Point { x, y }).to_vec())
-            .unwrap(),
-    );
-    layer.mask = Some(mask);
+    let layer = masked([[20., 20.], [260., 30.], [230., 200.], [30., 180.]]);
     let source = Rect {
         min: Point { x: 10., y: 10. },
         max: Point { x: 280., y: 220. },
@@ -761,7 +595,7 @@ fn mask_warps_commit_and_replay_as_previewed() {
     for (n, mesh) in warps(source).into_iter().enumerate() {
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         frame(&mut r, &layer, &[], true);
-        let original = mask_pages(&r);
+        let original = mask_values(&r);
         let transform = ImageTransform {
             map: TransformMap::Mesh(std::sync::Arc::new(mesh)),
             interpolation: Interpolation::Bicubic,
@@ -775,7 +609,7 @@ fn mask_warps_commit_and_replay_as_previewed() {
         }))
         .unwrap();
         frame(&mut r, &layer, &[], false);
-        let previewed = mask_pages(&r);
+        let previewed = mask_values(&r);
         assert_ne!(previewed, original, "warp {n} moves the mask");
         let mut op = operation(30, Affine::IDENTITY, None);
         op.kind = LayerOperationKind::Transform(transform);
@@ -788,10 +622,10 @@ fn mask_warps_commit_and_replay_as_previewed() {
         };
         r.set_transform_preview(None).unwrap();
         frame(&mut r, &committed, std::slice::from_ref(&operation), false);
-        assert_eq!(mask_pages(&r), previewed, "warp {n}: apply keeps the preview");
+        assert_eq!(mask_values(&r), previewed, "warp {n}: apply keeps the preview");
         let mut replay = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         frame(&mut replay, &committed, &[operation], true);
-        assert_eq!(mask_pages(&replay), previewed, "warp {n}: replay matches the preview");
+        assert_eq!(mask_values(&replay), previewed, "warp {n}: replay matches the preview");
     }
 }
 
@@ -810,13 +644,7 @@ fn pixel_selections_resample_through_warps_like_their_affine() {
             255 - (x * 3 + y * 5) % 200
         }
     };
-    let words: Vec<u32> = (0..extent[1])
-        .flat_map(|y| {
-            (0..extent[0].div_ceil(4))
-                .map(move |w| (0..4).fold(0, |word, i| word | soft(w * 4 + i, y) << (i * 8)))
-        })
-        .collect();
-    let pixels = std::sync::Arc::new(SelectionPixels::bytes(extent, [100, 80, 900, 560], words).unwrap());
+    let pixels = std::sync::Arc::new(SelectionPixels::bytes(extent, [100, 80, 900, 560], packed(extent, 4, soft)).unwrap());
     let selection = std::sync::Arc::new(
         Selection::pixels(pixels)
             .transformed(Affine::translation(Point { x: 4., y: -3. }))
@@ -842,18 +670,9 @@ fn pixel_selections_resample_through_warps_like_their_affine() {
             refinement: Default::default(),
             limit: None,
         };
-        assert!(r.request_region(request).unwrap());
-        r.wait_idle().unwrap();
-        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-        loop {
-            if let Some(result) = r.take_region() {
-                let result = result.unwrap();
-                assert_eq!(result.request_id, id);
-                break result.pixels;
-            }
-            assert!(std::time::Instant::now() < deadline, "region callback timed out");
-            std::thread::yield_now();
-        }
+        let result = receive_request(r, request);
+        assert_eq!(result.request_id, id);
+        result.pixels
     };
     let expected = resample(&mut r, 90, TransformMap::Affine(affine));
     let warped = resample(

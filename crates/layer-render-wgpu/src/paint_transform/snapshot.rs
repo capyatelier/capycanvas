@@ -468,6 +468,7 @@ fn invert(m: [f64; 9]) -> Option<[f64; 9]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::preimage;
     use layer_core::{ImageTransform, Point, Projective, Rect, TransformMap};
 
     const EXTENT: [u32; 2] = [6000, 4000];
@@ -486,20 +487,6 @@ mod tests {
             ..Default::default()
         };
         (transform, map.0.map(f64::from))
-    }
-
-    /// Solve H(u, v) = (x, y) directly; None without a preimage where w > 0.
-    fn preimage(h: [f64; 9], x: f64, y: f64) -> Option<[f64; 2]> {
-        let [a, b, c, d] = [
-            h[0] - x * h[6],
-            h[1] - x * h[7],
-            h[3] - y * h[6],
-            h[4] - y * h[7],
-        ];
-        let [e, f] = [x * h[8] - h[2], y * h[8] - h[5]];
-        let det = a * d - b * c;
-        let [u, v] = [(e * d - b * f) / det, (a * f - e * c) / det];
-        (h[6] * u + h[7] * v + h[8] > 0.).then_some([u, v])
     }
 
     /// Split 2x2 page blocks as the renderer does. Every job binds at most
@@ -533,7 +520,7 @@ mod tests {
                 for y in (y0..=y1).step_by(7).chain([y1]) {
                     for [dx, dy] in positions {
                         let world = [x as f64 + dx, y as f64 + dy];
-                        let Some([u, v]) = preimage(h, world[0], world[1]) else {
+                        let Some([u, v]) = preimage(h, world) else {
                             continue;
                         };
                         for [tx, ty] in [[-1., -1.], [1., 1.], [-1., 1.], [1., -1.]] {
@@ -604,7 +591,7 @@ mod tests {
                 [r.max_x(), r.max_y()],
             ]
             .iter()
-            .all(|[x, y]| preimage(h, *x as f64, *y as f64).is_none());
+            .all(|[x, y]| preimage(h, [*x as f64, *y as f64]).is_none());
             if unmapped {
                 let mut own: Vec<_> = page_coordinates(r).collect();
                 own.sort_unstable();
