@@ -114,11 +114,6 @@ Restore Starting Layout. Windows keeps the proportional columns. Check with
   GTK/Web status components show only in fullscreen; the builder retains editable
   Clock/Battery placeholders when their values are hidden. Workspace-specific
   tools and panels remain distinct.
-- Startup refreshes included names to Sketch, Paint and Photo, retaining normal
-  collision suffixes and preserving saved contents, working tools and history.
-  A name swap is atomic, so the two included names do not collide with each
-  other. If either participant is open elsewhere, both names wait for release.
-  Custom names and workspaces owned by another live window are not modified.
 - Seed exactly three default workspaces with stable IDs:
   `builtin:workspace:painter`, `builtin:workspace:illustrator`, and
   `builtin:workspace:photographer`. Fresh installations open Illustrator.
@@ -140,16 +135,9 @@ Restore Starting Layout. Windows keeps the proportional columns. Check with
   prepended and selected until the user switches away.
 - If another window owns a default workspace, focus that window through the normal
   ownership path. Do not take it over or reset its contents just to switch modes.
-- If an included workspace cannot decode or validate, restore only that workspace
-  from its current platform default. This covers startup, header switching and
-  manager previews, including incompatible development fields such as
-  `colors.shape`. Its layout history and working settings are reset; its stable ID,
-  pins, ordering, document and all other workspaces remain unchanged. Healthy
-  customized defaults and user-created workspaces are never reset this way.
-  Repair checks the live owner and advances generations/fencing in the same
-  transaction as the replacement. A preview releases its temporary claim.
-  Disk errors, newer database schemas and damaged ownership/counter records are
-  errors, not reasons to reset. Low-level storage reads remain non-mutating.
+- A workspace that cannot decode or validate is listed as unavailable and is
+  never replaced. Switching to it reports the error; startup falls back to the
+  next available workspace.
 - New Workspace copies the current settings and arrangement, asks only for a
   name, and pins the new workspace. Manage Workspaces retains selection preview, explicit Switch to Workspace,
   and Cancel. Layout History remains a history of arrangements within a workspace.
@@ -226,11 +214,8 @@ Reusable items with this flag are read-only. Included workspaces still allow
 layout, working-state, and lifecycle metadata updates. SQLite and the browser
 store both enforce the distinction, including direct metadata writes.
 
-Included-workspace repair and initial seeding share one definition. SQLite replaces
-the failed row with self-contained content, without editing shared resources.
-The browser stores the same entity JSON shape but decodes entities individually,
-so an incompatible item cannot prevent opening the catalog. Neither backend adds
-support for obsolete workspace fields.
+The browser stores the same entity JSON shape as SQLite but decodes entities
+individually, so an incompatible item cannot prevent opening the catalog.
 
 The shared manager exposes `workspace_ids` (complete dialog order), `switcher_ids`
 (visible subset), `refresh_switcher`, and `edit_switcher(SwitcherEdit::{Show, Move})`.

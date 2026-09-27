@@ -1,26 +1,20 @@
 use super::*;
-use layer_ui::{DockLayout, WorkspaceCapture};
+use crate::test_support::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn wait(reply: StoreReply) -> Result<StoreResponse> {
     pollster::block_on(reply.into_future())
 }
-struct FakeClock(AtomicU64);
-impl Clock for FakeClock {
-    fn now_ms(&self) -> u64 {
-        self.0.load(Ordering::Relaxed)
-    }
-}
 struct Fixture {
     directory: std::path::PathBuf,
     store: SqliteStore,
-    clock: Arc<FakeClock>,
+    clock: Arc<TestClock>,
     owner: Owner,
 }
 impl Fixture {
     fn new() -> Self {
-        let directory = std::env::temp_dir().join(format!("capy-workspace-test-{}", new_id()));
-        let clock = Arc::new(FakeClock(AtomicU64::new(1_000_000)));
+        let directory = temp_dir("workspace-test");
+        let clock = Arc::new(TestClock(AtomicU64::new(1_000_000)));
         let store =
             SqliteStore::with_clock(&directory.join("workspaces.sqlite3"), clock.clone()).unwrap();
         Self {
@@ -34,17 +28,7 @@ impl Fixture {
         let entity = workspace(name);
         let id = entity.id.clone();
         self.store
-            .commit(
-                CommitBatch::prepare(
-                    self.owner.clone(),
-                    vec![Mutation::Create {
-                        entity,
-                        claim: true,
-                        name_policy: NamePolicy::Exact,
-                    }],
-                )
-                .unwrap(),
-            )
+            .commit(CommitBatch::prepare(self.owner.clone(), vec![create(entity)]).unwrap())
             .unwrap();
         self.store.load(&id).unwrap()
     }
@@ -61,15 +45,6 @@ impl Drop for Fixture {
         let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
-fn workspace(name: &str) -> Entity {
-    let layout = DockLayout::default();
-    Entity::workspace(
-        name,
-        WorkspaceCapture::from_template(&layout).unwrap(),
-        layout,
-        1_000_000,
-    )
-}
 
 #[test]
 fn storage_enforces_included_workspace_name_and_delete_protection() {
@@ -78,15 +53,7 @@ fn storage_enforces_included_workspace_name_and_delete_protection() {
     let mut entity = workspace("Painter");
     entity.metadata.builtin = true;
     let id = entity.id.clone();
-    let create = CommitBatch::prepare(
-        f.owner.clone(),
-        vec![Mutation::Create {
-            entity,
-            claim: true,
-            name_policy: NamePolicy::Exact,
-        }],
-    )
-    .unwrap();
+    let create = CommitBatch::prepare(f.owner.clone(), vec![create(entity)]).unwrap();
     browser.prepare_delivery(&create).unwrap();
     browser
         .execute(
@@ -100,19 +67,11 @@ fn storage_enforces_included_workspace_name_and_delete_protection() {
     let stored = f.store.load(&id).unwrap();
     for deleting in [false, true] {
         let mut metadata = stored.entity.metadata.clone();
-        if deleting {
-            metadata.deleted_at_ms = Some(2_000_000);
+        metadata.name = "Renamed".into();
+        let mutation = if deleting {
+            delete(&stored)
         } else {
-            metadata.name = "Renamed".into();
-        }
-        let mutation = Mutation::Update {
-            id: id.clone(),
-            generations: stored.generations,
-            fence: stored.claim.as_ref().unwrap().fence,
-            metadata: Some(metadata),
-            content: None,
-            working: None,
-            name_policy: NamePolicy::Exact,
+            change(&stored, Some(metadata), None, None)
         };
         let batch = CommitBatch::prepare(f.owner.clone(), vec![mutation]).unwrap();
         browser.prepare_delivery(&batch).unwrap();
@@ -215,7 +174,7 @@ fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
 
 #[test]
 fn failed_database_export_keeps_the_existing_destination() {
-    let directory = std::env::temp_dir().join(format!("capy-workspace-invalid-{}", new_id()));
+    let directory = temp_dir("workspace-invalid");
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(
         directory.join("workspaces.sqlite3"),
@@ -294,14 +253,7 @@ fn sqlite_full_preserves_protected_records_and_retries_the_same_delivery() {
     let mut f = Fixture::new();
     let saved = f.create("Protected Workspace");
     let mut metadata = saved.entity.metadata.clone();
-    for index in 0..32 {
-        metadata.previous.push(MetadataVersion {
-            id: new_id(),
-            name: format!("Earlier Name {index}"),
-            description: "x".repeat(16_384),
-            timestamp_ms: 1_000_000,
-        });
-    }
+    metadata.description = "x".repeat(16_384);
     let batch = CommitBatch::prepare(
         f.owner.clone(),
         vec![change(&saved, Some(metadata.clone()), None, None)],
@@ -394,33 +346,17 @@ fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
         )
         .unwrap();
     let snapshot = f.store.load(&current.entity.id).unwrap();
-    let other = Owner::fresh();
-    let StoreResponse::Storage(deferred) = f
-        .store
+    f.store
         .handle(StoreRequest::Maintenance {
-            owner: Some(other),
+            owner: Some(Owner::fresh()),
             clear_older: true,
-            apply: true,
         })
-        .unwrap()
-    else {
-        panic!()
-    };
-    assert_eq!(deferred.versions_to_remove, 0);
-    let request = StoreRequest::Maintenance {
-        owner: Some(f.owner.clone()),
-        clear_older: true,
-        apply: false,
-    };
-    let StoreResponse::Storage(preview) = f.store.handle(request).unwrap() else {
-        panic!()
-    };
-    assert_eq!(preview.versions_to_remove, 2);
+        .unwrap();
+    assert_eq!(f.store.load(&current.entity.id).unwrap(), snapshot);
     f.store
         .handle(StoreRequest::Maintenance {
             owner: Some(f.owner.clone()),
             clear_older: true,
-            apply: true,
         })
         .unwrap();
     let cleaned = f.store.load(&current.entity.id).unwrap();
@@ -438,28 +374,15 @@ fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
     );
     assert!(!history.revisions.contains_key(&abandoned));
     assert_eq!(cleaned.entity.working, current.entity.working);
-    assert!(cleaned.entity.metadata.previous.is_empty());
     assert!(cleaned.generations.layout > snapshot.generations.layout);
     let copy = f.create("Shares original");
-    let mut metadata = cleaned.entity.metadata.clone();
-    metadata.deleted_at_ms = Some(1_000_000);
     f.store
-        .commit(
-            CommitBatch::prepare(
-                f.owner.clone(),
-                vec![change(&cleaned, Some(metadata), None, None)],
-            )
-            .unwrap(),
-        )
+        .commit(CommitBatch::prepare(f.owner.clone(), vec![delete(&cleaned)]).unwrap())
         .unwrap();
-    f.clock
-        .0
-        .store(1_000_000 + TRASH_LIFETIME_MS + 1, Ordering::Relaxed);
     f.store
         .handle(StoreRequest::Maintenance {
             owner: None,
             clear_older: false,
-            apply: true,
         })
         .unwrap();
     assert!(f.store.load(&cleaned.entity.id).is_err());
@@ -490,6 +413,13 @@ fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
             )
             .is_err()
     );
+}
+fn delete(stored: &StoredEntity) -> Mutation {
+    Mutation::Delete {
+        id: stored.entity.id.clone(),
+        generations: stored.generations,
+        fence: stored.claim.as_ref().unwrap().fence,
+    }
 }
 fn change(
     stored: &StoredEntity,
@@ -523,7 +453,10 @@ fn atomic_create_load_and_shared_immutable_components() {
         .connection
         .query_row("SELECT count(*) FROM components", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(components, DockLayout::default().panels.len() as i64 + 1);
+    assert_eq!(
+        components,
+        layer_ui::DockLayout::default().panels.len() as i64 + 1
+    );
     let mut reopened = f.connection();
     assert_eq!(reopened.load(&first.entity.id).unwrap(), first);
     assert_eq!(reopened.list().unwrap().len(), 2);
@@ -589,15 +522,7 @@ fn successful_sql_requests_do_not_publish_an_aborted_transaction() {
     let mut f = Fixture::new();
     let entity = workspace("Painting");
     let id = entity.id.clone();
-    let batch = CommitBatch::prepare(
-        f.owner.clone(),
-        vec![Mutation::Create {
-            entity,
-            claim: true,
-            name_policy: NamePolicy::Exact,
-        }],
-    )
-    .unwrap();
+    let batch = CommitBatch::prepare(f.owner.clone(), vec![create(entity)]).unwrap();
     f.store.connection.execute_batch("CREATE TEMP TRIGGER fail_receipt BEFORE INSERT ON receipts BEGIN SELECT RAISE(ABORT, 'simulated storage failure'); END;").unwrap();
     assert!(f.store.commit(batch.clone()).is_err());
     assert!(f.store.load(&id).is_err());
@@ -621,15 +546,7 @@ fn successful_sql_requests_do_not_publish_an_aborted_transaction() {
 fn lost_acknowledgements_and_repeated_delivery_keep_one_original_receipt() {
     let mut f = Fixture::new();
     let entity = workspace("Painting");
-    let batch = CommitBatch::prepare(
-        f.owner.clone(),
-        vec![Mutation::Create {
-            entity,
-            claim: true,
-            name_policy: NamePolicy::Exact,
-        }],
-    )
-    .unwrap();
+    let batch = CommitBatch::prepare(f.owner.clone(), vec![create(entity)]).unwrap();
     let original = f.store.commit(batch.clone()).unwrap();
     let mut reopened = f.connection();
     assert_eq!(reopened.commit(batch.clone()).unwrap(), original);
@@ -706,17 +623,11 @@ fn native_lock_protects_suspended_writers_and_fences_released_owners() {
     assert_eq!(other.load(&id).unwrap().entity.working, old.entity.working);
 }
 #[test]
-fn deletion_replacement_and_restore_are_atomic_and_delayed_writes_cannot_resurrect() {
+fn deletion_replacement_is_atomic_and_delayed_writes_cannot_resurrect() {
     let mut f = Fixture::new();
     let old = f.create("Painting");
     let replacement = f.create("Inking");
-    let mut metadata = old.entity.metadata.clone();
-    metadata.deleted_at_ms = Some(f.clock.now_ms());
-    let mut batch = CommitBatch::prepare(
-        f.owner.clone(),
-        vec![change(&old, Some(metadata), None, None)],
-    )
-    .unwrap();
+    let mut batch = CommitBatch::prepare(f.owner.clone(), vec![delete(&old)]).unwrap();
     batch
         .bindings
         .push(("last_workspace".into(), Some(replacement.entity.id.clone())));
@@ -735,27 +646,16 @@ fn deletion_replacement_and_restore_are_atomic_and_delayed_writes_cannot_resurre
             )
             .is_err()
     );
-    let _same_name = f.create("Painting");
-    let deleted = f.store.claim(&old.entity.id, f.owner.clone()).unwrap();
-    let mut metadata = deleted.entity.metadata.clone();
-    metadata.deleted_at_ms = None;
-    let mutation = Mutation::Update {
-        id: old.entity.id.clone(),
-        generations: deleted.generations,
-        fence: deleted.claim.unwrap().fence,
-        metadata: Some(metadata),
-        content: None,
-        working: None,
-        name_policy: NamePolicy::Unique,
-    };
-    f.store
-        .commit(CommitBatch::prepare(f.owner.clone(), vec![mutation]).unwrap())
-        .unwrap();
-    let restored = f.store.load(&old.entity.id).unwrap();
-    assert_eq!(restored.entity.metadata.name, "Painting (2)");
     assert_eq!(
-        restored.entity.capture().unwrap(),
-        old.entity.capture().unwrap()
+        f.store.load(&old.entity.id).unwrap_err().kind,
+        ErrorKind::NotFound
+    );
+    let mut recreated = workspace("Painting");
+    recreated.id = old.entity.id.clone();
+    let recreate = CommitBatch::prepare(f.owner.clone(), vec![create(recreated)]).unwrap();
+    assert_eq!(
+        f.store.commit(recreate).unwrap_err().kind,
+        ErrorKind::Conflict
     );
 }
 #[test]
@@ -882,7 +782,7 @@ fn older_schema_is_rejected_and_preserved() {
 
 #[test]
 fn the_last_native_client_drains_accepted_requests_and_joins_sqlite() {
-    let directory = std::env::temp_dir().join(format!("capy-workspace-joined-{}", new_id()));
+    let directory = temp_dir("workspace-joined");
     let first = StoreWorker::shared(&directory).unwrap();
     let last = first.clone();
     wait(first.request(StoreRequest::List)).unwrap();
@@ -918,20 +818,12 @@ fn the_last_native_client_drains_accepted_requests_and_joins_sqlite() {
 
 #[test]
 fn native_worker_shares_storage_across_window_clients() {
-    let directory = std::env::temp_dir().join(format!("capy-workspace-worker-{}", new_id()));
+    let directory = temp_dir("workspace-worker");
     let first = StoreWorker::shared(&directory).unwrap();
     let second = StoreWorker::shared(&directory).unwrap();
     let entity = workspace("Painting");
     let id = entity.id.clone();
-    let batch = CommitBatch::prepare(
-        Owner::fresh(),
-        vec![Mutation::Create {
-            entity,
-            claim: true,
-            name_policy: NamePolicy::Exact,
-        }],
-    )
-    .unwrap();
+    let batch = CommitBatch::prepare(Owner::fresh(), vec![create(entity)]).unwrap();
     assert!(matches!(
         wait(first.request(StoreRequest::Commit { batch })).unwrap(),
         StoreResponse::Committed(_)
@@ -983,7 +875,7 @@ fn concurrent_claims_have_exactly_one_editable_owner() {
 #[test]
 fn killed_native_process_restores_without_waiting_for_its_lease() {
     const CHILD_DIRECTORY: &str = "CAPY_WORKSPACE_RESTART_TEST_DIRECTORY";
-    let clock = || Arc::new(FakeClock(AtomicU64::new(1_000_000)));
+    let clock = || Arc::new(TestClock(AtomicU64::new(1_000_000)));
     if let Some(directory) = std::env::var_os(CHILD_DIRECTORY) {
         let directory = std::path::PathBuf::from(directory);
         let mut store =
@@ -991,17 +883,7 @@ fn killed_native_process_restores_without_waiting_for_its_lease() {
         let entity = workspace("Saved before crash");
         let id = entity.id.clone();
         store
-            .commit(
-                CommitBatch::prepare(
-                    Owner::fresh(),
-                    vec![Mutation::Create {
-                        entity,
-                        claim: true,
-                        name_policy: NamePolicy::Exact,
-                    }],
-                )
-                .unwrap(),
-            )
+            .commit(CommitBatch::prepare(Owner::fresh(), vec![create(entity)]).unwrap())
             .unwrap();
         let saved = store.load(&id).unwrap();
         let mut working = saved.entity.working.clone().unwrap();
@@ -1037,7 +919,7 @@ fn killed_native_process_restores_without_waiting_for_its_lease() {
             let _ = self.0.wait();
         }
     }
-    let directory = std::env::temp_dir().join(format!("capy-workspace-killed-{}", new_id()));
+    let directory = temp_dir("workspace-killed");
     let mut child = Child(
         std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -1081,17 +963,7 @@ fn killed_native_process_restores_without_waiting_for_its_lease() {
     let survivor_id = survivor.id.clone();
     let survivor_owner = Owner::fresh();
     concurrent
-        .commit(
-            CommitBatch::prepare(
-                survivor_owner.clone(),
-                vec![Mutation::Create {
-                    entity: survivor,
-                    claim: true,
-                    name_policy: NamePolicy::Exact,
-                }],
-            )
-            .unwrap(),
-        )
+        .commit(CommitBatch::prepare(survivor_owner.clone(), vec![create(survivor)]).unwrap())
         .unwrap();
     child.0.kill().unwrap();
     child.0.wait().unwrap();
@@ -1161,15 +1033,7 @@ fn dropped_window_retires_all_its_claims_after_queued_writes_not_other_windows()
     let pending = workspace("Unadopted queued creation");
     let pending_id = pending.id.clone();
     let reply = worker.request(StoreRequest::Commit {
-        batch: CommitBatch::prepare(
-            manager.owner.clone(),
-            vec![Mutation::Create {
-                entity: pending,
-                claim: true,
-                name_policy: NamePolicy::Exact,
-            }],
-        )
-        .unwrap(),
+        batch: CommitBatch::prepare(manager.owner.clone(), vec![create(pending)]).unwrap(),
     });
     drop(manager);
     let StoreResponse::List(items) = wait(worker.request(StoreRequest::List)).unwrap() else {
@@ -1247,33 +1111,15 @@ fn failed_claim_and_creation_drop_unpublished_locks() {
     assert_eq!(claimed.claim.unwrap().owner, other_owner);
 
     let entity = workspace("Rolled back creation");
-    let create = CommitBatch::prepare(
-        f.owner.clone(),
-        vec![Mutation::Create {
-            entity: entity.clone(),
-            claim: true,
-            name_policy: NamePolicy::Exact,
-        }],
-    )
-    .unwrap();
+    let batch = CommitBatch::prepare(f.owner.clone(), vec![create(entity.clone())]).unwrap();
     f.store.connection.execute_batch("CREATE TRIGGER fail_receipt BEFORE INSERT ON receipts BEGIN SELECT RAISE(ABORT, 'receipt failed'); END;").unwrap();
-    assert!(f.store.commit(create).is_err());
+    assert!(f.store.commit(batch).is_err());
     f.store
         .connection
         .execute_batch("DROP TRIGGER fail_receipt")
         .unwrap();
     other
-        .commit(
-            CommitBatch::prepare(
-                other_owner,
-                vec![Mutation::Create {
-                    entity: entity.clone(),
-                    claim: true,
-                    name_policy: NamePolicy::Exact,
-                }],
-            )
-            .unwrap(),
-        )
+        .commit(CommitBatch::prepare(other_owner, vec![create(entity.clone())]).unwrap())
         .unwrap();
     assert_eq!(other.load(&entity.id).unwrap().entity, entity);
 }
@@ -1408,7 +1254,7 @@ fn large_generations_round_trip_without_javascript_precision_loss() {
 
 #[test]
 fn failed_worker_open_can_be_retried_after_storage_becomes_available() {
-    let root = std::env::temp_dir().join(format!("capy-workspace-unavailable-{}", new_id()));
+    let root = temp_dir("workspace-unavailable");
     std::fs::write(&root, b"not a directory").unwrap();
     let worker = StoreWorker::shared(&root).unwrap();
     assert_eq!(

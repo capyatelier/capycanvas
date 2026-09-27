@@ -4,9 +4,8 @@ use layer_ui::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 pub const HISTORY_BUDGET_BYTES: u64 = 100 * 1024 * 1024;
-pub const TRASH_LIFETIME_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 pub const OWNER_LEASE_MS: u64 = 30_000;
 pub const OWNER_RENEW_MS: u64 = 10_000;
 pub const MAX_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
@@ -26,14 +25,7 @@ pub const DEFAULT_WORKSPACES: [(&str, layer_ui::WorkspacePreset); 3] = [
     ),
 ];
 pub(crate) fn is_default_item(id: &str) -> bool {
-    default_workspace_name(id).is_some()
-}
-
-pub(crate) fn default_workspace_name(id: &str) -> Option<&'static str> {
-    DEFAULT_WORKSPACES
-        .iter()
-        .find(|(key, _)| *key == id)
-        .map(|(_, preset)| preset.name())
+    DEFAULT_WORKSPACES.iter().any(|(key, _)| *key == id)
 }
 
 pub fn new_id() -> String {
@@ -134,15 +126,6 @@ impl ItemKind {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct MetadataVersion {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    #[serde(with = "counter")]
-    pub timestamp_ms: u64,
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Metadata {
     pub kind: ItemKind,
     pub name: String,
@@ -155,8 +138,6 @@ pub struct Metadata {
     pub modified_at_ms: u64,
     #[serde(with = "counter")]
     pub last_used_ms: u64,
-    pub deleted_at_ms: Option<u64>,
-    pub previous: Vec<MetadataVersion>,
 }
 impl Metadata {
     pub fn new(kind: ItemKind, name: &str, now: u64) -> Self {
@@ -168,22 +149,14 @@ impl Metadata {
             created_at_ms: now,
             modified_at_ms: now,
             last_used_ms: now,
-            deleted_at_ms: None,
-            previous: Vec::new(),
         }
     }
     pub fn validate(&self) -> Result<(), StoreError> {
         validate_name(&self.name)?;
-        if self.description.len() > 16_384 || self.previous.len() > 100_000 {
+        if self.description.len() > 16_384 {
             return Err(StoreError::invalid(
                 "Item metadata exceeds supported limits.",
             ));
-        }
-        for v in &self.previous {
-            validate_name(&v.name)?;
-            if v.description.len() > 16_384 {
-                return Err(StoreError::invalid("Description is too long."));
-            }
         }
         Ok(())
     }
@@ -194,7 +167,7 @@ impl Metadata {
             ));
         }
         validate_name(name.trim())?;
-        if description.len() > 16_384 || self.previous.len() >= 100_000 {
+        if description.len() > 16_384 {
             return Err(StoreError::invalid(
                 "Item metadata exceeds supported limits.",
             ));
@@ -202,12 +175,6 @@ impl Metadata {
         if name.trim() == self.name && description == self.description {
             return Ok(());
         }
-        self.previous.push(MetadataVersion {
-            id: new_id(),
-            name: self.name.clone(),
-            description: self.description.clone(),
-            timestamp_ms: self.modified_at_ms,
-        });
         self.name = name.trim().into();
         self.description = description.into();
         self.modified_at_ms = now;
@@ -271,48 +238,20 @@ impl ToolbarDefinition {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ReusableContent {
-    Toolbar { definition: ToolbarDefinition },
-}
-impl ReusableContent {
-    pub fn kind(&self) -> ItemKind {
-        match self {
-            Self::Toolbar { .. } => ItemKind::Toolbar,
-        }
-    }
-    pub fn validate(&self) -> Result<(), StoreError> {
-        match self {
-            Self::Toolbar { definition } => definition.validate(),
-        }
-    }
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReusableVersion {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub content: ReusableContent,
-    #[serde(with = "counter")]
-    pub timestamp_ms: u64,
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ItemContent {
     Workspace {
         history: LayoutHistory,
         baseline: Box<DockLayout>,
     },
-    Reusable {
-        current: ReusableVersion,
-        previous: Vec<ReusableVersion>,
+    Toolbar {
+        definition: ToolbarDefinition,
     },
 }
 impl ItemContent {
     pub fn kind(&self) -> ItemKind {
         match self {
             Self::Workspace { .. } => ItemKind::Workspace,
-            Self::Reusable { current, .. } => current.content.kind(),
+            Self::Toolbar { .. } => ItemKind::Toolbar,
         }
     }
     pub fn validate(&self) -> Result<(), StoreError> {
@@ -321,19 +260,7 @@ impl ItemContent {
                 history.validate().map_err(StoreError::invalid)?;
                 validate_stored_layout(baseline)
             }
-            Self::Reusable { current, previous } => {
-                current.content.validate()?;
-                if previous.len() > 100_000 {
-                    return Err(StoreError::invalid("Too many previous versions."));
-                }
-                for v in previous {
-                    v.content.validate()?;
-                    if v.content.kind() != current.content.kind() {
-                        return Err(StoreError::invalid("Inconsistent library version."));
-                    }
-                }
-                Ok(())
-            }
+            Self::Toolbar { definition } => definition.validate(),
         }
     }
 }
@@ -400,23 +327,12 @@ impl Entity {
             working: Some(capture.working),
         }
     }
-    pub fn reusable(name: &str, description: &str, content: ReusableContent, now: u64) -> Self {
-        let mut metadata = Metadata::new(content.kind(), name, now);
-        metadata.description = description.into();
+    pub fn toolbar(definition: ToolbarDefinition, now: u64) -> Self {
         Self {
             id: new_id(),
-            metadata,
+            metadata: Metadata::new(ItemKind::Toolbar, &definition.name, now),
             working: None,
-            content: ItemContent::Reusable {
-                current: ReusableVersion {
-                    id: new_id(),
-                    name: name.trim().into(),
-                    description: description.into(),
-                    content,
-                    timestamp_ms: now,
-                },
-                previous: Vec::new(),
-            },
+            content: ItemContent::Toolbar { definition },
         }
     }
     /// Built-in workspaces restore the current shipped preset for this host.

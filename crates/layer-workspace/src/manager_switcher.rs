@@ -49,9 +49,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let mut items: Vec<_> = state
             .items
             .iter()
-            .filter(|i| {
-                i.metadata.kind == ItemKind::Workspace && i.metadata.deleted_at_ms.is_none()
-            })
+            .filter(|i| i.metadata.kind == ItemKind::Workspace)
             .collect();
         items.sort_by_key(|i| {
             (
@@ -124,11 +122,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             SwitcherEdit::Show { id, visible } => {
                 let expected = self.state.borrow().switcher.clone();
                 let mut ids = self.switcher_ids();
-                if !self.items().iter().any(|i| {
-                    i.id == id
-                        && i.metadata.kind == ItemKind::Workspace
-                        && i.metadata.deleted_at_ms.is_none()
-                }) {
+                if !self
+                    .items()
+                    .iter()
+                    .any(|i| i.id == id && i.metadata.kind == ItemKind::Workspace)
+                {
                     return Err(StoreError::invalid(
                         "This workspace is no longer available.",
                     ));

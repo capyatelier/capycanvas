@@ -32,7 +32,7 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
     const db = await open(), command = JSON.parse(request), [live, liveAt] = await liveOwners();
     return new Promise((resolve, reject) => {
       let tx, response, failure;
-      const readonly = !pending && (readOnly.has(command.type) || command.type === "maintenance" && !command.apply);
+      const readonly = !pending && readOnly.has(command.type);
       try {
         tx = db.transaction("workspace", readonly ? "readonly" : "readwrite", { durability: "strict" });
         const store = tx.objectStore("workspace"), read = store.get("database");

@@ -46,14 +46,8 @@ pub fn export_package(entity: &Entity) -> Result<Vec<u8>, StoreError> {
     entity.validate()?;
     let mut metadata = entity.metadata.clone();
     metadata.builtin = false;
-    metadata.deleted_at_ms = None;
-    let mut content = entity.content.clone();
-    if let ItemContent::Reusable { previous, .. } = &mut content {
-        previous.clear();
-        metadata.previous.clear();
-    }
     let mut components = BTreeMap::new();
-    let mut value = serde_json::to_value(content)?;
+    let mut value = serde_json::to_value(&entity.content)?;
     // History's counter is local navigation bookkeeping, not portable identity.
     if let Some(history) = value.get_mut("history") {
         history["generation"] = "0".into();
@@ -112,42 +106,28 @@ pub fn import_package(bytes: &[u8], expected: PackageKind, now: u64) -> Result<E
             "The package contains unreferenced resources.",
         ));
     }
-    match &mut content {
-        ItemContent::Workspace { history, .. } => {
-            let mapping: BTreeMap<_, _> = history
-                .revisions
-                .keys()
-                .map(|id| (id.clone(), new_id()))
-                .collect();
-            history.current = mapping[&history.current].clone();
-            for id in history.undo.iter_mut().chain(&mut history.redo) {
-                *id = mapping[id].clone();
-            }
-            history.revisions = std::mem::take(&mut history.revisions)
-                .into_iter()
-                .map(|(id, mut revision)| {
-                    revision.id = mapping[&id].clone();
-                    (revision.id.clone(), revision)
-                })
-                .collect();
-            history.generation = 0;
+    if let ItemContent::Workspace { history, .. } = &mut content {
+        let mapping: BTreeMap<_, _> = history
+            .revisions
+            .keys()
+            .map(|id| (id.clone(), new_id()))
+            .collect();
+        history.current = mapping[&history.current].clone();
+        for id in history.undo.iter_mut().chain(&mut history.redo) {
+            *id = mapping[id].clone();
         }
-        ItemContent::Reusable { current, previous } => {
-            if !previous.is_empty() {
-                return Err(StoreError::invalid(
-                    "Reusable exports must contain only the selected configuration.",
-                ));
-            }
-            current.id = new_id();
-        }
+        history.revisions = std::mem::take(&mut history.revisions)
+            .into_iter()
+            .map(|(id, mut revision)| {
+                revision.id = mapping[&id].clone();
+                (revision.id.clone(), revision)
+            })
+            .collect();
+        history.generation = 0;
     }
     let mut metadata = package.metadata;
     metadata.builtin = false;
-    metadata.deleted_at_ms = None;
     metadata.last_used_ms = now;
-    for version in &mut metadata.previous {
-        version.id = new_id();
-    }
     let entity = Entity {
         id: new_id(),
         metadata,

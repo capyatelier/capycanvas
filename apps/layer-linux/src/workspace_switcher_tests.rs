@@ -460,11 +460,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
             pump(20);
             let is_deleted = glib::MainContext::default()
                 .block_on(manager.load(&deleted))
-                .unwrap()
-                .entity
-                .metadata
-                .deleted_at_ms
-                .is_some();
+                .is_err();
             if (!confirm && !dialog.is_mapped())
                 || (confirm && is_deleted && manager.active_id().as_deref() == Some(replacement))
             {
@@ -482,11 +478,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
             assert!(
                 glib::MainContext::default()
                     .block_on(manager.load(&deleted))
-                    .unwrap()
-                    .entity
-                    .metadata
-                    .deleted_at_ms
-                    .is_none()
+                    .is_ok()
             );
             dialog_button(&w, "Cancel").unwrap().emit_clicked();
             pump(300);

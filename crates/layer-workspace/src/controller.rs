@@ -548,60 +548,59 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         }));
                     }
                     WorkspaceInput::Form { kind, id } => {
+                        let action = match kind.as_str() {
+                            "new" => ManagerAction::New,
+                            "rename" | "delete" => {
+                                let id = id
+                                    .clone()
+                                    .ok_or_else(|| StoreError::invalid("Choose an item."))?;
+                                if kind == "rename" {
+                                    ManagerAction::Rename(id)
+                                } else {
+                                    ManagerAction::Delete(id)
+                                }
+                            }
+                            "reset" => {
+                                ManagerAction::Reset(self.manager.active_id().ok_or_else(|| {
+                                    StoreError::invalid("Open a workspace first.")
+                                })?)
+                            }
+                            "reset_brushes" => ManagerAction::ResetBrushes,
+                            _ => ManagerAction::SaveAsNew,
+                        };
+                        let current = self.manager.current();
+                        let source = match &action {
+                            ManagerAction::Reset(_) => current.as_ref().map(|e| e.metadata.clone()),
+                            ManagerAction::Rename(id) | ManagerAction::Delete(id) => self
+                                .manager
+                                .items()
+                                .into_iter()
+                                .find(|i| &i.id == id)
+                                .map(|i| i.metadata),
+                            _ => None,
+                        };
+                        let prompt = self.manager.form_prompt(&action, source.as_ref())?;
                         self.start_transition(session)?;
                         change = self.stop_preview(session);
-                        let reset = if kind == "reset" {
-                            let entity = self
-                                .manager
-                                .current()
-                                .ok_or_else(|| StoreError::invalid("Open a workspace first."))?;
-                            let prompt = reset_prompt(&entity)?;
+                        if let (ManagerAction::Reset(_), Some(entity)) = (&action, &current) {
                             session
                                 .begin_workspace_layout_preview()
                                 .map_err(StoreError::invalid)?;
                             self.preview_open = true;
                             let preview = session
-                                .preview_workspace_layout(&entity.starting_layout(self.manager.platform)?)
+                                .preview_workspace_layout(
+                                    &entity.starting_layout(self.manager.platform)?,
+                                )
                                 .map_err(StoreError::invalid)?;
                             change.regions |= preview.regions;
                             change.revision = preview.revision;
-                            Some(prompt)
-                        } else {
-                            None
-                        };
-                        let name = if kind == "new" {
-                            "New Workspace".into()
-                        } else if kind == "recover" {
-                            format!("{} Recovered", self.view.name)
-                        } else {
-                            self.manager
-                                .items()
-                                .iter()
-                                .find(|i| Some(&i.id) == id.as_ref())
-                                .map(|i| i.metadata.name.clone())
-                                .unwrap_or_default()
-                        };
-                        let title: String = match kind.as_str() {
-                            "new" => "New Workspace",
-                            "rename" => "Rename",
-                            "delete" => "Delete",
-                            "reset" => reset.as_ref().unwrap().title.as_str(),
-                            "reset_brushes" => "Reset All Brushes?",
-                            _ => "Save as New Workspace",
                         }
-                        .into();
                         self.view.form = Some(WorkspaceForm {
-                            message: match kind.as_str() {
-                                "reset_brushes" => "Restore every brush’s settings in this workspace to their defaults.".into(),
-                                "new" => "Copy your current tool settings and layout into a new workspace.".into(),
-                                "delete" => format!("Delete “{name}”? This is permanent."),
-                                "reset" => reset.as_ref().unwrap().message.clone(),
-                                _ => String::new(),
-                            },
-                            confirm: match kind.as_str() { "reset" => reset.as_ref().unwrap().confirm.into(), "reset_brushes" => "Reset Brushes".into(), "new" => "Create and Switch".into(), _ => title.clone() },
+                            message: prompt.message,
+                            confirm: prompt.confirm,
                             kind,
-                            title,
-                            name,
+                            title: prompt.title,
+                            name: prompt.name.or(source.map(|m| m.name)).unwrap_or_default(),
                             id,
                         });
                     }

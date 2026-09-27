@@ -109,13 +109,10 @@ import SwiftUI
             precondition(storedReset["entity"]["working"]["tools"]["overrides"].object.isEmpty)
             let untouched = try await library.read(["type": "load", "id": inking])["entity"]["working"]
             precondition(untouched["tools"]["overrides"][String(untouched["preset"].uint)]["size"].number == 31)
-            // A live source window's most recent edit must be copied before
-            // its debounce timer writes. The source remains independently open.
             let other = EditorStore(platform: platform, persistence: storage, managedWorkspaces: true)
             try await wait("other window") { other.workspaceLibrary!.ready }
             _ = try await other.workspaceLibrary!.operation(["type": "switch", "id": defaults[0]["id"].raw])
             let otherID = other.workspaceLibrary!.status["active_id"].string
-            try await other.apply(["type": "set_brush_size", "value": 113])
             var focused = false
             other.focusWindow = { focused = true }
             try await manager.run(JSON(["type": "switch_to_window", "value": otherID]))
@@ -124,10 +121,6 @@ import SwiftUI
             try await manager.run(JSON(["type": "switch", "value": otherID]))
             precondition(focused && library.status["active_id"].string == original,
                 "The header switch action must focus a claimed default workspace without taking it over")
-            try await form(manager, ["type": "duplicate", "value": otherID], name: "Other Window Copy")
-            let copied = library.status["active_id"].string
-            precondition(editor.state["brush"]["diameter"].number == 113 && other.workspaceLibrary!.status["active_id"].string == otherID)
-            try await manager.run(JSON(["type": "switch", "value": original]))
             try await form(manager, ["type": "new_toolbar"], name: "Ink Tools")
             try await manager.show("this_workspace")
             let toolbar = manager.view["rows"].array.first { $0["title"].string == "Ink Tools" }!
@@ -159,7 +152,6 @@ import SwiftUI
                 precondition(action == "rename_toolbar" ? titles.contains("Renamed Ink")
                     : action == "duplicate_toolbar" ? titles.contains("Copied Ink") : !titles.contains("Renamed Ink"))
             }
-            try await form(manager, ["type": "delete", "value": copied])
             try await manager.run(JSON(["type": "switch", "value": sketching]))
             let deletion = try await library.read(["type": "prompt", "action": ["type": "delete", "value": sketching]])["prompt"]
             precondition(deletion["choices"].array.isEmpty && deletion["message"].string.contains("permanent"))

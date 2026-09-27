@@ -1,6 +1,6 @@
 //! Saved toolbar transport. Shared Core owns identities, installation and history.
 use super::*;
-use layer_workspace::{ItemContent, ReusableContent, ToolbarDefinition};
+use layer_workspace::{ItemContent, ToolbarDefinition};
 
 impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     pub(super) fn toolbar_page(&mut self, native: &mut NativeHost, page: Page) -> Result<()> {
@@ -128,13 +128,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                 };
                 let mut definition = if let Some(id) = source.filter(|id| !id.is_empty()) {
                     let stored = manager.load(&id).await?;
-                    if stored.entity.metadata.deleted_at_ms.is_some() {
-                        return Err(StoreError::invalid("This saved toolbar was deleted."));
-                    }
-                    let ItemContent::Reusable { current, .. } = stored.entity.content else {
+                    let ItemContent::Toolbar { mut definition } = stored.entity.content else {
                         return Err(StoreError::invalid("Choose a saved toolbar."));
                     };
-                    let ReusableContent::Toolbar { mut definition } = current.content;
                     definition.name = stored.entity.metadata.name;
                     definition
                 } else {

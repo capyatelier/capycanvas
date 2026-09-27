@@ -183,8 +183,8 @@ fn apple_workspace_library_handoff_round_trips_history_tools_and_scene_identity(
         );
         assert_eq!(retained["working"], first_capture["working"]);
         app.request(6, json!({"type":"begin"})).unwrap();
-        let duplicate = library.request(json!({"type":"operation","operation":{"type":"duplicate","id":original,"name":"Second Workspace"},"now":3000}));
-        let second = library.adopt(&app, &duplicate);
+        let created = library.request(json!({"type":"operation","operation":{"type":"new","name":"Second Workspace"},"now":3000}));
+        let second = library.adopt(&app, &created);
         assert_ne!(second, original);
         app.action(json!({"type":"set_brush_size","value":91.}));
         library.observe(&app, 4000);
@@ -213,12 +213,6 @@ fn apple_workspace_library_handoff_round_trips_history_tools_and_scene_identity(
         assert_eq!(app.state()["brush"]["diameter"], 53.);
         app.invoke("redo_workspace");
         library.observe(&app, 6000);
-        let toolbar = library.request(json!({"type":"operation","operation":{"type":"save_toolbar","panel":"toolbar","name":"Drawing Tools"},"now":7000}));
-        let exported = library.request(json!({"type":"export","id":toolbar["value"]["selected"]}));
-        let package: Value =
-            serde_json::from_str(exported["value"]["text"].as_str().unwrap()).unwrap();
-        assert!(package["working"].is_null());
-        assert!(package.get("owner").is_none());
         let other = Library::new(platform, &directory.0, "scene:other");
         let other_app = App::new(platform);
         other_app.request(6, json!({"type":"begin"})).unwrap();

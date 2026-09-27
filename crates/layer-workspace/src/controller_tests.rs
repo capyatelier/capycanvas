@@ -170,51 +170,6 @@ fn startup_with_an_occupied_window_binding_reuses_an_available_default() {
 }
 
 #[test]
-fn invalid_defaults_recover_through_controller_switch_and_preview() {
-    let mut f = Fixture::new();
-    let original = f.controller.view.id.clone().unwrap();
-    let capture = f.host.session.capture_workspace().unwrap();
-    let corrupt = |id: &str| {
-        let mut value: serde_json::Value =
-            serde_json::from_str(&f.backend.database.borrow().encoded().unwrap()).unwrap();
-        value["items"][id]["entity"]["working"]["colors"]["shape"] = serde_json::json!("wheel");
-        *f.backend.database.borrow_mut() = BrowserDatabase::decode(&value.to_string()).unwrap();
-    };
-    for (id, _) in DEFAULT_WORKSPACES {
-        corrupt(id);
-    }
-    let painter = DEFAULT_WORKSPACES[0].0;
-    f.input(serde_json::json!({"type":"switch","id":painter}));
-    assert_eq!(f.controller.view.id.as_deref(), Some(painter));
-    assert!(
-        f.controller.view.error.is_none(),
-        "{:?}",
-        f.controller.view.error
-    );
-    let mut expected = layer_ui::WorkspacePreset::Painter.working_state();
-    // Workspace colors adapt their picker precision to the active document.
-    expected.colors.set_document_depth(f.host.session.engine().document().color.depth).unwrap();
-    expected.colors.library.ensure_starters();
-    assert_eq!(f.host.session.capture_workspace().unwrap().working, expected);
-    f.input(serde_json::json!({"type":"open","page":"workspaces"}));
-    f.input(serde_json::json!({"type":"select","id":DEFAULT_WORKSPACES[2].0}));
-    assert!(f.controller.view.enabled);
-    assert!(
-        f.controller.view.error.is_none(),
-        "{:?}",
-        f.controller.view.error
-    );
-    assert_eq!(
-        f.controller.view.id.as_deref(),
-        Some(painter),
-        "Preview never activates its workspace"
-    );
-    f.input(serde_json::json!({"type":"cancel"}));
-    f.input(serde_json::json!({"type":"switch","id":original}));
-    assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
-}
-
-#[test]
 fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
     let defaults = [
         DEFAULT_WORKSPACES[1].0,
@@ -236,7 +191,6 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
             pollster::block_on(Store(f.backend.clone()).execute(StoreRequest::Claim {
                 id: (*id).into(),
                 owner: owner.clone(),
-                reset_invalid_default: None,
             }))
             .unwrap();
         }
@@ -248,11 +202,11 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
         assert!(f.controller.manager.switcher_ids().contains(&deleted));
         f.input(serde_json::json!({"type":"form","kind":"delete","id":deleted}));
         f.input(serde_json::json!({"type":"submit","name":""}));
-        let record = pollster::block_on(f.controller.manager.load(&deleted)).unwrap();
+        let record = pollster::block_on(f.controller.manager.load(&deleted));
         if occupied == defaults.len() {
             assert!(f.controller.view.error.is_some());
             assert_eq!(f.controller.view.id.as_ref(), Some(&deleted));
-            assert!(record.entity.metadata.deleted_at_ms.is_none());
+            assert!(record.is_ok());
             assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
         } else {
             let replacement = defaults[occupied];
@@ -262,7 +216,7 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
                 f.controller.view.error
             );
             assert_eq!(f.controller.view.id.as_deref(), Some(replacement));
-            assert!(record.entity.metadata.deleted_at_ms.is_some());
+            assert_eq!(record.unwrap_err().kind, ErrorKind::NotFound);
             assert!(
                 !f.controller
                     .manager
@@ -271,7 +225,7 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
             );
             assert_eq!(
                 f.controller.manager.items().len(),
-                count,
+                count - 1,
                 "Deletion must not create a new workspace"
             );
             let saved = pollster::block_on(f.controller.manager.load(replacement))
@@ -351,7 +305,15 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
                 "preview is never persisted"
             );
             let prompt = f.controller.view.form.as_ref().unwrap();
-            assert_eq!(prompt.message, reset_prompt(&saved).unwrap().message);
+            let expected = f
+                .controller
+                .manager
+                .form_prompt(
+                    &ManagerAction::Reset(saved.id.clone()),
+                    Some(&saved.metadata),
+                )
+                .unwrap();
+            assert_eq!(prompt.message, expected.message);
             assert!(prompt.message.contains("Window → Undo Workspace"));
             if builtin.is_some() {
                 assert!(prompt.message.contains("latest default"));

@@ -262,10 +262,8 @@ import SwiftUI
         guard value["type"] as? String == "operation" else { return false }
         let operation = JSON(value["operation"] ?? NSNull())
         switch operation["type"].string {
-        case "rename", "restore_metadata", "restore_deleted", "delete_permanently", "restore_version": return true
+        case "rename": return true
         case "delete": return operation["id"].string != status["active_id"].string
-        case "duplicate":
-            return try await request(["type": "load", "id": operation["id"].raw])["entity"]["metadata"]["kind"].string != "workspace"
         default: return false
         }
     }
@@ -321,23 +319,10 @@ import SwiftUI
         try await serialized { [self] in
             var message = value; message["now"] = now
             let kind = value["type"] as? String ?? ""
-            guard ["catalog", "view", "load", "interrupted", "export", "storage", "prompt", "history"].contains(kind),
-                !(value["apply"] as? Bool ?? false) else {
+            guard ["catalog", "view", "load", "prompt", "history"].contains(kind) else {
                 throw HostFailure(message: "This workspace operation requires an editor transition")
             }
             if captureEditor && ["view", "prompt", "history"].contains(kind), ready && !closed { message["idle"] = try await capture() }
-            if kind == "export" {
-                if ready {
-                    guard try await capture() else { throw HostFailure(message: "Finish the current interaction before exporting the workspace") }
-                } else {
-                    let snapshot = try await session(["type": "capture"])
-                    guard snapshot["idle"].bool && !snapshot["capture"].isNull else {
-                        throw HostFailure(message: "Finish the current interaction before exporting the workspace")
-                    }
-                    message["capture"] = snapshot["capture"].raw
-                }
-                if message["id"] as? String == status["active_id"].string { message["id"] = NSNull() }
-            }
             let result = try await request(message)
             try await configure(result["binding"])
             return result
@@ -348,28 +333,6 @@ import SwiftUI
             guard ready && !closed else { throw HostFailure(message: "Workspace storage is not ready") }
             guard try await capture() else { throw HostFailure(message: "Finish the current interaction before saving the workspace") }
             _ = try await request(["type": "flush"])
-        }
-    }
-    func backup(to url: URL) async throws {
-        try await serialized { [self] in _ = try await request(["type": "backup", "path": url.path]) }
-    }
-    func snapshotForCopy() async throws -> JSON {
-        try await serialized { [self] in
-            guard ready && !closed && !readOnly else { throw HostFailure(message: "The source window must recover workspace ownership first") }
-            busy = true
-            defer { busy = false }
-            let latest = try await session(["type": "begin"])
-            do {
-                _ = try await request(["type": "observe", "capture": latest["capture"].raw,
-                    "working": latest["capture"]["working"].raw, "now": now])
-                _ = try await request(["type": "flush"])
-                let source = try await request(["type": "load", "id": status["active_id"].raw])
-                _ = try await session(["type": "end"])
-                return source["entity"]
-            } catch {
-                _ = try? await session(["type": "end"])
-                throw error
-            }
         }
     }
     func close() async throws {

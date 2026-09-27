@@ -102,10 +102,10 @@ impl Ownership {
             return if held.owner == *owner {
                 Ok(None)
             } else {
-                Err(occupied())
+                Err(owned_elsewhere())
             };
         }
-        self.try_lock(id)?.map(Some).ok_or_else(occupied)
+        self.try_lock(id)?.map(Some).ok_or_else(owned_elsewhere)
     }
     pub(super) fn publish(&mut self, id: &str, owner: &Owner, fence: u64, file: Option<File>) {
         if let Some(file) = file {
@@ -138,12 +138,6 @@ pub(crate) fn lock_directory(database: &Path) -> PathBuf {
     let mut path = database.as_os_str().to_os_string();
     path.push("-locks");
     PathBuf::from(path)
-}
-fn occupied() -> StoreError {
-    StoreError::new(
-        ErrorKind::OwnedElsewhere,
-        "This workspace is open in another window. Switch to that window or duplicate it.",
-    )
 }
 fn unavailable(error: std::io::Error) -> StoreError {
     StoreError::new(

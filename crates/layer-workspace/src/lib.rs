@@ -13,6 +13,7 @@ mod protocol;
 pub use package::*;
 mod browser;
 mod retention;
+mod store_rules;
 pub use browser::BrowserDatabase;
 mod controller;
 pub use controller::*;
@@ -21,11 +22,10 @@ mod browser_tests;
 #[cfg(all(test, feature = "native"))]
 mod controller_tests;
 #[cfg(all(test, feature = "native"))]
-mod default_recovery_tests;
+mod test_support;
 pub use manager::*;
 pub use model::*;
 pub use protocol::*;
-pub use retention::*;
 #[cfg(feature = "native")]
 mod sqlite;
 #[cfg(feature = "native")]

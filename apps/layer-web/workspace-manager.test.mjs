@@ -144,7 +144,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     const deleteForm=async()=>{
       await click(`.workspace-row[data-id="${deleted}"] .workspace-options`);
       await click('.workspace-row-menu [data-action="delete"]');
-      assert.equal(await evaluate('document.querySelector(".workspace-form[open] > p").textContent'),'Delete “Web Inking Acceptance”? This is permanent.');
+      assert.equal(await evaluate('document.querySelector(".workspace-form[open] > p").textContent'),'Delete “Web Inking Acceptance”? This is permanent. This window will switch to an available default workspace.');
       assert.equal(await evaluate('document.querySelectorAll(".workspace-form[open] select").length'),0);
     };
     await deleteForm(); await click('.workspace-form footer button'); await idle();

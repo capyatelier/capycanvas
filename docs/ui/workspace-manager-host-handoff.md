@@ -70,8 +70,7 @@ save/retry path. It does not create layout or document history.
 
 Keep the existing simple toolbar management flow. Do not add Recently Deleted,
 backup/import/export, metadata or saved-layout version screens, duplication/update
-controls, network sync, or device-specific layout variants. Some underlying APIs
-remain for compatibility and retention; their existence does not expand the UI.
+controls, network sync, or device-specific layout variants.
 Failed saves still need the existing Retry / Save as New Workspace recovery, and
 failed close must preserve the option to keep the window open.
 

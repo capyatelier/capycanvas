@@ -62,7 +62,7 @@ import SQLite3
             try await manager.flush()
             do { try await first.apply(["type": "set_brush_size", "value": 91]) }
             catch { throw HostFailure(message: "A resumed workspace must remain editable: \(error.localizedDescription)") }
-            try await libraryActions(manager, editor: first, root: root)
+            try await libraryActions(manager, editor: first)
             try await ownershipAndStorage(manager, editor: first, root: root, scene: scene, platform: platform)
             let second = EditorStore(platform: platform, scene: otherScene, persistence: storage, managedWorkspaces: true)
             try await wait("second scene") { second.workspaceLibrary!.ready || second.workspaceLibrary!.error != nil }
@@ -161,43 +161,25 @@ import SQLite3
         _ = try await manager.operation(["type": "switch", "id": original])
         precondition(editor.state["brush"]["diameter"].number == 94)
         _ = try await manager.operation(["type": "delete", "id": recovered])
-        _ = try await manager.operation(["type": "delete_permanently", "id": recovered])
         try await editor.apply(["type": "set_brush_size", "value": 91])
         let flushed: Bool = await withCheckedContinuation { continuation in
             editor.flushPersistence { continuation.resume(returning: $0) }
         }
         precondition(flushed, "The editor lifecycle barrier must include workspace storage")
     }
-    @MainActor static func libraryActions(_ manager: WorkspaceLibrary, editor: EditorStore, root: URL) async throws {
+    @MainActor static func libraryActions(_ manager: WorkspaceLibrary, editor: EditorStore) async throws {
         let original = manager.status["active_id"].string
         let saved = try await manager.operation(["type": "save_toolbar", "panel": "toolbar", "name": "Studio"])
         let reusable = saved["selected"].string
         precondition(!reusable.isEmpty)
         let before = try await manager.read(["type": "load", "id": reusable])
         precondition(before["entity"]["working"].isNull)
-        let version = before["entity"]["content"]["current"]["id"].string
         _ = try await manager.operation(["type": "rename", "id": reusable, "name": "Studio Tools", "description": "Independent toolbar"])
         let renamed = try await manager.read(["type": "load", "id": reusable])
-        let metadata = renamed["entity"]["metadata"]["previous"][0]["id"].string
-        precondition(!metadata.isEmpty)
-        _ = try await manager.operation(["type": "restore_metadata", "id": reusable, "version": metadata])
+        precondition(renamed["entity"]["metadata"]["name"].string == "Studio Tools")
         _ = try await manager.operation(["type": "reset", "id": original])
         precondition(editor.state["brush"]["diameter"].number == 91, "Layout reset must preserve current working values")
         _ = try await manager.operation(["type": "update_toolbar", "id": reusable, "panel": "toolbar"])
-        _ = try await manager.operation(["type": "restore_version", "id": reusable, "version": version])
-        let exported = try await manager.read(["type": "export", "id": reusable])
-        let package = try JSON.decode(exported["text"].string)
-        precondition(package["working"].isNull && package["owner"].isNull && exported["extension"].string == "capytoolbar")
-        let imported = try await manager.perform(["type": "import", "kind": "toolbar", "text": exported["text"].string])
-        let importedID = imported["selected"].string
-        precondition(importedID != reusable)
-        let duplicate = try await manager.operation(["type": "duplicate", "id": reusable, "name": "Studio Copy"])
-        for id in [importedID, duplicate["selected"].string] {
-            _ = try await manager.operation(["type": "delete", "id": id])
-            _ = try await manager.operation(["type": "restore_deleted", "id": id])
-            _ = try await manager.operation(["type": "delete", "id": id])
-            _ = try await manager.operation(["type": "delete_permanently", "id": id])
-        }
         // Explicit toolbar names reject collisions; ordinary library copies
         // allocate independent local identities and an available name.
         let panel = try await manager.installToolbar(name: "Pencil Tools")
@@ -211,40 +193,14 @@ import SQLite3
         precondition(!SnapshotProjection.equal(panel.raw, copy.raw))
         _ = try await manager.operation(["type": "update_toolbar", "id": toolbarID, "panel": copy.raw])
         _ = try await manager.installToolbar(id: toolbarID, name: "Replaced Tools", replace: copy)
-        let toolbarExport = try await manager.read(["type": "export", "id": toolbarID])
-        _ = try await manager.perform(["type": "import", "kind": "toolbar", "text": toolbarExport["text"].string])
         let local = try await manager.read(["type": "view", "page": "this_workspace", "query": "", "selected": panel.stableKey, "idle": true])
         precondition(local["details"]["title"].string == "Pencil Tools")
-        // Opening retained history creates independent workspaces and
-        // never consumes the original workspace's navigation or current tools.
-        let source = try await manager.read(["type": "load", "id": original])
-        let revision = source["entity"]["content"]["history"]["current"].string
-        for operation: [String: Any] in [
-            ["type": "open_history", "id": original, "revision": revision, "name": "History Copy"],
-            ["type": "save_as_new", "name": "Recovered Copy"]
-        ] {
-            _ = try await manager.operation(operation)
-            let created = manager.status["active_id"].string
-            precondition(created != original)
-            _ = try await manager.operation(["type": "switch", "id": original])
-            precondition(editor.state["brush"]["diameter"].number == 91)
-            _ = try await manager.operation(["type": "delete", "id": created])
-            _ = try await manager.operation(["type": "delete_permanently", "id": created])
-        }
-        // Export reads the latest accepted working edit even before autosave.
-        try await editor.apply(["type": "set_brush_size", "value": 92])
-        let current = try await manager.read(["type": "export", "id": original])
-        let backup = try JSON.decode(current["text"].string)
-        let working = backup["working"]
-        precondition(working["tools"]["overrides"][String(working["preset"].uint)]["size"].number == 92)
-        try await editor.apply(["type": "set_brush_size", "value": 91])
-        _ = try await manager.read(["type": "storage", "clear_older": false, "apply": false])
-        _ = try await manager.perform(["type": "storage", "clear_older": false, "apply": true])
-        _ = try await manager.read(["type": "interrupted"])
-        let destination = root.appendingPathComponent("consistent-backup.sqlite3")
-        _ = try await manager.perform(["type": "backup", "path": destination.path])
-        let bytes = try Data(contentsOf: destination)
-        precondition(bytes.starts(with: Data("SQLite format 3\0".utf8)))
+        _ = try await manager.operation(["type": "save_as_new", "name": "Recovered Copy"])
+        let created = manager.status["active_id"].string
+        precondition(created != original)
+        _ = try await manager.operation(["type": "switch", "id": original])
+        precondition(editor.state["brush"]["diameter"].number == 91)
+        _ = try await manager.operation(["type": "delete", "id": created])
     }
 }
 

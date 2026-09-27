@@ -48,11 +48,7 @@ fn saved(f: &Fixture, name: &str) -> String {
         .manager
         .items()
         .iter()
-        .find(|i| {
-            i.metadata.kind == ItemKind::Toolbar
-                && i.metadata.name == name
-                && i.metadata.deleted_at_ms.is_none()
-        })
+        .find(|i| i.metadata.kind == ItemKind::Toolbar && i.metadata.name == name)
         .unwrap()
         .id
         .clone()
@@ -268,13 +264,7 @@ fn toolbar_library_save_restart_copy_rename_and_delete_preserve_independent_inst
     input(&mut f, Input::Cancel);
     restart(&mut f);
     assert_eq!(named_panel(&f, "Independent tools"), copy);
-    assert!(
-        f.service
-            .manager
-            .items()
-            .iter()
-            .all(|i| i.id != id || i.metadata.deleted_at_ms.is_some())
-    );
+    assert!(f.service.manager.items().iter().all(|i| i.id != id));
     f.close();
     f.dispose();
 }

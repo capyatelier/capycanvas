@@ -1,24 +1,6 @@
 use super::*;
 
 impl<S: WorkspaceStore> WorkspaceManager<S> {
-    pub async fn create_from_workspace(
-        &self,
-        id: &str,
-        name: &str,
-        duplicate: bool,
-        now: u64,
-    ) -> Result<StoredEntity> {
-        self.flush().await?;
-        let source = if self.active_id().as_deref() == Some(id) {
-            self.current().unwrap()
-        } else {
-            let source = self.claim(id).await?;
-            self.release(&source).await;
-            source.entity
-        };
-        self.create_from_snapshot(source, name, duplicate, now)
-            .await
-    }
     pub async fn create_from_snapshot(
         &self,
         source: Entity,
@@ -88,60 +70,31 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .map_err(StoreError::invalid)?,
         )?;
         definition.name = name.trim().into();
-        self.save_reusable(
-            Entity::reusable(name, "", ReusableContent::Toolbar { definition }, now),
-            NamePolicy::Exact,
-        )
-        .await
+        self.save_reusable(Entity::toolbar(definition, now), NamePolicy::Exact)
+            .await
     }
-    pub async fn duplicate_reusable(&self, id: &str, name: &str, now: u64) -> Result<String> {
-        let mut entity = self.load(id).await?.entity;
-        if entity.metadata.kind == ItemKind::Workspace {
-            return Err(StoreError::invalid("Choose a saved toolbar."));
-        }
-        entity.id = new_id();
-        entity.metadata.builtin = false;
-        entity
-            .metadata
-            .rename(name, &entity.metadata.description.clone(), now)?;
-        entity.metadata.created_at_ms = now;
-        entity.metadata.deleted_at_ms = None;
-        self.save_reusable(entity, NamePolicy::Unique).await
-    }
-    pub async fn update_reusable(
+    pub async fn update_toolbar(
         &self,
         id: &str,
-        content: ReusableContent,
+        definition: ToolbarDefinition,
         now: u64,
     ) -> Result<()> {
         self.flush().await?;
         let stored = self.claim(id).await?;
         let result: Result<()> = async {
-            let ItemContent::Reusable { current, previous } = &stored.entity.content else {
+            if !matches!(stored.entity.content, ItemContent::Toolbar { .. }) {
                 return Err(StoreError::invalid("Choose a saved toolbar."));
-            };
-            if current.content.kind() != content.kind() {
-                return Err(StoreError::invalid(
-                    "The library item has a different type.",
-                ));
             }
-            let mut previous = previous.clone();
-            previous.push(current.clone());
             let mut metadata = stored.entity.metadata.clone();
             metadata.modified_at_ms = now;
-            let content = ItemContent::Reusable {
-                current: ReusableVersion {
-                    id: new_id(),
-                    name: metadata.name.clone(),
-                    description: metadata.description.clone(),
-                    content,
-                    timestamp_ms: now,
-                },
-                previous,
-            };
             self.publish(CommitBatch::prepare(
                 self.owner.clone(),
-                vec![update(&stored, Some(metadata), Some(content), None)?],
+                vec![update(
+                    &stored,
+                    Some(metadata),
+                    Some(ItemContent::Toolbar { definition }),
+                    None,
+                )?],
             )?)
             .await?;
             Ok(())
@@ -150,18 +103,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.release(&stored).await;
         result?;
         self.refresh().await
-    }
-    pub async fn restore_reusable_version(&self, id: &str, version: &str, now: u64) -> Result<()> {
-        let stored = self.load(id).await?;
-        let ItemContent::Reusable { current, previous } = &stored.entity.content else {
-            return Err(StoreError::invalid("Choose a saved toolbar."));
-        };
-        let selected = std::iter::once(current)
-            .chain(previous)
-            .find(|v| v.id == version)
-            .ok_or_else(|| StoreError::invalid("This previous version is no longer retained."))?;
-        self.update_reusable(id, selected.content.clone(), now)
-            .await
     }
     async fn publish_layout(
         &self,
@@ -234,38 +175,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
         result
     }
-    pub async fn open_history_as_workspace(
-        &self,
-        id: &str,
-        revision: &str,
-        name: &str,
-        now: u64,
-    ) -> Result<StoredEntity> {
-        self.flush().await?;
-        let source = if self.active_id().as_deref() == Some(id) {
-            self.current().unwrap()
-        } else {
-            self.load(id).await?.entity
-        };
-        let capture = source.capture()?;
-        let baseline = capture
-            .history
-            .revisions
-            .get(revision)
-            .ok_or_else(|| StoreError::invalid("This layout version is no longer retained."))?
-            .layout
-            .clone();
-        let entity = Entity::workspace(
-            name,
-            WorkspaceCapture {
-                history: layer_ui::LayoutHistory::new(&baseline),
-                working: capture.working,
-            },
-            baseline,
-            now,
-        );
-        self.create_and_bind(entity, NamePolicy::Unique).await
-    }
     /// Choose an available included workspace when deleting the active one.
     /// Inactive items need no replacement; this never creates a new workspace.
     pub async fn replacement_for_delete(&self, id: &str, now: u64) -> Result<Option<String>> {
@@ -279,7 +188,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             let default_id = DEFAULT_WORKSPACES[index].0;
             let item = items.iter().find(|item| item.id == default_id)?;
             let available = item.id != id
-                && item.metadata.deleted_at_ms.is_none()
                 && !item.claim.as_ref().is_some_and(|claim| {
                     claim.owner != self.owner && claim.expires_at_ms > now
                 });
@@ -298,14 +206,20 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let active = self.active_id().as_deref() == Some(id);
         let mut incoming = None;
         let result: Result<Option<StoredEntity>> = async {
-            let mut metadata = deleting.entity.metadata.clone();
-            if metadata.builtin {
+            if deleting.entity.metadata.builtin {
                 return Err(StoreError::invalid(
                     "Included layouts and workspaces cannot be deleted.",
                 ));
             }
-            metadata.deleted_at_ms = Some(now);
-            let mut mutations = vec![update(&deleting, Some(metadata), None, None)?];
+            let mut mutations = vec![Mutation::Delete {
+                id: id.into(),
+                generations: deleting.generations,
+                fence: deleting
+                    .claim
+                    .as_ref()
+                    .ok_or_else(StoreError::conflict)?
+                    .fence,
+            }];
             let replacement_id = if active {
                 let replacement = match replacement {
                     Some(id) => id.to_string(),
@@ -330,12 +244,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             };
             let mut batch = CommitBatch::prepare(self.owner.clone(), mutations)?;
             if let Some(id) = &replacement_id {
-                batch
-                    .bindings
-                    .push(("last_workspace".into(), Some(id.clone())));
-                batch
-                    .bindings
-                    .push((format!("window:{}", self.owner.id), Some(id.clone())));
+                self.bind_window(&mut batch, id);
             }
             self.publish(batch).await?;
             match replacement_id {
@@ -369,21 +278,5 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         } else {
             Ok(None)
         }
-    }
-    pub async fn restore_deleted(&self, id: &str, now: u64) -> Result<()> {
-        let stored = self.claim(id).await?;
-        let mut metadata = stored.entity.metadata.clone();
-        metadata.deleted_at_ms = None;
-        metadata.modified_at_ms = now;
-        let mut mutation = update(&stored, Some(metadata), None, None)?;
-        if let Mutation::Update { name_policy, .. } = &mut mutation {
-            *name_policy = NamePolicy::Unique;
-        }
-        let result = self
-            .publish(CommitBatch::prepare(self.owner.clone(), vec![mutation])?)
-            .await;
-        self.release(&stored).await;
-        result?;
-        self.refresh().await
     }
 }

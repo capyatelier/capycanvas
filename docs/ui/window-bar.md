@@ -6,9 +6,7 @@ dock for toolbar containers. The default workspaces are **Sketch**, **Paint** an
 Menu, Filters, Lasso and Transform on the left; workspace choices in the center;
 and Brush, Blend, Erase, Layers and Color on the right.
 It uses medium icons and hides canvas zoom/rotation. The canvas extends behind
-the transparent bar. Included names refresh to Sketch, Paint and Photo without
-resetting saved arrangements, working tools or history. Custom workspace names
-are untouched; normal name-collision suffixes remain supported.
+the transparent bar.
 
 ## Customize inline
 

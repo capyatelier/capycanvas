@@ -13398,11 +13398,7 @@ fn native_named_workspace_manager_library_and_history() {
     assert!(
         glib::MainContext::default()
             .block_on(manager.load(&library))
-            .unwrap()
-            .entity
-            .metadata
-            .deleted_at_ms
-            .is_some()
+            .is_err()
     );
     // Exercise the actual modal and check both live and persisted state while browsing.
     let original = w

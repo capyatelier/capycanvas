@@ -28,7 +28,6 @@ pub enum ManagerAction {
     Switch(String),
     SwitchToWindow(String),
     Rename(String),
-    Duplicate(String),
     Reset(String),
     ResetBrushes,
     History(String),
@@ -52,7 +51,7 @@ impl ManagerAction {
             Self::Switch(_) => "Switch",
             Self::SwitchToWindow(_) => "Switch to Window",
             Self::Rename(_) | Self::RenameToolbar(_) => "Rename…",
-            Self::Duplicate(_) | Self::DuplicateToolbar(_) => "Duplicate…",
+            Self::DuplicateToolbar(_) => "Duplicate…",
             Self::ResetBrushes => "Reset All Brushes…",
             Self::Reset(_) => "Restore Starting Layout…",
             Self::History(_) => "Layout History…",
@@ -184,12 +183,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         items
             .into_iter()
             .filter(|i| {
-                i.metadata.deleted_at_ms.is_none()
-                    && i.metadata.kind
-                        == match page {
-                            ManagerPage::Workspaces => ItemKind::Workspace,
-                            _ => ItemKind::Toolbar,
-                        }
+                i.metadata.kind
+                    == match page {
+                        ManagerPage::Workspaces => ItemKind::Workspace,
+                        _ => ItemKind::Toolbar,
+                    }
             })
             .filter(|i| {
                 format!("{} {}", i.metadata.name, i.metadata.description)
@@ -241,38 +239,36 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let mut actions = Vec::new();
         let mut add =
             |action, enabled, primary| actions.push(ManagerButton::new(action, enabled, primary));
-        if metadata.deleted_at_ms.is_none() {
-            match metadata.kind {
-                ItemKind::Workspace => {
-                    add(
-                        if elsewhere {
-                            ManagerAction::SwitchToWindow(id.clone())
-                        } else {
-                            ManagerAction::Switch(id.clone())
-                        },
-                        idle && !current,
-                        true,
-                    );
-                    if !metadata.builtin {
-                        add(ManagerAction::Rename(id.clone()), available, false);
-                    }
-                    add(
-                        ManagerAction::Delete(id.clone()),
-                        available && idle && !metadata.builtin,
-                        false,
-                    );
+        match metadata.kind {
+            ItemKind::Workspace => {
+                add(
+                    if elsewhere {
+                        ManagerAction::SwitchToWindow(id.clone())
+                    } else {
+                        ManagerAction::Switch(id.clone())
+                    },
+                    idle && !current,
+                    true,
+                );
+                if !metadata.builtin {
+                    add(ManagerAction::Rename(id.clone()), available, false);
                 }
-                ItemKind::Toolbar => {
-                    add(ManagerAction::AddToolbar(id.clone()), idle, true);
-                    add(
-                        ManagerAction::UpdateToolbar(id.clone()),
-                        available && idle,
-                        false,
-                    );
-                    if available {
-                        add(ManagerAction::Rename(id.clone()), true, false);
-                        add(ManagerAction::Delete(id.clone()), true, false);
-                    }
+                add(
+                    ManagerAction::Delete(id.clone()),
+                    available && idle && !metadata.builtin,
+                    false,
+                );
+            }
+            ItemKind::Toolbar => {
+                add(ManagerAction::AddToolbar(id.clone()), idle, true);
+                add(
+                    ManagerAction::UpdateToolbar(id.clone()),
+                    available && idle,
+                    false,
+                );
+                if available {
+                    add(ManagerAction::Rename(id.clone()), true, false);
+                    add(ManagerAction::Delete(id.clone()), true, false);
                 }
             }
         }
@@ -285,7 +281,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let entity = &stored.entity;
         let preview = match &entity.content {
             ItemContent::Workspace { history, .. } => Some(history.layout().clone()),
-            ItemContent::Reusable { .. } => None,
+            ItemContent::Toolbar { .. } => None,
         };
         let mut description = entity.metadata.description.clone();
         if entity.metadata.builtin {
@@ -319,28 +315,4 @@ pub fn date(timestamp_ms: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = mp + if mp < 10 { 3 } else { -9 };
     format!("{:04}-{:02}-{:02}", y + i64::from(m <= 2), m, d)
-}
-
-pub struct WorkspacePrompt {
-    pub title: String,
-    pub message: String,
-    pub confirm: &'static str,
-}
-pub fn reset_prompt(entity: &Entity) -> Result<WorkspacePrompt, StoreError> {
-    let ItemContent::Workspace { .. } = &entity.content else {
-        return Err(StoreError::invalid("Choose a workspace."));
-    };
-    Ok(WorkspacePrompt {
-        title: "Restore Starting Layout".into(),
-        message: format!(
-            "{} The arrangement shown behind this dialog is a preview. You can undo restoring it with {} → Undo Workspace.",
-            if entity.metadata.builtin && is_default_item(&entity.id) {
-                "Restore the latest default layout for this workspace."
-            } else {
-                "Restore this workspace’s saved starting layout."
-            },
-            layer_ui::WORKSPACE_MENU_LABEL
-        ),
-        confirm: "Restore",
-    })
 }

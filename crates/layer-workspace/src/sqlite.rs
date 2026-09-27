@@ -1,4 +1,5 @@
 use crate::protocol::{PreparedWrite, unpack};
+use crate::store_rules::*;
 use crate::*;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{
@@ -101,9 +102,9 @@ impl SqliteStore {
                 id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, name_key TEXT NOT NULL,
                 metadata TEXT NOT NULL, content TEXT NOT NULL, working TEXT,
                 metadata_generation TEXT NOT NULL, layout_generation TEXT NOT NULL, working_generation TEXT NOT NULL,
-                deleted_at TEXT, builtin INTEGER NOT NULL,
+                builtin INTEGER NOT NULL,
                 fence TEXT NOT NULL DEFAULT '0', owner TEXT, epoch TEXT, lease_until TEXT);
-                CREATE UNIQUE INDEX item_names ON items(kind,name_key) WHERE deleted_at IS NULL;
+                CREATE UNIQUE INDEX item_names ON items(kind,name_key);
                 CREATE TABLE components (id TEXT PRIMARY KEY, json TEXT NOT NULL);
                 CREATE TABLE receipts (id TEXT PRIMARY KEY, hash TEXT NOT NULL, receipt TEXT NOT NULL,
                     owner TEXT NOT NULL, epoch TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
@@ -142,24 +143,13 @@ impl SqliteStore {
                 .update_preference_ids("workspace_order", expected, ids)
                 .map(StoreResponse::WorkspaceOrder),
             StoreRequest::List => self.list().map(StoreResponse::List),
-            StoreRequest::Maintenance {
-                owner,
-                clear_older,
-                apply,
-            } => self
-                .maintenance(owner.as_ref(), clear_older, apply)
-                .map(StoreResponse::Storage),
-            StoreRequest::DeletePermanently { id, owner, fence } => {
-                self.delete_permanently(&id, &owner, parse_counter(&fence)?)?;
+            StoreRequest::Maintenance { owner, clear_older } => {
+                self.maintenance(owner.as_ref(), clear_older)?;
                 Ok(StoreResponse::Done)
             }
             StoreRequest::Load { id } => self.load(&id).map(Box::new).map(StoreResponse::Entity),
-            StoreRequest::Claim {
-                id,
-                owner,
-                reset_invalid_default,
-            } => self
-                .claim_with_recovery(&id, owner, reset_invalid_default)
+            StoreRequest::Claim { id, owner } => self
+                .claim(&id, owner)
                 .map(Box::new)
                 .map(StoreResponse::Entity),
             StoreRequest::Renew { id, owner, fence } => self
@@ -178,7 +168,7 @@ impl SqliteStore {
                     // The immutable delivery retains its ID and bytes. Defer
                     // every live owner, including the target of this write, so
                     // cleanup cannot invalidate its expected generations.
-                    let _ = self.maintenance(None, true, true);
+                    let _ = self.maintenance(None, true);
                     self.commit(batch).map(StoreResponse::Committed)
                 } else {
                     result.map(StoreResponse::Committed)
@@ -243,7 +233,6 @@ impl SqliteStore {
         expected: Option<Vec<String>>,
         ids: Vec<String>,
     ) -> Result<Option<Vec<String>>> {
-        validate_switcher_ids(&ids)?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -255,21 +244,9 @@ impl SqliteStore {
             )
             .optional()?;
         let current: Option<Vec<String>> = current.map(|s| serde_json::from_str(&s)).transpose()?;
-        if current.as_ref() != Some(&ids) {
-            if current != expected {
-                return Err(StoreError::new(
-                    ErrorKind::Conflict,
-                    "Workspace preferences changed in another window. Try again.",
-                ));
-            }
-            for id in &ids {
-                let row = header(&tx, id)?;
-                if row.kind != "workspace" || row.deleted {
-                    return Err(StoreError::invalid(
-                        "This workspace is no longer available.",
-                    ));
-                }
-            }
+        if update_preference(current.as_ref(), expected, &ids, |id| {
+            Ok(header(&tx, id)?.kind == "workspace")
+        })? {
             tx.execute(&format!("INSERT INTO {table}(id,workspace_ids) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET workspace_ids=excluded.workspace_ids"), [serde_json::to_string(&ids)?])?;
         }
         tx.commit()?;
@@ -323,20 +300,16 @@ impl SqliteStore {
                             tx.query_row("SELECT name,kind FROM items WHERE id=?1", [&id], |r| {
                                 Ok((r.get(0)?, r.get(1)?))
                             })?;
-                        let kind = match kind.as_str() {
-                            "toolbar" => ItemKind::Toolbar,
-                            _ => ItemKind::Workspace,
-                        };
                         let row = header(&tx, &id).ok();
-                        let mut metadata = Metadata::new(kind, &name, 0);
-                        metadata.builtin = row.as_ref().is_some_and(|r| r.builtin);
-                        Ok(ItemSummary {
+                        Ok(summary_fallback(
                             id,
-                            metadata,
-                            generations: row.as_ref().map(|r| r.generations).unwrap_or_default(),
-                            claim: row.and_then(|r| r.claim),
-                            error: Some(error.to_string()),
-                        })
+                            Some(&kind),
+                            &name,
+                            row.as_ref().is_some_and(|r| r.builtin),
+                            row.as_ref().map(|r| r.generations).unwrap_or_default(),
+                            row.and_then(|r| r.claim),
+                            error.to_string(),
+                        ))
                     }
                 }
             })
@@ -345,72 +318,14 @@ impl SqliteStore {
         Ok(values)
     }
     pub fn claim(&mut self, id: &str, owner: Owner) -> Result<StoredEntity> {
-        self.claim_with_recovery(id, owner, None)
-    }
-    fn claim_with_recovery(
-        &mut self,
-        id: &str,
-        owner: Owner,
-        reset_invalid_default: Option<layer_ui::Platform>,
-    ) -> Result<StoredEntity> {
         let now = self.clock.now_ms();
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.ownership.reconcile(&tx, now)?;
         let row = header(&tx, id)?;
-        if row
-            .claim
-            .as_ref()
-            .is_some_and(|c| c.owner != owner && c.expires_at_ms > now)
-        {
-            return Err(StoreError::new(
-                ErrorKind::OwnedElsewhere,
-                "This workspace is open in another window. Switch to that window or duplicate it.",
-            ));
-        }
-        // Recheck decoding under the write lock. Never reset a healthy record
-        // that another window has repaired, or bypass a live owner's lease.
-        let reset = match load(&tx, id) {
-            Ok(_) => false,
-            Err(error) => {
-                let replacement = reset_invalid_default
-                    .filter(|_| {
-                        error.kind == ErrorKind::InvalidData
-                            && row.builtin
-                            && row.kind == "workspace"
-                            && !row.deleted
-                    })
-                    .and_then(|platform| Entity::included_workspace(id, platform, now));
-                let Some(mut entity) = replacement else {
-                    return Err(error);
-                };
-                entity.metadata = resolve_name(&tx, entity.metadata, id, NamePolicy::Unique)?;
-                entity.validate()?;
-                // A self-contained replacement cannot inherit a missing or
-                // corrupt shared component, and does not modify other records.
-                tx.execute(
-                    "UPDATE items SET name=?2,name_key=?3,metadata=?4,content=?5,working=?6,metadata_generation=?7,layout_generation=?8,working_generation=?9 WHERE id=?1",
-                    params![id, entity.metadata.name, name_key(&entity.metadata.name),
-                        serde_json::to_string(&entity.metadata)?, serde_json::to_string(&entity.content)?,
-                        serde_json::to_string(&entity.working)?,
-                        advance(row.generations.metadata)?.to_string(),
-                        advance(row.generations.layout)?.to_string(),
-                        advance(row.generations.working)?.to_string()],
-                )?;
-                true
-            }
-        };
-        let fence = if !reset
-            && row
-                .claim
-                .as_ref()
-                .is_some_and(|c| c.owner == owner && c.expires_at_ms > now)
-        {
-            row.fence
-        } else {
-            advance(row.fence)?
-        };
+        let fence = claim_fence(row.claim.as_ref(), &owner, row.fence, now)?;
+        load(&tx, id)?;
         let guard = self.ownership.acquire(id, &owner)?;
         tx.execute(
             "UPDATE items SET owner=?2,epoch=?3,fence=?4,lease_until=?5 WHERE id=?1",
@@ -434,8 +349,7 @@ impl SqliteStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.ownership.reconcile(&tx, now)?;
-        let row = header(&tx, id)?;
-        check_owner(&row, owner, fence, now)?;
+        check_claim(header(&tx, id)?.claim.as_ref(), owner, fence, now)?;
         let claim = Claim {
             owner: owner.clone(),
             fence,
@@ -474,10 +388,7 @@ impl SqliteStore {
             |r| r.get(0),
         )?;
         if cancelled {
-            return Err(StoreError::new(
-                ErrorKind::Conflict,
-                "These interrupted changes were already recovered into an independent item.",
-            ));
+            return Err(recovered_elsewhere());
         }
         if let Some((original_hash, original)) = receipt(&self.connection, &batch.operation_id)? {
             return if original_hash == hash {
@@ -488,29 +399,7 @@ impl SqliteStore {
                 ))
             };
         }
-        for (id, json) in &batch.components {
-            if content_id(json.as_bytes()) != *id {
-                return Err(StoreError::invalid("Invalid workspace component."));
-            }
-        }
-        for write in &batch.writes {
-            if let Some(metadata) = &write.metadata {
-                metadata.validate()?;
-                if write.metadata_json.as_deref() != Some(&serde_json::to_string(metadata)?) {
-                    return Err(StoreError::invalid("Inconsistent metadata payload."));
-                }
-            }
-            if let Some(content) = &write.content_json {
-                unpack(content, |id| {
-                    batch
-                        .components
-                        .get(id)
-                        .cloned()
-                        .map(Ok)
-                        .unwrap_or_else(|| component(&self.connection, id))
-                })?;
-            }
-        }
+        validate_payload(&batch, |id| component(&self.connection, id))?;
         // A pending delivery survives interruption until its receipt is acknowledged.
         self.connection.execute(
             "INSERT INTO pending(id,hash,payload) VALUES(?1,?2,?3) ON CONFLICT(id) DO NOTHING",
@@ -540,10 +429,7 @@ impl SqliteStore {
         if cancelled {
             tx.execute("DELETE FROM pending WHERE id=?1", [&batch.operation_id])?;
             tx.commit()?;
-            return Err(StoreError::new(
-                ErrorKind::Conflict,
-                "These interrupted changes were already recovered into an independent item.",
-            ));
+            return Err(recovered_elsewhere());
         }
         if let Some((original_hash, original)) = receipt(&tx, &batch.operation_id)? {
             return if original_hash == hash {
@@ -567,10 +453,7 @@ impl SqliteStore {
                 return Err(StoreError::invalid("Invalid recovery delivery."));
             }
             if receipt(&tx, id)?.is_some() {
-                return Err(StoreError::new(
-                    ErrorKind::Conflict,
-                    "The interrupted changes already finished saving. Refresh the manager to view them.",
-                ));
+                return Err(already_saved());
             }
             let original: Option<String> = tx
                 .query_row("SELECT payload FROM pending WHERE id=?1", [id], |r| {
@@ -600,7 +483,7 @@ impl SqliteStore {
                 ));
             }
             let generations = apply_write(&tx, write, &batch.owner, now)?;
-            if !write.create && header(&tx, &write.id)?.claim.is_none() {
+            if write.delete || (!write.create && header(&tx, &write.id)?.claim.is_none()) {
                 released.push((write.id.clone(), write.fence));
             }
             result.items.push((write.id.clone(), generations));
@@ -620,13 +503,12 @@ impl SqliteStore {
         for (key, id) in &batch.bindings {
             if let Some(id) = id {
                 let row = header(&tx, id)?;
-                if row.kind != "workspace" || row.deleted {
-                    return Err(StoreError::invalid(
-                        "The replacement workspace is unavailable.",
-                    ));
-                }
-                let claim = row.claim.as_ref().ok_or_else(StoreError::conflict)?;
-                check_owner(&row, &batch.owner, claim.fence, now)?;
+                check_binding(
+                    row.kind == "workspace",
+                    row.claim.as_ref(),
+                    &batch.owner,
+                    now,
+                )?;
                 tx.execute("INSERT INTO bindings(key,item_id) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET item_id=excluded.item_id", params![key, id])?;
             } else {
                 tx.execute("DELETE FROM bindings WHERE key=?1", [key])?;
@@ -656,28 +538,18 @@ struct Header {
     metadata: String,
     kind: String,
     builtin: bool,
-    deleted: bool,
     generations: Generations,
     fence: u64,
     claim: Option<Claim>,
 }
-fn parse_counter(text: &str) -> Result<u64> {
-    text.parse()
-        .map_err(|_| StoreError::invalid("Invalid workspace generation."))
-}
-fn advance(value: u64) -> Result<u64> {
-    value
-        .checked_add(1)
-        .ok_or_else(|| StoreError::invalid("Workspace generation exhausted."))
-}
 fn header(connection: &Connection, id: &str) -> Result<Header> {
-    let row = connection.query_row("SELECT metadata,kind,builtin,deleted_at,metadata_generation,layout_generation,working_generation,fence,owner,epoch,lease_until FROM items WHERE id=?1", [id], |r| Ok((
-        r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, bool>(2)?,r.get::<_, Option<String>>(3)?,
-        r.get::<_, String>(4)?,r.get::<_, String>(5)?,r.get::<_, String>(6)?,r.get::<_, String>(7)?,
-        r.get::<_, Option<String>>(8)?,r.get::<_, Option<String>>(9)?,r.get::<_, Option<String>>(10)?,
-    ))).optional()?.ok_or_else(|| StoreError::new(ErrorKind::NotFound, "This workspace item is no longer available."))?;
-    let fence = parse_counter(&row.7)?;
-    let claim = match (row.8, row.9, row.10) {
+    let row = connection.query_row("SELECT metadata,kind,builtin,metadata_generation,layout_generation,working_generation,fence,owner,epoch,lease_until FROM items WHERE id=?1", [id], |r| Ok((
+        r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, bool>(2)?,
+        r.get::<_, String>(3)?,r.get::<_, String>(4)?,r.get::<_, String>(5)?,r.get::<_, String>(6)?,
+        r.get::<_, Option<String>>(7)?,r.get::<_, Option<String>>(8)?,r.get::<_, Option<String>>(9)?,
+    ))).optional()?.ok_or_else(not_found)?;
+    let fence = parse_counter(&row.6)?;
+    let claim = match (row.7, row.8, row.9) {
         (Some(id), Some(epoch), Some(until)) => Some(Claim {
             owner: Owner { id, epoch },
             fence,
@@ -690,11 +562,10 @@ fn header(connection: &Connection, id: &str) -> Result<Header> {
         metadata: row.0,
         kind: row.1,
         builtin: row.2,
-        deleted: row.3.is_some(),
         generations: Generations {
-            metadata: parse_counter(&row.4)?,
-            layout: parse_counter(&row.5)?,
-            working: parse_counter(&row.6)?,
+            metadata: parse_counter(&row.3)?,
+            layout: parse_counter(&row.4)?,
+            working: parse_counter(&row.5)?,
         },
         fence,
         claim,
@@ -706,7 +577,7 @@ fn component(connection: &Connection, id: &str) -> Result<String> {
             r.get(0)
         })
         .optional()?
-        .ok_or_else(|| StoreError::invalid("A referenced workspace resource is missing."))
+        .ok_or_else(missing_resource)
 }
 fn load(connection: &Connection, id: &str) -> Result<StoredEntity> {
     let row = header(connection, id)?;
@@ -736,16 +607,6 @@ fn receipt(connection: &Connection, id: &str) -> Result<Option<(String, CommitRe
         .map(|(hash, text)| Ok((hash, serde_json::from_str(&text)?)))
         .transpose()
 }
-fn check_owner(row: &Header, owner: &Owner, fence: u64, now: u64) -> Result<()> {
-    if row
-        .claim
-        .as_ref()
-        .is_none_or(|c| &c.owner != owner || c.fence != fence || c.expires_at_ms <= now)
-    {
-        return Err(StoreError::conflict());
-    }
-    Ok(())
-}
 fn apply_write(
     connection: &Connection,
     write: &PreparedWrite,
@@ -771,45 +632,38 @@ fn apply_write(
             layout: 1,
             working: u64::from(write.working_json.is_some()),
         };
-        connection.execute("INSERT INTO items(id,kind,name,name_key,metadata,content,working,metadata_generation,layout_generation,working_generation,deleted_at,builtin,fence,owner,epoch,lease_until) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)", params![
+        connection.execute("INSERT INTO items(id,kind,name,name_key,metadata,content,working,metadata_generation,layout_generation,working_generation,builtin,fence,owner,epoch,lease_until) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)", params![
             write.id, metadata.kind.key(), metadata.name, name_key(&metadata.name), serde_json::to_string(&metadata)?, content, write.working_json,
-            generations.metadata.to_string(), generations.layout.to_string(), generations.working.to_string(), metadata.deleted_at_ms.map(|v| v.to_string()), metadata.builtin,
+            generations.metadata.to_string(), generations.layout.to_string(), generations.working.to_string(), metadata.builtin,
             if write.claim { "1" } else { "0" }, write.claim.then_some(&owner.id), write.claim.then_some(&owner.epoch), write.claim.then(|| now.saturating_add(OWNER_LEASE_MS).to_string()),
         ])?;
         return Ok(generations);
     }
     let row = header(connection, &write.id)?;
-    check_owner(&row, owner, write.fence, now)?;
-    if (write.metadata.is_some() && write.expected.metadata != row.generations.metadata)
-        || (write.content_json.is_some() && write.expected.layout != row.generations.layout)
-        || (write.working_json.is_some() && write.expected.working != row.generations.working)
-    {
-        return Err(StoreError::conflict());
+    check_claim(row.claim.as_ref(), owner, write.fence, now)?;
+    check_update(
+        &serde_json::from_str(&row.metadata)?,
+        row.generations,
+        write,
+    )?;
+    if write.delete {
+        remove(connection, &write.id, row.fence)?;
+        return Ok(row.generations);
     }
     let mut generations = row.generations;
     if let Some(metadata) = &write.metadata {
-        if metadata.kind.key() != row.kind || metadata.builtin != row.builtin {
-            return Err(StoreError::invalid("Item type cannot change."));
-        }
-        if row.builtin && metadata.deleted_at_ms.is_some() {
-            return Err(StoreError::invalid(
-                "Included workspaces cannot be deleted.",
-            ));
-        }
-        if row.builtin && metadata.name != serde_json::from_str::<Metadata>(&row.metadata)?.name {
-            return Err(StoreError::invalid(
-                "Included workspaces cannot be renamed.",
-            ));
-        }
         let metadata = resolve_name(connection, metadata.clone(), &write.id, write.name_policy)?;
         generations.metadata = advance(generations.metadata)?;
-        connection.execute("UPDATE items SET name=?2,name_key=?3,metadata=?4,metadata_generation=?5,deleted_at=?6 WHERE id=?1", params![write.id, metadata.name, name_key(&metadata.name), serde_json::to_string(&metadata)?, generations.metadata.to_string(), metadata.deleted_at_ms.map(|v| v.to_string())])?;
-        if metadata.deleted_at_ms.is_some() && !row.deleted {
-            connection.execute(
-                "UPDATE items SET fence=?2,owner=NULL,epoch=NULL,lease_until=NULL WHERE id=?1",
-                params![write.id, advance(row.fence)?.to_string()],
-            )?;
-        }
+        connection.execute(
+            "UPDATE items SET name=?2,name_key=?3,metadata=?4,metadata_generation=?5 WHERE id=?1",
+            params![
+                write.id,
+                metadata.name,
+                name_key(&metadata.name),
+                serde_json::to_string(&metadata)?,
+                generations.metadata.to_string()
+            ],
+        )?;
     }
     if let Some(content) = &write.content_json {
         generations.layout = advance(generations.layout)?;
@@ -819,11 +673,6 @@ fn apply_write(
         )?;
     }
     if let Some(working) = &write.working_json {
-        if row.kind != "workspace" {
-            return Err(StoreError::invalid(
-                "Reusable items cannot store working values.",
-            ));
-        }
         generations.working = advance(generations.working)?;
         connection.execute(
             "UPDATE items SET working=?2,working_generation=?3 WHERE id=?1",
@@ -832,30 +681,26 @@ fn apply_write(
     }
     Ok(generations)
 }
+fn remove(connection: &Connection, id: &str, fence: u64) -> Result<()> {
+    connection.execute("INSERT INTO tombstones(id,fence) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET fence=excluded.fence",params![id,advance(fence)?.to_string()])?;
+    connection.execute("DELETE FROM bindings WHERE item_id=?1", [id])?;
+    connection.execute("DELETE FROM items WHERE id=?1", [id])?;
+    Ok(())
+}
 fn resolve_name(
     connection: &Connection,
-    mut metadata: Metadata,
+    metadata: Metadata,
     id: &str,
     policy: NamePolicy,
 ) -> Result<Metadata> {
-    if metadata.deleted_at_ms.is_some() {
-        return Ok(metadata);
-    }
-    let exists = |key: &str| -> Result<bool> {
-        Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM items WHERE kind=?1 AND name_key=?2 AND id!=?3 AND deleted_at IS NULL)", params![metadata.kind.key(),key,id], |r| r.get(0))?)
-    };
-    match policy {
-        NamePolicy::Unique => metadata.name = available_name(&metadata.name, exists)?,
-        NamePolicy::Exact => {
-            if exists(&name_key(&metadata.name))? {
-                return Err(StoreError::new(
-                    ErrorKind::NameCollision,
-                    "An item with this name already exists.",
-                ));
-            }
-        }
-    }
-    Ok(metadata)
+    let kind = metadata.kind.key();
+    apply_name_policy(metadata, policy, |key| {
+        Ok(connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM items WHERE kind=?1 AND name_key=?2 AND id!=?3)",
+            params![kind, key, id],
+            |r| r.get(0),
+        )?)
+    })
 }
 
 #[cfg(test)]

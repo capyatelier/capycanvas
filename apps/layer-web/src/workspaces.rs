@@ -83,8 +83,7 @@ pub fn workspace_database(
             StoreRequest::List | StoreRequest::Load { .. }
             | StoreRequest::Receipt { .. } | StoreRequest::Binding { .. }
             | StoreRequest::Pending
-            | StoreRequest::Reopen | StoreRequest::Switcher | StoreRequest::WorkspaceOrder
-            | StoreRequest::Maintenance { apply: false, .. });
+            | StoreRequest::Reopen | StoreRequest::Switcher | StoreRequest::WorkspaceOrder);
         let listing = !pending && matches!(&request, StoreRequest::List);
         let response = if listing && let Some(reply) = &cached.list {
             reply.clone()

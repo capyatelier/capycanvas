@@ -1,14 +1,9 @@
+use crate::test_support::*;
 use crate::*;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
-struct TestClock(AtomicU64);
-impl Clock for TestClock {
-    fn now_ms(&self) -> u64 {
-        self.0.load(Ordering::SeqCst)
-    }
-}
 fn normalize(result: Result<StoreResponse, StoreError>) -> serde_json::Value {
     let result = result.map(|mut r| {
         match &mut r {
@@ -30,30 +25,15 @@ fn browser_claims_of_closed_documents_are_released_without_waiting_for_the_lease
     let mut browser = BrowserDatabase::default();
     let closed = Owner::fresh();
     let reopened = Owner::fresh();
-    let layout = layer_ui::DockLayout::for_platform(layer_ui::Platform::Web);
-    let entity = Entity::workspace(
-        "Browser lock",
-        layer_ui::WorkspaceCapture::from_template(&layout).unwrap(),
-        layout,
-        1000,
-    );
+    let entity = workspace("Browser lock");
     let id = entity.id.clone();
-    let batch = CommitBatch::prepare(
-        closed.clone(),
-        vec![Mutation::Create {
-            entity,
-            claim: true,
-            name_policy: NamePolicy::Exact,
-        }],
-    )
-    .unwrap();
+    let batch = CommitBatch::prepare(closed.clone(), vec![create(entity)]).unwrap();
     browser
         .execute(StoreRequest::Commit { batch }, 1000)
         .unwrap();
     let claim = StoreRequest::Claim {
         id: id.clone(),
         owner: reopened.clone(),
-        reset_invalid_default: None,
     };
     assert!(!browser.release_unlocked(&[closed.id.clone()], 1001));
     assert!(
@@ -90,30 +70,15 @@ fn browser_leases_still_expire_and_fence_stale_writers() {
     let mut browser = BrowserDatabase::default();
     let owner = Owner::fresh();
     let other = Owner::fresh();
-    let layout = layer_ui::DockLayout::for_platform(layer_ui::Platform::Web);
-    let entity = Entity::workspace(
-        "Browser lease",
-        layer_ui::WorkspaceCapture::from_template(&layout).unwrap(),
-        layout,
-        1000,
-    );
+    let entity = workspace("Browser lease");
     let id = entity.id.clone();
-    let batch = CommitBatch::prepare(
-        owner.clone(),
-        vec![Mutation::Create {
-            entity,
-            claim: true,
-            name_policy: NamePolicy::Exact,
-        }],
-    )
-    .unwrap();
+    let batch = CommitBatch::prepare(owner.clone(), vec![create(entity)]).unwrap();
     browser
         .execute(StoreRequest::Commit { batch }, 1000)
         .unwrap();
     let request = StoreRequest::Claim {
         id: id.clone(),
         owner: other.clone(),
-        reset_invalid_default: None,
     };
     assert_eq!(
         browser.execute(request.clone(), 1001).unwrap_err().kind,
@@ -159,7 +124,7 @@ fn browser_leases_still_expire_and_fence_stale_writers() {
 
 #[test]
 fn browser_transactions_match_sqlite_contract() {
-    let directory = std::env::temp_dir().join(format!("capy-browser-contract-{}", new_id()));
+    let directory = temp_dir("browser-contract");
     let clock = Arc::new(TestClock(AtomicU64::new(1000)));
     let mut sqlite = SqliteStore::with_clock(&directory.join("db.sqlite3"), clock.clone()).unwrap();
     let mut browser = BrowserDatabase::default();
@@ -180,22 +145,8 @@ fn browser_transactions_match_sqlite_contract() {
     };
     let owner = Owner::fresh();
     let other = Owner::fresh();
-    let capture = layer_ui::WorkspaceCapture::from_template(&layer_ui::DockLayout::for_platform(
-        layer_ui::Platform::Web,
-    ))
-    .unwrap();
-    let first = Entity::workspace(
-        "Drawing",
-        capture.clone(),
-        capture.history.layout().clone(),
-        1000,
-    );
-    let second = Entity::workspace(
-        "Painting",
-        capture.clone(),
-        capture.history.layout().clone(),
-        1000,
-    );
+    let first = workspace("Drawing");
+    let second = workspace("Painting");
     let create = |entity: Entity, claim| Mutation::Create {
         entity,
         claim,
@@ -339,7 +290,6 @@ fn browser_transactions_match_sqlite_contract() {
         StoreRequest::Claim {
             id: first.id.clone(),
             owner: other.clone(),
-            reset_invalid_default: None,
         },
         1002,
     );
@@ -373,7 +323,7 @@ fn browser_transactions_match_sqlite_contract() {
         working,
         name_policy: NamePolicy::Exact,
     };
-    let mut working = capture.working.clone();
+    let mut working = first.working.clone().unwrap();
     working.zen_mode = true;
     let batch =
         CommitBatch::prepare(owner.clone(), vec![update(None, Some(working.clone()))]).unwrap();
@@ -383,12 +333,7 @@ fn browser_transactions_match_sqlite_contract() {
     metadata.name = "Ink".into();
     let batch = CommitBatch::prepare(owner.clone(), vec![update(Some(metadata), None)]).unwrap();
     execute(StoreRequest::Commit { batch }, 1003);
-    let fresh = Entity::workspace(
-        "Should roll back",
-        capture.clone(),
-        capture.history.layout().clone(),
-        1000,
-    );
+    let fresh = workspace("Should roll back");
     let batch = CommitBatch::prepare(
         owner.clone(),
         vec![
@@ -424,7 +369,6 @@ fn browser_transactions_match_sqlite_contract() {
         StoreRequest::Claim {
             id: first.id.clone(),
             owner: other.clone(),
-            reset_invalid_default: None,
         },
         32000,
     );
@@ -453,12 +397,7 @@ fn browser_transactions_match_sqlite_contract() {
         32001,
     );
     // Pinning shares creation's transaction, rollback and idempotent receipt.
-    let third = Entity::workspace(
-        "Sketching",
-        capture.clone(),
-        capture.history.layout().clone(),
-        32002,
-    );
+    let third = workspace("Sketching");
     let mut pinned =
         CommitBatch::prepare(other.clone(), vec![create(third.clone(), true)]).unwrap();
     pinned.pin_workspaces.push(third.id.clone());
@@ -507,9 +446,27 @@ fn browser_transactions_match_sqlite_contract() {
         execute(StoreRequest::Switcher, 32006),
         normalize(Ok(StoreResponse::Switcher(Some(vec![]))))
     );
-    let mut invalid = CommitBatch::prepare(other, vec![]).unwrap();
+    let mut invalid = CommitBatch::prepare(other.clone(), vec![]).unwrap();
     invalid.pin_workspaces.push(first.id.clone());
     execute(StoreRequest::Commit { batch: invalid }, 32007);
+    let delete = |fence| {
+        let mutation = Mutation::Delete {
+            id: third.id.clone(),
+            generations,
+            fence,
+        };
+        CommitBatch::prepare(other.clone(), vec![mutation]).unwrap()
+    };
+    execute(StoreRequest::Commit { batch: delete(2) }, 32008);
+    execute(StoreRequest::Commit { batch: delete(1) }, 32008);
+    execute(
+        StoreRequest::Load {
+            id: third.id.clone(),
+        },
+        32008,
+    );
+    let batch = CommitBatch::prepare(other, vec![create(third, true)]).unwrap();
+    execute(StoreRequest::Commit { batch }, 32009);
     if let Ok(path) = std::env::var("CAPY_STORE_CONTRACT_FIXTURE") {
         std::fs::write(path, serde_json::to_string(&fixture).unwrap()).unwrap();
     }
@@ -520,25 +477,10 @@ fn browser_transactions_match_sqlite_contract() {
 #[test]
 fn browser_preserves_newer_schemas_and_exact_large_counters() {
     let owner = Owner::fresh();
-    let capture =
-        layer_ui::WorkspaceCapture::from_template(&layer_ui::DockLayout::default()).unwrap();
-    let entity = Entity::workspace(
-        "Drawing",
-        capture.clone(),
-        capture.history.layout().clone(),
-        1,
-    );
+    let entity = workspace("Drawing");
     let id = entity.id.clone();
     let mut db = BrowserDatabase::default();
-    let batch = CommitBatch::prepare(
-        owner.clone(),
-        vec![Mutation::Create {
-            entity,
-            claim: true,
-            name_policy: NamePolicy::Exact,
-        }],
-    )
-    .unwrap();
+    let batch = CommitBatch::prepare(owner.clone(), vec![create(entity)]).unwrap();
     db.execute(StoreRequest::Commit { batch }, 1).unwrap();
     let mut encoded: serde_json::Value = serde_json::from_str(&db.encoded().unwrap()).unwrap();
     encoded["schema"] = serde_json::json!(999);
@@ -554,18 +496,10 @@ fn browser_preserves_newer_schemas_and_exact_large_counters() {
     encoded["items"][&id]["claim"]["fence"] = serde_json::json!("9007199254740993");
     let mut db = BrowserDatabase::decode(&encoded.to_string()).unwrap();
     let StoreResponse::Entity(s) = db
-        .execute(
-            StoreRequest::Claim {
-                id,
-                owner,
-                reset_invalid_default: None,
-            },
-            100000,
-        )
+        .execute(StoreRequest::Claim { id, owner }, 100000)
         .unwrap()
     else {
         panic!()
     };
     assert_eq!(s.claim.unwrap().fence, 9007199254740994);
 }
-

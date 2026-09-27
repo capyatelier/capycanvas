@@ -1,5 +1,5 @@
 use super::*;
-use layer_workspace::{ItemContent, ItemKind, ManagerAction as A, ManagerPage, ReusableContent};
+use layer_workspace::{ItemContent, ItemKind, ManagerAction as A, ManagerPage};
 
 type Result<T> = std::result::Result<T, StoreError>;
 pub(super) struct OperationGuard {
@@ -127,28 +127,6 @@ impl NativeWorkspaces {
             manager.load(id).await
         }
     }
-    async fn snapshot_source(&self, id: &str) -> Result<layer_workspace::Entity> {
-        let stored = self.selected(id).await?;
-        if let Some(claim) = &stored.claim
-            && claim.owner != self.manager.as_ref().unwrap().owner
-            && claim.expires_at_ms > now_ms()
-        {
-            let target = WINDOWS.with(|windows| {
-                windows
-                    .borrow()
-                    .get(&claim.owner.id)
-                    .and_then(std::rc::Weak::upgrade)
-            });
-            let target = target.ok_or_else(||StoreError::new(layer_workspace::ErrorKind::OwnedElsewhere,"This workspace is open in another application process. Close it there to finish saving before duplicating it here."))?;
-            let _operation = target.workspaces.begin_operation(&target).await?;
-            let manager = target.workspaces.manager.as_ref().unwrap();
-            manager.flush().await?;
-            return manager
-                .current()
-                .ok_or_else(|| StoreError::invalid("The source workspace closed."));
-        }
-        Ok(stored.entity)
-    }
     pub async fn perform(&self, w: &Rc<Workspace>, action: A) -> Result<()> {
         let manager = self
             .manager
@@ -201,12 +179,13 @@ impl NativeWorkspaces {
                     }
                 }
             }
-            A::New | A::Duplicate(_) | A::Rename(_) | A::SaveToolbar(_) => {
+            A::New | A::Rename(_) | A::SaveToolbar(_) => {
                 self.named(w, action).await?;
             }
             A::Reset(id) => {
                 let stored = self.selected(&id).await?;
-                let prompt = layer_workspace::reset_prompt(&stored.entity)?;
+                let prompt =
+                    manager.form_prompt(&A::Reset(id.clone()), Some(&stored.entity.metadata))?;
                 let preview = history::Preview::begin(w).await?;
                 let change = w
                     .gpu
@@ -217,7 +196,7 @@ impl NativeWorkspaces {
                     .preview_workspace_layout(&stored.entity.starting_layout(layer_ui::Platform::Gtk)?)
                     .map_err(StoreError::invalid)?;
                 w.changed(Ok(change));
-                if !dialog::confirm(w, &prompt.title, &prompt.message, prompt.confirm, false).await
+                if !dialog::confirm(w, &prompt.title, &prompt.message, &prompt.confirm, false).await
                 {
                     return Ok(());
                 }
@@ -361,9 +340,7 @@ impl NativeWorkspaces {
                             .panel(panel)
                             .map_err(StoreError::invalid)?,
                     )?;
-                    let result = manager
-                        .update_reusable(&id, ReusableContent::Toolbar { definition }, now_ms())
-                        .await;
+                    let result = manager.update_toolbar(&id, definition, now_ms()).await;
                     self.finish_operation(w);
                     result?;
                 }
@@ -381,7 +358,7 @@ impl NativeWorkspaces {
     async fn named(&self, w: &Rc<Workspace>, action: A) -> Result<()> {
         let manager = self.manager.as_ref().unwrap();
         let source_id = match &action {
-            A::Duplicate(id) | A::Rename(id) => Some(id.as_str()),
+            A::Rename(id) => Some(id.as_str()),
             _ => None,
         };
         let source = if let Some(id) = source_id {
@@ -391,7 +368,6 @@ impl NativeWorkspaces {
         };
         let mut name = match &action {
             A::Rename(_) => source.as_ref().unwrap().entity.metadata.name.clone(),
-            A::Duplicate(_) => format!("{} Copy", source.as_ref().unwrap().entity.metadata.name),
             A::SaveToolbar(panel) => manager
                 .current()
                 .unwrap()
@@ -411,18 +387,6 @@ impl NativeWorkspaces {
         };
         let (title, message, confirm) = match &action {
             A::Rename(_) => ("Rename", "", "Rename"),
-            A::Duplicate(_)
-                if source
-                    .as_ref()
-                    .is_some_and(|s| s.entity.metadata.kind != ItemKind::Workspace) =>
-            {
-                ("Duplicate", "Make a separate copy.", "Duplicate")
-            }
-            A::Duplicate(_) => (
-                "Duplicate Workspace",
-                "Copy this workspace for another task.",
-                "Duplicate and Switch",
-            ),
             A::SaveToolbar(_) => (
                 "Save to Toolbar Library",
                 "Save this toolbar to reuse in any workspace.",
@@ -466,22 +430,6 @@ impl NativeWorkspaces {
                     .create_workspace(&name, now_ms())
                     .await
                     .map(Some),
-                A::Duplicate(id)
-                    if source.as_ref().unwrap().entity.metadata.kind == ItemKind::Workspace =>
-                {
-                    async {
-                        let snapshot = self.snapshot_source(id).await?;
-                        manager
-                            .create_from_snapshot(snapshot, &name, true, now_ms())
-                            .await
-                            .map(Some)
-                    }
-                    .await
-                }
-                A::Duplicate(id) => manager
-                    .duplicate_reusable(id, &name, now_ms())
-                    .await
-                    .map(|_| None),
                 A::Rename(id) => manager
                     .rename(id, &name, &description, now_ms())
                     .await
@@ -527,7 +475,7 @@ impl NativeWorkspaces {
             .unwrap()
             .items()
             .into_iter()
-            .filter(|i| i.metadata.kind == ItemKind::Toolbar && i.metadata.deleted_at_ms.is_none())
+            .filter(|i| i.metadata.kind == ItemKind::Toolbar)
             .map(|i| (i.id, i.metadata.name))
             .collect()
     }
@@ -540,10 +488,9 @@ impl NativeWorkspaces {
         name: Option<&str>,
     ) -> Result<()> {
         let stored = self.selected(id).await?;
-        let ItemContent::Reusable { current, .. } = stored.entity.content else {
+        let ItemContent::Toolbar { mut definition } = stored.entity.content else {
             return Err(StoreError::invalid("Choose a saved toolbar."));
         };
-        let ReusableContent::Toolbar { mut definition } = current.content;
         if let Some(name) = name {
             definition.name = name.into();
         }

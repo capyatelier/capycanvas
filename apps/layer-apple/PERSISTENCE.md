@@ -41,9 +41,7 @@ preview.
 Externally opened `.capyworkspace` and `.capytoolbar` files use coordinated reads
 on the file queue and shared Rust import validation. The compact workspace
 screens follow the shared design without storage administration, package
-pickers/exporters, trash or metadata/version-management controls. The
-lower-level storage service provides consistent SQLite backup and package
-serialization, with direct integration coverage.
+pickers/exporters, trash or metadata/version-management controls.
 
 `NativeWorkspaceLibrary` has a separate serial Dispatch queue; SQLite runs on
 the shared Rust storage worker. The drawing owner only captures or adopts
@@ -67,9 +65,8 @@ cargo test -p layer-apple -p layer-workspace -p layer-ui -p layer-host --feature
 ```
 
 They exercise latest-edit switching, failed-transition unlock, startup and
-restart beside another owner, toolbar metadata/versions, toolbars, layout
-history, import/export packages, trash, consistent SQLite backup and recovery as
-a new workspace after a competing owner claims an expired lease. A deliberately
+restart beside another owner, toolbars, layout history and recovery as a new
+workspace after a competing owner claims an expired lease. A deliberately
 locked temporary database verifies that the drawing owner still serves edits
 and queries, and that later edits survive the earlier save acknowledgement.
 This is integration evidence, not physical lifecycle or sustained frame-rate

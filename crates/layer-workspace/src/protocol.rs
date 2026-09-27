@@ -75,11 +75,17 @@ pub enum Mutation {
         working: Option<layer_ui::WorkspaceWorkingState>,
         name_policy: NamePolicy,
     },
+    Delete {
+        id: String,
+        generations: Generations,
+        fence: u64,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct PreparedWrite {
     pub id: String,
     pub create: bool,
+    pub delete: bool,
     pub claim: bool,
     pub name_policy: NamePolicy,
     pub expected: Generations,
@@ -117,46 +123,74 @@ impl CommitBatch {
             pin_workspaces: Vec::new(),
         };
         for mutation in mutations {
-            let (id, create, claim, expected, fence, metadata, content, working, name_policy) =
-                match mutation {
-                    Mutation::Create {
-                        entity,
+            let (
+                id,
+                create,
+                delete,
+                claim,
+                expected,
+                fence,
+                metadata,
+                content,
+                working,
+                name_policy,
+            ) = match mutation {
+                Mutation::Create {
+                    entity,
+                    claim,
+                    name_policy,
+                } => {
+                    entity.validate()?;
+                    (
+                        entity.id,
+                        true,
+                        false,
                         claim,
+                        Generations::default(),
+                        0,
+                        Some(entity.metadata),
+                        Some(entity.content),
+                        entity.working,
                         name_policy,
-                    } => {
-                        entity.validate()?;
-                        (
-                            entity.id,
-                            true,
-                            claim,
-                            Generations::default(),
-                            0,
-                            Some(entity.metadata),
-                            Some(entity.content),
-                            entity.working,
-                            name_policy,
-                        )
-                    }
-                    Mutation::Update {
-                        id,
-                        generations,
-                        fence,
-                        metadata,
-                        content,
-                        working,
-                        name_policy,
-                    } => (
-                        id,
-                        false,
-                        false,
-                        generations,
-                        fence,
-                        metadata,
-                        content,
-                        working,
-                        name_policy,
-                    ),
-                };
+                    )
+                }
+                Mutation::Update {
+                    id,
+                    generations,
+                    fence,
+                    metadata,
+                    content,
+                    working,
+                    name_policy,
+                } => (
+                    id,
+                    false,
+                    false,
+                    false,
+                    generations,
+                    fence,
+                    metadata,
+                    content,
+                    working,
+                    name_policy,
+                ),
+                Mutation::Delete {
+                    id,
+                    generations,
+                    fence,
+                } => (
+                    id,
+                    false,
+                    true,
+                    false,
+                    generations,
+                    fence,
+                    None,
+                    None,
+                    None,
+                    NamePolicy::Exact,
+                ),
+            };
             if let Some(metadata) = &metadata {
                 metadata.validate()?;
             }
@@ -186,6 +220,7 @@ impl CommitBatch {
             batch.writes.push(PreparedWrite {
                 id,
                 create,
+                delete,
                 claim,
                 expected,
                 fence,
@@ -206,7 +241,7 @@ impl CommitBatch {
                     && w.create
                     && w.metadata
                         .as_ref()
-                        .is_some_and(|m| m.kind == ItemKind::Workspace && m.deleted_at_ms.is_none())
+                        .is_some_and(|m| m.kind == ItemKind::Workspace)
             }) {
                 return Err(StoreError::invalid(
                     "Only newly created workspaces can be pinned with creation.",
@@ -342,10 +377,6 @@ pub enum StoreRequest {
     Claim {
         id: String,
         owner: Owner,
-        /// Reset an unreadable included workspace while acquiring ownership.
-        /// Plain loads remain read-only; custom items never get this fallback.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reset_invalid_default: Option<layer_ui::Platform>,
     },
     Renew {
         id: String,
@@ -373,12 +404,6 @@ pub enum StoreRequest {
     Maintenance {
         owner: Option<Owner>,
         clear_older: bool,
-        apply: bool,
-    },
-    DeletePermanently {
-        id: String,
-        owner: Owner,
-        fence: String,
     },
     Reopen,
 }
@@ -394,6 +419,5 @@ pub enum StoreResponse {
     Receipt(Option<CommitReceipt>),
     Binding(Option<String>),
     Pending(Vec<CommitBatch>),
-    Storage(StorageReport),
     Done,
 }

@@ -1,6 +1,7 @@
 //! Transactional browser storage policy. IndexedDB holds the serialized snapshot
 //! and invokes this synchronous reducer inside its read/write transaction. No
 //! JavaScript number arithmetic is used for fences or generation counters.
+use crate::store_rules::*;
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -67,28 +68,27 @@ impl Default for BrowserDatabase {
         }
     }
 }
-fn advance(n: u64) -> Result<u64> {
-    n.checked_add(1)
-        .ok_or_else(|| StoreError::invalid("Workspace generation exhausted."))
-}
 fn content(text: &str, batch: &CommitBatch) -> Result<ItemContent> {
     protocol::unpack(text, |id| {
         batch
             .components
             .get(id)
             .cloned()
-            .ok_or_else(|| StoreError::invalid("A referenced workspace resource is missing."))
+            .ok_or_else(missing_resource)
     })
 }
-fn check_owner(item: &StoredEntity, owner: &Owner, fence: u64, now: u64) -> Result<()> {
-    if item
-        .claim
-        .as_ref()
-        .is_none_or(|c| &c.owner != owner || c.fence != fence || c.expires_at_ms <= now)
-    {
-        return Err(StoreError::conflict());
+fn update_ids(
+    field: &mut Option<Vec<String>>,
+    expected: Option<Vec<String>>,
+    ids: Vec<String>,
+    items: &BTreeMap<String, BrowserRecord>,
+) -> Result<Option<Vec<String>>> {
+    if update_preference(field.as_ref(), expected, &ids, |id| {
+        Ok(items.get(id).ok_or_else(not_found)?.metadata()?.kind == ItemKind::Workspace)
+    })? {
+        *field = Some(ids);
     }
-    Ok(())
+    Ok(field.clone())
 }
 impl BrowserDatabase {
     pub fn decode(text: &str) -> Result<Self> {
@@ -118,70 +118,16 @@ impl BrowserDatabase {
         released
     }
     fn record(&self, id: &str) -> Result<&BrowserRecord> {
-        self.items.get(id).ok_or_else(|| {
-            StoreError::new(
-                ErrorKind::NotFound,
-                "This workspace item is no longer available.",
-            )
-        })
+        self.items.get(id).ok_or_else(not_found)
     }
     fn item(&self, id: &str) -> Result<StoredEntity> {
         self.record(id)?.stored()
     }
-    fn claim(
-        &mut self,
-        id: &str,
-        owner: Owner,
-        reset_invalid_default: Option<layer_ui::Platform>,
-        now: u64,
-    ) -> Result<StoredEntity> {
+    fn claim(&mut self, id: &str, owner: Owner, now: u64) -> Result<StoredEntity> {
         let record = self.record(id)?;
-        let live = record.claim.as_ref().filter(|c| c.expires_at_ms > now);
-        if live.is_some_and(|c| c.owner != owner) {
-            return Err(StoreError::new(
-                ErrorKind::OwnedElsewhere,
-                "This workspace is open in another window.",
-            ));
-        }
-        let loaded = record.stored().and_then(|s| {
-            s.entity.validate()?;
-            Ok(s)
-        });
-        let reset = loaded.is_err();
-        let mut item = match loaded {
-            Ok(item) => item,
-            Err(error) => {
-                let metadata = &record.entity["metadata"];
-                let replacement = reset_invalid_default
-                    .filter(|_| {
-                        error.kind == ErrorKind::InvalidData
-                            && record.entity["id"].as_str() == Some(id)
-                            && metadata["builtin"].as_bool() == Some(true)
-                            && metadata["kind"].as_str() == Some("workspace")
-                            && metadata["deleted_at_ms"].is_null()
-                    })
-                    .and_then(|platform| Entity::included_workspace(id, platform, now));
-                let Some(mut entity) = replacement else {
-                    return Err(error);
-                };
-                entity.metadata = self.resolve_name(entity.metadata, id, NamePolicy::Unique)?;
-                entity.validate()?;
-                StoredEntity {
-                    entity,
-                    generations: Generations {
-                        metadata: advance(record.generations.metadata)?,
-                        layout: advance(record.generations.layout)?,
-                        working: advance(record.generations.working)?,
-                    },
-                    claim: None,
-                }
-            }
-        };
-        let fence = if !reset && live.is_some() {
-            self.fence(id)?
-        } else {
-            advance(self.fence(id)?)?
-        };
+        let fence = claim_fence(record.claim.as_ref(), &owner, self.fence(id)?, now)?;
+        let mut item = record.stored()?;
+        item.entity.validate()?;
         item.claim = Some(Claim {
             owner,
             fence,
@@ -193,15 +139,12 @@ impl BrowserDatabase {
         Ok(item)
     }
     fn fence(&self, id: &str) -> Result<u64> {
-        self.fences.get(id).map_or(Ok(0), |s| {
-            s.parse()
-                .map_err(|_| StoreError::invalid("Invalid workspace fence."))
-        })
+        self.fences.get(id).map_or(Ok(0), |s| parse_counter(s))
     }
     fn validated_batch(&self, batch: &CommitBatch) -> Result<String> {
         let hash = content_id(batch.encoded()?.as_bytes());
         if self.cancelled.contains(&batch.operation_id) {
-            return Err(StoreError::conflict());
+            return Err(recovered_elsewhere());
         }
         if let Some((original, _)) = self.receipts.get(&batch.operation_id)
             && original != &hash
@@ -217,28 +160,7 @@ impl BrowserDatabase {
                 "An operation ID is already bound to another payload.",
             ));
         }
-        for (id, json) in &batch.components {
-            if content_id(json.as_bytes()) != *id {
-                return Err(StoreError::invalid("Invalid workspace component."));
-            }
-        }
-        let mut ids = BTreeSet::new();
-        for w in &batch.writes {
-            if !ids.insert(&w.id) {
-                return Err(StoreError::invalid(
-                    "An item may only be written once in one operation.",
-                ));
-            }
-            if let Some(m) = &w.metadata {
-                m.validate()?;
-                if w.metadata_json.as_deref() != Some(&serde_json::to_string(m)?) {
-                    return Err(StoreError::invalid("Inconsistent metadata payload."));
-                }
-            }
-            if let Some(c) = &w.content_json {
-                content(c, batch)?;
-            }
-        }
+        validate_payload(batch, |_| Err(missing_resource()))?;
         Ok(hash)
     }
     /// Persist this in a separate completed transaction before publication. If
@@ -274,51 +196,14 @@ impl BrowserDatabase {
             Switcher => StoreResponse::Switcher(self.switcher.clone()),
             WorkspaceOrder => StoreResponse::WorkspaceOrder(self.workspace_order.clone()),
             UpdateSwitcher { expected, ids } => {
-                validate_switcher_ids(&ids)?;
-                if self.switcher.as_ref() != Some(&ids) {
-                    if self.switcher != expected {
-                        return Err(StoreError::new(
-                            ErrorKind::Conflict,
-                            "Workspace preferences changed in another window. Try again.",
-                        ));
-                    }
-                    for id in &ids {
-                        let item = self.item(id)?;
-                        if item.entity.metadata.kind != ItemKind::Workspace
-                            || item.entity.metadata.deleted_at_ms.is_some()
-                        {
-                            return Err(StoreError::invalid(
-                                "This workspace is no longer available.",
-                            ));
-                        }
-                    }
-                    self.switcher = Some(ids);
-                }
-                StoreResponse::Switcher(self.switcher.clone())
+                StoreResponse::Switcher(update_ids(&mut self.switcher, expected, ids, &self.items)?)
             }
-            UpdateWorkspaceOrder { expected, ids } => {
-                validate_switcher_ids(&ids)?;
-                if self.workspace_order.as_ref() != Some(&ids) {
-                    if self.workspace_order != expected {
-                        return Err(StoreError::new(
-                            ErrorKind::Conflict,
-                            "Workspace preferences changed in another window. Try again.",
-                        ));
-                    }
-                    for id in &ids {
-                        let item = self.item(id)?;
-                        if item.entity.metadata.kind != ItemKind::Workspace
-                            || item.entity.metadata.deleted_at_ms.is_some()
-                        {
-                            return Err(StoreError::invalid(
-                                "This workspace is no longer available.",
-                            ));
-                        }
-                    }
-                    self.workspace_order = Some(ids);
-                }
-                StoreResponse::WorkspaceOrder(self.workspace_order.clone())
-            }
+            UpdateWorkspaceOrder { expected, ids } => StoreResponse::WorkspaceOrder(update_ids(
+                &mut self.workspace_order,
+                expected,
+                ids,
+                &self.items,
+            )?),
             List => StoreResponse::List(
                 self.items
                     .iter()
@@ -338,27 +223,25 @@ impl BrowserDatabase {
                                         .err()
                                         .map(|e| e.to_string())
                                 });
-                        ItemSummary {
-                            id: id.clone(),
-                            metadata: metadata.unwrap_or_else(|_| {
-                                let kind = match s.entity["metadata"]["kind"].as_str() {
-                                    Some("toolbar") => ItemKind::Toolbar,
-                                    _ => ItemKind::Workspace,
-                                };
-                                let mut metadata = Metadata::new(
-                                    kind,
-                                    s.entity["metadata"]["name"]
-                                        .as_str()
-                                        .unwrap_or("Unreadable workspace"),
-                                    0,
-                                );
-                                metadata.builtin =
-                                    s.entity["metadata"]["builtin"].as_bool() == Some(true);
-                                metadata
-                            }),
-                            generations: s.generations,
-                            claim: s.claim.clone(),
-                            error,
+                        match metadata {
+                            Ok(metadata) => ItemSummary {
+                                id: id.clone(),
+                                metadata,
+                                generations: s.generations,
+                                claim: s.claim.clone(),
+                                error,
+                            },
+                            Err(error) => summary_fallback(
+                                id.clone(),
+                                s.entity["metadata"]["kind"].as_str(),
+                                s.entity["metadata"]["name"]
+                                    .as_str()
+                                    .unwrap_or("Unreadable workspace"),
+                                s.entity["metadata"]["builtin"].as_bool() == Some(true),
+                                s.generations,
+                                s.claim.clone(),
+                                error.to_string(),
+                            ),
                         }
                     })
                     .collect(),
@@ -368,21 +251,10 @@ impl BrowserDatabase {
                 s.entity.validate()?;
                 StoreResponse::Entity(Box::new(s))
             }
-            Claim {
-                id,
-                owner,
-                reset_invalid_default,
-            } => StoreResponse::Entity(Box::new(self.claim(
-                &id,
-                owner,
-                reset_invalid_default,
-                now,
-            )?)),
+            Claim { id, owner } => StoreResponse::Entity(Box::new(self.claim(&id, owner, now)?)),
             Renew { id, owner, fence } => {
-                let fence = fence
-                    .parse()
-                    .map_err(|_| StoreError::invalid("Invalid workspace fence."))?;
-                check_owner(&self.item(&id)?, &owner, fence, now)?;
+                let fence = parse_counter(&fence)?;
+                check_claim(self.record(&id)?.claim.as_ref(), &owner, fence, now)?;
                 let claim = crate::Claim {
                     owner,
                     fence,
@@ -420,33 +292,13 @@ impl BrowserDatabase {
             Binding { key } => StoreResponse::Binding(self.bindings.get(&key).cloned()),
             Pending => StoreResponse::Pending(self.pending.values().cloned().collect()),
             Reopen => StoreResponse::Done,
-            DeletePermanently { id, owner, fence } => {
-                let item = self.item(&id)?;
-                check_owner(
-                    &item,
-                    &owner,
-                    fence.parse().map_err(|_| StoreError::conflict())?,
-                    now,
-                )?;
-                if item.entity.metadata.builtin || item.entity.metadata.deleted_at_ms.is_none() {
-                    return Err(StoreError::invalid(
-                        "Only deleted user items can be permanently removed.",
-                    ));
-                }
-                self.remove(&id);
-                StoreResponse::Done
-            }
-            Maintenance {
-                owner,
-                clear_older,
-                apply,
-            } => {
+            Maintenance { owner, clear_older } => {
                 let items: Vec<_> = self
                     .items
                     .values()
                     .filter_map(|r| r.stored().ok().filter(|s| s.entity.validate().is_ok()))
                     .collect();
-                let plan = retention::retention_plan(
+                let changed = retention::retention_plan(
                     &items,
                     owner.as_ref(),
                     now,
@@ -456,33 +308,14 @@ impl BrowserDatabase {
                         HISTORY_BUDGET_BYTES as usize
                     },
                 )?;
-                let mut report = plan.report;
-                report.database_bytes = self.encoded()?.len() as u64;
-                if apply {
-                    // execute() publishes this cloned transaction only on success.
-                    // Vacate all renamed labels before ordinary collision resolution.
-                    for id in &plan.renamed {
-                        self.items.get_mut(id).unwrap().entity["metadata"]["name"] =
-                            serde_json::json!(format!("\0catalog:{id}"));
+                for entity in changed {
+                    let s = self.items.get_mut(&entity.id).unwrap();
+                    if s.stored()?.entity.content != entity.content {
+                        s.generations.layout = advance(s.generations.layout)?;
                     }
-                    for mut entity in plan.changed {
-                        entity.metadata =
-                            self.resolve_name(entity.metadata, &entity.id, NamePolicy::Unique)?;
-                        let s = self.items.get_mut(&entity.id).unwrap();
-                        let old = s.stored()?;
-                        if old.entity.metadata != entity.metadata {
-                            s.generations.metadata = advance(s.generations.metadata)?;
-                        }
-                        if old.entity.content != entity.content {
-                            s.generations.layout = advance(s.generations.layout)?;
-                        }
-                        s.entity = serde_json::to_value(entity)?;
-                    }
-                    for id in plan.expired {
-                        self.remove(&id);
-                    }
+                    s.entity = serde_json::to_value(entity)?;
                 }
-                StoreResponse::Storage(report)
+                StoreResponse::Done
             }
         })
     }
@@ -492,33 +325,16 @@ impl BrowserDatabase {
         self.bindings.retain(|_, v| v != id);
         self.tombstones.insert(id.into());
     }
-    fn resolve_name(
-        &self,
-        mut metadata: Metadata,
-        id: &str,
-        policy: NamePolicy,
-    ) -> Result<Metadata> {
-        if metadata.deleted_at_ms.is_some() {
-            return Ok(metadata);
-        }
-        let exists = |key: &str| {
+    fn resolve_name(&self, metadata: Metadata, id: &str, policy: NamePolicy) -> Result<Metadata> {
+        let kind = metadata.kind.key();
+        apply_name_policy(metadata, policy, |key| {
             Ok(self.items.iter().any(|(other, s)| {
                 let m = &s.entity["metadata"];
                 other != id
-                    && m["kind"].as_str() == Some(metadata.kind.key())
-                    && m["deleted_at_ms"].is_null()
+                    && m["kind"].as_str() == Some(kind)
                     && m["name"].as_str().is_some_and(|name| name_key(name) == key)
             }))
-        };
-        if policy == NamePolicy::Unique {
-            metadata.name = available_name(&metadata.name, exists)?;
-        } else if exists(&name_key(&metadata.name))? {
-            return Err(StoreError::new(
-                ErrorKind::NameCollision,
-                "An item with this name already exists. Choose another name.",
-            ));
-        }
-        Ok(metadata)
+        })
     }
     fn commit(&mut self, batch: CommitBatch, now: u64) -> Result<CommitReceipt> {
         let hash = self.validated_batch(&batch)?;
@@ -530,7 +346,7 @@ impl BrowserDatabase {
                 return Err(StoreError::invalid("Invalid recovery delivery."));
             }
             if self.receipts.contains_key(id) {
-                return Err(StoreError::conflict());
+                return Err(already_saved());
             }
             if let Some(original) = self.pending.get(id)
                 && original.owner != batch.owner
@@ -553,7 +369,7 @@ impl BrowserDatabase {
             items: Vec::new(),
         };
         for w in &batch.writes {
-            let mut s = if w.create {
+            let s = if w.create {
                 if self.items.contains_key(&w.id) || self.tombstones.contains(&w.id) {
                     return Err(StoreError::conflict());
                 }
@@ -597,27 +413,14 @@ impl BrowserDatabase {
                 }
             } else {
                 let mut s = self.item(&w.id)?;
-                check_owner(&s, &batch.owner, w.fence, now)?;
-                if w.metadata.is_some() && w.expected.metadata != s.generations.metadata
-                    || w.content_json.is_some() && w.expected.layout != s.generations.layout
-                    || w.working_json.is_some() && w.expected.working != s.generations.working
-                {
-                    return Err(StoreError::conflict());
+                check_claim(s.claim.as_ref(), &batch.owner, w.fence, now)?;
+                check_update(&s.entity.metadata, s.generations, w)?;
+                if w.delete {
+                    self.remove(&w.id);
+                    receipt.items.push((w.id.clone(), s.generations));
+                    continue;
                 }
                 if let Some(m) = &w.metadata {
-                    if s.entity.metadata.builtin && m.name != s.entity.metadata.name {
-                        return Err(StoreError::invalid(
-                            "Included workspaces cannot be renamed.",
-                        ));
-                    }
-                    if s.entity.metadata.builtin && m.deleted_at_ms.is_some() {
-                        return Err(StoreError::invalid(
-                            "Included workspaces cannot be deleted.",
-                        ));
-                    }
-                    if m.kind != s.entity.metadata.kind || m.builtin != s.entity.metadata.builtin {
-                        return Err(StoreError::invalid("Item type cannot be changed."));
-                    }
                     s.entity.metadata = self.resolve_name(m.clone(), &w.id, w.name_policy)?;
                     s.generations.metadata = advance(s.generations.metadata)?;
                 }
@@ -632,11 +435,6 @@ impl BrowserDatabase {
                 s
             };
             s.entity.validate()?;
-            if s.entity.metadata.deleted_at_ms.is_some() {
-                s.claim = None;
-                self.fences
-                    .insert(w.id.clone(), advance(self.fence(&w.id)?)?.to_string());
-            }
             receipt.items.push((w.id.clone(), s.generations));
             self.items
                 .insert(w.id.clone(), BrowserRecord::from_stored(s)?);
@@ -650,17 +448,10 @@ impl BrowserDatabase {
         for (key, id) in &batch.bindings {
             if let Some(id) = id {
                 let s = self.item(id)?;
-                if s.entity.metadata.kind != ItemKind::Workspace
-                    || s.entity.metadata.deleted_at_ms.is_some()
-                {
-                    return Err(StoreError::invalid(
-                        "The replacement workspace is unavailable.",
-                    ));
-                }
-                check_owner(
-                    &s,
+                check_binding(
+                    s.entity.metadata.kind == ItemKind::Workspace,
+                    s.claim.as_ref(),
                     &batch.owner,
-                    s.claim.as_ref().ok_or_else(StoreError::conflict)?.fence,
                     now,
                 )?;
                 self.bindings.insert(key.clone(), id.clone());

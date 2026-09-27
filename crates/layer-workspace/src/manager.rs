@@ -71,9 +71,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let current = self.current()?;
         let baseline = current.starting_layout(self.platform).ok()?;
         let mut items = self.items();
-        items.retain(|i| {
-            i.metadata.kind == ItemKind::Workspace && i.metadata.deleted_at_ms.is_none()
-        });
+        items.retain(|i| i.metadata.kind == ItemKind::Workspace);
         items.sort_by_key(|i| std::cmp::Reverse(i.metadata.last_used_ms));
         Some(layer_ui::ManagedWorkspace {
             id: current.id,
@@ -200,22 +198,33 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .store
             .execute(StoreRequest::Acknowledge { operation_id: id })
             .await;
+        self.forget_operation(&receipt.operation_id);
+        Ok(receipt)
+    }
+    fn forget_operation(&self, operation_id: &str) {
         let mut state = self.state.borrow_mut();
         if state
             .failed_operation
             .as_ref()
-            .is_some_and(|b| b.operation_id == receipt.operation_id)
+            .is_some_and(|b| b.operation_id == operation_id)
         {
             state.failed_operation = None;
         }
         state
             .older_failed_operations
-            .retain(|b| b.operation_id != receipt.operation_id);
-        if state.error_operation.as_deref() == Some(&receipt.operation_id) {
+            .retain(|b| b.operation_id != operation_id);
+        if state.error_operation.as_deref() == Some(operation_id) {
             state.error = None;
             state.error_operation = None;
         }
-        Ok(receipt)
+    }
+    fn bind_window(&self, batch: &mut CommitBatch, id: &str) {
+        batch
+            .bindings
+            .push(("last_workspace".into(), Some(id.into())));
+        batch
+            .bindings
+            .push((format!("window:{}", self.owner.id), Some(id.into())));
     }
     pub fn has_failed_operation(&self) -> bool {
         let state = self.state.borrow();
@@ -255,27 +264,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Ok(())
     }
     pub async fn load(&self, id: &str) -> Result<StoredEntity> {
-        let loaded = self
+        match self
             .store
             .execute(StoreRequest::Load { id: id.into() })
-            .await;
-        if model::is_default_item(id)
-            && loaded
-                .as_ref()
-                .is_err_and(|e| e.kind == ErrorKind::InvalidData)
+            .await?
         {
-            // Previews/details also load workspaces before a switch. Repair at
-            // this boundary too, using the same atomic, ownership-checked claim.
-            // Never leave a preview holding an inactive workspace's lease.
-            let mut incoming = self.claim(id).await?;
-            if self.active_id().as_deref() != Some(id) {
-                self.release_checked(&incoming).await?;
-                incoming.claim = None;
-            }
-            self.refresh().await?;
-            return Ok(incoming);
-        }
-        match loaded? {
             StoreResponse::Entity(entity) => Ok(*entity),
             _ => Err(StoreError::invalid("Unexpected workspace load reply.")),
         }
@@ -286,7 +279,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .execute(StoreRequest::Claim {
                 id: id.into(),
                 owner: self.owner.clone(),
-                reset_invalid_default: Some(self.platform),
             })
             .await?
         {
@@ -316,7 +308,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .execute(StoreRequest::Maintenance {
                 owner: None,
                 clear_older: false,
-                apply: true,
             })
             .await?;
         self.refresh().await?;
@@ -334,11 +325,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let prior_workspace = self
             .items()
             .into_iter()
-            .filter(|i| {
-                i.metadata.kind == ItemKind::Workspace
-                    && i.metadata.deleted_at_ms.is_none()
-                    && !i.metadata.builtin
-            })
+            .filter(|i| i.metadata.kind == ItemKind::Workspace && !i.metadata.builtin)
             .max_by_key(|i| i.metadata.last_used_ms)
             .map(|i| i.id);
         self.initialize_catalog(now).await?;
@@ -353,11 +340,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             _ => None,
         };
         let id = binding
-            .filter(|id| {
-                self.items()
-                    .iter()
-                    .any(|i| &i.id == id && i.metadata.deleted_at_ms.is_none())
-            })
+            .filter(|id| self.items().iter().any(|i| &i.id == id))
             .or(prior_workspace)
             .unwrap_or_else(|| DEFAULT_WORKSPACES[1].0.into());
         self.prepare_startup(&id, now).await
@@ -376,9 +359,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     async fn prepare_startup_inner(&self, preferred: &str, now: u64, resume: bool) -> Result<StoredEntity> {
         self.refresh().await?;
         let mut candidates = self.items();
-        candidates.retain(|item| {
-            item.metadata.kind == ItemKind::Workspace && item.metadata.deleted_at_ms.is_none()
-        });
+        candidates.retain(|item| item.metadata.kind == ItemKind::Workspace);
         candidates.sort_by_key(|item| {
             let priority = if item.id == preferred {
                 0
@@ -399,7 +380,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 Ok(incoming) => return Ok(incoming),
                 // Claims, rather than the catalog's lease snapshot, decide
                 // availability when several windows open at the same time.
-                Err(error) if error.kind == ErrorKind::OwnedElsewhere => continue,
+                Err(error)
+                    if matches!(
+                        error.kind,
+                        ErrorKind::OwnedElsewhere | ErrorKind::InvalidData
+                    ) =>
+                {
+                    continue;
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -472,12 +460,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 name_policy,
             }],
         )?;
-        batch
-            .bindings
-            .push(("last_workspace".into(), Some(id.clone())));
-        batch
-            .bindings
-            .push((format!("window:{}", self.owner.id), Some(id.clone())));
+        self.bind_window(&mut batch, &id);
         batch.pin_workspaces.push(id.clone());
         self.publish(batch).await?;
         self.refresh().await?;
@@ -491,11 +474,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.flush().await?;
         let mut incoming = self.claim(id).await?;
         let outcome = async {
-            if incoming.entity.metadata.deleted_at_ms.is_some() {
-                return Err(StoreError::invalid(
-                    "This workspace was deleted. Choose another workspace.",
-                ));
-            }
             PreparedWorkspace::new(incoming.entity.capture()?).map_err(StoreError::invalid)?;
             if resume {
                 return Ok(incoming.clone());
@@ -506,12 +484,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 self.owner.clone(),
                 vec![update(&incoming, Some(metadata.clone()), None, None)?],
             )?;
-            batch
-                .bindings
-                .push(("last_workspace".into(), Some(id.into())));
-            batch
-                .bindings
-                .push((format!("window:{}", self.owner.id), Some(id.into())));
+            self.bind_window(&mut batch, id);
             let receipt = self.publish(batch).await?;
             incoming.entity.metadata = metadata;
             incoming.generations = receipt.items[0].1;
@@ -696,9 +669,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .clone()
             .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
         let incoming = self.claim(&saved.entity.id).await?;
-        if incoming.entity.metadata.deleted_at_ms.is_some()
-            || incoming.generations != saved.generations
-        {
+        if incoming.generations != saved.generations {
             self.release(&incoming).await;
             return Err(StoreError::new(
                 ErrorKind::Conflict,

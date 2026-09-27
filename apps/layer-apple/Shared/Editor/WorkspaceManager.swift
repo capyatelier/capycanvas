@@ -213,7 +213,7 @@ import SwiftUI
             try await library.flush(); try await refresh()
         case "rename_toolbar", "duplicate_toolbar", "delete_toolbar":
             pendingCustomization = JSON(["type": type, "panel": value.raw]); presented = false
-        case "new", "rename", "duplicate", "reset_brushes", "save_toolbar", "update_toolbar",
+        case "new", "rename", "reset_brushes", "save_toolbar", "update_toolbar",
             "delete", "save_as_new", "replace_toolbar", "new_toolbar", "recover_interrupted":
             let wasPresented = presented
             let spec = try await library.read(["type": "prompt", "action": action.raw])["prompt"]
@@ -234,19 +234,6 @@ import SwiftUI
         case "new":
             operation["type"] = "new"; closeAfter = true
         case "rename": operation["type"] = "rename"
-        case "duplicate":
-            operation["type"] = "duplicate"
-            let source = try await library.read(["type": "load", "id": value.raw])
-            if source["entity"]["metadata"]["kind"].string == "workspace",
-                !source["claim"].isNull, source["claim"]["owner"]["id"].string != library.status["owner"].string,
-                (UInt64(source["claim"]["expires_at_ms"].string) ?? 0) > UInt64(Date().timeIntervalSince1970 * 1000) {
-                guard let other = EditorStore.workspaceOwner(id: value.string, owner: source["claim"]["owner"]["id"].string)?.workspaceLibrary else {
-                    throw HostFailure(message: "Close the workspace in its other application process to finish saving before copying it here.")
-                }
-                operation["source"] = try await other.snapshotForCopy().raw
-                operation["type"] = "duplicate_snapshot"
-            }
-            closeAfter = source["entity"]["metadata"]["kind"].string == "workspace"
         case "reset": operation["type"] = "reset"
         case "save_toolbar": operation["type"] = "save_toolbar"; operation["panel"] = value.raw; nextPage = "toolbar_library"
         case "update_toolbar": operation["type"] = "update_toolbar"; operation["panel"] = try JSON.decode(choice).raw
@@ -318,7 +305,7 @@ import SwiftUI
     func refreshHistory(_ selected: String?) async throws {
         requestGeneration &+= 1
         let generation = requestGeneration
-        let result = try await service().read(["type": "history", "id": historyID, "mode": "layout",
+        let result = try await service().read(["type": "history", "id": historyID,
             "selected": selected as Any? ?? NSNull()])
         guard generation == requestGeneration else { return }
         history = result["history"]

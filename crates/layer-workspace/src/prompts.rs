@@ -62,7 +62,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     fn choices_for(&self, kind: ItemKind) -> Vec<ManagerChoice> {
         self.items()
             .into_iter()
-            .filter(|i| i.metadata.kind == kind && i.metadata.deleted_at_ms.is_none())
+            .filter(|i| i.metadata.kind == kind)
             .map(|i| ManagerChoice {
                 id: i.id,
                 label: i.metadata.name,
@@ -107,15 +107,37 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         now: u64,
     ) -> Result<ManagerPrompt, StoreError> {
         use ManagerAction as A;
+        if matches!(action, A::RecoverInterrupted) {
+            let choices = self
+                .interrupted_changes(now)
+                .await?
+                .into_iter()
+                .map(|(id, label)| ManagerChoice { id, label })
+                .collect::<Vec<_>>();
+            if choices.is_empty() {
+                return Err(StoreError::invalid(
+                    "There are no interrupted changes to recover.",
+                ));
+            }
+            return Ok(ManagerPrompt::confirm("Recover Interrupted Changes","Recover the selected changes into independent copies with unique names. Existing items stay as they are.","Recover Copies")
+                .choices("Interrupted changes",choices,None));
+        }
         let source = match action {
-            A::Rename(id)
-            | A::Duplicate(id)
-            | A::Reset(id)
-            | A::Delete(id)
-            | A::UpdateToolbar(id) => Some(self.presentation_entity(id).await?),
+            A::Rename(id) | A::Reset(id) | A::Delete(id) | A::UpdateToolbar(id) => {
+                Some(self.presentation_entity(id).await?.metadata)
+            }
             _ => None,
         };
-        let mut p = match action {
+        self.form_prompt(action, source.as_ref())
+    }
+    pub fn form_prompt(
+        &self,
+        action: &ManagerAction,
+        source: Option<&Metadata>,
+    ) -> Result<ManagerPrompt, StoreError> {
+        use ManagerAction as A;
+        let source = || source.ok_or_else(|| StoreError::invalid("Choose an item."));
+        Ok(match action {
             A::New => {
                 let mut p = ManagerPrompt::confirm(
                     "New Workspace",
@@ -135,32 +157,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 p
             }
             A::Rename(_) => {
-                let s = source.as_ref().unwrap();
+                let s = source()?;
                 let mut p = ManagerPrompt::confirm(
                     "Rename",
                     "Choose a name and optional description.",
                     "Rename",
                 );
-                p.name = Some(s.metadata.name.clone());
-                p.description = Some(s.metadata.description.clone());
-                p
-            }
-            A::Duplicate(_) => {
-                let s = source.as_ref().unwrap();
-                let mut p = if s.metadata.kind == ItemKind::Workspace {
-                    ManagerPrompt::confirm(
-                        "Duplicate Workspace",
-                        "The copy keeps its own changes, history, working values, and original reset target.",
-                        "Duplicate and Switch",
-                    )
-                } else {
-                    ManagerPrompt::confirm(
-                        "Duplicate",
-                        "Create an independent, editable copy in your library.",
-                        "Duplicate",
-                    )
-                };
-                p.name = Some(format!("{} Copy", s.metadata.name));
+                p.name = Some(s.name.clone());
+                p.description = Some(s.description.clone());
                 p
             }
             A::SaveToolbar(panel) => {
@@ -182,15 +186,30 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 p.name = Some(toolbar.title().into());
                 p
             }
-            A::Reset(_) => {
-                let p = reset_prompt(source.as_ref().unwrap())?;
-                ManagerPrompt::confirm(p.title, p.message, p.confirm)
+            A::Reset(id) => {
+                let s = source()?;
+                if s.kind != ItemKind::Workspace {
+                    return Err(StoreError::invalid("Choose a workspace."));
+                }
+                ManagerPrompt::confirm(
+                    "Restore Starting Layout",
+                    format!(
+                        "{} The arrangement shown behind this dialog is a preview. You can undo restoring it with {} → Undo Workspace.",
+                        if s.builtin && is_default_item(id) {
+                            "Restore the latest default layout for this workspace."
+                        } else {
+                            "Restore this workspace’s saved starting layout."
+                        },
+                        layer_ui::WORKSPACE_MENU_LABEL
+                    ),
+                    "Restore",
+                )
             }
             A::Delete(id) => {
-                let s = source.as_ref().unwrap();
+                let s = source()?;
                 let mut p = ManagerPrompt::confirm(
                     "Delete",
-                    format!("Delete “{}”? This is permanent.", s.metadata.name),
+                    format!("Delete “{}”? This is permanent.", s.name),
                     "Delete",
                 );
                 if self.active_id().as_deref() == Some(id) {
@@ -212,7 +231,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 let current = self
                     .current()
                     .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
-                ManagerPrompt::confirm("Update Saved Toolbar",format!("Choose a toolbar from {} to update {}. Previous versions remain available; existing workspace copies stay as they are.",current.metadata.name,source.as_ref().unwrap().metadata.name),"Update")
+                ManagerPrompt::confirm("Update Saved Toolbar",format!("Choose a toolbar from {} to replace the saved {}. Existing workspace copies stay as they are.",current.metadata.name,source()?.name),"Update")
                     .choices("Toolbar",self.current_toolbar_choices()?,None)
             }
             A::SaveAsNew => {
@@ -224,30 +243,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 p.name = Some("Recovered Workspace".into());
                 p
             }
-            A::RecoverInterrupted => {
-                let choices = self
-                    .interrupted_changes(now)
-                    .await?
-                    .into_iter()
-                    .map(|(id, label)| ManagerChoice { id, label })
-                    .collect::<Vec<_>>();
-                if choices.is_empty() {
-                    return Err(StoreError::invalid(
-                        "There are no interrupted changes to recover.",
-                    ));
-                }
-                ManagerPrompt::confirm("Recover Interrupted Changes","Recover the selected changes into independent copies with unique names. Existing items stay as they are.","Recover Copies")
-                    .choices("Interrupted changes",choices,None)
-            }
             _ => {
                 return Err(StoreError::invalid(
                     "This action does not use a workspace form.",
                 ));
             }
-        };
-        if p.selected.is_none() {
-            p.selected = p.choices.first().map(|c| c.id.clone());
-        }
-        Ok(p)
+        })
     }
 }

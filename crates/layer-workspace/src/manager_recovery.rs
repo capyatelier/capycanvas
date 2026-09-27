@@ -66,7 +66,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             let names: Vec<_> = batch
                 .writes
                 .iter()
-                .filter(|w| !(w.create && model::is_default_item(&w.id)))
+                .filter(|w| !w.delete && !(w.create && model::is_default_item(&w.id)))
                 .map(|write| {
                     write
                         .metadata
@@ -103,7 +103,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.flush().await?;
         let mut entities = Vec::new();
         for write in &batch.writes {
-            if write.create && model::is_default_item(&write.id) {
+            if write.delete || (write.create && model::is_default_item(&write.id)) {
                 continue;
             }
             let base = if write.create {
@@ -126,7 +126,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 );
             }
             entity.metadata.builtin = false;
-            entity.metadata.deleted_at_ms = None;
             entity.metadata.created_at_ms = now;
             entity.metadata.last_used_ms = now;
             entity.validate()?;
@@ -151,32 +150,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         recovery.abandon_operations = batch.abandon_operations;
         recovery.abandon_operations.push(operation.into());
         if let Some(id) = &incoming {
-            recovery
-                .bindings
-                .push(("last_workspace".into(), Some(id.clone())));
-            recovery
-                .bindings
-                .push((format!("window:{}", self.owner.id), Some(id.clone())));
+            self.bind_window(&mut recovery, id);
         }
         self.publish(recovery).await?;
-        self.state
-            .borrow_mut()
-            .older_failed_operations
-            .retain(|b| b.operation_id != operation);
-        if self
-            .state
-            .borrow()
-            .failed_operation
-            .as_ref()
-            .is_some_and(|b| b.operation_id == operation)
-        {
-            let mut state = self.state.borrow_mut();
-            state.failed_operation = None;
-            if state.error_operation.as_deref() == Some(operation) {
-                state.error = None;
-                state.error_operation = None;
-            }
-        }
+        self.forget_operation(operation);
         self.refresh().await?;
         match incoming {
             Some(id) => self.load(&id).await.map(Some),

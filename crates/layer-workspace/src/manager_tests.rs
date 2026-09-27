@@ -59,7 +59,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let directory = std::env::temp_dir().join(format!("capy-workspace-manager-{}", new_id()));
+        let directory = crate::test_support::temp_dir("workspace-manager");
         let worker = StoreWorker::shared(&directory).unwrap();
         let manager = WorkspaceManager::new(
             TestStore {
@@ -85,97 +85,6 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn included_name_write_failure_is_atomic_and_retryable_without_claims() {
-    pollster::block_on(async {
-        let f = Fixture::new();
-        let m = &f.manager;
-        m.close().await.unwrap();
-        let id = DEFAULT_WORKSPACES[0].0;
-        let before = m.load(id).await.unwrap();
-        let mut metadata = before.entity.metadata.clone();
-        metadata.name = "Painter".into();
-        rusqlite::Connection::open(f.directory.join("workspaces.sqlite3"))
-            .unwrap()
-            .execute(
-                "UPDATE items SET metadata=?1,name=?2,name_key=?3 WHERE id=?4",
-                rusqlite::params![
-                    serde_json::to_string(&metadata).unwrap(),
-                    metadata.name,
-                    name_key(&metadata.name),
-                    id
-                ],
-            )
-            .unwrap();
-        let db = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
-        db.execute_batch("CREATE TRIGGER fail_catalog_name BEFORE UPDATE OF name ON items BEGIN SELECT RAISE(ABORT, 'Test catalog write failure'); END;").unwrap();
-        assert!(m.initialize_catalog(2_000).await.is_err());
-        assert!(!m.has_failed_operation());
-        assert!(m.load(id).await.unwrap().claim.is_none());
-        assert_eq!(m.load(id).await.unwrap().entity.metadata.name, "Painter");
-        db.execute_batch("DROP TRIGGER fail_catalog_name;").unwrap();
-        m.initialize_catalog(3_000).await.unwrap();
-        let saved = m.load(id).await.unwrap();
-        assert_eq!(saved.entity.metadata.name, "Sketch");
-        assert_eq!(saved.entity.content, before.entity.content);
-        assert_eq!(saved.entity.working, before.entity.working);
-        assert!(
-            saved.claim.is_none(),
-            "catalog name maintenance never acquires a claim"
-        );
-    });
-}
-
-#[test]
-fn included_names_refresh_without_resetting_workspaces_or_rewriting_on_reopen() {
-    pollster::block_on(async {
-        let f = Fixture::new();
-        f.manager.close().await.unwrap();
-        let connection =
-            rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
-        let mut before = Vec::new();
-        for (id, preset) in DEFAULT_WORKSPACES {
-            let mut saved = f.manager.load(id).await.unwrap();
-            // Older builds persisted longer labels. Contents and working state
-            // must be preserved even when the included workspace was customized.
-            let old_name = format!("Old {}", preset.name());
-            saved.entity.metadata.name = old_name.clone();
-            saved.entity.working.as_mut().unwrap().zen_mode = true;
-            connection
-                .execute(
-                    "UPDATE items SET metadata=?1,name=?2,name_key=?3,working=?4 WHERE id=?5",
-                    rusqlite::params![
-                        serde_json::to_string(&saved.entity.metadata).unwrap(),
-                        old_name,
-                        name_key(&old_name),
-                        serde_json::to_string(&saved.entity.working).unwrap(),
-                        id
-                    ],
-                )
-                .unwrap();
-            before.push(saved);
-        }
-        let m = WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
-        m.initialize_catalog(3_000).await.unwrap();
-        let mut renamed = Vec::new();
-        for (old, (id, preset)) in before.iter().zip(DEFAULT_WORKSPACES) {
-            let saved = m.load(id).await.unwrap();
-            assert_eq!(saved.entity.metadata.name, preset.name());
-            assert_eq!(saved.entity.content, old.entity.content);
-            assert_eq!(saved.entity.working, old.entity.working);
-            assert_eq!(saved.generations.layout, old.generations.layout);
-            assert_eq!(saved.generations.working, old.generations.working);
-            assert!(saved.generations.metadata > old.generations.metadata);
-            assert!(saved.claim.is_none());
-            renamed.push(saved);
-        }
-        m.initialize_catalog(4_000).await.unwrap();
-        for saved in renamed {
-            assert_eq!(m.load(&saved.entity.id).await.unwrap(), saved);
-        }
-    });
-}
-
-#[test]
 fn concurrent_default_catalog_creation_retires_only_the_duplicate_seed() {
     struct RacingStore {
         worker: StoreWorker,
@@ -191,7 +100,7 @@ fn concurrent_default_catalog_creation_retires_only_the_duplicate_seed() {
         }
     }
     pollster::block_on(async {
-        let directory = std::env::temp_dir().join(format!("capy-defaults-race-{}", new_id()));
+        let directory = crate::test_support::temp_dir("defaults-race");
         let worker = StoreWorker::shared(&directory).unwrap();
         let m = WorkspaceManager::new(
             RacingStore {
@@ -306,6 +215,39 @@ fn startup_write_failure_does_not_switch_elsewhere_or_create_a_workspace() {
 }
 
 #[test]
+fn undecodable_builtin_is_reported_without_replacement() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        f.manager.close().await.unwrap();
+        let id = DEFAULT_WORKSPACES[1].0;
+        let db = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+        db.execute("UPDATE items SET metadata='{' WHERE id=?1", [id])
+            .unwrap();
+        let row = || -> Vec<String> {
+            db.query_row(
+                "SELECT metadata,content,working,fence,metadata_generation FROM items WHERE id=?1",
+                [id],
+                |r| Ok(vec![r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?]),
+            )
+            .unwrap()
+        };
+        let before = row();
+        let m = WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
+        assert_eq!(
+            m.prepare_switch(id, 2_000).await.unwrap_err().kind,
+            ErrorKind::InvalidData
+        );
+        assert_eq!(row(), before);
+        let incoming = m.initialize(3_000).await.unwrap();
+        assert_eq!(incoming.entity.id, DEFAULT_WORKSPACES[0].0);
+        assert_eq!(row(), before);
+        assert!(m.items().iter().any(|i| i.id == id && i.error.is_some()));
+        m.activate(incoming);
+        m.close().await.unwrap();
+    });
+}
+
+#[test]
 fn active_deletion_without_a_replacement_never_creates_a_workspace() {
     pollster::block_on(async {
         let defaults = [
@@ -330,33 +272,21 @@ fn active_deletion_without_a_replacement_never_creates_a_workspace() {
             let result = m.delete_item(&id, None, 3_000).await;
             if occupied == defaults.len() {
                 assert!(result.is_err());
-                assert!(
-                    m.load(&id)
-                        .await
-                        .unwrap()
-                        .entity
-                        .metadata
-                        .deleted_at_ms
-                        .is_none()
-                );
+                assert!(m.load(&id).await.is_ok());
                 assert_eq!(m.active_id().as_deref(), Some(id.as_str()));
             } else {
                 let incoming = result.unwrap().unwrap();
                 assert_eq!(incoming.entity.id, defaults[occupied]);
-                assert!(
-                    m.load(&id)
-                        .await
-                        .unwrap()
-                        .entity
-                        .metadata
-                        .deleted_at_ms
-                        .is_some()
-                );
+                assert_eq!(m.load(&id).await.unwrap_err().kind, ErrorKind::NotFound);
                 let outgoing = m.activate(incoming).unwrap();
                 m.release(&outgoing).await;
             }
             m.refresh().await.unwrap();
-            assert_eq!(m.items().len(), 4, "Deletion never adds a replacement row");
+            assert_eq!(
+                m.items().len(),
+                if occupied == defaults.len() { 4 } else { 3 },
+                "Deletion never adds a replacement row"
+            );
             for id in &defaults[..occupied] {
                 let record = other.load(id).await.unwrap();
                 assert_eq!(record.claim.as_ref().unwrap().owner, other.owner);
@@ -463,7 +393,7 @@ fn included_workspace_history_restores_layout_but_respects_active_owners() {
             (current.as_str(), true, false),
         ] {
             let view = m
-                .history_view(&id, ManagerHistoryMode::Layout, Some(revision), idle, 3_000)
+                .history_view(&id, Some(revision), idle, 3_000)
                 .await
                 .unwrap();
             assert_eq!(view.restore.is_some(), enabled);
@@ -471,7 +401,7 @@ fn included_workspace_history_restores_layout_but_respects_active_owners() {
         let other =
             WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
         let view = other
-            .history_view(&id, ManagerHistoryMode::Layout, Some("r0"), true, 3_000)
+            .history_view(&id, Some("r0"), true, 3_000)
             .await
             .unwrap();
         assert!(view.restore.is_none());
@@ -558,7 +488,6 @@ fn resumed_owner_revalidates_without_losing_dirty_edits_or_overwriting_successor
             .request(StoreRequest::Claim {
                 id: id.clone(),
                 owner: other.clone(),
-                reset_invalid_default: None,
             })
             .await
             .unwrap()
@@ -884,8 +813,10 @@ fn manager_recovery_library_and_backup_round_trip() {
             "Reusable Tools (2)"
         );
         m.delete_item(&library, None, 16_000).await.unwrap();
-        m.delete_permanently(&library).await.unwrap();
-        assert!(m.load(&library).await.is_err());
+        assert_eq!(
+            m.load(&library).await.unwrap_err().kind,
+            ErrorKind::NotFound
+        );
         assert_eq!(
             m.current().unwrap().capture().unwrap().history.layout(),
             &changed

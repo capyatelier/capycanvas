@@ -582,11 +582,6 @@ impl ManagerUi {
                     return;
                 }
                 let result = stored.and_then(|stored| {
-                    if stored.entity.metadata.deleted_at_ms.is_some() {
-                        return Err(StoreError::invalid(
-                            "This workspace was deleted. Choose another workspace.",
-                        ));
-                    }
                     let details =
                         w.workspaces
                             .manager

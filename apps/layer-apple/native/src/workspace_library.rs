@@ -47,7 +47,6 @@ enum Request {
     },
     History {
         id: String,
-        mode: ManagerHistoryMode,
         selected: Option<String>,
         idle: Option<bool>,
         now: u64,
@@ -60,7 +59,6 @@ enum Request {
         now: u64,
     },
     Flush,
-    Renew,
     Revalidate {
         now: u64,
     },
@@ -77,29 +75,14 @@ enum Request {
         operation: Operation,
         now: u64,
     },
-    Storage {
-        clear_older: bool,
-        apply: bool,
-    },
-    Interrupted {
-        now: u64,
-    },
     Recover {
         id: String,
         now: u64,
-    },
-    Export {
-        id: Option<String>,
-        #[serde(default, deserialize_with = "json_field")]
-        capture: Option<WorkspaceCapture>,
     },
     Import {
         text: String,
         kind: PackageKind,
         now: u64,
-    },
-    Backup {
-        path: String,
     },
 }
 
@@ -110,10 +93,6 @@ enum Operation {
         id: String,
     },
     New {
-        name: String,
-    },
-    Duplicate {
-        id: String,
         name: String,
     },
     Rename {
@@ -133,37 +112,13 @@ enum Operation {
         id: String,
         revision: Option<String>,
     },
-    OpenHistory {
-        id: String,
-        revision: String,
-        name: String,
-    },
-    RestoreVersion {
-        id: String,
-        version: String,
-    },
-    RestoreMetadata {
-        id: String,
-        version: String,
-    },
     Delete {
         id: String,
         replacement: Option<String>,
     },
-    RestoreDeleted {
-        id: String,
-    },
-    DeletePermanently {
-        id: String,
-    },
     SaveAsNew {
         #[serde(deserialize_with = "json_field")]
         capture: WorkspaceCapture,
-        name: String,
-    },
-    DuplicateSnapshot {
-        #[serde(deserialize_with = "json_field")]
-        source: Entity,
         name: String,
     },
 }
@@ -292,8 +247,7 @@ impl CapyWorkspaceLibrary {
                 // workspace before switching back to the saved scene identity.
                 let incoming = if let Some(id) = saved {
                     let candidate = match self.manager.load(&id).await {
-                        Ok(value) if value.entity.metadata.deleted_at_ms.is_none() => Some(value),
-                        Ok(_) => None,
+                        Ok(value) => Some(value),
                         Err(error) if error.kind == ErrorKind::NotFound => None,
                         Err(error) => return Err(error),
                     };
@@ -429,16 +383,11 @@ impl CapyWorkspaceLibrary {
             }
             Request::Toolbar { id, name } => {
                 let mut definition = if let Some(id) = id {
-                    let entity = self.manager.load(&id).await?.entity;
-                    if entity.metadata.deleted_at_ms.is_some() {
-                        return Err(StoreError::invalid(
-                            "Restore this toolbar from Recently Deleted first.",
-                        ));
-                    }
-                    let ItemContent::Reusable { current, .. } = entity.content else {
+                    let ItemContent::Toolbar { definition } =
+                        self.manager.load(&id).await?.entity.content
+                    else {
                         return Err(StoreError::invalid("Choose a saved toolbar."));
                     };
-                    let ReusableContent::Toolbar { definition } = current.content;
                     definition
                 } else {
                     ToolbarDefinition {
@@ -476,14 +425,13 @@ impl CapyWorkspaceLibrary {
             }
             Request::History {
                 id,
-                mode,
                 selected,
                 idle,
                 now,
             } => {
                 let history = self
                     .manager
-                    .history_view(&id, mode, selected.as_deref(), idle.unwrap_or(false), now)
+                    .history_view(&id, selected.as_deref(), idle.unwrap_or(false), now)
                     .await?;
                 let preview=history.preview.as_ref().map(|layout| {
                     let resolved=layout.workspace(1000.,700.,layer_ui::HEADER_HEIGHT,layer_ui::STATUS_HEIGHT);
@@ -507,10 +455,6 @@ impl CapyWorkspaceLibrary {
                 if self.resume_error.is_some() {
                     self.save_resume_key().await?;
                 }
-                Ok(Value::Null)
-            }
-            Request::Renew => {
-                self.manager.renew().await?;
                 Ok(Value::Null)
             }
             Request::Revalidate { now } => {
@@ -573,40 +517,12 @@ impl CapyWorkspaceLibrary {
                 Ok(Value::Null)
             }
             Request::Operation { operation, now } => self.operation(operation, now).await,
-            Request::Storage { clear_older, apply } => {
-                if apply {
-                    if let Some(incoming) = self.manager.maintain_storage(clear_older).await? {
-                        return self.prepare(incoming);
-                    }
-                }
-                Ok(json!({"storage":self.manager.storage_report(clear_older).await?}))
-            }
-            Request::Interrupted { now } => {
-                Ok(json!({"interrupted":self.manager.interrupted_changes(now).await?}))
-            }
             Request::Recover { id, now } => {
                 if let Some(incoming) = self.manager.recover_interrupted(&id, now).await? {
                     self.prepare(incoming)
                 } else {
                     Ok(Value::Null)
                 }
-            }
-            Request::Export { id, capture } => {
-                let entity = if let Some(id) = id {
-                    self.manager.load(&id).await?.entity
-                } else if let Some(entity) = self.manager.current() {
-                    entity
-                } else if let Some(capture) = capture {
-                    capture.validate().map_err(StoreError::invalid)?;
-                    let baseline = capture.history.layout().clone();
-                    Entity::workspace("Recovered Workspace", capture, baseline, 0)
-                } else {
-                    return Err(StoreError::invalid("No workspace is active."));
-                };
-                Ok(
-                    json!({"name":entity.metadata.name,"extension":PackageKind::for_entity(&entity).extension(),
-                    "text":String::from_utf8(export_package(&entity)?).map_err(|e|StoreError::invalid(e.to_string()))?}),
-                )
             }
             Request::Import { text, kind, now } => {
                 if kind == PackageKind::WorkspaceBackup {
@@ -621,10 +537,6 @@ impl CapyWorkspaceLibrary {
                     )
                 }
             }
-            Request::Backup { path } => {
-                self.manager.store.backup_database(Path::new(&path)).await?;
-                Ok(Value::Null)
-            }
         }
     }
     // One future per operation keeps the debug poll frames bounded on Apple's
@@ -637,14 +549,6 @@ impl CapyWorkspaceLibrary {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + '_>> {
         macro_rules! run { ($body:block) => { Box::pin(async move $body) }; }
         match operation {
-            Operation::DuplicateSnapshot { source, name } => run!({
-                source.validate()?;
-                let incoming = self
-                    .manager
-                    .create_from_snapshot(source, &name, true, now)
-                    .await?;
-                self.prepare(incoming)
-            }),
             Operation::Switch { id } => run!({
                 let incoming = self.manager.prepare_switch(&id, now).await?;
                 self.prepare(incoming)
@@ -652,17 +556,6 @@ impl CapyWorkspaceLibrary {
             Operation::New { name } => run!({
                 let incoming = self.manager.create_workspace(&name, now).await?;
                 self.prepare(incoming)
-            }),
-            Operation::Duplicate { id, name } => run!({
-                if self.manager.load(&id).await?.entity.metadata.kind == ItemKind::Workspace {
-                    let incoming = self
-                        .manager
-                        .create_from_workspace(&id, &name, true, now)
-                        .await?;
-                    self.prepare(incoming)
-                } else {
-                    Ok(json!({"selected":self.manager.duplicate_reusable(&id, &name, now).await?}))
-                }
             }),
             Operation::Rename {
                 id,
@@ -688,9 +581,7 @@ impl CapyWorkspaceLibrary {
                         .panel(panel)
                         .map_err(StoreError::invalid)?,
                 )?;
-                self.manager
-                    .update_reusable(&id, ReusableContent::Toolbar { definition }, now)
-                    .await?;
+                self.manager.update_toolbar(&id, definition, now).await?;
                 Ok(Value::Null)
             }),
             Operation::Reset { id, revision } => run!({
@@ -703,34 +594,6 @@ impl CapyWorkspaceLibrary {
                 } else {
                     Ok(Value::Null)
                 }
-            }),
-            Operation::OpenHistory { id, revision, name } => run!({
-                let incoming = self
-                    .manager
-                    .open_history_as_workspace(&id, &revision, &name, now)
-                    .await?;
-                self.prepare(incoming)
-            }),
-            Operation::RestoreVersion { id, version } => run!({
-                self.manager
-                    .restore_reusable_version(&id, &version, now)
-                    .await?;
-                Ok(Value::Null)
-            }),
-            Operation::RestoreMetadata { id, version } => run!({
-                let entity = self.manager.load(&id).await?.entity;
-                let value = entity
-                    .metadata
-                    .previous
-                    .iter()
-                    .find(|v| v.id == version)
-                    .ok_or_else(|| {
-                        StoreError::invalid("This name and description are no longer retained.")
-                    })?;
-                self.manager
-                    .rename(&id, &value.name, &value.description, now)
-                    .await?;
-                Ok(json!({"binding":self.manager.binding()}))
             }),
             Operation::Delete { id, replacement } => run!({
                 let replacement = match replacement {
@@ -745,14 +608,6 @@ impl CapyWorkspaceLibrary {
                     Some(incoming) => self.prepare(incoming),
                     None => Ok(Value::Null),
                 }
-            }),
-            Operation::RestoreDeleted { id } => run!({
-                self.manager.restore_deleted(&id, now).await?;
-                Ok(Value::Null)
-            }),
-            Operation::DeletePermanently { id } => run!({
-                self.manager.delete_permanently(&id).await?;
-                Ok(Value::Null)
             }),
             Operation::SaveAsNew { capture, name } => run!({
                 let incoming = self.manager.save_as_new(capture, &name, now).await?;
