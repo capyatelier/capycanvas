@@ -119,9 +119,10 @@ class AndroidRasterTest {
         if (compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()) compose.onNodeWithTag(tag).assertIsDisplayed().performClick()
         else {
             val label = state()!!.array("commands").objects().first { it.getString("id") == command }.getString("label")
+            val entry = hasText(label) and !hasTestTag("tool-action-$command")
             compose.onNodeWithTag("canvas-bar-more").performClick()
-            compose.waitUntil(10_000) { compose.onAllNodesWithText(label).fetchSemanticsNodes().isNotEmpty() }
-            compose.onNodeWithText(label).performClick()
+            compose.waitUntil(10_000) { compose.onAllNodes(entry).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNode(entry).performClick()
         }
         compose.waitForIdle(); tick()
     }
@@ -201,7 +202,7 @@ class AndroidRasterTest {
     }
     private fun manifest(bytes: ByteArray): JSONObject {
         assertArrayEquals("CAPYRASTER".toByteArray(),bytes.copyOfRange(0,10))
-        assertTrue("Native archive version", bytes[10].toInt() == 7 && bytes[11].toInt() == 0)
+        assertTrue("Native archive version", bytes[10].toInt() == 8 && bytes[11].toInt() == 0)
         val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
