@@ -262,23 +262,11 @@ impl Editor {
         let mut document = self.document.clone();
         document.selection = None;
         for layer in &mut document.layers {
-            layer.selection = None;
-            if let Some(mask) = &mut layer.mask { mask.initial = None; }
+            crate::without_shared_selections(layer);
         }
         // Metadata excludes payloads (sources/rasters are independently stored).
-        struct Counter(usize);
-        impl std::io::Write for Counter {
-            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-                self.0 = self.0.saturating_add(b.len());
-                Ok(b.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let mut count = Counter(0);
-        let _ = serde_json::to_writer(&mut count, &document);
-        metadata_bytes = metadata_bytes.saturating_add(count.0.saturating_mul(4));
+        metadata_bytes =
+            metadata_bytes.saturating_add(crate::json_len(&document).saturating_mul(4));
         RetainedTiles {
             rasters,
             sources,

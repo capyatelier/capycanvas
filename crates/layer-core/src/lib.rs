@@ -1263,18 +1263,8 @@ impl Document {
             layers: vec![
                 Layer::paint(paint_id, "Current ink"),
                 Layer {
-                    id: LayerId(2),
-                    name: Arc::from("Paper"),
                     kind: LayerKind::Background,
-                    visible: true,
-                    opacity: 1.0,
-                    raster: Default::default(),
-                    source: None,
-                    properties: LayerProperties::default(),
-                    mask: None,
-                    pending_operations: Vec::new(),
-                    effect: None,
-                    selection: None,
+                    ..Layer::paint(LayerId(2), "Paper")
                 },
             ],
             active_layer: paint_id,
@@ -1717,6 +1707,31 @@ pub struct Editor {
     next_checkpoint: u64,
 }
 
+pub(crate) fn json_len(value: &impl serde::Serialize) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    match serde_json::to_writer(&mut count, value) {
+        Ok(()) => count.0,
+        Err(_) => usize::MAX,
+    }
+}
+
+pub(crate) fn without_shared_selections(layer: &mut Layer) {
+    layer.selection = None;
+    if let Some(mask) = &mut layer.mask {
+        mask.initial = None;
+    }
+}
+
 #[derive(Debug)]
 struct HistoryEntry {
     edit: Edit,
@@ -1726,28 +1741,13 @@ struct HistoryEntry {
 impl HistoryEntry {
     fn new(edit: Edit, checkpoint: u64) -> Self {
         fn serialized(value: &impl serde::Serialize) -> usize {
-            struct Count(usize);
-            impl std::io::Write for Count {
-                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                    self.0 = self.0.saturating_add(bytes.len());
-                    Ok(bytes.len())
-                }
-                fn flush(&mut self) -> std::io::Result<()> {
-                    Ok(())
-                }
-            }
-            let mut count = Count(0);
-            if serde_json::to_writer(&mut count, value).is_err() {
-                return usize::MAX;
-            }
             // Conservative allowance for allocations/nodes and binary scalars;
             // shared metadata is charged repeatedly rather than undercounted.
-            count.0.saturating_mul(4)
+            json_len(value).saturating_mul(4)
         }
         fn layer_metadata(layer: &Layer) -> usize {
             let mut metadata = layer.clone();
-            metadata.selection = None; // Shared coverage is charged by identity.
-            if let Some(mask) = &mut metadata.mask { mask.initial = None; }
+            without_shared_selections(&mut metadata);
             serialized(&metadata)
         }
         fn size(edit: &Edit) -> usize {
