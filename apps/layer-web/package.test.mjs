@@ -140,32 +140,51 @@ test("every runtime filename hashes its final bytes and all dependency reference
     assert.equal(name, `${original.slice(0, -extension.length)}.${hash}${extension}`);
   }
   const app = readFileSync(join(dir, names["app.js"]), "utf8");
+  const references = (path, dependency) => readFileSync(join(dir, names[path]), "utf8").includes(`./${names[dependency]}`);
   for (const path of ["preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "pkg/layer_web.js"])
-    assert.ok(app.includes(`from "./${names[path]}"`));
+    assert.ok(references("app.js", path), path);
   for (const path of ["icons/pen.svg", "icons.svg", "brush-previews/1-dark.png"])
     assert.ok(app.includes(JSON.stringify(names[path])));
-  for (const path of ["workspace-manager.js", "header.js"])
-    assert.ok(readFileSync(join(dir, names[path]), "utf8").includes(`from "./${names["workspace-switcher.js"]}"`));
-  assert.ok(readFileSync(join(dir, names["header.js"]), "utf8").includes(`from "./${names["color-controls.js"]}"`));
-  assert.ok(readFileSync(join(dir, names["editor-panels.js"]), "utf8").includes(`from "./${names["raster-worker-client.js"]}"`));
-  assert.ok(readFileSync(join(dir, names["preferences.js"]), "utf8").includes(`from "./${names["shortcut-page.js"]}"`));
+  for (const path of ["workspace-manager.js", "header.js"]) assert.ok(references(path, "workspace-switcher.js"), path);
+  assert.ok(references("header.js", "color-controls.js"));
+  assert.ok(references("editor-panels.js", "raster-worker-client.js"));
+  assert.ok(references("preferences.js", "shortcut-page.js"));
   assert.ok(readFileSync(join(dir, names["style.css"]), "utf8").includes(`url("${names["icons/pen.svg"]}")`));
   assert.ok(readFileSync(join(dir, names["pkg/layer_web.js"]), "utf8").includes(names["pkg/layer_web_bg.wasm"].slice(4)));
   assert.deepEqual(fingerprintAssets(runtimeFixture(t)), names, "An identical rebuild keeps every URL stable");
 });
 
-test("production module imports and worker URLs resolve to packaged files", (t) => {
-  const modules = readdirSync(new URL("./", import.meta.url)).filter(path => path.endsWith(".js") && path !== "sw.js");
-  const dir = runtimeFixture(t, Object.fromEntries(modules.map(path =>
-    [path, readFileSync(new URL(path, import.meta.url), "utf8")])));
-  const names = fingerprintAssets(dir), files = new Set(filesIn(dir));
+// Checks the packaged output independently of the packager's own reference scan.
+function assertResolved(dir, names) {
+  const files = new Set(filesIn(dir));
   for (const name of Object.values(names).filter(path => path.endsWith(".js"))) {
     const source = readFileSync(join(dir, name), "utf8");
-    for (const [, dependency] of source.matchAll(/\bfrom\s+["'](\.[^"']+)["']/g))
+    for (const [, dependency] of source.matchAll(/\b(?:from\s*|import\(\s*)["'](\.[^"']+)["']/g))
       assert.ok(files.has(posix.join(posix.dirname(name), dependency)), `${name} imports missing ${dependency}`);
     for (const [, dependency] of source.matchAll(/new URL\(["']([^"']+)["'],\s*import\.meta\.url\)/g))
       assert.ok(files.has(posix.join(posix.dirname(name), dependency)), `${name} references missing ${dependency}`);
   }
+}
+
+test("production module imports and worker URLs resolve to packaged files", (t) => {
+  const modules = readdirSync(new URL("./", import.meta.url)).filter(path => path.endsWith(".js") && path !== "sw.js");
+  const dir = runtimeFixture(t, Object.fromEntries(modules.map(path =>
+    [path, readFileSync(new URL(path, import.meta.url), "utf8")])));
+  assertResolved(dir, fingerprintAssets(dir));
+});
+
+test("new modules and imports package without changing the packager", (t) => {
+  const dir = runtimeFixture(t, {
+    "extra.js": 'import {status} from "./system-status.js"; export const worker = new URL("./extra-worker.js", import.meta.url);',
+    "extra-worker.js": 'import init from "./pkg/layer_web.js"; const numeric = await import("./numeric.js");',
+    "gpu.js": 'import {worker} from "./extra.js"; export function showGpuNotice() {}',
+    "header.js": "import {createNumberField} from './numeric.js'; import {switcher} from './workspace-switcher.js'; import {pickerButtonAction} from './color-controls.js'; export const header = true;",
+  });
+  const names = fingerprintAssets(dir);
+  assertResolved(dir, names);
+  const references = (path, dependency) => readFileSync(join(dir, names[path]), "utf8").includes(`./${names[dependency]}`);
+  assert.ok(references("gpu.js", "extra.js") && references("extra.js", "extra-worker.js") && references("extra-worker.js", "numeric.js"));
+  assert.ok(references("header.js", "numeric.js"), "A new import between existing modules follows its hash");
 });
 
 test("changed assets propagate to their consumers and worker version, not unrelated assets", (t) => {
@@ -184,8 +203,10 @@ test("changed assets propagate to their consumers and worker version, not unrela
   }
 });
 
-test("new modules or changed rewrite anchors fail packaging rather than shipping stale references", (t) => {
-  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "extra.js": "export const extra = true;" })), /new module/);
+test("unresolved references, cycles or changed rewrite anchors fail packaging rather than shipping stale references", (t) => {
+  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "gpu.js": 'import {missing} from "./missing.js";' })), /gpu\.js references missing \.\/missing\.js/);
+  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "gpu.js": 'new URL("./missing-worker.js", import.meta.url);' })), /references missing \.\/missing-worker\.js/);
+  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "numeric.js": "import {createRangeControl} from './range-control.js';" })), /Module cycle cannot be fingerprinted: .*numeric\.js/);
   assert.throws(() => fingerprintAssets(runtimeFixture(t, { "app.js": "changed module layout" })), /Missing package reference/);
   assert.throws(() => fingerprintAssets(runtimeFixture(t, { "style.css": 'body { mask: url("missing.svg"); }' })), /Missing CSS asset/);
 });

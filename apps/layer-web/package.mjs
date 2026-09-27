@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { dependencyNotices } from "../../tools/build/dependency-notices.mjs";
@@ -37,11 +37,17 @@ function replaceRequired(text, from, to) {
   return text.replaceAll(from, to);
 }
 
-// Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
-// Hash final bytes after rewriting dependencies; no bundler required.
-const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","color-controls.js","header.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","selection-masks.js", "raster-worker-client.js", "editor-panels.js","workspace-chrome.js","glass.js","documents.js","shortcut-page.js","preferences.js", "command-bar.js", "gpu.js", "customization.js", "numeric.js", "range-control.js", "toolbar-components.js", "canvas-bar.js", "layers.js", "filter-previews.js", "stroke-recording.js", "effects.js", "tooltips.js", "pen-scroll.js", "palettes.js", "pkg/layer_web.js", "app.js"];
-const workers = ["workspace-worker.js", "raster-worker.js", "proof-worker.js"];
+// Relative references the browser resolves against a module: static, side-effect
+// and dynamic imports, and URLs such as workers and Wasm. Bare specifiers and
+// absolute URLs are not package files.
+const moduleReferences = [
+  /(\b(?:from|import)\s*\(?\s*)(["'])(\.\.?\/[^"'\n]*)\2/g,
+  /(\bnew URL\(\s*)(["'])((?![a-zA-Z][\w+.-]*:|\/)[^"'\n]+)\2(?=\s*,\s*import\.meta\.url\s*\))/g,
+];
 
+// Hash final bytes after rewriting dependencies; no bundler required. The module
+// graph is read from the modules, as the browser follows it, so new modules and
+// imports package without changes here; an unresolved reference fails the build.
 export function fingerprintAssets(directory) {
   const files = filesIn(directory), names = {};
   const publish = (path, data = readFileSync(join(directory, path))) => {
@@ -52,11 +58,7 @@ export function fingerprintAssets(directory) {
     rmSync(join(directory, path));
     names[path] = name;
   };
-  for (const path of files) {
-    if (path.endsWith(".js") && !modules.includes(path) && !workers.includes(path))
-      throw new Error(`Add the new module to the package dependency order: ${path}`);
-    if (!path.endsWith(".js") && path !== "style.css") publish(path);
-  }
+  for (const path of files) if (!path.endsWith(".js") && path !== "style.css") publish(path);
   const css = read(join(directory, "style.css")).replace(/url\((["']?)([^"')]+)\1\)/g, (reference, _quote, path) => {
     if (/^(data:|https?:|\/|#)/.test(path)) return reference;
     const name = names[path.replace(/^\.\//, "")];
@@ -64,73 +66,31 @@ export function fingerprintAssets(directory) {
     return `url(${JSON.stringify(name)})`;
   });
   publish("style.css", css);
-  publish("drawing-tabs.js");
-  publish("document-recovery.js");
-  publish("document-storage.js");
-  publish("workspace-store.js");
-  publish("workspace-switcher.js");
-  publish("workspace-manager.js", replaceRequired(read(join(directory, "workspace-manager.js")), 'from "./workspace-switcher.js"', `from "./${names["workspace-switcher.js"]}"`));
-  publish("system-status.js");
-  publish("color-controls.js");
-  publish("header.js", replaceRequired(replaceRequired(read(join(directory, "header.js")), "from './workspace-switcher.js'", `from "./${names["workspace-switcher.js"]}"`), "from './color-controls.js'", `from "./${names["color-controls.js"]}"`));
-  publish("export-controls.js");
-  publish("pkg/layer_web.js", replaceRequired(read(join(directory, "pkg/layer_web.js")),
-    "'layer_web_bg.wasm'", JSON.stringify(basename(names["pkg/layer_web_bg.wasm"]))));
-  publish("proof-worker.js", replaceRequired(read(join(directory,"proof-worker.js")), 'from "./pkg/layer_web.js"', `from "./${names["pkg/layer_web.js"]}"`));
-  publish("proof.js", replaceRequired(replaceRequired(read(join(directory,"proof.js")), "from './export-controls.js'", `from "./${names["export-controls.js"]}"`), '"./proof-worker.js"', JSON.stringify(`./${names["proof-worker.js"]}`)));
-  publish("histogram.js");
-  publish("document-color.js", replaceRequired(read(join(directory, "document-color.js")), "from './export-controls.js'", `from "./${names["export-controls.js"]}"`));
-  publish("raster-worker.js", replaceRequired(read(join(directory, "raster-worker.js")),
-    'from "./pkg/layer_web.js"', `from "./${names["pkg/layer_web.js"]}"`));
-  publish("raster-worker-client.js", replaceRequired(read(join(directory, "raster-worker-client.js")),
-    '"./raster-worker.js"', JSON.stringify(`./${names["raster-worker.js"]}`)));
-  publish("numeric.js");
-  publish("range-control.js", replaceRequired(read(join(directory, "range-control.js")), "from './numeric.js'", `from "./${names["numeric.js"]}"`));
-  let editorPanels = read(join(directory, "editor-panels.js"));
-  for (const path of ["raster-worker-client.js", "color-controls.js", "range-control.js"]) editorPanels = replaceRequired(editorPanels, `from './${path}'`, `from "./${names[path]}"`);
-  publish("editor-panels.js", editorPanels);
-  publish("selection-masks.js");
-  publish("workspace-chrome.js");
-  publish("glass.js");
-  publish("image-import.js");
-  let documents = read(join(directory, "documents.js"));
-  for (const path of ["drawing-tabs.js", "document-recovery.js", "export-controls.js", "histogram.js","document-color.js","proof.js","image-import.js"]) documents = replaceRequired(documents, `from './${path}'`, `from "./${names[path]}"`);
-  publish("documents.js", documents);
-  publish("shortcut-page.js");
-  let preferences = read(join(directory, "preferences.js"));
-  for (const path of ["export-controls.js", "shortcut-page.js"]) preferences = replaceRequired(preferences, `from './${path}'`, `from "./${names[path]}"`);
-  publish("preferences.js", preferences);
-  publish("command-bar.js");
-  publish("gpu.js");
-  let toolbarComponents = read(join(directory, "toolbar-components.js"));
-  for (const path of ["numeric.js", "range-control.js"]) toolbarComponents = replaceRequired(toolbarComponents, `from './${path}'`, `from "./${names[path]}"`);
-  publish("toolbar-components.js", toolbarComponents);
-  publish("canvas-bar.js", replaceRequired(read(join(directory, "canvas-bar.js")), 'from "./toolbar-components.js"', `from "./${names["toolbar-components.js"]}"`));
-  publish("customization.js", replaceRequired(replaceRequired(read(join(directory, "customization.js")), "from './color-controls.js'", `from "./${names["color-controls.js"]}"`), 'from "./toolbar-components.js"', `from "./${names["toolbar-components.js"]}"`));
-  publish("layers.js");
-  publish("filter-previews.js");
-  publish("stroke-recording.js");
-  let effects = read(join(directory, "effects.js"));
-  for (const path of ["color-controls.js", "filter-previews.js", "stroke-recording.js"]) effects = replaceRequired(effects, `from './${path}'`, `from "./${names[path]}"`);
-  publish("effects.js", effects);
-  publish("tooltips.js");
-  publish("pen-scroll.js");
-  publish("palettes.js");
-  let worker = read(join(directory, "workspace-worker.js"));
-  for (const path of ["pkg/layer_web.js", "workspace-store.js"])
-    worker = replaceRequired(worker, `from "./${path}"`, `from "./${names[path]}"`);
-  publish("workspace-worker.js", worker);
-  let preload = read(join(directory, "workspace-preload.js"));
-  preload = replaceRequired(preload, 'from "./workspace-store.js"', `from "./${names["workspace-store.js"]}"`);
-  for (const path of ["workspace-worker.js", "pkg/layer_web_bg.wasm"])
-    preload = replaceRequired(preload, `"./${path}"`, JSON.stringify(`./${names[path]}`));
-  publish("workspace-preload.js", preload);
-  let app = read(join(directory, "app.js"));
-  for (const path of modules.slice(0, -1).filter(path => path !== "range-control.js" && path !== "toolbar-components.js" && path !== "workspace-store.js" && path !== "drawing-tabs.js" && path !== "document-recovery.js" && path !== "filter-previews.js" && path !== "stroke-recording.js" && path !== "workspace-switcher.js" && path !== "color-controls.js" && path !== "export-controls.js" && path !== "histogram.js" && path !== "document-color.js" && path !== "image-import.js" && path !== "proof.js" && path !== "shortcut-page.js"))
-    app = replaceRequired(app, `from "./${path}"`, `from "./${names[path]}"`);
-  const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews)\//.test(path) || path === "icons.svg" || path === "pkg/layer_web_bg.wasm" || path === "workspace-worker.js"));
-  app = replaceRequired(app, "const assetPaths = {};", `const assetPaths = ${JSON.stringify(artwork)};`);
-  publish("app.js", app);
+  // app.js looks up artwork, brush previews and Wasm by their development paths.
+  const lookups = JSON.stringify(Object.fromEntries(Object.entries(names).filter(([path]) => path !== "style.css")));
+  const sources = new Map(files.filter(path => path.endsWith(".js")).map(path => [path, read(join(directory, path))]));
+  const target = (path, specifier) => posix.normalize(posix.join(posix.dirname(path), specifier));
+  // Publish each module after its dependencies, so its references name final hashes.
+  const done = new Set(), visiting = [];
+  const visit = (path) => {
+    if (done.has(path)) return;
+    if (visiting.includes(path))
+      throw new Error(`Module cycle cannot be fingerprinted: ${[...visiting.slice(visiting.indexOf(path)), path].join(" -> ")}`);
+    visiting.push(path);
+    for (const pattern of moduleReferences) for (const [, , , specifier] of sources.get(path).matchAll(pattern)) {
+      const dependency = target(path, specifier);
+      if (sources.has(dependency)) visit(dependency);
+      else if (!names[dependency]) throw new Error(`${path} references missing ${specifier}`);
+    }
+    visiting.pop();
+    let text = sources.get(path);
+    for (const pattern of moduleReferences) text = text.replace(pattern, (_, prefix, quote, specifier) =>
+      prefix + quote + specifier.slice(0, -basename(specifier).length) + basename(names[target(path, specifier)]) + quote);
+    if (path === "app.js") text = replaceRequired(text, "const assetPaths = {};", `const assetPaths = ${lookups};`);
+    publish(path, text);
+    done.add(path);
+  };
+  for (const path of sources.keys()) visit(path);
   return names;
 }
 
@@ -192,8 +152,7 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    // Copy every runtime module, not only listed ones, so fingerprinting rejects a
-    // module missing from the dependency order instead of shipping its unresolved import.
+    // Stage every runtime module; fingerprinting follows their references.
     for (const path of [...readdirSync(web).filter(path => path.endsWith(".js") && path !== "sw.js"), "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
@@ -219,7 +178,10 @@ export function packageWeb() {
       run(resvg, ["--resources-dir", web, "--width", String(size), "--height", String(size), source, join(runtime, `icon-${size}.png`)]);
     }
     const names = fingerprintAssets(runtime);
-    const asset = (path) => `assets/${names[path]}`;
+    const asset = (path) => {
+      if (!names[path]) throw new Error(`Missing package asset: ${path}`);
+      return `assets/${names[path]}`;
+    };
     // Apple's out-of-page icon lookup also needs a conventional stable URL.
     // A query fingerprint refreshes explicit links while older saved URLs still
     // work after deployment removes a previous release's hashed asset files.
@@ -255,14 +217,19 @@ export function packageWeb() {
     <link rel="apple-touch-icon" sizes="180x180" type="image/png" href="${appleIcon}" />
     <meta name="apple-mobile-web-app-title" content="Capy Canvas" />
     <link rel="license" href="./licenses.html" />`;
-    writeFileSync(join(site, "index.html"), read(join(web, "index.html"))
-      .replace('href="data:,"', `type="image/png" sizes="32x32" href="${asset("icon-32.png")}"`)
-      .replace('href="style.css"', `href="${asset("style.css")}"`)
-      .replace('["icons.svg", "pkg/layer_web_bg.wasm"]', JSON.stringify([asset("icons.svg"), asset("pkg/layer_web_bg.wasm")]))
-      .replace('src="workspace-preload.js"', `src="${asset("workspace-preload.js")}"`)
-      .replace('src="app.js"', `src="${asset("app.js")}"`)
-      .replace("<!-- Packager inserts install metadata here; development never registers a worker. -->", metadata)
-      .replace("</body>", `<script>addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js", {updateViaCache: "none"}).catch(console.error); });</script>\n  </body>`));
+    // Page scripts and styles name runtime files; the preload script's list and
+    // the insertion points must still match, or the build fails.
+    let html = read(join(web, "index.html")).replace(/\b(src|href)="([^":#]+)"/g,
+      (reference, attribute, path) => names[path] ? `${attribute}="${asset(path)}"` : reference);
+    for (const [from, to] of [
+      ['href="data:,"', `type="image/png" sizes="32x32" href="${asset("icon-32.png")}"`],
+      ['["icons.svg", "pkg/layer_web_bg.wasm"]', JSON.stringify([asset("icons.svg"), asset("pkg/layer_web_bg.wasm")])],
+      ["<!-- Packager inserts install metadata here; development never registers a worker. -->", metadata],
+      ["</body>", `<script>addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js", {updateViaCache: "none"}).catch(console.error); });</script>\n  </body>`],
+    ]) html = replaceRequired(html, from, to);
+    for (const [, path] of html.matchAll(/\b(?:src|href)="(?![a-z][\w+.-]*:|#)([^"?#]+)/g))
+      if (!existsSync(join(site, path))) throw new Error(`index.html references unpublished ${path}`);
+    writeFileSync(join(site, "index.html"), html);
     writeFileSync(join(site, ".nojekyll"), "");
     const { files } = writeWorker(site);
     mkdirSync(dirname(output), { recursive: true });

@@ -36,7 +36,8 @@ The build:
    launcher. Runtime speed optimizations stay unchanged. Debug data is disabled
    and source prefixes are remapped so panic strings do not expose build-machine
    paths. The generated runtime is scanned before packaging.
-3. Copies the runtime files and renders a 32 px favicon and
+3. Copies every runtime module, the stylesheet and artwork, and renders a 32 px
+   favicon and
    180/192/512 px PNG installation icons from the shared capybara SVG, all with
    rounded corners, preserving its separate branding terms. The Apple-only
    180px icon instead has an opaque, full-bleed background; iPadOS applies its
@@ -50,9 +51,18 @@ The build:
    URLs, including the CSS checkbox mask. A build-time resource map handles
    dynamic icon and brush-preview lookups. HTML and manifest references use the new names; no unversioned runtime
    copies remain. Relative URLs work at any hosting subpath. Identical rebuilds
-   retain identical URLs; unrelated assets retain their hashes. A module missing
-   from the packager's dependency order fails the build; otherwise its import
-   would be left unversioned and absent, and the app would never start.
+   retain identical URLs; unrelated assets retain their hashes.
+
+   The module graph is read from the modules, as the browser follows it:
+   relative static, side-effect and dynamic imports, and `new URL(…,
+   import.meta.url)` workers and Wasm. Adding a module, worker or import needs
+   no packager change. The build fails instead of shipping a page that cannot
+   start when a module references a missing file, modules import each other in
+   a cycle (content hashes cannot name each other), `index.html` references a
+   file that is not published, or an `index.html` insertion point changes.
+   Paths computed at runtime cannot be followed; look them up through `app.js`'s
+   `asset()`, whose map covers every published file except modules and the
+   stylesheet.
 5. Includes project/branding licenses, original notices for the Wasm dependency
    graph (including build-time dependencies), and the installed Rust toolchain's
    complete copyright notice. Generic missing-license placeholders fail the
