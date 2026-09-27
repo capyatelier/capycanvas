@@ -138,7 +138,8 @@ deterministic. Import is previewed before anything changes:
 - Files from a newer format version are refused.
 
 Each host provides the file chooser. GTK uses `GtkFileDialog`, Web uses a
-download link and a file input, and Android uses the Storage Access Framework.
+download link and a file input, Android uses the Storage Access Framework, and
+macOS and iPadOS use the system file exporter and importer.
 
 The binding editor shows the action's description, its keys and default, and
 any chord that a more or less specific scope resolves differently.

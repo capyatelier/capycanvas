@@ -96,6 +96,9 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
   with `-ApplePersistenceIgnoreState`, so a zoomed window carries into the next
   test. For a wider work area, enter full screen and leave it in a teardown
   block.
+- **Settings sub-pages.** macOS sheets have no title bar, so navigation titles
+  and `.navigation` toolbar items inside Settings never appear. Put a sub-page's
+  title and Back button in its content, as the shortcut page does.
 - **Editor menus.** An open `EditorMenuButton` menu is modal to accessibility,
   so its button cannot be queried while it is open. Close it by pressing the
   button's recorded frame, and reveal rows in long menus before activating them.

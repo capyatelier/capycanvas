@@ -43,7 +43,8 @@ enum AppleKeyName {
     static func name(_ key: UIKey) -> String {
         let names: [Int: String] = [40: "enter", 41: "escape", 42: "backspace", 43: "tab",
             73: "insert", 74: "home", 75: "pageup", 76: "delete", 77: "end", 78: "pagedown",
-            79: "arrowright", 80: "arrowleft", 81: "arrowdown", 82: "arrowup", 88: "enter"]
+            79: "arrowright", 80: "arrowleft", 81: "arrowdown", 82: "arrowup", 88: "enter",
+            224: "Control", 225: "Shift", 226: "Alt", 227: "Meta", 228: "Control", 229: "Shift", 230: "Alt", 231: "Meta"]
         let code = key.keyCode.rawValue
         let function = (58...69).contains(code) ? "f\(code - 57)" : (104...115).contains(code) ? "f\(code - 91)" : nil
         return names[code] ?? function ?? key.charactersIgnoringModifiers

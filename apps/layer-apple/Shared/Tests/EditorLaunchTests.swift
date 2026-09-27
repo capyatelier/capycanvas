@@ -95,6 +95,8 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testCanvasActionBar() { checkCanvasActionBar(in: ignoringSavedWindows(editorCaptureApplication())) }
 
+    @MainActor func testShortcutSettingsPage() { checkShortcutSettingsPage(in: ignoringSavedWindows(editorCaptureApplication())) }
+
     @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
 
     @MainActor func testWorkspaceSwitcher() {

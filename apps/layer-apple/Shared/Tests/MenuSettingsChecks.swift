@@ -516,7 +516,7 @@ extension XCTestCase {
         let confirm = app.buttons["shortcut-confirm"]
         expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: confirm)
         waitForExpectations(timeout: 10)
-        XCTAssertTrue(confirm.label == "Replace" || confirm.value as? String == "Replace")
+        XCTAssertTrue(confirm.label == "Reassign" || confirm.value as? String == "Reassign")
         activate(confirm)
         XCTAssertTrue(confirm.waitForNonExistence(timeout: 10))
         activate(app.buttons["shortcut-editor-done"])

@@ -465,8 +465,13 @@ structure. Mac uses Hide/activate; UIKit uses Home/activate. This workflow does
 not establish physical pen interruption or memory-pressure termination.
 
 Both targets now project the live shared application menus. Keyboard Shortcuts
-supports search, alternate bindings, conflict replacement and resets; Settings
-search uses the shared results. The focused
+presents the shared shortcut page: keymap presets with `.capykeys` import,
+export and differences, categories, a search line that also looks up a pressed
+chord, tool and show filters, modifier keys with per-tool actions, alternate
+bindings, Reassign and resets; Settings search uses the shared results.
+`EditorLaunchTests/testShortcutSettingsPage` walks the categories, a modifier
+key's action picker, adding and removing a modifier key, chord search and, on
+macOS, a keymap export/import round trip. The focused
 `EditorLaunchTests/testShortcutConflictAndEditorEffect` test exercises capture
 and the resulting Zen action without automating the system menu bar. The shared
 inventory command emits the settled default document/workspace, every command

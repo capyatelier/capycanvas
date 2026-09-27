@@ -10,9 +10,16 @@ struct ShortcutKeyCapture: NSViewRepresentable {
         let view = NSView()
         let coordinator = context.coordinator
         coordinator.captured = captured
-        coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak view, weak coordinator] event in
+        coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak view, weak coordinator] event in
             guard let view, event.window === view.window, view.window?.isKeyWindow == true else { return event }
-            if !event.isARepeat {
+            if event.type == .flagsChanged {
+                let flags = event.modifierFlags, previous = coordinator?.flags ?? []
+                coordinator?.flags = flags
+                for (flag, name): (NSEvent.ModifierFlags, String) in [(.shift, "Shift"), (.control, "Control"), (.option, "Alt"), (.command, "Meta")]
+                    where flags.contains(flag) && !previous.contains(flag) {
+                    coordinator?.captured?(name, !flags.intersection([.command, .control]).isEmpty, flags.contains(.shift), flags.contains(.option))
+                }
+            } else if !event.isARepeat {
                 let key = AppleKeyName.name(event)
                 let flags = event.modifierFlags
                 if !key.isEmpty { coordinator?.captured?(key, !flags.intersection([.command, .control]).isEmpty,
@@ -29,6 +36,7 @@ struct ShortcutKeyCapture: NSViewRepresentable {
     }
     final class Coordinator {
         var monitor: Any?
+        var flags: NSEvent.ModifierFlags = []
         var captured: ((String, Bool, Bool, Bool) -> Void)?
     }
 }
