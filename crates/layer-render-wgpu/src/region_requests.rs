@@ -37,50 +37,67 @@ impl RegionRequests {
             rx,
         }
     }
-    /// A pixel selection's coverage resampled through a warp mesh into
-    /// `extent`, a window of positions at a time.
-    fn resample_warp(
+    fn positions(&mut self, r: &WgpuRasterizer) -> &mut paint_transform::mesh::Positions {
+        self.positions.get_or_insert_with(|| {
+            r.transforms.as_ref().map_or_else(
+                || paint_transform::mesh::Positions::new(&r.device),
+                paint_transform::mesh::Positions::sharing,
+            )
+        })
+    }
+    /// A pixel selection's coverage resampled through `map` into `extent`,
+    /// through a warp mesh a window of positions at a time.
+    fn resample_mapped(
         &mut self,
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         extent: [u32; 2],
         selection: &layer_core::Selection,
-        mesh: &std::sync::Arc<layer_core::MeshMap>,
+        map: &layer_core::TransformMap,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
         use paint_transform::mesh::{MeshGeometry, WINDOW_PAGES};
-        let (source, rows) = r.selection_clip.warp_source(&r.device, selection)?;
+        let source = r.selection_clip.mapped_source(&r.device, selection, map)?;
         let [w, h] = extent;
-        let words = u64::from(w.div_ceil(4)) * u64::from(h);
-        let bytes = 32 + words * 4 + 32;
-        if extent.contains(&0) || bytes > r.device.limits().max_storage_buffer_binding_size {
+        let bytes = 32 + u64::from(w.div_ceil(4)) * u64::from(h) * 4 + 32;
+        let limits = r.device.limits();
+        let mesh = match map {
+            layer_core::TransformMap::Mesh(mesh) => Some(mesh),
+            _ => None,
+        };
+        if extent.contains(&0)
+            || bytes > limits.max_storage_buffer_binding_size
+            || (mesh.is_none() && h > limits.max_compute_workgroups_per_dimension)
+        {
             return Err(GpuRasterError::SizeOverflow);
         }
         let output = r.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("warped selection coverage"),
+            label: Some("mapped selection coverage"),
             size: bytes,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let header: Vec<u8> = [0, 0, w, h, 0, 2, 0, 0].into_iter().flat_map(u32::to_ne_bytes).collect();
+        let mut header = [0u8; 32];
+        for (dst, value) in header.chunks_exact_mut(4).zip([0, 0, w, h, 0, 2, 0, 0]) {
+            dst.copy_from_slice(&value.to_ne_bytes());
+        }
         r.uploads.write(encoder, &output, &header)?;
-        let geometry = std::sync::Arc::new(MeshGeometry::new(mesh));
+        let Some(mesh) = mesh else {
+            r.selection_clip.resample_window(&r.device, encoder, &source, &output, PixelRect::full(extent), None);
+            return Ok(output);
+        };
+        let geometry = std::sync::Arc::new(MeshGeometry::new(mesh, None));
         let side = WINDOW_PAGES * PAGE_SIZE;
-        let mut positions = self.positions.take().unwrap_or_else(|| paint_transform::mesh::Positions::new(&r.device));
-        let result = (|| {
-            positions.upload(r, encoder, &geometry)?;
-            let view = positions.view(&r.device, [side; 2]);
-            let drawn = pixel_rect(mesh.drawn_bounds(), extent);
-            for y in (drawn.min_y() / side..drawn.max_y().div_ceil(side)).map(|n| n * side) {
-                for x in (drawn.min_x() / side..drawn.max_x().div_ceil(side)).map(|n| n * side) {
-                    positions.draw(r, encoder, [x / PAGE_SIZE, y / PAGE_SIZE])?;
-                    let rect = PixelRect::new(x, y, (x + side).min(w), (y + side).min(h));
-                    r.selection_clip.resample_warp_window(&r.device, encoder, &source, rows, &output, &view, rect, w);
-                }
+        let positions = self.positions(r);
+        positions.upload(r, encoder, &geometry)?;
+        let view = positions.view(&r.device, [side; 2]);
+        let drawn = pixel_rect(mesh.drawn_bounds(), extent);
+        for y in (drawn.min_y() / side..drawn.max_y().div_ceil(side)).map(|n| n * side) {
+            for x in (drawn.min_x() / side..drawn.max_x().div_ceil(side)).map(|n| n * side) {
+                positions.draw(r, encoder, [x / PAGE_SIZE, y / PAGE_SIZE])?;
+                let rect = PixelRect::new(x, y, (x + side).min(w), (y + side).min(h));
+                r.selection_clip.resample_window(&r.device, encoder, &source, &output, rect, Some((&view, w)));
             }
-            Ok::<_, GpuRasterError>(())
-        })();
-        self.positions = Some(positions);
-        result?;
+        }
         Ok(output)
     }
     fn start(
@@ -132,22 +149,11 @@ impl RegionRequests {
         if let Some(startup) = &r.startup {
             startup.compiler.check()?;
             let mut ready = true;
-            if let layer_render::RegionSource::TransformedSelection {
-                map: layer_core::TransformMap::Mesh(_),
-                ..
-            } = &request.source
-            {
-                let positions = self.positions.get_or_insert_with(|| paint_transform::mesh::Positions::new(&r.device));
-                ready &= startup
-                    .compiler
-                    .require([&positions.pipeline], startup::BRUSH);
-                ready &= startup
-                    .compiler
-                    .require([&r.selection_clip.resample_mesh], startup::BRUSH);
-                ready &= self.refiner.as_ref().unwrap().prepare_bounds(&startup.compiler);
-            } else if mapped {
-                startup.compiler.pipeline(&r.selection_clip.resample, startup::BRUSH);
-                ready &= r.selection_clip.resample.ready();
+            if let layer_render::RegionSource::TransformedSelection { map, .. } = &request.source {
+                if matches!(map, layer_core::TransformMap::Mesh(_)) {
+                    ready &= startup.compiler.require([&self.positions(r).pipeline], startup::BRUSH);
+                }
+                ready &= startup.compiler.require([&r.selection_clip.resample], startup::BRUSH);
                 ready &= self.refiner.as_ref().unwrap().prepare_bounds(&startup.compiler);
             } else if tone.is_some() {
                 ready &= self.raw.prepare_tonal(&startup.compiler);
@@ -185,27 +191,11 @@ impl RegionRequests {
                 .prepare(&r.device, &mut encoder, extent, selection)?;
         }
         let input = if let layer_render::RegionSource::TransformedSelection {
-            selection,
-            map: layer_core::TransformMap::Mesh(mesh),
-            ..
-        } = &request.source
-        {
-            flood::Region {
-                coverage: self.resample_warp(r, &mut encoder, extent, selection, mesh)?,
-                bounds_offset: 0,
-            }
-        } else if let layer_render::RegionSource::TransformedSelection {
             selection, map, ..
         } = &request.source
         {
             flood::Region {
-                coverage: r.selection_clip.resample_mapped(
-                    &r.device,
-                    &mut encoder,
-                    extent,
-                    selection,
-                    map,
-                )?,
+                coverage: self.resample_mapped(r, &mut encoder, extent, selection, map)?,
                 bounds_offset: 0,
             }
         } else if let layer_render::RegionSource::Selection(selection) = &request.source {

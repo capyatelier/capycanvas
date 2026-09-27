@@ -48,6 +48,11 @@ fn inside(h:vec3<f32>)->bool {
     let layer_pixel=vec2(dot(resample.clip_x.xyz,h),dot(resample.clip_y.xyz,h));
     return all(layer_pixel>=vec2(0.)) && all(layer_pixel<resample.extent.xy);
 }
+// With options.z set, a warp mesh reads the moved copy's texel position of
+// each display texel from positions, rasterized with a one-texel border;
+// UNCOVERED where the mesh does not reach.
+@group(0) @binding(4) var positions:texture_2d<f32>;
+const UNCOVERED=-1e38;
 @compute @workgroup_size(8,8)
 fn resample_main(@builtin(global_invocation_id) id:vec3<u32>) {
     if any(id.xy>=resample.texels.zw) {return;}
@@ -57,21 +62,10 @@ fn resample_main(@builtin(global_invocation_id) id:vec3<u32>) {
         store(t,vec4(0.),h,false);
         return;
     }
-    store(t,bilinear(moved,resample.x,resample.y,resample.w,h),h,true);
-}
-// A warp mesh reads the moved copy's texel position of each display texel,
-// rasterized with a one-texel border; UNCOVERED where the mesh does not reach.
-@group(0) @binding(4) var positions:texture_2d<f32>;
-const UNCOVERED=-1e38;
-@compute @workgroup_size(8,8)
-fn mesh_resample_main(@builtin(global_invocation_id) id:vec3<u32>) {
-    if any(id.xy>=resample.texels.zw) {return;}
-    let t=resample.texels.xy+id.xy;
-    let h=vec3(vec2<f32>(t)+.5,1.);
-    let q=textureLoad(positions,vec2<i32>(id.xy)+vec2(1),0).xy;
-    if !inside(h) {
-        store(t,vec4(0.),h,false);
+    if resample.options.z!=0. {
+        let q=textureLoad(positions,vec2<i32>(id.xy)+vec2(1),0).xy;
+        store(t,select(bilinear_at(moved,q),vec4(0.),q.x<=UNCOVERED),h,true);
         return;
     }
-    store(t,select(bilinear_at(moved,q),vec4(0.),q.x<=UNCOVERED),h,true);
+    store(t,bilinear(moved,resample.x,resample.y,resample.w,h),h,true);
 }

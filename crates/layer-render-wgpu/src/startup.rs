@@ -420,7 +420,6 @@ impl WgpuRasterizer {
         startup.compiler.require(self.selection_clip.pipelines(), OTHER);
         startup.compiler.require(transforms.display_pipelines(), OTHER);
         startup.compiler.require(transforms.mesh_pipelines(), OTHER);
-        startup.compiler.require([&transforms.resample().mesh_pipeline, &self.selection_clip.resample_mesh], OTHER);
         startup.current = current;
         startup.brush = Some(brush.clone());
         startup.transform = transform;
@@ -623,8 +622,7 @@ mod gpu_tests {
         let transforms = renderer.transforms.as_ref().unwrap();
         assert!(
             transforms.pipelines().into_iter().chain(transforms.mesh_pipelines()).all(Deferred::ready)
-                && transforms.display_pipelines().into_iter().all(Deferred::ready)
-                && transforms.resample().mesh_pipeline.ready(),
+                && transforms.display_pipelines().into_iter().all(Deferred::ready),
             "what transforms and warps draw with compiles while idle after startup"
         );
         assert!(renderer.startup_needs_update(&document, &brush, true),

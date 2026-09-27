@@ -258,11 +258,9 @@ struct ImageTransformState {
     positions: mesh::Positions,
     /// Mesh positions for the display texels a moving warp resamples.
     display_positions: mesh::Positions,
-    /// The warp mesh last drawn into a display level, the tolerance it was
-    /// tessellated within and its geometry.
-    display_mesh: Option<(Arc<layer_core::MeshMap>, f32, Arc<mesh::MeshGeometry>)>,
-    /// The warp mesh last drawn and its tessellated geometry.
-    mesh: Option<(Arc<layer_core::MeshMap>, Arc<mesh::MeshGeometry>)>,
+    /// The warp mesh last tessellated, the display tolerance it was
+    /// tessellated within, if any, and its geometry.
+    mesh: Option<(Arc<layer_core::MeshMap>, Option<f32>, Arc<mesh::MeshGeometry>)>,
     #[cfg(test)]
     pub source_captures: u64,
     #[cfg(test)]
@@ -329,19 +327,16 @@ pub(crate) fn resample_map(
     local: u32,
     level: u32,
 ) -> layer_core::ImageTransform {
-    let matrix = |map: &layer_core::TransformMap| match map {
-        layer_core::TransformMap::Affine(affine) => layer_core::Projective::from_affine(*affine).0,
-        layer_core::TransformMap::Projective(projective) => projective.0,
-        layer_core::TransformMap::Mesh(_) => layer_core::Projective::IDENTITY.0,
+    let moved = match &transform.map {
+        layer_core::TransformMap::Affine(affine) => layer_core::Projective::from_affine(*affine),
+        layer_core::TransformMap::Projective(projective) => *projective,
+        layer_core::TransformMap::Mesh(_) => layer_core::Projective::IDENTITY,
     };
-    let multiply = |a: [f32; 9], b: [f32; 9]| -> [f32; 9] {
-        std::array::from_fn(|i| (0..3).map(|k| a[i / 3 * 3 + k] * b[k * 3 + i % 3]).sum())
-    };
-    let [from, to] = [local, level].map(|l| (1u32 << l) as f32);
-    let reduce = [1. / to, 0., 0., 0., 1. / to, 0., 0., 0., 1.];
-    let expand = [from, 0., 0., 0., from, 0., 0., 0., 1.];
-    let placed = multiply(layer_core::Projective::from_affine(placement).0, matrix(&transform.map));
-    let map = layer_core::Projective(multiply(multiply(reduce, placed), expand));
+    let scale = |s: f32| layer_core::Projective([s, 0., 0., 0., s, 0., 0., 0., 1.]);
+    let map = scale((1u32 << local) as f32)
+        .then(moved)
+        .then(layer_core::Projective::from_affine(placement))
+        .then(scale(1. / (1u32 << level) as f32));
     layer_core::ImageTransform {
         map: map
             .as_affine()
@@ -512,7 +507,6 @@ impl ImageTransformState {
             atlases: Default::default(),
             display_positions: positions.fork(),
             positions,
-            display_mesh: None,
             mesh: None,
             #[cfg(test)]
             source_captures: 0,
@@ -709,7 +703,7 @@ impl ImageTransformState {
         let index = r.paint_layers.iter().position(|l| l.id == layer);
         let mesh = match &transform.map {
             layer_core::TransformMap::Mesh(map) => {
-                let geometry = self.mesh_geometry(map);
+                let geometry = self.mesh_geometry(map, None);
                 self.positions.upload(r, encoder, &geometry)?;
                 Some(geometry)
             }
@@ -1178,27 +1172,15 @@ impl ImageTransformState {
             snapshot::SnapshotPage::of(&capture.texture, &capture.view),
         );
     }
-    /// The mesh tessellated within `tolerance` destination pixels for a
-    /// display level.
-    fn display_geometry(&mut self, map: &Arc<layer_core::MeshMap>, tolerance: f32) -> Arc<mesh::MeshGeometry> {
-        if let Some((cached, within, geometry)) = &self.display_mesh
-            && *within == tolerance
+    fn mesh_geometry(&mut self, map: &Arc<layer_core::MeshMap>, display: Option<f32>) -> Arc<mesh::MeshGeometry> {
+        if let Some((cached, within, geometry)) = &self.mesh
+            && *within == display
             && (Arc::ptr_eq(cached, map) || cached == map)
         {
             return geometry.clone();
         }
-        let geometry = Arc::new(mesh::MeshGeometry::display(map, tolerance));
-        self.display_mesh = Some((map.clone(), tolerance, geometry.clone()));
-        geometry
-    }
-    fn mesh_geometry(&mut self, map: &Arc<layer_core::MeshMap>) -> Arc<mesh::MeshGeometry> {
-        if let Some((cached, geometry)) = &self.mesh
-            && (Arc::ptr_eq(cached, map) || cached == map)
-        {
-            return geometry.clone();
-        }
-        let geometry = Arc::new(mesh::MeshGeometry::new(map));
-        self.mesh = Some((map.clone(), geometry.clone()));
+        let geometry = Arc::new(mesh::MeshGeometry::new(map, display));
+        self.mesh = Some((map.clone(), display, geometry.clone()));
         geometry
     }
     fn release_snapshot(&mut self) {
@@ -1464,7 +1446,7 @@ impl ImageTransformState {
             let positions = match &mesh {
                 Some(map) => {
                     let tolerance = 0.5 * side as f32 / magnification(placement).max(1e-6);
-                    let geometry = self.display_geometry(map, tolerance);
+                    let geometry = self.mesh_geometry(map, Some(tolerance));
                     let texel = 1. / side as f32;
                     let to_texels = placement.then(layer_core::Affine([texel, 0., 0., texel, 0., 0.]));
                     let origin = [texels[0] as f32 - 1., texels[1] as f32 - 1.];

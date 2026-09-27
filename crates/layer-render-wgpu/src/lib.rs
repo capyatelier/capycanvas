@@ -1573,7 +1573,7 @@ impl WgpuRasterizer {
             return true;
         };
         startup.compiler.require(transforms.mesh_pipelines(), startup::BRUSH)
-            & startup.compiler.require([&transforms.resample().mesh_pipeline], startup::BRUSH)
+            & startup.compiler.require([&transforms.resample().pipeline], startup::BRUSH)
     }
 
     /// The pipeline that composes placed layers.

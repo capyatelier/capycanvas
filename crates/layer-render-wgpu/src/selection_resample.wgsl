@@ -1,6 +1,10 @@
 // Resample immutable source coverage once per placement. Brush/mask consumers
 // retain their compact packed-coverage interface and pay no per-dab transform
 // cost. Rows x, y and w map an output pixel to homogeneous source pixels.
+// With info.z set, a warp mesh maps each output pixel through the layer
+// position rasterized at it instead, one window of rect at a time with a
+// one-pixel border, into an output info.z pixels wide; UNCOVERED where the
+// mesh does not reach. Rows x and y then map that position to source pixels.
 struct Params {
     rect: vec4<u32>, info: vec4<u32>,
     x: vec4<f32>, y: vec4<f32>, w: vec4<f32>,
@@ -9,6 +13,8 @@ struct Packed { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> source: Packed;
 @group(0) @binding(2) var<storage, read_write> output: Packed;
+@group(0) @binding(3) var positions: texture_2d<f32>;
+const UNCOVERED = -1e38;
 
 fn at(p: vec2<i32>) -> f32 {
     let q = p - vec2<i32>(source.rect.xy);
@@ -38,35 +44,18 @@ fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
     let maximum = select(4.,255.,bytes);
     let stride = (params.rect.z + count-1u) / count;
     if id.x >= stride || id.y >= params.rect.w { return; }
+    let meshed = params.info.z != 0u;
     var packed = 0u;
     for (var i = 0u; i < count; i++) {
         let x = id.x * count + i;
         if x >= params.rect.z { break; }
-        let value = coverage(vec2<f32>(params.rect.xy + vec2<u32>(x, id.y)) + .5);
-        // Preserve the source coverage precision and bounded storage.
-        packed |= min(u32(maximum), u32(floor(value * maximum + .5))) << (i * (32u/count));
-    }
-    output.values[id.y * stride + id.x] = packed;
-}
-
-// A warp mesh maps each output pixel through the layer position rasterized at
-// it, one window of rect at a time, with a one-pixel border, into an output
-// info.z pixels wide. Rows x and y then map that position to source pixels.
-@group(0) @binding(3) var positions: texture_2d<f32>;
-const UNCOVERED = -1e38;
-@compute @workgroup_size(64)
-fn resample_mesh(@builtin(global_invocation_id) id: vec3<u32>) {
-    let words = (params.rect.z + 3u) / 4u;
-    if id.x >= words || id.y >= params.rect.w { return; }
-    var packed = 0u;
-    for (var i = 0u; i < 4u; i++) {
-        let x = id.x * 4u + i;
-        if x >= params.rect.z { break; }
-        let s = textureLoad(positions, vec2<i32>(vec2(x, id.y)) + vec2(1), 0).xy;
-        if s.x > UNCOVERED {
-            packed |= min(255u, u32(floor(coverage(s) * 255. + .5))) << (i * 8u);
+        var p = vec2<f32>(params.rect.xy + vec2<u32>(x, id.y)) + .5;
+        if meshed {
+            p = textureLoad(positions, vec2<i32>(vec2(x, id.y)) + vec2(1), 0).xy;
+            if p.x <= UNCOVERED { continue; }
         }
+        packed |= min(u32(maximum), u32(floor(coverage(p) * maximum + .5))) << (i * (32u/count));
     }
-    let stride = (params.info.z + 3u) / 4u;
-    output.values[(params.rect.y + id.y) * stride + params.rect.x / 4u + id.x] = packed;
+    let meshed_row = (params.rect.y + id.y) * ((params.info.z + count-1u) / count) + params.rect.x / count;
+    output.values[select(id.y * stride, meshed_row, meshed) + id.x] = packed;
 }

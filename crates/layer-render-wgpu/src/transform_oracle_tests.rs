@@ -666,7 +666,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
     let pixels = selection_pixels();
     let mut transaction = 100;
     for (mesh, folds) in [(warped, false), (folded, true), (shrunk, false)] {
-        let geometry = MeshGeometry::new(&mesh);
+        let geometry = MeshGeometry::new(&mesh, None);
         let (positions, stacked) = mesh_positions(&geometry);
         let covered = positions[0].iter().filter(|p| p.is_some()).count();
         assert!(covered > 1000, "the mesh covers the layer");

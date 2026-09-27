@@ -3,6 +3,7 @@
 //! jobs can bound the source each region samples, and their triangles grouped
 //! by the positions window they reach.
 use super::*;
+use crate::submission::ColorPass;
 use std::ops::Range;
 
 /// Destination tolerance of the tessellated surface, in pixels.
@@ -27,11 +28,15 @@ pub(crate) struct MeshGeometry {
 }
 
 impl MeshGeometry {
-    pub fn new(mesh: &layer_core::MeshMap) -> Self {
-        let (vertices, quads) = Self::surface(mesh, TOLERANCE);
+    /// The mesh within TOLERANCE destination pixels, or within `display`
+    /// pixels for a display level drawn whole, which neither bounds regions
+    /// nor bins windows.
+    pub fn new(mesh: &layer_core::MeshMap, display: Option<f32>) -> Self {
+        let (vertices, quads) = Self::surface(mesh, display.map_or(TOLERANCE, |t| t.max(TOLERANCE)));
         let width = quads[0] + 1;
-        let mut destination = Vec::with_capacity(quads[0] * quads[1]);
-        for j in 0..quads[1] {
+        let rows = if display.is_some() { 0 } else { quads[1] };
+        let mut destination = Vec::with_capacity(quads[0] * rows);
+        for j in 0..rows {
             for i in 0..quads[0] {
                 let a = j * width + i;
                 destination.push([a, a + 1, a + width, a + width + 1].iter().fold(
@@ -52,7 +57,7 @@ impl MeshGeometry {
             .find_map(|shift| Bins::new(&destination, 0., shift))
             .unwrap_or_default();
         let window_shift = (WINDOW_PAGES * PAGE_SIZE).trailing_zeros();
-        let windows = Bins::new(&destination, 1., window_shift);
+        let windows = display.is_none().then(|| Bins::new(&destination, 1., window_shift)).flatten();
         let quads = quads.map(|n| n as u32);
         let mut geometry = Self {
             vertices,
@@ -70,22 +75,6 @@ impl MeshGeometry {
                 .collect(),
             None => geometry.triangles().flatten().collect(),
         };
-        geometry
-    }
-
-    /// The mesh within `tolerance` destination pixels, drawn whole at a
-    /// display level. It neither bounds regions nor bins windows.
-    pub fn display(mesh: &layer_core::MeshMap, tolerance: f32) -> Self {
-        let (vertices, quads) = Self::surface(mesh, tolerance.max(TOLERANCE));
-        let mut geometry = Self {
-            vertices,
-            quads: quads.map(|n| n as u32),
-            destination: Vec::new(),
-            pages: Bins::default(),
-            windows: None,
-            indices: Vec::new(),
-        };
-        geometry.indices = geometry.triangles().flatten().collect();
         geometry
     }
 
@@ -352,19 +341,13 @@ pub(crate) struct Positions {
 }
 impl Positions {
     pub fn new(device: &PipelineDevice) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("mesh position window"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(WINDOW_BYTES),
-                },
-                count: None,
-            }],
-        });
+        let layout = crate::bindings::layout(device, "mesh position window", &[crate::bindings::buffer(
+            0,
+            wgpu::ShaderStages::VERTEX,
+            wgpu::BufferBindingType::Uniform,
+            false,
+            wgpu::BufferSize::new(WINDOW_BYTES),
+        )]);
         let (compile_device, parameters) = (device.clone(), layout.clone());
         let pipeline = Deferred::pipeline(move |mode| {
             let device = &compile_device;
@@ -433,20 +416,21 @@ impl Positions {
             bytes: Vec::new(),
         }
     }
+    /// Positions drawn with the transforms' pipeline.
+    pub fn sharing(transforms: &PaintTransforms) -> Self {
+        transforms.0[0].positions.fork()
+    }
     pub fn storage_bytes(&self) -> u64 {
         self.target.as_ref().map_or(0, |(t, _)| texture_bytes(t))
             + self.vertices.as_ref().map_or(0, wgpu::Buffer::size)
             + self.indices.as_ref().map_or(0, wgpu::Buffer::size)
             + self.window.as_ref().map_or(0, |(b, _)| b.size())
     }
-    /// The positions texture for windows of `size` destination pixels.
+    /// A positions texture for windows of at least `size` destination pixels.
     pub fn view(&mut self, device: &wgpu::Device, size: [u32; 2]) -> wgpu::TextureView {
-        let extent = size.map(|n| n + 2);
-        if self
-            .target
-            .as_ref()
-            .is_none_or(|(t, _)| [t.width(), t.height()] != extent)
-        {
+        let held = self.target.as_ref().map_or([0; 2], |(t, _)| [t.width(), t.height()]);
+        let extent = [0, 1].map(|axis| held[axis].max(size[axis] + 2));
+        if extent != held {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("mesh source positions"),
                 size: wgpu::Extent3d {
@@ -555,63 +539,27 @@ impl Positions {
     ) -> Result<(), GpuRasterError> {
         let (texture, view) = self.target.as_ref().unwrap();
         let [a, b, c, d, e, f] = to_window.0;
-        let window: Vec<u8> = [
-            origin[0],
-            origin[1],
-            texture.width() as f32,
-            texture.height() as f32,
-            a,
-            c,
-            e,
-            source_scale,
-            b,
-            d,
-            f,
-            0.,
-        ]
-        .into_iter()
-        .flat_map(f32::to_le_bytes)
-        .collect();
-        if self.window.is_none() {
+        let size = [texture.width() as f32, texture.height() as f32];
+        let mut window = [0u8; WINDOW_BYTES as usize];
+        for (dst, value) in window
+            .chunks_exact_mut(4)
+            .zip([origin[0], origin[1], size[0], size[1], a, c, e, source_scale, b, d, f, 0.])
+        {
+            dst.copy_from_slice(&value.to_le_bytes());
+        }
+        let (buffer, binding) = &*self.window.get_or_insert_with(|| {
             let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("mesh position window"),
                 size: WINDOW_BYTES,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("mesh position window"),
-                layout: &self.layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                }],
-            });
-            self.window = Some((buffer, binding));
-        }
-        let (buffer, binding) = self.window.as_ref().unwrap();
-        r.uploads.write(encoder, buffer, &window)?;
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("mesh source positions"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: pixel_transform::UNCOVERED,
-                        g: pixel_transform::UNCOVERED,
-                        b: 0.,
-                        a: 0.,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
+            let binding = crate::bindings::group(&r.device, "mesh position window", &self.layout, [buffer.as_entire_binding()]);
+            (buffer, binding)
         });
+        r.uploads.write(encoder, buffer, &window)?;
+        let uncovered = wgpu::Color { r: pixel_transform::UNCOVERED, g: pixel_transform::UNCOVERED, b: 0., a: 0. };
+        let mut pass = encoder.color_pass("mesh source positions", view, wgpu::LoadOp::Clear(uncovered));
         if !triangles.is_empty() {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, binding, &[]);
@@ -663,7 +611,7 @@ mod tests {
             },
         )
         .unwrap();
-        MeshGeometry::new(&mesh)
+        MeshGeometry::new(&mesh, None)
     }
 
     fn bounds(g: &MeshGeometry, triangle: [u32; 3]) -> [f32; 4] {
@@ -788,11 +736,25 @@ mod tests {
             max: Point { x: 2048., y: 1536. },
         };
         let mesh = MeshMap::identity(bounds, [3, 3]).unwrap();
-        let g = MeshGeometry::new(&mesh);
+        let g = MeshGeometry::new(&mesh, None);
         let f = g.footprint(PixelRect::new(681, 0, 682, 1)).unwrap();
         for (actual, expected) in f.into_iter().zip([680., -1., 683., 2.]) {
             assert!((actual - expected).abs() < 0.01, "{f:?}");
         }
+    }
+
+    #[test]
+    fn positions_grow_and_keep_their_texture_for_smaller_windows() {
+        let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut positions = Positions::new(&r.device);
+        let first = positions.view(&r.device, [300, 200]);
+        for size in [[120, 90], [300, 200], [298, 3], [1, 200]] {
+            assert!(positions.view(&r.device, size) == first, "{size:?} reuses the texture");
+        }
+        let grown = positions.view(&r.device, [310, 150]);
+        let texture = &positions.target.as_ref().unwrap().0;
+        assert_eq!([texture.width(), texture.height()], [312, 202]);
+        assert!(grown != first && positions.view(&r.device, [310, 200]) == grown);
     }
 
     #[test]
@@ -806,7 +768,7 @@ mod tests {
             .unwrap()
             .move_node(15, far)
             .unwrap();
-        let g = MeshGeometry::new(&mesh);
+        let g = MeshGeometry::new(&mesh, None);
         assert!(g.windows.is_none());
         assert_eq!(g.window([0, 0]), 0..g.indices.len() as u32);
         assert_eq!(g.indices.len(), g.triangles().count() * 3);
