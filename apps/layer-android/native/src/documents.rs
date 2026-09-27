@@ -307,7 +307,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
             .stack_size(8 * 1024 * 1024)
             .spawn_scoped(scope, move || match &mut t.payload {
                 Payload::Save(project) => {
-                    let project = project.take().ok_or("Save already encoded")?.pruned()?;
+                    let project = project.take().ok_or("Save already encoded")?;
                     let mut out = BufWriter::new(input.ok_or("Missing project output")?);
                     project.write(&mut out)?;
                     out.flush().map_err(error)?;
@@ -585,7 +585,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectPublish(
         let Payload::Save(project) = &mut unsafe { task(handle) }.payload else {
             return Err("Not a recovery save".into());
         };
-        let project = project.take().ok_or("Recovery already encoded")?.pruned()?;
+        let project = project.take().ok_or("Recovery already encoded")?;
         layer_core::atomic_write(std::path::Path::new(&path), |output| project.write(output))
     })();
     fail(&mut env, result);

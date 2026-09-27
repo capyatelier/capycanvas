@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::packet;
-use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace};
+use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::SourceBuilder};
 use layer_core::raster::{RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey};
 use layer_core::{Affine, Document, EffectInstance, LayerMask, Point, Selection, SelectionPixels};
 use std::io::Cursor;
@@ -47,7 +47,7 @@ fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
             if *previous_time == elapsed || speed == 0. { assert_eq!(&pixels, previous_pixels, "rate changes do not seek"); }
             else { assert_ne!(&pixels, previous_pixels, "playback advances"); }
         }
-        let mut capture = live.snapshot_gpu().capture(Project { document: doc.clone(), assets: Default::default() },
+        let mut capture = live.snapshot_gpu().capture(Project { document: doc.clone() },
             [1.;4], elapsed, Default::default()).unwrap();
         let exported = capture.renderer.effect_clocks.get(&LayerId(3)).unwrap().1.clone()
             .advance(doc.layers[0].effect.as_ref().unwrap(),elapsed);
@@ -69,7 +69,7 @@ fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
     let mut builder = SourceBuilder::new([3, 1], target.clone(), 1024 * 1024).unwrap();
     builder.push_row(&input.into_iter().flatten().flat_map(f32::to_le_bytes).collect::<Vec<_>>()).unwrap();
     document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
-    let project = Project { document, assets: Default::default() };
+    let project = Project { document };
     let mut renderer = capture(project.clone()).unwrap();
     let before = renderer.preview_linear_document([3, 1]).unwrap().pixels;
     let mut output = Cursor::new(Vec::new());
@@ -119,7 +119,7 @@ fn shared_float32_bands_and_exr_preserve_samples_across_column_boundaries() {
         straight.extend(row);
     }
     document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
-    let project = Project { document, assets: Default::default() };
+    let project = Project { document };
     let (live, rendered) = frame(&project);
     assert_eq!(rendered, expected);
     let mut capture = live.snapshot_gpu().capture(
@@ -161,7 +161,7 @@ fn hdr_flattened_storage_ignores_sdr_rendition() {
     layer.effect = Some(Arc::new(effect));
     document.layers.insert(0, layer);
     document.sdr_rendition = hdr::SdrRendition { exposure: -4., contrast: 2., headroom: 4., ..Default::default() };
-    let mut renderer = capture(Project { document, assets: Default::default() }).unwrap();
+    let mut renderer = capture(Project { document }).unwrap();
     let mut bytes = vec![0; 24];
     renderer.write_rows(&target, Default::default(), None, |_, _, read| read(0, &mut bytes)).unwrap();
     let expected: Vec<_> = input.into_iter().flat_map(|p| hdr::encode_pixel([2. * p[0], 2. * p[1], 2. * p[2], p[3]]).unwrap()).flat_map(u16::to_le_bytes).collect();
@@ -231,10 +231,7 @@ fn source_project(color: DocumentColor, extent: [u32; 2]) -> Project {
         builder.push_row(&row).unwrap();
     }
     document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
-    Project {
-        document,
-        assets: Default::default(),
-    }
+    Project { document }
 }
 fn decode(bytes: Vec<u8>) -> layer_core::color::source::SourceImage {
     layer_color::photo::read_photo(Cursor::new(bytes), Default::default()).unwrap()
@@ -379,56 +376,6 @@ fn snapshot_gray_identity_and_explicit_matte_keep_their_output_contracts() {
         let expected = (RgbSpace::DisplayP3.encode(matte[c] as f64) * 65535.).round() as u16;
         assert_eq!(actual, expected);
     }
-}
-
-#[test]
-fn snapshot_legacy_project_images_use_native_primary_conversion_without_full_upload() {
-    let mut project = source_project(DocumentColor::default(), [33, 17]);
-    let source = project.document.layers[0].source.take().unwrap();
-    let bytes = raw_rows(&source);
-    let asset = layer_core::AssetId("test:legacy snapshot image".into());
-    project.document.layers[0].asset = Some(asset.clone());
-    project.document.color = DocumentColor {
-        space: RgbSpace::ProPhoto,
-        depth: SampleDepth::U16,
-    };
-    project.assets.insert(
-        asset,
-        layer_core::ProjectAsset {
-            extent: [33, 17],
-            format: ProjectAssetFormat::Rgba8Srgb,
-            bytes: bytes.clone().into(),
-        },
-    );
-    let mut reader = capture(project).unwrap();
-    let actual = reader.read_region([0, 0, 33, 17]).unwrap();
-    let decoder = layer_color::WorkingDecoder::new(
-        &source.interpretation,
-        RgbSpace::ProPhoto,
-        Default::default(),
-    )
-    .unwrap();
-    let mut expected = vec![[0.; 4]; 33 * 17];
-    decoder.decode_pixels(&bytes, &mut expected).unwrap();
-    for (actual, expected) in actual.iter().zip(expected) {
-        for c in 0..4 {
-            let expected = if c == 3 {
-                expected[3]
-            } else {
-                expected[c] * expected[3]
-            };
-            assert!((actual[c] - expected).abs() <= 2e-6);
-        }
-    }
-    assert!(reader.renderer.composite_texture.is_none());
-    assert!(reader.renderer.image_sources.is_empty());
-    assert!(
-        reader
-            .renderer
-            .paint_layers
-            .iter()
-            .all(|l| l.pages.is_empty())
-    );
 }
 
 fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {

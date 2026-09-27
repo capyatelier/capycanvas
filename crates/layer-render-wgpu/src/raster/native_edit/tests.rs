@@ -182,7 +182,7 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
                 assert_eq!(backing(&live.document().layers[0].raster), empty);
                 assert!(live.redo().unwrap()); flush(&mut live);
                 assert_eq!(backing(&live.document().layers[0].raster), pixels);
-                let project = layer_core::Project { document: live.document().clone(), assets: Default::default() };
+                let project = layer_core::Project { document: live.document().clone() };
                 let mut bytes = Vec::new(); project.write(&mut bytes).unwrap();
                 let loaded = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
                 assert_eq!(loaded.document.color, color);
@@ -225,7 +225,6 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
             );
             let project = layer_core::Project {
                 document: live.document().clone(),
-                assets: Default::default(),
             };
             let mut bytes = Vec::new();
             project.write(&mut bytes).unwrap();
@@ -781,7 +780,7 @@ fn pending_native_save_and_immediate_undo_finish_after_presentation_releases_bac
     let second = live.document().layers[0].raster.clone();
     assert!(!first.host_backed());
     assert!(!second.host_backed());
-    let project = layer_core::Project { document: live.document().clone(), assets: Default::default() };
+    let project = layer_core::Project { document: live.document().clone() };
     let (started, ready) = mpsc::channel();
     let save = std::thread::spawn(move || {
         started.send(()).unwrap();

@@ -11,7 +11,6 @@ use layer_engine::{
 use layer_render::{CanvasRenderer, ViewState};
 use layer_render_wgpu::WgpuRasterizer;
 use std::{
-    collections::BTreeMap,
     io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -155,7 +154,7 @@ impl Canvas {
         Ok(())
     }
     fn snapshot(&self) -> Result<Project> {
-        Ok(Project::snapshot(self.engine.document(), &BTreeMap::new())?)
+        Ok(Project::snapshot(self.engine.document())?)
     }
     fn stroke(&mut self, ordinal: u64) -> Result<(Vec<f64>, Vec<f64>)> {
         self.stroke_observed(ordinal, |_, _, _, _, _| {})

@@ -10,6 +10,16 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
       else if(performance.now()>end)reject(Error('Preview timeout: '+${JSON.stringify(condition)}));
       else setTimeout(check,40);
     }check();})`);
+  await evaluate(`(async()=>{
+    const canvas=new OffscreenCanvas(256,256),context=canvas.getContext('2d');
+    for(let y=0;y<8;y++)for(let x=0;x<8;x++){context.fillStyle=(x+y)%2?'rgb(30,160,220)':'rgb(230,50,80)';context.fillRect(x*32,y*32,32,32);}
+    const file=new File([await canvas.convertToBlob()],'Preview checker.png',{type:'image/png'});
+    window.previewPicker=window.showOpenFilePicker;window.showOpenFilePicker=async()=>[{getFile:async()=>file}];
+    layerApp.dispatch({type:'invoke',command:'import_image'});
+  })()`);
+  await wait(`layerApp.state().commands.find(c=>c.id==='placement_original_size').enabled`);
+  await evaluate(`window.showOpenFilePicker=previewPicker;delete window.previewPicker;layerApp.dispatch({type:'invoke',command:'apply_transform'})`);
+  await wait(`layerApp.state().layer_tools.editing_layer.label==='Preview checker'&&!layerApp.state().commands.find(c=>c.id==='placement_original_size').enabled`);
   await evaluate(`(()=>{
     const app=layerApp.app,original=app.poll_filter_previews;
     const pipeline=GPUDevice.prototype.createRenderPipelineAsync;
@@ -29,9 +39,6 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
       const c=[...document.querySelectorAll('[data-effect="'+id+'"] canvas')].find(c=>c.getBoundingClientRect().height>0);
       return c?.width>0&&c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i)=>i%4===3&&v>0);
     };
-    const pixels=new Uint8Array(256*256*4);
-    for(let i=0;i<256*256;i++)pixels.set((Math.floor(i%256/32)+Math.floor(i/256/32))%2?[30,160,220,255]:[230,50,80,255],i*4);
-    app.import_layer_image('Preview checker',256,256,pixels);layerApp.wake();
     layerApp.dispatch({type:'filter_picker',action:{op:'category',category:null}});
   })()`);
   const show=async()=>{

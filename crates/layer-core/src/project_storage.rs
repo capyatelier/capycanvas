@@ -1,6 +1,6 @@
 //! Indexed project transport. Metadata and each compressed tile have independent
 //! integrity checks; stream offsets are relative to the end of the manifest.
-use super::project::{AssetRecord, io_error, metadata, read_block, validate_document};
+use super::project::{io_error, metadata, read_block, validate_document};
 use crate::{raster::*, *};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -12,7 +12,7 @@ pub use selections::SelectionIndex;
 #[cfg(test)]
 mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x07\0";
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x08\0";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,20 +37,11 @@ struct BlobRecord {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SourceRecord {
-    asset: AssetRecord,
-    offset: u64,
-    size: u64,
-    digest: [u8; 32],
-}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Manifest<D = Document> {
     document: D,
     tile_size: u32,
     rasters: Vec<RasterRecord>,
     blobs: Vec<BlobRecord>,
-    sources: Vec<SourceRecord>,
     tiled_sources: SourceIndex,
     selections: SelectionIndex,
 }
@@ -124,31 +115,11 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
         })
         .collect();
     tiled_sources.index_profiles(&profiles, &mut offset);
-    let sources = project
-        .assets
-        .iter()
-        .map(|(id, asset)| {
-            let size = asset.bytes.len() as u64;
-            let record = SourceRecord {
-                asset: AssetRecord {
-                    id: id.clone(),
-                    extent: asset.extent,
-                    format: asset.format,
-                },
-                offset,
-                size,
-                digest: Sha256::digest(&asset.bytes).into(),
-            };
-            offset += size;
-            record
-        })
-        .collect();
     let manifest = Manifest {
         document: &document,
         tile_size: TILE_SIZE,
         rasters,
         blobs: records,
-        sources,
         tiled_sources,
         selections,
     };
@@ -164,9 +135,6 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     }
     for profile in profiles {
         output.write_all(&profile).map_err(io_error)?;
-    }
-    for source in project.assets.values() {
-        output.write_all(&source.bytes).map_err(io_error)?;
     }
     Ok(())
 }
@@ -214,7 +182,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
     }
     let mut referenced = BTreeSet::new();
     let mut tile_count = 0;
-    let mut source_bytes = manifest.tiled_sources.validate(
+    manifest.tiled_sources.validate(
         &manifest.document,
         &manifest.blobs,
         limits,
@@ -223,22 +191,6 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         &mut tile_count,
     )?;
     manifest.selections.validate(&manifest.document, &manifest.blobs, limits, &mut referenced, &mut tile_count)?;
-    let mut asset_ids = BTreeSet::new();
-    for source in &manifest.sources {
-        if source.offset != offset
-            || source.size != source.asset.size(limits)?
-            || !asset_ids.insert(&source.asset.id)
-        {
-            return Err("Invalid source image index".into());
-        }
-        source_bytes = source_bytes
-            .checked_add(source.size)
-            .filter(|v| *v <= limits.asset_bytes)
-            .ok_or("Source images exceed the memory budget")?;
-        offset = offset
-            .checked_add(source.size)
-            .ok_or("Source index overflow")?;
-    }
     let mut target_ids = BTreeSet::new();
     let expected_targets: BTreeMap<_, _> = manifest
         .document
@@ -263,7 +215,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         for tile in &raster.tiles {
             let blob = manifest.blobs.get(tile.blob).ok_or("Missing raster blob")?;
             if !keys.insert(tile.key)
-                || !tile.key.plane.accepts_descriptor(manifest.document.color, blob.descriptor)
+                || blob.descriptor != tile.key.plane.descriptor(manifest.document.color)
                 || mask != (tile.key.plane == RasterPlane::Mask)
                 || tile.key.coordinate[0] >= extent[0].div_ceil(TILE_SIZE)
                 || tile.key.coordinate[1] >= extent[1].div_ceil(TILE_SIZE)
@@ -335,28 +287,12 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         };
         *revision = RasterRevision::backed(data);
     }
-    let mut assets = BTreeMap::new();
-    for source in manifest.sources {
-        let bytes = read_block(&mut input, source.size, limits.asset_bytes)?;
-        if <[u8; 32]>::from(Sha256::digest(&bytes)) != source.digest {
-            return Err("Source image integrity check failed".into());
-        }
-        assets.insert(
-            source.asset.id,
-            ProjectAsset {
-                extent: source.asset.extent,
-                format: source.asset.format,
-                bytes: bytes.into(),
-            },
-        );
-    }
     let mut extra = [0];
     if input.read(&mut extra).map_err(io_error)? != 0 {
         return Err("Unexpected project data".into());
     }
     let project = Project {
         document: manifest.document,
-        assets,
     };
     project.validate(limits)?;
     Ok(project)
@@ -450,7 +386,7 @@ mod tests {
     #[test]
     fn native_sources_preserve_u16_profiles_hidden_rgb_and_shared_ownership() {
         let project = source_fixture();
-        let snapshot = Project::snapshot(&project.document, &project.assets).unwrap();
+        let snapshot = Project::snapshot(&project.document).unwrap();
         assert!(Arc::ptr_eq(
             snapshot.document.layers[0].source.as_ref().unwrap(),
             project.document.layers[0].source.as_ref().unwrap()
@@ -514,6 +450,18 @@ mod tests {
         changed.extend_from_slice(&json);
         changed.extend_from_slice(&bytes[52 + length..]);
         changed
+    }
+
+    #[test]
+    fn unknown_fields_and_other_versions_are_rejected() {
+        let mut bytes = Vec::new();
+        fixture().write(&mut bytes).unwrap();
+        let read = |bytes: &[u8]| Project::read(bytes, Default::default());
+        assert!(read(&rewrite_manifest(&bytes, |_| {})).is_ok());
+        let sources = rewrite_manifest(&bytes, |m| m["sources"] = serde_json::json!([]));
+        assert!(read(&sources).is_err());
+        bytes[10] = 7;
+        assert!(read(&bytes).is_err());
     }
 
     #[test]
@@ -632,12 +580,11 @@ mod tests {
     }
     fn fixture() -> Project {
         let mut document = Document::new("raster fixture", 512, 256);
+        let descriptor = RasterPlane::Color.descriptor(document.color);
         let tile = RasterTile::backed(
             TileBlob::encode(
-                color::PixelDescriptor::SRGB8_PAINT,
-                &(0..crate::color::PixelDescriptor::SRGB8_PAINT
-                    .byte_len([TILE_SIZE; 2])
-                    .unwrap())
+                descriptor,
+                &(0..descriptor.byte_len([TILE_SIZE; 2]).unwrap())
                     .map(|i| (i % 251) as u8)
                     .collect::<Vec<_>>(),
             )
@@ -662,10 +609,7 @@ mod tests {
             ]),
             watercolor: None,
         });
-        Project {
-            document,
-            assets: BTreeMap::new(),
-        }
+        Project { document }
     }
     #[test]
     fn indexed_raster_roundtrip_deduplicates_and_reuses_backing() {
@@ -703,7 +647,8 @@ mod tests {
             Project::read(
                 bytes.as_slice(),
                 ProjectLimits {
-                    raster_bytes: crate::color::PixelDescriptor::SRGB8_PAINT
+                    raster_bytes: RasterPlane::Color
+                        .descriptor(Default::default())
                         .byte_len([TILE_SIZE; 2])
                         .unwrap() as u64,
                     ..Default::default()

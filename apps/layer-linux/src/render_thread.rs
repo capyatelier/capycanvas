@@ -5,7 +5,7 @@ use gtk::prelude::WidgetExt;
 use layer_core::{AssetId, Layer};
 use layer_render::{
     BackendError, BrushSource, CanvasRenderer, CursorSegment, Dab, DabBatch, FramePacket, HostImage,
-    PixelFormat, ReadbackImage, TipOutline, ViewState,
+    ReadbackImage, TipOutline, ViewState,
 };
 use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
 use std::{
@@ -723,21 +723,12 @@ impl CanvasRenderer for RenderWorker {
             image.bytes,
         )
         .map_err(|_| BackendError("Invalid source image"))?;
-        self.prepare_owned_asset(asset, &source)
-    }
-    fn prepare_owned_asset(
-        &mut self,
-        id: &AssetId,
-        asset: &layer_core::ProjectAsset,
-    ) -> Result<(), Self::Error> {
-        let [width, height] = asset.extent;
-        if asset.format == PixelFormat::R8Unorm {
-            self.brush_sources.insert(
-                id.clone(),
-                BrushSource { image: asset.clone(), outline: layer_render::mask_outline(width, height, width, &asset.bytes) },
-            );
-        }
-        self.send(Command::Asset(id.clone(), asset.clone()))
+        let [width, height] = source.extent;
+        self.brush_sources.insert(
+            asset.clone(),
+            BrushSource { image: source.clone(), outline: layer_render::mask_outline(width, height, width, &source.bytes) },
+        );
+        self.send(Command::Asset(asset.clone(), source))
     }
     fn release_asset(&mut self, asset: &AssetId) {
         self.brush_sources.remove(asset);
@@ -1201,8 +1192,12 @@ impl Worker {
                     }
                 }
                 Command::Asset(id, asset) => {
+                    let [width, height] = asset.extent;
                     self.renderer
-                        .prepare_owned_asset(&id, &asset)
+                        .prepare_asset(
+                            &id,
+                            HostImage { width, height, stride: width, format: asset.format, bytes: &asset.bytes },
+                        )
                         .map_err(error)?;
                 }
                 Command::Selection(selection) => self

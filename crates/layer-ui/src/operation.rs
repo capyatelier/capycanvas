@@ -211,7 +211,7 @@ pub(crate) fn tool_set(transform: bool) -> ToolSetView {
 }
 
 // Conservative allocated tile geometry avoids a readback at interaction start. Erased
-// regions may leave extra transparent room; operations and assets remain bounded
+// regions may leave extra transparent room; operations remain bounded
 // by the finite local editing area. Selecting an area uses that area's bounds instead.
 fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
     let layer = doc.target_owner(target).unwrap();
@@ -227,7 +227,6 @@ fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
     let mut bounds = if doc
         .target_raster(target)
         .is_some_and(|r| r.try_data().is_none())
-        || (target == layer.id && layer.asset.is_some())
     {
         canvas
     } else if target != layer.id {
@@ -286,8 +285,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     l.mask.is_some()
                 } else {
                     l.kind == LayerKind::Paint
-                        && (l.asset.is_some()
-                            || l.source.is_some()
+                        && (l.source.is_some()
                             || !l.raster.is_empty()
                             || !l.pending_operations.is_empty())
                 }

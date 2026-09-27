@@ -33,7 +33,6 @@ impl Frame {
                         && a.visible == b.visible
                         && a.opacity == b.opacity
                         && a.raster == b.raster
-                        && a.asset == b.asset
                         && a.properties == b.properties
                         && a.mask == b.mask
                         && a.effect == b.effect

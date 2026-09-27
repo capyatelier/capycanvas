@@ -234,9 +234,8 @@ impl Service {
                                         .ok_or("Recovery storage is unavailable")?;
                                     match work.kind {
                                         RecoveryWorkKind::Capture => {
-                                            let project = project
-                                                .ok_or("Recovery snapshot is missing")?
-                                                .pruned()?;
+                                            let project =
+                                                project.ok_or("Recovery snapshot is missing")?;
                                             atomic_write(
                                                 &storage.path(&storage.key)?,
                                                 &stopping,

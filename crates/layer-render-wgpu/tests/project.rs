@@ -7,7 +7,7 @@ use layer_engine::{
 };
 use layer_render::ViewState;
 use layer_render_wgpu::WgpuRasterizer;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 type Engine = CanvasEngine<WgpuRasterizer>;
 const SIZE: [u32; 2] = [384, 256]; // Crosses raster tile boundaries.
@@ -51,14 +51,14 @@ fn source_backed_save_reopen_preserves_original_and_edited_tiles() {
     let source = Arc::new(builder.finish().unwrap());
     let mut document = Document::new("retained16 source in sRGB8 working document", SIZE[0], SIZE[1]);
     document.layers[0].source = Some(source.clone());
-    let project = Project { document, assets: BTreeMap::new() };
+    let project = Project { document };
     let (mut live, mut input) = engine(&project);
     let original = image(&mut live, 0);
     draw(&mut live, &mut input, DefaultBrushPreset::GPen, [1., 0., 0., 0.5], 100., 1_000_000);
     let painted = image(&mut live, 100_000_000);
     assert!(painted != original);
     let mut archive = Vec::new();
-    let snapshot = Project::snapshot(live.document(), &BTreeMap::new()).unwrap();
+    let snapshot = Project::snapshot(live.document()).unwrap();
     snapshot.write(&mut archive).unwrap();
     let loaded = Project::read(archive.as_slice(), Default::default()).unwrap();
     assert_eq!(loaded.document.layers[0].source.as_ref().unwrap(), &source);
@@ -138,7 +138,7 @@ fn fixture() -> Project {
             if x < 16 || y < 16 { 0 } else { 140 },
         ]
     }));
-    Project::snapshot(&doc, &BTreeMap::new()).unwrap()
+    Project::snapshot(&doc).unwrap()
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn preset_history(masked: bool) {
         );
         let expected = image(&mut live, time + 80_000_000);
         assert_ne!(before, expected, "{preset:?} must leave a visible mark");
-        let checkpoint = Project::snapshot(live.document(), &BTreeMap::new()).unwrap();
+        let checkpoint = Project::snapshot(live.document()).unwrap();
         let mut archive = Vec::new();
         checkpoint.write(&mut archive).unwrap();
         let decoded = Project::read(archive.as_slice(), ProjectLimits::default()).unwrap();

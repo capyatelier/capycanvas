@@ -48,10 +48,7 @@ impl NewDocumentOptions {
         let mut document = Document::new("untitled", self.extent[0], self.extent[1]);
         document.color = self.color;
         document.layers[1].visible = self.background == DocumentBackground::White;
-        Ok(Project {
-            document,
-            assets: Default::default(),
-        })
+        Ok(Project { document })
     }
     pub fn description(self) -> String {
         format!(

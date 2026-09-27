@@ -37,10 +37,6 @@ impl SnapshotGpu {
         if let Some(encoder) = self.encoder.clone() {
             renderer.set_browser_raster_encoder(encoder);
         }
-        for (id, asset) in &project.assets {
-            control.check()?;
-            renderer.prepare_owned_asset(id, asset)?;
-        }
         renderer.resize_surface(view.width_px, view.height_px)?;
         let mut programs = Vec::new();
         for effect in project

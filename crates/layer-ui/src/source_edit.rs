@@ -30,7 +30,7 @@ impl PreviewRevisions {
 }
 
 pub(crate) fn baked(layer: &Layer) -> bool {
-    !layer.raster.is_empty() || !layer.pending_operations.is_empty() || layer.asset.is_some()
+    !layer.raster.is_empty() || !layer.pending_operations.is_empty()
 }
 fn repair_edit(
     mut layer: Layer,
@@ -81,7 +81,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         }
         project.document.apply(edit.clone()).map_err(error)?;
-        let project = project.pruned()?;
         project.validate(limits)?;
         self.engine.validate_edit(edit).map_err(error)?;
         Ok(project)

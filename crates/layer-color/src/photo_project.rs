@@ -38,10 +38,7 @@ pub fn photo_project(
     };
     document.layers[0].source = Some(Arc::new(source));
     document.layers[1].visible = false;
-    let project = Project {
-        document,
-        assets: Default::default(),
-    };
+    let project = Project { document };
     project.validate(ProjectLimits::default())?;
     Ok(project)
 }

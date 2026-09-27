@@ -2,7 +2,8 @@
 //! moving transform every frame, then the frame that releases it, with CPU
 //! submission, GPU execution and serialized completion kept apart.
 use super::*;
-use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::*};
+use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth, source::*};
+use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
 use layer_core::{Affine, ImageTransform, Interpolation, Projective, TransformMap};
 use std::time::Instant;
 
@@ -196,26 +197,31 @@ fn drag(r: &mut WgpuRasterizer, layer: &Layer, label: &str) -> f64 {
 #[ignore = "hardware 24-megapixel paint transform benchmark; release, serial"]
 fn large_paint_transform_latency() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let asset = AssetId::from("test:large transform latency");
-    let pixels: Vec<_> = (0..EXTENT[0] * EXTENT[1])
-        .flat_map(|i| {
-            let (x, y) = (i % EXTENT[0], i / EXTENT[0]);
-            [(x % 200) as u8, (y % 220) as u8, ((x ^ y) % 256) as u8, 230]
-        })
-        .collect();
-    r.prepare_asset(
-        &asset,
-        HostImage {
-            width: EXTENT[0],
-            height: EXTENT[1],
-            stride: EXTENT[0] * 4,
-            format: PixelFormat::Rgba8Srgb,
-            bytes: &pixels,
-        },
-    )
-    .unwrap();
+    let mut data = RasterData::default();
+    for ty in 0..EXTENT[1].div_ceil(PAGE_SIZE) {
+        for tx in 0..EXTENT[0].div_ceil(PAGE_SIZE) {
+            let pixels: Vec<_> = (0..PAGE_SIZE * PAGE_SIZE)
+                .flat_map(|i| {
+                    let (x, y) = (
+                        tx * PAGE_SIZE + i % PAGE_SIZE,
+                        ty * PAGE_SIZE + i / PAGE_SIZE,
+                    );
+                    [(x % 200) as u8, (y % 220) as u8, ((x ^ y) % 256) as u8, 230]
+                })
+                .collect();
+            data.tiles.insert(
+                TileKey {
+                    plane: RasterPlane::Color,
+                    coordinate: [tx, ty],
+                },
+                RasterTile::backed(
+                    TileBlob::encode(DocumentColor::default().paint_descriptor(), &pixels).unwrap(),
+                ),
+            );
+        }
+    }
     let mut layer = Layer::paint(LayerId(1), "large paint transform");
-    layer.asset = Some(asset);
+    layer.raster = RasterRevision::backed(data);
     submit(&mut r, &layer, true);
     r.wait_idle().unwrap();
     let worst = drag(&mut r, &layer, "paint");

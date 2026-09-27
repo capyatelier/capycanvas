@@ -88,8 +88,6 @@ impl PixelDescriptor {
         encoding: TransferEncoding::Srgb,
         alpha: AlphaAssociation::Straight,
     };
-    /// Explicit attachment layout used by hosts awaiting native SDR adoption.
-    /// Canonical document paint uses `DocumentColor::paint_descriptor()`.
     pub const SRGB8_PAINT: Self = Self {
         alpha: AlphaAssociation::PremultipliedLinear,
         ..Self::SRGB8_STRAIGHT

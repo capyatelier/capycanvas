@@ -146,14 +146,6 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
         let mask=scene_read(back,v).a;
         return hdr_map_sdr(ink,settings.operation_linear,settings.operation_offset)*mask;
     }
-    if op == 8u {
-        // Sources are straight encoded RGB. Associate in linear light, then
-        // let the sRGB attachment encode its premultiplied result once.
-        let encoded = textureLoad(front, vec2<i32>(floor(v.uv * vec2<f32>(textureDimensions(front)))), 0);
-        let linear = select(pow((encoded.rgb + .055) / 1.055, vec3<f32>(2.4)), encoded.rgb / 12.92,
-            encoded.rgb <= vec3<f32>(.04045));
-        return vec4<f32>(linear * encoded.a, encoded.a);
-    }
     let raw = scene_read(front,v);
     if op == 6u || op == 11u {
         // Constant fills are the degenerate case (equal endpoint colors).

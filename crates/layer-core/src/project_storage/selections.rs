@@ -45,10 +45,7 @@ mod tests {
         let mut mask = LayerMask::reveal_all(id, Point::default());
         mask.initial = Some(selection.clone());
         document.layers[1].mask = Some(mask);
-        let project = Project {
-            document,
-            assets: Default::default(),
-        };
+        let project = Project { document };
         let mut transferred = project.document.clone();
         let mut blocks = Vec::new();
         let index = SelectionIndex::detach(&mut transferred, |pixels, range| {

@@ -85,7 +85,6 @@ fn profiled_rgb_gray_jpeg_rows_preserve_interpretation_and_archive_decoded_sampl
                 );
                 let mut project = layer_core::Project {
                     document: layer_core::Document::new("JPEG master", 257, 17),
-                    assets: Default::default(),
                 };
                 project.document.layers[0].source = Some(std::sync::Arc::new(decoded));
                 let mut archive = Vec::new();

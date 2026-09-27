@@ -26,18 +26,12 @@ impl Fixture {
         )
         .unwrap();
         native.startup = Default::default();
+        let source = layer_core::color::source::rgba8_source([4, 3], |_, _| [230, 71, 42, 255]);
         native
-            .import_layer_image(
-                "Synthetic color",
-                layer_render::HostImage {
-                    width: 4,
-                    height: 3,
-                    stride: 16,
-                    format: layer_core::ProjectAssetFormat::Rgba8Srgb,
-                    bytes: &[230, 71, 42, 255].repeat(12),
-                },
-            )
+            .session
+            .import_layer_source("Synthetic color", std::sync::Arc::unwrap_or_clone(source))
             .unwrap();
+        native.dirty = true;
         let directory = Directory::new();
         directory.example();
         let mut service = FilterService::new(|| {});

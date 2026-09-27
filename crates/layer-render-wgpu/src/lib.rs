@@ -126,7 +126,6 @@ const RECOMPOSE_MS: f64 = 2.;
 // Queries consume each group before its source slots can be reused. This also
 // fits the portable sixteen sampled-texture bindings per shader stage.
 const SOURCE_SLOTS: usize = 16;
-const PAGE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 4;
 const SCALAR_PAGE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64;
 const RESERVOIR_SIZE: u32 = 64;
 const PROCEDURAL_GRAIN_SIZE: u32 = 256;
@@ -890,7 +889,6 @@ pub struct WgpuRasterizer {
     artwork_frame: Option<Arc<artwork::Frame>>,
     effect_clocks: effects::Clocks,
     filter_source_epoch: u64,
-    image_sources: std::collections::HashMap<AssetId, layer_core::ProjectAsset>,
     tiled_sources: std::collections::BTreeMap<LayerId, Arc<layer_core::color::source::SourceImage>>,
     composite_texture: Option<wgpu::Texture>,
     composite_view: Option<wgpu::TextureView>,
@@ -1201,7 +1199,6 @@ impl WgpuRasterizer {
             ui_preview_space: layer_core::color::RgbSpace::Srgb,
             ui_rendition: None,
             ui_preview_pipeline: None,
-            image_sources: Default::default(),
             tiled_sources: Default::default(),
             paint_layers: Vec::with_capacity(8),
             raster: None,
@@ -3307,50 +3304,11 @@ impl CanvasRenderer for WgpuRasterizer {
             image.bytes,
         )
         .map_err(|_| GpuRasterError::InvalidImage)?;
-        self.prepare_owned_asset(asset, &source)
-    }
-
-    fn prepare_owned_asset(
-        &mut self,
-        asset: &AssetId,
-        source: &layer_core::ProjectAsset,
-    ) -> Result<(), Self::Error> {
-        let [width, height] = source.extent;
-        let limit = self.device.limits().max_texture_dimension_2d;
-        let stride = width.checked_mul(source.format.channels());
-        let size = stride.and_then(|row| (row as usize).checked_mul(height as usize));
-        if width == 0
-            || height == 0
-            || width > limit
-            || height > limit
-            || size != Some(source.bytes.len())
-        {
-            return Err(GpuRasterError::InvalidImage);
-        }
-        if source.format == PixelFormat::Rgba8Srgb {
-            // Keep the immutable source shared with save snapshots. Initial
-            // rasterization uploads bounded tiles; no full GPU source is kept.
-            self.image_sources.insert(asset.clone(), source.clone());
-        } else {
-            self.upload_mask_source(asset, source);
-        }
+        self.upload_mask_source(asset, &source);
         Ok(())
     }
 
-    fn source_asset(&self, asset: &AssetId) -> Option<layer_core::ProjectAsset> {
-        if let Some(source) = self.image_sources.get(asset) {
-            return Some(source.clone());
-        }
-        let mask = self.mask(asset).ok()?;
-        Some(layer_core::ProjectAsset {
-            extent: [mask.extent[0], mask.extent[1]],
-            format: layer_core::ProjectAssetFormat::R8Unorm,
-            bytes: mask.source.clone(),
-        })
-    }
-
     fn release_asset(&mut self, asset: &AssetId) {
-        self.image_sources.remove(asset);
         self.masks.retain(|stored| stored.id != *asset);
         self.texture_sets.clear();
     }
@@ -3657,24 +3615,6 @@ impl CanvasRenderer for WgpuRasterizer {
             let Some(index) = self.paint_layers.iter().position(|l| l.id == layer.id) else {
                 continue;
             };
-            if reset
-                && !self.has_raster_source(layer.id)
-                && let Some(source) = layer.asset.as_ref().and_then(|a| self.image_sources.get(a))
-            {
-                for c in page_coordinates(PixelRect::full([
-                    source.extent[0].min(packet.document_extent[0]),
-                    source.extent[1].min(packet.document_extent[1]),
-                ])) {
-                    if !self.paint_layers[index]
-                        .pages
-                        .iter()
-                        .any(|p| p.coordinate == c)
-                    {
-                        let page = self.create_page(c, "imported paint page");
-                        self.paint_layers[index].pages.push(page);
-                    }
-                }
-            }
             for batch in original_batches.iter().filter(|b| b.layer_id == layer.id) {
                 let DabBatchKind::LayerOperation(operation_index) = batch.kind else {
                     continue;
@@ -3762,11 +3702,6 @@ impl CanvasRenderer for WgpuRasterizer {
                     );
                 }
             }
-        }
-        if reset && packet.layers.iter().any(|l| l.asset.is_some()) {
-            let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
-            scene.initialize_images(self, packet.layers, &mut encoder)?;
-            self.scene = Some(scene);
         }
         if packet.layers.iter().any(|l| l.source.is_some() || self.native_backing(l.id).is_some()) {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));

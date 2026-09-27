@@ -76,12 +76,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn retained_document_tiles(&self) -> layer_core::raster_storage::RetainedTiles {
         let mut tiles = self.engine.retained_tiles();
-        // Include the fixed native input queue/session structures and retained
-        // non-tiled legacy assets. This is admission accounting, not process RSS.
+        // Include the fixed native input queue/session structures. This is
+        // admission accounting, not process RSS.
         tiles.metadata_bytes = tiles.metadata_bytes.saturating_add(2 * 1024 * 1024);
-        for asset in self.files.assets.values() {
-            tiles.metadata_bytes = tiles.metadata_bytes.saturating_add(asset.bytes.len());
-        }
         tiles
     }
 
@@ -203,7 +200,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         ))
     }
 
-    /// Prepare immutable source assets before publishing a replacement renderer.
     /// Retain document history, tool settings, camera and workspace. GPU-only
     /// readbacks are cancelled; pending filter validation resumes from retained
     /// source bytes before it can publish a catalog or edit.
@@ -212,9 +208,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             && !renderer.supports_tiled_sources()
         {
             return Err("The replacement renderer does not support tiled photo documents".into());
-        }
-        for (id, asset) in &self.files.assets {
-            renderer.prepare_owned_asset(id, asset).map_err(error)?;
         }
         if let Some(pending) = &self.pending_filters
             && !renderer
@@ -250,7 +243,14 @@ impl<R: CanvasRenderer> UiSession<R> {
 mod tests {
     use super::*;
     use crate::session::test_support::*;
-    use layer_core::ProjectAsset;
+
+    fn sources() -> Recorder {
+        Recorder { tiled_sources: true, ..Default::default() }
+    }
+
+    fn source(pixel: [u8; 4]) -> layer_core::color::source::SourceImage {
+        std::sync::Arc::unwrap_or_clone(layer_core::color::source::rgba8_source([1, 1], |_, _| pixel))
+    }
 
     #[test]
     fn header_layout_remains_publishable_after_final_document_retirement() {
@@ -344,20 +344,15 @@ mod tests {
     }
 
     #[test]
-    fn replacement_retains_source_assets_undo_redo_workspace_and_pending_save() {
+    fn replacement_retains_sources_undo_redo_workspace_and_pending_save() {
         let mut s = UiSession::new(
-            Recorder::default(),
+            sources(),
             Document::new("recovery", 128, 128),
             [256, 256],
             Platform::Windows,
         )
         .unwrap();
-        let image = ProjectAsset {
-            extent: [1, 1],
-            format: layer_core::ProjectAssetFormat::Rgba8Srgb,
-            bytes: std::sync::Arc::from([180, 20, 75, 128]),
-        };
-        s.import_layer_asset("Imported source", image).unwrap();
+        s.import_layer_source("Imported source", source([180, 20, 75, 128])).unwrap();
         s.frame(0, 0).unwrap();
         let imported = s.engine.document().clone();
         invoke(&mut s, CommandId::Undo);
@@ -372,7 +367,7 @@ mod tests {
         assert!(!s.command(CommandId::Redo).enabled);
         invoke(&mut s, CommandId::SaveDocument);
         let request = s.files.pending.as_ref().unwrap().0;
-        let (previous, change) = s.replace_renderer(Recorder::default()).unwrap();
+        let (_, change) = s.replace_renderer(sources()).unwrap();
         assert!(change.canvas_wake);
         assert!(!s.rendering_suspended());
         assert_eq!(s.engine.document(), &document);
@@ -380,11 +375,6 @@ mod tests {
         assert_eq!(s.capture_workspace().unwrap(), workspace);
         assert_eq!(s.state.camera, camera);
         assert_eq!(s.files.pending.as_ref().unwrap().0, request);
-        assert_eq!(s.engine.backend().assets, previous.assets);
-        assert!(
-            !s.engine.backend().assets.is_empty(),
-            "undone imports still belong to redo"
-        );
         s.complete_document_request(request, Ok(false)).unwrap();
         invoke(&mut s, CommandId::Redo);
         s.frame(2, 2).unwrap();
@@ -463,24 +453,16 @@ mod tests {
     #[test]
     fn suspension_cancels_transform_and_filter_candidate_without_changing_sources() {
         let mut s = UiSession::new(
-            Recorder::default(),
+            sources(),
             Document::new("retire", 128, 128),
             [128, 128],
             Platform::Windows,
         )
         .unwrap();
-        s.import_layer_asset(
-            "Source",
-            ProjectAsset {
-                extent: [1, 1],
-                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
-                bytes: std::sync::Arc::from([20, 30, 40, 255]),
-            },
-        )
-        .unwrap();
+        s.import_layer_source("Source", source([20, 30, 40, 255])).unwrap();
         s.frame(0, 0).unwrap();
         let document = s.engine.document().clone();
-        let assets = s.files.assets.clone();
+        let imported = document.active_layer;
         let catalog = s.effect_catalog.clone();
         let mut package = layer_core::EffectPackage {
             format: 1,
@@ -504,8 +486,9 @@ mod tests {
         assert!(s.state.filter_load.error.is_some());
         assert_eq!(s.effect_catalog.filters(), catalog.filters());
         assert_eq!(s.engine.document(), &document);
-        let source = s.capture_project_recovery().unwrap();
-        assert_eq!(source.assets, assets);
+        let recovered = s.capture_project_recovery().unwrap();
+        let retained = |d: &Document| d.layer(imported).unwrap().source.clone().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&retained(&recovered.document), &retained(&document)));
         assert!(s.command(CommandId::SaveDocumentAs).enabled);
         assert!(
             s.dispatch(UiAction::Color {
@@ -516,42 +499,5 @@ mod tests {
             .is_err()
         );
         assert_eq!(s.engine.document(), &document);
-    }
-
-    #[test]
-    fn failed_asset_upload_leaves_current_document_and_gpu_queries_intact() {
-        let mut s = UiSession::new(
-            Recorder::default(),
-            Document::new("failed", 128, 128),
-            [128, 128],
-            Platform::Gtk,
-        )
-        .unwrap();
-        s.import_layer_asset(
-            "Source",
-            ProjectAsset {
-                extent: [1, 1],
-                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
-                bytes: std::sync::Arc::from([20, 30, 40, 255]),
-            },
-        )
-        .unwrap();
-        s.eyedropper
-            .queue(layer_render::ColorSampleSource::Composite, [10, 10]);
-        s.eyedropper.poll(s.engine.backend_mut(), layer_core::color::RgbSpace::Srgb).unwrap();
-        let document = s.engine.document().clone();
-        let checkpoint = s.engine.checkpoint();
-        assert!(
-            s.replace_renderer(Recorder {
-                reject_assets: true,
-                ..Default::default()
-            })
-            .is_err()
-        );
-        assert_eq!(s.engine.document(), &document);
-        assert_eq!(s.engine.checkpoint(), checkpoint);
-        assert!(s.eyedropper.busy());
-        assert!(!s.engine.backend().reject_assets);
-        assert_eq!(s.engine.backend().sample_requests.len(), 1);
     }
 }

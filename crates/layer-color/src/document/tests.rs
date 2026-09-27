@@ -113,10 +113,7 @@ fn fixture(color: DocumentColor) -> Project {
         layer.effect = Some(Arc::new(effect));
         document.layers.insert(document.layers.len() - 1, layer);
     }
-    let project = Project {
-        document,
-        assets: Default::default(),
-    };
+    let project = Project { document };
     project.validate(Default::default()).unwrap();
     project
 }
@@ -429,59 +426,6 @@ fn absolute_intent_keeps_the_white_point_difference_and_preserves_alpha() {
 }
 
 #[test]
-fn explicit_attachment_assignment_recovers_declared_straight_codes_before_retagging() {
-    let mut project = fixture(DocumentColor::default());
-    let bytes: Vec<_> = (0..256)
-        .flat_map(|alpha| {
-            (0..256).flat_map(move |code| [code as u8, code as u8, code as u8, alpha as u8])
-        })
-        .collect();
-    let mut data = (*project.document.layers[0].raster.wait_data().unwrap()).clone();
-    data.tiles.insert(
-        key(RasterPlane::Color),
-        RasterTile::backed(TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &bytes).unwrap()),
-    );
-    project.document.layers[0].raster = RasterRevision::backed(data);
-    let prepared = prepare_document_color(
-        &project,
-        DocumentColorChange::Assign(RgbSpace::DisplayP3),
-        LIMIT,
-        || false,
-    )
-    .unwrap();
-    let blob = backing(
-        &prepared.project.document.layers[0].raster,
-        RasterPlane::Color,
-    );
-    assert_eq!(
-        blob.descriptor,
-        prepared.project.document.color.paint_descriptor()
-    );
-    let result = blob.decode().unwrap();
-    for (a, b) in bytes.chunks_exact(4).zip(result.chunks_exact(4)) {
-        let reference = if a[3] == 0 {
-            0.
-        } else {
-            let linear = RgbSpace::Srgb.decode(a[0] as f64 / 255.) / (a[3] as f64 / 255.);
-            (RgbSpace::Srgb.encode(linear) * 255.)
-                .round()
-                .clamp(0., 255.)
-        };
-        assert!((b[0] as f64 - reference).abs() <= 1.);
-        assert_eq!(b[0], b[1]);
-        assert_eq!(b[1], b[2]);
-        assert_eq!(a[3], b[3]);
-    }
-    let mut editor = Editor::new(project.document.clone());
-    editor.perform(edit(&prepared)).unwrap();
-    editor.undo().unwrap();
-    assert_eq!(
-        editor.document().layers[0].raster,
-        project.document.layers[0].raster
-    );
-}
-
-#[test]
 fn apply_and_history_restore_exact_roots_sources_properties_and_checkpoints() {
     let project = fixture(DocumentColor {
         space: RgbSpace::DisplayP3,
@@ -632,7 +576,7 @@ fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
     let rgba = Arc::new(TileBlob::encode(color.paint_descriptor(), &half).unwrap());
     let mask = Arc::new(TileBlob::encode(color.coverage_descriptor(), &vec![123; 65536*2]).unwrap());
     document.layers[0].raster = RasterRevision::backed(RasterData { tiles: [(key(RasterPlane::Color), RasterTile::backed_shared(rgba)), (key(RasterPlane::Wetness), RasterTile::backed_shared(mask.clone()))].into(), watercolor: None });
-    let project = Project { document, assets: Default::default() };
+    let project = Project { document };
     let promote = DocumentColorChange::Depth { depth: SampleDepth::F32, dither: OutputDither::None };
     let result = prepare_document_color(&project, promote, LIMIT, || false).unwrap();
     let root = result.project.document.layers[0].raster.wait_data().unwrap();

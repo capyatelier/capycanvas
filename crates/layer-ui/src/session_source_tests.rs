@@ -279,7 +279,6 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
         let layer = session.engine.document().layer(id).unwrap();
         assert_eq!(layer.source.as_deref(), Some(&source));
         assert!(layer.raster.is_empty());
-        assert!(layer.asset.is_none());
     };
     check(&session);
     assert!(session.command(CommandId::ScaleRotate).enabled);
@@ -610,7 +609,7 @@ fn source_admission_counts_aggregate_ownership_before_mutating_document_or_ids()
     // Identical bytes in a different allocation count twice; shared tile backing
     // counts once even when separate layers own different image-index objects.
     session.import_sources(vec![("Shared backing".into(), source)], limits, false, None, None).unwrap();
-    session.capture_project_recovery().unwrap().pruned().unwrap().validate(limits).unwrap();
+    session.capture_project_recovery().unwrap().validate(limits).unwrap();
     let before = session.engine.document().clone();
     let mut repaired = before.layer(before.active_layer).unwrap().clone();
     let mut source = repaired.source.as_ref().unwrap().as_ref().clone();

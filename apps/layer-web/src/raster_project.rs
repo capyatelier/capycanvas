@@ -3,7 +3,7 @@
 //! shared Project reader/writer handles persisted bytes and verifies integrity.
 use super::*;
 use layer_core::{
-    Document, LayerId, Project, ProjectAsset, ProjectAssetFormat, ProjectLimits,
+    Document, LayerId, Project, ProjectLimits,
     color::{PixelDescriptor, ProfileReference},
     raster::{RasterData, RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey},
 };
@@ -35,7 +35,6 @@ struct Metadata {
     selections: layer_core::ProjectSelections,
     rasters: Vec<Raster>,
     blobs: Vec<Blob>,
-    sources: Vec<Source>,
     originals: Vec<Original>,
 }
 #[derive(Serialize, Deserialize)]
@@ -49,13 +48,6 @@ struct Blob {
     descriptor: PixelDescriptor,
     digest: [u8; 32],
     data: usize,
-}
-#[derive(Serialize, Deserialize)]
-struct Source {
-    id: AssetId,
-    extent: [u32; 2],
-    format: ProjectAssetFormat,
-    data: Vec<usize>,
 }
 #[derive(Serialize, Deserialize)]
 struct Original {
@@ -105,7 +97,6 @@ pub(super) async fn wait_backing(project: &Project) -> Result<(), JsValue> {
 }
 
 fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
-    let project = project.pruned()?;
     project.validate(limits(ProjectLimits::default().dimension))?;
     let mut document = project.document.clone();
     let mut parts = Vec::new();
@@ -121,7 +112,6 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
         document, proof, selections, profiles: Vec::new(),
         rasters: Vec::new(),
         blobs: Vec::new(),
-        sources: Vec::new(),
         originals: Vec::new(),
     };
     let mut dedup = BTreeMap::new();
@@ -164,15 +154,6 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
     }
     for bytes in profile_bytes {
         metadata.profiles.push(push_bytes(bytes, &mut parts));
-    }
-    for (id, asset) in &project.assets {
-        let data = push_bytes(asset.bytes.clone(), &mut parts);
-        metadata.sources.push(Source {
-            id: id.clone(),
-            extent: asset.extent,
-            format: asset.format,
-            data,
-        });
     }
     Ok((metadata, parts))
 }
@@ -260,7 +241,6 @@ pub(super) async fn unpack(
     hdr::admit_document(&metadata.document)?;
     let mut project = Project {
         document: metadata.document,
-        assets: BTreeMap::new(),
     };
     let budget = limits(ProjectLimits::default().dimension);
     if metadata.blobs.len() > budget.tiles || metadata.rasters.len() > budget.layers * 2
@@ -372,42 +352,6 @@ pub(super) async fn unpack(
             let layer = project.document.layers.iter_mut().find(|l| l.id == id)
                 .ok_or_else(|| js("Missing original source layer"))?;
             layer.source = Some(source.clone());
-        }
-    }
-    let mut total = 0u64;
-    for source in metadata.sources {
-        let size =
-            source.extent[0] as u64 * source.extent[1] as u64 * source.format.channels() as u64;
-        total = total
-            .checked_add(size)
-            .filter(|v| *v <= budget.asset_bytes)
-            .ok_or_else(|| js("Project source budget exceeded"))?;
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(size as usize).map_err(js)?;
-        for index in source.data {
-            let block = part(&buffers, index)?;
-            if bytes.len() + block.len() > size as usize {
-                return Err(js("Oversized project source"));
-            }
-            bytes.extend_from_slice(&block);
-            documents::yield_browser().await?;
-        }
-        if bytes.len() != size as usize {
-            return Err(js("Incomplete project source"));
-        }
-        if project
-            .assets
-            .insert(
-                source.id,
-                ProjectAsset {
-                    extent: source.extent,
-                    format: source.format,
-                    bytes: bytes.into(),
-                },
-            )
-            .is_some()
-        {
-            return Err(js("Duplicate project source"));
         }
     }
     project.validate(budget).map_err(js)?;

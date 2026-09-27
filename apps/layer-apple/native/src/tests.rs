@@ -1,6 +1,5 @@
 //! Test editor effects after UI action dispatch, without automating OS menus.
 use super::*;
-use layer_render::CanvasRenderer;
 use serde_json::{Value, json};
 
 struct App(*mut CapyApple);
@@ -1162,8 +1161,7 @@ impl Drop for App {
 
 #[test]
 fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
-    use layer_core::{Project, ProjectAssetFormat, ProjectLimits};
-    use layer_render::{HostImage, PixelFormat};
+    use layer_core::{Project, ProjectLimits};
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
@@ -1209,9 +1207,7 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
         assert!(expected != paper, "Fixture must contain visible artwork");
         let source = unsafe { &*app.0 };
         let engine = source.host.session.engine();
-        let original =
-            Project::snapshot_with(engine.document(), |id| engine.backend().source_asset(id))
-                .unwrap();
+        let original = Project::snapshot(engine.document()).unwrap();
         assert!(original.document.layers.iter().any(|layer| layer.source.is_some()),
             "The imported original stays retained alongside edited raster pixels");
         let mask = engine
@@ -1229,34 +1225,10 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
         assert!(coverage.values().all(|(descriptor, _)| *descriptor == layer_core::color::PixelDescriptor::COVERAGE8));
         let mut bytes = Vec::new();
         original.write(&mut bytes).unwrap();
-        let Project { document, assets } =
+        let Project { document } =
             Project::read(bytes.as_slice(), ProjectLimits::default()).unwrap();
         assert_project_document(&document, &original.document);
-        let mut gpu =
-            native_renderer();
-        for (id, asset) in &assets {
-            gpu.prepare_asset(
-                id,
-                HostImage {
-                    width: asset.extent[0],
-                    height: asset.extent[1],
-                    stride: asset.extent[0] * asset.format.channels(),
-                    bytes: &asset.bytes,
-                    format: match asset.format {
-                        ProjectAssetFormat::R8Unorm => PixelFormat::R8Unorm,
-                        ProjectAssetFormat::Rgba8Srgb => PixelFormat::Rgba8Srgb,
-                    },
-                },
-            )
-            .unwrap();
-            let retained = gpu.source_asset(id).unwrap();
-            assert_eq!(retained, *asset);
-            let second = gpu.source_asset(id).unwrap();
-            assert!(
-                std::sync::Arc::ptr_eq(&retained.bytes, &second.bytes),
-                "Source access must share storage"
-            );
-        }
+        let gpu = native_renderer();
         let restored = App::new(platform);
         let host = &mut unsafe { &mut *restored.0 }.host;
         host.session =

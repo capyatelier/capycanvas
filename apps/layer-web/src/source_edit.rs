@@ -92,11 +92,7 @@ impl WebApp {
                 document.color = project.document.color;
                 document.layers[0].source = Some(original.clone());
                 document.layers[1].visible = false;
-                let wire = raster_project::pack(Project {
-                    document,
-                    assets: Default::default(),
-                })
-                .await?;
+                let wire = raster_project::pack(Project { document }).await?;
                 let metadata = js_sys::Reflect::get(&wire, &js("metadata"))?
                     .as_string()
                     .ok_or_else(|| js("Missing source metadata"))?;

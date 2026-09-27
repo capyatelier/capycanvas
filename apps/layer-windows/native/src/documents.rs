@@ -234,7 +234,6 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
         Job::Workflow { mut task, action } => { task.work(action); Ok(Completed::Workflow(task)) }
         Job::DiscardOpening(opening) => { drop(opening); Ok(Completed::Cancelled) }
         Job::Save { project, path } => {
-            let project = project.pruned()?;
             atomic_write(&path, cancel, |file| project.write(file))?;
             Ok(Completed::Saved)
         }
@@ -886,15 +885,14 @@ mod tests {
 
     #[test]
     fn suspended_renderer_saves_committed_raster_and_keeps_close_decisions() {
-        use layer_core::color::PixelDescriptor;
         use layer_core::raster::{
             RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey,
         };
         let mut f = Fixture::new();
         let mut project = layer_ui::new_drawing(256, 256).unwrap();
         let bytes = [27, 89, 143, 255].repeat(256 * 256);
-        let tile =
-            RasterTile::backed(TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &bytes).unwrap());
+        let descriptor = RasterPlane::Color.descriptor(project.document.color);
+        let tile = RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap());
         project.document.layers[0].raster = RasterRevision::backed(RasterData {
             tiles: std::collections::BTreeMap::from([(
                 TileKey {
@@ -946,12 +944,7 @@ mod tests {
         f.finish();
         let project = Project::read(File::open(&path).unwrap(), Default::default()).unwrap();
         let mut expected = Vec::new();
-        Project {
-            document: source,
-            assets: Default::default(),
-        }
-        .write(&mut expected)
-        .unwrap();
+        Project { document: source }.write(&mut expected).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), expected);
         let saved = project.document.layers[0].raster.wait_data().unwrap();
         assert_eq!(
@@ -998,16 +991,7 @@ mod tests {
             DocumentRequest::ConfirmClose { .. }
         ));
         let project = Project::read(File::open(path).unwrap(), Default::default()).unwrap();
-        assert_eq!(
-            project.document,
-            Project {
-                document: saved,
-                assets: Default::default()
-            }
-            .pruned()
-            .unwrap()
-            .document
-        );
+        assert_eq!(project.document, saved);
         let state = &f.host.session.state().document_file;
         f.act(DocumentAction::RespondClose {
             id: f.request(),
@@ -1264,17 +1248,11 @@ mod gpu_tests {
             UiSession::from_project(Renderer(Some(gpu.into())), project, None, [31, 29], Platform::Windows).unwrap();
         host.session.set_document_replacement(true);
         host.resize(31, 29, 1.).unwrap();
-        host.import_layer_image(
-            "Synthetic alpha",
-            layer_render::HostImage {
-                width: 4,
-                height: 3,
-                stride: 16,
-                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
-                bytes: &[210, 45, 83, 180].repeat(12),
-            },
-        )
-        .unwrap();
+        let source = layer_core::color::source::rgba8_source([4, 3], |_, _| [210, 45, 83, 180]);
+        host.session
+            .import_layer_source("Synthetic alpha", std::sync::Arc::unwrap_or_clone(source))
+            .unwrap();
+        host.dirty = true;
         let directory = std::env::temp_dir().join(format!(
             "capy-save-gpu-{}-{}",
             std::process::id(),

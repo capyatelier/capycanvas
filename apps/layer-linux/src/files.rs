@@ -271,12 +271,9 @@ async fn document_request(
                 .ok_or("Canvas unavailable")?
                 .session
                 .capture_project_save(id, location)?;
-            gio::spawn_blocking(move || {
-                let project = project.pruned()?;
-                atomic_write(&path, |file| project.write(file))
-            })
-            .await
-            .map_err(|_| "Project writer failed")??;
+            gio::spawn_blocking(move || atomic_write(&path, |file| project.write(file)))
+                .await
+                .map_err(|_| "Project writer failed")??;
         }
         _ => unreachable!(),
     }

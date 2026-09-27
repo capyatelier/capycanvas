@@ -70,10 +70,7 @@ fn project(color: DocumentColor) -> Project {
     });
     document.layers[0].mask = Some(mask);
     document.next_layer_id += 1;
-    Project {
-        document,
-        assets: Default::default(),
-    }
+    Project { document }
 }
 
 #[test]
@@ -231,7 +228,7 @@ fn hdr_archive_and_history_preserve_samples_and_authored_rendition() {
     editor.perform(Edit::SetSdrRendition(rendition)).unwrap();
     editor.undo().unwrap();assert_eq!(editor.document().sdr_rendition,Default::default());
     editor.redo().unwrap();assert_eq!(editor.document().sdr_rendition,rendition);
-    let project=Project{document:editor.document().clone(),assets:Default::default()};
+    let project=Project{document:editor.document().clone()};
     let mut encoded=Vec::new();project.write(&mut encoded).unwrap();
     let restored=Project::read(encoded.as_slice(),Default::default()).unwrap();
     assert_eq!(restored.document.color,color);assert_eq!(restored.document.sdr_rendition,rendition);
@@ -259,7 +256,7 @@ fn float32_archive_history_preserve_every_bit_including_hidden_rgb() {
     editor.perform(Edit::SetLayerOpacity { id, opacity: 0.25 }).unwrap();
     editor.undo().unwrap();
     editor.redo().unwrap();
-    let project = Project { document: editor.document().clone(), assets: Default::default() };
+    let project = Project { document: editor.document().clone() };
     let mut archive = Vec::new(); project.write(&mut archive).unwrap();
     let restored = Project::read(archive.as_slice(), Default::default()).unwrap();
     let actual = restored.document.layers[0].raster.wait_data().unwrap().tiles[&key].wait_backing().unwrap();

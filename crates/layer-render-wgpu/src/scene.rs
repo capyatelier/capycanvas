@@ -1,7 +1,6 @@
 //! Tiled layer composition with explicit cached image boundaries. Pointwise
 //! scratch follows nesting depth. Masks never download or rewrite paint.
 use super::*;
-use wgpu::util::DeviceExt;
 #[path = "scene_images.rs"]
 mod images;
 #[path = "filter_previews.rs"]
@@ -17,10 +16,6 @@ mod placement;
 enum Job {
     Placement(Box<placement::PlacementJob>),
     DecodedTile(std::sync::Arc<sources::PendingTile>),
-    SourceUpload {
-        buffer: wgpu::Buffer,
-        texture: wgpu::Texture,
-    },
     Effect {
         target: wgpu::TextureView,
         sources: [wgpu::TextureView; 3],
@@ -150,77 +145,6 @@ impl Scene {
             + self.images.storage_bytes();
         { bytes += self.source_tiles.gpu_bytes() + self.display_source_tiles.gpu_bytes(); }
         bytes
-    }
-    pub fn initialize_images(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        layers: &[Layer],
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<(), GpuRasterError> {
-        // Cold import only. Reuse one encoded source tile and cap native upload
-        // buffers at 16 MiB. Final paint stays in the existing raster pages.
-        const UPLOAD_TILES: usize = 64;
-        self.jobs.clear();
-        let mut source_tile = None;
-        let mut pixels = Vec::new();
-        let mut uploads = 0;
-        for layer in layers {
-            if r.has_raster_source(layer.id) { continue; }
-            let Some(source) = layer.asset.as_ref().and_then(|a| r.image_sources.get(a)).cloned() else {
-                continue;
-            };
-            let Some(stored) = r.paint_layers.iter().find(|p| p.id == layer.id) else { continue; };
-            let pages: Vec<_> = stored.pages.iter()
-                .map(|p| (p.coordinate, p.active().view.clone())).collect();
-            let (texture, view) = source_tile.get_or_insert_with(|| {
-                create_target(&r.device, [PAGE_SIZE; 2], wgpu::TextureFormat::Rgba8Unorm,
-                    "bounded encoded source tile")
-            });
-            pixels.resize(PAGE_BYTES as usize, 0);
-            for (coordinate, target) in pages {
-                pixels.fill(0);
-                let [x, y] = coordinate.map(|v| v * PAGE_SIZE);
-                let width = source.extent[0].saturating_sub(x).min(PAGE_SIZE) as usize;
-                let height = source.extent[1].saturating_sub(y).min(PAGE_SIZE) as usize;
-                if width > 0 {
-                    for row in 0..height {
-                        let offset = ((y as usize + row) * source.extent[0] as usize + x as usize) * 4;
-                        let packed = row * PAGE_SIZE as usize * 4;
-                        pixels[packed..packed + width * 4].copy_from_slice(&source.bytes[offset..offset + width * 4]);
-                    }
-                }
-                // Mapped-at-creation buffers preserve copy/draw ordering on both
-                // native and WebGPU; Queue::write_texture would run all uploads
-                // before the draws and make every tile see the final source.
-                let buffer = r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("source tile upload"), contents: &pixels,
-                    usage: wgpu::BufferUsages::COPY_SRC,
-                });
-                self.jobs.push(Job::SourceUpload { buffer, texture: texture.clone() });
-                let mut data = [0.; 32];
-                data[..8].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0.]);
-                data[8] = 8.;
-                self.jobs.push(Job::Draw {
-                    target, sources: [view.clone(), r.empty_view.clone(), r.empty_view.clone()],
-                    data, over: false, clip: None,
-                });
-                uploads += 1;
-                r.metrics.source_upload_peak_bytes = r.metrics.source_upload_peak_bytes
-                    .max((uploads as u64 + 2) * PAGE_BYTES);
-                if uploads == UPLOAD_TILES {
-                    self.encode_jobs(r, encoder)?;
-                    self.jobs.clear();
-                    Self::submit_source_uploads(r, encoder)?;
-                    uploads = 0;
-                }
-            }
-        }
-        self.encode_jobs(r, encoder)?;
-        self.jobs.clear();
-        if uploads != 0 {
-            Self::submit_source_uploads(r, encoder)?;
-        }
-        Ok(())
     }
     fn submit_source_uploads(
         r: &mut WgpuRasterizer,
@@ -1660,7 +1584,7 @@ impl Scene {
             }
             if display_tiles >= display_batch || self.jobs.len() >= DISPLAY_JOBS_PER_SUBMISSION {
                 let uploads = self.jobs.iter().any(|job| {
-                    matches!(job, Job::DecodedTile(_) | Job::SourceUpload { .. } | Job::Placement(_))
+                    matches!(job, Job::DecodedTile(_) | Job::Placement(_))
                 });
                 self.encode_display_jobs(r, encoder, &direct_tiles[..direct_count])?;
                 direct_count = 0;
@@ -1991,15 +1915,6 @@ impl Scene {
                     let in_flight = self.source_tiles.charge_upload(encoder, bytes);
                     r.metrics.source_upload_peak_bytes = r.metrics.source_upload_peak_bytes.max(in_flight);
                 }
-                Job::SourceUpload { buffer, texture } => encoder.copy_buffer_to_texture(
-                    wgpu::TexelCopyBufferInfo {
-                        buffer,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0, bytes_per_row: Some(PAGE_SIZE * 4), rows_per_image: Some(PAGE_SIZE),
-                        },
-                    },
-                    texture.as_image_copy(), texture.size(),
-                ),
                 Job::Clear(target, color) => {
                     if self.jobs.get(i+1).is_some_and(|next|
                         matches!(next,Job::Draw{target:next,..}|Job::Effect{target:next,..}|Job::Watercolor{target:next,..} if next==target)

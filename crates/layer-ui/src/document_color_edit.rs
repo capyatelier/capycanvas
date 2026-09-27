@@ -149,7 +149,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .engine
             .prepare_color_transition(transition)
             .map_err(error)?;
-        let project = Project::snapshot(prepared.document(), &self.files.assets)?;
+        let project = Project::snapshot(prepared.document())?;
         Ok((prepared, project))
     }
 

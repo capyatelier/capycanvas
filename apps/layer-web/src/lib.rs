@@ -16,9 +16,9 @@ mod raster_project;
 mod raster_worker;
 mod workspaces;
 
-use layer_core::{AssetId, Point};
+use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
-use layer_render::{CanvasRenderer, HostImage};
+use layer_render::CanvasRenderer;
 use layer_render_wgpu::{AttachedRenderer, GpuRasterError, SdrSurfaceColor, StartupProgress, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{UiAction, UiSession, ui_catalog};
 use serde::{Deserialize, Serialize};
@@ -258,31 +258,6 @@ impl WebApp {
         };
         let image = result.map_err(js)?;
         serialize(&(image.request_id, image.width, image.height, image.bytes))
-    }
-    pub fn import_layer_image(
-        &mut self,
-        name: &str,
-        width: u32,
-        height: u32,
-        bytes: &[u8],
-    ) -> Result<JsValue, JsValue> {
-        self.session
-            .import_layer_image(
-                name,
-                HostImage {
-                    width,
-                    height,
-                    stride: width * 4,
-                    format: layer_render::PixelFormat::Rgba8Srgb,
-                    bytes,
-                },
-            )
-            .map_err(js)?;
-        serialize(&layer_ui::UiChange {
-            regions: layer_ui::regions::DOCUMENT,
-            canvas_wake: true,
-            revision: self.session.state().revision,
-        })
     }
     /// Display-only hover data, independent of the high-rate paint queue.
     pub fn cursor_input(&mut self, sample: &[f64]) {

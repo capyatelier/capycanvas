@@ -2058,8 +2058,8 @@ class AndroidInteractionTest {
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         val originalTransparency = transparency()
         val (width, height) = 2048 to 1536
-        val stripes = ByteArray(width * height * 4) { i -> if (i % 4 == 3 || (i / 4 % width / 12 + i / 4 / width / 12) % 2 == 0) -1 else 40 }
-        instrumentation.runOnMainSync { host.importLayer("Stripes", width, height, stripes) }
+        host.importStripes(width, height)
+        invoke("apply_transform")
         waitFor("stripes") { state().getJSONObject("layer_tools").getJSONObject("editing_layer").getString("label") == "Stripes" }
         val viewport = JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))
         fun screen(): android.graphics.Bitmap {

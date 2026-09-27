@@ -46,7 +46,6 @@ fn source_is(w: &Rc<Workspace>, expected: &SourceImage) {
     assert_eq!(document.color, Default::default());
     let layer = document.layer(document.active_layer).unwrap();
     assert_eq!(layer.source.as_deref(), Some(expected));
-    assert!(layer.asset.is_none());
     assert!(
         layer.raster.is_empty(),
         "retained import must not quantize to canvas precision"

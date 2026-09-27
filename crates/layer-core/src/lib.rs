@@ -201,7 +201,6 @@ pub struct Layer {
     /// The indexed project container stores source/profile payload separately.
     #[serde(skip)]
     pub source: Option<Arc<color::source::SourceImage>>,
-    pub asset: Option<AssetId>,
     pub properties: LayerProperties,
     pub mask: Option<LayerMask>,
     #[serde(skip)]
@@ -229,7 +228,6 @@ impl Layer {
             opacity: self.opacity,
             raster: self.raster.clone(),
             source: self.source.clone(),
-            asset: self.asset.clone(),
             properties: self.properties.clone(),
             mask: self.mask.clone(),
             pending_operations: Vec::new(),
@@ -246,7 +244,6 @@ impl Layer {
             opacity: 1.0,
             raster: Default::default(),
             source: None,
-            asset: None,
             properties: LayerProperties::default(),
             mask: None,
             pending_operations: Vec::new(),
@@ -1273,7 +1270,6 @@ impl Document {
                     opacity: 1.0,
                     raster: Default::default(),
                     source: None,
-                    asset: None,
                     properties: LayerProperties::default(),
                     mask: None,
                     pending_operations: Vec::new(),

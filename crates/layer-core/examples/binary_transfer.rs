@@ -50,10 +50,7 @@ fn main() -> Result<(), String> {
     )?;
     source.push_row(&[17, 33, 65, 255])?;
     document.layers[1].source = Some(Arc::new(source.finish()?));
-    let project = Project {
-        document,
-        assets: Default::default(),
-    };
+    let project = Project { document };
     let mut output = std::fs::File::create(path).map_err(|e| e.to_string())?;
     let start = std::time::Instant::now();
     project.write(&mut output)?;

@@ -312,10 +312,7 @@ fn tonal_61mp_performance() {
             doc.layers = vec![layer.clone()];
             doc.active_layer = layer.id;
             doc.selection = Some(Selection::pixels(result.pixels));
-            let project = layer_core::Project {
-                document: doc,
-                assets: Default::default(),
-            };
+            let project = layer_core::Project { document: doc };
             let start = std::time::Instant::now();
             let mut output = Vec::new();
             let saved = project.write(&mut output);

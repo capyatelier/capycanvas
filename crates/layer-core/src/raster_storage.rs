@@ -493,7 +493,7 @@ mod tests {
     fn blob(value: u8) -> Arc<TileBlob> {
         Arc::new(
             TileBlob::encode(
-                crate::color::PixelDescriptor::SRGB8_PAINT,
+                RasterPlane::Color.descriptor(Default::default()),
                 &vec![value; 256 * 256 * 4],
             )
             .unwrap(),
@@ -604,7 +604,7 @@ mod tests {
         editor.undo().unwrap();
         let retained = editor.retained_tiles();
         assert!(retained.try_blobs().unwrap().is_none());
-        let tile = RasterTile::pending(crate::color::PixelDescriptor::SRGB8_PAINT);
+        let tile = RasterTile::pending(RasterPlane::Color.descriptor(Default::default()));
         root.publish(Ok(RasterData {
             tiles: [(
                 TileKey {
@@ -650,7 +650,6 @@ mod tests {
         editor.redo().unwrap();
         let project = Project {
             document: editor.document().clone(),
-            assets: Default::default(),
         };
         let mut saved = Vec::new();
         project.write(&mut saved).unwrap();

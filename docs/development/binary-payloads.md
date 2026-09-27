@@ -15,7 +15,7 @@ small, inspectable indices, settings, effect definitions and UI commands.
   JSON during browser save, recovery, opening and document conversion.
 - Original-source and proof ICC profiles in those transfers use a shared
   `ProfileReference` and deduplicated binary buffers. The private worker protocol
-  changes with the application; the persisted project format stays at version 7.
+  changes with the application; the persisted project format stays at version 8.
 - Export preset libraries retain each ICC payload as binary, independently of
   profile-library files. All hosts use `ExportPresets::encode/decode`; old JSON
   libraries remain readable and migrate on the next successful atomic write.

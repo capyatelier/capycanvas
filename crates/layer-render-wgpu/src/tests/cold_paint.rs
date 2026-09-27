@@ -37,10 +37,7 @@ fn project(color: DocumentColor) -> Project {
         }
     }
     document.layers[0].raster = RasterRevision::backed(data);
-    Project {
-        document,
-        assets: Default::default(),
-    }
+    Project { document }
 }
 fn packet(project: &Project, all: bool) -> FramePacket<'_> {
     FramePacket {

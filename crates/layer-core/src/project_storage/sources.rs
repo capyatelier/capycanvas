@@ -140,7 +140,7 @@ impl SourceIndex {
         offset: &mut u64,
         referenced: &mut BTreeSet<usize>,
         tile_count: &mut usize,
-    ) -> Result<u64, String> {
+    ) -> Result<(), String> {
         if self.images.len() > limits.layers
             || self.layers.len() > limits.layers
             || self.profiles.len() > self.images.len() + usize::from(self.proof.is_some())
@@ -153,8 +153,7 @@ impl SourceIndex {
             let layer = document
                 .layer(binding.target)
                 .ok_or("Missing source target")?;
-            if layer.asset.is_some()
-                || layer.kind != LayerKind::Paint
+            if layer.kind != LayerKind::Paint
                 || binding.image >= self.images.len()
                 || !targets.insert(binding.target)
             {
@@ -246,7 +245,7 @@ impl SourceIndex {
         if bytes > limits.asset_bytes || *tile_count > limits.tiles {
             return Err("Source images exceed the memory budget".into());
         }
-        Ok(bytes)
+        Ok(())
     }
 
     pub(super) fn read(

@@ -1,8 +1,7 @@
 //! Document lifecycle policy. Hosts provide dialogs and asynchronous transport;
 //! checkpoints, cancellation and close-after-save decisions remain shared.
 use super::*;
-use layer_core::{AssetId, Project, ProjectAsset};
-use std::collections::BTreeMap;
+use layer_core::Project;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentLocation {
@@ -178,7 +177,6 @@ pub struct DocumentExport {
 
 #[derive(Default)]
 pub(super) struct DocumentFiles {
-    pub assets: BTreeMap<AssetId, ProjectAsset>,
     pub(super) saved_checkpoint: u64,
     pub(super) unpublished: bool,
     pub(super) pending_modified_change: bool,
@@ -213,13 +211,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             })
             .flatten();
         let mut session = Self::new(renderer, project.document, viewport, platform)?;
-        for (id, asset) in &project.assets {
-            session
-                .renderer_mut()
-                .prepare_owned_asset(id, asset)
-                .map_err(error)?;
-        }
-        session.files.assets = project.assets;
         session.state.document_file.location = location;
         if let Some(name) = photo_name {
             session.state.document_file.unsaved_name = Some(name);
@@ -372,7 +363,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_raster_snapshot()?;
         Ok(Project {
             document: self.engine.document().clone(),
-            assets: self.files.assets.clone(),
         })
     }
 

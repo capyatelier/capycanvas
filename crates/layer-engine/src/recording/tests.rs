@@ -148,9 +148,11 @@ fn rejects_truncation_corruption_unsupported_versions_and_incomplete_streams() {
     let n = corrupt.len();
     corrupt[n - 7] ^= 1;
     assert!(read(corrupt.as_slice()).is_err());
-    let mut unknown = bytes.clone();
-    unknown[7] = b'9';
-    assert!(read(unknown.as_slice()).is_err());
+    for version in [b'2', b'9'] {
+        let mut unknown = bytes.clone();
+        unknown[7] = version;
+        assert!(read(unknown.as_slice()).is_err());
+    }
     assert!(read(compress(&[]).unwrap().as_slice()).is_err());
 }
 

@@ -1,8 +1,7 @@
 use super::*;
-use layer_core::{AssetId, Point, ProjectAsset};
+use layer_core::{AssetId, Point};
 use layer_engine::{SampleFlags, ToolKind};
 use layer_render::{BackendError, FilterPreviewImage, FilterPreviewRequest, FramePacket, HostImage};
-use std::collections::BTreeMap;
 
 /// Protocol recorder only: no canvas storage or software rasterization.
 #[derive(Default)]
@@ -27,8 +26,6 @@ pub(crate) struct Recorder {
     pub(crate) region_reply: Option<layer_render::RegionResult>,
     pub(crate) transform: Option<layer_render::TransformPreview>,
     pub(crate) overlay: Option<layer_render::SelectionOverlay>,
-    pub(crate) assets: BTreeMap<AssetId, ProjectAsset>,
-    pub(crate) reject_assets: bool,
     pub(crate) filter_preview: Option<FilterPreviewRequest>,
     pub(crate) filter_preview_ready: Option<Result<FilterPreviewImage, BackendError>>,
     pub(crate) filter_preview_requests: usize,
@@ -132,13 +129,6 @@ impl CanvasRenderer for Recorder {
         Ok(())
     }
     fn prepare_asset(&mut self, _: &AssetId, _: HostImage<'_>) -> Result<(), Self::Error> {
-        Ok(())
-    }
-    fn prepare_owned_asset(&mut self, id: &AssetId, asset: &ProjectAsset) -> Result<(), Self::Error> {
-        if self.reject_assets {
-            return Err(BackendError("asset preparation failed"));
-        }
-        self.assets.insert(id.clone(), asset.clone());
         Ok(())
     }
     fn release_asset(&mut self, _: &AssetId) {}

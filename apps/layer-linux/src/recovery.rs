@@ -166,7 +166,7 @@ fn publish(path: &std::path::Path, project: Project, discarded: &AtomicBool) -> 
         return Ok(());
     }
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-    let result = atomic_write(path, |out| project.pruned()?.write(out));
+    let result = atomic_write(path, |out| project.write(out));
     // Close can finish while the worker awaits tile backing or writes a file.
     if discarded.load(Ordering::Acquire) {
         let _ = std::fs::remove_file(path);
@@ -271,7 +271,6 @@ mod tests {
             std::env::temp_dir().join(format!("capy-recovery-failure-{}.capy", std::process::id()));
         let mut project = Project {
             document: Document::new("recovery", 256, 256),
-            assets: Default::default(),
         };
         let discarded = AtomicBool::new(false);
         publish(&path, project.clone(), &discarded).unwrap();
@@ -312,7 +311,6 @@ mod tests {
         let tile = RasterTile::pending(RasterPlane::Color.descriptor(Default::default()));
         let mut project = Project {
             document: Document::new("recovery", 256, 256),
-            assets: Default::default(),
         };
         project.document.layers[0].raster = RasterRevision::backed(RasterData {
             tiles: [(

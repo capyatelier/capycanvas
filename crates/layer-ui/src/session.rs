@@ -4823,7 +4823,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     ui_rendition.parameters().into_iter().fold(0u64, |h,v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v.to_bits())))
                 } else { 0 })
                 .wrapping_add(l.pending_operations.len() as u64 * 2)
-                .wrapping_add(u64::from(l.asset.is_some()))
                 .wrapping_add(self.source_preview_revisions.id(l.id).wrapping_mul(65537))
                 .wrapping_add(self.selection_masks.preview_revision(l.id).wrapping_mul(65539))
                 .wrapping_add(if l.kind == LayerKind::Background {
@@ -4967,7 +4966,7 @@ mod tests {
         }, 1024 * 1024).unwrap();
         source.push_row(&[0; 8]).unwrap();
         document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
-        let project = layer_core::Project { document, assets: Default::default() };
+        let project = layer_core::Project { document };
         let result = UiSession::from_project(Recorder::default(), project, None, [256, 256], Platform::Gtk);
         assert!(matches!(result, Err(message) if message.contains("does not support tiled photo")));
     }
@@ -6006,18 +6005,18 @@ mod tests {
     }
 
     #[test]
-    fn document_save_keeps_source_assets_and_tracks_the_saved_undo_state() {
-        let mut s = session(Platform::Gtk);
-        let pixels = std::sync::Arc::<[u8]>::from([200, 20, 90, 128]);
-        s.import_layer_asset(
-            "Image",
-            layer_core::ProjectAsset {
-                extent: [1, 1],
-                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
-                bytes: pixels.clone(),
-            },
+    fn document_save_keeps_sources_and_tracks_the_saved_undo_state() {
+        let mut s = UiSession::new(
+            Recorder { tiled_sources: true, ..Default::default() },
+            Document::new("test", 1000, 1000),
+            [1000, 1000],
+            Platform::Gtk,
         )
         .unwrap();
+        let source = layer_core::color::source::rgba8_source([1, 1], |_, _| [200, 20, 90, 128]);
+        s.import_layer_source("Image", std::sync::Arc::unwrap_or_clone(source)).unwrap();
+        let image = s.engine.document().active_layer;
+        let retained = |d: &Document| d.layer(image).unwrap().source.clone().unwrap();
         assert!(s.state.document_file.modified);
         invoke(&mut s, CommandId::SaveDocument);
         let id = s.files.pending.as_ref().unwrap().0;
@@ -6031,14 +6030,10 @@ mod tests {
             uri: "file:///first.capy".into(),
             name: "first.capy".into(),
         };
-        let project = s
-            .capture_project_save(id, first)
-            .unwrap()
-            .pruned()
-            .unwrap();
+        let project = s.capture_project_save(id, first).unwrap();
         assert!(std::sync::Arc::ptr_eq(
-            &project.assets.values().next().unwrap().bytes,
-            &pixels
+            &retained(&project.document),
+            &retained(s.engine.document())
         ));
         assert!(s.capture_project_save(id, location.clone()).is_err());
         let invalid = DocumentLocation { uri: String::new(), ..location.clone() };
@@ -6059,7 +6054,7 @@ mod tests {
         project.write(&mut stream).unwrap();
         let decoded = layer_core::Project::read(stream.as_slice(), Default::default()).unwrap();
         let reopened = UiSession::from_project(
-            Recorder::default(),
+            Recorder { tiled_sources: true, ..Default::default() },
             decoded,
             s.state.document_file.location.clone(),
             [800, 600],
@@ -6067,7 +6062,7 @@ mod tests {
         )
         .unwrap();
         assert!(!reopened.state.document_file.modified);
-        assert_eq!(reopened.files.assets, project.assets);
+        assert_eq!(retained(reopened.engine.document()), retained(&project.document));
         let mut reopened_stream = Vec::new();
         reopened
             .capture_project_recovery()

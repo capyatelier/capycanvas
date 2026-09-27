@@ -212,16 +212,11 @@ impl DocumentAdmission {
                 "{error}\nFree disk space or close some tabs before opening another drawing."
             ));
         }
-        let assets = candidate
-            .assets
-            .values()
-            .fold(0usize, |n, a| n.saturating_add(a.bytes.len()));
         let metadata = layer_core::Editor::new(candidate.document.clone())
             .retained_tiles()
             .metadata_bytes;
         if self
             .existing
-            .saturating_add(assets)
             .saturating_add(metadata)
             .saturating_add(2 * 1024 * 1024)
             > self.limit
@@ -301,7 +296,6 @@ mod tests {
         tabs.budget.metadata = 1;
         let project = Project {
             document: layer_core::Document::new("candidate", 16, 16),
-            assets: Default::default(),
         };
         assert!(tabs.admit(&inventory(), &project).is_err());
         tabs.storage_completed(Err("Disk full".into()));

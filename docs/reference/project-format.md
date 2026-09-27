@@ -59,11 +59,11 @@ live edge settings are committed because they affect composition and later paint
 
 ## Container and validation
 
-The header is the twelve bytes `CAPYRASTER\x07\0`, followed by a little-endian
+The header is the twelve bytes `CAPYRASTER\x08\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
-blobs, image roles/interpretations and source assets. Payload offsets are relative to the payload start.
-Version 7 fixes the tile encoding to one lossless LZ4 block per tile, without a
+blobs and image roles/interpretations. Payload offsets are relative to the payload start.
+Version 8 fixes the tile encoding to one lossless LZ4 block per tile, without a
 frame header or prepended size. The pixel descriptor determines the exact decoded
 size, bounded to 1 MiB; the library's compression bound caps stored bytes. Painted
 and imported tiles use the same `lz4_flex` encoder with safe, checked Rust paths.
@@ -71,8 +71,7 @@ There is no native codec, vendor patch, compression-level policy or codec dispat
 Multibyte U16/F16/F32 samples use reversible byte-plane shuffling; the SHA-256 tile
 digest covers the descriptor and original decoded bytes, before shuffling.
 Image profiles are binary payloads with independent hashes; builtins are explicit
-identifiers. Packed brush/source assets also have their own digests. There are no
-paths to extract.
+identifiers. There are no paths to extract.
 
 Identical tile blobs are deduplicated in a save. Repeated saves reuse immutable
 compressed backing without readback, conversion or recompression. The writer

@@ -403,7 +403,7 @@ mod selection_tests {
         assert_eq!(editor.document().saved_selection(id).unwrap(), original);
         editor.redo().unwrap();
         let mut bytes = Vec::new();
-        Project::snapshot(editor.document(), &BTreeMap::new())
+        Project::snapshot(editor.document())
             .unwrap()
             .write(&mut bytes)
             .unwrap();
@@ -487,7 +487,7 @@ mod selection_tests {
             assert!(doc.validate_layer(&invalid).is_err());
         }
         doc.apply(Edit::InsertLayer { index: 0, layer }).unwrap();
-        let project = Project::snapshot(&doc, &BTreeMap::new()).unwrap();
+        let project = Project::snapshot(&doc).unwrap();
         assert!(
             project
                 .validate(ProjectLimits {

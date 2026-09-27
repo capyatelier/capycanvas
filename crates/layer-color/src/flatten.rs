@@ -39,10 +39,7 @@ pub fn flattened_document(
     document.layers.truncate(1);
     document.layers[0].name = "Converted image".into();
     document.layers[0].source = Some(Arc::new(source));
-    let project = Project {
-        document,
-        assets: Default::default(),
-    };
+    let project = Project { document };
     project.validate(Default::default())?;
     Ok(project)
 }

@@ -14,11 +14,11 @@ applies `Edit` values and retains the reverse operations for undo/redo. A stroke
 stores real pen samples and the `BrushSnapshot` used to draw it, so later brush
 changes do not change the meaning of an existing stroke.
 
-Committed samples and source assets use shared storage. History can retain them
+Committed samples and tiled sources use shared storage. History can retain them
 without copying all their data, and corrections to estimated pen samples can
 replace storage without modifying an earlier snapshot.
 
-`Project` serializes the editable document and its reachable source assets into a
+`Project` serializes the editable document and its reachable tiled sources into a
 `.capy` file. It validates the data without requiring a GPU. Native file access and
 the decision to replace an open document belong to the host and shared UI session.
 
@@ -30,7 +30,7 @@ the decision to replace an open document belong to the host and shared UI sessio
 | [layers.rs](src/layers.rs) | Layer properties, selections, masks and ordered layer operations. |
 | [effects.rs](src/effects.rs) and [effect_catalog.rs](src/effect_catalog.rs) | Filter definitions, parameters, instances and catalog validation. |
 | [presets.rs](src/presets.rs) | Built-in brush definitions. |
-| [project.rs](src/project.rs) | Project encoding, decoding, asset collection and limits. |
+| [project.rs](src/project.rs) | Project encoding, decoding, validation and limits. |
 | [input_corrections.rs](src/input_corrections.rs) | Updates to previously estimated stroke samples. |
 
 Changes to these types can affect undo, renderer replay and project compatibility.

@@ -170,12 +170,7 @@ impl Converter<'_> {
                     coordinate[0] * TILE_SIZE,
                     coordinate[1] * TILE_SIZE + y as u32,
                 ];
-                let stats = if original.descriptor.alpha == AlphaAssociation::PremultipliedLinear {
-                    self.encoder
-                        .encode_premultiplied(&linear, new, None, origin)?
-                } else {
-                    self.encoder.encode_straight(&linear, new, None, origin)?
-                };
+                let stats = self.encoder.encode_straight(&linear, new, None, origin)?;
                 self.statistics.clipped_channels += stats.clipped_channels;
             }
         }
@@ -263,7 +258,8 @@ pub fn prepare_document_color(
     if cancelled() {
         return Err("Document color change cancelled".into());
     }
-    let mut candidate = project.clone().pruned()?;
+    project.validate(Default::default())?;
+    let mut candidate = project.clone();
     let old = candidate.document.color;
     let target = change.target(old);
     if old.depth.is_float() && !target.depth.is_float() { return Err("Export an SDR rendition to reduce HDR range; the editable HDR master remains unchanged".into()); }
@@ -290,8 +286,7 @@ pub fn prepare_document_color(
         profile: ColorProfile::Builtin(old.space),
         profile_assumed: false,
     };
-    // Assignment keeps numeric coordinates. Only an explicitly premultiplied
-    // attachment needs canonicalization; that encoding stays in the old space.
+    // Assignment keeps numeric coordinates.
     let destination = SourceInterpretation {
         depth: target.depth,
         profile: ColorProfile::Builtin(if matches!(change, DocumentColorChange::Assign(_)) {

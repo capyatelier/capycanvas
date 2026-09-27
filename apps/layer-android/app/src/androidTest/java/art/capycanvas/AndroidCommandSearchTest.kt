@@ -1,6 +1,7 @@
 package art.capycanvas
 
 import android.graphics.Bitmap
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -19,12 +20,14 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -369,8 +372,8 @@ class AndroidCommandSearchTest {
 
     @Test fun panelGlassAndPlacement() {
         val (width, height) = 2048 to 1536
-        val stripes = ByteArray(width * height * 4) { i -> if (i % 4 == 3 || i / 4 % width / 8 % 2 == 0) -1 else 0 }
-        main { host.importLayer("Stripes", width, height, stripes) }
+        host.importStripes(width, height)
+        action(obj("type" to "invoke", "command" to "apply_transform"))
         waitFor("stripes") { state().getJSONObject("layer_tools").getJSONObject("editing_layer").getString("label") == "Stripes" }
         action(obj("type" to "invoke", "command" to "zen_mode"))
         fun covered() = state().getJSONObject("camera").let { camera ->

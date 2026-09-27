@@ -31,7 +31,6 @@ mod deferred;
 use deferred::{NativeCapture, NativeOutput};
 
 struct Target {
-    source: Option<AssetId>,
     revision: RasterRevision,
     data: Arc<RasterData>,
     changed: BTreeSet<[u32; 2]>,
@@ -572,14 +571,7 @@ impl WgpuRasterizer {
             for (id, root) in std::iter::once((layer.id, &layer.raster))
                 .chain(layer.mask.iter().map(|m| (m.id, &m.raster)))
             {
-                let source = if id == layer.id {
-                    layer.asset.as_ref()
-                } else {
-                    None
-                };
-                let current = runtime
-                    .and_then(|r| r.targets.get(&id))
-                    .filter(|t| t.source.as_ref() == source);
+                let current = runtime.and_then(|r| r.targets.get(&id));
                 match root.try_data() {
                     Some(Ok(data))
                         if packet.reset_layers || current.is_none_or(|t| t.revision != *root) =>
@@ -679,15 +671,6 @@ impl WgpuRasterizer {
                     if id == layer.id && !self.paint_layers.iter().any(|l| l.id == id) {
                         continue;
                     }
-                    let source = if id == layer.id {
-                        layer.asset.clone()
-                    } else {
-                        None
-                    };
-                    if runtime.targets.get(&id).is_some_and(|t| t.source != source) {
-                        runtime.targets.remove(&id);
-                        if let Some(native) = &mut self.native_edit { native.backing.remove(&id); }
-                    }
                     let wanted = match revision.try_data() {
                         Some(Ok(data)) => Some(data),
                         Some(Err(error)) => return Err(GpuRasterError::Effect(error)),
@@ -719,7 +702,6 @@ impl WgpuRasterizer {
                         runtime.targets.insert(
                             id,
                             Target {
-                                source,
                                 revision: revision.clone(),
                                 data,
                                 changed: BTreeSet::new(),
@@ -765,13 +747,6 @@ impl WgpuRasterizer {
         })();
         self.raster = Some(runtime);
         result
-    }
-
-    pub(super) fn has_raster_source(&self, target: LayerId) -> bool {
-        self.raster
-            .as_ref()
-            .and_then(|r| r.targets.get(&target))
-            .is_some_and(|t| !t.data.tiles.is_empty())
     }
 
     pub(super) fn raster_staging_bytes(&self) -> u64 {
@@ -934,7 +909,7 @@ impl WgpuRasterizer {
                 continue;
             }
             let blob = tile.wait_backing().map_err(GpuRasterError::Effect)?;
-            if !key.plane.accepts_descriptor(self.document_color(), blob.descriptor) {
+            if blob.descriptor != key.plane.descriptor(self.document_color()) {
                 return Err(GpuRasterError::Effect(
                     "Raster plane has the wrong pixel representation".into(),
                 ));

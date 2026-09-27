@@ -339,7 +339,7 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
         match payload {
             Payload::Save { snapshot, project } => {
                 if let Some(snapshot) = snapshot.take() {
-                    *project = Some(snapshot.pruned()?);
+                    *project = Some(snapshot);
                 }
                 project
                     .as_ref()

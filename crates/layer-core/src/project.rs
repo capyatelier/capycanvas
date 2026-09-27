@@ -7,19 +7,17 @@ use std::io::{Read, Write};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectAssetFormat {
     R8Unorm,
-    Rgba8Srgb,
 }
 impl ProjectAssetFormat {
     pub fn channels(self) -> u32 {
         match self {
             Self::R8Unorm => 1,
-            Self::Rgba8Srgb => 4,
         }
     }
 }
 
-/// Packed source pixels, never a CPU canvas raster. Arc storage lets a save
-/// snapshot share immutable imported images and custom brush textures.
+/// Packed brush-mask pixels, never a CPU canvas raster. Arc storage shares
+/// immutable custom brush textures across the render-worker boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectAsset {
     pub extent: [u32; 2],
@@ -62,12 +60,11 @@ impl ProjectAsset {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Project {
     pub document: Document,
-    pub assets: BTreeMap<AssetId, ProjectAsset>,
 }
 
 /// Raster bounds cover decoded instances. Source bounds cover retained tiled
-/// source/profile ownership and packed assets; source decoding is tile/band
-/// bounded. Hosts may set stricter limits; GPU limits are checked separately.
+/// source/profile ownership; source decoding is tile/band bounded. Hosts may
+/// set stricter limits; GPU limits are checked separately.
 #[derive(Clone, Copy, Debug)]
 pub struct ProjectLimits {
     pub metadata_bytes: u64,
@@ -90,78 +87,16 @@ impl Default for ProjectLimits {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct AssetRecord {
-    pub(super) id: AssetId,
-    pub(super) extent: [u32; 2],
-    pub(super) format: ProjectAssetFormat,
-}
-impl AssetRecord {
-    pub(super) fn size(&self, limits: ProjectLimits) -> Result<u64, String> {
-        if self.extent.iter().any(|v| *v == 0 || *v > limits.dimension)
-            || self.id.0.is_empty()
-            || self.id.0.len() > 1024
-        {
-            return Err("Invalid project image".into());
-        }
-        u64::from(self.extent[0])
-            .checked_mul(u64::from(self.extent[1]))
-            .and_then(|n| n.checked_mul(u64::from(self.format.channels())))
-            .filter(|n| *n <= limits.asset_bytes)
-            .ok_or_else(|| "Project image exceeds the memory limit".into())
-    }
-}
-
 impl Project {
     /// Snapshot current reachable raster and source content. History is separate.
-    pub fn snapshot(
-        document: &Document,
-        assets: &BTreeMap<AssetId, ProjectAsset>,
-    ) -> Result<Self, String> {
-        Self::snapshot_with(document, |id| assets.get(id).cloned())
-    }
-
-    /// Resolve only referenced immutable resources. Renderers can share their
-    /// retained source bytes without copying every loaded texture or reading GPU
-    /// canvas pixels. Supplied built-in textures are embedded exactly too.
-    pub fn snapshot_with(
-        document: &Document,
-        mut source: impl FnMut(&AssetId) -> Option<ProjectAsset>,
-    ) -> Result<Self, String> {
-        let document = document.clone();
-        let needed = asset_references(&document)?;
-        let project = Self {
-            document,
-            assets: needed
-                .keys()
-                .filter_map(|id| source(id).map(|asset| (id.clone(), asset)))
-                .collect(),
-        };
+    pub fn snapshot(document: &Document) -> Result<Self, String> {
+        let project = Self { document: document.clone() };
         project.validate(ProjectLimits::default())?;
         Ok(project)
     }
 
-    /// Run on the file worker after capturing an immutable session snapshot.
-    /// Takes ownership so pruning does not clone the document again.
-    pub fn pruned(mut self) -> Result<Self, String> {
-        let needed = asset_references(&self.document)?;
-        self.assets.retain(|id, _| needed.contains_key(id));
-        self.validate(ProjectLimits::default())?;
-        Ok(self)
-    }
-
     pub fn validate(&self, limits: ProjectLimits) -> Result<(), String> {
         validate_document(&self.document, limits)?;
-        let needed = asset_references(&self.document)?;
-        for (id, format) in &needed {
-            match self.assets.get(id) {
-                Some(a) if a.format == *format => (),
-                _ => {
-                    return Err("A source image is missing or has the wrong format".into());
-                }
-            }
-        }
         let mut total = 0u64;
         let mut source_memory = color::source::SourceAccounting::default();
         let mut source_tiles = 0usize;
@@ -183,24 +118,6 @@ impl Project {
         }
         if total > limits.asset_bytes {
             return Err("Project images exceed the memory limit".into());
-        }
-        for (id, asset) in &self.assets {
-            if !needed.contains_key(id) {
-                return Err("Project contains an unused asset".into());
-            }
-            let size = AssetRecord {
-                id: id.clone(),
-                extent: asset.extent,
-                format: asset.format,
-            }
-            .size(limits)?;
-            total = total
-                .checked_add(size)
-                .filter(|n| *n <= limits.asset_bytes)
-                .ok_or("Project images exceed the memory limit")?;
-            if size != asset.bytes.len() as u64 {
-                return Err("Invalid project image size".into());
-            }
         }
         Ok(())
     }
@@ -256,25 +173,6 @@ pub(super) fn read_block(input: &mut impl Read, size: u64, limit: u64) -> Result
         return Err("The project is incomplete".into());
     }
     Ok(bytes)
-}
-
-fn asset_references(document: &Document) -> Result<BTreeMap<AssetId, ProjectAssetFormat>, String> {
-    let mut ids = BTreeMap::new();
-    let mut add = |id: &AssetId, format| -> Result<(), String> {
-        if ids
-            .insert(id.clone(), format)
-            .is_some_and(|previous| previous != format)
-        {
-            return Err("One project asset has incompatible uses".into());
-        }
-        Ok(())
-    };
-    for l in &document.layers {
-        if let Some(id) = &l.asset {
-            add(id, ProjectAssetFormat::Rgba8Srgb)?;
-        }
-    }
-    Ok(ids)
 }
 
 fn validate_selection(selection: &Selection, limits: ProjectLimits) -> Result<(), String> {
@@ -419,32 +317,6 @@ mod tests {
             document.selection = Some(Selection::pixels(Arc::new(crate::SelectionPixels::bytes([5,1],bounds,words).unwrap())));
             assert!(validate_document(&document, ProjectLimits::default()).is_err());
         }
-    }
-
-    #[test]
-    fn source_snapshot_prunes_only_unreferenced_assets_and_validates_shape() {
-        let mut document = Document::new("sources", 256, 256);
-        let source = AssetId::from("imported");
-        document.layers[0].asset = Some(source.clone());
-        let image = ProjectAsset {
-            extent: [2, 1],
-            format: ProjectAssetFormat::Rgba8Srgb,
-            bytes: vec![17; 8].into(),
-        };
-        let project = Project::snapshot_with(&document, |_| Some(image.clone())).unwrap();
-        assert_eq!(project.assets.len(), 1);
-        assert!(Arc::ptr_eq(&project.assets[&source].bytes, &image.bytes));
-        let mut extra = project.clone();
-        extra.assets.insert(AssetId::from("unused"), image.clone());
-        assert!(extra.validate(ProjectLimits::default()).is_err());
-        assert_eq!(extra.pruned().unwrap().assets.len(), 1);
-        assert!(Project::snapshot_with(&document, |_| None).is_err());
-        let mut malformed = image.clone();
-        malformed.extent = [3, 1];
-        assert!(Project::snapshot_with(&document, |_| Some(malformed.clone())).is_err());
-        malformed = image;
-        malformed.format = ProjectAssetFormat::R8Unorm;
-        assert!(Project::snapshot_with(&document, |_| Some(malformed.clone())).is_err());
     }
 
     #[test]

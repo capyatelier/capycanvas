@@ -1,9 +1,9 @@
 //! Worker-owned exact document capture. The immutable snapshot shares backing
 //! with saving; only the requested region and its dependencies become GPU pixels.
 use super::*;
-use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
+use layer_core::color::source::{SourceChannels, SourceInterpretation};
 use layer_core::raster::{RasterData, RasterPlane};
-use layer_core::{Project, ProjectAssetFormat, ProjectLimits};
+use layer_core::{Project, ProjectLimits};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -164,53 +164,12 @@ impl SnapshotRenderer {
             ));
         }
         let extent = [project.document.width, project.document.height];
-        let mut layers: Vec<_> = project
+        let layers: Vec<_> = project
             .document
             .layers
             .iter()
             .map(Layer::composite_snapshot)
             .collect();
-        let mut sources = HashMap::new();
-        // Retire packed legacy image upload for this consumer. Both retained
-        // originals and legacy project images use the same tiled source decoder.
-        for layer in &mut layers {
-            control.check()?;
-            if layer.source.is_some() {
-                continue;
-            }
-            let Some(asset_id) = layer.asset.take() else {
-                continue;
-            };
-            if !sources.contains_key(&asset_id) {
-                let asset = project
-                    .assets
-                    .get(&asset_id)
-                    .ok_or(GpuRasterError::InvalidImage)?;
-                if asset.format != ProjectAssetFormat::Rgba8Srgb {
-                    return Err(GpuRasterError::InvalidImage);
-                }
-                let mut builder = SourceBuilder::new(
-                    asset.extent,
-                    SourceInterpretation {
-                        channels: SourceChannels::Rgba,
-                        depth: layer_core::color::SampleDepth::U8,
-                        profile: Default::default(),
-                        profile_assumed: false,
-                    },
-                    ProjectLimits::default().asset_bytes as usize,
-                )
-                .map_err(GpuRasterError::Color)?;
-                for row in asset.bytes.chunks_exact(asset.extent[0] as usize * 4) {
-                    control.check()?;
-                    builder.push_row(row).map_err(GpuRasterError::Color)?;
-                }
-                sources.insert(
-                    asset_id.clone(),
-                    Arc::new(builder.finish().map_err(GpuRasterError::Color)?),
-                );
-            }
-            layer.source = sources.get(&asset_id).cloned();
-        }
         let mut backing = HashMap::new();
         for layer in &layers {
             for (id, raster) in std::iter::once((layer.id, &layer.raster))

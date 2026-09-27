@@ -552,25 +552,19 @@ fn native_document_files() {
         panic!("document did not become ready");
     };
     ready(&w);
-    let image = layer_core::ProjectAsset {
-        extent: [96, 64],
-        format: layer_core::ProjectAssetFormat::Rgba8Srgb,
-        bytes: (0..96 * 64)
-            .flat_map(|i| {
-                if (i / 96 / 8 + i % 96 / 8) % 2 == 0 {
-                    [235, 60, 90, 180]
-                } else {
-                    [25, 160, 220, 95]
-                }
-            })
-            .collect(),
-    };
+    let image = layer_core::color::source::rgba8_source([96, 64], |x, y| {
+        if (y / 8 + x / 8) % 2 == 0 {
+            [235, 60, 90, 180]
+        } else {
+            [25, 160, 220, 95]
+        }
+    });
     w.gpu
         .borrow_mut()
         .as_mut()
         .unwrap()
         .session
-        .import_layer_asset("Imported color", image)
+        .import_layer_source("Imported color", std::sync::Arc::unwrap_or_clone(image))
         .unwrap();
     w.refresh(regions::DOCUMENT | regions::COMMANDS);
     w.wake();
@@ -597,7 +591,8 @@ fn native_document_files() {
         Default::default(),
     )
     .unwrap();
-    assert_eq!(recovery.assets.len(), 1);
+    let sources = |p: &layer_core::Project| p.document.layers.iter().filter(|l| l.source.is_some()).count();
+    assert_eq!(sources(&recovery), 1);
     assert!(state(&w).document_file.modified);
     w.dispatch(UiAction::Invoke {
         command: CommandId::SaveDocument,
@@ -619,7 +614,7 @@ fn native_document_files() {
     );
     let project =
         layer_core::Project::read(std::fs::File::open(&path).unwrap(), Default::default()).unwrap();
-    assert_eq!(project.assets.len(), 1);
+    assert_eq!(sources(&project), 1);
     let before = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 900))
         .unwrap();
@@ -4076,30 +4071,19 @@ fn native_runtime_filter_packages() {
         layer_core::EffectInstallMode::Merge,
     );
     assert_eq!(state(&w).adjustments.len(), 41);
-    let pixels: Vec<u8> = (0..1024 * 768)
-        .flat_map(|i| {
-            if (i % 1024 / 32 + i / 1024 / 32) % 2 == 0 {
-                [230, 50, 80, 255]
-            } else {
-                [30, 160, 220, 255]
-            }
-        })
-        .collect();
+    let checker = layer_core::color::source::rgba8_source([1024, 768], |x, y| {
+        if (x / 32 + y / 32) % 2 == 0 {
+            [230, 50, 80, 255]
+        } else {
+            [30, 160, 220, 255]
+        }
+    });
     w.gpu
         .borrow_mut()
         .as_mut()
         .unwrap()
         .session
-        .import_layer_image(
-            "Runtime checker",
-            layer_render::HostImage {
-                width: 1024,
-                height: 768,
-                stride: 4096,
-                format: layer_render::PixelFormat::Rgba8Srgb,
-                bytes: &pixels,
-            },
-        )
+        .import_layer_source("Runtime checker", std::sync::Arc::unwrap_or_clone(checker))
         .unwrap();
     w.wake();
     pump(100);
@@ -4177,33 +4161,21 @@ fn native_adjustment_panels_review() {
     w.dispatch(UiAction::SetTheme {
         theme: Some(Theme::Dark),
     });
-    let bytes: Vec<u8> = (0..512 * 512)
-        .flat_map(|i| {
-            let x = (i % 512) as f32 / 511.;
-            let y = (i / 512) as f32 / 511.;
-            [
-                (x * 255.) as u8,
-                (y * 255.) as u8,
-                ((1. - x) * 255.) as u8,
-                255,
-            ]
-        })
-        .collect();
+    let study = layer_core::color::source::rgba8_source([512, 512], |x, y| {
+        let (x, y) = (x as f32 / 511., y as f32 / 511.);
+        [
+            (x * 255.) as u8,
+            (y * 255.) as u8,
+            ((1. - x) * 255.) as u8,
+            255,
+        ]
+    });
     w.gpu
         .borrow_mut()
         .as_mut()
         .unwrap()
         .session
-        .import_layer_image(
-            "Color study",
-            layer_render::HostImage {
-                width: 512,
-                height: 512,
-                stride: 2048,
-                format: layer_render::PixelFormat::Rgba8Srgb,
-                bytes: &bytes,
-            },
-        )
+        .import_layer_source("Color study", std::sync::Arc::unwrap_or_clone(study))
         .unwrap();
     w.refresh(regions::ALL);
     w.wake();
@@ -4613,33 +4585,19 @@ fn native_layer_panel_review() {
         &[[810., 200.], [1100., 200.], [1100., 820.], [900., 800.]],
         T::LassoFill,
     );
-    // A deterministic source-image fixture, not a CPU canvas implementation.
-    let bytes: Vec<u8> = (0..2048 * 1536)
-        .flat_map(|i| {
-            let x = i % 2048;
-            let y = i / 2048;
-            if (x / 12 + y / 12) % 2 == 0 {
-                [220, 170, 66, 255]
-            } else {
-                [178, 124, 42, 255]
-            }
-        })
-        .collect();
+    let fabric = layer_core::color::source::rgba8_source([2048, 1536], |x, y| {
+        if (x / 12 + y / 12) % 2 == 0 {
+            [220, 170, 66, 255]
+        } else {
+            [178, 124, 42, 255]
+        }
+    });
     w.gpu
         .borrow_mut()
         .as_mut()
         .unwrap()
         .session
-        .import_layer_image(
-            "Fabric texture",
-            layer_render::HostImage {
-                width: 2048,
-                height: 1536,
-                stride: 8192,
-                format: layer_render::PixelFormat::Rgba8Srgb,
-                bytes: &bytes,
-            },
-        )
+        .import_layer_source("Fabric texture", std::sync::Arc::unwrap_or_clone(fabric))
         .unwrap();
     w.wake();
     pump(200);

@@ -243,10 +243,7 @@ fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
             let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
             frame(&mut r, &document.layers);
             let before = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
-            let project = layer_core::Project {
-                document,
-                assets: Default::default(),
-            };
+            let project = layer_core::Project { document };
             let mut archive = Vec::new();
             project.write(&mut archive).unwrap();
             let mut loaded =

@@ -1044,39 +1044,6 @@ pub extern "system" fn Java_art_capycanvas_Native_takeFilterPreviews(
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_importLayer(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-    name: JString,
-    width: jint,
-    height: jint,
-    rgba: jni::objects::JByteArray,
-) {
-    let result = (|| {
-        let name = read(&mut env, &name)?;
-        let bytes = env.convert_byte_array(&rgba).map_err(error)?;
-        let app = unsafe { app(handle) };
-        app.observe_gpu_failure(true);
-        if app.host.session.rendering_suspended() {
-            return Err("Restart the canvas before importing an image".into());
-        }
-        app.host.import_layer_image(
-            &name,
-            layer_render::HostImage {
-                width: width as u32,
-                height: height as u32,
-                stride: (width as u32).saturating_mul(4),
-                format: layer_render::PixelFormat::Rgba8Srgb,
-                bytes: &bytes,
-            },
-        )?;
-        Ok(())
-    })();
-    fail(&mut env, result);
-}
-
 /// Stateless numeric math is independent of the render-owned session. Safe to
 /// call on the UI thread; no renderer lock, I/O or expression compilation loop.
 #[unsafe(no_mangle)]

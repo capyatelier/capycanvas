@@ -122,7 +122,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
 impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn new(
         mut backend: B,
-        mut document: Document,
+        document: Document,
         input: InputConsumer<PenEvent>,
         view: ViewState,
         input_transform: ViewTransform,
@@ -131,11 +131,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
                 "The renderer is not configured for this document's color space and precision",
             )));
-        }
-        for layer in &mut document.layers {
-            if layer.asset.is_some() && layer.raster.is_empty() {
-                layer.raster = layer_core::raster::RasterRevision::pending();
-            }
         }
         backend
             .resize_surface(view.width_px, view.height_px)
@@ -755,13 +750,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 Edit::InsertLayer { layer, .. } => layer,
                 _ => return,
             };
-            if layer.asset.is_some()
-                && document
-                    .layer(layer.id)
-                    .is_none_or(|old| old.asset != layer.asset)
-            {
-                layer.raster = layer_core::raster::RasterRevision::pending();
-            }
             if !layer.pending_operations.is_empty() {
                 layer.raster = layer_core::raster::RasterRevision::pending();
                 for (index, operation) in layer.pending_operations.iter().enumerate() {
@@ -785,14 +773,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         fn rebuild_needed(document: &Document, edit: &Edit) -> bool {
             match edit {
                 Edit::SetColor { .. } => true,
-                Edit::InsertLayer { layer, .. } => layer.asset.is_some() || layer.source.is_some(),
+                Edit::InsertLayer { layer, .. } => layer.source.is_some(),
                 Edit::Batch(edits) => edits.iter().any(|e| rebuild_needed(document, e)),
                 // A batch may replace a layer inserted earlier in that batch;
                 // it is absent from this pre-edit snapshot, so be conservative.
                 Edit::ReplaceLayer(layer) => {
                     document.layer(layer.id).is_none_or(|old| {
-                        old.asset != layer.asset
-                            || old.source != layer.source
+                        old.source != layer.source
                             || old.mask.as_ref().map(|m| {
                                 (&m.initial, m.id, m.default_coverage, &m.pending_operations)
                             }) != layer.mask.as_ref().map(|m| {
@@ -820,11 +807,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .batches
                 .iter()
                 .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
-            || self
-                .document()
-                .layers
-                .iter()
-                .any(|l| l.asset.is_some() && l.raster.try_data().is_none())
         {
             if !self.backend.can_submit() || !self.backend.can_capture_raster() {
                 return Err(DocumentError::InvalidLayerOperation(
@@ -912,11 +894,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .batches
             .iter()
             .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
-            && !self
-                .document()
-                .layers
-                .iter()
-                .any(|l| l.asset.is_some() && l.raster.try_data().is_none())
         {
             self.process_input()?;
         }
@@ -2163,9 +2140,10 @@ mod tests {
                     if revision.try_data().is_none() {
                         // A renderer contract double publishes a distinct committed tile.
                         use layer_core::raster::*;
+                        let descriptor = RasterPlane::Color.descriptor(self.color);
                         let blob = TileBlob::encode(
-                            layer_core::color::PixelDescriptor::SRGB8_PAINT,
-                            &vec![1; layer_core::color::PixelDescriptor::SRGB8_PAINT.byte_len([TILE_SIZE; 2]).unwrap()],
+                            descriptor,
+                            &vec![1; descriptor.byte_len([TILE_SIZE; 2]).unwrap()],
                         )
                         .unwrap();
                         let mut data = RasterData::default();

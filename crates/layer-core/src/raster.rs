@@ -89,15 +89,6 @@ impl RasterPlane {
             color.coverage_descriptor()
         }
     }
-    /// Native paint is straight profile RGB. The original sRGB attachment
-    /// representation remains explicit for hosts awaiting native integration;
-    /// it must never be inferred from the document color/depth alone.
-    pub fn accepts_descriptor(self, color: crate::color::DocumentColor, descriptor: PixelDescriptor) -> bool {
-        descriptor == self.descriptor(color)
-            || (self == Self::Color
-                && color == crate::color::DocumentColor::default()
-                && descriptor == PixelDescriptor::SRGB8_PAINT)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -334,7 +325,7 @@ impl RasterData {
     ) -> Result<(), String> {
         self.validate_index(extent, mask, color)?;
         for (key, tile) in &self.tiles {
-            if !key.plane.accepts_descriptor(color, tile.wait_backing()?.descriptor) {
+            if tile.wait_backing()?.descriptor != key.plane.descriptor(color) {
                 return Err("Raster plane has the wrong pixel representation".into());
             }
         }
@@ -366,7 +357,7 @@ impl RasterData {
             {
                 return Err("Invalid raster tile coordinates or plane".into());
             }
-            if !key.plane.accepts_descriptor(color, tile.descriptor()) {
+            if tile.descriptor() != key.plane.descriptor(color) {
                 return Err("Raster plane has the wrong pixel representation".into());
             }
         }
@@ -568,7 +559,7 @@ mod tests {
                 "pending is not failed"
             );
             if tile_failure {
-                let tile = RasterTile::pending(PixelDescriptor::SRGB8_PAINT);
+                let tile = RasterTile::pending(RasterPlane::Color.descriptor(Default::default()));
                 tile.publish(Err("readback failed".into())).unwrap();
                 pending
                     .publish(Ok(RasterData {
@@ -629,12 +620,10 @@ mod tests {
     }
     #[test]
     fn exact_backing_reuses_unchanged_tiles_and_preserves_snapshot() {
-        let size = PixelDescriptor::SRGB8_PAINT
-            .byte_len([TILE_SIZE; 2])
-            .unwrap();
+        let descriptor = RasterPlane::Color.descriptor(Default::default());
+        let size = descriptor.byte_len([TILE_SIZE; 2]).unwrap();
         let bytes: Vec<_> = (0..size).map(|i| (i % 251) as u8).collect();
-        let tile =
-            RasterTile::backed(TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &bytes).unwrap());
+        let tile = RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap());
         let key = TileKey {
             plane: RasterPlane::Color,
             coordinate: [0, 0],
@@ -649,8 +638,7 @@ mod tests {
             coordinate: [1, 0],
             ..key
         };
-        next.tiles
-            .insert(changed, RasterTile::pending(PixelDescriptor::SRGB8_PAINT));
+        next.tiles.insert(changed, RasterTile::pending(descriptor));
         assert!(next.tiles[&key].same_capture(&revision.wait_data().unwrap().tiles[&key]));
         assert!(!next.host_backed());
         assert!(revision.host_backed());
@@ -659,7 +647,7 @@ mod tests {
     }
     #[test]
     fn capture_failure_is_shared_and_publication_is_single_assignment() {
-        let tile = RasterTile::pending(PixelDescriptor::SRGB8_PAINT);
+        let tile = RasterTile::pending(RasterPlane::Color.descriptor(Default::default()));
         let snapshot = tile.clone();
         tile.publish(Err("Device lost before capture".into()))
             .unwrap();

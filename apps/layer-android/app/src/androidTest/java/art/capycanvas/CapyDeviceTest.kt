@@ -19,6 +19,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -114,6 +115,29 @@ fun CanvasHost.workspaceCapture(): String {
     }
     assertTrue(done.await(10, TimeUnit.SECONDS))
     return result
+}
+
+fun CanvasHost.importStripes(width: Int, height: Int) {
+    val stripes = File(instrumentation.targetContext.cacheDir, "Stripes.png")
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    try {
+        val canvas = android.graphics.Canvas(bitmap)
+        canvas.drawColor(android.graphics.Color.BLACK)
+        val white = android.graphics.Paint().apply { color = android.graphics.Color.WHITE }
+        for (x in 0 until width step 16) canvas.drawRect(x.toFloat(), 0f, x + 8f, height.toFloat(), white)
+        stripes.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    } finally { bitmap.recycle() }
+    val control = Native.captureControl()
+    val task = runBlocking { withNative { h ->
+        Native.dispatch(h, obj("type" to "invoke", "command" to "import_image").toString())
+        val request = JSONArray(Native.query(h, obj("type" to "requests").toString())).objects().first { it.getJSONObject("kind").optString("type") == "document" }
+        Native.imageImportTask(h, request.getInt("id"), Native.imageImportContext(h, "null", "null"), control)
+    } }
+    try {
+        Native.imageImportRead(task, ParcelFileDescriptor.open(stripes, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), stripes.name)
+        runBlocking { withNative { Native.imageImportAdopt(it, task) } }
+    } finally { Native.imageImportFree(task); Native.captureFree(control) }
+    instrumentation.runOnMainSync { documentChanged() }
 }
 
 fun screenshot(path: String, inspect: ((Bitmap) -> Unit)? = null) {

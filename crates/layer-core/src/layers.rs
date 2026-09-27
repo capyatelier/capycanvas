@@ -1036,10 +1036,7 @@ impl Document {
             if layer.kind != LayerKind::Selection { return Err(DocumentError::InvalidLayerOperation("Mask properties require a Selection Layer")); }
             mask.validate()?;
         }
-        if layer.asset.is_some() && layer.source.is_some()
-            || (layer.kind != LayerKind::Paint
-                && (layer.asset.is_some() || layer.source.is_some()))
-        {
+        if layer.kind != LayerKind::Paint && layer.source.is_some() {
             return Err(DocumentError::InvalidLayerOperation("Invalid layer source"));
         }
         if layer.source.as_ref().is_some_and(|s| !s.is_original()

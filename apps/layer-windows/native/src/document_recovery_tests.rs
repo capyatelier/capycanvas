@@ -121,13 +121,11 @@ fn new_open_and_save_keep_the_authoritative_document_across_removal() {
     let mut f = Fixture::new();
     f.host
         .session
-        .import_layer_asset(
+        .import_layer_source(
             "Embedded",
-            layer_core::ProjectAsset {
-                extent: [2, 2],
-                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
-                bytes: Arc::from([30u8, 90, 210, 180].repeat(4)),
-            },
+            Arc::unwrap_or_clone(layer_core::color::source::rgba8_source([2, 2], |_, _| {
+                [30, 90, 210, 180]
+            })),
         )
         .unwrap();
     invoke(&mut f.host, CommandId::AddLayer);

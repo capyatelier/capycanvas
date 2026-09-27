@@ -53,13 +53,11 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
         .as_mut()
         .unwrap()
         .session
-        .import_layer_asset(
+        .import_layer_source(
             "Mark",
-            layer_core::ProjectAsset {
-                extent: [1, 1],
-                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
-                bytes: vec![255, 0, 0, 255].into(),
-            },
+            std::sync::Arc::unwrap_or_clone(layer_core::color::source::rgba8_source([1, 1], |_, _| {
+                [255, 0, 0, 255]
+            })),
         )
         .unwrap();
     w.refresh(regions::DOCUMENT | regions::COMMANDS);
