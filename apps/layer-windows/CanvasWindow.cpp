@@ -145,6 +145,7 @@ void CanvasWindow::Open() {
         CapyUi::setTouchContact(e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch);
     });
     root.AddHandler(UIElement::PointerPressedEvent(),box_value(contact),true);
+    root.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([](auto&&,auto&&){CapyUi::hideRevealedTooltip();})),true);
     root.AddHandler(UIElement::PointerMovedEvent(),box_value(contact),true);
     root.PointerMoved([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
         if(auto self=weak.lock())self->ChromeMotion(e);

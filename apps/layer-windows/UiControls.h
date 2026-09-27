@@ -229,6 +229,42 @@ inline void tooltip(DependencyObject const& target,hstring const& text){
     if(!touchContact())ToolTipService::SetToolTip(target,tip);
     owners.insert_or_assign(get_abi(target),TooltipOwner{make_weak(target),tip});
 }
+struct TooltipReveal {weak_ref<FrameworkElement> owner;ToolTip tip{nullptr};Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};};
+inline TooltipReveal& tooltipReveal(){thread_local TooltipReveal reveal;return reveal;}
+inline void hideRevealedTooltip(){
+    auto& reveal=tooltipReveal();if(!reveal.tip)return;
+    if(reveal.timer)reveal.timer.Stop();
+    reveal.tip.IsOpen(false);
+    if(auto owner=reveal.owner.get();owner&&touchContact())ToolTipService::SetToolTip(owner,nullptr);
+    reveal.tip=nullptr;reveal.owner={};
+}
+inline void revealTooltip(FrameworkElement const& target){
+    hideRevealedTooltip();
+    DependencyObject key=target;
+    auto found=tooltipOwners().find(get_abi(key));
+    if(found==tooltipOwners().end()||found->second.owner.get()!=target)return;
+    auto& reveal=tooltipReveal();reveal.owner=make_weak(target);reveal.tip=found->second.tip;
+    ToolTipService::SetToolTip(target,reveal.tip);reveal.tip.IsOpen(true);
+    if(!reveal.timer){
+        reveal.timer=target.DispatcherQueue().CreateTimer();reveal.timer.IsRepeating(false);reveal.timer.Interval(std::chrono::milliseconds(4000));
+        reveal.timer.Tick([](auto&&,auto&&){hideRevealedTooltip();});
+    }
+    reveal.timer.Start();
+}
+inline Grid explainable(Control const& control){
+    Grid host;host.Background(clear());host.Children().Append(control);
+    control.HorizontalAlignment(HorizontalAlignment::Stretch);control.VerticalAlignment(VerticalAlignment::Stretch);
+    host.Tapped([inner=make_weak(control)](auto&& sender,TappedRoutedEventArgs const&){
+        if(auto control=inner.get();control&&!control.IsEnabled())revealTooltip(sender.template as<FrameworkElement>());
+    });
+    return host;
+}
+inline void explain(Grid const& host,Control const& control,bool enabled,hstring const& text,hstring const& reason){
+    control.IsEnabled(enabled);control.IsHitTestVisible(enabled);
+    tooltip(host,enabled||reason.empty()?text:reason);
+    AutomationProperties::SetHelpText(control,enabled?L"":reason);
+}
+inline Control explained(FrameworkElement const& host){return host.as<Grid>().Children().GetAt(0).as<Control>();}
 inline bool pickerControl(J const& control){
     auto kind=str(control,L"kind");return kind==L"color_picker"||(kind==L"command"&&str(control,L"command")==L"eyedropper");
 }

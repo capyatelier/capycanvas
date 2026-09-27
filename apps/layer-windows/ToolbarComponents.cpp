@@ -240,7 +240,8 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         for(size_t i=0;i<fields.size();++i){
             auto value=i<placed.Size()?placed.GetAt(uint32_t(i)):JsonValue::CreateNullValue();
             bool shown=value.ValueType()==JsonValueType::Object;
-            if(!shown&&fields[i].row.FocusState()!=FocusState::Unfocused)more.Focus(FocusState::Programmatic);
+            auto focusable=fields[i].action?explained(fields[i].row).as<FrameworkElement>():fields[i].row;
+            if(!shown&&focusable.FocusState()!=FocusState::Unfocused)more.Focus(FocusState::Programmatic);
             fields[i].row.Visibility(shown?Visibility::Visible:Visibility::Collapsed);
             if(!shown)continue;
             auto bounds=value.GetObject();
@@ -711,12 +712,12 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             if(auto self=weak.lock())self->send(O({{L"type",S(L"invoke")},{L"command",S(command)}}));
         });
         auto glyph=str(state,L"icon");pick.Content(icon(glyph.empty()?L"settings":glyph,data->theme(),iconSize));
-        tooltip(pick,str(state,L"tooltip"));
         AutomationProperties::SetAutomationId(pick,L"toolbar-action-"+command);
-        Field result;result.row=pick;result.action=true;
-        result.update=[pick,checkable,data=data](J const& option){
+        auto host=explainable(pick);
+        Field result;result.row=host;result.action=true;
+        result.update=[host,pick,checkable,data=data](J const& option){
             auto current=object(object(option,L"Action"),L"state");bool enabled=flag(current,L"enabled");
-            pick.IsEnabled(enabled);pick.Opacity(enabled?1:.36);
+            explain(host,pick,enabled,str(current,L"tooltip"),str(current,L"disabled_reason"));pick.Opacity(enabled?1:.36);
             bool chosen=checkable&&flag(current,L"selected");
             pick.Background(chosen?selected(data):clear());AutomationProperties::SetItemStatus(pick,chosen?L"Selected":L"");
         };

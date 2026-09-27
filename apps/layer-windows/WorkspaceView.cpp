@@ -3,6 +3,7 @@
 #include "StrokeRecording.h"
 #include "CommandSearch.h"
 #include "CanvasActionBar.h"
+#include "CanvasNotice.h"
 #include "PanelBody.h"
 #include "PanelConfiguration.h"
 #include "WorkspaceExpansion.h"
@@ -97,6 +98,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::map<uint32_t,Group> groups;
     std::shared_ptr<CommandSearchPopup> commandSearch=std::make_shared<CommandSearchPopup>();
     std::shared_ptr<CanvasActionBar> canvasBar=std::make_shared<CanvasActionBar>();
+    std::shared_ptr<CanvasNotice> notice=std::make_shared<CanvasNotice>();
     double cameraRevision=-1;
     hstring previousTheme,previousPalette;
     Flyout popup{nullptr};
@@ -136,8 +138,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(zenCapy,L"zen-capy");tooltip(zenCapy,L"Exit Zen mode");
         root.Children().Append(zenCapy);
         canvasBar->data=data;
-        canvasBar->changed=[weak=weak_from_this()]{if(auto self=weak.lock()){self->gestures->ChromeChanged();if(self->glassChanged)self->glassChanged();}};
+        canvasBar->changed=[weak=weak_from_this()]{if(auto self=weak.lock()){self->gestures->ChromeChanged();self->notice->Bar(object(self->data->chrome,L"canvas_bar"));if(self->glassChanged)self->glassChanged();}};
         canvasBar->init(root);
+        notice->data=data;notice->init(root);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
         commandSearch->data=data;commandSearch->changed=[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->glassChanged)self->glassChanged();};commandSearch->init(root);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
@@ -309,7 +312,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->refreshPalette();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
-            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);root.Children().Append(zenCapy);canvasBar->attach();
+            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);root.Children().Append(zenCapy);canvasBar->attach();notice->attach();
             measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureHost);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
@@ -375,6 +378,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         updateConfiguration();
         commandSearch->Apply(data->state);
         canvasBar->Dragging(object(update,L"drag").Size()!=0);canvasBar->Apply(data->state);
+        notice->Place(layout);notice->Publish(data->state);
         expansion->Apply(configurationHeight());present();
         collapsed->Apply();drawers->Apply();gestures->Refresh();
         auto status=object(layout,L"status");place(cameraSlot,status);
@@ -777,7 +781,7 @@ bool WorkspaceView::CancelGesture(){
 }
 void WorkspaceView::SetWindowId(uint64_t id){impl->data->windowId=id;}
 void WorkspaceView::SetGlassChanged(std::function<void()> changed){impl->glassChanged=std::move(changed);}
-void WorkspaceView::CanvasContact(bool active){impl->canvasBar->Contact(active);}
+void WorkspaceView::CanvasContact(bool active){impl->canvasBar->Contact(active);if(active){impl->notice->Hide();hideRevealedTooltip();}}
 JsonArray WorkspaceView::DrawerSources()const{return impl->data->drawerSources;}
 JsonArray WorkspaceView::Glass(UIElement const& reference,JsonArray& connections)const{return impl->glass(reference,connections);}
 void WorkspaceView::SetTitlebarInsets(float left,float right,float height){

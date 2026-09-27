@@ -49,8 +49,8 @@ adoption, whether from storage, decoding, validation, claiming or
 3. **In memory**: continue on a `BrowserDatabase` owned by the manager. Nothing
    in this window is persisted.
 
-Stages 2 and 3 raise the shared canvas notice to explain what happened (GTK, Web
-and Android show it). Stage 3 reads nothing that was stored: it seeds the
+Stages 2 and 3 raise the shared canvas notice to explain what happened (GTK, Web,
+Android and Windows show it). Stage 3 reads nothing that was stored: it seeds the
 built-in presets from code into an empty store and adopts one. Startup
 therefore always ends with an adopted workspace, provided the presets adopt on
 that platform and every storage request eventually replies or fails. Tests

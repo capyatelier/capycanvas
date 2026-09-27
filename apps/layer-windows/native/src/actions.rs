@@ -128,7 +128,9 @@ impl Action {
             }
             Self::Ordinary(action) => action,
         };
+        let timeout = matches!(action, UiAction::Notice { accept: false, .. });
         host.dispatch(action)
+            .or_else(|error| if timeout { Ok(()) } else { Err(error) })
     }
 }
 #[cfg(test)]
@@ -223,6 +225,18 @@ mod tests {
         )
         .unwrap();
         assert!(malformed.dispatch(&mut host).is_err());
+    }
+    #[test]
+    fn stale_notice_timeouts_are_quiet_but_stale_accepts_fail() {
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let answer = |accept: bool| {
+            serde_json::from_value::<Action>(
+                serde_json::json!({"type":"notice","id":u64::MAX,"accept":accept}),
+            )
+            .unwrap()
+        };
+        answer(false).dispatch(&mut host).unwrap();
+        assert!(answer(true).dispatch(&mut host).is_err());
     }
     #[test]
     fn proof_panel_rejects_obsolete_controls_and_preserves_view_history() {

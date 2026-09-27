@@ -7,11 +7,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/persistence/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-function Dialog([string]$Name) {
-    $dialog=Control 'workspace-close-error'
-    (Control $Name -Name -Type ([System.Windows.Automation.ControlType]::Button) -Within $dialog).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-}
-function Launch([string]$Profile,[string]$Label,[switch]$Failed) {
+function Launch([string]$Profile,[string]$Label) {
     $env:CAPY_SETTINGS_DIRECTORY=$Profile
     $script:stderr=Join-Path $run ($Label+'-stderr.log')
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -20,19 +16,11 @@ function Launch([string]$Profile,[string]$Label,[switch]$Failed) {
     Write-Output "Owned workspace persistence review $($review.Id) ($Label)"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Canvas did not start' 45
     $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
-    if($Failed){Wait-Until {(Model).windows_workspace.error -and !(Model).windows_workspace.busy} 'Storage failure was not reported'}
-    else{
-        Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Workspace did not open' 45
-        Wait-Until {@((Model).panel_measurements|Where-Object {$_.panel -eq 'brushes' -and $_.content_height -gt 0 -and $_.content_height -ne 320}).Count -eq 1} 'Adopted workspace did not receive native measurements'
-    }
+    Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Workspace did not open' 45
+    Wait-Until {@((Model).panel_measurements|Where-Object {$_.panel -eq 'brushes' -and $_.content_height -gt 0 -and $_.content_height -ne 320}).Count -eq 1} 'Adopted workspace did not receive native measurements'
 }
 function Close {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
-    if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-}
-function Exit-AfterDecision {
-    if(!$review.WaitForExit(5000)){throw 'Workspace close exceeded five seconds after the decision'}
-    if($null -eq $review.ExitCode -or $review.ExitCode -ne 0){throw 'Workspace close did not exit successfully'}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
 }
 function Layout { (Model).state.workspace | ConvertTo-Json -Depth 80 -Compress }
@@ -63,33 +51,20 @@ try {
     [IO.Directory]::CreateDirectory($broken)|Out-Null
     $database=Join-Path $broken 'workspaces.sqlite3'
     [IO.File]::WriteAllText($database,'isolated fixture: unreadable workspace database')
-    Launch $broken 'unreadable' -Failed
-    $unchanged=(Model).state.brush.diameter
+    $script:startupNotice=$null
+    $CapyEach={if(!$script:startupNotice -and $review){$text=(Model).state.notice.text;if($text){$script:startupNotice=$text}}}
+    Launch $broken 'unreadable'
+    Wait-Until {$null -ne $script:startupNotice} 'Unreadable storage did not raise the startup notice' 15
+    $CapyEach=$null
+    if($script:startupNotice -notmatch "^(Saved workspaces couldn't be opened, so they were reset\.|Workspace changes in this window won't be saved: .+)$"){throw "Unexpected startup notice: $($script:startupNotice)"}
+    if((Model).windows_workspace.error){throw 'Unreadable storage still reported a workspace error'}
     (Control 'Brush size slider' -Name -Type ([System.Windows.Automation.ControlType]::Slider)).GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(0.8)
-    Start-Sleep -Milliseconds 250
-    if((Model).state.brush.diameter -ne $unchanged){throw 'Editing was accepted before workspace recovery'}
-    $review.CloseMainWindow()|Out-Null
-    Wait-Until {$null -ne (Find 'workspace-close-error')} 'Close recovery dialog did not appear'
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'close-recovery.png') -ClientOnly *> (Join-Path $run 'close-recovery.json')
-    Dialog 'Keep open'
-    Wait-Until {!(Model).windows_workspace.closing -and !(Model).state.document_file.close_ready} 'Keep open did not cancel window close'
-    # These files were created by this fixture in its unique local directory.
-    Move-Item -LiteralPath $database -Destination (Join-Path $broken 'unreadable-original')
-    Copy-Item -LiteralPath (Join-Path $profile 'workspaces.sqlite3') -Destination $database
-    Invoke 'workspace-storage-retry'
-    Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.error} 'Retry did not reopen repaired storage'
-    if((Model).state.brush.diameter -ne $expectedSize){throw 'Recovery did not adopt the stored workspace'}
+    Wait-Until {(Model).state.brush.diameter -ne $expectedSize} 'Editing was refused after the storage reset'
     Close
-    $discard=Join-Path $run 'discard'
-    [IO.Directory]::CreateDirectory($discard)|Out-Null
-    $original='isolated fixture: preserve this unreadable database'
-    [IO.File]::WriteAllText((Join-Path $discard 'workspaces.sqlite3'),$original)
-    Launch $discard 'discard' -Failed
-    $review.CloseMainWindow()|Out-Null
-    Dialog 'Close without saving'
-    Exit-AfterDecision
-    if([IO.File]::ReadAllText((Join-Path $discard 'workspaces.sqlite3')) -ne $original){throw 'Closing overwrote unreadable workspace data'}
-    [pscustomobject]@{autosave='passed';restart_layout='passed';restart_tool_values='passed';native_measurements='passed';final_edit_close='passed';unreadable_storage='passed';editing_guard='passed';keep_open='passed';retry_recovery='passed';explicit_discard='passed';original_preserved='passed';zero_exit='passed';scope='native UI Automation and isolated SQLite persistence; full manager UI and physical input remain separate'}|ConvertTo-Json
+    Launch $broken 'reopened'
+    if((Model).windows_workspace.error){throw 'The reset storage did not reopen'}
+    Close
+    [pscustomobject]@{autosave='passed';restart_layout='passed';restart_tool_values='passed';native_measurements='passed';final_edit_close='passed';unreadable_storage_resets_with_notice='passed';editing_after_reset='passed';reset_storage_reopens='passed';zero_exit='passed';scope='native UI Automation and isolated SQLite persistence; full manager UI and physical input remain separate'}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
