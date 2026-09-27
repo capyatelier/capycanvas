@@ -162,7 +162,7 @@ extension XCTestCase {
             ("Pen", "Marker", ["Marker"]),
             ("Pencil", "Pencil", ["Pencil", "Pointy Pencil", "Shading Pencil"]),
             ("Pencil", "Pastel", ["Chalk", "Pastel Block", "Charcoal"]),
-            ("Paint Brush", "Paint", ["Paintbrush", "Textured Flat", "Dry Scumble", "Transparent Glaze", "Opaque Gouache", "Multiply Glaze"]),
+            ("Paint Brush", "Paint", ["Paintbrush", "Bristle Paintbrush", "Textured Flat", "Dry Scumble", "Transparent Glaze", "Opaque Gouache", "Multiply Glaze"]),
             ("Paint Brush", "Watercolor", ["Watercolor Wash", "Wet Watercolor"]),
             ("Paint Brush", "Oil paint", ["Loaded Oil", "Palette Knife", "Wet Round"]),
             ("Airbrush", "Airbrush", ["Airbrush"]), ("Airbrush", "Spray", ["Spray"]),

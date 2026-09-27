@@ -33,6 +33,9 @@ use layer_render::{
 use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::{Arc, mpsc}, time::Duration};
 
 mod builtin_masks;
+mod bristle_table;
+#[cfg(test)]
+mod kernel_spirv;
 mod color_sample;
 mod source_access;
 mod material_sources;
@@ -1507,6 +1510,13 @@ impl WgpuRasterizer {
             .as_ref()
             .map(|grain| grain.asset.clone())
             .unwrap_or_else(|| white.clone());
+        if style.contact.is_some_and(|c| c.bristles.is_some()) {
+            return TextureSetKey {
+                primary: AssetId::from(bristle_table::HAIRS_ASSET),
+                grain,
+                transport: AssetId::from(bristle_table::FIELD_ASSET),
+            };
+        }
         TextureSetKey {
             primary,
             grain,
@@ -4698,10 +4708,12 @@ struct StyleGpu {
     contact_a: [f32; 4],
     contact_b: [f32; 4],
     contact_c: [f32; 4],
+    bristles: [f32; 4],
     brush_to_layer_linear: [f32; 4],
     brush_to_layer_offset: [f32; 4],
     layer_to_brush_linear: [f32; 4],
     layer_to_brush_offset: [f32; 4],
+    bristle_streak: [f32; 4],
 }
 
 #[repr(C)]
@@ -4748,6 +4760,8 @@ impl StyleGpu {
             contact_a: [0.0; 4],
             contact_b: [0.0; 4],
             contact_c: [0.0; 4],
+            bristles: [0.0; 4],
+            bristle_streak: [0.0; 4],
             brush_to_layer_linear: [1., 0., 0., 1.],
             brush_to_layer_offset: [0.; 4],
             layer_to_brush_linear: [1., 0., 0., 1.],
@@ -4850,6 +4864,10 @@ impl StyleGpu {
             ];
         }
         if let Some(contact) = style.contact {
+            if let Some(bristles) = contact.bristles {
+                result.bristles = [1., bristles.texture_scale, bristles.load, bristles.splay];
+                result.bristle_streak = bristles.streak_rgba_linear;
+            }
             let paper = contact.paper * grain.map_or(1., |grain| grain.depth);
             result.contact_a = [1.0, paper, contact.tip_bias, contact.edge_roughness];
             result.contact_b = [
@@ -6145,7 +6163,7 @@ mod tests {
     fn gpu_records_match_shader_layouts() {
         assert_eq!(mem::size_of::<Dab>(), 128);
         assert_eq!(mem::size_of::<DabGpu>(), 160);
-        assert_eq!(mem::size_of::<StyleGpu>(), 304);
+        assert_eq!(mem::size_of::<StyleGpu>(), 336);
         assert_eq!(mem::size_of::<TargetGpu>(), 32);
     }
 

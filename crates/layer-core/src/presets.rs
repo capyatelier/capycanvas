@@ -52,6 +52,7 @@ pub enum DefaultBrushPreset {
     WetInk = 32,
     BlottyInk = 33,
     BrushedInk = 34,
+    BristlePaintbrush = 35,
     LiquifyTwirlClockwise = 36,
     LiquifyPinch = 37,
     LiquifyExpand = 38,
@@ -62,6 +63,7 @@ pub enum DefaultBrushPreset {
 /// diameter, and opacity before beginning a stroke.
 pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
     match preset {
+        DefaultBrushPreset::BristlePaintbrush => crate::contact_presets::bristle_paintbrush(),
         DefaultBrushPreset::GPen
         | DefaultBrushPreset::Pencil
         | DefaultBrushPreset::PointyPencil

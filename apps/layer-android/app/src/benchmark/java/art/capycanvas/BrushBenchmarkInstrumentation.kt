@@ -3,6 +3,7 @@ package art.capycanvas
 import android.app.Activity
 import android.app.Instrumentation
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -67,7 +68,12 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)) as MainActivity
             stage("activity-started")
             val active = activity
-            runOnMainSync { active.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            runOnMainSync {
+                active.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                // Keep the fixed trajectory and fit zoom comparable regardless
+                // of how the tablet is held. This applies only to this activity.
+                active.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
             val host = active.host
             fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
             fun waitFor(condition: () -> Boolean) {
@@ -137,10 +143,19 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             invoke("fit_canvas")
             action(obj("type" to "select_brush", "id" to preset))
             action(obj("type" to "set_brush_size", "value" to size))
+            arguments.getString("paintLoad")?.let {
+                val load = it.toDouble()
+                check(load in 0.0..1.0)
+                action(obj("type" to "set_tool_setting", "id" to "bristle_load", "value" to load))
+            }
             for ((id, value) in listOf("feedback" to prediction, "platform_prediction" to false, "prediction_horizon" to 16))
                 action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
             SystemClock.sleep(1500)
             waitFor { host.snapshot?.optBoolean("brush_ready") == true }
+            waitFor {
+                val viewport = state().getJSONObject("camera").getJSONArray("viewport")
+                viewport.getInt(0) > viewport.getInt(1)
+            }
             val initial = state()
             check(abs(initial.getJSONObject("brush").getDouble("diameter") - size) < .01)
             val camera = initial.getJSONObject("camera")
@@ -215,8 +230,12 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
                 "state" to state(), "display" to displayInfo, "resources" to resources(),
                 "center" to JSONArray(listOf(cx, cy)), "radii" to JSONArray(listOf(rx, ry))).toString(2))
+            val warmupRevision = state().getJSONObject("document_file").getLong("revision")
             stroke(1500, "constant")
             SystemClock.sleep(1500)
+            check(state().getJSONObject("document_file").getLong("revision") > warmupRevision) {
+                "Warm-up did not paint; check input focus and canvas bounds"
+            }
             invoke("undo")
             SystemClock.sleep(1500)
             File(output, "$label-ready").writeText("ready")
@@ -249,7 +268,12 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 val after = state()
                 check(host.failure == null) { host.failure!! }
                 check(host.actionError == null) { host.actionError!! }
-                check(after.getJSONObject("document_file").getLong("revision") > beforeRevision) { "No committed paint" }
+                if (after.getJSONObject("document_file").getLong("revision") <= beforeRevision) {
+                    File(output, "$label-$run-diagnostic.json").writeText(obj(
+                        "report" to data, "state" to after, "before_revision" to beforeRevision,
+                        "completions" to completions, "renderer" to stats()).toString())
+                    error("No committed paint")
+                }
                 check(data.getJSONArray("frames").length() > 0)
                 data.put("motion", motion).put("presentation", present).put("renderer_before", before)
                     .put("completions", completions)

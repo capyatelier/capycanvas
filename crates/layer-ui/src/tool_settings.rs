@@ -75,6 +75,7 @@ impl ToolSetting {
         match self.id {
             "tonal_lower" => "From — lower bound in stops relative to reference white (0)",
             "tonal_upper" => "To — upper bound in stops relative to reference white (0)",
+            "bristle_scale" => "Bristle texture size relative to the configured brush size",
             _ => self.label,
         }
     }
@@ -170,6 +171,32 @@ const DEFINITIONS: &[Definition] = &[
         group: "Texture",
         numeric: NumericControl::percent,
         field: |b| b.grain.as_mut().map(|g| &mut g.depth),
+    },
+    Definition {
+        id: "bristle_scale",
+        label: "Bristle scale",
+        group: "Bristles",
+        numeric: || NumericControl {
+            min: 0.25,
+            soft_min: 0.25,
+            max: 4.,
+            soft_max: 2.,
+            ..NumericControl::percent()
+        },
+        field: |b| {
+            b.contact
+                .as_mut()?
+                .bristles
+                .as_mut()
+                .map(|b| &mut b.texture_scale)
+        },
+    },
+    Definition {
+        id: "bristle_load",
+        label: "Paint load",
+        group: "Bristles",
+        numeric: NumericControl::percent,
+        field: |b| b.contact.as_mut()?.bristles.as_mut().map(|b| &mut b.load),
     },
     Definition {
         id: "paint",
@@ -348,5 +375,30 @@ mod tests {
         ] {
             assert!(edit(&brush, id, value).is_err());
         }
+    }
+
+    #[test]
+    fn bristle_controls_preserve_relative_scale_when_resizing_and_round_trip() {
+        let brush = default_brush(DefaultBrushPreset::BristlePaintbrush);
+        let scaled = edit(&brush, "bristle_scale", 2.).unwrap();
+        let resized = edit(&scaled, "size", 1000.).unwrap();
+        assert_eq!(scaled.contact, resized.contact);
+        let restored: BrushSnapshot =
+            serde_json::from_str(&serde_json::to_string(&resized).unwrap()).unwrap();
+        assert_eq!(resized, restored);
+        let catalog = crate::brush_catalog().collect::<Vec<_>>();
+        let index = catalog
+            .iter()
+            .position(|p| p.id == DefaultBrushPreset::Paintbrush as u32)
+            .unwrap();
+        assert_eq!(
+            catalog[index + 1].id,
+            DefaultBrushPreset::BristlePaintbrush as u32
+        );
+        assert!(
+            controls(&default_brush(DefaultBrushPreset::Paintbrush))
+                .iter()
+                .all(|c| c.id != "bristle_scale")
+        );
     }
 }

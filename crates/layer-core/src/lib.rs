@@ -16,7 +16,7 @@ pub mod binary_payload;
 mod image_metadata;
 pub use image_metadata::{ImageResolution, ResolutionUnit};
 mod contact;
-pub use contact::BrushContact;
+pub use contact::{BrushBristles, BrushContact};
 mod contact_presets;
 pub use contact_presets::CONTACT_BRUSH_PRESETS;
 mod effect_catalog;
@@ -1194,6 +1194,8 @@ pub struct Stroke {
     pub bounds: Rect,
     /// Captured at contact start; replay must not use today's alpha lock.
     pub alpha_locked: bool,
+    /// The pen measured barrel rotation; otherwise twist is only the view angle.
+    pub barrel_twist: bool,
     /// Immutable layer-local coverage captured at stroke start, including for
     /// mask painting. Later selection edits must not change stroke replay.
     pub selection: Option<Arc<Selection>>,
@@ -1243,6 +1245,7 @@ impl Stroke {
             material_updates: Arc::default(),
             bounds,
             alpha_locked: false,
+            barrel_twist: false,
             selection: None,
         })
     }

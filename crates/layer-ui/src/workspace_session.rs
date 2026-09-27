@@ -56,7 +56,7 @@ impl PreparedWorkspace {
         }
         state.colors.validate()?;
         let mut brush = state.tools.brush(preset(state.preset)?);
-        brush.color_rgba_linear = state.colors.definition().linear_in(layer_core::color::RgbSpace::Srgb)?;
+        state.colors.load_paint(&mut brush, layer_core::color::RgbSpace::Srgb)?;
         brush.validate().map_err(error)?;
         let mut region_tools = region_tools::RegionTools::default();
         for (id, &value) in &state.region_values {
@@ -222,7 +222,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(UiChange::default());
         }
         let mut brush = tools::ToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().color.space);
-        brush.color_rgba_linear = self.engine.configured_brush().color_rgba_linear;
+        self.state.colors.load_paint(&mut brush, self.engine.document().color.space)?;
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.tools.overrides.clear();
         self.state.brush.diameter = brush.diameter;
@@ -348,7 +348,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         working.colors.set_rgb_space(space)?;
         working.colors.set_document_depth(self.engine.document().color.depth)?;
         let mut brush = working.tools.brush_in(preset(working.preset)?, space);
-        brush.color_rgba_linear = working.colors.definition().linear_in(space)?;
+        working.colors.load_paint(&mut brush, space)?;
         // This is the only fallible mutation; CanvasEngine validates before setting.
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.engine.set_paint_color(working.colors.definition());

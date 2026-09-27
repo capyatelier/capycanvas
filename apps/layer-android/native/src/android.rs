@@ -846,6 +846,7 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
     records: JDoubleArray,
     count: jint,
     predicted: jboolean,
+    barrel_twist: jboolean,
 ) {
     let result = (|| {
         if count <= 0
@@ -861,13 +862,16 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
             .get_double_array_region(&records, 0, &mut data)
             .map_err(error)
             .and_then(|()| {
-                app.host.pointer(
-                    id.max(0) as u64,
-                    tool as u8,
-                    button as u8,
-                    &data,
-                    predicted != 0,
-                )
+                let view_revision = app.host.session.state().camera.revision;
+                app.host.pointer_batch(layer_host::PointerBatch {
+                    id: id.max(0) as u64,
+                    tool: tool as u8,
+                    button: button as u8,
+                    records: &data,
+                    predicted: predicted != 0,
+                    view_revision,
+                    barrel_twist: barrel_twist != 0,
+                })
             });
         app.pointer_records = data;
         result

@@ -541,7 +541,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (BuildConfig.DEBUG) pointerAllocations++
         return DoubleArray(maxOf(16, Integer.highestOneBit(size - 1) shl 1))
     }
-    fun pointer(id: Long, tool: Int, button: Int, samples: DoubleArray, count: Int, predicted: Boolean = false) {
+    fun pointer(id: Long, tool: Int, button: Int, samples: DoubleArray, count: Int, predicted: Boolean = false, barrelTwist: Boolean = false) {
         val arrival = System.nanoTime()
         val accepted = worker.post {
             try {
@@ -560,7 +560,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                         val reply = JSONObject(Native.input(handle, chromeInput(event).toString()))
                         if (reply.optBoolean("handled")) suppressedContacts.add(id)
                     }
-                    if (id !in suppressedContacts) Native.pointer(handle, id, tool, button, samples, count, predicted)
+                    if (id !in suppressedContacts) Native.pointer(handle, id, tool, button, samples, count, predicted, barrelTwist)
                     if (!predicted) syncCanvasBar()
                     if (phase == 3 || phase == 4) suppressedContacts.remove(id)
                     if (!predicted && measuredInputs != null && inputCount < 8192) {

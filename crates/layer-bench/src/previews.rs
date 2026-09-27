@@ -6,8 +6,13 @@ pub fn generate(directory: &Path) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(directory)?;
     for theme in ["dark", "light"] {
         for choice in layer_ui::brush_catalog() {
+            if let Ok(ids) = std::env::var("CAPY_BRUSH_PREVIEW_IDS")
+                && !ids.split(',').any(|id| id.parse::<u32>().ok() == Some(choice.id))
+            {
+                continue;
+            }
             if std::env::var_os("CAPY_CONTACT_PREVIEWS_ONLY").is_some()
-                && !matches!(choice.id, 1 | 2 | 25..=34)
+                && !matches!(choice.id, 1 | 2 | 25..=35)
             {
                 continue;
             }

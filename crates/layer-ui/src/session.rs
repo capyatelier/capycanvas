@@ -4538,7 +4538,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut brush = self.engine.configured_brush().clone();
         brush.diameter = state.diameter;
         brush.opacity = state.opacity;
-        brush.color_rgba_linear = self.state.colors.definition().linear_in(self.engine.document().color.space)?;
+        self.state.colors.load_paint(&mut brush, self.engine.document().color.space)?;
         self.engine.set_brush(brush).map_err(error)?;
         self.engine.set_paint_color(self.state.colors.definition());
         self.engine.set_tool(
@@ -14124,6 +14124,21 @@ mod tests {
             }
             assert_eq!(segment.marker, 0.0);
         }
+    }
+
+    #[test]
+    fn hovering_a_bristle_brush_outlines_its_fan() {
+        let mut s = session(Platform::Gtk);
+        let mut brush = default_brush(DefaultBrushPreset::BristlePaintbrush);
+        brush.diameter = 200.0;
+        s.engine.set_brush(brush).unwrap();
+        s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.0)));
+        let cursor = s.canvas_cursor().unwrap();
+        let reach = cursor.segments.iter()
+            .filter(|segment| segment.marker == 0.0)
+            .map(|segment| (segment.from[0] - cursor.center[0]).hypot(segment.from[1] - cursor.center[1]))
+            .fold(0.0_f32, f32::max);
+        assert!(reach > 20.0, "the hover outline spans the fan: {reach}");
     }
 
     #[test]

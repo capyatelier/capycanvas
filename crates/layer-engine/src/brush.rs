@@ -13,10 +13,15 @@ use layer_render::Dab;
 
 const SPEED_FILTER_SECONDS: f32 = 0.015;
 const PRESSURE_FALL_RESPONSE_SECONDS: f32 = 0.004;
+const BARREL_TWIST_RESPONSE_SECONDS: f32 = 0.025;
 const MIN_DAB_DISTANCE: f32 = 0.25;
 const MAX_DABS_PER_SEGMENT: usize = 65_536;
 /// Power applied to the smooth endpoint-correction envelope.
 const CORRECTION_EASING: f32 = 1.5;
+const MAX_FAN_ARCS: f32 = 64.0;
+const FAN_TURN_RADIANS: f64 = 0.05;
+const FAN_LIFT: f32 = 2.;
+const MAX_FAN_PENDING: usize = 512;
 
 #[derive(Clone, Copy, Debug)]
 struct DynamicPoint {
@@ -64,6 +69,17 @@ pub struct DabGenerator {
     last: Option<DynamicPoint>,
     stabilized_input: Option<StrokePoint>,
     pressure_fall_target: f32,
+    bristle_azimuth: Option<f32>,
+    barrel_twist: bool,
+    fan_slide: f32,
+    fan_touchdown: Point,
+    fan_roll: f32,
+    fan_axis: [f32; 2],
+    fan_heading: [f32; 2],
+    fan_dragging: bool,
+    fan_deepest: f32,
+    fan_pressed: f32,
+    fan_pending: Vec<Dab>,
     distance_until_next: f32,
     filtered_speed: f32,
     rng: u32,
@@ -81,6 +97,17 @@ impl Default for DabGenerator {
             last: None,
             stabilized_input: None,
             pressure_fall_target: 0.0,
+            bristle_azimuth: None,
+            barrel_twist: false,
+            fan_slide: 0.,
+            fan_touchdown: Point { x: 0., y: 0. },
+            fan_roll: 0.,
+            fan_axis: [0.; 2],
+            fan_heading: [0.; 2],
+            fan_dragging: false,
+            fan_deepest: 0.,
+            fan_pressed: 0.,
+            fan_pending: Vec::new(),
             distance_until_next: 0.0,
             filtered_speed: 0.0,
             rng: 1,
@@ -119,6 +146,13 @@ impl DabGenerator {
         let mut output = Vec::new();
         let mut damage = Rect::EMPTY;
         preview.emit_contacts(evaluated, brush, &mut output, &mut damage);
+        if brush.contact.is_some_and(|c| c.bristles.is_some()) {
+            output = output.last().or(preview.fan_pending.last()).copied().into_iter().collect();
+            for fan in &mut output {
+                fan.texture_sign = [1.; 2];
+            }
+        }
+        self.bristle_azimuth = preview.bristle_azimuth;
         self.last = Some(current);
         output
     }
@@ -130,6 +164,16 @@ impl DabGenerator {
         self.last = None;
         self.stabilized_input = None;
         self.pressure_fall_target = 0.0;
+        self.bristle_azimuth = None;
+        self.barrel_twist = false;
+        self.fan_slide = 0.;
+        self.fan_roll = 0.;
+        self.fan_axis = [0.; 2];
+        self.fan_heading = [0.; 2];
+        self.fan_dragging = false;
+        self.fan_deepest = 0.;
+        self.fan_pressed = 0.;
+        self.fan_pending.clear();
         self.distance_until_next = 0.0;
         self.filtered_speed = 0.0;
         self.rng = mix_seed(brush.seed, stroke_id.0);
@@ -140,8 +184,15 @@ impl DabGenerator {
         self.continuous_fraction = 0.0;
     }
 
+    /// Whether this stroke's twist is a measured barrel angle rather than a
+    /// constant from a pen without a rotation sensor.
+    pub fn set_barrel_twist(&mut self, measured: bool) {
+        self.barrel_twist = measured;
+    }
+
     pub fn reset_for_replay(&mut self, stroke: &Stroke) {
         self.reset_for_stroke(stroke.id, &stroke.brush);
+        self.barrel_twist = stroke.barrel_twist;
         self.total_distance = Some(
             stroke
                 .points
@@ -176,6 +227,10 @@ impl DabGenerator {
         let dy = current.point.position.y - last.point.position.y;
         let distance = dx.hypot(dy);
         if distance <= f32::EPSILON {
+            if brush.contact.is_some_and(|c| c.bristles.is_some()) {
+                // A held brush can splay or roll without changing its center.
+                self.append_swept(last, current, brush, output, &mut damage);
+            }
             if brush.path.continuous_rate_hz > 0.0 {
                 let elapsed_micros = current
                     .point
@@ -227,11 +282,21 @@ impl DabGenerator {
         damage: &mut Rect,
     ) {
         let start = self.last_evaluated.unwrap_or(last);
+        let bristles = brush.contact.is_some_and(|c| c.bristles.is_some());
         let radius = self.last_emitted_dab.map_or(brush.diameter * 0.5, |dab| {
-            dab.radii[0].min(dab.radii[1])
+            if bristles {
+                dab.radii[0].max(dab.radii[1])
+            } else {
+                dab.radii[0].min(dab.radii[1])
+            }
         });
         let tolerance = (radius * 0.01).max(0.25);
         let traveled = f64::from((current.stroke_distance - start.stroke_distance).max(0.));
+        let path_tolerance = if bristles {
+            (FAN_TURN_RADIANS * traveled / 7.).max(0.25)
+        } else {
+            f64::from(tolerance)
+        };
         let dx = f64::from(current.position().x) - f64::from(start.position().x);
         let dy = f64::from(current.position().y) - f64::from(start.position().y);
         // Every intervening vertex lies inside the ellipse whose focal points
@@ -249,7 +314,7 @@ impl DabGenerator {
             || twist_change.abs() > 0.04;
         // Keep the pose before a pressure/tilt transition just as we keep the
         // vertex before a bend. Otherwise a release narrows an earlier span.
-        if (error2 > f64::from(tolerance).powi(2) || pose_changed)
+        if (error2 > path_tolerance.powi(2) || pose_changed)
             && last.stroke_distance > start.stroke_distance
         {
             let evaluated = self.evaluate(last, brush);
@@ -281,19 +346,22 @@ impl DabGenerator {
 
     /// Close the last sub-spacing segment using the final pressure/pose. This
     /// matters for a pointed lift: copying the preceding large dab rounds it off.
+    /// A bristle fan then lifts off the paper.
     pub(crate) fn finish(&mut self, brush: &BrushSnapshot, output: &mut Vec<Dab>) -> Rect {
-        if brush.contact.is_none() {
+        let Some(contact) = brush.contact else {
             return Rect::EMPTY;
-        }
+        };
         let (Some(last), Some(dab)) = (self.last, self.last_emitted_dab) else {
             return Rect::EMPTY;
         };
-        if (last.position().x - dab.center.x).hypot(last.position().y - dab.center.y) <= 0.0001 {
-            return Rect::EMPTY;
-        }
-        let evaluated = self.evaluate(last, brush);
         let mut damage = Rect::EMPTY;
-        self.emit_contacts(evaluated, brush, output, &mut damage);
+        if (last.position().x - dab.center.x).hypot(last.position().y - dab.center.y) > 0.0001 {
+            let evaluated = self.evaluate(last, brush);
+            self.emit_contacts(evaluated, brush, output, &mut damage);
+        }
+        if contact.bristles.is_some() {
+            damage = damage.union(self.lift_fan(output));
+        }
         damage
     }
 
@@ -426,7 +494,16 @@ impl DabGenerator {
                 last.tilt[0] + (point.tilt[0] - last.tilt[0]) * response,
                 last.tilt[1] + (point.tilt[1] - last.tilt[1]) * response,
             ],
-            twist: mix_angle(last.twist, point.twist, response, std::f32::consts::TAU),
+            twist: mix_angle(
+                last.twist,
+                point.twist,
+                if self.barrel_twist && brush.contact.is_some_and(|c| c.bristles.is_some()) {
+                    response * (1.0 - (-elapsed / BARREL_TWIST_RESPONSE_SECONDS).exp())
+                } else {
+                    response
+                },
+                std::f32::consts::TAU,
+            ),
             elapsed_micros: point.elapsed_micros,
         };
         self.stabilized_input = Some(stabilized);
@@ -497,12 +574,19 @@ impl DabGenerator {
             + tilt_direction * brush.shape.follow_tilt
             + point.point.twist * brush.shape.follow_twist;
         let mut radii = [diameter * 0.5, diameter * 0.5 / aspect];
+        let mut contact_tilt = tilt;
         if let Some(contact) = brush.contact {
-            let spread = contact.tilt_spread * tilt * tilt;
-            radii[0] *= 1.0 + spread;
-            radii[1] *= 1.0 + spread * 0.18;
-            if contact.tilt_spread > 0.0 && tilt > 0.001 {
-                rotation = tilt_direction + brush.angle_radians;
+            if let Some(bristles) = contact.bristles {
+                (rotation, radii, contact_tilt) = self.fan_pose(
+                    point.point, tilt, tilt_direction, diameter, bristles, brush.angle_radians,
+                );
+            } else {
+                let spread = contact.tilt_spread * tilt * tilt;
+                radii[0] *= 1.0 + spread;
+                radii[1] *= 1.0 + spread * 0.18;
+                if contact.tilt_spread > 0.0 && tilt > 0.001 {
+                    rotation = tilt_direction + brush.angle_radians;
+                }
             }
         }
         let (rotation_sin, rotation_cos) = rotation.sin_cos();
@@ -546,7 +630,7 @@ impl DabGenerator {
                 previous: [0.0; 4],
                 contact: [
                     point.point.pressure,
-                    tilt,
+                    contact_tilt,
                     point.stroke_distance / brush.diameter.max(0.01),
                     (self.stroke_seed & 65535) as f32,
                 ],
@@ -560,6 +644,45 @@ impl DabGenerator {
         }
     }
 
+    fn fan_pose(
+        &mut self,
+        point: StrokePoint,
+        tilt: f32,
+        azimuth: f32,
+        diameter: f32,
+        bristles: layer_core::BrushBristles,
+        angle: f32,
+    ) -> (f32, [f32; 2], f32) {
+        let previous = self.bristle_azimuth.unwrap_or(if tilt > 0.02 { azimuth } else { 0. });
+        let facing = if tilt > 0.08 {
+            mix_angle_unwrapped(
+                previous,
+                azimuth,
+                ((tilt - 0.08) * 4.).clamp(0., 1.),
+                std::f32::consts::TAU,
+            )
+        } else {
+            previous
+        };
+        self.bristle_azimuth = Some(facing);
+        let roll = angle + if self.barrel_twist { point.twist - facing } else { 0. };
+        let (lean_sin, lean_cos) = (tilt * 1.2).sin_cos();
+        let (roll_sin, roll_cos) = roll.sin_cos();
+        let (azimuth_sin, azimuth_cos) = facing.sin_cos();
+        let fan_x = -azimuth_sin * roll_cos - lean_cos * azimuth_cos * roll_sin;
+        let fan_y = azimuth_cos * roll_cos - lean_cos * azimuth_sin * roll_sin;
+        let pressure = point.pressure.clamp(0., 1.);
+        let radius = diameter * 0.5;
+        let width =
+            radius * fan_x.hypot(fan_y) * (1. - 0.5 * bristles.splay * (1. - pressure.sqrt()));
+        let depth = radius * (0.02 + 0.3 * pressure * pressure.sqrt() + 0.1 * tilt);
+        (
+            (-fan_x).atan2(fan_y),
+            [depth.max(0.5), width.max(0.5)],
+            lean_sin * roll_sin,
+        )
+    }
+
     fn emit_contacts(
         &mut self,
         evaluated: EvaluatedDab,
@@ -567,6 +690,10 @@ impl DabGenerator {
         output: &mut Vec<Dab>,
         damage: &mut Rect,
     ) {
+        if brush.contact.is_some_and(|c| c.bristles.is_some()) {
+            self.emit_fan(evaluated.dab, output, damage);
+            return;
+        }
         let maximum = brush.shape.count.max(1);
         let minimum =
             ((maximum as f32 * (1.0 - brush.shape.count_jitter)).ceil() as u8).clamp(1, maximum);
@@ -637,6 +764,139 @@ impl DabGenerator {
             self.last_emitted_dab = Some(dab);
             output.push(dab);
         }
+    }
+
+    fn emit_fan(&mut self, dab: Dab, output: &mut Vec<Dab>, damage: &mut Rect) {
+        let from = self.last_emitted_dab.unwrap_or(dab);
+        let start_angle = from.rotation[1].atan2(from.rotation[0]);
+        let turn = mix_angle_unwrapped(
+            start_angle,
+            dab.rotation[1].atan2(dab.rotation[0]),
+            1.,
+            std::f32::consts::TAU,
+        ) - start_angle;
+        let reach = from.radii[1].max(dab.radii[1]);
+        let depth = from.radii[0].min(dab.radii[0]);
+        let arcs = (turn.abs() * reach / depth).ceil().clamp(1., MAX_FAN_ARCS) as usize;
+        let mut previous = from;
+        for arc in 1..=arcs {
+            let mut next = dab;
+            if arc < arcs {
+                let t = arc as f32 / arcs as f32;
+                let (sin, cos) = (start_angle + turn * t).sin_cos();
+                next.center = Point {
+                    x: mix(from.center.x, dab.center.x, t),
+                    y: mix(from.center.y, dab.center.y, t),
+                };
+                next.radii = [mix(from.radii[0], dab.radii[0], t), mix(from.radii[1], dab.radii[1], t)];
+                next.rotation = [cos, sin];
+                for channel in 0..3 {
+                    next.contact[channel] = mix(from.contact[channel], dab.contact[channel], t);
+                }
+            }
+            next.previous = [previous.radii[0], previous.radii[1], previous.rotation[0], previous.rotation[1]];
+            next.previous_contact = previous.contact;
+            next.motion = [next.center.x - previous.center.x, next.center.y - previous.center.y];
+            let turn = (previous.rotation[0] * next.rotation[1] - previous.rotation[1] * next.rotation[0])
+                .atan2(previous.rotation[0] * next.rotation[0] + previous.rotation[1] * next.rotation[1]);
+            let opening = self.last_emitted_dab.is_none() && arc == 1;
+            if opening {
+                self.fan_touchdown = previous.center;
+            }
+            self.fan_roll += turn;
+            self.fan_slide = self.fan_slide.max(
+                (next.center.x - self.fan_touchdown.x).hypot(next.center.y - self.fan_touchdown.y)
+                    + self.fan_roll.abs() * next.radii[1] * 0.5,
+            );
+            let start_heading = heading_angle(previous.rotation, self.fan_heading);
+            self.turn_fan_heading(next.motion, next.radii);
+            let coherent = self.fan_axis[0].hypot(self.fan_axis[1]) + self.fan_roll.abs() * next.radii[1] * 0.5;
+            next.material = [0., 1., next.material[2], 1.];
+            next.texture_sign = [start_heading, heading_angle(next.rotation, self.fan_heading)];
+            if self.fan_dragging {
+                include_dab(damage, next);
+                output.push(next);
+            } else {
+                self.fan_pending.push(next);
+                self.fan_deepest = self.fan_deepest.max(next.radii[0]);
+                self.fan_pressed = self.fan_pressed.max(next.contact[0]);
+                if self.fan_slide.min(coherent) > self.fan_deepest + 4. {
+                    self.fan_dragging = true;
+                    self.release_pending(true, output, damage);
+                } else if self.fan_pending.len() >= MAX_FAN_PENDING {
+                    self.release_pending(false, output, damage);
+                }
+            }
+            previous = next;
+        }
+        self.last_emitted_dab = Some(previous);
+    }
+
+    /// Until the fan has dragged further than its deepest contact, beyond sensor
+    /// jitter, a stroke may still be a tap. Its first spans wait here. A drag
+    /// releases them streaked along its travel, so streaks run from the
+    /// trailing edge right back to where the brush touched down; a tap releases
+    /// them as a pressed imprint, carrying in deposit strength how hard it was
+    /// pressed.
+    fn release_pending(&mut self, dragged: bool, output: &mut Vec<Dab>, damage: &mut Rect) {
+        let streak = f32::from(u8::from(dragged));
+        for mut span in self.fan_pending.drain(..) {
+            span.material[1] = streak;
+            span.material[3] = streak;
+            if !dragged {
+                span.material[2] = self.fan_pressed;
+            }
+            span.texture_sign = if dragged {
+                [
+                    heading_angle([span.previous[2], span.previous[3]], self.fan_heading),
+                    heading_angle(span.rotation, self.fan_heading),
+                ]
+            } else {
+                [hair_axis(span.texture_sign[0]), hair_axis(span.texture_sign[1])]
+            };
+            include_dab(damage, span);
+            output.push(span);
+        }
+    }
+
+    /// Spans commit the paint their trailing edge leaves behind. Lifting the fan
+    /// commits what is still under it: the last pose, left where it is.
+    fn lift_fan(&mut self, output: &mut Vec<Dab>) -> Rect {
+        let Some(pose) = self.last_emitted_dab else {
+            return Rect::EMPTY;
+        };
+        let mut damage = Rect::EMPTY;
+        let dragged = self.fan_dragging;
+        self.release_pending(dragged, output, &mut damage);
+        let mut lift = pose;
+        lift.motion = [0.; 2];
+        lift.previous = [pose.radii[0], pose.radii[1], pose.rotation[0], pose.rotation[1]];
+        lift.previous_contact = pose.contact;
+        let heading = heading_angle(pose.rotation, self.fan_heading);
+        lift.texture_sign = [if dragged { heading } else { hair_axis(heading) }; 2];
+        let streak = f32::from(u8::from(dragged));
+        let pressed = if dragged { pose.material[2] } else { self.fan_pressed };
+        lift.material = [FAN_LIFT, streak, pressed, streak];
+        include_dab(&mut damage, lift);
+        output.push(lift);
+        damage
+    }
+
+    /// Follows the axis of travel over about the fan's half width, so a quick
+    /// reversal or a tight turn does not swing the streaks around. The heading
+    /// keeps a continuous sense along that axis.
+    fn turn_fan_heading(&mut self, motion: [f32; 2], radii: [f32; 2]) {
+        let step = motion[0].hypot(motion[1]);
+        if step <= 0.0001 {
+            return;
+        }
+        let retained = (-step / radii[1].max(radii[0] * 2.).max(4.)).exp();
+        let doubled = [(motion[0] * motion[0] - motion[1] * motion[1]) / step, 2. * motion[0] * motion[1] / step];
+        self.fan_axis = [self.fan_axis[0] * retained + doubled[0], self.fan_axis[1] * retained + doubled[1]];
+        let (sin, cos) = (self.fan_axis[1].atan2(self.fan_axis[0]) * 0.5).sin_cos();
+        let reference = if self.fan_heading == [0.; 2] { motion } else { self.fan_heading };
+        let sense = if cos * reference[0] + sin * reference[1] < 0. { -1. } else { 1. };
+        self.fan_heading = [cos * sense, sin * sense];
     }
 
     fn next_random(&mut self) -> u32 {
@@ -805,9 +1065,34 @@ fn interpolate(a: DynamicPoint, b: DynamicPoint, t: f32) -> DynamicPoint {
     }
 }
 
+fn mix(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
+
+/// The travel direction as an angle from the fan's normal.
+fn heading_angle(normal: [f32; 2], travel: [f32; 2]) -> f32 {
+    if travel[0].hypot(travel[1]) <= 0.0001 {
+        return 0.;
+    }
+    (normal[0] * travel[1] - normal[1] * travel[0]).atan2(normal[0] * travel[0] + normal[1] * travel[1])
+}
+
+/// The hair axis nearest a heading, for a pressed imprint.
+fn hair_axis(heading: f32) -> f32 {
+    if heading.abs() > std::f32::consts::FRAC_PI_2 {
+        std::f32::consts::PI.copysign(heading)
+    } else {
+        0.
+    }
+}
+
 fn mix_angle(a: f32, b: f32, t: f32, period: f32) -> f32 {
+    mix_angle_unwrapped(a, b, t, period).rem_euclid(period)
+}
+
+// Preserve the directed material frame: folding an ellipse angle into [0, PI)
+// mirrors its bristles whenever a gently curving stroke crosses horizontal.
+fn mix_angle_unwrapped(a: f32, b: f32, t: f32, period: f32) -> f32 {
     let delta = (b - a + period * 0.5).rem_euclid(period) - period * 0.5;
-    (a + delta * t).rem_euclid(period)
+    a + delta * t
 }
 
 fn spacing_for(dab: Dab, spacing: f32) -> f32 {
@@ -1152,6 +1437,237 @@ mod tests {
         );
         assert_eq!(damage.min, Point { x: 18.0, y: 19.0 });
         assert_eq!(damage.max, Point { x: 22.0, y: 41.0 });
+    }
+
+    fn bristle_generator(twist: bool) -> (layer_core::BrushSnapshot, DabGenerator) {
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::BristlePaintbrush);
+        let mut generator = DabGenerator::default();
+        generator.reset_for_stroke(StrokeId(7), &brush);
+        generator.set_barrel_twist(twist);
+        (brush, generator)
+    }
+
+    #[test]
+    fn a_hovering_fan_outlines_its_full_contact() {
+        let (brush, mut generator) = bristle_generator(false);
+        let mut hover = point(40., 1., 0);
+        hover.tilt = [0.5, 0.2];
+        let outline = generator.cursor_contacts(hover, &brush);
+        assert_eq!(outline.len(), 1);
+        assert_eq!(outline[0].texture_sign, [1.; 2], "the outline is never flipped or collapsed");
+        assert!(outline[0].radii[0] > 1. && outline[0].radii[1] > outline[0].radii[0]);
+    }
+
+    #[test]
+    fn a_held_fan_spreads_with_pressure_and_rolls_through_short_arcs() {
+        let (brush, mut generator) = bristle_generator(true);
+        let mut dabs = Vec::new();
+        let mut light = point(0., 0.05, 0);
+        light.twist = 0.02;
+        generator.append(light, &brush, &mut dabs);
+        let light_width = generator.last_emitted_dab.unwrap().radii[1];
+        let mut heavy = light;
+        heavy.pressure = 0.9;
+        heavy.elapsed_micros = 10_000;
+        generator.append(heavy, &brush, &mut dabs);
+        let heavy_width = generator.last_emitted_dab.unwrap().radii[1];
+        assert!(heavy_width > light_width * 1.15, "pressure spreads the fan");
+        assert!(heavy_width < light_width * 1.6, "without changing its size as much as its paint");
+        dabs.clear();
+        let mut rolled = heavy;
+        rolled.twist = std::f32::consts::FRAC_PI_2;
+        for step in 2..=20 {
+            rolled.elapsed_micros = step * 10_000;
+            generator.append(rolled, &brush, &mut dabs);
+        }
+        assert!(dabs.len() > 4, "a held roll sweeps arcs no longer than the contact depth");
+        for pair in dabs.windows(2) {
+            let turn = (pair[0].rotation[0] * pair[1].rotation[1] - pair[0].rotation[1] * pair[1].rotation[0]).asin();
+            assert!(turn.abs() * pair[1].radii[1] <= pair[1].radii[0] * 1.01);
+            assert_eq!(pair[1].previous[2..], pair[0].rotation);
+        }
+        let last = dabs.last().unwrap();
+        assert!(last.rotation[0].abs() < 0.05 && last.rotation[1] > 0.99, "the fan settles on the barrel angle");
+        let mut a = generator.characterize(rolled);
+        let mut b = a;
+        a.point.twist = std::f32::consts::TAU - 0.02;
+        b.point.twist = 0.02;
+        let middle = interpolate(a, b, 0.5);
+        assert!(middle.point.twist.sin().abs() < 0.001, "wrap must take the short arc");
+    }
+
+    #[test]
+    fn a_measured_barrel_sets_the_fan_while_an_unmeasured_one_faces_the_lean() {
+        let pose = |twist: bool, tilt: [f32; 2], roll: f32| {
+            let (brush, mut generator) = bristle_generator(twist);
+            let mut sample = point(0., 0.7, 0);
+            sample.tilt = tilt;
+            sample.twist = roll;
+            let mut dabs = Vec::new();
+            generator.append(sample, &brush, &mut dabs);
+            generator.last_emitted_dab.unwrap()
+        };
+        let facing = pose(false, [0., 0.9], 1.3);
+        assert!((facing.rotation[1].atan2(facing.rotation[0]) - std::f32::consts::FRAC_PI_2).abs() < 0.001);
+        let upright = pose(true, [0.; 2], 1.3);
+        assert!((upright.rotation[1].atan2(upright.rotation[0]) - 1.3).abs() < 0.001);
+        let flat = pose(true, [1.1, 0.], 0.);
+        let edge = pose(true, [1.1, 0.], std::f32::consts::FRAC_PI_2);
+        assert!(edge.radii[1] < flat.radii[1] * 0.5, "rolling a leaning fan foreshortens it");
+        let opposite = pose(true, [1.1, 0.], -std::f32::consts::FRAC_PI_2);
+        assert!(edge.contact[1] > 0.5 && opposite.contact[1] < -0.5, "opposite rolls lift opposite edges");
+        assert_eq!(flat.contact[1], 0.);
+    }
+
+    #[test]
+    fn moving_across_the_fan_does_not_rotate_it_to_follow_the_path() {
+        let (brush, _) = bristle_generator(false);
+        let ending_pose = |across: bool| {
+            let mut generator = DabGenerator::default();
+            let mut dabs = Vec::new();
+            for i in 0..20 {
+                let mut sample = point(i as f32 * 30., 0.55, i * 4_000);
+                sample.tilt = [0.6, 0.];
+                if across { std::mem::swap(&mut sample.position.x, &mut sample.position.y); }
+                generator.append(sample, &brush, &mut dabs);
+            }
+            generator.finish(&brush, &mut dabs);
+            *dabs.last().unwrap()
+        };
+        let along = ending_pose(false);
+        let across = ending_pose(true);
+        assert_eq!(along.rotation, across.rotation);
+        assert_eq!(along.radii, across.radii);
+        assert_ne!(along.center, across.center);
+        let off_axis = |angle: f32| angle.abs().min(std::f32::consts::PI - angle.abs());
+        assert!(off_axis(along.texture_sign[1]) < 0.2, "{:?}", along.texture_sign);
+        assert!((off_axis(across.texture_sign[1]) - std::f32::consts::FRAC_PI_2).abs() < 0.2, "{:?}", across.texture_sign);
+    }
+
+    #[test]
+    fn a_drag_streaks_its_first_spans_along_its_travel() {
+        let (mut brush, mut generator) = bristle_generator(true);
+        brush.diameter = 60.;
+        let mut dabs = Vec::new();
+        for i in 0..=60 {
+            let mut sample = point(0., (i as f32 / 10.).min(1.) * 0.7, i * 4_000);
+            sample.position.y = (i as f32 - 20.).max(0.) * 2.;
+            generator.append(sample, &brush, &mut dabs);
+            if i == 20 {
+                assert!(dabs.is_empty(), "a pressed fan may still be a tap");
+                let mut preview = Vec::new();
+                generator.clone().finish(&brush, &mut preview);
+                assert!(preview.len() > 1, "the preview shows it meanwhile");
+            }
+        }
+        assert!(dabs.len() > 10);
+        for dab in &dabs {
+            assert_eq!([dab.material[1], dab.material[3]], [1.; 2], "every span of a drag streaks");
+            for angle in dab.texture_sign {
+                assert!((angle.abs() - std::f32::consts::FRAC_PI_2).abs() < 0.2, "streaks follow the sideways drag: {angle}");
+            }
+        }
+        for pair in dabs.windows(2) {
+            assert_eq!(pair[1].texture_sign[0], pair[0].texture_sign[1]);
+        }
+    }
+
+    #[test]
+    fn a_jittery_tap_keeps_its_imprint() {
+        let (brush, mut generator) = bristle_generator(true);
+        let mut dabs = Vec::new();
+        for i in 0..12 {
+            let jitter = |salt: f32| ((i as f32 * 12.9898 + salt).sin() * 43758.547).fract() - 0.5;
+            let mut sample = point(610. + jitter(1.) * 1.5, (i as f32 / 11. * std::f32::consts::PI).sin().max(0.).sqrt(), i * 4_166);
+            sample.position.y = 130. + jitter(7.) * 1.5;
+            sample.twist = 0.4 + jitter(3.) * 0.05;
+            generator.append(sample, &brush, &mut dabs);
+        }
+        assert!(dabs.is_empty(), "a stroke waits until it is a tap or a drag");
+        generator.finish(&brush, &mut dabs);
+        assert_eq!(dabs.pop().unwrap().material[0], FAN_LIFT);
+        assert!(dabs.len() > 4);
+        for dab in &dabs {
+            assert_eq!([dab.material[0], dab.material[1], dab.material[3]], [0.; 3], "a tap leaves an imprint");
+        }
+        for dab in &dabs {
+            for angle in dab.texture_sign {
+                let off_axis = angle.abs().min(std::f32::consts::PI - angle.abs());
+                assert!(off_axis < 0.5, "jitter must not turn a tap's texture off its hairs: {angle}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_fan_lifts_off_the_paper_where_it_last_rested() {
+        let (mut brush, mut generator) = bristle_generator(true);
+        brush.diameter = 40.;
+        let mut dabs = Vec::new();
+        for i in 0..=80 {
+            generator.append(point(i as f32 * 4., 0.7, i * 4_000), &brush, &mut dabs);
+        }
+        generator.finish(&brush, &mut dabs);
+        let (lift, last) = (dabs[dabs.len() - 1], dabs[dabs.len() - 2]);
+        assert!(dabs[..dabs.len() - 1].iter().all(|d| d.material[0] != FAN_LIFT));
+        assert_eq!(lift.material[0], FAN_LIFT);
+        assert_eq!((lift.center, lift.radii, lift.rotation, lift.contact), (last.center, last.radii, last.rotation, last.contact));
+        assert_eq!(lift.motion, [0.; 2], "the fan lifts where it stopped");
+        assert_eq!(lift.previous, [last.radii[0], last.radii[1], last.rotation[0], last.rotation[1]]);
+        assert_eq!(lift.texture_sign, [last.texture_sign[1]; 2]);
+
+        let (brush, mut generator) = bristle_generator(true);
+        let mut tap = Vec::new();
+        generator.append(point(10., 0.5, 0), &brush, &mut tap);
+        generator.finish(&brush, &mut tap);
+        assert_eq!(tap.len(), 2);
+        assert_eq!(tap[1].material[0], FAN_LIFT, "a tap lifts its imprint");
+    }
+
+    #[test]
+    fn quick_reversals_keep_the_streaks_on_the_axis_of_travel() {
+        let (mut brush, mut generator) = bristle_generator(true);
+        brush.diameter = 60.;
+        let mut dabs = Vec::new();
+        for i in 0..=240 {
+            let phase = (i as f32 / 30.).fract();
+            let x = 200. + 50. * (1. - (2. * phase - 1.).abs());
+            let mut sample = point(x + i as f32 * 0.2, 0.7, i * 4_000);
+            sample.position.y = 30. * (i as f32 * 0.02).sin();
+            generator.append(sample, &brush, &mut dabs);
+        }
+        dabs.retain(|d| d.material[0] != FAN_LIFT);
+        let turns: Vec<f32> = dabs
+            .iter()
+            .map(|d| (d.texture_sign[1] - d.texture_sign[0] + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI)
+            .collect();
+        assert!(turns.iter().all(|t| t.abs() < 0.5), "a reversal swung the streaks across the stroke within a span: {turns:?}");
+        for pair in dabs.windows(2) {
+            assert_eq!(pair[1].texture_sign[0], pair[0].texture_sign[1]);
+        }
+    }
+
+    #[test]
+    fn fan_contacts_chain_through_turns_and_the_lift() {
+        let (mut brush, mut generator) = bristle_generator(false);
+        brush.diameter = 30.;
+        let mut dabs = Vec::new();
+        for i in 0..=120 {
+            let t = i as f32 / 120.;
+            let mut sample = point(t * 240., 0.8, i * 4_000);
+            sample.position.y = 5. * (t * std::f32::consts::PI).sin();
+            generator.append(sample, &brush, &mut dabs);
+        }
+        generator.finish(&brush, &mut dabs);
+        dabs.retain(|d| d.material[0] != FAN_LIFT);
+        assert!(dabs.iter().all(|d| d.rotation[0] > 0.99), "the fan keeps its frame across turns");
+        for pair in dabs.windows(2) {
+            let start = [pair[1].center.x - pair[1].motion[0], pair[1].center.y - pair[1].motion[1]];
+            assert!((start[0] - pair[0].center.x).abs() < 0.001 && (start[1] - pair[0].center.y).abs() < 0.001);
+            assert_eq!(pair[1].previous_contact, pair[0].contact);
+            assert_eq!(pair[1].texture_sign[0], pair[0].texture_sign[1], "spans share their heading at each join");
+        }
+        let heading = dabs[dabs.len() / 2].texture_sign[1];
+        assert!(heading.abs() < 0.2, "the stroke travels along the hairs: {heading}");
     }
 
     #[test]

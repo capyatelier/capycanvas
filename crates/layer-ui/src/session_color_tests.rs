@@ -717,3 +717,26 @@ fn phased_proof_controls_commit_once() {
     assert_eq!(s.engine.checkpoint(),checkpoint);
     assert_eq!(s.engine.document().sdr_rendition.exposure,0.);
 }
+
+#[test]
+fn bristle_streaks_carry_the_color_that_is_not_painting() {
+    use layer_core::color::{RgbColor,RgbSpace};
+    let mut s=session(Platform::Gtk);
+    s.select_brush(DefaultBrushPreset::BristlePaintbrush as u32).unwrap();
+    let olive=RgbColor::new(RgbSpace::Srgb,[0.5,0.5,0.1,1.]).unwrap();
+    let red=RgbColor::new(RgbSpace::Srgb,[0.7,0.1,0.1,1.]).unwrap();
+    for (slot,color) in [(ColorSlot::Foreground,olive),(ColorSlot::Background,red)] {
+        s.dispatch(UiAction::Color {action:ColorAction::SetSlot {slot,color}}).unwrap();
+    }
+    let space=s.engine.document().color.space;
+    let paints=|s:&UiSession<Recorder>| {
+        let brush=s.engine.configured_brush();
+        (brush.color_rgba_linear,brush.contact.unwrap().bristles.unwrap().streak_rgba_linear)
+    };
+    s.dispatch(UiAction::Color {action:ColorAction::Select {slot:ColorSlot::Foreground}}).unwrap();
+    assert_eq!(paints(&s),(olive.linear_in(space).unwrap(),red.linear_in(space).unwrap()));
+    s.dispatch(UiAction::Color {action:ColorAction::Select {slot:ColorSlot::Background}}).unwrap();
+    assert_eq!(paints(&s),(red.linear_in(space).unwrap(),olive.linear_in(space).unwrap()),"painting with the second color streaks with the first");
+    s.dispatch(UiAction::Color {action:ColorAction::Swap}).unwrap();
+    assert_eq!(paints(&s).1,red.linear_in(space).unwrap());
+}

@@ -642,7 +642,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     // dark contact seams on Adreno for large, multi-contact batches.
     let range = material_sources.header.zw;
     let tooth = contact_paper(world);
-    if contact_uniform() && style.render_mode.x < 0.5 {
+    if contact_uniform() && style.render_mode.x < 0.5 && !bristles_enabled() {
         var ceiling = 1.0;
         if contact_feature(1u, style.contact_a.x > 0.5) && range.y > 0u {
             ceiling = dabs[range.x].invariants.z;
@@ -667,7 +667,23 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     let field = contact_field_with_paper(world, tooth);
     for (var offset = 0u; offset < range.y; offset += 1u) {
         let dab = dabs[range.x + offset];
-        let coverage = contact_coverage_field(dab, world, field);
+        var pigment = dab.color.rgb;
+        var coverage = 0.0;
+        var repaint = false;
+        if bristles_enabled() {
+            let paint = bristle_paint(dab, world, field.y);
+            let selected = brush_selection_at(brush_to_layer(world));
+            if paint.held {
+                stroke_coverage = max(stroke_coverage, paint.coverage * selected);
+                continue;
+            }
+            pigment = paint.color;
+            coverage = paint.opacity * select(paint.coverage * selected,
+                max(paint.coverage * selected, stroke_coverage), paint.reached);
+            repaint = paint.reached || (paint.rim && stroke_coverage >= 1.0);
+        } else {
+            coverage = contact_coverage_field(dab, world, field);
+        }
         if coverage <= 0.0 { continue; }
         var requested_alpha = clamp(
             (dab.flow * dab.color.a) * coverage,
@@ -681,6 +697,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         }
         var source_alpha = requested_alpha;
         if contact_uniform() {
+            if repaint { stroke_coverage = 0.0; }
             let next_coverage = max(stroke_coverage, requested_alpha);
             source_alpha = clamp(
                 working_ratio(next_coverage - stroke_coverage, 1.0 - stroke_coverage),
@@ -692,7 +709,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             stroke_coverage = max(stroke_coverage, requested_alpha);
         }
         if style.operation.w != 0u { result *= 1.0 - source_alpha; }
-        else { result = source_over(result, dab.color.rgb, source_alpha); }
+        else { result = source_over(result, pigment, source_alpha); }
     }
     return MaterialOutput(
         result,

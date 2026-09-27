@@ -8,8 +8,36 @@
 
 use crate::BrushError;
 
+/// A flat fan of hairs swept across the paper. Hair spacing is relative to the
+/// configured diameter, independently of instantaneous pressure and zoom.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BrushBristles {
+    /// Hair spacing relative to the default for the configured diameter.
+    pub texture_scale: f32,
+    /// How far the fan narrows as pressure is released.
+    pub splay: f32,
+    /// Paint carried at the start of each stroke.
+    pub load: f32,
+    /// A second paint on the hairs, in straight linear document RGB. Thick
+    /// ridges of paint show it. Painting tools load the color swatch that is
+    /// not painting.
+    pub streak_rgba_linear: [f32; 4],
+}
+
+impl Default for BrushBristles {
+    fn default() -> Self {
+        Self {
+            texture_scale: 1.,
+            splay: 0.65,
+            load: 0.8,
+            streak_rgba_linear: [0.02, 0.02, 0.018, 1.],
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushContact {
+    pub bristles: Option<BrushBristles>,
     /// Strength of paper tooth in the contact threshold, 0 for a solid nib.
     pub paper: f32,
     /// How far pressure pushes the contact into the paper's tooth.
@@ -37,6 +65,7 @@ pub struct BrushContact {
 impl Default for BrushContact {
     fn default() -> Self {
         Self {
+            bristles: None,
             paper: 0.0,
             pressure_gain: 0.65,
             tip_bias: 0.0,
@@ -54,6 +83,13 @@ impl Default for BrushContact {
 
 impl BrushContact {
     pub(crate) fn validate(self) -> Result<(), BrushError> {
+        if let Some(b) = self.bristles
+            && (!(0.25..=4.).contains(&b.texture_scale)
+                || [b.splay, b.load, b.streak_rgba_linear[3]].iter().any(|v| !(0.0..=1.0).contains(v))
+                || b.streak_rgba_linear[..3].iter().any(|v| !v.is_finite()))
+        {
+            return Err(BrushError::InvalidAdvanced);
+        }
         let unit = [
             self.paper,
             self.pressure_gain,
