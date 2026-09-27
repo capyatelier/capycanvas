@@ -198,10 +198,10 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
       assert.equal(await evaluate("layerApp.app.preferences().page"), page);
       assert.ok(await evaluate(`[...document.querySelectorAll('.preferences-page:not([hidden]) label,.preferences-page:not([hidden]) p,.preferences-page:not([hidden]) h3,.preferences-page:not([hidden]) input,.preferences-page:not([hidden]) .settings-info,.preferences-page:not([hidden]) .settings-link')].every(n=>Math.abs(parseFloat(getComputedStyle(n).fontSize)-${points * 4 / 3}/(n.matches('.preference-text p,.number-description')?1.2:1))<.02)`), "settings titles use the shared size; subtitles follow Adwaita's smaller font");
       if (page === "input") {
-        await click('.preference-choice summary');
-        assert.equal(await evaluate("document.querySelectorAll('.preference-options [role=option] svg').length"), 10);
+        await click('.preference-choice:has(#setting-cursor) summary');
+        assert.equal(await evaluate("document.querySelectorAll('.preference-choice:has(#setting-cursor) [role=option] svg').length"), 10);
         await capture(`cursor-choices-${theme}`);
-        await click('.preference-options [data-choice="1"]');
+        await click('.preference-choice:has(#setting-cursor) [data-choice="1"]');
         assert.equal(await evaluate("layerApp.state().settings.cursor"), "cross");
         await preference({ type: "reset", id: "cursor" });
       }
@@ -367,7 +367,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   const type = async (selector, value) => { await evaluate(`(() => { const node=document.querySelector(${JSON.stringify(selector)}); node.focus(); node.value=${JSON.stringify(value)}; node.dispatchEvent(new Event('input')); })()`); await settle(); };
   assert.equal(await evaluate("document.querySelector('#shortcut-categories [data-category]').dataset.category"), "Modifier keys", "modifier keys come first");
   assert.ok(await evaluate(`(() => { const rows=['#shortcuts-search','#shortcut-context','#shortcut-show'].map(s=>document.querySelector(s).getBoundingClientRect()); return rows.every(r=>Math.abs(r.top+r.height/2-(rows[0].top+rows[0].height/2))<2) && rows[0].left<rows[1].left && rows[1].left<rows[2].left; })()`), "search and both filters share one line");
-  assert.deepEqual(await evaluate("[...document.querySelectorAll('#shortcut-show option')].map(o=>o.textContent)"), ["All actions", "With shortcuts", "Customized"]);
+  assert.deepEqual(await evaluate("[...document.querySelectorAll('#shortcut-show [data-choice]')].map(o=>o.textContent)"), ["All actions", "With shortcuts", "Customized"]);
   await capture("shortcuts");
   await type('#shortcuts-search', 'z');
   for (const id of ["Undo", "Redo", "UndoWorkspace", "RedoWorkspace"]) assert.ok(await visible(`[data-shortcut="command.${id}"]`), `Z finds ${id}`);
@@ -467,7 +467,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
 
   await preference({ type: "page", page: "input" });
   assert.deepEqual(await evaluate("[...document.querySelectorAll('#triggers-pen-buttons [data-trigger]')].map(r=>r.dataset.trigger)"), ["pen.button.primary", "pen.button.secondary"]);
-  assert.ok(await visible('#triggers-touch-gestures') && await visible('#setting-eraser-tool'));
+  assert.ok(await visible('#triggers-touch-gestures') && await visible('.preference-row:has(#setting-eraser-tool)'));
   await capture("pen-and-input");
   await click('[data-trigger="pen.button.primary"]');
   assert.equal(await evaluate("document.querySelector('#settings-title').textContent"), "Lower side button");
@@ -578,7 +578,8 @@ export async function checkSettingsParity({ call, evaluate, settle }) {
           nativeOnlyHeight += row.bounds[3]; continue;
         }
         assert.ok(actual, `Web must render ${row.id}`);
-        row.bounds.forEach((v,i)=>check(row.id,['x','y','width','height'][i],actual.bounds[i],v - (i === 1 ? nativeOnlyHeight : 0)));
+        const wholePixelFilterLabels = row.id === 'shortcuts-search' ? 2 : 0;
+        row.bounds.forEach((v,i)=>check(row.id,['x','y','width','height'][i],actual.bounds[i],v - (i === 1 ? nativeOnlyHeight : 0),1.1 + (i === 2 ? wholePixelFilterLabels : 0)));
         for (const label of actual.labels) {
           const expected = row.labels.find(l=>l.text===label.text.replace('Use browser','Use Linux'));
           assert.ok(expected, `GTK must render ${label.text}`);

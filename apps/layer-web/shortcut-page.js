@@ -1,27 +1,15 @@
 // DOM adapter for the shortcut, modifier key and pen button views. Grouping,
 // filtering, recording, conflicts and defaults are all decided in Rust.
-export function createShortcutPage({ element, button, icon, send, view, scroller }) {
+export function createShortcutPage({ element, button, icon, send, view, scroller, settingsGroup: group, dropdown }) {
   const panes = new Map(), active = new Map(), rows = new Map();
-  let keymapSelect, keymapOutdated, contextSelect, showSelect, shortcutSearch, categoryList, emptyStatus;
+  let keymapChoice, keymapOutdated, contextChoice, showChoice, shortcutSearch, categoryList, emptyStatus;
   let rootResults, categoryResults, modifierMain, modifierCategory, inputRoot;
-  let keymapIds = "", contextSignature = "", showSignature = "", categorySignature = "", resultsSignature = "", modifierSignature = "", triggerSignature = "";
+  let categorySignature = "", resultsSignature = "", modifierSignature = "", triggerSignature = "";
   const categoryRows = new Map(), triggerRows = new Map(), triggerGroups = new Map(), savedScroll = new Map();
-  const chevron = () => { const glyph = icon("chevron-down"); glyph.classList.add("row-chevron"); return glyph; };
+  const chevron = () => { const glyph = icon("go-next"); glyph.classList.add("row-chevron"); return glyph; };
   const flatButton = (glyph, label, onClick, id) => {
     const node = button("", onClick, "icon-button"); node.append(icon(glyph));
     node.setAttribute("aria-label", label); node.title = label; if (id) node.id = id; return node;
-  };
-  const group = (title, description) => {
-    const section = element("section", "settings-group");
-    if (title || description) {
-      const heading = element("div", "settings-heading");
-      const labels = element("div");
-      if (title) labels.append(element("h3", "", title));
-      if (description) labels.append(element("p", "settings-description", description));
-      heading.append(labels); section.append(heading);
-    }
-    const list = element("div", "preference-group"); section.append(list);
-    return { section, list };
   };
   const navRow = (label, subtitle, value, onClick) => {
     const row = button("", onClick, "preference-row nav-row");
@@ -77,7 +65,8 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
   function sheet(id, onDismiss) {
     const node = element("dialog", "sheet"); node.id = id;
     const header = element("header", "dialog-header"), title = element("h2");
-    const exit = flatButton("close", "Close", () => onDismiss(), `${id}-close`); exit.classList.add("dialog-close");
+    const exit = button("", () => onDismiss(), "dialog-close"); exit.append(icon("window-close"));
+    exit.id = `${id}-close`; exit.setAttribute("aria-label", "Close"); exit.title = "Close";
     header.append(title, exit);
     const body = element("div", "sheet-body");
     node.append(header, body); document.body.append(node);
@@ -121,8 +110,8 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     const presetRow = element("div", "preference-row");
     const presetText = element("span", "preference-text"); presetText.append(element("span", "", "Preset"));
     keymapOutdated = element("p", "", "Updated since you chose it"); keymapOutdated.hidden = true; presetText.append(keymapOutdated);
-    keymapSelect = element("select"); keymapSelect.id = "keymap-preset"; keymapSelect.setAttribute("aria-label", "Keymap preset");
-    keymapSelect.addEventListener("change", () => send({ type: "select_keymap", id: keymapSelect.value }));
+    keymapChoice = dropdown("Keymap preset", index => send({ type: "select_keymap", id: view().keymap.presets[index].id }));
+    keymapChoice.id = "keymap-preset";
     const menu = element("details", "preference-choice keymap-menu"); menu.id = "keymap-menu";
     const summary = element("summary"); summary.setAttribute("aria-label", "Keymap options"); summary.title = "Keymap options"; summary.append(icon("more"));
     const options = element("div", "preference-options"); options.setAttribute("role", "menu");
@@ -135,7 +124,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
       const item = button(label, () => { menu.open = false; send(action); }); item.id = id; item.setAttribute("role", "menuitem"); options.append(item);
     }
     menu.append(summary, options);
-    presetRow.append(presetText, keymapSelect, menu); keymap.list.append(presetRow);
+    presetRow.append(presetText, keymapChoice, menu); keymap.list.append(presetRow);
     root.append(keymap.section);
 
     const shortcuts = element("section", "settings-group"); shortcuts.id = "shortcuts";
@@ -154,13 +143,11 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
       shortcutSearch.select();
     });
     searchBox.append(icon("search"), shortcutSearch);
-    contextSelect = element("select", "filter-select"); contextSelect.id = "shortcut-context";
-    contextSelect.title = "Show what shortcuts do with a kind of tool"; contextSelect.setAttribute("aria-label", contextSelect.title);
-    contextSelect.addEventListener("change", () => send({ type: "shortcut_context", category: JSON.parse(contextSelect.value) }));
-    showSelect = element("select", "filter-select"); showSelect.id = "shortcut-show";
-    showSelect.title = "Choose which actions to list"; showSelect.setAttribute("aria-label", showSelect.title);
-    showSelect.addEventListener("change", () => send({ type: "shortcut_show", show: showSelect.value }));
-    filters.append(searchBox, contextSelect, showSelect);
+    contextChoice = dropdown("Show what shortcuts do with a kind of tool", index => send({ type: "shortcut_context", category: view().shortcut_page.contexts[index].category }));
+    contextChoice.id = "shortcut-context"; contextChoice.title = "Show what shortcuts do with a kind of tool";
+    showChoice = dropdown("Choose which actions to list", index => send({ type: "shortcut_show", show: view().shortcut_page.shows[index].show }));
+    showChoice.id = "shortcut-show"; showChoice.title = "Choose which actions to list";
+    filters.append(searchBox, contextChoice, showChoice);
     categoryList = element("div", "preference-group"); categoryList.id = "shortcut-categories";
     emptyStatus = element("div", "status-page"); emptyStatus.id = "shortcut-empty"; emptyStatus.hidden = true;
     emptyStatus.append(icon("search"), element("strong"), element("p"));
@@ -400,12 +387,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
 
   function refreshKeymap(model) {
     const keymap = model.keymap;
-    const ids = JSON.stringify(keymap.presets.map(p => p.id));
-    if (keymapIds !== ids) {
-      keymapIds = ids;
-      keymapSelect.replaceChildren(...keymap.presets.map(p => Object.assign(document.createElement("option"), { value: p.id, textContent: p.title })));
-    }
-    if (keymapSelect.value !== keymap.selected) keymapSelect.value = keymap.selected;
+    keymapChoice.update(keymap.presets.map(p => p.title), keymap.presets.findIndex(p => p.id === keymap.selected));
     keymapOutdated.hidden = !keymap.outdated;
     const signature = JSON.stringify([keymap.selected, keymap.differences, keymap.source, keymap.links]);
     if (details.signature !== signature) {
@@ -443,20 +425,9 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
   }
 
   function refreshFilters(model) {
-    const page = model.shortcut_page;
-    const contexts = JSON.stringify(page.contexts);
-    if (contexts !== contextSignature) {
-      contextSignature = contexts;
-      contextSelect.replaceChildren(...page.contexts.map(c => Object.assign(document.createElement("option"), { value: JSON.stringify(c.category), textContent: c.label })));
-    }
-    const context = JSON.stringify(page.context);
-    if (contextSelect.value !== context) contextSelect.value = context;
-    const shows = JSON.stringify(page.shows);
-    if (shows !== showSignature) {
-      showSignature = shows;
-      showSelect.replaceChildren(...page.shows.map(s => Object.assign(document.createElement("option"), { value: s.show, textContent: s.label })));
-    }
-    if (showSelect.value !== page.show) showSelect.value = page.show;
+    const page = model.shortcut_page, context = JSON.stringify(page.context);
+    contextChoice.update(page.contexts.map(c => c.label), page.contexts.findIndex(c => JSON.stringify(c.category) === context));
+    showChoice.update(page.shows.map(s => s.label), page.shows.findIndex(s => s.show === page.show));
     if (shortcutSearch.value !== model.shortcut_query) shortcutSearch.value = model.shortcut_query;
   }
 
@@ -477,7 +448,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
       else send({ type: "shortcut_category", id: null });
     },
     refresh(model) {
-      if (!keymapSelect) return;
+      if (!keymapChoice) return;
       refreshKeymap(model);
       refreshFilters(model);
       refreshCategories(model);

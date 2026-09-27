@@ -85,6 +85,42 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       if (line) { const rect = line.getBoundingClientRect(); e.preventDefault(); e.stopImmediatePropagation(); showContext(line, rect.left, rect.bottom, e.target); }
     }
   }, { capture: true });
+  function settingsGroup(title, description) {
+    const section = element("section", "settings-group");
+    if (description) {
+      const heading = element("div", "settings-heading"), labels = element("div");
+      if (title) labels.append(element("h3", "", title));
+      labels.append(element("p", "settings-description", description));
+      heading.append(labels); section.append(heading);
+    } else if (title) section.append(element("h3", "", title));
+    const list = element("div", "preference-group"); section.append(list);
+    return { section, list };
+  }
+  function dropdown(label, choose) {
+    const widget = element("details", "preference-choice");
+    const summary = element("summary"); summary.setAttribute("aria-label", label);
+    const choices = element("div", "preference-options"); choices.setAttribute("role", "listbox");
+    widget.append(summary, choices);
+    let optionSignature = "", shown = "";
+    widget.update = (options, selected, icons = []) => {
+      const signature = JSON.stringify([options, icons]);
+      if (optionSignature !== signature) {
+        optionSignature = signature; shown = "";
+        choices.replaceChildren(...options.map((name, index) => {
+          const choice = button("", () => { widget.open = false; choose(index); });
+          choice.dataset.choice = index; choice.setAttribute("role", "option");
+          if (icons[index]) choice.append(icon(icons[index]));
+          choice.append(element("span", "", name));
+          return choice;
+        }));
+      }
+      if (shown === String(selected)) return;
+      shown = String(selected);
+      summary.replaceChildren(...(icons[selected] ? [icon(icons[selected])] : []), element("span", "", options[selected] ?? ""), icon("chevron-down"));
+      for (const choice of choices.children) choice.setAttribute("aria-selected", String(Number(choice.dataset.choice) === selected));
+    };
+    return widget;
+  }
   const root = element("div", "preferences-layout");
   const sidebar = element("aside", "preferences-sidebar");
   const sidebarHeader = element("header", "dialog-header");
@@ -97,11 +133,11 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   const content = element("div", "preferences-content");
   const header = element("header", "dialog-header");
   const title = element("h2"); title.id = "settings-title";
-  const back = button("‹", () => root.classList.remove("show-content"), "preferences-back");
-  back.setAttribute("aria-label", "Preferences categories");
-  const subpageBack = button("‹", () => shortcutPage.back(view()), "subpage-back");
+  const back = button("", () => root.classList.remove("show-content"), "preferences-back");
+  back.append(icon("go-previous")); back.setAttribute("aria-label", "Preferences categories");
+  const subpageBack = button("", () => shortcutPage.back(view()), "subpage-back"); subpageBack.append(icon("go-previous"));
   subpageBack.id = "shortcut-category-back"; subpageBack.setAttribute("aria-label", "Back"); subpageBack.hidden = true;
-  const exit = button("", close, "dialog-close"); exit.append(icon("close")); exit.setAttribute("aria-label", "Close preferences");
+  const exit = button("", close, "dialog-close"); exit.append(icon("window-close")); exit.setAttribute("aria-label", "Close preferences");
   exit.id = "close-settings";
   header.append(back, subpageBack, title, exit);
   const search = element("input", "preferences-search");
@@ -128,7 +164,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   dialog.addEventListener("cancel", (e) => { e.preventDefault(); if (view() && shortcutPage.title(view())) shortcutPage.back(view()); else close(); });
 
   let searchSignature = "", searchFocus = 0, revealed = null;
-  const shortcutPage = createShortcutPage({ element, button, icon, send, view, scroller: pages });
+  const shortcutPage = createShortcutPage({ element, button, icon, send, view, scroller: pages, settingsGroup, dropdown });
 
   const fields = new Map(), pageNodes = new Map(), tabs = new Map(), groups = [];
   function paintSwatches(widget, input, kind) {
@@ -169,9 +205,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       node.setAttribute("aria-label", page.title); pages.append(node); pageNodes.set(page.id, node);
       const container = shortcutPage.container(page.id, node);
       for (const group of page.groups) {
-        const section = element("section", "settings-group");
-        section.append(element("h3", "", group.title));
-        const list = element("div", "preference-group"); section.append(list); container.append(section);
+        const { section, list } = settingsGroup(group.title); container.append(section);
         groups.push([group.rows.map((r) => r.id), section]);
         for (const row of group.rows) {
           const line = element("div", "preference-row"), text = element("div", "preference-text");
@@ -237,21 +271,10 @@ export function createPreferences({ app, element, button, icon, numberField, pan
                   choice.append(icon(row.kind.icons[index])); widget.append(choice);
                 });
                 widget.append(input);
-              } else if (row.kind.icons.length) {
-                input = element("input"); input.type = "hidden";
-                widget = element("details", "preference-choice");
-                const summary = element("summary"); summary.setAttribute("aria-label", row.title);
-                const choices = element("div", "preference-options"); choices.setAttribute("role", "listbox");
-                row.kind.options.forEach((name, index) => {
-                  const choice = button("", () => { input.value = index; input.dispatchEvent(new Event("input")); widget.open = false; });
-                  choice.dataset.choice = index; choice.setAttribute("role", "option");
-                  choice.append(icon(row.kind.icons[index]), element("span", "", name)); choices.append(choice);
-                });
-                widget.append(summary, choices, input);
               } else {
-                input = element("select");
-                row.kind.options.forEach((name, index) => { const option = element("option", "", name); option.value = index; input.append(option); });
-                widget = input;
+                input = element("input"); input.type = "hidden";
+                widget = dropdown(row.title, index => { input.value = index; input.dispatchEvent(new Event("input")); });
+                widget.append(input);
               }
               break;
             case "number":
@@ -337,11 +360,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
         if (row.kind.presentation.type === "circles") paintCircles(widget, row.kind);
         else if (row.kind.presentation.type === "image_tiles") {
           for (const choice of widget.querySelectorAll("[data-choice]")) choice.setAttribute("aria-pressed", String(Number(choice.dataset.choice) === row.kind.selected));
-        } else if (row.kind.icons.length && field.selection !== row.kind.selected) {
-          field.selection = row.kind.selected;
-          widget.querySelector("summary").replaceChildren(icon(row.kind.icons[row.kind.selected]), element("span", "", row.kind.options[row.kind.selected]), icon("chevron-down"));
-          for (const choice of widget.querySelectorAll("[data-choice]")) choice.setAttribute("aria-selected", String(Number(choice.dataset.choice) === row.kind.selected));
-        }
+        } else widget.update(row.kind.options, row.kind.selected, row.kind.icons);
       }
       else if (row.kind.type === "swatches") paintSwatches(widget, input, row.kind);
       else if (row.kind.type === "switch" && input.checked !== row.kind.active) input.checked = row.kind.active;
@@ -358,7 +377,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       if (field) {
         root.classList.add("show-content");
         field.line.scrollIntoView({ block: "nearest" });
-        (field.widget.querySelector("button") || field.input).focus({ preventScroll: true });
+        (field.widget.querySelector("summary, button") || field.input).focus({ preventScroll: true });
       }
     }
     shortcutPage.refresh(model);
