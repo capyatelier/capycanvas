@@ -97,6 +97,8 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testShortcutSettingsPage() { checkShortcutSettingsPage(in: ignoringSavedWindows(editorCaptureApplication())) }
 
+    @MainActor func testTouchGestureTaps() { checkTouchGestureTaps(in: ignoringSavedWindows(editorCaptureApplication())) }
+
     @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
 
     @MainActor func testWorkspaceSwitcher() {

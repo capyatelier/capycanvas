@@ -38,7 +38,11 @@ struct SettingsView: View {
                 .toolbar { ToolbarItem(placement: .confirmationAction) {
                     SettingsDoneButton(store: store)
                 } }
-        }.sheet(isPresented: $profiles) { ColorProfileLibrary(preferences: store.colorPreferences).modifier(EditorPopupPresentation()) }
+        }.sheet(isPresented: Binding(get: { !model["shortcut_page"]["picker"].isNull },
+            set: { if !$0 { action(["type": "close_action_picker"]) } })) {
+            ActionPickerSheet(store: store).modifier(EditorPopupPresentation())
+        }
+        .sheet(isPresented: $profiles) { ColorProfileLibrary(preferences: store.colorPreferences).modifier(EditorPopupPresentation()) }
             .frame(minHeight: 420)
             #if os(macOS)
             .frame(minWidth: 560)
@@ -78,6 +82,9 @@ struct SettingsView: View {
                                 }
                             }
                         }
+                    }
+                    if model["page"].string == "input" {
+                        GestureTriggerSections(store: store)
                     }
                     if model["page"].string == "color" {
                         Section("Display Details") {

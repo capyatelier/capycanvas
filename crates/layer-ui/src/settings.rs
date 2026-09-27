@@ -27,7 +27,7 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
     pub fn touch_gestures(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Ios)
     }
     pub fn pen_buttons(self) -> bool {
         matches!(self, Self::Gtk | Self::Web | Self::Android)

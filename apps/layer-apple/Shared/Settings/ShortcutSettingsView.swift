@@ -33,10 +33,6 @@ struct ShortcutSettingsView: View {
         }
         .background {
             Color.clear
-                .sheet(isPresented: Binding(get: { !page["picker"].isNull }, set: { if !$0 { action(["type": "close_action_picker"]) } })) {
-                    ActionPickerSheet(store: store).modifier(EditorPopupPresentation())
-                }
-            Color.clear
                 .sheet(isPresented: Binding(get: { keymap["details"].bool }, set: { if !$0 { action(["type": "keymap_details", "open": false]) } })) {
                     KeymapDetailsSheet(store: store).modifier(EditorPopupPresentation())
                 }
@@ -278,6 +274,29 @@ private struct ModifierKeyPane: View {
     }
 }
 
+struct GestureTriggerSections: View {
+    @ObservedObject var store: EditorStore
+    private var sections: [(title: String, rows: [JSON])] {
+        var sections: [(title: String, rows: [JSON])] = []
+        for row in store.snapshot["preferences"]["shortcut_page"]["triggers"].array {
+            let title = row["section"].string
+            if sections.last?.title == title { sections[sections.count - 1].rows.append(row) } else { sections.append((title, [row])) }
+        }
+        return sections
+    }
+    var body: some View {
+        ForEach(sections, id: \.title) { section in
+            Section(section.title) {
+                ForEach(section.rows, id: \.shortcutID) { row in
+                    ShortcutNavigationRow(label: row["label"].string, detail: row["detail"].string, value: row["action"].string) {
+                        store.dispatch(["type": "preferences", "action": ["type": "open_action_picker", "trigger": row["id"].string]])
+                    }.accessibilityIdentifier("trigger-" + row["id"].string)
+                }
+            }
+        }
+    }
+}
+
 private struct PaneHeader: View {
     let title: String
     let back: () -> Void
@@ -291,7 +310,7 @@ private struct PaneHeader: View {
     }
 }
 
-private struct ShortcutNavigationRow: View {
+struct ShortcutNavigationRow: View {
     let label: String
     var detail = ""
     let value: String
@@ -447,7 +466,7 @@ private struct ModifierCaptureSheet: View {
     }
 }
 
-private struct ActionPickerSheet: View {
+struct ActionPickerSheet: View {
     @ObservedObject var store: EditorStore
     private var picker: JSON { store.snapshot["preferences"]["shortcut_page"]["picker"] }
     private func action(_ value: [String: Any]) { store.dispatch(["type": "preferences", "action": value]) }

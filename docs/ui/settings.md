@@ -208,7 +208,9 @@ reports Wayland stylus buttons 2, 3 and 8, and tablet pad buttons as
 `pad_button_N` keys when the compositor leaves them to the app. Android reports
 tablet buttons `KEYCODE_BUTTON_1`–`16` as the same `pad_button_N` keys. Web
 reports pointer `buttons` bits 2 and 4. Android reports the stylus primary and secondary buttons. Windows, macOS and
-iPadOS do not show these rows until their hosts deliver the same input.
+iPadOS do not show the pen button rows until their hosts deliver the same input.
+iPadOS delivers finger taps with native touch timestamps and lists the tap
+rows; macOS and Windows receive no finger contacts and list neither.
 
 ## Saving and loading
 
