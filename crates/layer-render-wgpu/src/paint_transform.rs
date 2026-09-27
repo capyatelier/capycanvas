@@ -16,8 +16,13 @@ impl PaintTransforms {
         let companion = primary.fork();
         Self([primary, companion])
     }
-    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 4] {
+    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 3] {
         self.0[0].pipelines()
+    }
+    /// Drag previews draw into the display with this once it is ready; it
+    /// never delays input.
+    pub fn display_pipeline(&self) -> &Deferred<wgpu::RenderPipeline> {
+        self.0[0].color.display.as_ref().expect("color transform")
     }
     pub fn begin_frame(&mut self) {
         for t in &mut self.0 {
@@ -299,10 +304,9 @@ impl ImageTransformState {
             source_captures: 0,
         }
     }
-    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 4] {
+    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 3] {
         [
             &self.color.pipeline,
-            self.color.display.as_ref().expect("color transform"),
             &self.scalar.pipeline,
             &self.visibility.pipeline,
         ]

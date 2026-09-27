@@ -1243,7 +1243,8 @@ impl WgpuRasterizer {
             if renderer.device.portable_blend() { for pipeline in &renderer.portable_blend.pipelines { pipeline.compile(); } }
             renderer.layer_masks.compile_all();
             for pipeline in renderer.selection_clip.pipelines() { pipeline.compile(); }
-            for pipeline in renderer.transforms.as_ref().unwrap().pipelines() {
+            let transforms = renderer.transforms.as_ref().unwrap();
+            for pipeline in transforms.pipelines().into_iter().chain([transforms.display_pipeline()]) {
                 pipeline.compile();
             }
         }
@@ -1514,6 +1515,10 @@ impl WgpuRasterizer {
         };
         let alone = self.display_previews
             && preview.moving
+            && self
+                .transforms
+                .as_ref()
+                .is_some_and(|t| self.startup.is_none() || t.display_pipeline().ready())
             && self.native_edit.is_some()
             && packet.dabs.is_empty()
             && packet.dab_batches.is_empty()

@@ -306,6 +306,7 @@ impl WgpuRasterizer {
             }
             if shader.key.transform {
                 required.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
+                startup.compiler.pipeline(self.transforms.as_ref().unwrap().display_pipeline(), OTHER);
             }
             required.enqueue(&startup.compiler, DOCUMENT);
             startup.document = required;
@@ -391,6 +392,7 @@ impl WgpuRasterizer {
         if transform {
             current.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
             current.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
+            startup.compiler.pipeline(self.transforms.as_ref().unwrap().display_pipeline(), OTHER);
         }
         current.enqueue(&startup.compiler, BRUSH);
         startup.current = current;
