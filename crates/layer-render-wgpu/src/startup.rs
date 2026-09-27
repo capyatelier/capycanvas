@@ -286,8 +286,10 @@ impl WgpuRasterizer {
         })
     }
     /// Called after the blank canvas has been submitted. Document, brush and
-    /// live-transform dependencies precede speculative compilation. Hosts pass
-    /// the engine's preview presence before draining an interactive frame.
+    /// live-transform dependencies precede speculative compilation. What a
+    /// transform or warp draws with then compiles while input is quiet, so
+    /// opening one later need not wait for it. Hosts pass the engine's
+    /// preview presence before draining an interactive frame.
     pub fn prepare_startup(
         &mut self,
         document: &Document,
@@ -326,9 +328,6 @@ impl WgpuRasterizer {
             }
             if shader.key.transform {
                 required.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
-                for pipeline in self.transforms.as_ref().unwrap().display_pipelines() {
-                    startup.compiler.pipeline(pipeline, OTHER);
-                }
             }
             required.enqueue(&startup.compiler, DOCUMENT);
             startup.document = required;
@@ -414,11 +413,14 @@ impl WgpuRasterizer {
         if transform {
             current.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
             current.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
-            for pipeline in self.transforms.as_ref().unwrap().display_pipelines() {
-                startup.compiler.pipeline(pipeline, OTHER);
-            }
         }
         current.enqueue(&startup.compiler, BRUSH);
+        let transforms = self.transforms.as_ref().unwrap();
+        startup.compiler.require(transforms.pipelines(), OTHER);
+        startup.compiler.require(self.selection_clip.pipelines(), OTHER);
+        startup.compiler.require(transforms.display_pipelines(), OTHER);
+        startup.compiler.require(transforms.mesh_pipelines(), OTHER);
+        startup.compiler.require([&transforms.resample().mesh_pipeline, &self.selection_clip.resample_mesh], OTHER);
         startup.current = current;
         startup.brush = Some(brush.clone());
         startup.transform = transform;
@@ -618,20 +620,17 @@ mod gpu_tests {
         }
         assert!(renderer.regions.as_ref().is_none_or(|regions| regions.flood.pipelines().all(|p| !p.ready())),
             "unused region recipes must remain uncompiled");
+        let transforms = renderer.transforms.as_ref().unwrap();
+        assert!(
+            transforms.pipelines().into_iter().chain(transforms.mesh_pipelines()).all(Deferred::ready)
+                && transforms.display_pipelines().into_iter().all(Deferred::ready)
+                && transforms.resample().mesh_pipeline.ready(),
+            "what transforms and warps draw with compiles while idle after startup"
+        );
         assert!(renderer.startup_needs_update(&document, &brush, true),
             "demand readiness continues after initial completion");
         renderer.prepare_startup(&document, &brush, true).unwrap();
-        while !renderer.poll_startup().unwrap().brush_ready {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(renderer.transforms.as_ref().unwrap().pipelines().iter().all(|p| p.ready()));
-        while !renderer.poll_startup().unwrap().complete {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(renderer.transforms.as_ref().unwrap().display_pipelines().iter().all(|p| p.ready()),
-            "display previews compile after input is enabled");
+        assert!(renderer.poll_startup().unwrap().brush_ready, "opening a transform waits for no compilation");
         renderer.prepare_startup(&document, &brush, false).unwrap();
         assert!(renderer.poll_startup().unwrap().brush_ready, "cached dependencies resume immediately");
 
