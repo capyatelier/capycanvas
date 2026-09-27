@@ -58,13 +58,6 @@ class AndroidWorkspacePerformanceTest {
                 scenario.onActivity { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
                 assertTrue(done.await(10, TimeUnit.SECONDS))
             }
-            fun report(reset: Boolean = false): JSONObject {
-                val done = CountDownLatch(1)
-                var result = JSONObject()
-                host.measurements(reset) { result = it; done.countDown() }
-                assertTrue(done.await(10, TimeUnit.SECONDS))
-                return result
-            }
             fun bounds(tag: String): androidx.compose.ui.geometry.Rect {
                 var result = androidx.compose.ui.geometry.Rect.Zero
                 scenario.onActivity { result = owner.find(hasTag(tag))!!.boundsInRoot }
@@ -158,7 +151,7 @@ class AndroidWorkspacePerformanceTest {
                     try {
                         event(MotionEvent.ACTION_MOVE, if (resize || colorOverlap || mode == "attached") first else workspace.center)
                         SystemClock.sleep(750)
-                        report(reset = true)
+                        host.measurementReport(true)
                         synchronized(durations) { durations.clear(); lostMetrics = 0 }
                         scenario.onActivity {
                             drawnRevisions.clear(); changedBounds = 0
@@ -213,7 +206,7 @@ class AndroidWorkspacePerformanceTest {
                         scenario.onActivity { drawn = drawnRevisions.size; changes = changedBounds }
                         assertTrue("Android must render while dragging", timings.isNotEmpty())
                         fun percentile(values: List<Long>, fraction: Double) = values[((values.size - 1) * fraction).toInt()] / 1_000_000.0
-                        val metrics = report()
+                        val metrics = host.measurementReport()
                         val expectRetained = !resize || InstrumentationRegistry.getArguments().getString("expectRetainedResize") != "false"
                         if (expectRetained) assertEquals("Steady motion retains the full UI models", 0L, metrics.getLong("snapshots_published"))
                         scenario.onActivity {

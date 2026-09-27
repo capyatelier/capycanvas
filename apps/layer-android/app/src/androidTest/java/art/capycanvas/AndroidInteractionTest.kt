@@ -203,7 +203,7 @@ class AndroidInteractionTest {
                     "group", "floating" -> "group-grip-41"
                     "drawer-tab" -> "drawer-tab-sizes"
                     "drawer-grip" -> "column-drawer-grip-41"
-                    "tile", "drawer-tile" -> "tile-toolbar-${host.panelContent!!.array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").objects().first().getInt("id") }"
+                    "tile", "drawer-tile" -> "tile-toolbar-${host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").objects().first().getInt("id") }"
                     "ribbon" -> "ribbon-grip-toolbar"
                     else -> "column-grip-41"
                 }
@@ -252,7 +252,7 @@ class AndroidInteractionTest {
                     waitFor("toolbar drawer") { exists("column-drawer-41") }; settle()
                 }
             }
-            val tiles=host.panelContent!!.array("panels").objects().first { it.getString("id")=="toolbar" }.array("tiles").objects()
+            val tiles=host.snapshot!!.array("panels").objects().first { it.getString("id")=="toolbar" }.array("tiles").objects()
             val source=tiles.first { (it.getJSONObject("control").getString("kind")=="divider")==kind.endsWith("divider") }
             val tag=if(kind=="column") "column-icon-sizes"
                 else "tile-toolbar-${source.getInt("id")}"
@@ -373,12 +373,12 @@ class AndroidInteractionTest {
                 val wide = Offset(origin + 420 * density, press.y)
                 event(MotionEvent.ACTION_DOWN, press)
                 event(MotionEvent.ACTION_MOVE, first); settle()
-                val retained = host.panelContent
+                val retained = host.snapshot
                 val positions = mutableListOf<Rect>()
                 for ((index, position) in listOf(first, wide).withIndex()) {
                     event(MotionEvent.ACTION_MOVE, position); settle()
                     assertNull(host.actionError)
-                    assertTrue("Resize retains $panel controls", retained === host.panelContent)
+                    assertTrue("Resize retains $panel controls", retained === host.snapshot)
                     val allocation = group(panel).getJSONObject("bounds")
                     val shown = bounds("group-41")
                     assertEquals(allocation.number("width") * density, shown.width, 1.1f)
@@ -392,7 +392,7 @@ class AndroidInteractionTest {
                         else assertEquals("Wide presets share a row", firstPreset.top, thirdPreset.top, 1.1f)
                     }
                     if (panel == "toolbar") {
-                        val tiles = host.panelContent!!.array("panels").objects().first { it.getString("id") == panel }.array("tiles").objects()
+                        val tiles = host.snapshot!!.array("panels").objects().first { it.getString("id") == panel }.array("tiles").objects()
                         group(panel).getJSONObject("tiles").array("tiles").objects().forEachIndexed { tileIndex, rect ->
                             if (tiles[tileIndex].getJSONObject("control").getString("kind") == "divider") return@forEachIndexed
                             val tile = bounds("tile-toolbar-${tiles[tileIndex].getInt("id")}")
@@ -1505,7 +1505,7 @@ class AndroidInteractionTest {
         try {
             tap(bounds("layer-row-$id").center)
             waitFor("Secondary row click opens menu") { popupCount()==1 }; back()
-            val tile=host.panelContent!!.array("panels").objects().first { it.getString("id")=="toolbar" }.array("tiles").getJSONObject(0).getInt("id")
+            val tile=host.snapshot!!.array("panels").objects().first { it.getString("id")=="toolbar" }.array("tiles").getJSONObject(0).getInt("id")
             tap(bounds("tile-toolbar-$tile").center)
             waitFor("Secondary tile click opens menu") { popupCount()==1 }; back()
         } finally { mouseButton=MotionEvent.BUTTON_PRIMARY }
@@ -1542,7 +1542,7 @@ class AndroidInteractionTest {
         waitFor("Zen chrome") { exists("zen-button") }; settle()
         val before=workspace()
         val targets=mutableListOf("zen-button")
-        val tiles=host.panelContent!!.array("panels").objects().first { it.getString("id")=="toolbar" }.array("tiles").objects()
+        val tiles=host.snapshot!!.array("panels").objects().first { it.getString("id")=="toolbar" }.array("tiles").objects()
         tiles.firstOrNull { exists("tile-toolbar-${it.getInt("id")}") }?.let { targets.add("tile-toolbar-${it.getInt("id")}") }
         for(tag in targets) {
             event(MotionEvent.ACTION_DOWN,bounds(tag).center); SystemClock.sleep(700)
@@ -2003,14 +2003,14 @@ class AndroidInteractionTest {
             item.getJSONObject("option").optJSONObject("Choice")?.takeIf { it.getString("id") == id }
         }
         fun chosen(id: String) = choice(id)?.array("items")?.objects()?.firstOrNull { it.getBoolean("selected") }?.getString("label")
-        fun corner(): Offset {
-            val anchor = canvasBar()!!.getJSONArray("anchor")
+        fun screen(x: Double, y: Double): Offset {
             val camera = state().getJSONObject("camera")
-            val zoom = camera.getDouble("zoom").toFloat(); val translation = camera.getJSONArray("translation")
+            val zoom = camera.getDouble("zoom"); val translation = camera.getJSONArray("translation")
             val work = bounds("workspace")
-            return Offset(work.left + anchor.getDouble(2).toFloat() * zoom + translation.getDouble(0).toFloat(),
-                work.top + anchor.getDouble(3).toFloat() * zoom + translation.getDouble(1).toFloat())
+            return Offset(work.left + (x * zoom + translation.getDouble(0)).toFloat(), work.top + (y * zoom + translation.getDouble(1)).toFloat())
         }
+        fun onDocument(x: Double, y: Double) = state().array("tabs").getJSONObject(0).let { screen(it.getInt("width") * x, it.getInt("height") * y) }
+        fun corner() = canvasBar()!!.getJSONArray("anchor").let { screen(it.getDouble(2), it.getDouble(3)) }
         val devices = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)
         popupInput = true
         try {
@@ -2020,8 +2020,7 @@ class AndroidInteractionTest {
                 waitFor("no bar without a selection") { canvasBar() == null && !shown("canvas-action-bar") }
                 val glassBefore = glassBoxes()
                 val work = bounds("workspace")
-                fun at(x: Float, y: Float) = Offset(work.left + x * density, work.top + y * density)
-                val selection = Rect(at(620f, 220f), at(840f, 380f))
+                val selection = Rect(onDocument(.38, .22), onDocument(.62, .42))
                 tool = MotionEvent.TOOL_TYPE_STYLUS
                 drag(selection.topLeft, selection.bottomRight)
                 waitFor("$device selection bar", 5_000) { barKind() == "selection" && shown("canvas-action-bar") }
@@ -2086,10 +2085,7 @@ class AndroidInteractionTest {
                 waitFor("$device Grid menu closes", 5_000) { popupCount() == 0 && chosen("transform-warp-grid") == grid }
                 settle()
                 val hull = canvasBar()!!.getJSONArray("anchor")
-                val warpCamera = state().getJSONObject("camera")
-                val warpZoom = warpCamera.getDouble("zoom").toFloat(); val warpTranslation = warpCamera.getJSONArray("translation")
-                val edgeNode = Offset(work.left + (hull.getDouble(0) + (hull.getDouble(2) - hull.getDouble(0)) / 3).toFloat() * warpZoom + warpTranslation.getDouble(0).toFloat(),
-                    work.top + hull.getDouble(1).toFloat() * warpZoom + warpTranslation.getDouble(1).toFloat())
+                val edgeNode = screen(hull.getDouble(0) + (hull.getDouble(2) - hull.getDouble(0)) / 3, hull.getDouble(1))
                 val edge = hull.getDouble(1)
                 val base = hull.getDouble(3)
                 val name = listOf("mouse", "finger", "stylus")[devices.indexOf(device)]
@@ -2168,12 +2164,12 @@ class AndroidInteractionTest {
 
             tool = MotionEvent.TOOL_TYPE_STYLUS
             restore(); clear(); invoke("fit_canvas"); invoke("rectangle_select")
-            val work = bounds("workspace")
-            val stripes = Rect(Offset(work.left + 520 * density, work.top + 200 * density), Offset(work.left + 940 * density, work.top + 470 * density))
+            val stripes = Rect(onDocument(.3, .18), onDocument(.7, .5))
+            val stripe = stripes.width / 21
             invoke("brush")
-            for (i in 0..10) drag(Offset(stripes.left + i * 40 * density, stripes.top), Offset(stripes.left + i * 40 * density + 20 * density, stripes.bottom), 6)
+            for (i in 0..10) drag(Offset(stripes.left + 2 * i * stripe, stripes.top), Offset(stripes.left + (2 * i + 1) * stripe, stripes.bottom), 6)
             invoke("rectangle_select")
-            drag(Offset(work.left + 620 * density, work.top + 220 * density), Offset(work.left + 840 * density, work.top + 330 * density))
+            drag(onDocument(.38, .2), onDocument(.62, .36))
             waitFor("selection bar for captures", 5_000) { barKind() == "selection" && shown("canvas-action-bar") }
             tap(bounds("canvas-bar-action-scale_rotate").center)
             waitFor("transform bar for captures", 5_000) { shown("canvas-bar-action-apply_transform") }
@@ -2193,98 +2189,5 @@ class AndroidInteractionTest {
             action(obj("type" to "set_theme", "theme" to originalTheme)); transparency(originalTransparency)
         }
         println("PASS canvas action bar: selection and transform bars, chrome taps, hide and return, More, toggle, Apply/Cancel, Zen, glass, light/dark")
-    }
-    @Test fun cachedPanelsMatchDirectDrawing() {
-        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
-        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
-        val originalTransparency = transparency()
-        val (width, height) = 2048 to 1536
-        host.importStripes(width, height)
-        invoke("apply_transform")
-        waitFor("stripes") { state().getJSONObject("layer_tools").getJSONObject("editing_layer").getString("label") == "Stripes" }
-        val viewport = JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))
-        fun screen(): android.graphics.Bitmap {
-            SystemClock.sleep(500); settle()
-            return instrumentation.uiAutomation.takeScreenshot()
-        }
-        fun memory(label: String): String {
-            val dump = android.os.ParcelFileDescriptor.AutoCloseInputStream(
-                instrumentation.uiAutomation.executeShellCommand("dumpsys gfxinfo ${activity.packageName}")).use { String(it.readBytes()) }
-            File(File(instrumentation.targetContext.getExternalFilesDir(null), "validation/panel-layers").apply { mkdirs() }, "$label-gfxinfo.txt").writeText(dump)
-            return dump.lines().map { it.trim() }.dropWhile { !it.startsWith("Total GPU memory usage") }.take(2).joinToString(" ")
-        }
-        fun compare(label: String, cached: android.graphics.Bitmap, direct: android.graphics.Bitmap) {
-            try {
-                val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/panel-layers").apply { mkdirs() }
-                File(directory, "$label-cached.png").outputStream().use { cached.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-                File(directory, "$label-direct.png").outputStream().use { direct.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-                fun contrast(x: Int, y: Int): Int {
-                    val around = (maxOf(0, y - 1)..minOf(direct.height - 1, y + 1)).flatMap { ny ->
-                        (maxOf(0, x - 1)..minOf(direct.width - 1, x + 1)).map { nx -> direct.getPixel(nx, ny) and 255 } }
-                    return around.max() - around.min()
-                }
-                var differing = 0; var edges = 0; var largest = 0
-                for (y in 0 until cached.height step 2) for (x in 0 until cached.width step 2) {
-                    val a = cached.getPixel(x, y); val b = direct.getPixel(x, y)
-                    val delta = listOf(0, 8, 16).maxOf { kotlin.math.abs((a shr it and 255) - (b shr it and 255)) }
-                    largest = maxOf(largest, delta)
-                    if (delta > 2) { if (delta <= 8 && contrast(x, y) >= 64) edges++ else differing++ }
-                }
-                println("PANEL LAYERS $label: largest channel difference $largest, anti-aliased edge samples over 2: $edges, other samples over 2: $differing")
-                assertEquals("$label: cached panels draw like direct panels, within 8/255 on anti-aliased edges (largest difference $largest)", 0, differing)
-            } finally { cached.recycle(); direct.recycle() }
-        }
-        fun compareModes(label: String) {
-            instrumentation.runOnMainSync { PanelLayers.cached = true }
-            val cached = screen()
-            val cachedMemory = memory("$label-cached")
-            instrumentation.runOnMainSync { PanelLayers.cached = false }
-            val direct = screen()
-            println("PANEL LAYERS $label memory cached: $cachedMemory")
-            println("PANEL LAYERS $label memory direct: ${memory("$label-direct")}")
-            instrumentation.runOnMainSync { PanelLayers.cached = true }
-            compare(label, cached, direct)
-        }
-        try {
-            for (theme in listOf("light", "dark")) {
-                action(obj("type" to "set_theme", "theme" to theme))
-                restore()
-                compareModes("$theme-docked")
-                action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
-                action(obj("type" to "move_group", "group" to 43, "target" to obj("kind" to "float", "position" to JSONArray(listOf(560, 260))),
-                    "viewport" to viewport))
-                customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
-                customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
-                tap(bounds("column-icon-brushes").center); waitFor("drawer") { exists("column-drawer-41") }
-                invoke("fit_canvas")
-                for (level in 0..3) {
-                    transparency(level)
-                    compareModes("$theme-level$level")
-                }
-                action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "navigator"))
-                waitFor("navigator") { exists("navigator-overview") }
-                compareModes("$theme-navigator")
-                val overview = bounds("navigator-overview")
-                val shown = screen()
-                val colors = (-30 until 30).flatMap { dy -> (-30 until 30).map { dx ->
-                    shown.getPixel(overview.center.x.toInt() + dx, overview.center.y.toInt() + dy) } }.toSet()
-                shown.recycle()
-                assertTrue("$theme: the cached navigator reveals the live overview (${colors.size} colors)", colors.size > 1)
-                invoke("zen_mode")
-                waitFor("Zen") { snapshot().optBoolean("chrome_hidden") }
-                compareModes("$theme-zen")
-                instrumentation.runOnMainSync { PanelLayers.cached = true }
-                val before = screen()
-                android.os.ParcelFileDescriptor.AutoCloseInputStream(
-                    instrumentation.uiAutomation.executeShellCommand("am send-trim-memory ${android.os.Process.myPid()} COMPLETE")).use { it.readBytes() }
-                instrumentation.runOnMainSync { activity.window.decorView.invalidate() }
-                compare("$theme-trimmed", screen(), before)
-                invoke("zen_mode")
-            }
-        } finally {
-            instrumentation.runOnMainSync { PanelLayers.cached = true }
-            action(obj("type" to "set_theme", "theme" to originalTheme)); transparency(originalTransparency)
-        }
-        println("PASS cached panel layers match direct drawing in light and dark, Off through High, navigator, Zen and after memory trim")
     }
 }

@@ -38,10 +38,6 @@ import kotlin.math.ceil
 
 internal const val PanelShadowReach = 3f
 
-internal object PanelLayers {
-    var cached by mutableStateOf(true)
-}
-
 internal class PanelOpening {
     var coordinates: LayoutCoordinates? = null
     var bounds by mutableStateOf<Rect?>(null)
@@ -86,13 +82,12 @@ internal val LocalPanelOpening = staticCompositionLocalOf<PanelOpening?> { null 
 @Composable internal fun Modifier.panelSurface(elevation: Dp, shape: Shape, cut: Rect? = null, opening: PanelOpening? = null): Modifier {
     val reach = elevation * PanelShadowReach
     val margin = with(LocalDensity.current) { reach.roundToPx() }
-    val cached = PanelLayers.cached
     return (if (opening == null) this else onPlaced { opening.coordinates = it }.drawWithContent {
         drawContent()
         opening.bounds?.let { drawRect(Color.Transparent, it.topLeft, it.size, blendMode = BlendMode.Clear) }
     }).layout { measurable, constraints ->
         val placeable = measurable.measure(constraints.offset(2 * margin, 2 * margin))
         layout(placeable.width - 2 * margin, placeable.height - 2 * margin) { placeable.place(-margin, -margin) }
-    }.graphicsLayer { compositingStrategy = if (cached) CompositingStrategy.Offscreen else CompositingStrategy.Auto }
-        .padding(reach).panelShadow(elevation, shape, cut, isolated = cached).clip(shape)
+    }.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .padding(reach).panelShadow(elevation, shape, cut, isolated = true).clip(shape)
 }

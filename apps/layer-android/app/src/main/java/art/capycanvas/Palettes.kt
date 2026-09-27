@@ -156,8 +156,8 @@ internal class PaletteController(val host: CanvasHost) {
     var keyboard by mutableStateOf(false)
     private var menuGeneration = 0
 
-    fun view() = host.panelContent?.objectOrNull("palette_panel")
-    fun state() = host.panelContent?.objectOrNull("state")
+    fun view() = host.snapshot?.objectOrNull("palette_panel")
+    fun state() = host.snapshot?.objectOrNull("state")
     fun current(): JSONObject? = state()?.displayColors()?.let { colors ->
         colors.optJSONObject(when (colors.optString("paint_slot")) { "background" -> "background"; "temporary" -> "temporary"; else -> "foreground" })
     }
@@ -301,7 +301,7 @@ private fun Modifier.paletteKeys(activate: () -> Unit, menu: (() -> Unit)?): Mod
 
 @Composable internal fun PalettePanel(host: CanvasHost, modifier: Modifier = Modifier, onContent: (PanelContentSize) -> Unit = {}) {
     val controller = host.palettes
-    val view = host.panelContent?.objectOrNull("palette_panel") ?: return
+    val view = host.snapshot?.objectOrNull("palette_panel") ?: return
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val owner = remember { Any() }
@@ -399,7 +399,7 @@ private fun paletteContent(cells: PaletteCells, count: Int, top: Float, bottom: 
 
 @Composable internal fun PaletteMeasurement(host: CanvasHost, onContent: (PanelContentSize) -> Unit) {
     val controller = host.palettes
-    val view = host.panelContent?.objectOrNull("palette_panel") ?: return
+    val view = host.snapshot?.objectOrNull("palette_panel") ?: return
     val density = LocalDensity.current.density
     val count = view.array("swatches").length() + 1
     val report by rememberUpdatedState(onContent)

@@ -189,8 +189,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
     }
 }
 
-@Composable internal fun ImagePlacementControls(host: CanvasHost, state: JSONObject) {
-    val commands = state.array("commands").let { list -> remember(list) { list.objects().associateBy { it.getString("id") } } }
+@Composable internal fun ImportAndTransformControls(host: CanvasHost) {
     val images = host.documents.images
     if (images.working && !images.choosing) androidx.compose.ui.window.Popup(alignment = Alignment.BottomCenter) {
         Surface(Modifier.padding(12.dp), shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
@@ -201,5 +200,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
         }
     }
     images.profilePrompt?.let { SourceProfileDialog(it, images::chooseProfile) }
-    BackHandler(commands["placement_original_size"]?.optBoolean("enabled") == true) { host.invoke("cancel_transform") }
+    val cancel = host.canvasBar?.array("completion")?.objects()?.mapNotNull { it.getJSONObject("option").optJSONObject("Action")?.getJSONObject("state") }
+        ?.any { it.getString("id") == "cancel_transform" && it.getBoolean("enabled") } == true
+    BackHandler(cancel) { host.invoke("cancel_transform") }
 }

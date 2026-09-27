@@ -252,18 +252,7 @@ Test coverage:
 
 - `AndroidPanelShadowTest` compares hardware-rendered interiors with and without
   shadows across fills, corner shapes, sizes and elevations. It checks that
-  exterior shadows and content remain visible, and that cached layers match
-  direct drawing.
-- `AndroidInteractionTest#cachedPanelsMatchDirectDrawing` compares whole-window
-  captures with `PanelLayers.cached` on and off. It covers light and dark, every
-  transparency level, the docked layout, a floating group, a collapsed column
-  with its drawer, the Navigator, Zen, and the state after `send-trim-memory`.
-  It saves `dumpsys gfxinfo` beside the captures in `validation/panel-layers`.
-  Samples must match within 2/255. Skia can rasterize anti-aliased path edges
-  slightly differently in a layer and in the window, so a sample whose 3 × 3
-  neighbourhood spans 64 levels or more may differ by up to 8/255. The Layers
-  panel's more icon shows 4/255 on one edge pixel of two of its dots, at the
-  same positions.
+  exterior shadows and content remain visible.
 
 For measured overlap motion, build the release-based benchmark variant and run:
 

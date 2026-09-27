@@ -282,7 +282,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                 columns[index].values().forEach { panelId ->
                                     bodies[panelId.toString()]?.let { panel ->
                                         if (panel.array("tiles").length() > 0) DrawerToolbar(host, panel, dock, bounds.number("width"))
-                                        else PanelControls(host, host.panelContent?.getJSONObject("state") ?: snapshot.getJSONObject("state"), panel,
+                                        else PanelControls(host, host.snapshot?.getJSONObject("state") ?: snapshot.getJSONObject("state"), panel,
                                             if (panelId in listOf("layers", "adjustments", "filter_types")) Modifier.height(480.dp).then(if(panelId=="layers") Modifier.padding(8.dp) else Modifier) else Modifier.fillMaxWidth().then(if(model.optBoolean("compact"))Modifier.padding(12.dp) else Modifier), scrollable = false,
                                             splitFilters = columns.any { it.values().contains("filter_types") })
                                     }

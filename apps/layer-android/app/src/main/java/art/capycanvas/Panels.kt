@@ -65,7 +65,7 @@ import kotlin.math.roundToInt
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Box(if (labelLines > 0) Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
                         val glyph = Modifier.size(geometry.getInt("tile_icon_size").dp).testTag("tile-icon-${panel.getString("id")}-${tile.getInt("id")}")
-                        if (kind == "color") PaintPairIcon(host.panelContent?.getJSONObject("state"), tile.getString("label"), glyph)
+                        if (kind == "color") PaintPairIcon(host.snapshot?.getJSONObject("state"), tile.getString("label"), glyph)
                         else SharedIcon(icon, tile.getString("label"), glyph)
                     }
                     if (labelLines > 0) Text(tile.getString("label"), Modifier.weight(1f).padding(end = 4.dp).testTag("tile-label-${panel.getString("id")}-${tile.getInt("id")}"),
@@ -201,7 +201,7 @@ import kotlin.math.roundToInt
     }
 }
 @Composable internal fun ColorControls(host: CanvasHost) {
-    val state = host.panelContent?.objectOrNull("state")?.displayColors() ?: return
+    val state = host.snapshot?.objectOrNull("state")?.displayColors() ?: return
     val slot = if (state.optString("slot") == "background") "background" else "foreground"
     ManagedColorButton(host, "Edit Color…", state.getJSONObject(slot), true) { color ->
         host.dispatch(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to slot, "color" to color)))
@@ -219,7 +219,7 @@ import kotlin.math.roundToInt
                 EditorCheck(control.getBoolean("visible_in_panel"), control.getString("label")) { visible -> host.customize(obj("type" to "set_control_visible", "panel" to panel.getString("id"), "control" to control.getString("control"), "visible" to visible)) }
                 Text(control.getString("label"))
             }
-            host.panelContent?.getJSONObject("state")?.let { state -> ConfigurationControl(host, state, control.getString("control"), control.getString("label")) }
+            host.snapshot?.getJSONObject("state")?.let { state -> ConfigurationControl(host, state, control.getString("control"), control.getString("label")) }
           }
         }
         Column { WorkspaceMenuItems(host, panel.array("toolbar_options")) }

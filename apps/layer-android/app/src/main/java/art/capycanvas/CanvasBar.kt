@@ -95,7 +95,6 @@ private class BarFrame {
         }
     }
     val glass = remember { Any() }
-    DisposableEffect(host, glass) { onDispose { host.glassBox(glass, null) } }
     val placement = placed ?: return
     val shape = ControlShape
     LaunchedEffect(visible) {
@@ -105,7 +104,7 @@ private class BarFrame {
             dock.canvasBar = null; dock.refresh()
             return@LaunchedEffect
         }
-        val bounds = placed?.getJSONObject("bounds") ?: placement.getJSONObject("bounds")
+        val bounds = (placed ?: placement).getJSONObject("bounds")
         fun px(key: String) = (bounds.number(key) * density).roundToInt().toFloat()
         val radius = ControlRadius.value * density
         host.glassBox(glass, floatArrayOf(px("x"), px("y"), px("width"), px("height"), radius, radius, radius, radius))

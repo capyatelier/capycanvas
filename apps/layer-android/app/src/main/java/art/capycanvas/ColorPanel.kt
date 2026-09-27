@@ -63,7 +63,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
     .size(rect.getDouble(2).toFloat().dp, rect.getDouble(3).toFloat().dp)
 
 @Composable internal fun ColorMeasurement(host: CanvasHost, onContent: (PanelContentSize) -> Unit) {
-    val hdr = host.panelContent?.objectOrNull("color_panel")?.optBoolean("hdr") ?: return
+    val hdr = host.snapshot?.objectOrNull("color_panel")?.optBoolean("hdr") ?: return
     val density = LocalDensity.current.density
     val report by rememberUpdatedState(onContent)
     Layout({}) { _, constraints ->
@@ -76,7 +76,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
 
 /** Shared wheel and footer geometry; Rust owns layout and color math. */
 @Composable internal fun ColorPanelControls(host: CanvasHost, availableHeight: Dp = Dp.Infinity, onHeight: (natural: Float, displayed: Float) -> Unit = { _, _ -> }) {
-    val view = host.colorPreview?.objectOrNull("view") ?: host.panelContent?.objectOrNull("color_panel") ?: return
+    val view = host.colorPreview?.objectOrNull("view") ?: host.snapshot?.objectOrNull("color_panel") ?: return
     val colors = LocalPalette.current
     val config = LocalViewConfiguration.current
     // Expanding the compact corner targets to 48dp would cover the hue ring and
@@ -145,7 +145,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                     Canvas(Modifier.matchParentSize()) { if (hovered) drawCircle(colors.text.copy(alpha = .12f)) }
                     SharedIcon("color-swap", null, Modifier.size(16.dp))
                 }
-                ColorButton("Edit Color",Modifier.place(layout.array("edit")).testTag("color-edit-button"),onClick={if(host.panelContent?.objectOrNull("state")?.displayColors()?.optString("slot")!="transparent")edit=true}) {_,_->SharedIcon("pencil",null,Modifier.size(16.dp))}
+                ColorButton("Edit Color",Modifier.place(layout.array("edit")).testTag("color-edit-button"),onClick={if(host.snapshot?.objectOrNull("state")?.displayColors()?.optString("slot")!="transparent")edit=true}) {_,_->SharedIcon("pencil",null,Modifier.size(16.dp))}
                 val readoutClip = remember(layout) { ReadoutCorner(layout.array("wheel").getDouble(2).toFloat() * view.getJSONObject("geometry").number("outer") + 2f) }
                 ColorButton(view.getString("readout_description"), Modifier.place(layout.array("readout")).testTag("color-readout"),
                     shape = readoutClip, showFocusRing = false, onClick = { color(obj("op" to "toggle_readout")) }) { focused, _ ->
@@ -156,7 +156,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
     }
     }
     if(edit) {
-        val state=host.panelContent!!.getJSONObject("state").displayColors()
+        val state=host.snapshot!!.getJSONObject("state").displayColors()
         val slot=state.getString("slot")
         var intensity:Float?=null
         ColorEditorDialog(host,state.getJSONObject(slot),{edit=false},initialIntensity=if(view.optBoolean("hdr"))view.number("intensity")else null,onIntensity={intensity=it}) {selected->
@@ -270,9 +270,9 @@ private class ReadoutCorner(private val radius: Float) : Shape {
         }
         if (edit) {
             val paintSlot = if (slot == "background") "background" else "foreground"
-            val definition = host.panelContent!!.getJSONObject("state").displayColors().getJSONObject(paintSlot)
+            val definition = host.snapshot!!.getJSONObject("state").displayColors().getJSONObject(paintSlot)
             var intensity:Float?=null
-            val view=host.panelContent!!.getJSONObject("color_panel")
+            val view=host.snapshot!!.getJSONObject("color_panel")
             ColorEditorDialog(host, definition, { edit = false },initialIntensity=if(view.optBoolean("hdr"))view.number("intensity")else null,onIntensity={intensity=it}) { selected ->
                 edit = false; color(if(intensity!=null)obj("op" to "set_slot_intensity", "slot" to paintSlot, "color" to selected,"stops" to intensity)else obj("op" to "set_slot", "slot" to paintSlot, "color" to selected))
             }
@@ -313,7 +313,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
         // ring, clip, triangle and marker outlines at the tablet's physical DPI.
         val preview = host.colorPreview
         val request = ColorFieldRequest(shape, hue, pixels, rgbSpace, view.optBoolean("hdr"),
-            if(view.optBoolean("hdr"))(preview?.objectOrNull("colors") ?: host.panelContent!!.getJSONObject("state").displayColors()).toString() else "",
+            if(view.optBoolean("hdr"))(preview?.objectOrNull("colors") ?: host.snapshot!!.getJSONObject("state").displayColors()).toString() else "",
             view.optJSONObject("rendition")?.toString(), preview?.objectOrNull("picker")?.objectOrNull("preview") != null)
         val requests = remember { Channel<ColorFieldRequest>(Channel.CONFLATED) }
         val latest by rememberUpdatedState(request)

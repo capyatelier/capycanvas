@@ -63,7 +63,7 @@ class AndroidPaletteTest {
     private fun node(tag: String): SemanticsNode { var result: SemanticsNode? = null; main { result = tagged(tag(tag))?.second }; return checkNotNull(result) { "Missing $tag" } }
     private fun state() = host.snapshot!!.getJSONObject("state")
     private fun library() = state().getJSONObject("colors").getJSONObject("library")
-    private fun view() = host.panelContent!!.getJSONObject("palette_panel")
+    private fun view() = host.snapshot!!.getJSONObject("palette_panel")
     private fun order() = view().array("swatches").objects().map { it.getLong("id") }
     private fun popupCount(): Int {
         var result = 0
@@ -419,12 +419,7 @@ class AndroidPaletteTest {
         val from = center(swatch(0)); val cells = (0 until minOf(12, order().size)).map { center(swatch(it)) }
         event(MotionEvent.ACTION_DOWN, from); glide(from, cells[1], 4)
         waitFor("lifted") { exists("palette-drag-preview") }
-        fun report(reset: Boolean): JSONObject {
-            val done = CountDownLatch(1); var result = JSONObject()
-            instrumentation.runOnMainSync { host.measurements(reset) { result = it; done.countDown() } }
-            assertTrue(done.await(10, TimeUnit.SECONDS)); return result
-        }
-        report(true)
+        host.measurementReport(true)
         val frames = java.util.Collections.synchronizedList(mutableListOf<LongArray>())
         val thread = android.os.HandlerThread("palette-frames").apply { start() }
         val listener = android.view.Window.OnFrameMetricsAvailableListener { _, metrics, _ ->
@@ -450,7 +445,7 @@ class AndroidPaletteTest {
             SystemClock.sleep(4)
         }
         instrumentation.runOnMainSync { window.removeOnFrameMetricsAvailableListener(listener) }
-        val during = report(false)
+        val during = host.measurementReport(false)
         event(MotionEvent.ACTION_CANCEL); settle(); thread.quitSafely()
         assertEquals("cancelled drag leaves the palette", before, order())
         val rows = frames.toList().sortedBy { it[4] }

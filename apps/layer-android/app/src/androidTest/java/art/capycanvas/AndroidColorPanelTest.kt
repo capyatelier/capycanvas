@@ -23,8 +23,6 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.math.*
 
 /** Production Compose, shared Rust and typed tablet input, with isolated workspace storage. */
@@ -57,7 +55,7 @@ class AndroidColorPanelTest {
     private fun bounds(tag: String) = node(tag).boundsInRoot
     private fun state() = host.snapshot!!.getJSONObject("state")
     private fun colors() = state().getJSONObject("colors")
-    private fun view() = host.panelContent!!.getJSONObject("color_panel")
+    private fun view() = host.snapshot!!.getJSONObject("color_panel")
     private fun waitFor(label: String, timeout: Long = 10_000, condition: () -> Boolean) = host.awaitMain(label, timeout, condition = condition)
     private fun settle() { SystemClock.sleep(100); instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError) } }
     private fun action(action: JSONObject) { host.drain(action, 10); settle() }
@@ -293,11 +291,6 @@ class AndroidColorPanelTest {
             action(obj("type" to "set_color","rgba" to JSONArray(rgba)));tap(p+Offset((i-1)*85f,0f))
         }
         action(obj("type" to "set_color_sample_size","width" to 101))
-        fun measurements(reset:Boolean):JSONObject {
-            val done=CountDownLatch(1);var result:JSONObject?=null
-            instrumentation.runOnMainSync {host.measurements(reset){result=it;done.countDown()}}
-            assertTrue(done.await(10,TimeUnit.SECONDS));return result!!
-        }
         val reports=JSONArray()
         for(visible in listOf(false,true,false,true)) {
             action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "color","visible" to visible)))
@@ -305,7 +298,7 @@ class AndroidColorPanelTest {
             action(obj("type" to "invoke","command" to "eyedropper"))
             event(MotionEvent.ACTION_HOVER_MOVE,p);event(MotionEvent.ACTION_HOVER_MOVE,p)
             waitFor("preview ready"){picker().objectOrNull("preview")!=null};SystemClock.sleep(300)
-            measurements(true)
+            host.measurementReport(true)
             replayOrigin=IntArray(2).also { instrumentation.runOnMainSync { owner.view.getLocationOnScreen(it) } }
             val start=SystemClock.uptimeMillis()
             waitForInput=false
@@ -316,7 +309,7 @@ class AndroidColorPanelTest {
             val elapsed=SystemClock.uptimeMillis()-start
             waitForInput=true
             replayOrigin=null
-            val report=measurements(false).put("wheel",visible).put("duration_ms",elapsed).put("sample_width",101)
+            val report=host.measurementReport(false).put("wheel",visible).put("duration_ms",elapsed).put("sample_width",101)
             reports.put(report)
             assertEquals("Hover retains panel models",0,report.getInt("panel_content_changes"))
             event(MotionEvent.ACTION_HOVER_EXIT,p)

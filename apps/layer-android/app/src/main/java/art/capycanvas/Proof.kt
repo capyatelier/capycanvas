@@ -199,7 +199,7 @@ internal class ProofController(private val host: CanvasHost) {
                         "simulation"->ProofChoice(label,model.getJSONArray("simulations").objects().map{it.getString("value") to it.getString("label")},settings.getString("simulation"),!controller.committing){controller.edit("simulation",it)}
                         "intent"->ProofChoice(label,model.getJSONArray("intents").objects().map{it.getString("value") to it.getString("label")},settings.getString("intent"),!controller.committing){controller.edit("intent",it)}
                         "black_point_compensation"->ProofCheck(label,settings.getBoolean("bpc")&&settings.getString("intent")!="AbsoluteColorimetric",!controller.committing&&settings.getString("intent")!="AbsoluteColorimetric"){controller.edit("bpc",it)}
-                        "gamut_warning"->ProofCheck(label,host.panelContent?.objectOrNull("state")?.optBoolean("gamut_warning")==true,model.objectOrNull("document_profile")!=null){host.invoke("gamut_warning")}
+                        "gamut_warning"->ProofCheck(label,host.snapshot?.objectOrNull("state")?.optBoolean("gamut_warning")==true,model.objectOrNull("document_profile")!=null){host.invoke("gamut_warning")}
                     }
                 }
                 if(controller.busy)CircularProgressIndicator(Modifier.size(20.dp).align(Alignment.CenterHorizontally))

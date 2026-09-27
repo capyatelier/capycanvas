@@ -106,7 +106,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         val epoch=file.optLong("epoch")
                         finish(id!!,false)
                         try { host.proof.finishPending() } catch(e:Exception) {host.reportActionError(e.message?:"Could not finish print preparation");return@launch}
-                        if(host.panelContent?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch")==epoch)host.invoke("export_document")
+                        if(host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch")==epoch)host.invoke("export_document")
                     } else exportRequest=request
                 }
                 catch(e:Exception){complete(id!!,false,e.message?:"Could not finish print preparation")}
@@ -350,7 +350,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     LaunchedEffect(drawingsRequest?.getInt("id")) { if(drawingsRequest!=null) { host.drawingTabs.selector=true; host.dispatch(obj("type" to "complete_request","id" to drawingsRequest.getInt("id"))) } }
     // Registered before workspace/popup handlers, which get first refusal.
     BackHandler { host.drawingTabs.closeSelected() }
-    ImagePlacementControls(host, state)
+    ImportAndTransformControls(host)
     host.hostError?.let { message ->
         AlertDialog(onDismissRequest = host::dismissHostError, title = { Text("Could not complete action") }, text = { Text(message) },
             confirmButton = { TextButton(host::dismissHostError) { Text("OK") } })

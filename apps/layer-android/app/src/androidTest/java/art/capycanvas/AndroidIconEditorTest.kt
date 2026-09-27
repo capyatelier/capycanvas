@@ -31,7 +31,7 @@ class AndroidIconEditorTest {
                     app.customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to style))
                 }
                 compose.waitUntil(10_000) {
-                    app.panelContent?.array("panels")?.objects()?.firstOrNull { it.getString("id") == "toolbar" }
+                    app.snapshot?.array("panels")?.objects()?.firstOrNull { it.getString("id") == "toolbar" }
                         ?.optInt("tile_icon_size") == size
                 }
                 compose.waitForIdle()
@@ -69,7 +69,7 @@ class AndroidIconEditorTest {
             // The render owner publishes retained panel content separately from
             // the action reply; wait for the same tool projection before walking it.
             compose.waitUntil(10_000) {
-                app.panelContent?.getJSONObject("state")?.getJSONObject("tool_set")?.toString() == state().getJSONObject("tool_set").toString()
+                app.snapshot?.getJSONObject("state")?.getJSONObject("tool_set")?.toString() == state().getJSONObject("tool_set").toString()
             }
             compose.waitForIdle()
             assertNull(app.actionError)

@@ -12,8 +12,6 @@ import org.junit.Test
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import java.io.File
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.math.*
 
 /** Opt-in pen replay through either Android input dispatch or the canvas owner. */
@@ -47,22 +45,9 @@ class AndroidViewportBenchmarkTest {
                 val start = SystemClock.uptimeMillis()
                 while (!condition()) { assertNull(host.failure); check(SystemClock.uptimeMillis() - start < 120_000) { "G-pen did not settle: ${host.actionError}" }; SystemClock.sleep(20) }
             }
-            fun report(reset: Boolean): JSONObject { val done = CountDownLatch(1); var value = JSONObject(); host.measurements(reset) { value = it; done.countDown() }; check(done.await(30, TimeUnit.SECONDS)); return value }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
-            val task = native { h ->
-                Native.dispatch(h, obj("type" to "invoke", "command" to "new_document").toString())
-                val s = JSONObject(Native.snapshot(h)!!).getJSONObject("state")
-                val request = s.array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
-                val f = s.getJSONObject("document_file")
-                Native.projectTask(h, request.getInt("id"), "null", f.getLong("epoch"), f.getLong("revision"))
-            }
-            try {
-                Native.projectOptions(task, obj("extent" to JSONArray(listOf(size, size)), "color" to obj("space" to "Srgb", "depth" to "U8"), "background" to "White").toString())
-                Native.projectWork(task, -1, size, size)
-                native { Native.projectAdopt(it, task, "null") }
-            } finally { Native.projectFree(task) }
-            scenario.onActivity { host.documentChanged(); host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
-            waitFor { host.snapshot?.getJSONObject("state")?.getJSONArray("tabs")?.getJSONObject(0)?.optInt("width") == size && host.snapshot?.optBoolean("brush_ready") == true }
+            host.newDocument(size, size)
+            scenario.onActivity { host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
             val preset = host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() }.first { it.getString("label") == "G-Pen" }.getInt("id")
             scenario.onActivity {
                 host.dispatch(obj("type" to "select_brush", "id" to preset))
@@ -158,7 +143,7 @@ class AndroidViewportBenchmarkTest {
             native { Native.presentationTimings(it, true) }
             repeat(repeats) { run ->
                 val beforeRevision = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("revision")
-                report(true)
+                host.measurementReport(true)
                 val present = JSONArray()
                 native { Native.presentationTimings(it, true); Native.completionTimings(it, true) }
                 activePresent = present
@@ -173,7 +158,7 @@ class AndroidViewportBenchmarkTest {
                 assertNull(host.failure)
                 assertNull(host.actionError)
                 if (motion == "stroke") assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
-                val data = report(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)
+                val data = host.measurementReport(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)
                     .put("revision_before", beforeRevision).put("revision_after", afterRevision)
                     .put("display", native { JSONObject(Native.displayStatus(it)) })
                     .put("renderer", native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) })

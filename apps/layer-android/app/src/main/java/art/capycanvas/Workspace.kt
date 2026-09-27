@@ -214,7 +214,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     }
     dock.density = density
     dock.enabled = snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
-    val panelModels = host.panelContent?.optJSONArray("panels")
+    val panelModels = host.snapshot?.optJSONArray("panels")
     val panels = remember(panelModels) { panelModels?.objects()?.associateBy { it.getString("id") } ?: emptyMap() }
     val state = snapshot?.getJSONObject("state")
     val expanded = state?.getJSONObject("customization")?.opt("expanded")?.takeIf { it != JSONObject.NULL } as? String
@@ -325,7 +325,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         val projected = expansion?.objectOrNull("tiles")?.let { JSONObject(retainedGroup.toString()).put("tiles", it) } ?: retainedGroup
                         CompositionLocalProvider(LocalPalette provides if (expansion == null) colors.onGlass else colors,
                             LocalPanelOpening provides opening.takeIf { expansion == null }) {
-                            PanelGroup(host, host.panelContent?.getJSONObject("state") ?: state, projected, panels, dock, mod)
+                            PanelGroup(host, host.snapshot?.getJSONObject("state") ?: state, projected, panels, dock, mod)
                         }
                         expansion?.getJSONObject("configuration")?.let { rect ->
                             Box(Modifier.placed(rect, density).background(colors.panel)) {

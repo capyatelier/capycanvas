@@ -115,7 +115,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
         worker.post(check)
     }
-    internal val panelContent: JSONObject? get() = snapshot
     internal var colorPreview by mutableStateOf<JSONObject?>(null)
         private set
     internal var keymapFile by mutableStateOf<JSONObject?>(null)
@@ -126,8 +125,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     internal var cameraState by mutableStateOf(JSONObject())
         private set
-    internal var canvasBar by mutableStateOf<JSONObject?>(null)
-        private set
+    internal val canvasBar: JSONObject? get() = snapshot?.objectOrNull("state")?.objectOrNull("canvas_bar")
     internal var canvasBarVisible by mutableStateOf(true)
         private set
     private var canvasBarHolds = 0
@@ -821,8 +819,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         main.post {
             colorPreview = next.objectOrNull("color_preview")
             commandSearch = state.objectOrNull("command_search")
-            val bar = state.optJSONObject("canvas_bar")
-            if (bar !== canvasBar) canvasBar = bar
             (snapshot as? ObservedModel ?: ObservedModel(listOf("state", "state.document_file")).also { snapshot = it }).assign(next)
             publishNotice(state.optJSONObject("notice"))
             publishHostError(state.optString("host_error").takeUnless { state.isNull("host_error") })

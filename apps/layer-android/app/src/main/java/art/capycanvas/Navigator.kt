@@ -38,7 +38,7 @@ import kotlin.math.roundToInt
     val order = LocalWorkspaceZ.current
     val opening = LocalPanelOpening.current
     val overview = remember { arrayOfNulls<LayoutCoordinates>(1) }
-    val document = host.panelContent?.getJSONObject("state")?.array("tabs")?.optJSONObject(0)
+    val document = host.snapshot?.getJSONObject("state")?.array("tabs")?.optJSONObject(0)
     val documentSize = document?.let { it.optInt("width") to it.optInt("height") }
     DisposableEffect(host) { onDispose { host.navigatorPlacement(key, null) } }
     fun open() {
@@ -97,7 +97,7 @@ import kotlin.math.roundToInt
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            val commands = host.panelContent?.getJSONObject("state")?.array("commands")?.objects() ?: emptyList()
+            val commands = host.snapshot?.getJSONObject("state")?.array("commands")?.objects() ?: emptyList()
             for (id in listOf("zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical")) {
                 commands.find { it.getString("id") == id }?.let { command ->
                     IconButton({ host.invoke(id) }, modifier = Modifier.size(32.dp).testTag("navigator-$id"), enabled = command.getBoolean("enabled")) {

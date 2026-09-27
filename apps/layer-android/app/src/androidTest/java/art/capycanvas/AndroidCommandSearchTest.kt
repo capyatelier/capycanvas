@@ -166,7 +166,7 @@ class AndroidCommandSearchTest {
         fun panelContent(): List<Any?> {
             var parts = emptyList<Any?>()
             main {
-                val model = host.panelContent!!
+                val model = host.snapshot!!
                 val state = model.getJSONObject("state")
                 parts = listOf("panels", "color_panel", "palette_panel").map(model::opt) +
                     state.keys().asSequence().filter { it !in listOf("command_search", "revision") }.sorted().map(state::opt).toList()

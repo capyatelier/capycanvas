@@ -117,16 +117,48 @@ fun CanvasHost.workspaceCapture(): String {
     return result
 }
 
-fun CanvasHost.importStripes(width: Int, height: Int) {
-    val stripes = File(instrumentation.targetContext.cacheDir, "Stripes.png")
-    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+fun CanvasHost.measurementReport(reset: Boolean = false): JSONObject {
+    val done = CountDownLatch(1)
+    var report = JSONObject()
+    measurements(reset) { report = it; done.countDown() }
+    assertTrue("Measurement report", done.await(30, TimeUnit.SECONDS))
+    return report
+}
+
+fun documentRequest(handle: Long, command: String): Pair<Int, JSONObject> {
+    Native.dispatch(handle, obj("type" to "invoke", "command" to command).toString())
+    fun state() = JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
+    fun request(state: JSONObject) = state.array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
+    var state = state()
+    if (request(state).getJSONObject("kind").getJSONObject("request").getString("type") == "confirm_close") {
+        Native.documentClose(handle, request(state).getInt("id"), "\"discard\"")
+        state = state()
+    }
+    return request(state).getInt("id") to state.getJSONObject("document_file")
+}
+
+fun CanvasHost.newDocument(width: Int, height: Int) {
+    val task = runBlocking { withNative { h ->
+        val (id, file) = documentRequest(h, "new_document")
+        Native.projectTask(h, id, "null", file.getLong("epoch"), file.getLong("revision"))
+    } }
     try {
-        val canvas = android.graphics.Canvas(bitmap)
-        canvas.drawColor(android.graphics.Color.BLACK)
-        val white = android.graphics.Paint().apply { color = android.graphics.Color.WHITE }
-        for (x in 0 until width step 16) canvas.drawRect(x.toFloat(), 0f, x + 8f, height.toFloat(), white)
-        stripes.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-    } finally { bitmap.recycle() }
+        Native.projectOptions(task, obj("extent" to JSONArray(listOf(width, height)), "color" to obj("space" to "Srgb", "depth" to "U8"), "background" to "White").toString())
+        Native.projectWork(task, -1, width, height)
+        val until = SystemClock.uptimeMillis() + 60_000
+        while (true) {
+            try { runBlocking { withNative { Native.projectAdopt(it, task, "null") } }; break }
+            catch (e: IllegalStateException) { if (e.message?.contains("Wait for drawing capture") != true || SystemClock.uptimeMillis() > until) throw e }
+            documentChanged(); SystemClock.sleep(16)
+        }
+    } finally { Native.projectFree(task) }
+    documentChanged()
+    awaitMain("the new ${width}x$height drawing", 120_000) {
+        snapshot?.optJSONObject("state")?.array("tabs")?.optJSONObject(0)?.optInt("width") == width && snapshot?.optBoolean("brush_ready") == true
+    }
+}
+
+fun CanvasHost.importImage(file: File) {
     val hostFileJobs = DocumentController.nativeFileJobsForTest
     DocumentController.nativeFileJobsForTest = true
     try {
@@ -137,7 +169,7 @@ fun CanvasHost.importStripes(width: Int, height: Int) {
             Native.imageImportTask(h, request.getInt("id"), Native.imageImportContext(h, "null", "null"), control)
         } }
         try {
-            Native.imageImportRead(task, ParcelFileDescriptor.open(stripes, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), stripes.name)
+            Native.imageImportRead(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), file.name)
             runBlocking { withNative { Native.imageImportAdopt(it, task) } }
         } finally { Native.imageImportFree(task); Native.captureFree(control) }
         instrumentation.runOnMainSync { documentChanged() }
@@ -145,6 +177,19 @@ fun CanvasHost.importStripes(width: Int, height: Int) {
             snapshot?.optJSONObject("state")?.array("requests")?.objects()?.none { it.getJSONObject("kind").optString("type") == "document" } == true
         }
     } finally { DocumentController.nativeFileJobsForTest = hostFileJobs }
+}
+
+fun CanvasHost.importStripes(width: Int, height: Int) {
+    val stripes = File(instrumentation.targetContext.cacheDir, "Stripes.png")
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    try {
+        val canvas = android.graphics.Canvas(bitmap)
+        canvas.drawColor(android.graphics.Color.BLACK)
+        val white = android.graphics.Paint().apply { color = android.graphics.Color.WHITE }
+        for (x in 0 until width step 16) canvas.drawRect(x.toFloat(), 0f, x + 8f, height.toFloat(), white)
+        stripes.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    } finally { bitmap.recycle() }
+    importImage(stripes)
 }
 
 fun screenshot(path: String, inspect: ((Bitmap) -> Unit)? = null) {

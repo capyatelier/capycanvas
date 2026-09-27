@@ -735,10 +735,10 @@ class AndroidRasterTest {
         }
         compose.onNodeWithTag("color-hdr-intensity").performTouchInput { swipe(point(.3),point(.7),300) }
         compose.waitForIdle()
-        assertEquals("EV drag follows the visible arc",3.6,host.panelContent!!.getJSONObject("color_panel").getDouble("intensity"),.06)
+        assertEquals("EV drag follows the visible arc",3.6,host.snapshot!!.getJSONObject("color_panel").getDouble("intensity"),.06)
         compose.onNodeWithTag("color-hdr-intensity").performTouchInput { down(point(.7));moveTo(point(.4));cancel() }
         compose.waitForIdle()
-        assertEquals("Cancelled EV drag restores its value",3.6,host.panelContent!!.getJSONObject("color_panel").getDouble("intensity"),.06)
+        assertEquals("Cancelled EV drag restores its value",3.6,host.snapshot!!.getJSONObject("color_panel").getDouble("intensity"),.06)
     }
 
     @Test fun hdrEditingProofDeliveryAndRecovery() {
@@ -766,7 +766,7 @@ class AndroidRasterTest {
         compose.onNodeWithText("Use Color").assertIsEnabled()
         compose.onNodeWithTag("color-intensity-value").performTextReplacement("3")
         compose.onNodeWithText("Use Color").performClick();refresh()
-        assertEquals(3.0,host.panelContent!!.getJSONObject("color_panel").getDouble("intensity"),.001)
+        assertEquals(3.0,host.snapshot!!.getJSONObject("color_panel").getDouble("intensity"),.001)
         compose.onAllNodesWithText("Palettes…").assertCountEquals(0)
         native {h->
             val color=JSONObject(Native.colorUi(obj("type" to "form","request" to obj("color" to obj("space" to "Srgb","rgba" to org.json.JSONArray(listOf(0,0,0,1))),"document_space" to "Srgb","document_depth" to "F16","model" to "linear_rgb","intensity" to 0,"fields" to org.json.JSONArray(listOf("-4","4","1","100")))).toString())).getJSONObject("value")
@@ -782,7 +782,7 @@ class AndroidRasterTest {
         compose.runOnUiThread{host.customize(obj("type" to "set_panel_visible","panel" to "layers","visible" to true))};refresh()
         val layerGroup=host.snapshot!!.getJSONObject("layout").array("groups").objects().first{ "layers" in it.array("panels").values() }.getInt("id")
         compose.runOnUiThread{host.dispatch(obj("type" to "select_panel_tab","group" to layerGroup,"panel" to "layers"))};refresh()
-        val thumbnailId=host.panelContent!!.getJSONObject("state").array("layers").objects().first{!it.optBoolean("group")&&it.isNull("content_icon")}.getLong("id")
+        val thumbnailId=host.snapshot!!.getJSONObject("state").array("layers").objects().first{!it.optBoolean("group")&&it.isNull("content_icon")}.getLong("id")
         val thumbnailTag="layer-thumbnail-$thumbnailId-false"
         try{compose.waitUntil(10_000){compose.onAllNodesWithTag(thumbnailTag,useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty()}}
         catch(e:AssertionError){File(activity.getExternalFilesDir(null),"thumbnail-failure-tree.txt").writeText(compose.onRoot(useUnmergedTree=true).printToString());File(activity.getExternalFilesDir(null),"thumbnail-failure-state.json").writeText(host.snapshot.toString());throw e}
@@ -1186,13 +1186,6 @@ class AndroidRasterTest {
         return obj("count" to sorted.size,"p50" to sorted[((sorted.size-1)*.5).toInt()],"p95" to sorted[((sorted.size-1)*.95).toInt()],"p99" to sorted[((sorted.size-1)*.99).toInt()],"max" to sorted.last())
     }
     private fun motion(tool: Int, steps: Int, center: Pair<Double, Double> = 1000.0 to 750.0, during: (() -> Unit)? = null): JSONObject {
-        fun measurements(reset: Boolean): JSONObject {
-            val done = java.util.concurrent.CountDownLatch(1)
-            var result: JSONObject? = null
-            host.measurements(reset) { result = it; done.countDown() }
-            assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS))
-            return result!!
-        }
         fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(
             instrumentation.uiAutomation.executeShellCommand(command)
         ).use { it.readBytes().decodeToString() }
@@ -1209,7 +1202,7 @@ class AndroidRasterTest {
             instrumentation.uiAutomation.takeScreenshot()?.let{shot->output.resolveSibling(output.name+".png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
         }
         val start=SystemClock.uptimeMillis();val source=when(tool){android.view.MotionEvent.TOOL_TYPE_MOUSE->android.view.InputDevice.SOURCE_MOUSE;android.view.MotionEvent.TOOL_TYPE_FINGER->android.view.InputDevice.SOURCE_TOUCHSCREEN;else->android.view.InputDevice.SOURCE_STYLUS}
-        measurements(true)
+        host.measurementReport(true)
         val duration = if (steps >= 180) InstrumentationRegistry.getArguments()
             .getString("motionDurationMs")?.toLong()?.coerceIn(5_000L, 30_000L) ?: 5_000L else 1_000L
         var i = 0
@@ -1240,7 +1233,7 @@ class AndroidRasterTest {
         // motion. Capture its timeline independently of GPU timings.
         SystemClock.sleep(100)
         native { Unit } // Drain delivered input, without creating a frame.
-        val timeline = measurements(false)
+        val timeline = host.measurementReport(false)
         assertNull(host.failure)
         if (timeline.getJSONArray("inputs").length() == 0) {
             instrumentation.uiAutomation.takeScreenshot()?.let { screenshot ->

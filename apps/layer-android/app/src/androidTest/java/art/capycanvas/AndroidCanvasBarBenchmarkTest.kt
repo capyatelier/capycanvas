@@ -2,7 +2,6 @@ package art.capycanvas
 
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
 import android.view.FrameMetrics
@@ -21,8 +20,6 @@ import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -52,55 +49,14 @@ class AndroidCanvasBarBenchmarkTest {
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
             val host = activity.host
             fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
-            fun waitFor(label: String, condition: () -> Boolean) {
-                val start = SystemClock.uptimeMillis()
-                while (true) {
-                    var ready = false
-                    instrumentation.runOnMainSync { assertNull(host.failure); ready = condition() }
-                    if (ready) return
-                    check(SystemClock.uptimeMillis() - start < 120_000) { "$label did not settle: ${host.actionError}" }
-                    SystemClock.sleep(20)
-                }
-            }
-            fun action(value: JSONObject) {
-                val done = CountDownLatch(1)
-                instrumentation.runOnMainSync { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
-                assertTrue(done.await(30, TimeUnit.SECONDS))
-            }
+            fun waitFor(label: String, condition: () -> Boolean) = host.awaitMain(label, 120_000, condition = condition)
+            fun action(value: JSONObject) = host.drain(value, 30)
             fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
             fun state() = host.snapshot!!.getJSONObject("state")
-            fun report(reset: Boolean): JSONObject {
-                val done = CountDownLatch(1); var value = JSONObject()
-                host.measurements(reset) { value = it; done.countDown() }
-                check(done.await(30, TimeUnit.SECONDS)); return value
-            }
-            fun documentRequest(handle: Long, command: String): JSONObject {
-                Native.dispatch(handle, obj("type" to "invoke", "command" to command).toString())
-                fun current() = JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
-                var s = current()
-                var request = s.array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
-                if (request.getJSONObject("kind").getJSONObject("request").getString("type") == "confirm_close") {
-                    Native.documentClose(handle, request.getInt("id"), "\"discard\"")
-                    s = current()
-                    request = s.array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
-                }
-                return request.put("file", s.getJSONObject("document_file"))
-            }
             var documentExtent = "${width}x$height"
             fun newDocument(extent: Pair<Int, Int> = width to height) {
-                val (width, height) = extent
-                documentExtent = "${width}x$height"
-                val task = native { h ->
-                    val request = documentRequest(h, "new_document"); val file = request.getJSONObject("file")
-                    Native.projectTask(h, request.getInt("id"), "null", file.getLong("epoch"), file.getLong("revision"))
-                }
-                try {
-                    Native.projectOptions(task, obj("extent" to JSONArray(listOf(width, height)), "color" to obj("space" to "Srgb", "depth" to "U8"), "background" to "White").toString())
-                    Native.projectWork(task, -1, width, height)
-                    native { Native.projectAdopt(it, task, "null") }
-                } finally { Native.projectFree(task) }
-                instrumentation.runOnMainSync { host.documentChanged() }
-                waitFor("document") { state().getJSONArray("tabs").getJSONObject(0).optInt("width") == width && host.snapshot?.optBoolean("brush_ready") == true }
+                documentExtent = "${extent.first}x${extent.second}"
+                host.newDocument(extent.first, extent.second)
                 invoke("fit_canvas"); invoke("zoom_out")
                 SystemClock.sleep(800)
             }
@@ -119,16 +75,7 @@ class AndroidCanvasBarBenchmarkTest {
                 return file
             }
             fun place(file: File) {
-                val control = Native.captureControl()
-                val task = native { h ->
-                    val request = documentRequest(h, "import_image")
-                    Native.imageImportTask(h, request.getInt("id"), Native.imageImportContext(h, "null", "null"), control)
-                }
-                try {
-                    Native.imageImportRead(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), file.name)
-                    native { Native.imageImportAdopt(it, task) }
-                } finally { Native.imageImportFree(task); Native.captureFree(control) }
-                instrumentation.runOnMainSync { host.documentChanged() }
+                host.importImage(file)
                 waitFor("placement bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "placement" }
                 waitFor("canvas ready") { host.snapshot?.let { it.optBoolean("canvas_ready") && it.optBoolean("brush_ready") } == true }
             }
@@ -210,7 +157,7 @@ class AndroidCanvasBarBenchmarkTest {
             var refreshRate = 0f
             fun measure(label: String, operation: () -> Unit) {
                 SystemClock.sleep(600)
-                report(true)
+                host.measurementReport(true)
                 native { Native.completionTimings(it, true) }
                 synchronized(uiFrames) { uiFrames.clear() }
                 val bars = mutableListOf<Boolean>()
@@ -226,7 +173,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val ended = System.nanoTime()
                 instrumentation.runOnMainSync { refreshRate = activity.window.decorView.display.refreshRate }
                 val completions = native { JSONArray(Native.completionTimings(it, false)) }
-                val metrics = report(false)
+                val metrics = host.measurementReport(false)
                 val frames = metrics.getJSONArray("frames").let { a -> (0 until a.length()).map { a.getJSONArray(it) } }
                     .filter { it.getLong(1) in began..ended }
                 val submitted = frames.filter { it.getLong(6) > 0 }

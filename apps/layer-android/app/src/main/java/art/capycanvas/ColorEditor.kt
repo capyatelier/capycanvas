@@ -31,9 +31,9 @@ internal fun displayColor(preview: JSONObject): Color {
     return Color(v.getDouble(0).toFloat(), v.getDouble(1).toFloat(), v.getDouble(2).toFloat(), v.getDouble(3).toFloat())
 }
 internal fun documentRgbSpace(host: CanvasHost): String =
-    host.panelContent?.objectOrNull("color_panel")?.optString("rgb_space")?.takeIf { it.isNotBlank() } ?: "Srgb"
+    host.snapshot?.objectOrNull("color_panel")?.optString("rgb_space")?.takeIf { it.isNotBlank() } ?: "Srgb"
 private fun colorEpoch(host: CanvasHost): Long =
-    host.panelContent?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch") ?: 0L
+    host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch") ?: 0L
 
 @Composable internal fun ManagedColorButton(host: CanvasHost, label: String, value: JSONObject, enabled: Boolean, swatchOnly: Boolean = false, onChange: (JSONObject) -> Unit) {
     var editing by remember { mutableStateOf<JSONObject?>(null) }
@@ -52,10 +52,10 @@ private fun colorEpoch(host: CanvasHost): Long =
 
 @Composable internal fun ColorEditorDialog(host: CanvasHost, initial: JSONObject, onDismiss: () -> Unit, initialIntensity:Float?=null, onIntensity:(Float?)->Unit={}, onUse: (JSONObject) -> Unit) {
     val epoch = remember { colorEpoch(host) }
-    val hdr=host.panelContent?.objectOrNull("color_panel")?.optBoolean("hdr")==true
+    val hdr=host.snapshot?.objectOrNull("color_panel")?.optBoolean("hdr")==true
     var form by remember {
         mutableStateOf(JSONObject(Native.colorUi(obj("type" to "form", "request" to obj(
-            "color" to initial, "document_depth" to host.panelContent?.objectOrNull("state")?.displayColors()?.optString("hdr_depth"), "document_space" to documentRgbSpace(host), "model" to (if(hdr)"linear_rgb" else "document_rgb"), "intensity" to initialIntensity, "rendition" to host.panelContent?.objectOrNull("color_panel")?.objectOrNull("rendition")
+            "color" to initial, "document_depth" to host.snapshot?.objectOrNull("state")?.displayColors()?.optString("hdr_depth"), "document_space" to documentRgbSpace(host), "model" to (if(hdr)"linear_rgb" else "document_rgb"), "intensity" to initialIntensity, "rendition" to host.snapshot?.objectOrNull("color_panel")?.objectOrNull("rendition")
         )).toString())))
     }
     var intensityText by remember {mutableStateOf(if(form.getJSONObject("draft").isNull("intensity"))"" else form.getJSONObject("draft").getDouble("intensity").toString())}
