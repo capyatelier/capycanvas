@@ -2406,19 +2406,9 @@ impl Workspace {
     }
     fn install_gpu(self: &Rc<Self>) {
         let actions = gtk::gio::SimpleActionGroup::new();
-        let stopped = gtk::gio::SimpleAction::new("worker-stopped", None);
-        stopped.connect_activate(glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            move |_, _| this.wake()
-        ));
-        actions.add_action(&stopped);
-        let display = gtk::gio::SimpleAction::new("display-changed", None);
-        display.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, _| this.wake()));
-        actions.add_action(&display);
-        let pending = gtk::gio::SimpleAction::new("pending-work", None);
-        pending.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, _| this.wake()));
-        actions.add_action(&pending);
+        let wake = gtk::gio::SimpleAction::new("wake", None);
+        wake.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, _| this.wake()));
+        actions.add_action(&wake);
         self.area.insert_action_group("canvas", Some(&actions));
         self.area.connect_realize(glib::clone!(
             #[weak(rename_to = this)]

@@ -24,6 +24,15 @@ mod tests;
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
+/// Wake the canvas once GTK is next idle, from any thread.
+fn wake_canvas(area: &gtk::glib::SendWeakRef<gtk::Picture>) {
+    let area = area.clone();
+    gtk::glib::idle_add_once(move || {
+        if let Some(area) = area.upgrade() {
+            let _ = area.activate_action("canvas.wake", None);
+        }
+    });
+}
 
 struct Frame {
     time_seconds: f32,
@@ -308,13 +317,7 @@ impl RenderWorker {
                 if let Err(error) = result {
                     let _ = worker_failure.set(error.clone());
                     let _ = reply.send(Reply::Error(error));
-                    // GTK may already be idle. Schedule, never invoke inline
-                    // on the worker when the main context is temporarily free.
-                    gtk::glib::idle_add_once(move || {
-                        if let Some(area) = failure_area.upgrade() {
-                            let _ = area.activate_action("canvas.worker-stopped", None);
-                        }
-                    });
+                    wake_canvas(&failure_area);
                 }
             })
             .map_err(error)?;
@@ -1363,23 +1366,13 @@ impl Worker {
     fn report_pending_work(&self, pending_work: &AtomicBool) {
         let pending = self.renderer.has_pending_work();
         if pending && !pending_work.swap(pending, Ordering::AcqRel) {
-            let area = self.area.clone();
-            gtk::glib::idle_add_once(move || {
-                if let Some(area) = area.upgrade() {
-                    let _ = area.activate_action("canvas.pending-work", None);
-                }
-            });
+            wake_canvas(&self.area);
         }
         pending_work.store(pending, Ordering::Release);
     }
     fn report_display(&self, reply: &mpsc::Sender<Reply>) -> Result<(), String> {
         reply.send(Reply::DisplayHeadroom(self.display_headroom, self.hdr_encoding)).map_err(error)?;
-        let area = self.area.clone();
-        gtk::glib::idle_add_once(move || {
-            if let Some(area) = area.upgrade() {
-                let _ = area.activate_action("canvas.display-changed", None);
-            }
-        });
+        wake_canvas(&self.area);
         Ok(())
     }
     fn enable_hdr(&mut self) -> Result<(), String> {
