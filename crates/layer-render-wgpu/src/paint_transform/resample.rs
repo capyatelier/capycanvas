@@ -53,10 +53,11 @@ impl Resample {
     }
 }
 
-/// A transaction's layer reduced to one display level, drawn from its
-/// originals a few blocks per frame, and what resampling it binds. With a
+/// A transaction's layer reduced to one display level from its originals a
+/// few `pending` regions per frame, and what resampling it binds. With a
 /// selection that keeps some pixels in place, `image` holds the pixels that
-/// move and `kept` the others.
+/// move and `kept` the others, and each region is a block drawn exactly.
+/// Otherwise each is a page reduced whole.
 pub(crate) struct Reduced {
     pub transaction: u64,
     pub level: u32,

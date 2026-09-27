@@ -1493,6 +1493,56 @@ fn drags_resample_the_layer_reduced_to_the_display_level() {
 }
 
 #[test]
+fn a_selection_reduces_whole_the_pages_it_covers_or_leaves_out() {
+    let extent = [1536, 1024];
+    let doc = document(extent);
+    let layer = doc.layers[0].id;
+    let part = layer_core::Selection::polygon(
+        [[300., 200.], [1100., 200.], [1100., 800.], [300., 800.]].map(|[x, y]| Point { x, y }).to_vec(),
+    )
+    .unwrap();
+    let [mut direct, mut reference] = complete_pair(&doc);
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.2, 0.);
+    for r in [&mut direct, &mut reference] {
+        submit(r, &doc, v, true);
+    }
+    let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap();
+    let start = preview(layer, false, Some(part.clone()), layer_core::TransformMap::Affine(layer_core::Affine::IDENTITY));
+    for r in [&mut direct, &mut reference] {
+        r.set_transform_preview(Some(&start)).unwrap();
+        submit(r, &doc, v, false);
+    }
+    let mut frames = 0;
+    while direct.has_pending_work() {
+        frames += 1;
+        assert!(frames < 8, "the layer is reduced within a few frames");
+        submit(&mut direct, &doc, v, false);
+    }
+    assert_eq!(direct.transforms.as_ref().unwrap().reduced_level(), Some(level));
+    let transforms = direct.transforms.as_ref().unwrap();
+    assert!(
+        (1..transforms.reduced_from_originals()).contains(&transforms.reduced_exactly()),
+        "only the pages the selection's edge crosses are drawn exactly: {} of {}",
+        transforms.reduced_exactly(),
+        transforms.reduced_from_originals()
+    );
+    let moved = preview(
+        layer,
+        true,
+        Some(part),
+        layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 400., y: 120. })),
+    );
+    let composed = direct.metrics.composited_pixels;
+    for r in [&mut direct, &mut reference] {
+        r.set_transform_preview(Some(&moved)).unwrap();
+        submit(r, &doc, v, false);
+    }
+    assert_eq!(direct.metrics.composited_pixels, composed, "the drag draws into the display");
+    let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+    assert!(largest <= 1e-4 && mean <= 1e-7, "largest {largest}, mean {mean}");
+}
+
+#[test]
 fn placed_layers_resample_their_reduced_copy_and_settle_exactly() {
     let mut doc = document([1536, 1024]);
     let layer = doc.layers[0].id;
@@ -1964,25 +2014,25 @@ fn moving_warps_resample_the_reduced_layer_into_the_display_and_settle_exactly()
 }
 
 #[test]
-fn a_whole_placed_photo_drags_from_its_placement_preview_while_its_originals_decode() {
-    let extent = [3072, 2304];
+fn a_whole_placed_photo_is_reduced_from_its_placement_preview_like_its_originals() {
+    let extent = [1536, 1024];
     let [w, h] = extent.map(|n| n as f32);
     let mut doc = document(extent);
     doc.layers[0].source = Some(photo(extent, 7, |x, y| if (x / 83 + y / 59) % 4 == 0 { 30000 } else { 65535 }));
     doc.layers[0].properties.placement =
-        layer_core::Affine::around(Point { x: 1536., y: 1152. }, [0.45, 0.45], 0.2, Point { x: 90., y: -40. });
+        layer_core::Affine::around(Point { x: 768., y: 512. }, [0.45, 0.45], 0.2, Point { x: 90., y: -40. });
     let layer = doc.layers[0].id;
     let all = layer_core::Selection::polygon(
         [[0., 0.], [w, 0.], [w, h], [0., h]].map(|[x, y]| Point { x, y }).to_vec(),
     )
     .unwrap();
-    let v = centered_view([doc.width, doc.height], [320, 240], 0.1, 0.);
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.2, 0.);
     let start = preview(layer, false, Some(all.clone()), layer_core::TransformMap::Affine(layer_core::Affine::IDENTITY));
     let moving = preview(
         layer,
         true,
         Some(all),
-        layer_core::TransformMap::Affine(layer_core::Affine::around(Point { x: 1400., y: 1100. }, [0.9, 1.1], 0.2, Point { x: 30., y: -12. })),
+        layer_core::TransformMap::Affine(layer_core::Affine::around(Point { x: 700., y: 500. }, [0.9, 1.1], 0.2, Point { x: 30., y: -12. })),
     );
     let drawn: Vec<_> = [true, false]
         .into_iter()
@@ -1992,35 +2042,25 @@ fn a_whole_placed_photo_drags_from_its_placement_preview_while_its_originals_dec
             let level = r.live_display.as_ref().unwrap().sampled_level().unwrap();
             r.set_transform_preview(Some(&start)).unwrap();
             let mut frames = 0;
-            loop {
+            while r.transforms.as_ref().unwrap().reduced_level().is_none() {
                 if !mips {
                     r.scene.as_mut().unwrap().forget_placement_mips();
                 }
                 submit(&mut r, &doc, v, false);
-                let reduced = r.transforms.as_ref().unwrap().reduced_level().is_some();
-                if (mips && reduced) || !r.has_pending_work() {
-                    break;
-                }
                 frames += 1;
                 assert!(frames < 16, "the layer is reduced within a few frames");
             }
             assert_eq!(r.transforms.as_ref().unwrap().reduced_level(), Some(level + 1));
-            assert_eq!(r.warming, mips, "only the placement preview is ready before the originals decode");
             assert_eq!(
-                r.transforms.as_ref().unwrap().reduced_blocks() == 0,
+                r.transforms.as_ref().unwrap().reduced_from_originals() == 0,
                 mips,
                 "the copy comes from the placement preview when it is current"
             );
+            assert!(!r.warming, "a layer that moves whole decodes no originals ahead");
             let composed = r.metrics.composited_pixels;
-            let undecoded = r.transforms.as_ref().unwrap().undecoded_originals();
             r.set_transform_preview(Some(&moving)).unwrap();
             submit(&mut r, &doc, v, false);
             assert_eq!(r.metrics.composited_pixels, composed, "the drag draws into the display");
-            assert_eq!(
-                r.transforms.as_ref().unwrap().undecoded_originals(),
-                undecoded,
-                "the drag neither waits for the originals nor decodes them"
-            );
             display_levels(&r, level)
         })
         .collect();

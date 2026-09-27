@@ -1,9 +1,27 @@
 //! Work done ahead of a drag, and recomposition after one, spread over
-//! frames by how long the GPU spent on earlier frames that did it, so a drag
-//! that starts meanwhile does not wait behind it.
+//! frames by how long the GPU spent on earlier frames that did the same kind
+//! of work, so a drag that starts meanwhile does not wait behind it.
 use crate::frame_timing::{GpuFrameSample, GpuFrameTimer};
 use std::collections::VecDeque;
 use std::time::Duration;
+
+/// Kinds of preparation, each with its own cost per unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Work {
+    /// Static layers composed around a moving one.
+    Layers,
+    /// A placed layer's own pixels copied for its drag.
+    Placement,
+    /// Pages of a transformed layer reduced for its drag.
+    Reduce,
+    /// Blocks of a still transform preview drawn exactly into the display.
+    Display,
+    /// Pages of a still transform preview drawn at full resolution.
+    Settle,
+    /// Tiles recomposed after a drag.
+    Recompose,
+}
+const KINDS: usize = 6;
 
 /// GPU time a frame that prepares should take.
 const TARGET: Duration = Duration::from_millis(10);
@@ -14,73 +32,91 @@ const MOST_UNITS: usize = 96;
 /// Frames that prepared whose GPU time is still to be read.
 const PENDING_FRAMES: usize = 8;
 
-/// Units of preparation, each about one 256 x 256 tile of GPU work, a frame
-/// may do. Measured from where a frame's preparation starts, the count
-/// doubles after preparation that took under half of TARGET on the GPU,
-/// grows by one under TARGET, and halves after longer. Unmeasured, it stays
-/// where it began.
+/// Units of each kind of preparation a frame may do: tiles, pages or blocks.
+/// Measured from the start of a frame's first preparation to the end of its
+/// last, and counted against the kind that started, the count doubles after
+/// preparation that took under half of TARGET on the GPU, grows by one under
+/// TARGET, and halves after longer. Unmeasured, it stays where it began.
 pub(super) struct Preparation {
-    units: usize,
+    units: [usize; KINDS],
     measured: bool,
     timer: Option<GpuFrameTimer>,
     frame: u64,
-    timing: bool,
-    pending: VecDeque<u64>,
+    started: Option<Work>,
+    ended: bool,
+    pending: VecDeque<(u64, Work)>,
 }
 impl Preparation {
     /// Preparation measured by GPU timestamps when `measured` and the device
     /// has them, otherwise always the most.
     pub fn new(measured: bool) -> Self {
         Self {
-            units: if measured { FIRST_UNITS } else { MOST_UNITS },
+            units: [if measured { FIRST_UNITS } else { MOST_UNITS }; KINDS],
             measured,
             timer: None,
             frame: 0,
-            timing: false,
+            started: None,
+            ended: false,
             pending: VecDeque::new(),
         }
     }
-    /// The units this frame may prepare.
-    pub fn begin(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> usize {
+    /// Take in the GPU time of earlier frames as this one begins.
+    pub fn begin(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.started = None;
+        self.ended = false;
         if !self.measured || !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-            return self.units;
+            return;
         }
         let timer = self.timer.get_or_insert_with(|| GpuFrameTimer::new(device, queue));
         timer.poll(device, queue);
         let mut samples = [GpuFrameSample::default(); 4];
         let count = timer.take_into(&mut samples);
         for sample in &samples[..count] {
-            let Some(index) = self.pending.iter().position(|frame| *frame == sample.frame) else {
+            let Some(index) = self.pending.iter().position(|(frame, _)| *frame == sample.frame) else {
                 continue;
             };
-            self.pending.remove(index);
+            let (_, work) = self.pending.remove(index).unwrap();
             if sample.status == 1 {
-                self.units = adjust(self.units, Duration::from_nanos(sample.elapsed_ns));
+                let units = &mut self.units[work as usize];
+                *units = adjust(*units, Duration::from_nanos(sample.elapsed_ns));
             }
         }
-        self.units
     }
-    /// Measure the GPU time from here until `end`, as preparation begins in
-    /// this frame.
-    pub fn start(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        if self.timing {
+    /// The units of `work` this frame may do.
+    pub fn units(&self, work: Work) -> usize {
+        self.units[work as usize]
+    }
+    /// Measure the GPU time from here as `work` begins, unless this frame's
+    /// preparation started earlier.
+    pub fn start(&mut self, encoder: &mut wgpu::CommandEncoder, work: Work) {
+        if self.started.is_some() {
             return;
         }
         if let Some(timer) = &mut self.timer {
             self.frame += 1;
-            self.timing = timer.begin_encoded(encoder, self.frame);
+            self.started = timer.begin_encoded(encoder, self.frame).then_some(work);
         }
     }
-    /// Finish measuring this frame's preparation.
+    /// Measure until here, right after a preparation, unless a later one
+    /// ends further on.
     pub fn end(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        if !std::mem::take(&mut self.timing) {
-            return;
+        if self.started.is_some() {
+            self.ended = true;
+            self.timer.as_mut().unwrap().end_encoded(encoder);
         }
-        self.timer.as_mut().unwrap().end_encoded(encoder);
+    }
+    /// Finish measuring this frame, here when no preparation ended earlier.
+    pub fn finish(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        let Some(work) = self.started else {
+            return;
+        };
+        if !self.ended {
+            self.end(encoder);
+        }
         if self.pending.len() == PENDING_FRAMES {
             self.pending.pop_front();
         }
-        self.pending.push_back(self.frame);
+        self.pending.push_back((self.frame, work));
     }
     /// Note that the measured frame was submitted.
     pub fn submitted(&mut self, queue: &wgpu::Queue) {
@@ -112,6 +148,6 @@ mod tests {
         assert_eq!(adjust(FIRST_UNITS, TARGET * 2), FIRST_UNITS / 2);
         assert_eq!(adjust(1, TARGET * 10), 1, "a frame always prepares something");
         assert_eq!(adjust(MOST_UNITS, Duration::ZERO), MOST_UNITS);
-        assert_eq!(Preparation::new(false).units, MOST_UNITS);
+        assert_eq!(Preparation::new(false).units(Work::Settle), MOST_UNITS);
     }
 }

@@ -38,7 +38,7 @@ impl TileSnapshot {
         let b = self.bounds;
         [b.min_x() as i32, b.min_y() as i32, b.width() as i32, b.height() as i32]
     }
-    fn contains(&self, coordinate: [u32; 2]) -> bool {
+    pub fn contains(&self, coordinate: [u32; 2]) -> bool {
         self.pages.contains_key(&coordinate)
             || self.backing.as_ref().is_some_and(|(data, _)| {
                 data.tiles.contains_key(&layer_core::raster::TileKey {
@@ -71,42 +71,18 @@ impl TileSnapshot {
         positions: Option<&wgpu::TextureView>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<TransformSource, GpuRasterError> {
-        let mut originals = Vec::new();
+        let mut tiles = Vec::with_capacity(sources.len());
         for c in sources {
-            if self.pages.contains_key(c) {
-                continue;
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some((data, space)) = &self.backing
-                && let Some(tile) = data.tiles.get(&layer_core::raster::TileKey {
-                    plane: layer_core::raster::RasterPlane::Color,
-                    coordinate: *c,
-                })
-            {
-                let blob = tile.wait_backing().map_err(GpuRasterError::Effect)?;
-                originals.push((*c, r.backed_raster_tile(&blob, *space, encoder)?));
-                continue;
-            }
-            if let Some(original) = &self.original {
-                if let Some(tile) = r.original_source_tile(original, *c, encoder)? {
-                    originals.push((*c, tile));
-                }
+            if let Some(tile) = self.original_page(r, *c, encoder)? {
+                tiles.push((*c, tile));
             }
         }
-        let views: Vec<_> = sources
+        let views: Vec<_> = tiles
             .iter()
-            .filter_map(|c| {
-                let view = self.pages.get(c).map(|p| &p.view).or_else(|| {
-                    originals
-                        .iter()
-                        .find(|(at, _)| at == c)
-                        .map(|(_, tile)| &tile.view)
-                })?;
-                Some(TransformTile {
-                    view,
-                    origin: c.map(|v| (v * PAGE_SIZE) as i32),
-                    extent: [PAGE_SIZE; 2],
-                })
+            .map(|(c, tile)| TransformTile {
+                view: &tile.view,
+                origin: c.map(|v| (v * PAGE_SIZE) as i32),
+                extent: [PAGE_SIZE; 2],
             })
             .collect();
         let source = pass
@@ -120,6 +96,35 @@ impl TileSnapshot {
             )
             .map_err(GpuRasterError::InvalidTransform)?;
         Ok(source)
+    }
+    /// The original page at `coordinate`, decoded if it is not captured, or
+    /// None where the layer has no pixels.
+    pub fn original_page(
+        &self,
+        r: &mut WgpuRasterizer,
+        coordinate: [u32; 2],
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<Option<crate::source_access::RawTile>, GpuRasterError> {
+        if let Some(page) = self.pages.get(&coordinate) {
+            return Ok(Some(crate::source_access::RawTile {
+                texture: page.texture.clone(),
+                view: page.view.clone(),
+            }));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((data, space)) = &self.backing
+            && let Some(tile) = data.tiles.get(&layer_core::raster::TileKey {
+                plane: layer_core::raster::RasterPlane::Color,
+                coordinate,
+            })
+        {
+            let blob = tile.wait_backing().map_err(GpuRasterError::Effect)?;
+            return r.backed_raster_tile(&blob, *space, encoder).map(Some);
+        }
+        match &self.original {
+            Some(original) => r.original_source_tile(original, coordinate, encoder),
+            None => Ok(None),
+        }
     }
 }
 

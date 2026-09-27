@@ -105,9 +105,12 @@ moving layer into the level the view samples, at most sixteen layer pixels per
 texel side, and the coarser levels are reduced from it. While the Transform is
 still, the layer is reduced once per transaction as the exact area mean of its
 full-resolution pixels, to the level of its own pixels that matches the display
-under its placement. A whole placed photo is copied instead from its placement
-preview when that preview is current and holds the level. When the selection
-keeps some pixels in place, those are reduced apart from the pixels it moves.
+under its placement. It is reduced a page at a time, decoding a photo's
+original tiles as it reaches them. When the selection keeps some pixels in
+place, those are reduced apart from the pixels it moves: a page the selection
+covers or leaves out entirely is reduced whole, and one its edge crosses is
+drawn exactly. A whole placed photo is copied instead from its placement
+preview when that preview is current and holds the level.
 Each drag frame
 [resamples](../../crates/layer-render-wgpu/src/paint_transform/resample.rs) the
 copy with one bilinear sample per texel, the moved pixels through the transform
@@ -115,9 +118,8 @@ and the placement and the kept ones through the placement alone. With content
 above or below, the
 [layered display](../../crates/layer-render-wgpu/src/paint_transform/layers.rs)
 composes the static layers once at that level, then places the moving layer
-between them with its blend. A drag waits for them and the reduced copy, and
-for the moving photo's decoded tiles unless the copy came from its placement
-preview. After release, the still preview of an unplaced
+between them with its blend. A drag waits for them and the reduced copy. After
+release, the still preview of an unplaced
 layer is drawn as the exact area mean; a placed layer keeps its resampled
 preview. Later frames draw the preview's pages and recompose what the drag
 touched a few tiles at a time, reporting pending work so hosts keep drawing.
