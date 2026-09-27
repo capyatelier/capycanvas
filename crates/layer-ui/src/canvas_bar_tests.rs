@@ -477,6 +477,22 @@ fn a_stroke_that_misses_the_transform_publishes_nothing() {
 }
 
 #[test]
+fn a_handle_drag_leaves_command_availability_alone() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    s.frame(2, 2).unwrap();
+    let quad = s.operation.quad();
+    let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
+    let moved = Point { x: centre.x + 20., y: centre.y };
+    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), centre).unwrap();
+    assert_eq!(s.frame(3, 3).unwrap().regions, 0, "a drag starts without publishing");
+    assert!(!s.command(CommandId::CancelSelection).enabled, "a transform drag is not a selection gesture");
+    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), moved).unwrap();
+    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), moved).unwrap();
+    assert_eq!(s.frame(4, 4).unwrap().regions & regions::COMMANDS, 0, "release publishes values, not availability");
+}
+
+#[test]
 fn transform_values_publish_when_a_handle_drag_ends() {
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);

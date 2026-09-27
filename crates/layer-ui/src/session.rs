@@ -2029,7 +2029,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .is_some_and(|id| document.rulers.iter().any(|r| r.id == id))
             }
             CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
-            CommandId::CancelSelection => !self.layer_interaction.path.is_empty(),
+            CommandId::CancelSelection => {
+                !self.layer_interaction.path.is_empty() && self.layer_interaction.tool.selection_tool().is_some()
+            }
             CommandId::RemoveSelectionPoint => {
                 self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon })
                     && !self.layer_interaction.path.is_empty()
