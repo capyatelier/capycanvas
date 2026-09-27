@@ -108,31 +108,22 @@ impl MaskRenderer {
                 )
             })
         });
-        let init_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("selection coverage layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let init_layout = crate::bindings::layout(device, "selection coverage layout", &[
+            crate::bindings::buffer(
+                0,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Uniform,
+                false,
+                None,
+            ),
+            crate::bindings::buffer(
+                1,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                None,
+            ),
+        ]);
         let init_shader = {
             let device = device.clone();
             Deferred::new(move || {
@@ -285,36 +276,15 @@ impl MaskRenderer {
                     contents: &bytes,
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
-                let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("mask initial coverage"),
-                    layout: &self.init_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: coverage.as_entire_binding(),
-                        },
-                    ],
-                });
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("mask initialize page"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
+                let binding = crate::bindings::group(device, "mask initial coverage", &self.init_layout, [
+                    buffer.as_entire_binding(),
+                    coverage.as_entire_binding(),
+                ]);
+                let mut pass = encoder.color_pass(
+                    "mask initialize page",
+                    &view,
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                );
                 pass.set_pipeline(&self.initialize);
                 pass.set_bind_group(0, &binding, &[]);
                 pass.draw(0..3, 0..1);
@@ -374,22 +344,11 @@ impl WgpuRasterizer {
                 let source = self.device.portable_blend().then(|| self.portable_blend.source(&self.device,&page.view,wgpu::TextureFormat::Rgba32Float));
                 let count = if source.is_some() { batch.dab_count } else { 1 };
                 for dab in 0..count {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("incremental visibility mask brush"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: source.as_ref().unwrap_or(&page.view),
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: if source.is_some() { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
+                let mut pass = encoder.color_pass(
+                    "incremental visibility mask brush",
+                    source.as_ref().unwrap_or(&page.view),
+                    if source.is_some() { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
+                );
                 let local = damage
                     .intersect(page_rect(coordinate))
                     .page_local(coordinate);

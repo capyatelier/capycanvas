@@ -317,14 +317,7 @@ impl WgpuRasterizer {
                 "Raster backing queue is full".into(),
             ));
         }
-        if runtime.worker.is_none() {
-            runtime.worker = Some(CaptureWorker::new(
-                (*self.device).clone(),
-                self.raster_buffers.clone(),
-                #[cfg(target_arch = "wasm32")]
-                runtime.encoder.clone().ok_or_else(|| GpuRasterError::Effect("Browser raster worker is unavailable".into()))?,
-            )?);
-        }
+        runtime.ensure_worker(&self.device, &self.raster_buffers)?;
         let runtime = self.raster.as_ref().unwrap();
         let mut inputs = Vec::new();
         for layer in layers {

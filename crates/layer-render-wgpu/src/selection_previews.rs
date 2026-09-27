@@ -16,6 +16,11 @@ pub(super) struct SelectionPreviews {
     pub texture: Option<wgpu::TextureView>,
     pipeline: Option<PreviewPipeline>,
 }
+impl SelectionPreviews {
+    fn reset(&mut self) {
+        (self.key, self.buffer, self.texture) = (None, None, None);
+    }
+}
 struct PreviewPipeline {
     layout: wgpu::BindGroupLayout,
     merge: Deferred<wgpu::ComputePipeline>,
@@ -23,29 +28,13 @@ struct PreviewPipeline {
 }
 impl PreviewPipeline {
     fn new(r: &WgpuRasterizer) -> Self {
-        let layout = r
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("saved mask display"),
-                entries: &[0, 1, 2].map(|binding| wgpu::BindGroupLayoutEntry {
-                    binding,
-                    visibility: if binding == 2 {
-                        wgpu::ShaderStages::COMPUTE
-                    } else {
-                        wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT
-                    },
-                    ty: wgpu::BindingType::Buffer {
-                        ty: match binding {
-                            0 => wgpu::BufferBindingType::Uniform,
-                            1 => wgpu::BufferBindingType::Storage { read_only: true },
-                            _ => wgpu::BufferBindingType::Storage { read_only: false },
-                        },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }),
-            });
+        let layout = crate::bindings::layout(&r.device, "saved mask display", &[0, 1, 2].map(|binding| crate::bindings::buffer(
+            binding,
+            if binding == 2 { wgpu::ShaderStages::COMPUTE } else { wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT },
+            match binding { 0 => wgpu::BufferBindingType::Uniform, 1 => wgpu::BufferBindingType::Storage { read_only: true }, _ => wgpu::BufferBindingType::Storage { read_only: false }, },
+            false,
+            None,
+        )));
         let pl = r
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -54,30 +43,10 @@ impl PreviewPipeline {
                 immediate_size: 0,
             });
         let clip = include_str!("selection_clip.wgsl").replace("@group(1)", "@group(0)");
-        let shader = |source: &str| {
-            r.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("saved mask display"),
-                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[&clip, source])),
-            })
-        };
+        let shader = |source: &str| Deferred::wgsl(&r.device, "saved mask display", compose_wgsl(&[&clip, source]).into_owned());
         let compute = shader(include_str!("selection_previews.wgsl"));
         let draw = shader(include_str!("selection_thumbnail.wgsl"));
-        let merge = {
-            let (device, layout) = (r.device.clone(), pl.clone());
-            Deferred::pipeline(move |mode| {
-                mode.compute(
-                    &device,
-                    &wgpu::ComputePipelineDescriptor {
-                        label: Some("saved mask overlays"),
-                        layout: Some(&layout),
-                        module: &compute,
-                        entry_point: Some("merge"),
-                        compilation_options: Default::default(),
-                        cache: None,
-                    },
-                )
-            })
-        };
+        let merge = Deferred::compute(&r.device, "saved mask overlays", &pl, &compute, "merge");
         let thumbnail = {
             let (device, layout) = (r.device.clone(), pl);
             Deferred::pipeline(move |mode| {
@@ -137,16 +106,7 @@ impl PreviewPipeline {
                     .collect::<Vec<_>>(),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("saved mask display"),
-            layout: &self.layout,
-            entries: &[(0, &params), (1, input), (2, output)].map(|(binding, b)| {
-                wgpu::BindGroupEntry {
-                    binding,
-                    resource: b.as_entire_binding(),
-                }
-            }),
-        })
+        crate::bindings::group(&r.device, "saved mask display", &self.layout, [&params, input, output].map(|b| b.as_entire_binding()))
     }
     fn ready(&self, r: &WgpuRasterizer, thumbnail: bool) -> Result<bool, GpuRasterError> {
         let Some(startup) = &r.startup else {
@@ -187,9 +147,7 @@ impl WgpuRasterizer {
                 previews.definitions.insert(layer.id, coverage);
             }
             let Some(options) = self.selection_overlay else {
-                previews.key = None;
-                previews.buffer = None;
-                previews.texture = None;
+                previews.reset();
                 return Ok(());
             };
             let masks: Vec<_> = layers
@@ -219,9 +177,7 @@ impl WgpuRasterizer {
                 })
                 .collect();
             if masks.is_empty() {
-                previews.key = None;
-                previews.buffer = None;
-                previews.texture = None;
+                previews.reset();
                 return Ok(());
             }
             let key = (masks, self.document_extent, options.saved_protected);
@@ -391,19 +347,11 @@ impl WgpuRasterizer {
             self.device.working_format(),
             "selection layer thumbnail",
         );
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("selection layer thumbnail"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &result.view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
+        let mut pass = encoder.color_pass(
+            "selection layer thumbnail",
+            &result.view,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        );
         pass.set_pipeline(&gpu.thumbnail);
         pass.set_bind_group(0, &bind, &[]);
         pass.draw(0..3, 0..1);

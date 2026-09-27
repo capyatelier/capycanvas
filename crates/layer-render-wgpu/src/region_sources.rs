@@ -52,15 +52,7 @@ impl RawRegions {
     pub fn new(device: &PipelineDevice) -> Self {
         // Portable individual texture bindings, not a descriptor-indexing feature.
         // A batch fits in the existing sixteen-slot decoded source cache.
-        let mut bindings = String::new();
-        for i in 0..BATCH_TILES {
-            bindings += &format!("@group(0) @binding({i}) var source{i}: texture_2d<f32>;\n");
-        }
-        bindings += "fn tile_load(i:u32,p:vec2<i32>)->vec4<f32>{switch i {\n";
-        for i in 0..BATCH_TILES {
-            bindings += &format!("case {i}u:{{return textureLoad(source{i},p,0);}}\n");
-        }
-        bindings += "default:{return vec4<f32>(0.);}}}\n";
+        let bindings = crate::texture_switch(0, BATCH_TILES, "tile_load");
         let shader_source = compose_wgsl(&[
             &working_color::shader(device),
             include_str!("region_sources.wgsl"),
@@ -70,41 +62,17 @@ impl RawRegions {
             &include_str!("selection_clip.wgsl")
                 .replace("@group(1) @binding(1)", "@group(0) @binding(19)"),
         ]);
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("tiled region classification"),
-            source: wgpu::ShaderSource::Wgsl(
-                format!("{shader_source}{}", include_str!("tonal_cache_write.wgsl")).into(),
-            ),
-        });
+        let shader = Deferred::wgsl(&device, "tiled region classification", format!("{shader_source}{}", include_str!("tonal_cache_write.wgsl")));
         let mut entries: Vec<_> = (0..BATCH_TILES as u32)
-            .map(|binding| wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            })
+            .map(|binding| crate::bindings::texture(binding, wgpu::ShaderStages::COMPUTE, false))
             .collect();
-        entries.extend((16..22).map(|binding| wgpu::BindGroupLayoutEntry {
+        entries.extend((16..22).map(|binding| crate::bindings::buffer(
             binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: if binding == 16 || binding == 20 {
-                    wgpu::BufferBindingType::Uniform
-                } else {
-                    wgpu::BufferBindingType::Storage {
-                        read_only: binding == 19,
-                    }
-                },
-                has_dynamic_offset: binding == 16,
-                min_binding_size:
-                    (binding == 16).then(|| std::num::NonZeroU64::new(PARAMETER_BYTES).unwrap()),
-            },
-            count: None,
-        }));
+            wgpu::ShaderStages::COMPUTE,
+            if binding == 16 || binding == 20 { wgpu::BufferBindingType::Uniform } else { wgpu::BufferBindingType::Storage { read_only: binding == 19, } },
+            binding == 16,
+            (binding == 16).then(|| std::num::NonZeroU64::new(PARAMETER_BYTES).unwrap()),
+        )));
         let mut cached_entries: Vec<_> = entries
             .iter()
             .filter(|e| matches!(e.binding, 18 | 20 | 21))
@@ -121,21 +89,14 @@ impl RawRegions {
                 },
                 count: None,
             });
-            cached_entries.push(wgpu::BindGroupLayoutEntry {
+            cached_entries.push(crate::bindings::texture_of(
                 binding,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
-                    multisampled: false,
-                },
-                count: None,
-            });
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::TextureSampleType::Float { filterable: false },
+                wgpu::TextureViewDimension::D2Array,
+            ));
         }
-        let cached_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("cached tonal scalars"),
-            entries: &cached_entries,
-        });
+        let cached_layout = crate::bindings::layout(device, "cached tonal scalars", &cached_entries);
         let cached_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("cached tonal scalars"),
@@ -147,46 +108,16 @@ impl RawRegions {
         let cached_source = format!("{shader_source}{}", include_str!("tonal_cache_read.wgsl"));
         #[cfg(test)]
         let cached_source = cached_source + include_str!("tonal_streaming_test.wgsl");
-        let cached_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("cached tonal scalars"),
-            source: wgpu::ShaderSource::Wgsl(cached_source.into()),
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("tiled region classification"),
-            entries: &entries,
-        });
+        let cached_shader = Deferred::wgsl(&device, "cached tonal scalars", cached_source);
+        let layout = crate::bindings::layout(device, "tiled region classification", &entries);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tiled region classification"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = |entry| {
-            let (device, layout, shader) = (
-                device.clone(),
-                if entry == "tonal_cached" || entry == "tonal_streaming_control" {
-                    cached_pipeline_layout.clone()
-                } else {
-                    pipeline_layout.clone()
-                },
-                if entry == "tonal_cached" || entry == "tonal_streaming_control" {
-                    cached_shader.clone()
-                } else {
-                    shader.clone()
-                },
-            );
-            Deferred::pipeline(move |mode| {
-                mode.compute(
-                    &device,
-                    &wgpu::ComputePipelineDescriptor {
-                        label: Some(entry),
-                        layout: Some(&layout),
-                        module: &shader,
-                        entry_point: Some(entry),
-                        compilation_options: Default::default(),
-                        cache: None,
-                    },
-                )
-            })
+        let pipeline = |entry| match entry {
+            "tonal_cached" | "tonal_streaming_control" => Deferred::compute(device, entry, &cached_pipeline_layout, &cached_shader, entry),
+            _ => Deferred::compute(device, entry, &pipeline_layout, &shader, entry),
         };
         Self {
             capture: Default::default(),

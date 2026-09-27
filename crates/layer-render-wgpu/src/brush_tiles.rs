@@ -241,16 +241,7 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
                 && let Some(inverse) = inverse
             {
                 let tile = page_rect(coordinate);
-                let rect = layer_core::Rect {
-                    min: layer_core::Point {
-                        x: tile.min_x() as f32,
-                        y: tile.min_y() as f32,
-                    },
-                    max: layer_core::Point {
-                        x: tile.max_x() as f32,
-                        y: tile.max_y() as f32,
-                    },
-                };
+                let rect = tile.to_rect();
                 if !hull.touches(rect, inverse) {
                     continue;
                 }

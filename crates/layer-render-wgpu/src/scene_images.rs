@@ -66,24 +66,11 @@ impl ImageComposition {
         back: &Image,
     ) -> Self {
         let output = Image::new(r, bounds, "clipping composition cache");
-        let inputs = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("cached clipping composition inputs"),
-            layout: &scene.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&front.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&back.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&r.sampler),
-                },
-            ],
-        });
+        let inputs = crate::bindings::group(&r.device, "cached clipping composition inputs", &scene.layout, [
+            wgpu::BindingResource::TextureView(&front.view),
+            wgpu::BindingResource::TextureView(&back.view),
+            wgpu::BindingResource::Sampler(&r.sampler),
+        ]);
         let mut data = [0f32; 32];
         let [w, h] = [bounds.width(), bounds.height()].map(|v| v as f32);
         data[..6].copy_from_slice(&[0., 0., w, h, w, h]);

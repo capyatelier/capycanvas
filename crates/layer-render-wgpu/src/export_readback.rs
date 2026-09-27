@@ -40,22 +40,11 @@ impl WgpuRasterizer {
                 "exact readback tile",
             );
             {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("exact readback color conversion"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
+                let mut pass = encoder.color_pass(
+                    "exact readback color conversion",
+                    &view,
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                );
                 pass.set_pipeline(&self.pipelines.export);
                 pass.set_bind_group(0, &binding, &[]);
                 pass.draw(0..3, 0..1);

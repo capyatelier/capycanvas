@@ -74,48 +74,29 @@ impl NativeCapture {
     pub fn storage_bytes(&self) -> u64 {
         STATUS_BYTES + self.outputs.iter().map(|o| o.resource.bytes()).sum::<u64>()
     }
+    fn next_transfer(&self, validated: bool, label: &str) -> Result<(usize, PreparedCapture, wgpu::CommandBuffer), String> {
+        let mut count = 0;
+        let mut size = 0;
+        for output in &self.outputs {
+            if size + output.resource.bytes() > CAPTURE_CHUNK {
+                break;
+            }
+            count += 1;
+            size += output.resource.bytes();
+        }
+        let copies: Vec<_> = self.outputs[..count].iter().map(NativeOutput::capture).collect();
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+        let capture = prepare_capture(&self.device, &self.pool, &mut encoder, &copies, (!validated).then_some(&self.status))
+            .map_err(|e| e.to_string())?;
+        Ok((count, capture, encoder.finish()))
+    }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn finish(mut self) -> Result<(), String> {
         let mut validated = false;
         while !self.outputs.is_empty() {
             self.pool.priority.wait()?;
-            let mut count = 0;
-            let mut size = 0;
-            for output in &self.outputs {
-                if size + output.resource.bytes() > CAPTURE_CHUNK {
-                    break;
-                }
-                count += 1;
-                size += output.resource.bytes();
-            }
-            let copies: Vec<_> = self.outputs[..count]
-                .iter()
-                .map(NativeOutput::capture)
-                .collect();
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("background native raster readback"),
-                });
-            let capture = prepare_capture(
-                &self.device,
-                &self.pool,
-                &mut encoder,
-                &copies,
-                (!validated).then_some(&self.status),
-            )
-            .map_err(|e| e.to_string())?;
-            struct Transfer(Arc<BufferPool>, u64);
-            impl Drop for Transfer {
-                fn drop(&mut self) {
-                    self.0.transfer.fetch_sub(self.1, Ordering::Relaxed);
-                }
-            }
-            self.pool
-                .transfer
-                .fetch_add(capture.staging_bytes, Ordering::Relaxed);
-            let _transfer = Transfer(self.pool.clone(), capture.staging_bytes);
-            let commands = encoder.finish();
+            let (count, capture, commands) = self.next_transfer(validated, "background native raster readback")?;
+            let _transfer = Reserved::new(&self.pool.transfer, capture.staging_bytes);
             // Recheck after preparation. A frame can race this check, but only
             // this one bounded transfer can then precede it on the GPU queue.
             self.pool.priority.wait()?;
@@ -168,27 +149,10 @@ impl NativeCapture {
         let mut validated = false;
         while !self.outputs.is_empty() {
             self.pool.priority.wait_browser().await;
-            let mut count = 0;
-            let mut size = 0;
-            for output in &self.outputs {
-                if size + output.resource.bytes() > CAPTURE_CHUNK { break; }
-                count += 1;
-                size += output.resource.bytes();
-            }
-            let copies: Vec<_> = self.outputs[..count].iter().map(NativeOutput::capture).collect();
-            let mut commands = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("browser native raster readback"),
-            });
-            let capture = prepare_capture(&self.device, &self.pool, &mut commands, &copies,
-                (!validated).then_some(&self.status)).map_err(|e| e.to_string())?;
-            struct Transfer(Arc<BufferPool>, u64);
-            impl Drop for Transfer {
-                fn drop(&mut self) { self.0.transfer.fetch_sub(self.1, Ordering::Relaxed); }
-            }
-            self.pool.transfer.fetch_add(capture.staging_bytes, Ordering::Relaxed);
-            let _transfer = Transfer(self.pool.clone(), capture.staging_bytes);
+            let (count, capture, commands) = self.next_transfer(validated, "browser native raster readback")?;
+            let _transfer = Reserved::new(&self.pool.transfer, capture.staging_bytes);
             self.pool.priority.wait_browser().await;
-            self.queue.submit([commands.finish()]);
+            self.queue.submit([commands]);
             capture.submitted_device(&self.device).finish_browser(worker).await?;
             validated = true;
             for output in self.outputs.drain(..count) { self.pool.put_resource(output.resource); }

@@ -154,75 +154,7 @@ impl Scene {
     ) -> Result<usize, GpuRasterError> {
         let out = self.alloc(r, wgpu::Color::TRANSPARENT);
         let stored = r.paint_layers.iter().find(|l| l.id == layer.id);
-        let preview = r.preview_layer_id == Some(layer.id)
-            && !r.preview_damage.intersect(page_rect(c)).is_empty();
-        let watercolor_preview = preview
-            && packet.dab_batches.iter().any(|b| {
-                b.layer_id == layer.id
-                    && b.kind == DabBatchKind::Preview
-                    && b.style.execution == BrushExecution::Watercolor
-            });
-        let wet = stored.is_some_and(|s| {
-            (s.watercolor.is_some() || watercolor_preview)
-                && s.watercolor_wetness_pages
-                    .iter()
-                    .chain(
-                        r.preview_watercolor_wetness_pages
-                            .iter()
-                            .filter(|_| preview),
-                    )
-                    .any(|p| {
-                        p.coordinate[0].abs_diff(c[0]) <= 1 && p.coordinate[1].abs_diff(c[1]) <= 1
-                    })
-        });
-        if wet {
-            let binding = self.watercolor_binding(r, layer, stored.unwrap(), c, preview)?;
-            self.jobs.push(Job::Watercolor {
-                layer: layer.id,
-                target: self.pool[out].view.clone(),
-                binding,
-                record: *r
-                    .layer_style_records
-                    .get(&layer.id)
-                    .ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
-                coordinate: c,
-            });
-        } else {
-            let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
-            let predicted = if preview {
-                r.preview_page(c)
-            } else {
-                None
-            };
-            let view = if let Some(p) = predicted.filter(|_| r.preview_requires_base).or(persistent)
-            {
-                Some(p.active().view.clone())
-            } else {
-                self.source_tile(r, layer, c)?
-            };
-            if let Some(view) = view {
-                self.draw(
-                    r,
-                    out,
-                    view,
-                    None,
-                    [0., 0., 256., 256.],
-                    [1., 1., 0., 0.],
-                    true,
-                );
-            }
-            if let Some(p) = predicted.filter(|_| !r.preview_requires_base) {
-                self.draw(
-                    r,
-                    out,
-                    p.active().view.clone(),
-                    None,
-                    [0., 0., 256., 256.],
-                    [1., 1., 0., 0.],
-                    true,
-                );
-            }
-        }
+        self.paint_page(r, packet, layer, stored, c, out, [0., 0., 256., 256.])?;
         Ok(out)
     }
 }

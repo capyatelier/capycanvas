@@ -46,17 +46,10 @@ impl Picker {
         if data.is_none() || self.pipeline.is_some() {
             return;
         }
-        self.pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("color picker glass"), layout: Some(layout),
-            vertex: wgpu::VertexState { module: shader, entry_point: Some("picker_vertex"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 64, step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4], })], },
-            fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some("picker_fragment"),
-                compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })], }),
-            primitive: Default::default(), depth_stencil: None, multisample: Default::default(), multiview_mask: None, cache: None,
-        }));
+        let instance = wgpu::VertexBufferLayout { array_stride: 64, step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4] };
+        self.pipeline = Some(super::present::surface_pipeline(device, "color picker glass", layout, shader, ["picker_vertex", "picker_fragment"],
+            Some(instance), format, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)));
         self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("color picker geometry"),
             size: 64,

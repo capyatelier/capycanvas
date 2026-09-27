@@ -85,37 +85,22 @@ impl Pipelines {
         in_place: bool,
     ) -> Self {
         let layouts = std::array::from_fn(|coverage| {
-            let mut entries = vec![wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
-                },
-                count: None,
-            }];
+            let mut entries = vec![crate::bindings::buffer(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+                true,
+                NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
+            )];
             for binding in 1..=1 + coverage as u32 {
-                entries.push(wgpu::BindGroupLayoutEntry {
+                entries.push(crate::bindings::storage_texture(
                     binding,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: if in_place && binding == 1 { wgpu::StorageTextureAccess::ReadWrite }
-                            else { wgpu::StorageTextureAccess::WriteOnly },
-                        format: if binding == 1 {
-                            wgpu::TextureFormat::Rgba32Float
-                        } else {
-                            wgpu::TextureFormat::R32Float
-                        },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                });
+                    wgpu::ShaderStages::COMPUTE,
+                    if binding == 1 { wgpu::TextureFormat::Rgba32Float } else { wgpu::TextureFormat::R32Float },
+                    if in_place && binding == 1 { wgpu::StorageTextureAccess::ReadWrite } else { wgpu::StorageTextureAccess::WriteOnly },
+                ));
             }
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("dry material outputs"),
-                entries: &entries,
-            })
+            crate::bindings::layout(device, "dry material outputs", &entries)
         });
         let make_kernels = |flags: u32| {
             std::array::from_fn(|index| {

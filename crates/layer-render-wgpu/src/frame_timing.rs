@@ -59,14 +59,9 @@ impl TimestampMarker {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("timestamp marker"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-        });
+        let bind_group = crate::bindings::group(device, "timestamp marker", &pipeline.get_bind_group_layout(0), [
+            buffer.as_entire_binding(),
+        ]);
         Self {
             pipeline,
             bind_group,

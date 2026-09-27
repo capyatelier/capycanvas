@@ -252,22 +252,11 @@ impl UiImageTarget {
         source: &wgpu::BindGroup,
     ) {
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("UI image color conversion"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = encoder.color_pass(
+                "UI image color conversion",
+                &self.view,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, source, &[]);
             pass.draw(0..3, 0..1);
@@ -320,57 +309,35 @@ impl PreviewPipeline {
     fn new(r: &WgpuRasterizer) -> Self {
         let device = &r.device;
         let bounds_layout = |read_only| {
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("thumbnail bounds"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: u32::from(read_only),
-                    visibility: if read_only {
-                        wgpu::ShaderStages::VERTEX
-                    } else {
-                        wgpu::ShaderStages::COMPUTE
-                    },
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only },
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(16),
-                    },
-                    count: None,
-                }],
-            })
+            crate::bindings::layout(device, "thumbnail bounds", &[crate::bindings::buffer(
+                u32::from(read_only),
+                if read_only { wgpu::ShaderStages::VERTEX } else { wgpu::ShaderStages::COMPUTE },
+                wgpu::BufferBindingType::Storage { read_only },
+                false,
+                NonZeroU64::new(16),
+            )])
         };
         let write_bounds = bounds_layout(false);
         let read_bounds = bounds_layout(true);
-        let records = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("thumbnail page"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: NonZeroU64::new(80),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+        let records = crate::bindings::layout(device, "thumbnail page", &[
+            crate::bindings::buffer(
+                0,
+                wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+                true,
+                NonZeroU64::new(80),
+            ),
+            crate::bindings::texture(
+                1,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                true,
+            ),
+            crate::bindings::sampler(
+                2,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::SamplerBindingType::Filtering,
+            ),
+        ]);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("content-framed thumbnails"),
             source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", crate::view_color::hdr_shader(device.working_space(), layer_core::color::RgbSpace::Srgb), include_str!("thumbnails.wgsl")).into()),
@@ -523,28 +490,11 @@ impl PreviewPipeline {
                                 .view
                         }
                     };
-                    Ok(r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("thumbnail page"),
-                        layout: &self.records,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                    buffer: &records,
-                                    offset: 0,
-                                    size: NonZeroU64::new(80),
-                                }),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::TextureView(&view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: wgpu::BindingResource::Sampler(&r.sampler),
-                            },
-                        ],
-                    }))
+                    Ok(crate::bindings::group(&r.device, "thumbnail page", &self.records, [
+                        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &records, offset: 0, size: NonZeroU64::new(80), }),
+                        wgpu::BindingResource::TextureView(&view),
+                        wgpu::BindingResource::Sampler(&r.sampler),
+                    ]))
                 })
                 .collect()
         };
@@ -581,35 +531,18 @@ impl PreviewPipeline {
                 if batch == 0 { r.encode_clear(encoder,&result.view,"clear portable thumbnail"); }
                 let temporary=r.portable_blend.source(&r.device,&result.view,r.device.working_format());
                 for (i,source) in bindings.iter().enumerate() {
-                    let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label:Some("portable thumbnail"), color_attachments:&[Some(wgpu::RenderPassColorAttachment {view:&temporary,resolve_target:None,depth_slice:None,ops:wgpu::Operations {load:wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),store:wgpu::StoreOp::Store}})],..Default::default()
-                    });
+                    let mut pass=encoder.color_pass("portable thumbnail",&temporary,wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
                     pass.set_pipeline(&self.draw);pass.set_bind_group(0,&read,&[]);
                     pass.set_bind_group(1,source,&[((batch*SOURCE_SLOTS+i)*stride) as u32]);pass.draw(0..3,0..1);drop(pass);
                     r.portable_blend.apply(&r.device,encoder,&temporary,&result.view,PixelRect::full([32,32]),0);
                 }
                 continue;
             }
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("thumbnail framing and checkerboard"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &result.view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: if batch == 0 {
-                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                        } else {
-                            wgpu::LoadOp::Load
-                        },
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = encoder.color_pass(
+                "thumbnail framing and checkerboard",
+                &result.view,
+                if batch == 0 { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
+            );
             pass.set_pipeline(&self.draw);
             pass.set_bind_group(0, &read, &[]);
             for (i, source) in bindings.iter().enumerate() {

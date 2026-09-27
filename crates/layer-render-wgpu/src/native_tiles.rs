@@ -229,9 +229,11 @@ impl NativeTileEncoder {
                 for i in 0..count as u32 {
                     let base = i * bindings;
                     if in_place {
-                        entries.push(read_write_texture_entry(
+                        entries.push(crate::bindings::storage_texture(
                             base,
+                            wgpu::ShaderStages::COMPUTE,
                             wgpu::TextureFormat::Rgba32Float,
+                            wgpu::StorageTextureAccess::ReadWrite,
                         ));
                         textures.push_str(&format!("@group(0) @binding({base}) var working{i}:texture_storage_2d<rgba32float,read_write>;\n"));
                         loads.push_str(&format!(
@@ -269,10 +271,7 @@ impl NativeTileEncoder {
                         STATUS_BYTES,
                     ),
                 ]);
-                let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("native tile encoder inputs"),
-                    entries: &entries,
-                });
+                let layout = crate::bindings::layout(device, "native tile encoder inputs", &entries);
                 let body = include_str!("native_tiles/encode.wgsl")
                     .replace(
                         "PUBLICATION_GUARD",
@@ -301,26 +300,7 @@ impl NativeTileEncoder {
                         bind_group_layouts: &[Some(&layout)],
                         immediate_size: 0,
                     });
-                pipelines.push({
-                    let (device, pipeline_layout) = (device.clone(), pipeline_layout.clone());
-                    crate::Deferred::pipeline(move |mode| {
-                        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                            label: Some("native SDR tile writeback"),
-                            source: wgpu::ShaderSource::Wgsl(source.into()),
-                        });
-                        mode.compute(
-                            &device,
-                            &wgpu::ComputePipelineDescriptor {
-                                label: Some("native SDR tile writeback"),
-                                layout: Some(&pipeline_layout),
-                                module: &shader,
-                                entry_point: Some("main"),
-                                compilation_options: Default::default(),
-                                cache: None,
-                            },
-                        )
-                    })
-                });
+                pipelines.push(crate::Deferred::compute(&device, "native SDR tile writeback", &pipeline_layout, &crate::Deferred::wgsl(&device, "native SDR tile writeback", source), "main"));
                 layouts.push(layout);
             }
         }
@@ -537,39 +517,15 @@ fn full_parameters(device: &wgpu::Device, records: &[[u32; 8]]) -> (wgpu::Buffer
 }
 
 fn sampled_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
+    crate::bindings::texture(binding, wgpu::ShaderStages::COMPUTE, false)
 }
 fn storage_texture_entry(binding: u32, format: wgpu::TextureFormat) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
+    crate::bindings::storage_texture(
         binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::StorageTexture {
-            access: wgpu::StorageTextureAccess::WriteOnly,
-            format,
-            view_dimension: wgpu::TextureViewDimension::D2,
-        },
-        count: None,
-    }
-}
-
-fn read_write_texture_entry(
-    binding: u32,
-    format: wgpu::TextureFormat,
-) -> wgpu::BindGroupLayoutEntry {
-    let mut entry = storage_texture_entry(binding, format);
-    if let wgpu::BindingType::StorageTexture { access, .. } = &mut entry.ty {
-        *access = wgpu::StorageTextureAccess::ReadWrite;
-    }
-    entry
+        wgpu::ShaderStages::COMPUTE,
+        format,
+        wgpu::StorageTextureAccess::WriteOnly,
+    )
 }
 
 /// Optional native feature for exact in-place SDR publication. Check formats as
@@ -603,16 +559,13 @@ pub(crate) fn buffer_entry(
     dynamic: bool,
     bytes: u64,
 ) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
+    crate::bindings::buffer(
         binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty,
-            has_dynamic_offset: dynamic,
-            min_binding_size: wgpu::BufferSize::new(bytes),
-        },
-        count: None,
-    }
+        wgpu::ShaderStages::COMPUTE,
+        ty,
+        dynamic,
+        wgpu::BufferSize::new(bytes),
+    )
 }
 fn validate(r: &NativeTileRequest<'_>, in_place: bool) -> Result<(), GpuRasterError> {
     let dimensions = |t: &wgpu::Texture| {

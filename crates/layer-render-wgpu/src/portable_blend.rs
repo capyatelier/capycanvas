@@ -11,55 +11,23 @@ pub(crate) struct Pipelines {
 impl Pipelines {
     pub fn new(device: &PipelineDevice) -> Self {
         let layouts = std::array::from_fn(|i| {
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("portable Float32 blend"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: if i == 0 {
-                                wgpu::TextureFormat::Rgba32Float
-                            } else {
-                                wgpu::TextureFormat::R32Float
-                            },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                ],
-            })
+            crate::bindings::layout(device, "portable Float32 blend", &[
+                crate::bindings::buffer(
+                    0,
+                    wgpu::ShaderStages::COMPUTE,
+                    wgpu::BufferBindingType::Uniform,
+                    false,
+                    None,
+                ),
+                crate::bindings::texture(1, wgpu::ShaderStages::COMPUTE, false),
+                crate::bindings::texture(2, wgpu::ShaderStages::COMPUTE, false),
+                crate::bindings::storage_texture(
+                    3,
+                    wgpu::ShaderStages::COMPUTE,
+                    if i == 0 { wgpu::TextureFormat::Rgba32Float } else { wgpu::TextureFormat::R32Float },
+                    wgpu::StorageTextureAccess::WriteOnly,
+                ),
+            ])
         });
         let pipelines = std::array::from_fn(|i| {
             let device = device.clone();
@@ -224,30 +192,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let index = usize::from(target.texture().format() == wgpu::TextureFormat::R32Float);
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("portable Float32 blend"),
-            layout: &self.layouts[index],
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        &old.create_view(&Default::default()),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(target),
-                },
-            ],
-        });
+        let bind = crate::bindings::group(device, "portable Float32 blend", &self.layouts[index], [
+            params.as_entire_binding(),
+            wgpu::BindingResource::TextureView(source),
+            wgpu::BindingResource::TextureView( &old.create_view(&Default::default()), ),
+            wgpu::BindingResource::TextureView(target),
+        ]);
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&self.pipelines[index]);
         pass.set_bind_group(0, &bind, &[]);

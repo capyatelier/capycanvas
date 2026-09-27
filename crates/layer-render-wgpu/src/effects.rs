@@ -189,38 +189,20 @@ impl Effects {
         if let Some(cache) = &r.validated_effects {
             return cache.fork();
         }
-        let layout = r
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("effect parameters"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(16),
-                    },
-                    count: None,
-                }],
-            });
-        let masks = r
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("effect mask inputs"),
-                entries: &(0..MASK_SLOTS)
-                    .map(|i| wgpu::BindGroupLayoutEntry {
-                        binding: i as u32,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    })
-                    .collect::<Vec<_>>(),
-            });
+        let layout = crate::bindings::layout(&r.device, "effect parameters", &[crate::bindings::buffer(
+            0,
+            wgpu::ShaderStages::FRAGMENT,
+            wgpu::BufferBindingType::Storage { read_only: true },
+            false,
+            NonZeroU64::new(16),
+        )]);
+        let masks = crate::bindings::layout(
+            &r.device,
+            "effect mask inputs",
+            &(0..MASK_SLOTS)
+                .map(|i| crate::bindings::texture(i as u32, wgpu::ShaderStages::FRAGMENT, true))
+                .collect::<Vec<_>>(),
+        );
         let pipeline_layout = r
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -424,26 +406,16 @@ impl Effects {
         let binding = if reusable {
             self.instances[&ids].binding.clone()
         } else {
-            r.device().create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("effect parameter binding"),
-                layout: &self.layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                }],
-            })
+            crate::bindings::group(&r.device(), "effect parameter binding", &self.layout, [
+                buffer.as_entire_binding(),
+            ])
         };
         let compute_binding = if reusable {
             self.instances[&ids].compute_binding.clone()
         } else {
-            r.device().create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("effect preparation binding"),
-                layout: &self.preparation.layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                }],
-            })
+            crate::bindings::group(&r.device(), "effect preparation binding", &self.preparation.layout, [
+                buffer.as_entire_binding(),
+            ])
         };
         for (pipeline, groups) in dispatches {
             self.preparation.pending.push(preparation::Dispatch {
@@ -499,15 +471,16 @@ fn effect_properties(layer: &Layer, time: f32) -> [f32; 4] {
     ]
 }
 
-fn validate_source(source: &str) -> Result<(), GpuRasterError> {
+pub(super) fn parse_validated(source: &str) -> Result<naga::Module, GpuRasterError> {
     let module = naga::front::wgsl::parse_str(source)
         .map_err(|e| GpuRasterError::Effect(e.emit_to_string(source)))?;
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .map_err(|e| GpuRasterError::Effect(e.to_string()))?;
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
+        .validate(&module)
+        .map_err(|e| GpuRasterError::Effect(e.to_string()))?;
+    Ok(module)
+}
+fn validate_source(source: &str) -> Result<(), GpuRasterError> {
+    let module = parse_validated(source)?;
     if module.global_variables.len() != 5 + MASK_SLOTS
         || module.entry_points.len() != 3
         || !module.overrides.is_empty()
@@ -732,15 +705,6 @@ mod tests {
     fn validate(p: &[Arc<EffectProgram>], execution: Execution) {
         let source =
             shader_source(p, &vec![0; p.len()], execution, Default::default(), false).unwrap();
-        let module = naga::front::wgsl::parse_str(&source)
-            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::empty(),
-        )
-        .validate(&module)
-        .unwrap();
-        assert_eq!(module.global_variables.len(), 5 + MASK_SLOTS);
-        assert_eq!(module.entry_points.len(), 3);
+        validate_source(&source).unwrap();
     }
 }

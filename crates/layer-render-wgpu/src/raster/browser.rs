@@ -117,14 +117,7 @@ impl RasterCapture {
                 };
                 chunk.buffer.unmap();
                 self.pool.put(chunk.buffer.clone());
-                struct Scratch(Arc<BufferPool>, u64);
-                impl Drop for Scratch {
-                    fn drop(&mut self) {
-                        self.0.working.fetch_sub(self.1, Ordering::Release);
-                    }
-                }
-                self.pool.working.fetch_add(size, Ordering::Release);
-                let _scratch = Scratch(self.pool.clone(), size);
+                let _scratch = super::Reserved::new(&self.pool.working, size);
                 let descriptors = chunk.entries.iter().map(|e| e.descriptor).collect();
                 let blobs = encoder(bytes, descriptors).await?;
                 if blobs.len() != chunk.entries.len() {

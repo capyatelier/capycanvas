@@ -12,69 +12,31 @@ pub(super) struct SelectionRefiner {
 impl SelectionRefiner {
     pub fn new(device: &PipelineDevice) -> Self {
         let entries: Vec<_> = (0..6)
-            .map(|binding| wgpu::BindGroupLayoutEntry {
+            .map(|binding| crate::bindings::buffer(
                 binding,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: if binding == 0 || binding == 5 {
-                        wgpu::BufferBindingType::Uniform
-                    } else {
-                        wgpu::BufferBindingType::Storage {
-                            read_only: binding < 3,
-                        }
-                    },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            })
+                wgpu::ShaderStages::COMPUTE,
+                if binding == 0 || binding == 5 { wgpu::BufferBindingType::Uniform } else { wgpu::BufferBindingType::Storage { read_only: binding < 3, } },
+                false,
+                None,
+            ))
             .collect();
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("selection options"),
-            entries: &entries,
-        });
+        let layout = crate::bindings::layout(device, "selection options", &entries);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("selection options"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let bounds_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("selection bounds"),
-            entries: &[entries[0], entries[4]],
-        });
+        let bounds_layout = crate::bindings::layout(device, "selection bounds", &[entries[0], entries[4]]);
         let bounds_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("selection bounds"),
                 bind_group_layouts: &[Some(&bounds_layout)],
                 immediate_size: 0,
             });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("selection feather and modes"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("selection_refine.wgsl").into()),
-        });
+        let shader = Deferred::wgsl(&device, "selection feather and modes", include_str!("selection_refine.wgsl"));
         let pipelines = ["feather_h", "combine", "resize_h", "bounds"].map(|entry| {
-            let (device, layout, shader) = (
-                device.clone(),
-                if entry == "bounds" {
-                    bounds_pipeline_layout.clone()
-                } else {
-                    pipeline_layout.clone()
-                },
-                shader.clone(),
-            );
-            Deferred::pipeline(move |mode| {
-                mode.compute(
-                    &device,
-                    &wgpu::ComputePipelineDescriptor {
-                        label: Some(entry),
-                        layout: Some(&layout),
-                        module: &shader,
-                        entry_point: Some(entry),
-                        compilation_options: Default::default(),
-                        cache: None,
-                    },
-                )
-            })
+            let layout = if entry == "bounds" { &bounds_pipeline_layout } else { &pipeline_layout };
+            Deferred::compute(device, entry, layout, &shader, entry)
         });
         let empty = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("no prior selection"),

@@ -420,22 +420,10 @@ impl DecodedTiles {
             let space = samples.space;
             let table = self.transfer.prepare(&r.device, space)?;
             let binding = input.bindings[transfer::Tables::index(space)].get_or_insert_with(|| {
-                r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("native integer source and shared transfer"),
-                    layout: &pipelines.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(
-                                &input.texture.create_view(&Default::default()),
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: table.as_entire_binding(),
-                        },
-                    ],
-                })
+                crate::bindings::group(&r.device, "native integer source and shared transfer", &pipelines.layout, [
+                    wgpu::BindingResource::TextureView( &input.texture.create_view(&Default::default()), ),
+                    table.as_entire_binding(),
+                ])
             });
             if samples.tile.descriptor != samples.descriptor {
                 return Err(GpuRasterError::Color(
@@ -654,31 +642,21 @@ pub(crate) struct Pipelines {
 }
 impl Pipelines {
     pub fn new(device: &PipelineDevice, uniforms: &wgpu::BindGroupLayout) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("integer source samples"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Uint,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(transfer::TABLE_BYTES),
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let layout = crate::bindings::layout(device, "integer source samples", &[
+            crate::bindings::texture_of(
+                0,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::TextureSampleType::Uint,
+                wgpu::TextureViewDimension::D2,
+            ),
+            crate::bindings::buffer(
+                1,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                wgpu::BufferSize::new(transfer::TABLE_BYTES),
+            ),
+        ]);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("source decode"),
             bind_group_layouts: &[Some(uniforms), Some(&layout)],

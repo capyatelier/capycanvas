@@ -228,14 +228,7 @@ impl FilterPreviews {
                 mapped_at_creation: false,
             }));
             self.probe_batch(r)?;
-        } else if self
-            .request
-            .as_ref()
-            .unwrap()
-            .filters
-            .iter()
-            .any(|f| !self.rows.contains_key(&f.program.id))
-        {
+        } else if self.missing_rows() {
             self.render(r)?;
         }
         Ok(true)
@@ -314,24 +307,11 @@ impl FilterPreviews {
                     contents: &data,
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
-            let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("preview probe"),
-                layout: &self.probe.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: uniform.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: winner.as_entire_binding(),
-                    },
-                ],
-            });
+            let binding = crate::bindings::group(&r.device, "preview probe", &self.probe.get_bind_group_layout(0), [
+                wgpu::BindingResource::TextureView(view),
+                uniform.as_entire_binding(),
+                winner.as_entire_binding(),
+            ]);
             {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("find preview content"),
@@ -451,6 +431,8 @@ impl FilterPreviews {
             )
             .expand(pad, extent)
         });
+        let packed_bounds = [source_bounds.min_x(), source_bounds.min_y(), source_bounds.width(), source_bounds.height()]
+            .map(|v| v as f32);
         let source = if self.point.is_some() {
             self.source = Some(create_color_target(
                 &r.device,
@@ -552,20 +534,10 @@ impl FilterPreviews {
                     extent[1] as f32,
                 ]);
                 if self.point.is_some() {
-                    data[20..24].copy_from_slice(&[
-                        source_bounds.min_x() as f32,
-                        source_bounds.min_y() as f32,
-                        source_bounds.width() as f32,
-                        source_bounds.height() as f32,
-                    ]);
+                    data[20..24].copy_from_slice(&packed_bounds);
                 }
                 if stage == 0 && self.point.is_some() {
-                    data[16..20].copy_from_slice(&[
-                        source_bounds.min_x() as f32,
-                        source_bounds.min_y() as f32,
-                        source_bounds.width() as f32,
-                        source_bounds.height() as f32,
-                    ]);
+                    data[16..20].copy_from_slice(&packed_bounds);
                 } else if stage > 0 {
                     data[16..20].copy_from_slice(&[
                         crop[0] as f32,
@@ -682,12 +654,7 @@ impl FilterPreviews {
                 return Some(Err(error));
             }
         }
-        let request = self.request.as_ref()?;
-        if request
-            .filters
-            .iter()
-            .any(|f| !self.rows.contains_key(&f.program.id))
-        {
+        if self.request.is_none() || self.missing_rows() {
             return None;
         }
         let request = self.request.take().unwrap();
@@ -814,12 +781,7 @@ impl WgpuRasterizer {
         &mut self,
     ) -> Option<Result<FilterPreviewImage, GpuRasterError>> {
         let mut previews = self.filter_previews.take()?;
-        if previews.request.as_ref().is_some_and(|request| {
-            request
-                .filters
-                .iter()
-                .any(|effect| !previews.rows.contains_key(&effect.program.id))
-        }) {
+        if previews.missing_rows() {
             let _ = self.device.poll(wgpu::PollType::Poll);
         }
         let result = previews.take(self);
@@ -829,6 +791,9 @@ impl WgpuRasterizer {
 }
 
 impl FilterPreviews {
+    fn missing_rows(&self) -> bool {
+        self.request.as_ref().is_some_and(|r| r.filters.iter().any(|f| !self.rows.contains_key(&f.program.id)))
+    }
     pub(crate) fn storage_bytes(&self) -> u64 {
         let bytes = |(texture, _): &Image| texture_bytes(texture);
         self.source.as_ref().map_or(0, bytes)

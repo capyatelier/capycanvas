@@ -40,35 +40,20 @@ impl Flood {
         self.capacity + self.empty.size()
     }
     pub fn new(device: &PipelineDevice) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("connected region"),
-            source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                include_str!("flood.wgsl"),
-                include_str!("region_refine.wgsl"),
-                &include_str!("selection_clip.wgsl")
-                    .replace("@group(1) @binding(1)", "@group(0) @binding(4)"),
-            ])),
-        });
-        let entries: Vec<_> = (1..6).map(|binding| wgpu::BindGroupLayoutEntry {
+        let shader = Deferred::wgsl(device, "connected region", compose_wgsl(&[
+            include_str!("flood.wgsl"),
+            include_str!("region_refine.wgsl"),
+            &include_str!("selection_clip.wgsl")
+                .replace("@group(1) @binding(1)", "@group(0) @binding(4)"),
+        ]));
+        let entries: Vec<_> = (1..6).map(|binding| crate::bindings::buffer(
             binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: if binding == 1 {
-                    wgpu::BufferBindingType::Uniform
-                } else {
-                    wgpu::BufferBindingType::Storage {
-                        read_only: binding == 4,
-                    }
-                },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }).collect();
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("connected region"),
-            entries: &entries,
-        });
+            wgpu::ShaderStages::COMPUTE,
+            if binding == 1 { wgpu::BufferBindingType::Uniform } else { wgpu::BufferBindingType::Storage { read_only: binding == 4 } },
+            false,
+            None,
+        )).collect();
+        let layout = crate::bindings::layout(device, "connected region", &entries);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("connected region"),
             bind_group_layouts: &[Some(&layout)],
@@ -76,26 +61,7 @@ impl Flood {
         });
         let pipelines = STAGES
             .into_iter()
-            .map(|entry| {
-                let (device, layout, shader) =
-                    (device.clone(), pipeline_layout.clone(), shader.clone());
-                (
-                    entry,
-                    Deferred::pipeline(move |mode| {
-                        mode.compute(
-                            &device,
-                            &wgpu::ComputePipelineDescriptor {
-                                label: Some(entry),
-                                layout: Some(&layout),
-                                module: &shader,
-                                entry_point: Some(entry),
-                                compilation_options: Default::default(),
-                                cache: None,
-                            },
-                        )
-                    }),
-                )
-            })
+            .map(|entry| (entry, Deferred::compute(device, entry, &pipeline_layout, &shader, entry)))
             .collect();
         Self {
             layout,

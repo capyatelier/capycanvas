@@ -271,18 +271,14 @@ impl Scene {
     }
     pub fn initialize_source_paint(&mut self, r: &mut WgpuRasterizer, layers: &[Layer], encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
         self.jobs.clear();
-        for layer in layers.iter().filter(|l| l.source.is_some() || r.native_backing(l.id).is_some()) {
+        for layer in layers {
+            if layer.source.is_none() && r.native_backing(layer.id).is_none() {
+                continue;
+            }
             let pages: Vec<_> = r.paint_layers.iter().filter(|p| p.id == layer.id)
                 .flat_map(|p| p.pages.iter().filter(|p| p.primary_needs_clear)
                     .map(|p| (p.coordinate, p.primary.view.clone()))).collect();
-            for (coordinate, target) in pages {
-                let Some(view) = self.source_tile(r, layer, coordinate)? else { continue; };
-                let mut data = [0.; 32];
-                data[..8].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0.]);
-                data[8] = 1.;
-                data[9] = 1.;
-                self.jobs.push(Job::Draw { target, sources: [view, r.empty_view.clone(), r.empty_view.clone()], data, over: false, clip: None });
-            }
+            self.copy_source_pages(r, layer, pages)?;
         }
         self.encode_jobs(r, encoder)
     }
@@ -304,23 +300,27 @@ impl Scene {
             })
             .map(|p| (p.coordinate, p.primary.view.clone()))
             .collect();
-        for (coordinate, target) in pages {
-            let Some(view) = self.source_tile(r, layer, coordinate)? else {
-                continue;
-            };
-            let mut data = [0.; 32];
-            data[..8].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0.]);
-            data[8] = 1.;
-            data[9] = 1.;
-            self.jobs.push(Job::Draw {
-                target,
-                sources: [view, r.empty_view.clone(), r.empty_view.clone()],
-                data,
-                over: false,
-                clip: None,
-            });
-        }
+        self.copy_source_pages(r, layer, pages)?;
         self.encode_jobs(r, encoder)
+    }
+    fn copy_source_pages(&mut self, r: &mut WgpuRasterizer, layer: &Layer, pages: Vec<([u32; 2], wgpu::TextureView)>) -> Result<(), GpuRasterError> {
+        for (coordinate, target) in pages {
+            let Some(view) = self.source_tile(r, layer, coordinate)? else { continue };
+            let mut data = [0.; 32];
+            data[..10].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0., 1., 1.]);
+            self.jobs.push(Job::Draw { target, sources: [view, r.empty_view.clone(), r.empty_view.clone()], data, over: false, clip: None });
+        }
+        Ok(())
+    }
+    fn encode_decode(&mut self, r: &mut WgpuRasterizer, pending: Option<sources::PendingTile>, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        if let Some(pending) = pending {
+            // Each independent query owns its ordered uniform copy. Repeated
+            // sampling between frames must not grow the record buffer.
+            self.record_count = 0;
+            self.jobs.push(Job::DecodedTile(std::sync::Arc::new(pending)));
+            self.encode_jobs(r, encoder)?;
+        }
+        Ok(())
     }
     pub fn begin_frame(&mut self) {
         self.placement.begin_frame();
@@ -440,18 +440,10 @@ impl Scene {
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<crate::source_access::RawTile, GpuRasterError> {
-        {
-            debug_assert!(self.jobs.is_empty());
-            let (tile, pending) = self.source_tiles.plan(r, source, coordinate)?;
-            if let Some(pending) = pending {
-                // Each independent query owns its ordered uniform copy. Repeated
-                // sampling between frames must not grow the record buffer.
-                self.record_count = 0;
-                self.jobs.push(Job::DecodedTile(std::sync::Arc::new(pending)));
-                self.encode_jobs(r, encoder)?;
-            }
-            Ok(tile)
-        }
+        debug_assert!(self.jobs.is_empty());
+        let (tile, pending) = self.source_tiles.plan(r, source, coordinate)?;
+        self.encode_decode(r, pending, encoder)?;
+        Ok(tile)
     }
     pub fn prepare_native_transfer(&mut self, r: &WgpuRasterizer, space: layer_core::color::RgbSpace) -> Result<crate::native_tiles::NativeTransfer, GpuRasterError> {
         self.source_tiles.prepare_transfer(&r.device, space)
@@ -468,11 +460,7 @@ impl Scene {
         }
         for request in requests {
             let (tile, pending) = self.source_tiles.plan_raster(r, request.blob, request.space, request.destination)?;
-            if let Some(pending) = pending {
-                self.record_count = 0;
-                self.jobs.push(Job::DecodedTile(std::sync::Arc::new(pending)));
-                self.encode_jobs(r, encoder)?;
-            }
+            self.encode_decode(r, pending, encoder)?;
             // Consume this view before a later request can reuse the slot.
             encoder.copy_texture_to_texture(tile.texture.as_image_copy(), request.working.as_image_copy(), tile.texture.size());
         }
@@ -506,14 +494,103 @@ impl Scene {
     }
     pub fn raster_tile_for_query(&mut self, r: &mut WgpuRasterizer, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace, encoder: &mut crate::submission::CommandEncoder) -> Result<crate::source_access::RawTile, GpuRasterError> {
         let (tile, pending) = self.source_tiles.plan_raster(r, blob, space, r.document_color().space)?;
-        if let Some(pending) = pending {
-            self.record_count = 0;
-            self.jobs.push(Job::DecodedTile(std::sync::Arc::new(pending)));
-            self.encode_jobs(r, encoder)?;
-        }
+        self.encode_decode(r, pending, encoder)?;
         Ok(tile)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn paint_page(
+        &mut self,
+        r: &WgpuRasterizer,
+        packet: FramePacket<'_>,
+        layer: &Layer,
+        stored: Option<&PaintLayer>,
+        c: [u32; 2],
+        out: usize,
+        rect: [f32; 4],
+    ) -> Result<(), GpuRasterError> {
+        let preview = r.preview_layer_id == Some(layer.id)
+            && !r.preview_damage.intersect(page_rect(c)).is_empty();
+        let watercolor_preview = preview && packet.dab_batches.iter().any(|b|
+            b.layer_id == layer.id && b.kind == DabBatchKind::Preview
+                && b.style.execution == BrushExecution::Watercolor);
+        let wet_nearby = stored.is_some_and(|stored| (stored.watercolor.is_some() || watercolor_preview)
+            && stored
+                .watercolor_wetness_pages
+                .iter()
+                .chain(
+                    r.preview_watercolor_wetness_pages
+                        .iter()
+                        .filter(|_| preview),
+                )
+                .any(|p| {
+                    p.coordinate[0].abs_diff(c[0]) <= 1
+                        && p.coordinate[1].abs_diff(c[1]) <= 1
+                }));
+        if wet_nearby {
+            let binding = self.watercolor_binding(r, layer, stored.unwrap(), c, preview)?;
+            // Aligned pages already cover the layer tile. Only a
+            // translated page needs an intermediate and placement.
+            let page = if rect == [0., 0., 256., 256.] {
+                out
+            } else {
+                self.alloc(r, wgpu::Color::TRANSPARENT)
+            };
+            self.jobs.push(Job::Watercolor {
+                layer: layer.id,
+                target: self.pool[page].view.clone(),
+                binding,
+                record: *r.layer_style_records.get(&layer.id).ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
+                coordinate: c,
+            });
+            if page != out {
+                self.draw(
+                    r,
+                    out,
+                    self.pool[page].view.clone(),
+                    None,
+                    rect,
+                    [1., 1., 0., 0.],
+                    true,
+                );
+                self.free(page);
+            }
+        } else {
+            let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
+            let predicted = if preview {
+                r.preview_page(c)
+            } else {
+                None
+            };
+            if let Some(p) =
+                predicted.filter(|_| r.preview_requires_base).or(persistent)
+            {
+                self.draw(
+                    r,
+                    out,
+                    p.active().view.clone(),
+                    None,
+                    rect,
+                    [1., 1., 0., 0.],
+                    true,
+                );
+            } else if let Some(view) = self.source_tile(r, layer, c)? {
+                self.draw(r, out, view, None, rect, [1., 1., 0., 0.], true);
+            }
+            if let Some(p) = predicted.filter(|_| !r.preview_requires_base) {
+                self.draw(
+                    r,
+                    out,
+                    p.active().view.clone(),
+                    None,
+                    rect,
+                    [1., 1., 0., 0.],
+                    true,
+                );
+            }
+        }
+        Ok(())
+    }
     fn watercolor_binding(
         &mut self,
         r: &WgpuRasterizer,
@@ -872,86 +949,7 @@ impl Scene {
                     if !intersects(rect) {
                         continue;
                     }
-                    let preview = r.preview_layer_id == Some(layer.id)
-                        && !r.preview_damage.intersect(page_rect(c)).is_empty();
-                    let watercolor_preview = preview && packet.dab_batches.iter().any(|b|
-                        b.layer_id == layer.id && b.kind == DabBatchKind::Preview
-                            && b.style.execution == BrushExecution::Watercolor);
-                    let wet_nearby = stored.is_some_and(|stored| (stored.watercolor.is_some() || watercolor_preview)
-                        && stored
-                            .watercolor_wetness_pages
-                            .iter()
-                            .chain(
-                                r.preview_watercolor_wetness_pages
-                                    .iter()
-                                    .filter(|_| preview),
-                            )
-                            .any(|p| {
-                                p.coordinate[0].abs_diff(c[0]) <= 1
-                                    && p.coordinate[1].abs_diff(c[1]) <= 1
-                            }));
-                    if wet_nearby {
-                        let binding = self.watercolor_binding(r, layer, stored.unwrap(), c, preview)?;
-                        // Aligned pages already cover the layer tile. Only a
-                        // translated page needs an intermediate and placement.
-                        let page = if rect == [0., 0., 256., 256.] {
-                            out
-                        } else {
-                            self.alloc(r, wgpu::Color::TRANSPARENT)
-                        };
-                        self.jobs.push(Job::Watercolor {
-                            layer: layer.id,
-                            target: self.pool[page].view.clone(),
-                            binding,
-                            record: *r.layer_style_records.get(&layer.id).ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
-                            coordinate: c,
-                        });
-                        if page != out {
-                            self.draw(
-                                r,
-                                out,
-                                self.pool[page].view.clone(),
-                                None,
-                                rect,
-                                [1., 1., 0., 0.],
-                                true,
-                            );
-                            self.free(page);
-                        }
-                    } else {
-                        let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
-                        let predicted = if preview {
-                            r.preview_page(c)
-                        } else {
-                            None
-                        };
-                        if let Some(p) =
-                            predicted.filter(|_| r.preview_requires_base).or(persistent)
-                        {
-                            self.draw(
-                                r,
-                                out,
-                                p.active().view.clone(),
-                                None,
-                                rect,
-                                [1., 1., 0., 0.],
-                                true,
-                            );
-                        } else if let Some(view) = self.source_tile(r, layer, c)? {
-                            self.draw(r, out, view, None, rect, [1., 1., 0., 0.], true);
-                        }
-                        if let Some(p) = predicted.filter(|_| !r.preview_requires_base) {
-                            self.draw(
-                                r,
-                                out,
-                                p.active().view.clone(),
-                                None,
-                                rect,
-                                [1., 1., 0., 0.],
-                                true,
-                            );
-                        }
-                    }
+                    self.paint_page(r, packet, layer, stored, c, out, rect)?;
                 }
             }
             out
@@ -1064,20 +1062,10 @@ impl Scene {
                 if direct_effect_mask(packet.layers, layer)
                     && !layer.effect.as_ref().unwrap().program.image_boundary()
                 {
-                    while let Some((j, next)) = siblings.peek() {
-                        if self.stop_before.is_some_and(|(stop, _)| *j <= stop)
-                            || !next.visible
-                            || next.properties.clipped != layer.properties.clipped
-                            || !direct_effect_mask(packet.layers, next)
-                            || (chain.len() >= effects::MASK_SLOTS
-                                && next.mask.as_ref().is_some_and(|m| m.enabled))
-                            || !next.effect.as_ref().is_some_and(|e| {
-                                e.program.kind == layer_core::EffectKind::Adjustment
-                                    && !e.program.image_boundary()
-                            })
-                        {
-                            break;
-                        }
+                    while let Some((j, _)) = siblings.peek().filter(|(j, next)| {
+                        self.stop_before.is_none_or(|(stop, _)| *j > stop)
+                            && fuses_after(packet.layers, layer, next, chain.len())
+                    }) {
                         chain.push(*j);
                         siblings.next();
                     }
@@ -1981,12 +1969,9 @@ impl Scene {
                     // destination. Source-specific state belongs in the input
                     // group, not a new destination binding for every tile.
                     let output = output_bindings.get(target, || {
-                        r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("scene normal layers destination"), layout,
-                            entries: &[wgpu::BindGroupEntry {
-                                binding: 0, resource: wgpu::BindingResource::TextureView(target),
-                            }],
-                        })
+                        crate::bindings::group(&r.device, "scene normal layers destination", layout, [
+                            wgpu::BindingResource::TextureView(target),
+                        ])
                     });
                     pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
                     pass.set_bind_group(1, input, &[]);
@@ -2162,32 +2147,22 @@ impl Pipelines {
         effects::Effects::new(r, &self.uniforms, &self.layout)
     }
     pub fn new(device: &PipelineDevice) -> Self {
-        let uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("scene records"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: NonZeroU64::new(128),
-                },
-                count: None,
-            }],
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("scene sources"),
-            entries: &[
-                texture_entry(0),
-                texture_entry(1),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+        let uniforms = crate::bindings::layout(device, "scene records", &[crate::bindings::buffer(
+            0,
+            wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+            wgpu::BufferBindingType::Uniform,
+            true,
+            NonZeroU64::new(128),
+        )]);
+        let layout = crate::bindings::layout(device, "scene sources", &[
+            texture_entry(0),
+            texture_entry(1),
+            crate::bindings::sampler(
+                2,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::SamplerBindingType::Filtering,
+            ),
+        ]);
         let shader = Deferred::new({
             let device = device.clone();
             move || {
@@ -2219,40 +2194,23 @@ impl Pipelines {
             })
         });
         let constant = {
-            let inputs = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("scene normal stack inputs"),
-                entries: &[
-                    texture_entry(0), texture_entry(1),
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2, visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None,
-                    }, texture_entry(3),
-                ],
-            });
-            let output = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("scene constant backdrop output"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba32Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    }, count: None,
-                }],
-            });
+            let inputs = crate::bindings::layout(device, "scene normal stack inputs", &[
+                texture_entry(0), texture_entry(1),
+                crate::bindings::sampler(2, wgpu::ShaderStages::COMPUTE, wgpu::SamplerBindingType::Filtering),
+                texture_entry(3),
+            ]);
+            let output = crate::bindings::layout(device, "scene constant backdrop output", &[crate::bindings::storage_texture(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::TextureFormat::Rgba32Float,
+                wgpu::StorageTextureAccess::WriteOnly,
+            )]);
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("scene constant backdrop"),
                 bind_group_layouts: &[Some(&uniforms), Some(&inputs), Some(&output)],
                 immediate_size: 0,
             });
-            let (device, shader) = (device.clone(), shader.clone());
-            let pipeline = Deferred::pipeline(move |mode| {
-                mode.compute(&device, &wgpu::ComputePipelineDescriptor {
-                    label: Some("scene constant backdrop"), layout: Some(&layout),
-                    module: &shader, entry_point: Some("compose_constant"),
-                    compilation_options: Default::default(), cache: None,
-                })
-            });
+            let pipeline = Deferred::compute(device, "scene constant backdrop", &layout, &shader, "compose_constant");
             (output, inputs, pipeline)
         };
         Self {
@@ -2271,34 +2229,20 @@ fn direct_effect_mask(layers: &[Layer], layer: &Layer) -> bool {
     })
 }
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
+    crate::bindings::texture(
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
+        wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+        true,
+    )
 }
 fn uniform_binding(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     buffer: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("scene uniform binding"),
-        layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                buffer,
-                offset: 0,
-                size: NonZeroU64::new(128),
-            }),
-        }],
-    })
+    crate::bindings::group(device, "scene uniform binding", layout, [
+        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer, offset: 0, size: NonZeroU64::new(128), }),
+    ])
 }
 fn local_rect(c: [u32; 2], offset: layer_core::Point, tile: [u32; 2]) -> [f32; 4] {
     [
@@ -2358,6 +2302,16 @@ fn descriptor<'a>(
     }
 }
 
+fn fusable_adjustment(layer: &Layer) -> bool {
+    layer.effect.as_ref().is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment && !e.program.image_boundary())
+}
+fn fuses_after(layers: &[Layer], head: &Layer, next: &Layer, chain: usize) -> bool {
+    next.visible
+        && next.properties.clipped == head.properties.clipped
+        && direct_effect_mask(layers, next)
+        && !(chain >= effects::MASK_SLOTS && next.mask.as_ref().is_some_and(|m| m.enabled))
+        && fusable_adjustment(next)
+}
 /// Compile only programs referenced by this document, including the fused
 /// sibling chains used by compose_group. Catalog previews are a later stage.
 pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<&Layer>, effects::Execution)> {
@@ -2387,29 +2341,11 @@ pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<&Layer>, effec
             .filter(|l| l.properties.parent == parent && l.kind != LayerKind::Background && l.is_artwork())
             .peekable();
         while let Some(layer) = siblings.next() {
-            if !layer.visible
-                || !direct_effect_mask(layers, layer)
-                || !layer.effect.as_ref().is_some_and(|e| {
-                    e.program.kind == layer_core::EffectKind::Adjustment
-                        && !e.program.image_boundary()
-                })
-            {
+            if !layer.visible || !direct_effect_mask(layers, layer) || !fusable_adjustment(layer) {
                 continue;
             }
             let mut chain = vec![layer];
-            while let Some(next) = siblings.peek() {
-                if !next.visible
-                    || next.properties.clipped != layer.properties.clipped
-                    || !direct_effect_mask(layers, next)
-                    || (chain.len() >= effects::MASK_SLOTS
-                        && next.mask.as_ref().is_some_and(|m| m.enabled))
-                    || !next.effect.as_ref().is_some_and(|e| {
-                        e.program.kind == layer_core::EffectKind::Adjustment
-                            && !e.program.image_boundary()
-                    })
-                {
-                    break;
-                }
+            while let Some(next) = siblings.peek().filter(|next| fuses_after(layers, layer, next, chain.len())) {
                 chain.push(*next);
                 siblings.next();
             }
@@ -2454,34 +2390,18 @@ impl<K: std::hash::Hash + Eq + Clone> RecentBindings<K> {
 }
 
 fn compute_source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, sources: &[wgpu::TextureView; 3]) -> wgpu::BindGroup {
-    r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("scene normal stack inputs"), layout,
-        entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&sources[0]) },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&sources[1]) },
-            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.sampler) },
-            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&sources[2]) },
-        ],
-    })
+    crate::bindings::group(&r.device, "scene normal stack inputs", layout, [
+        wgpu::BindingResource::TextureView(&sources[0]),
+        wgpu::BindingResource::TextureView(&sources[1]),
+        wgpu::BindingResource::Sampler(&r.sampler),
+        wgpu::BindingResource::TextureView(&sources[2]),
+    ])
 }
 
 fn source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, sources: &[wgpu::TextureView; 3]) -> wgpu::BindGroup {
-    r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("scene tile inputs"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&sources[0]),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&sources[1]),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(&r.sampler),
-            },
-        ],
-    })
+    crate::bindings::group(&r.device, "scene tile inputs", layout, [
+        wgpu::BindingResource::TextureView(&sources[0]),
+        wgpu::BindingResource::TextureView(&sources[1]),
+        wgpu::BindingResource::Sampler(&r.sampler),
+    ])
 }

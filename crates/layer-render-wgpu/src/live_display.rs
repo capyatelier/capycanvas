@@ -206,26 +206,17 @@ impl RetainedLevel {
         // When admitted, one complete pyramid makes every camera view a pure
         // sampling operation. Otherwise retain the finest reduced levels that
         // fit alongside a bounded visible-tile atlas.
-        let bytes = |level| {
-            plan.extent
-                .map(|v| u64::from(v.div_ceil(1u32 << level)))
-                .into_iter()
-                .product::<u64>()
-                * 16
-        };
         let Some(first) = (if complete { 0 } else { 1 }..plan.level)
             .find(|&first| {
-                plan.extent.into_iter().all(|v|
-                    v.div_ceil(1 << first) <= r.device.limits().max_texture_dimension_2d)
-                    && (first..plan.level).map(bytes).sum::<u64>() <= budget
+                plan.level_size(first).into_iter().all(|v| v <= r.device.limits().max_texture_dimension_2d)
+                    && (first..plan.level).map(|level| plan.level_bytes(level)).sum::<u64>() <= budget
             })
         else {
             return Vec::new();
         };
         (first..plan.level)
             .map(|level| {
-                let size = plan.extent.map(|v| v.div_ceil(1 << level));
-                let (texture, view) = create_color_target(&r.device, size, "retained display mip");
+                let (texture, view) = create_color_target(&r.device, plan.level_size(level), "retained display mip");
                 Self {
                     level,
                     texture,
@@ -258,15 +249,7 @@ impl Cache {
         allowance: u64,
     ) -> Result<(display_mips::Plan, u64, bool, u64), GpuRasterError> {
         let plan = display_mips::Plan::new(extent)?;
-        let pyramid_bytes = (0..plan.level)
-            .map(|level| {
-                plan.extent
-                    .map(|v| u64::from(v.div_ceil(1 << level)))
-                    .into_iter()
-                    .product::<u64>()
-                    * 16
-            })
-            .sum::<u64>();
+        let pyramid_bytes = (0..plan.level).map(|level| plan.level_bytes(level)).sum::<u64>();
         let record_bytes = display_mips::CompleteUpdates::record_bytes(&r.device, plan);
         let complete_bytes = pyramid_bytes + Self::base_bound(plan) + record_bytes;
         let complete = plan.extent.into_iter()

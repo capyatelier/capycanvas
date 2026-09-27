@@ -45,19 +45,13 @@ impl Preparation {
     }
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("effect preparation storage"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(16),
-                    },
-                    count: None,
-                }],
-            }),
+            layout: crate::bindings::layout(device, "effect preparation storage", &[crate::bindings::buffer(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: false },
+                false,
+                NonZeroU64::new(16),
+            )]),
             pipelines: Vec::new(),
             pending: Vec::new(),
             executions: 0,
@@ -93,14 +87,7 @@ impl Preparation {
         }
         let [x, y, z] = lookup.workgroup_size;
         source.push_str(&format!("\n@compute @workgroup_size({x},{y},{z}) fn prep_main(@builtin(local_invocation_id) local:vec3<u32>,@builtin(global_invocation_id) global:vec3<u32>){{{}(local,global);}}",lookup.entry));
-        let module = naga::front::wgsl::parse_str(&source)
-            .map_err(|e| GpuRasterError::Effect(e.emit_to_string(&source)))?;
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::empty(),
-        )
-        .validate(&module)
-        .map_err(|e| GpuRasterError::Effect(e.to_string()))?;
+        let module = super::effects::parse_validated(&source)?;
         // Libraries may declare private/workgroup scratch, never extra bound
         // resources, override constants, or entry points owned by the host.
         if module.entry_points.len() != 1
@@ -151,29 +138,13 @@ impl Preparation {
                 "Preparation exceeds device workgroup limits".into(),
             ));
         }
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("effect preparation"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
+        let module = Deferred::wgsl(&device, "effect preparation", source);
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("effect preparation"),
             bind_group_layouts: &[Some(&self.layout)],
             immediate_size: 0,
         });
-        let device = device.clone();
-        let pipeline = Deferred::pipeline(move |mode| {
-            mode.compute(
-                &device,
-                &wgpu::ComputePipelineDescriptor {
-                    label: Some("effect preparation"),
-                    layout: Some(&layout),
-                    module: &module,
-                    entry_point: Some("prep_main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                },
-            )
-        });
+        let pipeline = Deferred::compute(device, "effect preparation", &layout, &module, "prep_main");
         self.pipelines.push((key.clone(), pipeline.clone()));
         Ok(pipeline)
     }

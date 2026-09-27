@@ -185,9 +185,11 @@ impl NativeScalarEncoder {
             for i in 0..count as u32 {
                 let base = i * bindings;
                 if in_place {
-                    entries.push(super::read_write_texture_entry(
+                    entries.push(crate::bindings::storage_texture(
                         base,
+                        wgpu::ShaderStages::COMPUTE,
                         wgpu::TextureFormat::R32Float,
+                        wgpu::StorageTextureAccess::ReadWrite,
                     ));
                     textures.push_str(&format!("@group(0) @binding({base}) var working{i}:texture_storage_2d<r32float,read_write>;\n"));
                     loads.push_str(&format!(
@@ -231,10 +233,7 @@ impl NativeScalarEncoder {
                     STATUS_BYTES,
                 ),
             ]);
-            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("native scalar encoder inputs"),
-                entries: &entries,
-            });
+            let layout = crate::bindings::layout(device, "native scalar encoder inputs", &entries);
             let body = include_str!("scalar.wgsl")
                 .replace(
                     "PUBLICATION_GUARD",
@@ -262,26 +261,7 @@ impl NativeScalarEncoder {
                 bind_group_layouts: &[Some(&layout)],
                 immediate_size: 0,
             });
-            pipelines.push({
-                let (device, pipeline_layout) = (device.clone(), pipeline_layout.clone());
-                crate::Deferred::pipeline(move |mode| {
-                    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some("native scalar writeback"),
-                        source: wgpu::ShaderSource::Wgsl(source.into()),
-                    });
-                    mode.compute(
-                        &device,
-                        &wgpu::ComputePipelineDescriptor {
-                            label: Some("native scalar writeback"),
-                            layout: Some(&pipeline_layout),
-                            module: &shader,
-                            entry_point: Some("main"),
-                            compilation_options: Default::default(),
-                            cache: None,
-                        },
-                    )
-                })
-            });
+            pipelines.push(crate::Deferred::compute(&device, "native scalar writeback", &pipeline_layout, &crate::Deferred::wgsl(&device, "native scalar writeback", source), "main"));
             layouts.push(layout);
         }
         let records = [SampleDepth::U8, SampleDepth::U16].map(|depth| {

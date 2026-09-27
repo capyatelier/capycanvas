@@ -185,3 +185,28 @@ impl<T> std::ops::Deref for Deferred<T> {
         self.compile()
     }
 }
+impl Deferred<wgpu::ShaderModule> {
+    pub fn wgsl(device: &super::PipelineDevice, label: &'static str, source: impl Into<std::borrow::Cow<'static, str>>) -> Self {
+        let (device, source) = (device.clone(), source.into());
+        Self::new(move || device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source) }))
+    }
+}
+impl Deferred<wgpu::ComputePipeline> {
+    pub fn compute(
+        device: &super::PipelineDevice,
+        label: &'static str,
+        layout: &wgpu::PipelineLayout,
+        module: &Deferred<wgpu::ShaderModule>,
+        entry: &'static str,
+    ) -> Self {
+        let (device, layout, module) = (device.clone(), layout.clone(), module.clone());
+        Self::pipeline(move |mode| mode.compute(&device, &wgpu::ComputePipelineDescriptor {
+            label: Some(label),
+            layout: Some(&layout),
+            module: &module,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            cache: None,
+        }))
+    }
+}

@@ -64,11 +64,7 @@ impl Scene {
                 }
                 continue;
             }
-            let plan = display_mips::Plan {
-                extent,
-                size: extent.map(|n| n.div_ceil(1 << level)),
-                level,
-            };
+            let plan = display_mips::Plan::at(extent, level);
             let bytes = plan.pixel_bytes() + 4096;
             if bytes > remaining
                 || plan
@@ -97,11 +93,7 @@ impl Scene {
         for (_, plan, sample_level) in &mut wanted {
             while *sample_level > 0 && plan.level > 1 {
                 let level = plan.level - 1;
-                let finer = display_mips::Plan {
-                    extent: plan.extent,
-                    size: plan.extent.map(|n| n.div_ceil(1 << level)),
-                    level,
-                };
+                let finer = display_mips::Plan::at(plan.extent, level);
                 let additional = finer.pixel_bytes() - plan.pixel_bytes();
                 if additional > remaining
                     || finer.size.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d)

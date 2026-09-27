@@ -74,10 +74,7 @@ impl SourceThumbnails {
                 count: None,
             });
         }
-        let layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("photo overview integration"),
-            entries: &entries,
-        });
+        let layout = crate::bindings::layout(d, "photo overview integration", &entries);
         let pipeline_layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("photo overview integration"),
             bind_group_layouts: &[Some(&layout)],
@@ -97,31 +94,22 @@ impl SourceThumbnails {
                 cache: None,
             })
         };
-        let display_layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("photo overview display"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(OVERVIEW_BYTES),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(48),
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let display_layout = crate::bindings::layout(d, "photo overview display", &[
+            crate::bindings::buffer(
+                0,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                NonZeroU64::new(OVERVIEW_BYTES),
+            ),
+            crate::bindings::buffer(
+                1,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Uniform,
+                false,
+                NonZeroU64::new(48),
+            ),
+        ]);
         let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("photo overview display"),
             source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", crate::view_color::hdr_shader(d.working_space(), r.ui_preview_space), include_str!("source_thumbnail_display.wgsl")).into()),
@@ -146,20 +134,10 @@ impl SourceThumbnails {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let display_binding = d.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("photo overview display"),
-            layout: &display_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: working.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: display_parameters.as_entire_binding(),
-                },
-            ],
-        });
+        let display_binding = crate::bindings::group(d, "photo overview display", &display_layout, [
+            working.as_entire_binding(),
+            display_parameters.as_entire_binding(),
+        ]);
         Self {
             horizontal: pipeline("horizontal"),
             vertical: pipeline("vertical"),
@@ -337,22 +315,11 @@ impl SourceThumbnails {
             "photo layer thumbnail",
         );
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("photo thumbnail and checkerboard"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &result.view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = encoder.color_pass(
+                "photo thumbnail and checkerboard",
+                &result.view,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
             pass.set_pipeline(&self.display);
             pass.set_bind_group(0, &self.display_binding, &[]);
             pass.draw(0..3, 0..1);
@@ -391,32 +358,13 @@ impl SourceThumbnails {
         }
         r.uploads
             .write(encoder, &self.parameters, &bytes)?;
-        let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ordered photo overview tile"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.parameters.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(pixels),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: contributions.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: self.rows.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: sums.as_entire_binding(),
-                },
-            ],
-        });
+        let binding = crate::bindings::group(&r.device, "ordered photo overview tile", &self.layout, [
+            self.parameters.as_entire_binding(),
+            wgpu::BindingResource::TextureView(pixels),
+            contributions.as_entire_binding(),
+            self.rows.as_entire_binding(),
+            sums.as_entire_binding(),
+        ]);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("bounded photo overview integration"),
             timestamp_writes: None,

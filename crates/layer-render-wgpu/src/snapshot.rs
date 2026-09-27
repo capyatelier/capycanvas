@@ -454,16 +454,7 @@ impl SnapshotRenderer {
                         "Invalid snapshot layer placement",
                     ))?;
                 let local = pixel_rect(
-                    inverse.bounds(layer_core::Rect {
-                        min: layer_core::Point {
-                            x: pages.min_x() as f32,
-                            y: pages.min_y() as f32,
-                        },
-                        max: layer_core::Point {
-                            x: pages.max_x() as f32,
-                            y: pages.max_y() as f32,
-                        },
-                    }),
+                    inverse.bounds(pages.to_rect()),
                     extent,
                 )
                 .expand(if mask { 1 } else { PAGE_SIZE }, extent);

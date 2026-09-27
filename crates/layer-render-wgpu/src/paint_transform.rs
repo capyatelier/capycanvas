@@ -444,16 +444,7 @@ impl ImageTransformState {
         {
             self.source_captures += 1;
         }
-        let mut cut = layer_core::Rect {
-            min: layer_core::Point {
-                x: source_bounds.min_x() as f32,
-                y: source_bounds.min_y() as f32,
-            },
-            max: layer_core::Point {
-                x: source_bounds.max_x() as f32,
-                y: source_bounds.max_y() as f32,
-            },
-        };
+        let mut cut = source_bounds.to_rect();
         if let Some(s) = selection {
             if !s.inverted {
                 let b = s.bounds();
@@ -487,12 +478,12 @@ impl ImageTransformState {
                 } else {
                     self.source_bounds[channel]
                 };
-                self.sources[channel] = Some(TileSnapshot::new(
-                    pages,
-                    if channel == 0 { original.clone() } else { None },
-                    if channel == 0 { backing.clone() } else { None },
+                self.sources[channel] = Some(TileSnapshot {
+                    pages: pages.into_iter().collect(),
+                    original: if channel == 0 { original.clone() } else { None },
+                    backing: if channel == 0 { backing.clone() } else { None },
                     bounds,
-                ));
+                });
             }
         }
         for (channel, pages) in self.captures.iter_mut().enumerate() {
@@ -770,12 +761,7 @@ impl ImageTransformState {
             .get_or_insert_with(|| Atlas::new(&r.device, format));
         let atlas = (atlas.texture.clone(), atlas.view.clone());
         let snapshot = self.sources[channel].as_ref().unwrap();
-        let bounds = [
-            snapshot.bounds.min_x() as i32,
-            snapshot.bounds.min_y() as i32,
-            snapshot.bounds.width() as i32,
-            snapshot.bounds.height() as i32,
-        ];
+        let bounds = snapshot.source_bounds();
         let records: Vec<_> = windows
             .iter()
             .flat_map(|window| {
@@ -965,10 +951,7 @@ impl ImageTransformState {
         );
         snapshot.pages.insert(
             coordinate,
-            snapshot::SnapshotPage {
-                texture: capture.texture.clone(),
-                view: capture.view.clone(),
-            },
+            snapshot::SnapshotPage::of(&capture.texture, &capture.view),
         );
     }
     fn release_snapshot(&mut self) {
@@ -1468,15 +1451,7 @@ fn source_pages(
                     .pages
                     .iter()
                     .filter(|((target, _), _)| *target == id)
-                    .map(|((_, c), p)| {
-                        (
-                            *c,
-                            snapshot::SnapshotPage {
-                                texture: p.texture.clone(),
-                                view: p.view.clone(),
-                            },
-                        )
-                    })
+                    .map(|((_, c), p)| (*c, snapshot::SnapshotPage::of(&p.texture, &p.view)))
                     .collect(),
                 Vec::new(),
                 Vec::new(),
@@ -1493,39 +1468,15 @@ fn source_pages(
         [
             l.pages
                 .iter()
-                .map(|p| {
-                    (
-                        p.coordinate,
-                        snapshot::SnapshotPage {
-                            texture: p.active().texture.clone(),
-                            view: p.active().view.clone(),
-                        },
-                    )
-                })
+                .map(|p| (p.coordinate, snapshot::SnapshotPage::of(&p.active().texture, &p.active().view)))
                 .collect(),
             l.material_pages
                 .iter()
-                .map(|p| {
-                    (
-                        p.coordinate,
-                        snapshot::SnapshotPage {
-                            texture: p.wetness.texture.clone(),
-                            view: p.wetness.view.clone(),
-                        },
-                    )
-                })
+                .map(|p| (p.coordinate, snapshot::SnapshotPage::of(&p.wetness.texture, &p.wetness.view)))
                 .collect(),
             l.watercolor_wetness_pages
                 .iter()
-                .map(|p| {
-                    (
-                        p.coordinate,
-                        snapshot::SnapshotPage {
-                            texture: p.active().texture.clone(),
-                            view: p.active().view.clone(),
-                        },
-                    )
-                })
+                .map(|p| (p.coordinate, snapshot::SnapshotPage::of(&p.active().texture, &p.active().view)))
                 .collect(),
         ],
     ))

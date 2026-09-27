@@ -1,9 +1,9 @@
 //! Affine and perspective cut-and-place over a bounded set of immutable source
 //! views. Manual Float32 interpolation applies selection and premultiplied
 //! color together.
+use crate::submission::ColorPass;
 use super::{Deferred, PipelineDevice, Uploads};
 use layer_core::{ImageTransform, Interpolation, Projective, TransformMap};
-use std::hash::{Hash, Hasher};
 
 pub(super) const TRANSFORM_SLOTS: usize = 16;
 const SOURCE_RECORD_BYTES: u64 = (1 + TRANSFORM_SLOTS as u64) * 16;
@@ -60,12 +60,6 @@ pub(super) struct BatchDraw<'a> {
     /// x, y, width, height in the attachment.
     pub scissor: [u32; 4],
 }
-struct SourceBinding {
-    used: u64,
-    views: Vec<wgpu::TextureView>,
-    selection: wgpu::Buffer,
-    binding: wgpu::BindGroup,
-}
 
 pub struct PixelTransform {
     placement: bool,
@@ -84,8 +78,7 @@ pub struct PixelTransform {
     source_stride: u32,
     source_next_record: u64,
     source_upload: Vec<u8>,
-    bindings: std::collections::HashMap<u64, Vec<SourceBinding>>,
-    binding_count: usize,
+    bindings: std::collections::HashMap<(wgpu::Buffer, Vec<wgpu::TextureView>), (u64, wgpu::BindGroup)>,
     binding_frame: u64,
     uniforms: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     stride: u32,
@@ -148,10 +141,7 @@ impl PixelTransform {
                 count: None,
             },
         ]);
-        let source_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("bounded immutable transform inputs"),
-            entries: &entries,
-        });
+        let source_layout = crate::bindings::layout(device, "bounded immutable transform inputs", &entries);
         let pipeline = transform_pipeline(device, &layout, &source_layout, scalar, visibility, "fragment_main");
         let display_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("transform display level"),
@@ -196,7 +186,6 @@ impl PixelTransform {
             source_next_record: 0,
             source_upload: Vec::new(),
             bindings: Default::default(),
-            binding_count: 0,
             binding_frame: 0,
             uniforms: None,
             stride: (REGION_BYTES as u32)
@@ -226,7 +215,6 @@ impl PixelTransform {
             source_next_record: 0,
             source_upload: Vec::new(),
             bindings: Default::default(),
-            binding_count: 0,
             binding_frame: 0,
             uniforms: None,
             stride: self.stride,
@@ -268,24 +256,10 @@ impl PixelTransform {
             return Err("Invalid transform selection");
         }
         let selection = selection.unwrap_or(&self.empty_selection);
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        selection.hash(&mut hash);
-        for tile in tiles {
-            tile.view.hash(&mut hash);
-        }
-        let key = hash.finish();
-        let binding = if let Some(cached) = self.bindings.get_mut(&key).and_then(|bucket| {
-            bucket.iter_mut().find(|b| {
-                b.selection == *selection
-                    && b.views.len() == tiles.len()
-                    && b.views
-                        .iter()
-                        .zip(tiles)
-                        .all(|(view, tile)| *view == *tile.view)
-            })
-        }) {
-            cached.used = self.binding_frame;
-            cached.binding.clone()
+        let key = (selection.clone(), tiles.iter().map(|t| t.view.clone()).collect::<Vec<_>>());
+        let binding = if let Some((used, binding)) = self.bindings.get_mut(&key) {
+            *used = self.binding_frame;
+            binding.clone()
         } else {
             let mut entries = Vec::with_capacity(TRANSFORM_SLOTS + 2);
             for i in 0..TRANSFORM_SLOTS {
@@ -313,25 +287,15 @@ impl PixelTransform {
                 layout: &self.source_layout,
                 entries: &entries,
             });
-            if self.binding_count >= BINDING_CAPACITY {
+            if self.bindings.len() >= BINDING_CAPACITY {
                 for recent in [self.binding_frame.saturating_sub(1), self.binding_frame] {
-                    self.bindings.retain(|_, bucket| {
-                        bucket.retain(|b| b.used >= recent);
-                        !bucket.is_empty()
-                    });
-                    self.binding_count = self.bindings.values().map(Vec::len).sum();
-                    if self.binding_count < BINDING_CAPACITY {
+                    self.bindings.retain(|_, (used, _)| *used >= recent);
+                    if self.bindings.len() < BINDING_CAPACITY {
                         break;
                     }
                 }
             }
-            self.bindings.entry(key).or_default().push(SourceBinding {
-                used: self.binding_frame,
-                views: tiles.iter().map(|t| t.view.clone()).collect(),
-                selection: selection.clone(),
-                binding: binding.clone(),
-            });
-            self.binding_count += 1;
+            self.bindings.insert(key, (self.binding_frame, binding.clone()));
             binding
         };
         Ok(TransformSource {
@@ -353,15 +317,10 @@ impl PixelTransform {
         selection: Option<&wgpu::Buffer>,
     ) {
         let allowed: std::collections::HashSet<_> = views.iter().copied().collect();
-        self.bindings.retain(|_, bucket| {
-            bucket.retain(|b| {
-                (b.selection == self.empty_selection
-                    || selection.is_some_and(|s| *s == b.selection))
-                    && b.views.iter().all(|v| allowed.contains(v))
-            });
-            !bucket.is_empty()
+        self.bindings.retain(|(buffer, bound), _| {
+            (*buffer == self.empty_selection || selection.is_some_and(|s| s == buffer))
+                && bound.iter().all(|v| allowed.contains(v))
         });
-        self.binding_count = self.bindings.values().map(Vec::len).sum();
     }
     pub fn shared_source_bytes(&self, other: &Self) -> u64 {
         if self.source_records == other.source_records {
@@ -383,18 +342,9 @@ impl PixelTransform {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("affine region uniforms"),
-                layout: &self.layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &buffer,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(REGION_BYTES),
-                    }),
-                }],
-            });
+            let binding = crate::bindings::group(device, "affine region uniforms", &self.layout, [
+                wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset: 0, size: wgpu::BufferSize::new(REGION_BYTES), }),
+            ]);
             self.uniforms = Some((buffer, binding));
         }
     }
@@ -426,7 +376,6 @@ impl PixelTransform {
         self.reserve_regions(device, end);
         if source_end > self.source_capacity {
             self.bindings.clear();
-            self.binding_count = 0;
             self.source_capacity = source_end
                 .next_power_of_two()
                 .min(device.limits().max_buffer_size)
@@ -518,22 +467,7 @@ impl PixelTransform {
         );
         let region_offset = offsets[0] + (index as u32 * 2 + u32::from(identity)) * self.stride;
         let source_offset = offsets[1] + index as u32 * self.source_stride;
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("affine changed region"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target.view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = encoder.color_pass("affine changed region", target.view, wgpu::LoadOp::Load);
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[region_offset]);
         pass.set_bind_group(1, &source.binding, &[source_offset]);
@@ -551,26 +485,11 @@ impl PixelTransform {
         offsets: [u32; 2],
         draws: &[BatchDraw<'_>],
     ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("batched transform regions"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: attachment,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: if clear {
-                        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                    } else {
-                        wgpu::LoadOp::Load
-                    },
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = encoder.color_pass(
+            "batched transform regions",
+            attachment,
+            if clear { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
+        );
         pass.set_pipeline(&self.pipeline);
         for draw in draws {
             let region = offsets[0] + (draw.job as u32 * 2 + u32::from(draw.identity)) * self.stride;
@@ -802,18 +721,9 @@ fn source_metadata(
 }
 
 fn source_shader() -> String {
-    let mut shader = String::from(
+    String::from(
         "struct SourceInfo { bounds:vec4<i32>, views:array<vec4<i32>,16> }\n@group(1) @binding(16) var<uniform> source_info:SourceInfo;\n",
-    );
-    for i in 0..TRANSFORM_SLOTS {
-        shader += &format!("@group(1) @binding({i}) var source{i}:texture_2d<f32>;\n");
-    }
-    shader += "fn source_load(i:u32,p:vec2<i32>)->vec4<f32>{switch i {\n";
-    for i in 0..TRANSFORM_SLOTS {
-        shader += &format!("case {i}u:{{return textureLoad(source{i},p,0);}}\n");
-    }
-    shader += "default:{return vec4(0.);}}}\n";
-    shader
+    ) + &crate::texture_switch(1, TRANSFORM_SLOTS, "source_load")
 }
 
 fn valid_extent(origin: [i32; 2], extent: [u32; 2]) -> bool {

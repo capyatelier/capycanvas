@@ -60,26 +60,13 @@ impl NativePromoter {
                 let mut textures = String::new();
                 let mut copies = String::new();
                 for i in 0..count as u32 {
-                    entries.push(wgpu::BindGroupLayoutEntry {
-                        binding: i * 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    });
-                    entries.push(wgpu::BindGroupLayoutEntry {
-                        binding: i * 2 + 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    });
+                    entries.push(crate::bindings::texture(i * 2, wgpu::ShaderStages::COMPUTE, false));
+                    entries.push(crate::bindings::storage_texture(
+                        i * 2 + 1,
+                        wgpu::ShaderStages::COMPUTE,
+                        format,
+                        wgpu::StorageTextureAccess::WriteOnly,
+                    ));
                     textures.push_str(&format!(
                         "@group(0) @binding({}) var canonical{i}:texture_2d<f32>;\n@group(0) @binding({}) var working{i}:texture_storage_2d<{name},write>;\n",
                         i * 2, i * 2 + 1,
@@ -99,10 +86,7 @@ impl NativePromoter {
                     false,
                     16,
                 ));
-                let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("native canonical promotion"),
-                    entries: &entries,
-                });
+                let layout = crate::bindings::layout(device, "native canonical promotion", &entries);
                 let source = include_str!("promote.wgsl")
                     .replace("TEXTURES", &textures)
                     .replace("COPY_TILES", &copies)
@@ -114,26 +98,7 @@ impl NativePromoter {
                         bind_group_layouts: &[Some(&layout)],
                         immediate_size: 0,
                     });
-                pipelines.push({
-                    let (device, pipeline_layout) = (device.clone(), pipeline_layout.clone());
-                    crate::Deferred::pipeline(move |mode| {
-                        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                            label: Some("native canonical promotion"),
-                            source: wgpu::ShaderSource::Wgsl(source.into()),
-                        });
-                        mode.compute(
-                            &device,
-                            &wgpu::ComputePipelineDescriptor {
-                                label: Some("native canonical promotion"),
-                                layout: Some(&pipeline_layout),
-                                module: &shader,
-                                entry_point: Some("main"),
-                                compilation_options: Default::default(),
-                                cache: None,
-                            },
-                        )
-                    })
-                });
+                pipelines.push(crate::Deferred::compute(&device, "native canonical promotion", &pipeline_layout, &crate::Deferred::wgsl(&device, "native canonical promotion", source), "main"));
                 layouts.push(layout);
             }
         }

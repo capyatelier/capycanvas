@@ -84,6 +84,31 @@ pub(super) struct RasterRuntime {
     #[cfg(target_arch = "wasm32")]
     encoder: Option<BrowserRasterEncoder>,
 }
+impl RasterRuntime {
+    fn ensure_worker(&mut self, device: &wgpu::Device, pool: &Arc<BufferPool>) -> Result<(), GpuRasterError> {
+        if self.worker.is_none() {
+            self.worker = Some(CaptureWorker::new(
+                device.clone(),
+                pool.clone(),
+                #[cfg(target_arch = "wasm32")]
+                self.encoder.clone().ok_or_else(|| GpuRasterError::Effect("Browser raster worker is unavailable".into()))?,
+            )?);
+        }
+        Ok(())
+    }
+}
+struct Reserved<'a>(&'a AtomicU64, u64);
+impl<'a> Reserved<'a> {
+    fn new(counter: &'a AtomicU64, bytes: u64) -> Self {
+        counter.fetch_add(bytes, Ordering::Relaxed);
+        Self(counter, bytes)
+    }
+}
+impl Drop for Reserved<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(self.1, Ordering::Relaxed);
+    }
+}
 #[cfg(not(target_arch = "wasm32"))]
 struct CaptureWorker {
     sender: Option<mpsc::SyncSender<NativeCapture>>,
@@ -418,23 +443,8 @@ impl RasterCapture {
                 // Mapped readback memory is expensive for a compressor's repeated
                 // accesses. Copy once into cached memory, then return the GPU
                 // allocation immediately. At most four 16 MiB chunks exist here.
-                struct Scratch<'a> {
-                    bytes: Vec<u8>,
-                    pool: &'a BufferPool,
-                }
-                impl Drop for Scratch<'_> {
-                    fn drop(&mut self) {
-                        self.pool
-                            .working
-                            .fetch_sub(self.bytes.len() as u64, Ordering::Relaxed);
-                    }
-                }
-                let bytes = Scratch {
-                    bytes: mapped.to_vec(),
-                    pool,
-                };
-                pool.working
-                    .fetch_add(bytes.bytes.len() as u64, Ordering::Relaxed);
+                let bytes = mapped.to_vec();
+                let _scratch = Reserved::new(&pool.working, bytes.len() as u64);
                 drop(mapped);
                 chunk.buffer.unmap();
                 pool.put(chunk.buffer.clone());
@@ -443,7 +453,7 @@ impl RasterCapture {
                         let begin = entry.offset as usize;
                         entry.tile.publish(TileBlob::encode(
                             entry.descriptor,
-                            &bytes.bytes[begin..begin + entry.size as usize],
+                            &bytes[begin..begin + entry.size as usize],
                         ))?;
                     }
                     Ok(())
@@ -611,15 +621,24 @@ impl WgpuRasterizer {
     }
 
     pub(super) fn prepare_source_backing(&mut self) -> Result<(), GpuRasterError> {
-        let runtime = self.raster.get_or_insert_with(Default::default);
-        if runtime.worker.is_none() {
-            runtime.worker = Some(CaptureWorker::new(
-                (*self.device).clone(),
-                self.raster_buffers.clone(),
-                #[cfg(target_arch = "wasm32")]
-                runtime.encoder.clone().ok_or_else(|| GpuRasterError::Effect("Browser raster worker is unavailable".into()))?,
-            )?);
-        }
+        self.raster.get_or_insert_with(Default::default).ensure_worker(&self.device, &self.raster_buffers)
+    }
+
+    fn restore_target(
+        &mut self,
+        id: LayerId,
+        current: &mut Target,
+        data: Arc<RasterData>,
+        reset: bool,
+        damage: &mut Vec<(LayerId, PixelRect)>,
+    ) -> Result<(), GpuRasterError> {
+        let extent = self.target_extent(id);
+        damage.extend(restored_damage(&current.data, &data, &current.changed, extent).into_iter().map(|rect| (id, rect)));
+        let mut before = if reset { RasterData::default() } else { (*current.data).clone() };
+        before.tiles.retain(|key, _| !current.changed.contains(&key.coordinate));
+        self.restore_live_raster(id, &before, &data)?;
+        current.data = data;
+        current.changed.clear();
         Ok(())
     }
 
@@ -648,28 +667,8 @@ impl WgpuRasterizer {
             for (id, revision) in packet.restore_rasters {
                 if let Some(current) = runtime.targets.get_mut(id) {
                     let data = revision.wait_data().map_err(GpuRasterError::Effect)?;
-                    damage.extend(
-                        restored_damage(
-                            &current.data,
-                            &data,
-                            &current.changed,
-                            self.target_extent(*id),
-                        )
-                        .into_iter()
-                        .map(|rect| (*id, rect)),
-                    );
-                    let mut before = if reset {
-                        RasterData::default()
-                    } else {
-                        (*current.data).clone()
-                    };
-                    before
-                        .tiles
-                        .retain(|key, _| !current.changed.contains(&key.coordinate));
-                    self.restore_live_raster(*id, &before, &data)?;
+                    self.restore_target(*id, current, data, reset, &mut damage)?;
                     current.revision = revision.clone();
-                    current.data = data;
-                    current.changed.clear();
                 }
             }
             for layer in packet.layers {
@@ -697,27 +696,7 @@ impl WgpuRasterizer {
                     if let Some(current) = runtime.targets.get_mut(&id) {
                         if reset || (wanted.is_some() && current.revision != *revision) {
                             let data = wanted.unwrap_or_else(|| current.data.clone());
-                            damage.extend(
-                                restored_damage(
-                                    &current.data,
-                                    &data,
-                                    &current.changed,
-                                    self.target_extent(id),
-                                )
-                                .into_iter()
-                                .map(|rect| (id, rect)),
-                            );
-                            let mut before = if reset {
-                                RasterData::default()
-                            } else {
-                                (*current.data).clone()
-                            };
-                            before
-                                .tiles
-                                .retain(|key, _| !current.changed.contains(&key.coordinate));
-                            self.restore_live_raster(id, &before, &data)?;
-                            current.data = data;
-                            current.changed.clear();
+                            self.restore_target(id, current, data, reset, &mut damage)?;
                             if revision.try_data().is_some() {
                                 current.revision = revision.clone();
                             }

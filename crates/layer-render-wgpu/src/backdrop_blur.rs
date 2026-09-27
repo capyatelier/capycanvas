@@ -130,37 +130,21 @@ impl BackdropBlur {
             label: Some("backdrop blur"),
             source: wgpu::ShaderSource::Wgsl(include_str!("backdrop_blur.wgsl").into()),
         });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("backdrop blur"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(PASS_SIZE),
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let layout = crate::bindings::layout(device, "backdrop blur", &[
+            crate::bindings::texture(0, wgpu::ShaderStages::FRAGMENT, true),
+            crate::bindings::sampler(
+                1,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::SamplerBindingType::Filtering,
+            ),
+            crate::bindings::buffer(
+                2,
+                wgpu::ShaderStages::VERTEX_FRAGMENT,
+                wgpu::BufferBindingType::Uniform,
+                true,
+                wgpu::BufferSize::new(PASS_SIZE),
+            ),
+        ]);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("backdrop blur"),
             bind_group_layouts: &[Some(&layout)],
@@ -293,25 +277,11 @@ impl BackdropBlur {
     }
 
     fn bind(&self, device: &wgpu::Device, texture: &wgpu::Texture) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("backdrop blur"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture.create_view(&Default::default())),
-                },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.uniforms,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(PASS_SIZE),
-                    }),
-                },
-            ],
-        })
+        crate::bindings::group(device, "backdrop blur", &self.layout, [
+            wgpu::BindingResource::TextureView(&texture.create_view(&Default::default())),
+            wgpu::BindingResource::Sampler(&self.sampler),
+            wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &self.uniforms, offset: 0, size: wgpu::BufferSize::new(PASS_SIZE), }),
+        ])
     }
 
     fn placed_bounds(&self) -> Vec<(BackdropRegion, PixelRect)> {

@@ -132,3 +132,27 @@ fn submit_traced(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::Su
     trace.next(c"capy.queue_submit");
     queue.submit([commands])
 }
+
+pub(crate) trait ColorPass {
+    fn color_pass(&mut self, label: &str, view: &wgpu::TextureView, load: wgpu::LoadOp<wgpu::Color>) -> wgpu::RenderPass<'_>;
+}
+impl ColorPass for wgpu::CommandEncoder {
+    fn color_pass(&mut self, label: &str, view: &wgpu::TextureView, load: wgpu::LoadOp<wgpu::Color>) -> wgpu::RenderPass<'_> {
+        self.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        })
+    }
+}
+impl ColorPass for CommandEncoder {
+    fn color_pass(&mut self, label: &str, view: &wgpu::TextureView, load: wgpu::LoadOp<wgpu::Color>) -> wgpu::RenderPass<'_> {
+        self.begin_pass();
+        self.current.color_pass(label, view, load)
+    }
+}

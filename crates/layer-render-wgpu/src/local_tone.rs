@@ -95,73 +95,33 @@ pub(crate) struct Pipelines {
 }
 impl Pipelines {
     fn new(device: &PipelineDevice) -> Self {
-        let mut entries = vec![wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }];
+        let mut entries = vec![crate::bindings::buffer(
+            0,
+            wgpu::ShaderStages::COMPUTE,
+            wgpu::BufferBindingType::Uniform,
+            false,
+            None,
+        )];
         for binding in 1..=4 {
-            entries.push(wgpu::BindGroupLayoutEntry {
+            entries.push(crate::bindings::buffer(
                 binding,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage {
-                        read_only: binding != 4,
-                    },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            });
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: binding != 4, },
+                false,
+                None,
+            ));
         }
-        entries.push(wgpu::BindGroupLayoutEntry {
-            binding: 5,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("local tone compute"),
-            entries: &entries,
-        });
+        entries.push(crate::bindings::texture(5, wgpu::ShaderStages::COMPUTE, false));
+        let layout = crate::bindings::layout(device, "local tone compute", &entries);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("local tone compute"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("local tone compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("local_tone.wgsl").into()),
-        });
+        let module = Deferred::wgsl(device, "local tone compute", include_str!("local_tone.wgsl"));
         let pipelines = ENTRIES
             .iter()
-            .map(|entry| {
-                let device = device.clone();
-                let pipeline_layout = pipeline_layout.clone();
-                let module = module.clone();
-                Deferred::pipeline(move |mode| {
-                    mode.compute(
-                        &device,
-                        &wgpu::ComputePipelineDescriptor {
-                            label: Some(entry),
-                            layout: Some(&pipeline_layout),
-                            module: &module,
-                            entry_point: Some(entry),
-                            compilation_options: Default::default(),
-                            cache: None,
-                        },
-                    )
-                })
-            })
+            .map(|entry| Deferred::compute(device, entry, &pipeline_layout, &module, entry))
             .collect();
         Self {
             layout,
@@ -358,36 +318,14 @@ impl Builder {
             bytes.copy_from_slice(&packed);
         }
         uniform.unmap();
-        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(ENTRIES[entry]),
-            layout: &self.pipelines.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: inputs[0].unwrap_or(&self.dummy).as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: inputs[1].unwrap_or(&self.dummy).as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: inputs[2].unwrap_or(&self.dummy).as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: output.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(texture.unwrap_or(&self.texture)),
-                },
-            ],
-        });
+        let group = crate::bindings::group(&self.device, ENTRIES[entry], &self.pipelines.layout, [
+            uniform.as_entire_binding(),
+            inputs[0].unwrap_or(&self.dummy).as_entire_binding(),
+            inputs[1].unwrap_or(&self.dummy).as_entire_binding(),
+            inputs[2].unwrap_or(&self.dummy).as_entire_binding(),
+            output.as_entire_binding(),
+            wgpu::BindingResource::TextureView(texture.unwrap_or(&self.texture)),
+        ]);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(ENTRIES[entry]),
             timestamp_writes: None,

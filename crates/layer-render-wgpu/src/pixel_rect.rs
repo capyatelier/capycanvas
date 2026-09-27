@@ -55,6 +55,12 @@ impl PixelRect {
     pub fn height(self) -> u32 {
         self.max_y - self.min_y
     }
+    pub fn to_rect(self) -> layer_core::Rect {
+        layer_core::Rect {
+            min: layer_core::Point { x: self.min_x as f32, y: self.min_y as f32 },
+            max: layer_core::Point { x: self.max_x as f32, y: self.max_y as f32 },
+        }
+    }
     pub fn area(self) -> u64 {
         self.width() as u64 * self.height() as u64
     }

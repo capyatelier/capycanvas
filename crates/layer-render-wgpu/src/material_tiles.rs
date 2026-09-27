@@ -34,27 +34,11 @@ impl WgpuRasterizer {
         {
             let amount = batch.style.wet_mix.amount_of_paint * first.material[2];
             let color = first.color_rgba_linear;
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("layer initialize brush reservoir"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.reservoir.active().view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: color[0] as f64,
-                            g: color[1] as f64,
-                            b: color[2] as f64,
-                            a: amount as f64,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let _pass = encoder.color_pass(
+                "layer initialize brush reservoir",
+                &self.reservoir.active().view,
+                wgpu::LoadOp::Clear(wgpu::Color { r: color[0] as f64, g: color[1] as f64, b: color[2] as f64, a: amount as f64, }),
+            );
         }
 
         // Full-page dry evaluation writes the new coverage page too. An old
@@ -69,22 +53,11 @@ impl WgpuRasterizer {
                     .find(|page| page.coordinate == coordinate)
                     .expect("stroke coverage page is prepared before encoding");
                 if page.owner != Some(batch.stroke_id) {
-                    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("layer reset stroke coverage page"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &page.active().view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
+                    let _pass = encoder.color_pass(
+                        "layer reset stroke coverage page",
+                        &page.active().view,
+                        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    );
                     page.owner = Some(batch.stroke_id);
                 }
             }

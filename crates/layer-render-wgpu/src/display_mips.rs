@@ -25,11 +25,16 @@ impl Plan {
                     .all(|v| v.div_ceil(1 << level) <= MAX_SIDE)
             })
             .ok_or(GpuRasterError::ExtentUnsupported)?;
-        Ok(Self {
-            extent,
-            size: extent.map(|v| v.div_ceil(1 << level)),
-            level,
-        })
+        Ok(Self::at(extent, level))
+    }
+    pub fn at(extent: [u32; 2], level: u32) -> Self {
+        Self { extent, size: extent.map(|v| v.div_ceil(1 << level)), level }
+    }
+    pub fn level_size(self, level: u32) -> [u32; 2] {
+        self.extent.map(|v| v.div_ceil(1 << level))
+    }
+    pub fn level_bytes(self, level: u32) -> u64 {
+        self.level_size(level).map(u64::from).into_iter().product::<u64>() * 16
     }
     /// The image of `extent` reduced to exactly `level`.
     pub fn at_level(extent: [u32; 2], level: u32) -> Self {
@@ -46,9 +51,7 @@ impl Plan {
         let scratch = (0..=last)
             .map(|level| u64::from(PAGE_SIZE >> level).pow(2) * 16)
             .sum::<u64>();
-        scratch + (self.level..=last).map(|level| {
-            self.extent.map(|n| u64::from(n.div_ceil(1 << level))).into_iter().product::<u64>() * 16
-        }).sum::<u64>()
+        scratch + (self.level..=last).map(|level| self.level_bytes(level)).sum::<u64>()
     }
 }
 
@@ -60,92 +63,39 @@ pub(super) struct Pipelines {
 }
 impl Pipelines {
     pub fn new(device: &PipelineDevice) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("display mip reduction"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: std::num::NonZeroU64::new(16),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba32Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let layout = crate::bindings::layout(device, "display mip reduction", &[
+            crate::bindings::texture(0, wgpu::ShaderStages::COMPUTE, false),
+            crate::bindings::buffer(
+                1,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+                true,
+                std::num::NonZeroU64::new(16),
+            ),
+            crate::bindings::storage_texture(
+                2,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::TextureFormat::Rgba32Float,
+                wgpu::StorageTextureAccess::WriteOnly,
+            ),
+        ]);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("display mip reduction"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("display mip reduction"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("display_mips.wgsl").into()),
-        });
-        let fused_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("four display mip levels"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2, multisampled: false,
-                    }, count: None,
-                },
-                native_tiles::buffer_entry(1, wgpu::BufferBindingType::Uniform, true, 16),
-                mip_output_entry(2), mip_output_entry(3), mip_output_entry(4), mip_output_entry(5),
-            ],
-        });
+        let shader = Deferred::wgsl(&device, "display mip reduction", include_str!("display_mips.wgsl"));
+        let fused_layout = crate::bindings::layout(device, "four display mip levels", &[
+            crate::bindings::texture(0, wgpu::ShaderStages::COMPUTE, false),
+            native_tiles::buffer_entry(1, wgpu::BufferBindingType::Uniform, true, 16),
+            mip_output_entry(2), mip_output_entry(3), mip_output_entry(4), mip_output_entry(5),
+        ]);
         let fused_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("four display mip levels"), bind_group_layouts: &[Some(&fused_layout)], immediate_size: 0,
         });
-        let fused_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("four display mip levels"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("display_mips_fused.wgsl").into()),
-        });
-        let fused_device = device.clone();
-        let fused_reduce = Deferred::pipeline(move |mode| mode.compute(&fused_device,
-            &wgpu::ComputePipelineDescriptor {
-                label: Some("four display mip levels"), layout: Some(&fused_pipeline_layout),
-                module: &fused_shader, entry_point: Some("reduce_four"),
-                compilation_options: Default::default(), cache: None,
-            }));
-        let device = device.clone();
-        let reduce = Deferred::pipeline(move |mode| {
-            mode.compute(
-                &device,
-                &wgpu::ComputePipelineDescriptor {
-                    label: Some("display mip reduction"),
-                    layout: Some(&pipeline_layout),
-                    module: &shader,
-                    entry_point: Some("reduce"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                },
-            )
-        });
+        let fused_shader = Deferred::wgsl(&device, "four display mip levels", include_str!("display_mips_fused.wgsl"));
+        let fused_reduce = Deferred::compute(device, "four display mip levels", &fused_pipeline_layout, &fused_shader, "reduce_four");
+        let reduce = Deferred::compute(device, "display mip reduction", &pipeline_layout, &shader, "reduce");
         Self {
             layout,
             fused_layout,
@@ -156,14 +106,12 @@ impl Pipelines {
 }
 
 fn mip_output_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding, visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::StorageTexture {
-            access: wgpu::StorageTextureAccess::WriteOnly,
-            format: wgpu::TextureFormat::Rgba32Float,
-            view_dimension: wgpu::TextureViewDimension::D2,
-        }, count: None,
-    }
+    crate::bindings::storage_texture(
+        binding,
+        wgpu::ShaderStages::COMPUTE,
+        wgpu::TextureFormat::Rgba32Float,
+        wgpu::StorageTextureAccess::WriteOnly,
+    )
 }
 
 struct Record {
@@ -219,16 +167,11 @@ impl CompleteUpdates {
             label: Some("retained display tile coordinates"), contents: &bytes,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let bindings = views.windows(2).map(|pair| device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("retained display reduction"), layout: &pipelines.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(pair[0]) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &records, offset: 0, size: NonZeroU64::new(16),
-                }) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(pair[1]) },
-            ],
-        })).collect();
+        let bindings = views.windows(2).map(|pair| crate::bindings::group(device, "retained display reduction", &pipelines.layout, [
+            wgpu::BindingResource::TextureView(pair[0]),
+            wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &records, offset: 0, size: NonZeroU64::new(16), }),
+            wgpu::BindingResource::TextureView(pair[1]),
+        ])).collect();
         let fused_bindings = (0..plan.level as usize / 4).map(|chunk| {
             let first = chunk * 4;
             let mut entries = vec![
@@ -359,7 +302,7 @@ impl Image {
             })
             .collect();
         let reduced = (plan.level + 1..=last).map(|level| create_target(
-            &r.device, plan.extent.map(|n| n.div_ceil(1 << level)),
+            &r.device, plan.level_size(level),
             wgpu::TextureFormat::Rgba32Float, "retained image mip",
         )).collect();
         Self {
@@ -386,7 +329,7 @@ impl Image {
         let level = requested.clamp(self.plan.level, self.last_level());
         let view = if level == self.plan.level { &self.view }
             else { &self.reduced[(level - self.plan.level - 1) as usize].1 };
-        (level, view, self.plan.extent.map(|n| n.div_ceil(1 << level)))
+        (level, view, self.plan.level_size(level))
     }
     pub fn copy_mip(
         &self,
@@ -489,26 +432,11 @@ impl Image {
                         contents: &data,
                         usage: wgpu::BufferUsages::UNIFORM,
                     });
-                    let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("display mip source"),
-                        layout: &pipelines.layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(
-                                    &self.views[level as usize - 1],
-                                ),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: uniform.as_entire_binding(),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: wgpu::BindingResource::TextureView(&self.views[level as usize]),
-                            },
-                        ],
-                    });
+                    let binding = crate::bindings::group(device, "display mip source", &pipelines.layout, [
+                        wgpu::BindingResource::TextureView( &self.views[level as usize - 1], ),
+                        uniform.as_entire_binding(),
+                        wgpu::BindingResource::TextureView(&self.views[level as usize]),
+                    ]);
                     Record { uniform, binding }
                 })
                 .collect()

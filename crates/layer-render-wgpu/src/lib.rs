@@ -15,6 +15,7 @@ mod portable_blend;
 mod target_geometry;
 mod pixel_rect;
 mod submission;
+use submission::ColorPass;
 use pixel_rect::{PixelRect, page_coordinates, page_rect, pixel_rect};
 
 use layer_core::{
@@ -1067,9 +1068,12 @@ impl WgpuRasterizer {
             label: Some("adjacent material source pages"), size: 160,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
-        let edge_layout = create_edge_layout(&device);
-        let watercolor_layout = create_color_neighborhood_layout(&device);
-        let transport_layout = create_transport_layout(&device);
+        let edge_layout = fragment_textures_layout(&device, 10, "layer post-stroke edge sources");
+        // Five cardinal color pages plus the full 3x3 watercolor-wetness
+        // neighborhood stay within the portable 16-texture fragment-stage limit.
+        let watercolor_layout =
+            fragment_textures_layout(&device, 14, "layer watercolor pigment and wetness neighborhood");
+        let transport_layout = fragment_textures_layout(&device, 10, "layer watercolor transport sources");
         let style_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
         let style_stride =
             (mem::size_of::<StyleGpu>() as u64).div_ceil(style_alignment) * style_alignment;
@@ -2400,12 +2404,8 @@ impl WgpuRasterizer {
                 wetness_views.push(view);
             }
         }
-        create_watercolor_neighborhood_bind_group(
-            &self.device,
-            &self.watercolor_layout,
-            color_views,
-            &wetness_views,
-        )
+        views_group(&self.device, "layer watercolor pigment and wetness neighborhood", &self.watercolor_layout,
+            color_views.iter().chain(&wetness_views).copied())
     }
 
     fn encode_clear(
@@ -2423,27 +2423,11 @@ impl WgpuRasterizer {
         label: &'static str,
         value: f32,
     ) {
-        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some(label),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: value as f64,
-                        g: value as f64,
-                        b: value as f64,
-                        a: value as f64,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let _pass = encoder.color_pass(
+            label,
+            view,
+            wgpu::LoadOp::Clear(wgpu::Color { r: value as f64, g: value as f64, b: value as f64, a: value as f64 }),
+        );
     }
 
     fn encode_batch(
@@ -2487,22 +2471,7 @@ impl WgpuRasterizer {
             .iter()
             .find(|set| set.key == key)
             .expect("advanced brush resources are prepared before encoding");
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("layer raster brush batch"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = encoder.color_pass("layer raster brush batch", target, wgpu::LoadOp::Load);
         pass.set_scissor_rect(
             scissor.min_x(),
             scissor.min_y(),
@@ -2732,12 +2701,8 @@ impl WgpuRasterizer {
                 .map(|p| &p.active().view)
                 .unwrap_or(&self.empty_scalar_view)
         });
-        Ok(create_transport_bind_group(
-            &self.device,
-            &self.transport_layout,
-            &colors,
-            &wetness,
-        ))
+        Ok(views_group(&self.device, "layer watercolor transport sources", &self.transport_layout,
+            colors.iter().chain(&wetness).copied()))
     }
 
     fn encode_watercolor_transport(
@@ -2977,22 +2942,11 @@ impl WgpuRasterizer {
             .expect("reservoir brush textures are prepared before encoding");
         let target = &self.reservoir.inactive().view;
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("layer brush reservoir exchange"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = encoder.color_pass(
+                "layer brush reservoir exchange",
+                target,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
             pass.set_pipeline(&self.pipelines.reservoir);
             pass.set_bind_group(
                 0,
@@ -3067,12 +3021,8 @@ impl WgpuRasterizer {
             jobs.push(Job {
                 coordinate,
                 destination_secondary: !color_page.active_secondary,
-                bind_group: create_edge_bind_group(
-                    &self.device,
-                    &self.edge_layout,
-                    &color_page.active().view,
-                    &coverage_views,
-                ),
+                bind_group: views_group(&self.device, "layer post-stroke edge sources", &self.edge_layout,
+                    std::iter::once(&color_page.active().view).chain(coverage_views.iter().copied())),
             });
         }
 
@@ -3083,25 +3033,13 @@ impl WgpuRasterizer {
                 .find(|page| page.coordinate == job.coordinate)
                 .expect("edge paint page remains live while encoding");
             let destination = page.surface(job.destination_secondary);
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("layer post-stroke edge page"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &destination.view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        // The full-page shader copies source color outside the
-                        // edge band, so a preceding source-to-destination copy
-                        // would be redundant.
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            // The full-page shader copies source color outside the edge
+            // band, so a preceding source-to-destination copy would be redundant.
+            let mut pass = encoder.color_pass(
+                "layer post-stroke edge page",
+                &destination.view,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
             pass.set_pipeline(&self.pipelines.stroke_edge);
             pass.set_bind_group(
                 0,
@@ -4359,10 +4297,7 @@ impl CanvasRenderer for WgpuRasterizer {
         }
         for &(layer, bounds) in &self.transform_damage {
             let bounds = pixel_rect(
-                layer_core::target_transform(packet.layers, layer).bounds(layer_core::Rect {
-                    min: layer_core::Point { x: bounds.min_x() as f32, y: bounds.min_y() as f32 },
-                    max: layer_core::Point { x: bounds.max_x() as f32, y: bounds.max_y() as f32 },
-                }),
+                layer_core::target_transform(packet.layers, layer).bounds(bounds.to_rect()),
                 packet.document_extent,
             );
             if let Some(tiles) = &mut composite_tiles {
@@ -4831,205 +4766,66 @@ fn dab_candidate_pixels(dab: Dab, extent: [u32; 2]) -> u64 {
 }
 
 fn create_style_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("layer style layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: true,
-                min_binding_size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
-            },
-            count: None,
-        }],
-    })
+    bindings::layout(device, "layer style layout", &[bindings::buffer(
+        0,
+        wgpu::ShaderStages::VERTEX_FRAGMENT,
+        wgpu::BufferBindingType::Uniform,
+        true,
+        NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
+    )])
 }
 
 fn create_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("layer sampled texture layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    })
+    bindings::layout(device, "layer sampled texture layout", &[
+        bindings::texture(0, wgpu::ShaderStages::FRAGMENT, true),
+        bindings::sampler(1, wgpu::ShaderStages::FRAGMENT, wgpu::SamplerBindingType::Filtering),
+    ])
 }
 
 fn create_advanced_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    let texture = wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    };
-    let mut entries = Vec::with_capacity(4);
-    for binding in 0..3 {
-        entries.push(wgpu::BindGroupLayoutEntry { binding, ..texture });
-    }
-    entries.push(wgpu::BindGroupLayoutEntry {
-        binding: 3,
-        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    });
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("layer advanced brush texture layout"),
-        entries: &entries,
-    })
+    let stages = wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE;
+    let entries = (0..3).map(|binding| bindings::texture(binding, stages, true))
+        .chain([bindings::sampler(3, stages, wgpu::SamplerBindingType::Filtering)])
+        .collect::<Vec<_>>();
+    bindings::layout(device, "layer advanced brush texture layout", &entries)
 }
 
 fn create_target_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("layer render target layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: NonZeroU64::new(mem::size_of::<TargetGpu>() as u64),
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(48),
-                },
-                count: None,
-            },
-        ],
-    })
+    bindings::layout(device, "layer render target layout", &[
+        bindings::buffer(
+            0,
+            wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+            wgpu::BufferBindingType::Uniform,
+            true,
+            NonZeroU64::new(mem::size_of::<TargetGpu>() as u64),
+        ),
+        bindings::buffer(
+            1,
+            wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+            wgpu::BufferBindingType::Storage { read_only: true },
+            false,
+            NonZeroU64::new(48),
+        ),
+    ])
 }
 
 fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    let mut entries = Vec::with_capacity(12);
-    for binding in 0..9 {
-        entries.push(wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        });
-    }
-    entries.push(wgpu::BindGroupLayoutEntry {
-        binding: 9,
-        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only: true },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    });
-    for binding in 10..12 {
-        entries.push(wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        });
-    }
-    entries.push(wgpu::BindGroupLayoutEntry {
-        binding: 12, visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: true, min_binding_size: NonZeroU64::new(160) }, count: None,
-    });
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("layer material source neighborhood layout"),
-        entries: &entries,
+    let stages = wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE;
+    let storage = wgpu::BufferBindingType::Storage { read_only: true };
+    let entries = (0..12).map(|binding| match binding {
+        9 => bindings::buffer(9, stages, storage, false, None),
+        _ => bindings::texture(binding, stages, false),
     })
+    .chain([bindings::buffer(12, stages, wgpu::BufferBindingType::Uniform, true, NonZeroU64::new(160))])
+    .collect::<Vec<_>>();
+    bindings::layout(device, "layer material source neighborhood layout", &entries)
 }
 
-fn create_edge_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    let entries = (0..10)
-        .map(|binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        })
+fn fragment_textures_layout(device: &wgpu::Device, count: u32, label: &str) -> wgpu::BindGroupLayout {
+    let entries = (0..count)
+        .map(|binding| bindings::texture(binding, wgpu::ShaderStages::FRAGMENT, false))
         .collect::<Vec<_>>();
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("layer post-stroke edge sources"),
-        entries: &entries,
-    })
-}
-
-fn create_color_neighborhood_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    // Five cardinal color pages plus the full 3x3 watercolor-wetness
-    // neighborhood stay within the portable 16-texture fragment-stage limit.
-    let entries = (0..14)
-        .map(|binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        })
-        .collect::<Vec<_>>();
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("layer watercolor pigment and wetness neighborhood"),
-        entries: &entries,
-    })
-}
-
-fn create_transport_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    let mut entries = Vec::with_capacity(10);
-    for binding in 0..10 {
-        entries.push(wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        });
-    }
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("layer watercolor transport sources"),
-        entries: &entries,
-    })
+    bindings::layout(device, label, &entries)
 }
 
 fn create_style_buffer(device: &wgpu::Device, stride: u64, capacity: usize) -> wgpu::Buffer {
@@ -5055,18 +4851,9 @@ fn create_style_bind_group(
     layout: &wgpu::BindGroupLayout,
     buffer: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("layer dynamic style binding"),
-        layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                buffer,
-                offset: 0,
-                size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
-            }),
-        }],
-    })
+    bindings::group(device, "layer dynamic style binding", layout, [
+        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer, offset: 0, size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64), }),
+    ])
 }
 
 fn create_target_bind_group(
@@ -5075,24 +4862,10 @@ fn create_target_bind_group(
     buffer: &wgpu::Buffer,
     selection: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("layer dynamic render target binding"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer,
-                    offset: 0,
-                    size: NonZeroU64::new(mem::size_of::<TargetGpu>() as u64),
-                }),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: selection.as_entire_binding(),
-            },
-        ],
-    })
+    bindings::group(device, "layer dynamic render target binding", layout, [
+        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer, offset: 0, size: NonZeroU64::new(mem::size_of::<TargetGpu>() as u64), }),
+        selection.as_entire_binding(),
+    ])
 }
 
 fn create_texture_bind_group(
@@ -5102,20 +4875,10 @@ fn create_texture_bind_group(
     sampler: &wgpu::Sampler,
     label: &'static str,
 ) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some(label),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
-    })
+    bindings::group(device, label, layout, [
+        wgpu::BindingResource::TextureView(view),
+        wgpu::BindingResource::Sampler(sampler),
+    ])
 }
 
 fn create_advanced_texture_bind_group(
@@ -5124,28 +4887,8 @@ fn create_advanced_texture_bind_group(
     views: [&wgpu::TextureView; 3],
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("layer advanced brush textures"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(views[0]),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(views[1]),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(views[2]),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
-    })
+    let resources = views.map(wgpu::BindingResource::TextureView).into_iter();
+    bindings::group(device, "layer advanced brush textures", layout, resources.chain([wgpu::BindingResource::Sampler(sampler)]))
 }
 
 fn create_material_bind_group(
@@ -5158,105 +4901,22 @@ fn create_material_bind_group(
     sources: wgpu::BindingResource<'_>,
 ) -> wgpu::BindGroup {
     debug_assert_eq!(views.len(), 9);
-    let entries: [_; 13] = std::array::from_fn(|binding| wgpu::BindGroupEntry {
-        binding: binding as u32,
-        resource: match binding {
-            0..=8 => wgpu::BindingResource::TextureView(views[binding]),
-            9 => dabs.as_entire_binding(),
-            10 => wgpu::BindingResource::TextureView(coverage),
-            11 => wgpu::BindingResource::TextureView(reservoir),
-            _ => sources.clone(),
-        },
-    });
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("layer material source neighborhood"),
-        layout,
-        entries: &entries,
-    })
+    let pages = views.iter().copied().map(wgpu::BindingResource::TextureView);
+    bindings::group(device, "layer material source neighborhood", layout, pages.chain([
+        dabs.as_entire_binding(),
+        wgpu::BindingResource::TextureView(coverage),
+        wgpu::BindingResource::TextureView(reservoir),
+        sources,
+    ]))
 }
 
-fn create_edge_bind_group(
+fn views_group<'a>(
     device: &wgpu::Device,
+    label: &str,
     layout: &wgpu::BindGroupLayout,
-    color: &wgpu::TextureView,
-    coverage: &[&wgpu::TextureView],
+    views: impl IntoIterator<Item = &'a wgpu::TextureView>,
 ) -> wgpu::BindGroup {
-    debug_assert_eq!(coverage.len(), 9);
-    let mut entries = Vec::with_capacity(10);
-    entries.push(wgpu::BindGroupEntry {
-        binding: 0,
-        resource: wgpu::BindingResource::TextureView(color),
-    });
-    entries.extend(
-        coverage
-            .iter()
-            .enumerate()
-            .map(|(index, view)| wgpu::BindGroupEntry {
-                binding: index as u32 + 1,
-                resource: wgpu::BindingResource::TextureView(view),
-            }),
-    );
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("layer post-stroke edge sources"),
-        layout,
-        entries: &entries,
-    })
-}
-
-fn create_watercolor_neighborhood_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    colors: &[&wgpu::TextureView],
-    wetness: &[&wgpu::TextureView],
-) -> wgpu::BindGroup {
-    debug_assert_eq!(colors.len(), 5);
-    debug_assert_eq!(wetness.len(), 9);
-    let mut entries = colors
-        .iter()
-        .enumerate()
-        .map(|(index, view)| wgpu::BindGroupEntry {
-            binding: index as u32,
-            resource: wgpu::BindingResource::TextureView(view),
-        })
-        .collect::<Vec<_>>();
-    entries.extend(
-        wetness
-            .iter()
-            .enumerate()
-            .map(|(index, view)| wgpu::BindGroupEntry {
-                binding: index as u32 + 5,
-                resource: wgpu::BindingResource::TextureView(view),
-            }),
-    );
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("layer watercolor pigment and wetness neighborhood"),
-        layout,
-        entries: &entries,
-    })
-}
-
-fn create_transport_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    colors: &[&wgpu::TextureView],
-    wetness: &[&wgpu::TextureView],
-) -> wgpu::BindGroup {
-    debug_assert_eq!(colors.len(), 5);
-    debug_assert_eq!(wetness.len(), 5);
-    let entries = colors
-        .iter()
-        .chain(wetness.iter())
-        .enumerate()
-        .map(|(index, view)| wgpu::BindGroupEntry {
-            binding: index as u32,
-            resource: wgpu::BindingResource::TextureView(view),
-        })
-        .collect::<Vec<_>>();
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("layer watercolor transport sources"),
-        layout,
-        entries: &entries,
-    })
+    bindings::group(device, label, layout, views.into_iter().map(wgpu::BindingResource::TextureView))
 }
 
 fn create_color_target(
@@ -5341,6 +5001,14 @@ fn compose_wgsl(parts: &[&str]) -> Cow<'static, str> {
         source.push('\n');
     }
     Cow::Owned(source)
+}
+
+fn texture_switch(group: u32, count: usize, function: &str) -> String {
+    let mut shader: String =
+        (0..count).map(|i| format!("@group({group}) @binding({i}) var source{i}:texture_2d<f32>;\n")).collect();
+    shader += &format!("fn {function}(i:u32,p:vec2<i32>)->vec4<f32>{{switch i {{\n");
+    shader.extend((0..count).map(|i| format!("case {i}u:{{return textureLoad(source{i},p,0);}}\n")));
+    shader + "default:{return vec4(0.);}}}\n"
 }
 
 fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pipelines {
@@ -5494,7 +5162,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     .map(|(blend, label)| {
         let (device, layout, shader) = (device.clone(), advanced_layout.clone(), advanced_brush.clone());
         Deferred::pipeline(move |mode| {
-            brush_pipeline_recipe(mode, &device, &layout, &shader, "fragment_main", blend, label)
+            brush_pipeline_format_recipe(mode, &device, &layout, &shader, "fragment_main", blend, device.working_format(), label)
         })
     });
     let max_blend = wgpu::BlendState {
@@ -5727,27 +5395,6 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     }
 }
 
-fn brush_pipeline_recipe(
-    mode: CompileMode,
-    device: &PipelineDevice,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    fragment_entry: &'static str,
-    blend: wgpu::BlendState,
-    label: &'static str,
-) -> Compilation<wgpu::RenderPipeline> {
-    brush_pipeline_format_recipe(
-        mode,
-        device,
-        layout,
-        shader,
-        fragment_entry,
-        blend,
-        device.working_format(),
-        label,
-    )
-}
-
 fn brush_pipeline_format_recipe(
     mode: CompileMode,
     device: &PipelineDevice,
@@ -5812,34 +5459,8 @@ fn fullscreen_pipeline_recipe(
     format: wgpu::TextureFormat,
     label: &'static str,
 ) -> Compilation<wgpu::RenderPipeline> {
-    mode.render(
-        device,
-        &wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some("vertex_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some(fragment_entry),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: device.attachment_blend(format, blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        },
-    )
+    let target = wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL };
+    fullscreen_pipeline_targets_with_constants_recipe(mode, device, layout, shader, fragment_entry, &[Some(target)], &[], label)
 }
 
 fn fullscreen_pipeline_targets_with_constants_recipe(

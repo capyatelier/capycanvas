@@ -30,27 +30,15 @@ impl SelectionPainter {
     }
     pub fn new(device: &PipelineDevice, textures: &wgpu::BindGroupLayout) -> Self {
         let entries: Vec<_> = [0, 1, 2, 3, 6, 7, 8]
-            .map(|binding| wgpu::BindGroupLayoutEntry {
+            .map(|binding| crate::bindings::buffer(
                 binding,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: if binding <= 1 || binding == 8 {
-                        wgpu::BufferBindingType::Uniform
-                    } else {
-                        wgpu::BufferBindingType::Storage {
-                            read_only: !matches!(binding, 2 | 3),
-                        }
-                    },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            })
+                wgpu::ShaderStages::COMPUTE,
+                if binding <= 1 || binding == 8 { wgpu::BufferBindingType::Uniform } else { wgpu::BufferBindingType::Storage { read_only: !matches!(binding, 2 | 3), } },
+                false,
+                None,
+            ))
             .into();
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("selection paint"),
-            entries: &entries,
-        });
+        let layout = crate::bindings::layout(device, "selection paint", &entries);
         let shader_source = |name: &str, binding: u32| {
             include_str!("selection_clip.wgsl")
                 .replace(
@@ -60,9 +48,7 @@ impl SelectionPainter {
                 .replace("BrushSelection", &format!("{name}Coverage"))
                 .replace("brush_selection", name)
         };
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("incremental selection coverage"),
-            source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+        let shader = Deferred::wgsl(&device, "incremental selection coverage", compose_wgsl(&[
                 include_str!("brush_types.wgsl"),
                 &include_str!("brush_textures.wgsl").replace("@group(3)", "@group(1)"),
                 include_str!("analytic_coverage.wgsl"),
@@ -72,30 +58,14 @@ impl SelectionPainter {
                 &shader_source("before", 6),
                 &shader_source("enclosed", 7),
                 include_str!("selection_paint.wgsl"),
-            ])),
-        });
+            ]));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("selection paint"),
             bind_group_layouts: &[Some(&layout), Some(textures)],
             immediate_size: 0,
         });
-        let pipelines = ["initialize", "paint", "bounds"].map(|entry| {
-            let (device, layout, shader) =
-                (device.clone(), pipeline_layout.clone(), shader.clone());
-            Deferred::pipeline(move |mode| {
-                mode.compute(
-                    &device,
-                    &wgpu::ComputePipelineDescriptor {
-                        label: Some(entry),
-                        layout: Some(&layout),
-                        module: &shader,
-                        entry_point: Some(entry),
-                        compilation_options: Default::default(),
-                        cache: None,
-                    },
-                )
-            })
-        });
+        let pipelines = ["initialize", "paint", "bounds"]
+            .map(|entry| Deferred::compute(device, entry, &pipeline_layout, &shader, entry));
         let (tx, rx) = mpsc::channel();
         Self {
             layout,

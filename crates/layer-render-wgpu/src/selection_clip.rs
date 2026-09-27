@@ -24,70 +24,23 @@ pub(super) struct SelectionClip {
 }
 impl SelectionClip {
     pub fn new(device: &PipelineDevice) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("selection raster inputs"),
-            entries: &[
-                buffer_entry(0, wgpu::BufferBindingType::Uniform),
-                buffer_entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
-                buffer_entry(2, wgpu::BufferBindingType::Storage { read_only: false }),
-            ],
-        });
-        let shader = {
-            let device = device.clone();
-            Deferred::new(move || {
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("packed selection coverage"),
-                    source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                        include_str!("selection_clip_init.wgsl"),
-                        include_str!("selection_geometry.wgsl"),
-                    ])),
-                })
-            })
-        };
+        let layout = crate::bindings::layout(device, "selection raster inputs", &[
+            buffer_entry(0, wgpu::BufferBindingType::Uniform),
+            buffer_entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
+            buffer_entry(2, wgpu::BufferBindingType::Storage { read_only: false }),
+        ]);
+        let shader = Deferred::wgsl(device, "packed selection coverage", compose_wgsl(&[
+            include_str!("selection_clip_init.wgsl"),
+            include_str!("selection_geometry.wgsl"),
+        ]));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("selection raster layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = |entry| {
-            let (device, pipeline_layout, shader) =
-                (device.clone(), pipeline_layout.clone(), shader.clone());
-            Deferred::pipeline(move |mode| {
-                mode.compute(
-                    &device,
-                    &wgpu::ComputePipelineDescriptor {
-                        label: Some("rasterize packed selection"),
-                        layout: Some(&pipeline_layout),
-                        module: &shader,
-                        entry_point: Some(entry),
-                        compilation_options: Default::default(),
-                        cache: None,
-                    },
-                )
-            })
-        };
-        let resample = {
-            let (device, layout) = (device.clone(), pipeline_layout.clone());
-            Deferred::pipeline(move |mode| {
-                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("affine selection coverage"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        include_str!("selection_resample.wgsl").into(),
-                    ),
-                });
-                mode.compute(
-                    &device,
-                    &wgpu::ComputePipelineDescriptor {
-                        label: Some("resample packed selection"),
-                        layout: Some(&layout),
-                        module: &shader,
-                        entry_point: Some("resample"),
-                        compilation_options: Default::default(),
-                        cache: None,
-                    },
-                )
-            })
-        };
+        let pipeline = |entry| Deferred::compute(device, "rasterize packed selection", &pipeline_layout, &shader, entry);
+        let resample_shader = Deferred::wgsl(device, "affine selection coverage", include_str!("selection_resample.wgsl"));
+        let resample = Deferred::compute(device, "resample packed selection", &pipeline_layout, &resample_shader, "resample");
         Self {
             crossings: pipeline("crossings"),
             fill: pipeline("fill"),
@@ -164,18 +117,7 @@ impl SelectionClip {
             *used = self.pixel_clock;
             return buffer.clone();
         }
-        let [w, h] = pixels.extent();
-        let mut bytes: Vec<_> = [0, 0, w, h, 0, pixels.coverage_format(), 0, 0]
-            .into_iter()
-            .chain(pixels.words().iter().copied())
-            .flat_map(u32::to_ne_bytes)
-            .collect();
-        bytes.resize(bytes.len().next_multiple_of(16), 0);
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("restored selection pixels"),
-            contents: &bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
+        let buffer = pixel_region_buffer(device, pixels, PixelRect::full(pixels.extent()));
         self.remember_pixels(pixels, buffer.clone());
         buffer
     }
@@ -240,16 +182,7 @@ impl SelectionClip {
             .intersect(PixelRect::full(extent));
         let source_region = match &geometry.shape {
             layer_core::SelectionShape::Pixels(pixels) if region.is_some() => {
-                let rect = layer_core::Rect {
-                    min: layer_core::Point {
-                        x: requested.min_x() as f32,
-                        y: requested.min_y() as f32,
-                    },
-                    max: layer_core::Point {
-                        x: requested.max_x() as f32,
-                        y: requested.max_y() as f32,
-                    },
-                };
+                let rect = requested.to_rect();
                 let mut source = layer_core::Affine(inverse).bounds(rect);
                 source.min.x -= 2.;
                 source.min.y -= 2.;
@@ -355,24 +288,11 @@ impl SelectionClip {
             if translation {
                 encoder.copy_buffer_to_buffer(&source, 32, buffer, 32, words * 4);
             } else if !bounds.is_empty() {
-                let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("affine selection inputs"),
-                    layout: &self.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: params.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: source.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: buffer.as_entire_binding(),
-                        },
-                    ],
-                });
+                let binding = crate::bindings::group(device, "affine selection inputs", &self.layout, [
+                    params.as_entire_binding(),
+                    source.as_entire_binding(),
+                    buffer.as_entire_binding(),
+                ]);
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("resample selection placement"),
                     timestamp_writes: None,
@@ -397,24 +317,11 @@ impl SelectionClip {
             usage: wgpu::BufferUsages::STORAGE,
         });
         let buffer = self.buffer.as_ref().unwrap();
-        let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("selection raster inputs"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: edge_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: buffer.as_entire_binding(),
-                },
-            ],
-        });
+        let binding = crate::bindings::group(device, "selection raster inputs", &self.layout, [
+            params.as_entire_binding(),
+            edge_buffer.as_entire_binding(),
+            buffer.as_entire_binding(),
+        ]);
         // Encoder-ordered writes are essential: replay can use several different
         // selections in one submission, including in the browser backend.
         encoder.copy_buffer_to_buffer(&params, 0, buffer, 0, 32);
@@ -474,14 +381,5 @@ fn pixel_region_buffer(
 }
 
 fn buffer_entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    }
+    crate::bindings::buffer(binding, wgpu::ShaderStages::COMPUTE, ty, false, None)
 }

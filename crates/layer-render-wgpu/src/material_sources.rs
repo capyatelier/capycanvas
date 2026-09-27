@@ -300,22 +300,11 @@ impl WgpuRasterizer {
         let mut current = 0;
         {
             let gather = self.material_gather.as_ref().unwrap();
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clear material sample field"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &gather.fields[current].1,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let _pass = encoder.color_pass(
+                "clear material sample field",
+                &gather.fields[current].1,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
         }
         let key = Self::texture_set_key(&batch.style);
         for pages in pages.unwrap().chunks(9) {
@@ -363,22 +352,11 @@ impl WgpuRasterizer {
                 .iter()
                 .find(|s| s.key == key)
                 .expect("material textures are prepared before gathering");
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("gather full-resolution material source pages"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &gather.fields[next].1,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = encoder.color_pass(
+                "gather full-resolution material source pages",
+                &gather.fields[next].1,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
             pass.set_pipeline(&self.pipelines.material_gather[operation.unwrap()]);
             pass.set_bind_group(
                 0,

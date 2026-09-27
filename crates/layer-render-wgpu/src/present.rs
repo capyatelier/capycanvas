@@ -341,118 +341,71 @@ impl ViewportPresenter {
         format: wgpu::TextureFormat,
         color: SdrSurfaceColor,
     ) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("viewport bindings"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 10,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: std::num::NonZeroU64::new(32),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry { binding:11,visibility:wgpu::ShaderStages::FRAGMENT,ty:wgpu::BindingType::Texture {sample_type:wgpu::TextureSampleType::Uint,view_dimension:wgpu::TextureViewDimension::D2,multisampled:false},count:None },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(CAMERA_SIZE),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: std::num::NonZeroU64::new(64),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: std::num::NonZeroU64::new(20),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 9,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: std::num::NonZeroU64::new(32),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: std::num::NonZeroU64::new(16),
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let layout = crate::bindings::layout(device, "viewport bindings", &[
+            crate::bindings::buffer(
+                10,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                std::num::NonZeroU64::new(32),
+            ),
+            crate::bindings::texture_of(
+                11,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::TextureSampleType::Uint,
+                wgpu::TextureViewDimension::D2,
+            ),
+            crate::bindings::buffer(
+                0,
+                wgpu::ShaderStages::VERTEX_FRAGMENT,
+                wgpu::BufferBindingType::Uniform,
+                true,
+                wgpu::BufferSize::new(CAMERA_SIZE),
+            ),
+            crate::bindings::texture(1, wgpu::ShaderStages::FRAGMENT, true),
+            crate::bindings::sampler(
+                2,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::SamplerBindingType::Filtering,
+            ),
+            crate::bindings::buffer(
+                3,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                None,
+            ),
+            crate::bindings::texture(4, wgpu::ShaderStages::FRAGMENT, false),
+            crate::bindings::buffer(
+                5,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                std::num::NonZeroU64::new(64),
+            ),
+            crate::bindings::texture(6, wgpu::ShaderStages::FRAGMENT, true),
+            crate::bindings::buffer(
+                7,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                std::num::NonZeroU64::new(20),
+            ),
+            crate::bindings::buffer(
+                9,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Uniform,
+                false,
+                std::num::NonZeroU64::new(32),
+            ),
+            crate::bindings::buffer(
+                8,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Uniform,
+                false,
+                std::num::NonZeroU64::new(16),
+            ),
+        ]);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("viewport layout"),
             bind_group_layouts: &[Some(&layout)],
@@ -479,60 +432,14 @@ impl ViewportPresenter {
                 .into(),
             ),
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("viewport presentation"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+        let pipeline = surface_pipeline(device, "viewport presentation", &pipeline_layout, &shader, ["vs_main", "fs_main"], None, format, None);
+        let cursor_pipeline = surface_pipeline(device, "display-only cursor", &pipeline_layout, &shader, ["cursor_vertex", "cursor_fragment"],
+            Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<CursorSegment>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32, 3 => Float32, 4 => Float32],
             }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let cursor_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("display-only cursor"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("cursor_vertex"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CursorSegment>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32, 3 => Float32, 4 => Float32],
-                })],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("cursor_fragment"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+            format, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING));
         let cursor_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("cursor segments"),
             size: 256 * std::mem::size_of::<CursorSegment>() as u64,
@@ -630,44 +537,23 @@ impl ViewportPresenter {
             return;
         }
         let device = &renderer.device;
-        self.overview_pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("in-surface document overviews"),
-            layout: Some(&self.pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &self.shader,
-                entry_point: Some("overview_vertex"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 96,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4],
-                })],
+        let instance = wgpu::VertexBufferLayout {
+            array_stride: 96,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4],
+        };
+        let blend = wgpu::BlendState {
+            color: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.color,
+            // The canvas already owns window coverage. Reapplying
+            // alpha blending here would thicken antialiased corners.
+            alpha: if self.standalone_overview {
+                wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.alpha
+            } else {
+                wgpu::BlendComponent { src_factor:wgpu::BlendFactor::Zero, dst_factor:wgpu::BlendFactor::One, operation:wgpu::BlendOperation::Add }
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &self.shader,
-                entry_point: Some("overview_fragment"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: self.format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.color,
-                        // The canvas already owns window coverage. Reapplying
-                        // alpha blending here would thicken antialiased corners.
-                        alpha: if self.standalone_overview {
-                            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.alpha
-                        } else {
-                            wgpu::BlendComponent { src_factor:wgpu::BlendFactor::Zero, dst_factor:wgpu::BlendFactor::One, operation:wgpu::BlendOperation::Add }
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        }));
+        };
+        self.overview_pipeline = Some(surface_pipeline(device, "in-surface document overviews", &self.pipeline_layout, &self.shader,
+            ["overview_vertex", "overview_fragment"], Some(instance), self.format, Some(blend)));
     }
 
     /// Reuses the composition, bindings and current presentation pass. An
@@ -885,61 +771,24 @@ impl ViewportPresenter {
             || self.next_view.as_ref() != Some(next)
             || self.display_geometry.as_ref() != Some(geometry);
         if bindings_changed {
-            self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("viewport composite"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &self.uniform,
-                            offset: 0,
-                            size: wgpu::BufferSize::new(CAMERA_SIZE),
-                        }),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(composite),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&renderer.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: coverage.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::TextureView(coarse),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: geometry.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
-                        resource: wgpu::BindingResource::TextureView(next),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 7,
-                        resource: self.proof_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 8,
-                        resource: self.proof_uniform.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 9,
-                        resource: self.hdr_uniform.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry { binding:11, resource:wgpu::BindingResource::TextureView(saved) },
-                    wgpu::BindGroupEntry {
-                        binding: 10,
-                        resource: self.local_buffer.as_entire_binding(),
-                    },
-                ],
-            }));
+            self.bind_group = Some(crate::bindings::group(device, "viewport composite", &self.layout, [
+                wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &self.uniform,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(CAMERA_SIZE),
+                }),
+                wgpu::BindingResource::TextureView(composite),
+                wgpu::BindingResource::Sampler(&renderer.sampler),
+                coverage.as_entire_binding(),
+                wgpu::BindingResource::TextureView(coarse),
+                geometry.as_entire_binding(),
+                wgpu::BindingResource::TextureView(next),
+                self.proof_buffer.as_entire_binding(),
+                self.proof_uniform.as_entire_binding(),
+                self.hdr_uniform.as_entire_binding(),
+                self.local_buffer.as_entire_binding(),
+                wgpu::BindingResource::TextureView(saved),
+            ]));
             self.document_extent = renderer.document_extent;
             self.selection_buffer = Some(coverage.clone());
             self.saved_selection_buffer = Some(saved.clone());
@@ -1278,6 +1127,35 @@ impl ViewportPresenter {
         self.uploads.finish(encoder);
         Ok(())
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn surface_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    entries: [&str; 2],
+    instance: Option<wgpu::VertexBufferLayout<'_>>,
+    format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState { module: shader, entry_point: Some(entries[0]), compilation_options: Default::default(), buffers: &[instance] },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(entries[1]),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+        }),
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 #[cfg(test)]

@@ -13,16 +13,7 @@ impl Validator {
             MAX_BATCH_TILES.min(device.limits().max_sampled_textures_per_shader_stage as usize);
         assert!(tiles_per_dispatch > 0);
         let mut entries: Vec<_> = (0..tiles_per_dispatch)
-            .map(|binding| wgpu::BindGroupLayoutEntry {
-                binding: binding as u32,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            })
+            .map(|binding| crate::bindings::texture(binding as u32, wgpu::ShaderStages::COMPUTE, false))
             .collect();
         entries.push(crate::native_tiles::buffer_entry(
             tiles_per_dispatch as u32,
@@ -30,10 +21,7 @@ impl Validator {
             false,
             STATUS_BYTES,
         ));
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("native publication validation"),
-            entries: &entries,
-        });
+        let layout = crate::bindings::layout(device, "native publication validation", &entries);
         let textures: String = (0..tiles_per_dispatch)
             .map(|i| format!("@group(0) @binding({i}) var working{i}:texture_2d<f32>;\n"))
             .collect();
@@ -59,26 +47,7 @@ impl Validator {
                     .replace("STATUS_BINDING", &tiles_per_dispatch.to_string())
                     .replace("VALIDATE", expression)
             );
-            {
-                let (device, pipeline_layout) = (device.clone(), pipeline_layout.clone());
-                crate::Deferred::pipeline(move |mode| {
-                    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some("native publication validation"),
-                        source: wgpu::ShaderSource::Wgsl(source.into()),
-                    });
-                    mode.compute(
-                        &device,
-                        &wgpu::ComputePipelineDescriptor {
-                            label: Some("native publication validation"),
-                            layout: Some(&pipeline_layout),
-                            module: &module,
-                            entry_point: Some("main"),
-                            compilation_options: Default::default(),
-                            cache: None,
-                        },
-                    )
-                })
-            }
+            crate::Deferred::compute(&device, "native publication validation", &pipeline_layout, &crate::Deferred::wgsl(&device, "native publication validation", source), "main")
         });
         Self {
             layout,

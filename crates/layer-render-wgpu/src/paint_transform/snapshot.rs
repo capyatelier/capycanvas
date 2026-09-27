@@ -9,6 +9,11 @@ pub(super) struct SnapshotPage {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
 }
+impl SnapshotPage {
+    pub fn of(texture: &wgpu::Texture, view: &wgpu::TextureView) -> Self {
+        Self { texture: texture.clone(), view: view.clone() }
+    }
+}
 pub(super) struct TileSnapshot {
     pub pages: BTreeMap<[u32; 2], SnapshotPage>,
     pub original: Option<std::sync::Arc<layer_core::color::source::SourceImage>>,
@@ -29,21 +34,9 @@ pub(crate) struct Footprint {
     pub sources: Vec<[u32; 2]>,
 }
 impl TileSnapshot {
-    pub fn new(
-        pages: Vec<([u32; 2], SnapshotPage)>,
-        original: Option<std::sync::Arc<layer_core::color::source::SourceImage>>,
-        backing: Option<(
-            std::sync::Arc<layer_core::raster::RasterData>,
-            layer_core::color::RgbSpace,
-        )>,
-        bounds: PixelRect,
-    ) -> Self {
-        Self {
-            pages: pages.into_iter().collect(),
-            original,
-            backing,
-            bounds,
-        }
+    pub fn source_bounds(&self) -> [i32; 4] {
+        let b = self.bounds;
+        [b.min_x() as i32, b.min_y() as i32, b.width() as i32, b.height() as i32]
     }
     fn contains(&self, coordinate: [u32; 2]) -> bool {
         self.pages.contains_key(&coordinate)
@@ -118,12 +111,7 @@ impl TileSnapshot {
             .source_views(
                 &r.device,
                 &views,
-                [
-                    self.bounds.min_x() as i32,
-                    self.bounds.min_y() as i32,
-                    self.bounds.width() as i32,
-                    self.bounds.height() as i32,
-                ],
+                self.source_bounds(),
                 selection,
                 &r.empty_view,
             )
