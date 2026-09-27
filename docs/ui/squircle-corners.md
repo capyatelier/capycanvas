@@ -48,10 +48,14 @@ Web squircles those as well. Menus and popovers use `SURFACE_RADIUS` with
 the 12px control radius. Other dialogs, cards, list highlights and tooltips
 keep their former visual rounding: `--squircle-scale` divides the former
 circular radius by the corner fit. Circular icon buttons, such as dialog close
-buttons, become full squircles.
+buttons, and switch tracks and knobs become squircles.
+
+The Capy button icon choices in settings are tiles on every host: full
+squircles like the Capy button itself. GTK wraps the choice grid in
+`squircle::Squircles`, and Windows uses the fitted circular radius.
 
 True circles stay round: color swatches and wheel buttons, wheel markers,
-dials, radio indicators, gradient stops, circular range and switch knobs and native
+dials, radio indicators, gradient stops, circular range knobs and native
 window controls.
 
 ## Corner fit

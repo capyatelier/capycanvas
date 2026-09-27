@@ -2,6 +2,7 @@
 #include "SettingsView.h"
 #include "UiControls.h"
 #include "Checker.h"
+#include "WorkspaceGeometry.h"
 #include <map>
 #include <tuple>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
@@ -172,7 +173,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             for(uint32_t i=0;i<columns;++i){ColumnDefinition column;column.Width({64,GridUnitType::Pixel});choices.ColumnDefinitions().Append(column);}
             for(uint32_t i=0;i<(options.Size()+columns-1)/columns;++i){RowDefinition track;track.Height({64,GridUnitType::Pixel});choices.RowDefinitions().Append(track);}
             for(uint32_t i=0;i<options.Size();++i){
-                Primitives::ToggleButton choice;choice.Width(64);choice.Height(64);choice.Padding({8});choice.CornerRadius({6,6,6,6});
+                Primitives::ToggleButton choice;choice.Width(64);choice.Height(64);choice.Padding({8});choice.CornerRadius({32*CornerFit,32*CornerFit,32*CornerFit,32*CornerFit});
                 choice.BorderThickness({0});AutomationProperties::SetName(choice,options.GetStringAt(i));
                 for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
                     choice.Resources().Insert(box_value(role),selected(data));

@@ -596,8 +596,7 @@ impl Preferences {
                                     )
                                 ),
                             );
-                            // Center the choices; no import control in this version.
-                            body.append(&selector.widget);
+                            body.append(&crate::squircle::Squircles::new(&selector.widget));
                             Field::ImageChoice(native_row, selector)
                         }
                         PreferenceKind::Choice {

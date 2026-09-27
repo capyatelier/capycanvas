@@ -1281,6 +1281,10 @@ function buildHeader() {
 function refreshWorkspaceMenu() {
   for(const menu of document.querySelectorAll('#header details[open]')) menu.refreshMenu?.();
 }
+function closeMenusOutside(target) {
+  for (const menu of document.querySelectorAll("details[open]"))
+    if (!menu.contains(target)) menu.open = false;
+}
 function persistWorkspace() {
   workspaceManager?.observe();
 }
@@ -1317,7 +1321,7 @@ window.addEventListener(
     // Native DOM modals own their contacts. Workspace transitions deliberately
     // consume editor input, so forwarding a dialog contact would swallow its
     // buttons before the DOM click handler can run.
-    if (e.target.closest("dialog[open]")) return;
+    if (e.target.closest("dialog[open]")) return closeMenusOutside(e.target);
     if (e.target === canvas && e.pointerType === "pen" && !(e.buttons & 33)) {
       e.preventDefault();
       return;
@@ -1333,8 +1337,7 @@ window.addEventListener(
       e.preventDefault();
       e.stopImmediatePropagation();
     }
-    for (const menu of document.querySelectorAll("details[open]"))
-      if (!menu.contains(e.target)) menu.open = false;
+    closeMenusOutside(e.target);
   },
   { capture: true },
 );

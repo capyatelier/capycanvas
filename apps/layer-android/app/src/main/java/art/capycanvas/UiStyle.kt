@@ -355,10 +355,9 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 indices.forEach { index ->
                     val active = index == selected
-                    val shape = RoundedCornerShape(6.dp)
-                    Box(Modifier.size(64.dp).testTag("image-choice-$index").clip(shape)
+                    Box(Modifier.size(64.dp).testTag("image-choice-$index").clip(TileShape)
                         .background(if (active) colors.active else colors.text.copy(alpha = .05f))
-                        .then(if (active) Modifier.border(2.dp, colors.accent, shape) else Modifier)
+                        .then(if (active) Modifier.border(2.dp, colors.accent, TileShape) else Modifier)
                         .alpha(if (enabled) 1f else .4f)
                         .selectable(active, enabled = enabled, role = Role.RadioButton) { onSelect(index) },
                         contentAlignment = Alignment.Center) {
