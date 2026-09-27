@@ -230,8 +230,10 @@ impl Pipelines {
 
 impl WgpuRasterizer {
     pub(super) fn dry_material_pipeline(&self, batch: &DabBatch) -> &Pipelines {
-        if self.in_place_dry_material(batch) { &self.pipelines.dry_in_place }
-        else { &self.pipelines.dry_material }.as_ref().unwrap()
+        match &self.pipelines.dry_in_place {
+            Some(in_place) if self.in_place_dry_material(batch) => in_place,
+            _ => &self.pipelines.dry_material,
+        }
     }
 
     pub(super) fn in_place_dry_material(&self, batch: &DabBatch) -> bool {
@@ -242,7 +244,7 @@ impl WgpuRasterizer {
     pub(super) fn compute_dry_material(&self, batch: &DabBatch) -> bool {
         // Adreno's compute destination-blend specialization corrupts predicted
         // Multiply batches. Non-normal blends use the ordered fragment path.
-        dry_material_compute_eligible(&batch.style) && self.pipelines.dry_material.is_some()
+        dry_material_compute_eligible(&batch.style)
     }
 
     pub(super) fn encode_dry_material_jobs(

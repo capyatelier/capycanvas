@@ -69,7 +69,7 @@ fn receive_with_resize(
 
 #[test]
 fn selection_options_boolean_modes_antialias_and_gaussian_feather() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     submit(
         &mut r,
         &[Layer::paint(LayerId(1), "selection")],
@@ -170,7 +170,7 @@ fn selection_options_boolean_modes_antialias_and_gaussian_feather() {
 
 #[test]
 fn selection_resize_uses_circular_extrema_preserves_soft_values_and_clips_edges() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     submit(
         &mut r,
         &[Layer::paint(LayerId(1), "resize")],
@@ -238,7 +238,7 @@ fn selection_resize_uses_circular_extrema_preserves_soft_values_and_clips_edges(
 #[test]
 #[ignore = "hardware completed-selection refinement benchmark; run serially"]
 fn selection_resize_latency() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     submit(
         &mut r,
         &[Layer::paint(LayerId(1), "resize timing")],

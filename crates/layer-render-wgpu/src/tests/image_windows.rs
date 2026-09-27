@@ -69,21 +69,12 @@ fn capture(
 #[test]
 fn image_windows_match_full_composition_with_halos_masks_and_clipping() {
     let extent = [777, 533];
-    for space in [
-        None,
-        Some(RgbSpace::Srgb),
-        Some(RgbSpace::DisplayP3),
-        Some(RgbSpace::AdobeRgb),
-        Some(RgbSpace::ProPhoto),
-    ] {
-        let mut r = match space {
-            None => WgpuRasterizer::new_headless().unwrap(),
-            Some(space) => WgpuRasterizer::new_native_headless(DocumentColor {
-                space,
-                depth: SampleDepth::U16,
-            })
-            .unwrap(),
-        };
+    for space in RgbSpace::ALL {
+        let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
+            space,
+            depth: SampleDepth::U16,
+        })
+        .unwrap();
         for clipped in [false, true] {
             let mut group = Layer::paint(LayerId(10), "isolated");
             group.kind = LayerKind::Group;
@@ -141,30 +132,18 @@ fn image_windows_match_full_composition_with_halos_masks_and_clipping() {
                 PixelRect::new(0, 0, 23, 27),
             ] {
                 let pixels = capture(&mut r, &mut scene, packet, crop);
-                let bytes = if space.is_some() { 16 } else { 4 };
                 for y in 0..crop.height() as usize {
                     for x in 0..crop.width() as usize {
                         let src = ((y + crop.min_y() as usize) * extent[0] as usize
                             + x
                             + crop.min_x() as usize)
-                            * bytes;
-                        let dst = (y * crop.width() as usize + x) * bytes;
+                            * 16;
+                        let dst = (y * crop.width() as usize + x) * 16;
                         for c in 0..4 {
-                            let (a, b, tolerance) = if space.is_some() {
-                                (
-                                    f32::from_le_bytes(
-                                        pixels[dst + c * 4..dst + c * 4 + 4].try_into().unwrap(),
-                                    ),
-                                    f32::from_le_bytes(
-                                        full[src + c * 4..src + c * 4 + 4].try_into().unwrap(),
-                                    ),
-                                    2e-6,
-                                )
-                            } else {
-                                (pixels[dst + c] as f32, full[src + c] as f32, 1.)
-                            };
+                            let a = f32::from_le_bytes(pixels[dst + c * 4..dst + c * 4 + 4].try_into().unwrap());
+                            let b = f32::from_le_bytes(full[src + c * 4..src + c * 4 + 4].try_into().unwrap());
                             assert!(
-                                (a - b).abs() <= tolerance,
+                                (a - b).abs() <= 2e-6,
                                 "{space:?} clipped={clipped} crop={crop:?} ({x},{y}) c={c}: {a} != {b}"
                             );
                         }

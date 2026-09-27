@@ -236,7 +236,7 @@ impl WgpuRasterizer {
         color: DocumentColor,
     ) -> Result<Self, GpuRasterError> {
         let device = device
-            .with_working_format(wgpu::TextureFormat::Rgba32Float)?
+            .require_float32()?
             .with_working_space(color.space).with_hdr(color.depth.is_float());
         let mut r = Self::from_wgpu_inner(adapter, device, queue, Initialization::Interactive)?;
         r.startup.as_mut().unwrap().host_catalog_pending = !cfg!(target_arch = "wasm32");
@@ -248,11 +248,7 @@ impl WgpuRasterizer {
     /// Dab RGB values are linear coordinates in `color.space`.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new_native_headless(color: DocumentColor) -> Result<Self, GpuRasterError> {
-        let mut r = pollster::block_on(Self::headless_with_working_format(
-            wgpu::TextureFormat::Rgba32Float,
-            color.space,
-            Initialization::Warm,
-        ))?;
+        let mut r = pollster::block_on(Self::headless(color.space, Initialization::Warm))?;
         r.initialize_native(color)?;
         Ok(r)
     }
@@ -261,11 +257,7 @@ impl WgpuRasterizer {
     /// lazy pipeline recipes instead of warming every brush, tip and transform.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn new_native_capture(color: DocumentColor) -> Result<Self, GpuRasterError> {
-        let mut r = pollster::block_on(Self::headless_with_working_format(
-            wgpu::TextureFormat::Rgba32Float,
-            color.space,
-            Initialization::Snapshot,
-        ))?;
+        let mut r = pollster::block_on(Self::headless(color.space, Initialization::Snapshot))?;
         r.initialize_native(color)?;
         Ok(r)
     }
@@ -277,7 +269,7 @@ impl WgpuRasterizer {
         color: DocumentColor,
     ) -> Result<Self, GpuRasterError> {
         let device = device
-            .with_working_format(wgpu::TextureFormat::Rgba32Float)?
+            .require_float32()?
             .with_working_space(color.space).with_hdr(color.depth.is_float());
         let mut r = Self::from_wgpu_inner(adapter, device, queue, Initialization::Snapshot)?;
         r.initialize_native(color)?;
@@ -515,7 +507,7 @@ impl WgpuRasterizer {
                     .worker
                     .as_ref()
                     .unwrap()
-                    .submit_batch(CaptureBatch::Native(capture))?;
+                    .submit_batch(capture)?;
             }
         }
         for publication in &frame.publications {

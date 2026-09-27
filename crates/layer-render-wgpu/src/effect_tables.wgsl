@@ -4,7 +4,6 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
     let start=base+1u+offset;let header=effect_data[start];
     let count=u32(header.x);
     var x=value;
-    if !FX_EXTENDED {x=clamp(x,0.,1.);}
     if header.z==1. {
         if header.y==1. {return vec4<f32>(x,0.,0.,0.);}
         var low=0u;var high=count-1u;

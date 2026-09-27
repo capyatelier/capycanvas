@@ -44,7 +44,7 @@ fn value(s: &Selection, x: u32, y: u32) -> u8 {
     ((p.words()[(y * p.extent()[0].div_ceil(4) + x / 4) as usize] >> ((x % 4) * 8)) & 255) as u8
 }
 fn renderer() -> WgpuRasterizer {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     submit(
         &mut r,
         &[Layer::paint(LayerId(1), "artwork")],

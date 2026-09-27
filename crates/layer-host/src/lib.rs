@@ -1838,7 +1838,7 @@ mod tests {
     #[test]
     #[ignore = "Requires an explicitly selected hardware GPU"]
     fn estimated_input_tokens_reach_committed_stroke_corrections() {
-        let gpu = layer_render_wgpu::WgpuRasterizer::new_headless().unwrap();
+        let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session = UiSession::from_project(

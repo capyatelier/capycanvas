@@ -42,9 +42,7 @@ is repository code under MIT OR Apache-2.0; no third-party image assets were add
 
 Ink keeps the maximum requested coverage for the current stroke and deposits
 only the increment. Consecutive contacts therefore extend the same deposit.
-R8 coverage is quantized before applying its color delta, avoiding differences
-caused by grouping contacts into different frames. Roughness comes from bounded,
-stationary noise in the contact boundary. Pooling uses the transverse stroke
+Roughness comes from bounded, stationary noise in the contact boundary. Pooling uses the transverse stroke
 profile; darkening every circular front cap left a repeated ring pattern and
 was removed. Brushed ink uses coherent strand identities with pressure-dependent
 separation and declining supply.

@@ -205,7 +205,7 @@ fn drag(r: &mut WgpuRasterizer, layer: &Layer, label: &str) -> f64 {
 #[test]
 #[ignore = "hardware 24-megapixel paint transform benchmark; release, serial"]
 fn large_paint_transform_latency() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let asset = AssetId::from("test:large transform latency");
     let pixels: Vec<_> = (0..EXTENT[0] * EXTENT[1])
         .flat_map(|i| {
@@ -262,7 +262,7 @@ fn large_photo_transform_latency() {
     }
     let mut layer = Layer::paint(LayerId(1), "large photo transform");
     layer.source = Some(std::sync::Arc::new(builder.finish().unwrap()));
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     submit(&mut r, &layer, true);
     r.wait_idle().unwrap();
     let worst = drag(&mut r, &layer, "photo");

@@ -5,7 +5,7 @@ use layer_engine::{
     CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
     input_queue,
 };
-use layer_render::{CanvasRenderer, ViewState};
+use layer_render::ViewState;
 use layer_render_wgpu::WgpuRasterizer;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -13,11 +13,8 @@ type Engine = CanvasEngine<WgpuRasterizer>;
 const SIZE: [u32; 2] = [384, 256]; // Crosses raster tile boundaries.
 
 fn engine(project: &Project) -> (Engine, InputProducer<PenEvent>) {
-    let mut gpu = WgpuRasterizer::new_headless().expect("physical GPU required");
-    for (id, a) in &project.assets {
-        gpu.prepare_owned_asset(id, a).unwrap();
-        assert!(Arc::ptr_eq(&a.bytes, &gpu.source_asset(id).unwrap().bytes));
-    }
+    let gpu = WgpuRasterizer::new_native_headless(project.document.color)
+        .expect("physical GPU required");
     let (producer, consumer) = input_queue(64);
     let view = ViewState {
         width_px: SIZE[0],
@@ -130,80 +127,29 @@ fn draw(
         }
     }
 }
-fn fixture(masked: bool) -> Project {
+fn fixture() -> Project {
     let mut doc = Document::new("editable-project-test", SIZE[0], SIZE[1]);
     doc.layers[1].visible = false;
-    let asset: AssetId = "fixture-source".into();
-    doc.layers[0].asset = Some(asset.clone());
-    let pixels: Vec<u8> = (0..SIZE[0] * SIZE[1])
-        .flat_map(|i| {
-            let x = i % SIZE[0];
-            let y = i / SIZE[0];
-            [
-                (x % 256) as u8,
-                (y % 256) as u8,
-                118,
-                if x < 16 || y < 16 { 0 } else { 140 },
-            ]
-        })
-        .collect();
-    if masked {
-        let group_id = doc.allocate_layer_id();
-        doc.layers[0].properties.parent = Some(group_id);
-        doc.layers[0].properties.offset = Point { x: 3., y: -2. };
-        let mut group = Layer::paint(group_id, "Group");
-        group.kind = LayerKind::Group;
-        group.properties.offset = Point { x: -3., y: 2. };
-        doc.layers.insert(0, group);
-        let mask = LayerMask::reveal_all(doc.allocate_layer_id(), Point::default());
-        doc.layers
-            .iter_mut()
-            .find(|l| l.id == LayerId(1))
-            .unwrap()
-            .mask = Some(mask);
-        for (filter, clipped) in [
-            ("gaussian_blur", true),
-            ("curves", true),
-            ("heat_haze", true),
-            ("gradient_map", false),
-        ] {
-            let definition = bundled_effect_catalog().get(filter).unwrap();
-            let mut layer = Layer::paint(doc.allocate_layer_id(), definition.label());
-            layer.kind = LayerKind::Effect;
-            layer.properties.parent = Some(group_id);
-            layer.properties.clipped = clipped;
-            let mut effect = definition.preview().unwrap();
-            if effect.program.time {
-                effect.set("animate", EffectValue::Toggle(true)).unwrap();
-            }
-            layer.effect = Some(Arc::new(effect));
-            doc.layers.insert(1, layer);
-        }
-        doc.reference_layers.insert(LayerId(1));
+    doc.layers[0].source = Some(color::source::rgba8_source(SIZE, |x, y| {
+        [
+            (x % 256) as u8,
+            (y % 256) as u8,
+            118,
+            if x < 16 || y < 16 { 0 } else { 140 },
+        ]
+    }));
+    Project::snapshot(&doc, &BTreeMap::new()).unwrap()
+}
+
+#[test]
+fn every_brush_preset_paints_survives_save_reopen_and_exact_undo_redo() {
+    for masked in [false, true] {
+        preset_history(masked);
     }
-    let assets = BTreeMap::from([(
-        asset,
-        ProjectAsset {
-            extent: SIZE,
-            format: ProjectAssetFormat::Rgba8Srgb,
-            bytes: pixels.into(),
-        },
-    )]);
-    Project::snapshot(&doc, &assets).unwrap()
 }
 
-#[test]
-fn every_contact_preset_survives_save_reopen_and_exact_undo_redo() {
-    contact_preset_history(false);
-}
-
-#[test]
-fn every_contact_preset_paints_masks_and_survives_save_reopen_and_exact_undo_redo() {
-    contact_preset_history(true);
-}
-
-fn contact_preset_history(masked: bool) {
-    let mut initial = fixture(false);
+fn preset_history(masked: bool) {
+    let mut initial = fixture();
     if masked {
         let mut mask =
             LayerMask::reveal_all(initial.document.allocate_layer_id(), Point::default());
@@ -215,7 +161,12 @@ fn contact_preset_history(masked: bool) {
         live.apply_edit(Edit::SetMaskTarget(true)).unwrap();
     }
     let mut before = image(&mut live, 0);
-    for (index, preset) in CONTACT_BRUSH_PRESETS.into_iter().enumerate() {
+    use DefaultBrushPreset::*;
+    let presets = CONTACT_BRUSH_PRESETS.into_iter().chain([
+        Spray, WetRound, MultiplyGlaze, OpaqueGouache, WatercolorWash, WetWatercolor,
+        LoadedOil, PaletteKnife, Smudge, NaturalBlender, LiquifyPush, LiquifyTwirl,
+    ]);
+    for (index, preset) in presets.enumerate() {
         let time = (index as u64 + 1) * 100_000_000;
         draw(
             &mut live,
@@ -227,8 +178,7 @@ fn contact_preset_history(masked: bool) {
         );
         let expected = image(&mut live, time + 80_000_000);
         assert_ne!(before, expected, "{preset:?} must leave a visible mark");
-        let checkpoint =
-            Project::snapshot_with(live.document(), |id| live.backend().source_asset(id)).unwrap();
+        let checkpoint = Project::snapshot(live.document(), &BTreeMap::new()).unwrap();
         let mut archive = Vec::new();
         checkpoint.write(&mut archive).unwrap();
         let decoded = Project::read(archive.as_slice(), ProjectLimits::default()).unwrap();

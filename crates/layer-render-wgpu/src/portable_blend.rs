@@ -261,19 +261,19 @@ mod tests {
 
     #[test]
     fn shader_blends_preserve_float32_values_and_unaffected_pixels_without_hardware_blending() {
-        // The legacy SDR device does not request Float32 attachment blending,
-        // even on a GPU that supports it. This exercises the portable contract.
-        let r = WgpuRasterizer::new_headless().unwrap();
-        assert!(
-            !r.device
-                .features()
-                .contains(wgpu::Features::FLOAT32_BLENDABLE)
-        );
-        let device = r
-            .device
-            .clone()
-            .with_working_format(wgpu::TextureFormat::Rgba32Float)
+        let adapter = pollster::block_on(
+            WgpuRasterizer::headless_instance().request_adapter(&Default::default()),
+        )
+        .unwrap();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::FLOAT32_FILTERABLE,
+            ..Default::default()
+        }))
+        .unwrap();
+        let device = PipelineDevice::from(device)
+            .require_float32()
             .unwrap();
+        assert!(device.portable_blend());
         let a = Renderer::new(&device);
         let b = Renderer::new(&device);
         assert!(Arc::ptr_eq(&a.shared, &b.shared));
@@ -290,7 +290,7 @@ mod tests {
         );
         let upload = |texture: &wgpu::Texture, values: &[f32]| {
             let bytes: Vec<_> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
-            r.queue.write_texture(
+            queue.write_texture(
                 texture.as_image_copy(),
                 &bytes,
                 wgpu::TexelCopyBufferLayout {
@@ -338,7 +338,7 @@ mod tests {
                     },
                     target.size(),
                 );
-                encoder.submit(&r.queue);
+                encoder.submit(&queue);
                 let (tx, rx) = std::sync::mpsc::channel();
                 output
                     .slice(..)

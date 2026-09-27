@@ -56,22 +56,13 @@ fn artwork([width, height]: [u32; 2]) -> Vec<u8> {
         })
         .collect()
 }
-fn setup(r: &mut WgpuRasterizer, extent: [u32; 2]) -> Layer {
-    let asset = AssetId("test:filter-library-art".into());
+fn setup(extent: [u32; 2]) -> Layer {
     let bytes = artwork(extent);
-    r.prepare_asset(
-        &asset,
-        HostImage {
-            width: extent[0],
-            height: extent[1],
-            stride: extent[0] * 4,
-            format: PixelFormat::Rgba8Srgb,
-            bytes: &bytes,
-        },
-    )
-    .unwrap();
     let mut layer = Layer::paint(LayerId(1), "Artwork");
-    layer.asset = Some(asset);
+    layer.source = Some(layer_core::color::source::rgba8_source(extent, |x, y| {
+        let i = (y * extent[0] + x) as usize * 4;
+        bytes[i..i + 4].try_into().unwrap()
+    }));
     layer
 }
 fn filter(id: &layer_core::EffectDefinition) -> Layer {
@@ -140,19 +131,6 @@ fn image(r: &mut WgpuRasterizer) -> Vec<u8> {
     r.readback_srgb_rgba8().unwrap()
 }
 
-fn png(path: &str, extent: [u32; 2], bytes: &[u8]) {
-    let path = std::path::Path::new(path);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let mut encoder = png::Encoder::new(std::fs::File::create(path).unwrap(), extent[0], extent[1]);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder
-        .write_header()
-        .unwrap()
-        .write_image_data(bytes)
-        .unwrap();
-}
-
 #[test]
 fn runtime_manifest_loads_a_new_filter_and_its_preparation() {
     let directory =
@@ -167,8 +145,8 @@ fn runtime_manifest_loads_a_new_filter_and_its_preparation() {
         })
         .unwrap();
     let definition = catalog.get("example:tent_blur").unwrap();
-    let mut r = WgpuRasterizer::new_headless().unwrap();
-    let base = setup(&mut r, EXTENT);
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let base = setup(EXTENT);
     submit(
         &mut r,
         EXTENT,
@@ -201,8 +179,8 @@ fn runtime_manifest_loads_a_new_filter_and_its_preparation() {
 
 #[test]
 fn entire_filter_catalog_renders_masks_freezes_and_animates() {
-    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
-    let base = setup(&mut r, EXTENT);
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).expect("physical GPU required");
+    let base = setup(EXTENT);
     submit(
         &mut r,
         EXTENT,
@@ -213,9 +191,6 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
         None,
     );
     let original = image(&mut r);
-    let directory = "../../artifacts/filter-library";
-    png(&format!("{directory}/source.png"), EXTENT, &original);
-    let mut rendered = Vec::new();
     for id in fixtures() {
         let mut layers = vec![filter(id), base.clone()];
         submit(&mut r, EXTENT, &layers, 0., false, true, None);
@@ -241,8 +216,6 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
                 id.label()
             );
         }
-        png(&format!("{directory}/{}.png", id.id()), EXTENT, &output);
-        rendered.push(output.clone());
         let before = r.scene.as_ref().map_or([0, 0], |s| s.image_work());
         submit(&mut r, EXTENT, &layers, 20., false, false, None);
         assert_eq!(image(&mut r), output, "{} frozen result", id.label());
@@ -295,35 +268,4 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
             assert_ne!(first, second, "{} animation must change pixels", id.label());
         }
     }
-    // Contact-sheet assembly only copies complete GPU-rendered rows.
-    let columns = 5;
-    let rows = 8;
-    let width = EXTENT[0] as usize * columns;
-    let height = EXTENT[1] as usize * rows;
-    let mut sheet = vec![0; width * height * 4];
-    for (i, output) in rendered.iter().enumerate() {
-        for y in 0..EXTENT[1] as usize {
-            let start = ((i / columns * EXTENT[1] as usize + y) * width
-                + i % columns * EXTENT[0] as usize)
-                * 4;
-            sheet[start..start + EXTENT[0] as usize * 4].copy_from_slice(
-                &output[y * EXTENT[0] as usize * 4..(y + 1) * EXTENT[0] as usize * 4],
-            );
-        }
-    }
-    png(
-        &format!("{directory}/contact-sheet.png"),
-        [width as u32, height as u32],
-        &sheet,
-    );
-    std::fs::write(
-        format!("{directory}/order.txt"),
-        fixtures()
-            .iter()
-            .map(|id| id.label())
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
-    .unwrap();
 }
-

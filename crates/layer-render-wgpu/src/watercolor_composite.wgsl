@@ -42,19 +42,8 @@ fn vertex_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) v
         vec2<f32>(2.0, 0.0),
         vec2<f32>(0.0, 2.0),
     );
-    let document_position = render_target.origin_extent.xy
-        + coordinates[vertex_index] * render_target.origin_extent.zw;
-    if style.color.r > 0.5 {
-        let uv = coordinates[vertex_index];
-        return vec4<f32>(uv.x*2.-1.,1.-uv.y*2.,0.,1.);
-    }
-    let extent = render_target.document_extent.xy;
-    return vec4<f32>(
-        document_position.x / extent.x * 2.0 - 1.0,
-        1.0 - document_position.y / extent.y * 2.0,
-        0.0,
-        1.0,
-    );
+    let uv = coordinates[vertex_index];
+    return vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
 }
 
 fn load_color(index: i32, coordinate: vec2<i32>) -> vec4<f32> {
@@ -168,7 +157,7 @@ fn sample_band(
 
 @fragment
 fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let world = position.xy + select(vec2<f32>(0.), render_target.origin_extent.xy, style.color.r > 0.5);
+    let world = position.xy + render_target.origin_extent.xy;
     let center = color_at(world);
     let center_wetness = wetness_at(world);
     let center_occupied = occupied(center_wetness);

@@ -94,7 +94,7 @@ fn scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words
 #[test]
 fn native_in_place_scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words() { scalar_corpus(true); }
 fn scalar_corpus(in_place: bool) {
-    let r = if in_place { WgpuRasterizer::new_native_headless(Default::default()).unwrap() } else { WgpuRasterizer::new_headless().unwrap() };
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let encoder = if in_place { NativeScalarEncoder::validated_in_place(&r.device) } else { NativeScalarEncoder::with_device(&r.device) };
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r);

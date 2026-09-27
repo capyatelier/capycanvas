@@ -56,13 +56,13 @@ One contact primitive supports G‑Pen, pencil, eraser, paintbrush, airbrush,
 chalk, marker, scatter/spray, dual texture, blend, smudge, wet mix, and liquify.
 Sensor mappings control geometry, coverage, color, material transfer, and
 deformation. Dry flow configuration remains the exact zero-state fast path.
-Uniform accumulation adds stroke-ID-keyed R8 coverage; non-watercolor wetness
-allocates one R8 field; loaded wet paint uses the spatial GPU reservoir; and
-smudge uses ordered backtrace advection. Watercolor uses coverage plus
-same-layer pigment advection, with its edge derived live during composition and
-a separate sparse R8 wetness channel, but no reservoir or drying clock. An
-optional brush-owned conductance texture triggers one bounded GPU exchange per
-submitted stroke update. Internally that exchange is three coarse-to-fine GPU
+Uniform accumulation adds stroke-ID-keyed R32Float coverage; non-watercolor
+wetness allocates one R32Float field; loaded wet paint uses the spatial GPU
+reservoir; and smudge uses ordered backtrace advection. Watercolor uses coverage
+plus same-layer pigment advection, with its edge derived live during composition
+and a separate sparse R32Float wetness channel, but no reservoir or drying
+clock. An optional brush-owned conductance texture triggers one bounded GPU
+exchange per submitted stroke update. Internally that exchange is three coarse-to-fine GPU
 stages that advance water/pigment along the gradient/curvature-derived tangent
 of the scalar field. Independent wet and dry flow rates let watercolor
 favor wet mixing and let a future ink preset favor capillary spread into dry

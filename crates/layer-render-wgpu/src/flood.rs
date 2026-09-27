@@ -8,12 +8,10 @@ pub(super) struct Flood {
     layout: wgpu::BindGroupLayout,
     pipelines: std::collections::HashMap<&'static str, Deferred<wgpu::ComputePipeline>>,
     parents: Option<wgpu::Buffer>,
-    mask: wgpu::Buffer,
     capacity: u64,
     empty: wgpu::Buffer,
 }
-const STAGES: [&str; 11] = [
-    "classify",
+const STAGES: [&str; 10] = [
     "close_h",
     "close_v",
     "reopen_h",
@@ -27,7 +25,7 @@ const STAGES: [&str; 11] = [
 ];
 fn stages(refinement: RegionRefinement) -> impl Iterator<Item = &'static str> {
     STAGES.into_iter().filter(move |entry| match *entry {
-        "classify" | "close_h" | "close_v" | "reopen_h" | "reopen_v" => refinement.gap_closing != 0,
+        "close_h" | "close_v" | "reopen_h" | "reopen_v" => refinement.gap_closing != 0,
         "component_mask" => refinement.expansion != 0 || refinement.smoothing != 0.,
         "expand_h" | "expand_v" => refinement.expansion != 0,
         _ => true,
@@ -39,31 +37,19 @@ pub(super) struct Region {
 }
 impl Flood {
     pub fn storage_bytes(&self) -> u64 {
-        self.capacity + self.empty.size() + self.mask.size()
+        self.capacity + self.empty.size()
     }
     pub fn new(device: &PipelineDevice) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("connected region"),
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                &working_color::shader(device),
                 include_str!("flood.wgsl"),
-                include_str!("region_color.wgsl"),
                 include_str!("region_refine.wgsl"),
                 &include_str!("selection_clip.wgsl")
                     .replace("@group(1) @binding(1)", "@group(0) @binding(4)"),
             ])),
         });
-        let mut entries = vec![wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }];
-        entries.extend((1..6).map(|binding| wgpu::BindGroupLayoutEntry {
+        let entries: Vec<_> = (1..6).map(|binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer {
@@ -78,7 +64,7 @@ impl Flood {
                 min_binding_size: None,
             },
             count: None,
-        }));
+        }).collect();
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("connected region"),
             entries: &entries,
@@ -115,12 +101,6 @@ impl Flood {
             layout,
             pipelines,
             parents: None,
-            mask: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("empty region morphology"),
-                size: 4,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            }),
             capacity: 0,
             empty: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("unlimited region"),
@@ -137,20 +117,17 @@ impl Flood {
     pub fn prepare(&self, compiler: &startup::Compiler, refinement: RegionRefinement) -> bool {
         compiler.require(stages(refinement).map(|entry| &self.pipelines[entry]), startup::BRUSH)
     }
-    /// A tiled classifier can populate eligibility without a full color image.
-    /// The packed mask is reused by the existing morphology/connected components.
     #[allow(clippy::too_many_arguments)]
     pub fn encode_input(
         &mut self,
         device: &PipelineDevice,
         encoder: &mut crate::submission::CommandEncoder,
-        source: &wgpu::TextureView,
         extent: [u32; 2],
         seed: [u32; 2],
         tolerance: f32,
         selection: Option<&wgpu::Buffer>,
         refinement: RegionRefinement,
-        classified: Option<&wgpu::Buffer>,
+        classified: &wgpu::Buffer,
         contiguous: bool,
     ) -> Result<Region, GpuRasterError> {
         let [w, h] = extent;
@@ -189,16 +166,8 @@ impl Flood {
             self.capacity = bytes;
         }
         let mask_bytes = u64::from(w.div_ceil(32)) * u64::from(h) * 4;
-        if classified.is_some_and(|mask| mask.size() < mask_bytes) {
+        if classified.size() < mask_bytes {
             return Err(GpuRasterError::SizeOverflow);
-        }
-        if classified.is_none() && refinement.needs_mask() && self.mask.size() < mask_bytes {
-            self.mask = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("region reusable packed morphology"),
-                size: mask_bytes,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            });
         }
         let region = Region {
             coverage: device.create_buffer(&wgpu::BufferDescriptor {
@@ -218,7 +187,7 @@ impl Flood {
             (refinement.gap_closing as f32).to_bits(),
             (refinement.expansion as f32).to_bits(),
             refinement.smoothing.to_bits(),
-            u32::from(classified.is_some()), u32::from(!contiguous), 0, 0,
+            1, u32::from(!contiguous), 0, 0,
         ];
         let data: Vec<_> = params.into_iter().flat_map(u32::to_ne_bytes).collect();
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -226,25 +195,20 @@ impl Flood {
             contents: &data,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let mut entries = vec![wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::TextureView(source),
-        }];
-        entries.extend(
-            [
-                &uniform,
-                self.parents.as_ref().unwrap(),
-                &region.coverage,
-                selection.unwrap_or(&self.empty),
-                classified.unwrap_or(&self.mask),
-            ]
-            .into_iter()
-            .enumerate()
-            .map(|(i, b)| wgpu::BindGroupEntry {
-                binding: i as u32 + 1,
-                resource: b.as_entire_binding(),
-            }),
-        );
+        let entries: Vec<_> = [
+            &uniform,
+            self.parents.as_ref().unwrap(),
+            &region.coverage,
+            selection.unwrap_or(&self.empty),
+            classified,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| wgpu::BindGroupEntry {
+            binding: i as u32 + 1,
+            resource: b.as_entire_binding(),
+        })
+        .collect();
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("flood request"),
             layout: &self.layout,
@@ -254,13 +218,13 @@ impl Flood {
         // other ping-pong plane before/after (never during) component labeling.
         // Interactive hosts prepare these recipes on the startup compiler.
         // Headless callers compile only what they use. Disabled refinements
-        // keep the original three dispatches and allocate no morphology mask.
+        // keep the original three dispatches.
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("connected region"),
             timestamp_writes: None,
         });
         pass.set_bind_group(0, &group, &[]);
-        for entry in stages(refinement).filter(|entry| classified.is_none() || *entry != "classify") {
+        for entry in stages(refinement) {
             pass.set_pipeline(&self.pipelines[entry]);
             if entry == "merge" && !contiguous { continue; }
             if entry == "initialize" {

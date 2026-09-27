@@ -57,18 +57,6 @@ fn morph(word: u32, horizontal: bool, erode: bool, lower: i32, upper: i32, exten
     else { region_mask[word] = result; }
 }
 
-@compute @workgroup_size(64)
-fn classify(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
-    let word = mask_word_id(id, groups);
-    let p = vec2<u32>((word % mask_stride()) * 32u, word / mask_stride());
-    if p.y >= params.extent_seed.y { return; }
-    let seed = comparison_color(textureLoad(source, vec2<i32>(params.extent_seed.zw), 0));
-    var packed = 0u;
-    for (var i = 0u; i < 32u && p.x+i < params.extent_seed.x; i++) {
-        if color_eligible(p + vec2<u32>(i,0), seed) { packed |= 1u << i; }
-    }
-    region_mask[word] = packed;
-}
 // Opening the eligible region closes holes in its complementary barriers.
 // Mirrored even-length footprints avoid shifting odd-width gap settings.
 @compute @workgroup_size(64)

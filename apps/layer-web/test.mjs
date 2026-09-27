@@ -370,7 +370,7 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--gpu-compatibility")) {
     assert.ok(packageHost, "Use --package --gpu-compatibility to test the built distribution");
-    await checkGpuCompatibility({ call, evaluate, settle, canvasPixels, url: packageHost.url, errors });
+    await checkGpuCompatibility({ call, evaluate, settle, url: packageHost.url, errors });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--gpu-startup")) {
     assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");

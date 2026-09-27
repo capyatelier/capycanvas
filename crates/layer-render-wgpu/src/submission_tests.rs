@@ -4,7 +4,7 @@ use super::*;
 #[test]
 #[ignore = "4K multilayer hardware replay; run serially in release mode"]
 fn multilayer_4k_fill_replay_matches_incremental_submissions() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [4096, 4096];
     let layers: Vec<_> = (1..=7)
         .map(|id| {

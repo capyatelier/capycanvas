@@ -28,17 +28,7 @@ use browser::CaptureWorker;
 mod pool;
 pub(super) use pool::BufferPool;
 mod deferred;
-use deferred::{CaptureBatch, NativeCapture, NativeOutput};
-
-fn capture_allocation(bytes: u64) -> u64 {
-    let tail = bytes % CAPTURE_CHUNK;
-    bytes / CAPTURE_CHUNK * CAPTURE_CHUNK
-        + if tail == 0 {
-            0
-        } else {
-            tail.next_power_of_two()
-        }
-}
+use deferred::{NativeCapture, NativeOutput};
 
 struct Target {
     source: Option<AssetId>,
@@ -96,7 +86,7 @@ pub(super) struct RasterRuntime {
 }
 #[cfg(not(target_arch = "wasm32"))]
 struct CaptureWorker {
-    sender: Option<mpsc::SyncSender<CaptureBatch>>,
+    sender: Option<mpsc::SyncSender<NativeCapture>>,
     pending: Arc<AtomicUsize>,
     thread: Option<std::thread::JoinHandle<()>>,
     staging: Arc<AtomicU64>,
@@ -106,7 +96,7 @@ struct CaptureWorker {
 #[cfg(not(target_arch = "wasm32"))]
 impl CaptureWorker {
     fn new(device: wgpu::Device, pool: Arc<BufferPool>) -> Result<Self, GpuRasterError> {
-        let (sender, receiver) = mpsc::sync_channel::<CaptureBatch>(16);
+        let (sender, receiver) = mpsc::sync_channel::<NativeCapture>(16);
         let pending = Arc::new(AtomicUsize::new(0));
         let count = pending.clone();
         let staging = Arc::new(AtomicU64::new(0));
@@ -177,10 +167,7 @@ impl CaptureWorker {
             && self.pending.load(Ordering::Acquire) < 16
             && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK - STATUS_BYTES
     }
-    fn submit(&self, captures: Vec<RasterCapture>) -> Result<(), GpuRasterError> {
-        self.submit_batch(CaptureBatch::Mapped(captures))
-    }
-    fn submit_batch(&self, captures: CaptureBatch) -> Result<(), GpuRasterError> {
+    fn submit_batch(&self, captures: NativeCapture) -> Result<(), GpuRasterError> {
         let size = captures.storage_bytes();
         self.staging.fetch_add(size, Ordering::Release);
         self.pending.fetch_add(1, Ordering::Release);
@@ -278,10 +265,6 @@ impl TileCapture<'_> {
                 AlphaAssociation::Straight | AlphaAssociation::PremultipliedLinear
             );
         let valid_format = match t.format() {
-            wgpu::TextureFormat::R8Unorm => d == PixelDescriptor::COVERAGE8,
-            wgpu::TextureFormat::Rgba8UnormSrgb => {
-                rgba && d.bits_per_channel == 8 && d.encoding == TransferEncoding::Srgb
-            }
             wgpu::TextureFormat::Rgba8Uint | wgpu::TextureFormat::Rgba16Uint | wgpu::TextureFormat::Rgba32Uint => {
                 rgba && d.bits_per_channel
                     == if t.format() == wgpu::TextureFormat::Rgba8Uint {
@@ -324,22 +307,10 @@ pub(super) struct PreparedCapture {
     pool: Arc<BufferPool>,
 }
 impl PreparedCapture {
-    pub fn submitted(
-        self,
-        r: &WgpuRasterizer,
-        submission: wgpu::SubmissionIndex,
-    ) -> RasterCapture {
-        self.submitted_device(&r.device, submission)
-    }
-    fn submitted_device(
-        mut self,
-        _device: &wgpu::Device,
-        submission: wgpu::SubmissionIndex,
-    ) -> RasterCapture {
+    fn submitted_device(mut self, _device: &wgpu::Device) -> RasterCapture {
         RasterCapture {
             #[cfg(not(target_arch = "wasm32"))]
             device: _device.clone(),
-            submission,
             chunks: self
                 .chunks
                 .drain(..)
@@ -425,7 +396,6 @@ pub(crate) fn unpadded_rows(bytes: &[u8], stride: u32, row_bytes: u32) -> Vec<u8
 pub struct RasterCapture {
     #[cfg(not(target_arch = "wasm32"))]
     device: wgpu::Device,
-    submission: wgpu::SubmissionIndex,
     chunks: Vec<Chunk>,
     validation: Option<Chunk>,
     pool: Arc<BufferPool>,
@@ -820,93 +790,6 @@ impl WgpuRasterizer {
         result
     }
 
-    pub(super) fn commit_rasters(&mut self, layers: &[Layer]) -> Result<(), GpuRasterError> {
-        if !layers.iter().any(|l| {
-            l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
-        }) {
-            return Ok(());
-        }
-        let mut runtime = self.raster.take().unwrap_or_default();
-        let result = (|| {
-            if runtime.worker.as_ref().is_some_and(|w| !w.ready()) {
-                return Err(GpuRasterError::Effect(
-                    "Raster backing queue is full".into(),
-                ));
-            }
-            let mut staging = 0;
-            for layer in layers {
-                for (id, revision) in std::iter::once((layer.id, &layer.raster))
-                    .chain(layer.mask.iter().map(|m| (m.id, &m.raster)))
-                {
-                    if revision.try_data().is_some() {
-                        continue;
-                    }
-                    let Some(current) = runtime.targets.get(&id) else {
-                        continue;
-                    };
-                    let (textures, _) = self.raster_textures(id);
-                    let mut target_bytes = 0;
-                    for key in textures.keys() {
-                        if !current.data.tiles.contains_key(key)
-                            || current.changed.contains(&key.coordinate)
-                        {
-                            target_bytes += key
-                                .plane
-                                .descriptor(self.document_color())
-                                .byte_len([PAGE_SIZE; 2])
-                                .unwrap() as u64;
-                        }
-                    }
-                    staging += capture_allocation(target_bytes);
-                }
-            }
-            if staging > MAX_CAPTURE_BYTES {
-                return Err(GpuRasterError::Effect(
-                    "Raster frame exceeds the 256 MiB staging budget".into(),
-                ));
-            }
-            if staging > 0 && runtime.worker.is_none() {
-                runtime.worker = Some(CaptureWorker::new(
-                    (*self.device).clone(),
-                    self.raster_buffers.clone(),
-                    #[cfg(target_arch = "wasm32")]
-                    runtime.encoder.clone().ok_or_else(|| {
-                        GpuRasterError::Effect("Browser raster worker is unavailable".into())
-                    })?,
-                )?);
-            }
-            let mut captures = Vec::new();
-            for layer in layers {
-                for (id, revision) in std::iter::once((layer.id, &layer.raster))
-                    .chain(layer.mask.iter().map(|m| (m.id, &m.raster)))
-                {
-                    if revision.try_data().is_some() {
-                        continue;
-                    }
-                    let Some(current) = runtime.targets.get_mut(&id) else {
-                        continue;
-                    };
-                    if let Some(capture) =
-                        self.capture_raster(id, &current.data, &current.changed, revision)?
-                    {
-                        // Include capture copies in GPU-completed frame timings.
-                        self.last_submission = Some(capture.submission.clone());
-                        captures.push(capture);
-                    }
-                    current.revision = revision.clone();
-                    current.data = revision.wait_data().map_err(GpuRasterError::Effect)?;
-                    current.changed.clear();
-                }
-            }
-            if !captures.is_empty() {
-                runtime.worker.as_ref().unwrap().submit(captures)?;
-            }
-            Ok(())
-        })();
-        self.raster = Some(runtime);
-        result
-    }
-
     pub(super) fn has_raster_source(&self, target: LayerId) -> bool {
         self.raster
             .as_ref()
@@ -980,68 +863,11 @@ impl WgpuRasterizer {
         (textures, watercolor)
     }
 
-    /// Capture only changed physical pages. The caller reserves bounded worker
-    /// capacity before issuing this request and owns the returned ticket until
-    /// every tile is host-backed. Unchanged captures are reused by identity.
-    pub fn capture_raster(
-        &self,
-        target: LayerId,
-        previous: &RasterData,
-        changed: &BTreeSet<[u32; 2]>,
-        revision: &RasterRevision,
-    ) -> Result<Option<RasterCapture>, GpuRasterError> {
-        // This path reads the original normalized attachments. Native SDR
-        // publication uses encode_native_rasters and its canonical descriptors.
-        let descriptor = |plane| if plane == RasterPlane::Color {
-            layer_core::color::PixelDescriptor::SRGB8_PAINT
-        } else {
-            layer_core::color::PixelDescriptor::COVERAGE8
-        };
-        let (textures, watercolor) = self.raster_textures(target);
-        let mut data = RasterData {
-            tiles: BTreeMap::new(),
-            watercolor,
-        };
-        let mut copies = Vec::new();
-        let mut total = 0;
-        for (key, texture) in textures {
-            if let Some(tile) = previous
-                .tiles
-                .get(&key)
-                .filter(|_| !changed.contains(&key.coordinate))
-            {
-                data.tiles.insert(key, tile.clone());
-            } else {
-                let size = descriptor(key.plane)
-                    .byte_len([PAGE_SIZE; 2])
-                    .unwrap() as u64;
-                total += size;
-                if total > MAX_CAPTURE_BYTES {
-                    return Err(GpuRasterError::Effect(
-                        "Raster capture exceeds the 256 MiB staging budget".into(),
-                    ));
-                }
-                let tile = RasterTile::pending(descriptor(key.plane));
-                data.tiles.insert(key, tile.clone());
-                copies.push(TileCapture {
-                    source: crate::raster::CaptureSource::Texture(texture),
-                    tile,
-                });
-            }
-        }
-        if copies.is_empty() {
-            revision.publish(Ok(data)).map_err(GpuRasterError::Effect)?;
-            return Ok(None);
-        }
-        let capture = self.capture_tiles(&copies, None)?;
-        revision.publish(Ok(data)).map_err(GpuRasterError::Effect)?;
-        Ok(Some(capture))
-    }
-
     /// Capture already queue-ordered native candidates through the same bounded
     /// worker as ordinary paint. Validate every input and the actual rounded
     /// staging allocation before recording copies. A publication-wide status,
     /// when present, is checked before any tile backing is published.
+    #[cfg(test)]
     pub fn capture_tiles(
         &self,
         copies: &[TileCapture<'_>],
@@ -1052,18 +878,9 @@ impl WgpuRasterizer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("immutable raster revision capture"),
             });
-        let capture = self.prepare_capture(&mut encoder, copies, status)?;
-        let submission = self.queue.submit([encoder.finish()]);
-        Ok(capture.submitted(self, submission))
-    }
-
-    pub(super) fn prepare_capture(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        copies: &[TileCapture<'_>],
-        status: Option<&NativeEncodeStatus>,
-    ) -> Result<PreparedCapture, GpuRasterError> {
-        prepare_capture(&self.device, &self.raster_buffers, encoder, copies, status)
+        let capture = prepare_capture(&self.device, &self.raster_buffers, &mut encoder, copies, status)?;
+        self.queue.submit([encoder.finish()]);
+        Ok(capture.submitted_device(&self.device))
     }
 
     /// Batch only already-decoded color tiles. Cold decodes retain their early
@@ -1186,39 +1003,14 @@ impl WgpuRasterizer {
                     )
                 }
             };
-            if self.native_edit.is_some() {
-                if key.plane == RasterPlane::Color {
-                    self.restore_native_color_tile(&mut native_batch, blob, texture)?;
-                } else {
-                    self.restore_native_raster_batch(&mut native_batch)?;
-                    self.restore_native_scalars(&[crate::native_tiles::scalar::NativeScalarRestore {
-                        blob: &blob, working: &texture,
-                    }])?;
-                }
-                replacements.push(replacement);
-                continue;
-            }
-            let attachment_descriptor = if key.plane == RasterPlane::Color {
-                layer_core::color::PixelDescriptor::SRGB8_PAINT
+            if key.plane == RasterPlane::Color {
+                self.restore_native_color_tile(&mut native_batch, blob, texture)?;
             } else {
-                layer_core::color::PixelDescriptor::COVERAGE8
-            };
-            if blob.descriptor != attachment_descriptor {
-                return Err(GpuRasterError::Color(
-                    "This renderer cannot restore native SDR paint; use a host with native color support".into(),
-                ));
+                self.restore_native_raster_batch(&mut native_batch)?;
+                self.restore_native_scalars(&[crate::native_tiles::scalar::NativeScalarRestore {
+                    blob: &blob, working: &texture,
+                }])?;
             }
-            let bytes = blob.decode().map_err(GpuRasterError::Effect)?;
-            self.queue.write_texture(
-                texture.as_image_copy(),
-                &bytes,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some((bytes.len() / PAGE_SIZE as usize) as u32),
-                    rows_per_image: Some(PAGE_SIZE),
-                },
-                texture.size(),
-            );
             replacements.push(replacement);
         }
         self.restore_native_raster_batch(&mut native_batch)?;

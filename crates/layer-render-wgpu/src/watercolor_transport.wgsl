@@ -298,7 +298,7 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
     var combined_pigment = relaxed_pigment;
     // Water activation is a material-model threshold. Native pigment coverage
     // has its own precision; a faint wash must travel with the same wet front.
-    let pigment_present=select(best_pigment.a>MIN_WETNESS,working_has_color(best_pigment.a),WORKING_EXTENDED);
+    let pigment_present=working_has_color(best_pigment.a);
     if best_wetness > decayed_wetness + MIN_WETNESS && pigment_present {
         let arrival = clamp(
             sqrt(
@@ -321,12 +321,7 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
             alpha,
         );
     }
-    let unclamped_pigment = working_clamp(combined_pigment);
-    var next_pigment = vec4<f32>(
-        min(unclamped_pigment.rgb, vec3<f32>(unclamped_pigment.a)),
-        unclamped_pigment.a,
-    );
-    if WORKING_EXTENDED {next_pigment = unclamped_pigment;}
+    var next_pigment = working_clamp(combined_pigment);
     if style.color.a > 0.5 {
         next_pigment = vec4<f32>(working_unassociate(next_pigment) * center.a, center.a);
     }

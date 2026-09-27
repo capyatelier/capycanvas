@@ -177,10 +177,8 @@ fn contact_segment_progress(dab: Dab, world: vec2<f32>) -> f32 {
 }
 
 fn mix_color(a: vec3<f32>, b: vec3<f32>, amount: f32) -> vec3<f32> {
-    if WORKING_EXTENDED {
-        if amount==0. || all(a==b) {return a;}
-        if amount==1. {return b;}
-    }
+    if amount==0. || all(a==b) {return a;}
+    if amount==1. {return b;}
     if style.render_mode.z > 0.5 {
         return working_from_oklab(mix(working_to_oklab(a), working_to_oklab(b), amount));
     }
@@ -683,12 +681,6 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         }
         var source_alpha = requested_alpha;
         if contact_uniform() {
-            // Attachment-based hosts store R8 coverage. Match that storage
-            // before applying its delta so frame boundaries cannot change ink.
-            // Native SDR uses R32Float and must retain faint/16-bit coverage.
-            if !WORKING_EXTENDED {
-                requested_alpha = round(requested_alpha * 255.0) / 255.0;
-            }
             let next_coverage = max(stroke_coverage, requested_alpha);
             source_alpha = clamp(
                 working_ratio(next_coverage - stroke_coverage, 1.0 - stroke_coverage),

@@ -14,7 +14,8 @@ pub(super) fn inventory(platform: Platform) -> Vec<Value> {
     let mut host = apple_host(platform);
     let hardware = std::env::args().any(|arg| arg == "--gpu");
     let preparation = if hardware {
-        let gpu = layer_render_wgpu::WgpuRasterizer::new_headless().unwrap();
+        let gpu =
+            layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         assert_ne!(
             gpu.adapter().get_info().device_type,
             wgpu::DeviceType::Cpu,

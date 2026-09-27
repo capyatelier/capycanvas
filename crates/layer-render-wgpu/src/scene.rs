@@ -96,7 +96,7 @@ pub(super) struct Pipelines {
     layout: wgpu::BindGroupLayout,
     pub pipeline: [Deferred<wgpu::RenderPipeline>; 2],
     pub source: sources::Pipelines,
-    pub constant: Option<(wgpu::BindGroupLayout, wgpu::BindGroupLayout, Deferred<wgpu::ComputePipeline>)>,
+    pub constant: (wgpu::BindGroupLayout, wgpu::BindGroupLayout, Deferred<wgpu::ComputePipeline>),
 }
 
 impl Scene {
@@ -696,7 +696,7 @@ impl Scene {
         // resolve over their constant backdrop in one destination write. This
         // preserves layer opacity after preview composition and needs neither
         // a scratch color tile nor an attachment destination read.
-        if r.scene_pipelines.constant.is_some() && self.cached_composition() && over && rect == [0., 0., 256., 256.]
+        if self.cached_composition() && over && rect == [0., 0., 256., 256.]
             && (options[0] == 14. || (options[0] == 7. && options[3] < 2.))
             && let Some(Job::Draw { target: prior_target, sources: prior_sources,
                 data: prior, over: false, clip: None }) = self.jobs.last()
@@ -1904,8 +1904,7 @@ impl Scene {
                 &self.upload,
             )?;
         }
-        let compute_supported = r.scene_pipelines.constant.is_some();
-        let is_compute = |job: &Job| compute_supported && matches!(job,
+        let is_compute = |job: &Job| matches!(job,
             Job::Draw { data, over: false, clip, .. } if data[8] == 15. || (data[8] == 13. && clip.is_some()));
         let source_bindings = &mut self.source_bindings;
         let mask_bindings = &mut self.mask_bindings;
@@ -1916,9 +1915,8 @@ impl Scene {
             if i < encoded_through {
                 continue;
             }
-            if is_compute(job)
-                && let Some((layout, inputs, pipeline)) = &r.scene_pipelines.constant
-            {
+            if is_compute(job) {
+                let (layout, inputs, pipeline) = &r.scene_pipelines.constant;
                 let end = (i + 1..self.jobs.len()).find(|&j| !is_compute(&self.jobs[j]))
                     .unwrap_or(self.jobs.len());
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -2169,7 +2167,7 @@ impl Pipelines {
                 )
             })
         });
-        let constant = (device.working_format() == wgpu::TextureFormat::Rgba32Float).then(|| {
+        let constant = {
             let inputs = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("scene normal stack inputs"),
                 entries: &[
@@ -2205,7 +2203,7 @@ impl Pipelines {
                 })
             });
             (output, inputs, pipeline)
-        });
+        };
         Self {
             source: sources::Pipelines::new(device, &uniforms),
             constant,

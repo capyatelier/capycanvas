@@ -317,17 +317,15 @@ mod tests {
             );
         }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: cache_features,
+            required_features: cache_features
+                | wgpu::Features::FLOAT32_FILTERABLE
+                | (adapter.features() & wgpu::Features::FLOAT32_BLENDABLE)
+                | crate::native_tiles::native_in_place_features(&adapter),
             ..Default::default()
         }))
         .unwrap();
-        let mut reference = WgpuRasterizer::from_wgpu_inner(
-            adapter.clone(),
-            device.clone().into(),
-            queue.clone(),
-            crate::Initialization::Warm,
-        )
-        .unwrap();
+        let color = layer_core::color::DocumentColor::default();
+        let mut reference = WgpuRasterizer::new_native_headless(color).unwrap();
         let doc = layer_core::Document::new("cached", 64, 64);
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         let dabs = [layer_render::Dab {
@@ -383,11 +381,12 @@ mod tests {
             "test must paint visible pixels"
         );
         for _ in 0..2 {
-            let mut renderer = WgpuRasterizer::from_wgpu_staged_cached(
+            let mut renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
                 adapter.clone(),
                 device.clone(),
                 queue.clone(),
                 &temp.0,
+                color,
             )
             .unwrap();
             renderer.prepare_startup(&doc, &brush, false).unwrap();

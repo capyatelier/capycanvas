@@ -138,13 +138,12 @@ impl RegionRequests {
                 self.flood.encode_input(
                     &r.device,
                     &mut encoder,
-                    &r.empty_view,
                     extent,
                     request.position,
                     request.tolerance,
                     request.limit.as_ref().and(r.selection_clip.buffer.as_ref()),
                     request.refinement,
-                    Some(&classified),
+                    &classified,
                     request.contiguous,
                 )?
             }

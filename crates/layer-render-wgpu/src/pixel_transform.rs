@@ -497,14 +497,30 @@ impl PixelTransform {
             target.region[0] + target.region[2] <= target.extent[0]
                 && target.region[1] + target.region[3] <= target.extent[1]
         );
-        let source_stride = self.source_stride;
-        self.draw(
-            encoder,
-            source,
-            offsets[0] + (index as u32 * 2 + u32::from(identity)) * self.stride,
-            offsets[1] + index as u32 * source_stride,
-            target,
-        );
+        let region_offset = offsets[0] + (index as u32 * 2 + u32::from(identity)) * self.stride;
+        let source_offset = offsets[1] + index as u32 * self.source_stride;
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("affine changed region"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[region_offset]);
+        pass.set_bind_group(1, &source.binding, &[source_offset]);
+        let [x, y, w, h] = target.region;
+        pass.set_scissor_rect(x, y, w, h);
+        pass.draw(0..3, 0..1);
     }
     /// Draw prepared regions of several jobs into one attachment with a
     /// single pass, clearing the attachment first or keeping earlier passes.
@@ -588,37 +604,6 @@ impl PixelTransform {
             pass.set_scissor_rect(x, y, w, h);
             pass.draw(0..3, 0..1);
         }
-    }
-    fn draw(
-        &self,
-        encoder: &mut crate::submission::CommandEncoder,
-        source: &TransformSource,
-        region_offset: u32,
-        source_offset: u32,
-        target: &TransformTarget<'_>,
-    ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("affine changed region"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target.view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[region_offset]);
-        pass.set_bind_group(1, &source.binding, &[source_offset]);
-        let [x, y, w, h] = target.region;
-        pass.set_scissor_rect(x, y, w, h);
-        pass.draw(0..3, 0..1);
     }
     /// Retained scratch only; source/targets are owned by the transaction host.
     pub fn storage_bytes(&self) -> u64 {

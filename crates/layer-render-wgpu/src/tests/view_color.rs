@@ -454,56 +454,46 @@ fn hdr_paint_and_photo_thumbnails_follow_the_sdr_rendition_without_clipping() {
 
 #[test]
 fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork() {
-    for native in [false, true] {
-        let mut r = if native {
-            WgpuRasterizer::new_native_headless(DocumentColor {
-                space: RgbSpace::ProPhoto,
-                depth: SampleDepth::U16,
-            })
-            .unwrap()
-        } else {
-            WgpuRasterizer::new_headless().unwrap()
-        };
-        frame(&mut r, &source(RgbSpace::Srgb, [65535; 4]));
-        let artwork = r.readback_srgb_rgba8().unwrap();
-        // Unassociated export is undefined at zero coverage. Even if a custom
-        // effect leaves hidden RGB, the output boundary must emit canonical zero.
-        let pixel = if native {
-            [0.7f32, -0.1, 1.5, 0.]
-                .into_iter()
-                .flat_map(f32::to_le_bytes)
-                .collect::<Vec<_>>()
-        } else {
-            vec![255, 75, 132, 0]
-        };
-        let input = pixel.repeat(256 * 256);
-        let texture = r.composite_texture.as_ref().unwrap();
-        r.queue.write_texture(
-            texture.as_image_copy(),
-            &input,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(256 * pixel.len() as u32),
-                rows_per_image: Some(256),
-            },
-            texture.size(),
-        );
-        // Exercise the unassociated output boundary with deliberately hidden
-        // RGB. Exact artwork readback must ignore the corrupted display cache.
-        let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let binding = r.composite_bind_group.as_ref().unwrap().clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        r.submit_ui_readback(encoder, &binding, [1; 2], 42, move |image| {
-            tx.send(image).unwrap();
-        });
-        complete(&r);
-        assert!(rx.recv().unwrap().unwrap().bytes.iter().all(|v| *v == 0));
-        assert_eq!(r.readback_srgb_rgba8().unwrap(), artwork);
-        assert_eq!(
-            crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()),
-            input
-        );
-    }
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
+        space: RgbSpace::ProPhoto,
+        depth: SampleDepth::U16,
+    })
+    .unwrap();
+    frame(&mut r, &source(RgbSpace::Srgb, [65535; 4]));
+    let artwork = r.readback_srgb_rgba8().unwrap();
+    // Unassociated export is undefined at zero coverage. Even if a custom
+    // effect leaves hidden RGB, the output boundary must emit canonical zero.
+    let pixel = [0.7f32, -0.1, 1.5, 0.]
+        .into_iter()
+        .flat_map(f32::to_le_bytes)
+        .collect::<Vec<_>>();
+    let input = pixel.repeat(256 * 256);
+    let texture = r.composite_texture.as_ref().unwrap();
+    r.queue.write_texture(
+        texture.as_image_copy(),
+        &input,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(256 * pixel.len() as u32),
+            rows_per_image: Some(256),
+        },
+        texture.size(),
+    );
+    // Exercise the unassociated output boundary with deliberately hidden
+    // RGB. Exact artwork readback must ignore the corrupted display cache.
+    let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let binding = r.composite_bind_group.as_ref().unwrap().clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    r.submit_ui_readback(encoder, &binding, [1; 2], 42, move |image| {
+        tx.send(image).unwrap();
+    });
+    complete(&r);
+    assert!(rx.recv().unwrap().unwrap().bytes.iter().all(|v| *v == 0));
+    assert_eq!(r.readback_srgb_rgba8().unwrap(), artwork);
+    assert_eq!(
+        crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()),
+        input
+    );
 }
 
 #[test]

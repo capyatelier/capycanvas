@@ -213,11 +213,7 @@ impl WgpuRasterizer {
             } else {
                 0
             };
-            let local = if from_persistent && !self.preview_full_pages {
-                damage
-                    .intersect(page_rect(job.coordinate))
-                    .page_local(job.coordinate)
-            } else if writes_full_page {
+            let local = if writes_full_page {
                 PixelRect::full([PAGE_SIZE; 2])
             } else {
                 job.local

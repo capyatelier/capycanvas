@@ -7,7 +7,7 @@ use std::time::Instant;
 #[ignore = "physical GPU two-pass workload control; no compositor"]
 fn filter_microbench() {
     use wgpu::util::DeviceExt;
-    let mut r = WgpuRasterizer::new_float32().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor::default()).unwrap();
     let extent = [5184, 3456];
     eprintln!("micro adapter={:?}", r.adapter.get_info());
     let texture = |label| {
@@ -298,14 +298,8 @@ fn photo_filter_frame_time() {
         assert_eq!(bytes.len(), (extent[0] * extent[1] * 4) as usize);
         bytes
     };
-    let mode = std::env::var("CAPY_FILTER_MODE").unwrap_or_else(|_| "native".into());
     let start = Instant::now();
-    let mut r = match mode.as_str() {
-        "legacy" => WgpuRasterizer::new_headless(),
-        "float" => WgpuRasterizer::new_float32(),
-        _ => WgpuRasterizer::new_native_headless(DocumentColor::default()),
-    }
-    .unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor::default()).unwrap();
     if let Ok(mib) = std::env::var("CAPY_FILTER_LIMIT_MIB")
         && let Some(native) = &mut r.native_edit
     {
@@ -321,28 +315,13 @@ fn photo_filter_frame_time() {
             .admit_native_sources(mib.parse::<u64>().unwrap() * 4 * 1024 * 1024);
     }
     eprintln!(
-        "adapter={:?} mode={mode} init_ms={:.3}",
+        "adapter={:?} init_ms={:.3}",
         r.adapter.get_info(),
         start.elapsed().as_secs_f64() * 1000.
     );
     let mut base = Layer::paint(LayerId(1), "Water photo");
     if let Some(project) = project {
-        assert_eq!(mode, "native");
         base = project.document.layers.into_iter().find(|layer| layer.source.is_some()).unwrap();
-    } else if mode == "legacy" || mode == "float" {
-        let asset = AssetId("investigation:water".into());
-        r.prepare_asset(
-            &asset,
-            HostImage {
-                width: extent[0],
-                height: extent[1],
-                stride: extent[0] * 4,
-                format: PixelFormat::Rgba8Srgb,
-                bytes: &bytes,
-            },
-        )
-        .unwrap();
-        base.asset = Some(asset);
     } else {
         let mut builder = SourceBuilder::new(
             extent,

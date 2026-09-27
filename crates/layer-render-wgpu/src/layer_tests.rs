@@ -236,7 +236,7 @@ pub(crate) fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
 
 #[test]
 fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [2048, 128];
     let mut outside = Selection::polygon(vec![
         Point { x: -40., y: -10. },
@@ -311,8 +311,47 @@ fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
 }
 
 #[test]
+fn connected_and_global_regions_select_painted_disks() {
+    use layer_render::{RegionRequest, RegionSource};
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let layer = Layer::paint(LayerId(1), "disks");
+    let mut left = dab([1., 0., 0., 1.]);
+    left.center = Point { x: 32., y: 64. };
+    left.radii = [16.; 2];
+    let mut right = left;
+    right.center.x = 96.;
+    let mut disks = batch(1);
+    disks.dab_count = 2;
+    submit(&mut r, std::slice::from_ref(&layer), &[left, right], &[disks], true);
+    for contiguous in [true, false] {
+        assert!(r.request_region(RegionRequest {
+            contiguous,
+            selection: None,
+            request_id: 1,
+            source: RegionSource::Layer(layer.id),
+            position: [32, 64],
+            tolerance: 0.,
+            refinement: Default::default(),
+            limit: None,
+        }).unwrap());
+        r.wait_idle().unwrap();
+        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+        let result = loop {
+            if let Some(result) = r.take_region() {
+                break result.unwrap();
+            }
+            assert!(std::time::Instant::now() < deadline, "region timed out");
+            std::thread::yield_now();
+        };
+        let [x0, y0, x1, y1] = result.pixels.bounds();
+        assert!(x0 <= 20 && y0 <= 52 && y1 >= 76, "{contiguous}: {:?}", result.pixels.bounds());
+        assert_eq!(x1 < 64, contiguous, "{:?}", result.pixels.bounds());
+    }
+}
+
+#[test]
 fn clipping_stack_keeps_soft_base_alpha_and_group_opacity_once() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut base = Layer::paint(LayerId(1), "base");
     let mut a = Layer::paint(LayerId(2), "clip a");
     a.properties.clipped = true;
@@ -347,7 +386,7 @@ fn clipping_stack_keeps_soft_base_alpha_and_group_opacity_once() {
 
 #[test]
 fn apply_mask_preserves_pixels_and_does_not_remain_a_live_mask() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut l = Layer::paint(LayerId(1), "paint");
     l.mask = Some(left_mask(9));
     submit(
@@ -380,7 +419,7 @@ fn apply_mask_preserves_pixels_and_does_not_remain_a_live_mask() {
 
 #[test]
 fn alpha_lock_preserves_partial_alpha_and_eraser_is_noop() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let l = Layer::paint(LayerId(1), "paint");
     submit(
         &mut r,

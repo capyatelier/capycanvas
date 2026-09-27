@@ -78,12 +78,7 @@ impl WgpuRasterizer {
         let bottom = y.saturating_add(radius + 1).min(extent[1]);
         let width = right - left;
         let count = width * (bottom - top);
-        let stride = if matches!(request.source, ColorSampleSource::Layer(id) if self.tiled_sources.contains_key(&id))
-        {
-            16
-        } else {
-            self.device.working_format().block_copy_size(None).unwrap()
-        };
+        let stride = 16;
         let capacity = u64::from(count * stride).div_ceil(256) * 256;
         if self
             .color_sampler
@@ -105,7 +100,6 @@ impl WgpuRasterizer {
                 })
             })
             .clone();
-        let mut formats = vec![false; count as usize];
         let mut encoder = crate::submission::CommandEncoder::new(
             &self.device,
             &wgpu::CommandEncoderDescriptor {
@@ -137,7 +131,7 @@ impl WgpuRasterizer {
         for row in top..bottom {
             let mut column = left;
             while column < right {
-                let (source, origin, mut end) = match request.source {
+                let (source, origin, end) = match request.source {
                     ColorSampleSource::Composite => {
                         (composite.clone(), [column - left, row - top], right)
                     }
@@ -154,15 +148,6 @@ impl WgpuRasterizer {
                     }
                 };
                 if let Some(source) = source {
-                    let float = source.format() == wgpu::TextureFormat::Rgba32Float;
-                    let bytes = source.format().block_copy_size(None).unwrap();
-                    // An area may cross edited integer paint and untouched
-                    // Float32 source. Pad integer texels individually in that case.
-                    if bytes != stride {
-                        end = column + 1;
-                    }
-                    let index = ((row - top) * width + column - left) as usize;
-                    formats[index..index + (end - column) as usize].fill(float);
                     encoder.copy_texture_to_buffer(
                         wgpu::TexelCopyTextureInfo {
                             origin: wgpu::Origin3d {
@@ -215,18 +200,9 @@ impl WgpuRasterizer {
                         continue;
                     }
                     weight += 1.;
-                    let color: [f32; 4] = if formats[i] {
-                        std::array::from_fn(|c| {
-                            f32::from_ne_bytes(texel[c * 4..c * 4 + 4].try_into().unwrap())
-                        })
-                    } else {
-                        [
-                            layer_core::color::srgb_decode(f32::from(texel[0]) / 255.),
-                            layer_core::color::srgb_decode(f32::from(texel[1]) / 255.),
-                            layer_core::color::srgb_decode(f32::from(texel[2]) / 255.),
-                            f32::from(texel[3]) / 255.,
-                        ]
-                    };
+                    let color: [f32; 4] = std::array::from_fn(|c| {
+                        f32::from_ne_bytes(texel[c * 4..c * 4 + 4].try_into().unwrap())
+                    });
                     if color[3] > 0. {
                         let alpha = color[3] as f64;
                         if perceptual {

@@ -11,7 +11,6 @@ pub(super) struct Frame {
     pub background: [f32; 4],
     pub time: f32,
     pub previews: Vec<DabBatch>,
-    pub preview_records: Vec<usize>,
 }
 impl Frame {
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
@@ -60,12 +59,6 @@ impl Frame {
                 .iter()
                 .filter(|b| b.kind == DabBatchKind::Preview)
                 .cloned()
-                .collect(),
-            preview_records: packet
-                .dab_batches
-                .iter()
-                .enumerate()
-                .filter_map(|(index, b)| (b.kind == DabBatchKind::Preview).then_some(index))
                 .collect(),
         }
     }
@@ -153,62 +146,9 @@ impl Capture {
                 "bounded artwork query",
             ));
         }
-        r.complete_preview_pages(encoder);
         let scene = self.scene.get_or_insert_with(|| query_scene(r));
         let (texture, view) = self.target.as_ref().unwrap();
         scene.capture_region(r, packet, texture, region, None, encoder)?;
-        // The lightweight frontmost preview has no paint page. Replay its
-        // retained GPU contacts into this exact crop instead of sampling the
-        // display. Native previews and destination brushes already have pages.
-        if r.preview_direct_to_composite && !packet.dab_batches.is_empty() {
-            use wgpu::util::DeviceExt;
-            let frame = r
-                .artwork_frame
-                .clone()
-                .ok_or(GpuRasterError::InvalidExtent)?;
-            let target = TargetGpu::new(
-                [region.min_x(), region.min_y()],
-                size,
-                packet.document_extent,
-            );
-            let uniform = r
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("exact preview crop geometry"),
-                    contents: target_bytes(&target),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-            for (batch, index) in frame.previews.iter().zip(&frame.preview_records) {
-                if batch.dab_count == 0
-                    || !packet
-                        .layers
-                        .iter()
-                        .any(|l| l.id == batch.layer_id && l.visible)
-                    || batch_pixel_rect(batch, packet.document_extent)
-                        .intersect(region)
-                        .is_empty()
-                {
-                    continue;
-                }
-                r.prepare_selection(encoder, &batch.style)?;
-                let coverage = if batch.style.selection.is_some() {
-                    r.selection_clip.buffer.as_ref().unwrap()
-                } else {
-                    &r.unclipped
-                };
-                let binding =
-                    create_target_bind_group(&r.device, &r.target_layout, &uniform, coverage);
-                r.encode_batch_to_target(
-                    encoder,
-                    *index,
-                    batch,
-                    view,
-                    PixelRect::new(0, 0, region.width(), region.height()),
-                    &binding,
-                    0,
-                )?;
-            }
-        }
         self.window = Some(window);
         self.peak_image_bytes = self.peak_image_bytes.max(bytes);
         Ok(source_access::RawTile {
@@ -224,47 +164,6 @@ fn query_scene(r: &WgpuRasterizer) -> scene::Scene {
     // only the bounded upload neighborhood, not the live display's admission.
     scene.admit_native_sources(0);
     scene
-}
-
-impl WgpuRasterizer {
-    /// The fast single-batch destination preview writes its damage directly
-    /// from persistent paint. The live compositor already clips that fork, but
-    /// exact queries compose whole tiles. Complete their unchanged pixels once
-    /// when queried, without adding a copy to ordinary prediction frames.
-    fn complete_preview_pages(&mut self, encoder: &mut crate::submission::CommandEncoder) {
-        if self.preview_full_pages || !self.preview_requires_base
-            || self.preview_completion.as_ref().is_some_and(|v| v.load(std::sync::atomic::Ordering::Acquire)) {
-            return;
-        }
-        if let Some(layer) = self.paint_layers.iter().find(|l| Some(l.id) == self.preview_layer_id) {
-            for preview in &self.preview_pages {
-                let Some(source) = layer.pages.iter().find(|p| p.coordinate == preview.coordinate) else {
-                    // Direct prediction clears absent persistent pixels to zero.
-                    continue;
-                };
-                let page = page_rect(preview.coordinate);
-                for region in page.subtract(page.intersect(self.preview_damage)) {
-                    if region.is_empty() { continue; }
-                    let local = region.page_local(preview.coordinate);
-                    let copy = |texture| wgpu::TexelCopyTextureInfo {
-                        texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d { x: local.min_x(), y: local.min_y(), z: 0 },
-                        aspect: wgpu::TextureAspect::All,
-                    };
-                    encoder.copy_texture_to_texture(
-                        copy(&source.active().texture), copy(&preview.active().texture),
-                        wgpu::Extent3d { width: local.width(), height: local.height(), depth_or_array_layers: 1 },
-                    );
-                }
-            }
-        }
-        // Failed/abandoned queries must not certify unsubmitted copies. Reuse
-        // the same queue-order validity guard as the other renderer caches.
-        let write = crate::submission::CacheWrite::new();
-        self.preview_completion = Some(write.validity());
-        write.track(encoder);
-    }
 }
 
 #[cfg(test)]

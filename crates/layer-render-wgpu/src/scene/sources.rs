@@ -299,15 +299,6 @@ impl DecodedTiles {
         r: &WgpuRasterizer,
         key: Key,
     ) -> Result<(RawTile, Option<crate::submission::CacheWrite>), GpuRasterError> {
-        if !r
-            .device
-            .features()
-            .contains(wgpu::Features::FLOAT32_FILTERABLE)
-        {
-            return Err(GpuRasterError::Color(
-                "This device cannot filter Float32 source tiles".into(),
-            ));
-        }
         self.clock = self.clock.wrapping_add(1);
         if let Some(slot) = self.slots.iter_mut().find(|s| {
             s.key.as_ref().is_some_and(|k| k.matches(&key)) && s.valid.load(Ordering::Acquire)

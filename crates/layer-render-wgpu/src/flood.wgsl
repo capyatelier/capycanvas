@@ -4,7 +4,6 @@ struct Params { extent_seed: vec4<u32>, options: vec4<f32>, input: vec4<u32> }
 // Bounds/count occupy eight extra words after the coverage, sharing one
 // allocation/binding and keeping the portable four-storage-buffer limit.
 struct Coverage { rect: vec4<u32>, info: vec4<u32>, values: array<atomic<u32>> }
-@group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var<storage, read_write> parents: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read_write> coverage: Coverage;
@@ -15,11 +14,6 @@ fn summary_index(field: u32) -> u32 {
 }
 var<workgroup> local_parent: array<atomic<u32>, 256>;
 
-fn color_eligible(p: vec2<u32>, seed: vec4<f32>) -> bool {
-    let color = comparison_color(textureLoad(source, vec2<i32>(p), 0));
-    return all(abs(color-seed) <= vec4<f32>(params.options.x))
-        && brush_selection_at(vec2<f32>(p)+.5) > 0.;
-}
 fn local_root(start: u32) -> u32 {
     var node = start;
     loop {
@@ -54,13 +48,7 @@ fn initialize(@builtin(global_invocation_id) id: vec3<u32>,
     let extent = params.extent_seed.xy;
     let inside = all(id.xy < extent);
     var eligible = false;
-    if inside {
-        if params.options.y > 0. || params.input.x != 0u { eligible = mask_bit(vec2<i32>(id.xy)); }
-        else {
-            let seed = comparison_color(textureLoad(source, vec2<i32>(params.extent_seed.zw), 0));
-            eligible = color_eligible(id.xy, seed);
-        }
-    }
+    if inside { eligible = mask_bit(vec2<i32>(id.xy)); }
     atomicStore(&local_parent[lane], select(NONE, lane, eligible));
     if all(id.xy == vec2<u32>(0)) {
         coverage.rect = vec4<u32>(0,0,extent);

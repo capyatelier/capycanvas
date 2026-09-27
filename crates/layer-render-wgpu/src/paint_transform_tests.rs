@@ -25,7 +25,7 @@ fn op_batch(index: u32, operation: &LayerOperation) -> DabBatch {
 
 #[test]
 fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pixels() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let layer = Layer::paint(LayerId(1), "remove preview target");
     submit(
         &mut r,
@@ -173,7 +173,7 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
         })
         .unwrap();
     };
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let layer = Layer::paint(LayerId(1), "moving preview");
     let mut d = dab([0.9, 0.2, 0.1, 1.]);
     d.center = Point { x: 150., y: 140. };
@@ -246,8 +246,8 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
 fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
     use layer_core::DefaultBrushPreset::*;
     use layer_core::Projective;
-    let mut r = WgpuRasterizer::new_headless().unwrap();
-    let mut reference = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [640, 384];
     let view = ViewState {
         width_px: extent[0],
@@ -363,7 +363,7 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
 
 #[test]
 fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [768, 512];
     let view = ViewState {
         width_px: extent[0],

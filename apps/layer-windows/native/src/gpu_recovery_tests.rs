@@ -28,13 +28,18 @@ pub(crate) fn renderer() -> (Renderer, DeviceWatch) {
             continue;
         }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: adapter.features()
+                & (wgpu::Features::FLOAT32_FILTERABLE
+                    | wgpu::Features::FLOAT32_BLENDABLE
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             ..Default::default()
         }))
         .unwrap();
         let state = DeviceWatch::observe(&device);
-        #[allow(deprecated)]
-        let gpu = WgpuRasterizer::from_wgpu(adapter, device, queue).unwrap();
+        let gpu =
+            WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, Default::default())
+                .unwrap();
         assert!(!state.is_lost(Some(gpu.device())));
         state.check().unwrap();
         return (Renderer(Some(gpu.into())), state);

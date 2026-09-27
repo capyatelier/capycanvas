@@ -312,7 +312,6 @@ impl Effects {
                 &programs,
                 &offsets,
                 stage,
-                r.device().working_format() == wgpu::TextureFormat::Rgba32Float,
                 r.device().working_space(),
                 r.device().hdr(),
             )?;
@@ -554,7 +553,6 @@ pub(super) fn validate_namespace(programs: &[Arc<EffectProgram>]) -> Result<(), 
         &[Arc::new(linked)],
         &[0],
         Execution::Preview,
-        false,
         Default::default(),
         false,
     )?)
@@ -563,11 +561,10 @@ fn shader_source(
     programs: &[Arc<EffectProgram>],
     offsets: &[u32],
     stage: Execution,
-    extended: bool,
     space: layer_core::color::RgbSpace,
     hdr: bool,
 ) -> Result<String, GpuRasterError> {
-    let mut source = working_color::source(extended, space);
+    let mut source = working_color::source(space);
     source.push_str(&crate::view_color::hdr_shader(space, layer_core::color::RgbSpace::Srgb));
     source.push_str(include_str!("scene.wgsl"));
     let space_id = layer_core::color::RgbSpace::ALL
@@ -575,7 +572,7 @@ fn shader_source(
         .position(|s| *s == space)
         .unwrap();
     let y = space.to_xyz()[1];
-    source.push_str(&format!("\nconst FX_EXTENDED:bool={extended};\nconst FX_HDR:bool={hdr};\nconst FX_SPACE:u32={space_id}u;\nconst FX_LUMA:vec3<f32>=vec3<f32>({:.12},{:.12},{:.12});\n", y[0], y[1], y[2]));
+    source.push_str(&format!("\nconst FX_EXTENDED:bool=true;\nconst FX_HDR:bool={hdr};\nconst FX_SPACE:u32={space_id}u;\nconst FX_LUMA:vec3<f32>=vec3<f32>({:.12},{:.12},{:.12});\n", y[0], y[1], y[2]));
     source.push_str(include_str!("effects_color.wgsl"));
     for i in 0..MASK_SLOTS {
         source.push_str(&format!(
@@ -594,25 +591,15 @@ fn fx_time(base:u32)->f32 { return effect_data[base-1u].w; }
 fn fx_extent()->vec2<f32> { return settings.color.zw; }
 fn fx_sample(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
-    if settings.source_over.z>0. {
-        if FX_EXTENDED {return working_sample_float(front,point-settings.source_over.xy);}
-        return textureSampleLevel(front,sampling,(point-settings.source_over.xy)/settings.source_over.zw,0.);
-    }
-    if FX_EXTENDED {return working_sample_float(front,point);}
-    return textureSampleLevel(front,sampling,point/fx_extent(),0.);
+    if settings.source_over.z>0. {return working_sample_float(front,point-settings.source_over.xy);}
+    return working_sample_float(front,point);
 }
 fn fx_original(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
-    if settings.backdrop.z>0. {
-        if FX_EXTENDED {return working_sample_float(back,point-settings.backdrop.xy);}
-        return textureSampleLevel(back,sampling,(point-settings.backdrop.xy)/settings.backdrop.zw,0.);
-    }
-    if FX_EXTENDED {return working_sample_float(back,point);}
-    return textureSampleLevel(back,sampling,point/fx_extent(),0.);
+    if settings.backdrop.z>0. {return working_sample_float(back,point-settings.backdrop.xy);}
+    return working_sample_float(back,point);
 }
 @fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {
-    // sRGB attachments encode RGB at physical pass boundaries. Fused effects
-    // retain Float32 values; linear8 prequantization would destroy shadow detail.
     return effect_result(v);
 }
 
@@ -743,7 +730,7 @@ mod tests {
     }
     fn validate(p: &[Arc<EffectProgram>], execution: Execution) {
         let source =
-            shader_source(p, &vec![0; p.len()], execution, false, Default::default(), false).unwrap();
+            shader_source(p, &vec![0; p.len()], execution, Default::default(), false).unwrap();
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(

@@ -111,9 +111,8 @@ impl Requirements {
             return;
         }
         let plan = BrushPassPlan::for_device(style, &r.device);
-        if style.execution == BrushExecution::Dry && plan.direct.is_none()
-            && let Some(dry) = &r.pipelines.dry_material {
-            let kernels = dry.for_style(style);
+        if style.execution == BrushExecution::Dry && plan.direct.is_none() {
+            let kernels = r.pipelines.dry_material.for_style(style);
             self.compute.push(kernels[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
             if preview { self.compute.push(kernels[plan.material as usize * 2].clone()); }
             if let Some(in_place) = &r.pipelines.dry_in_place {
@@ -289,7 +288,7 @@ impl WgpuRasterizer {
                 .render
                 .extend(self.scene_pipelines.pipeline.iter().cloned());
             if self.device.portable_blend() { required.compute.extend(self.portable_blend.pipelines.iter().cloned()); }
-            if let Some((_, _, pipeline)) = &self.scene_pipelines.constant { required.compute.push(pipeline.clone()); }
+            required.compute.push(self.scene_pipelines.constant.2.clone());
             if self.native_edit.as_ref().is_some_and(|native| {
                 u64::from(document.width) * u64::from(document.height) * 16 > native.display_dense_bytes
             }) {
@@ -555,7 +554,7 @@ mod gpu_tests {
                 .pipelines()
                 .all(|p| !p.ready())
         );
-        assert!(renderer.pipelines.dry_material.as_ref().unwrap().kernels.iter().all(|p| !p.ready()));
+        assert!(renderer.pipelines.dry_material.kernels.iter().all(|p| !p.ready()));
         let document = Document::new("native staged startup", 128, 128);
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         renderer.prepare_startup(&document, &brush, false).unwrap();
@@ -583,7 +582,7 @@ mod gpu_tests {
                 .all(Deferred::ready)
         );
         for index in [2, 3] {
-            assert!(renderer.pipelines.dry_material.as_ref().unwrap()
+            assert!(renderer.pipelines.dry_material
                 .for_style(&layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush))[index].ready(),
                 "G-Pen commit and prediction kernels must be ready before input is enabled");
         }

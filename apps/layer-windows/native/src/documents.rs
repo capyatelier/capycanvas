@@ -1255,7 +1255,7 @@ mod gpu_tests {
     #[test]
     #[ignore = "Requires an explicitly selected hardware D3D12 adapter"]
     fn d3d12_save_checkpoint_survives_later_edits() {
-        let gpu = WgpuRasterizer::new_headless().unwrap();
+        let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         assert_eq!(gpu.adapter().get_info().backend, wgpu::Backend::Dx12);
         assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
         let project = layer_ui::new_drawing(63, 47).unwrap();
@@ -1329,7 +1329,7 @@ mod gpu_tests {
     #[test]
     #[ignore = "Requires an explicitly selected hardware D3D12 adapter"]
     fn d3d12_background_save_open_new_and_stale_adoption() {
-        let gpu = WgpuRasterizer::new_headless().unwrap();
+        let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         assert_eq!(gpu.adapter().get_info().backend, wgpu::Backend::Dx12);
         assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
         let mut host = NativeHost::new(Platform::Gtk).unwrap();

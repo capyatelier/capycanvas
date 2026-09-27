@@ -26,7 +26,8 @@ fn effect(id: u64, kind: &layer_core::EffectDefinition) -> Layer {
 
 #[test]
 fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() {
-    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
+    let mut r =
+        WgpuRasterizer::new_native_headless(Default::default()).expect("physical GPU required");
     let mut base = Layer::paint(LayerId(1), "Translucent paint");
     let mut group = Layer::paint(LayerId(20), "Isolated group");
     group.kind = LayerKind::Group;

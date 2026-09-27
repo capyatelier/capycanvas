@@ -11,7 +11,7 @@ pub type BrowserRasterEncoder = Rc<
 >;
 
 pub(super) struct CaptureWorker {
-    sender: Option<mpsc::SyncSender<CaptureBatch>>,
+    sender: Option<mpsc::SyncSender<NativeCapture>>,
     pending: Arc<AtomicUsize>,
     pub(super) staging: Arc<AtomicU64>,
     pub(super) error: Arc<std::sync::Mutex<Option<String>>>,
@@ -23,7 +23,7 @@ impl CaptureWorker {
         _pool: Arc<BufferPool>,
         encoder: BrowserRasterEncoder,
     ) -> Result<Self, GpuRasterError> {
-        let (sender, receiver) = mpsc::sync_channel::<CaptureBatch>(16);
+        let (sender, receiver) = mpsc::sync_channel::<NativeCapture>(16);
         let pending = Arc::new(AtomicUsize::new(0));
         let staging = Arc::new(AtomicU64::new(0));
         let error = Arc::new(std::sync::Mutex::new(None));
@@ -68,10 +68,7 @@ impl CaptureWorker {
         self.pending.load(Ordering::Acquire) < 16
             && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK - STATUS_BYTES
     }
-    pub(super) fn submit(&self, captures: Vec<RasterCapture>) -> Result<(), GpuRasterError> {
-        self.submit_batch(CaptureBatch::Mapped(captures))
-    }
-    pub(super) fn submit_batch(&self, captures: CaptureBatch) -> Result<(), GpuRasterError> {
+    pub(super) fn submit_batch(&self, captures: NativeCapture) -> Result<(), GpuRasterError> {
         let size = captures.storage_bytes();
         self.pending.fetch_add(1, Ordering::Release);
         self.staging.fetch_add(size, Ordering::Release);

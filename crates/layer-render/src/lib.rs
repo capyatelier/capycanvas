@@ -464,9 +464,6 @@ impl RegionRefinement {
             && self.smoothing.is_finite()
             && (0.0..=1.0).contains(&self.smoothing)
     }
-    pub fn needs_mask(self) -> bool {
-        self.gap_closing != 0 || self.expansion != 0 || self.smoothing != 0.
-    }
 }
 #[derive(Clone, Debug)]
 pub struct RegionResult {

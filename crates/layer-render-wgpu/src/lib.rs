@@ -98,7 +98,6 @@ pub use present::{OverviewPlacement, ViewportPresenter};
 
 // RGB stores encode(linear RGB * alpha); sampling/blending uses Float32 linear
 // premultiplied values. Alpha is ordinary, unencoded UNORM8 coverage.
-const SRGB8_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const EXPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const INITIAL_DAB_BYTES: u64 = 4 * 1024 * 1024;
 const INITIAL_STYLE_RECORDS: usize = 128;
@@ -422,20 +421,12 @@ impl MaterialOperation {
 #[repr(usize)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DirectPipelineKind {
-    AnalyticPaint,
-    AnalyticErase,
-    MaskPaint,
-    MaskErase,
     TexturedPaint,
     TexturedErase,
 }
 
 impl DirectPipelineKind {
-    const COUNT: usize = 6;
-
-    fn is_textured(self) -> bool {
-        matches!(self, Self::TexturedPaint | Self::TexturedErase)
-    }
+    const COUNT: usize = 2;
 }
 
 #[repr(usize)]
@@ -524,11 +515,7 @@ impl BrushPassPlan {
             || style.alpha_locked
             || style.rendering.blend_mode != BrushBlendMode::Normal
             || state.coverage;
-        let textured = style.contact.is_some()
-            || style.grain.is_some()
-            || style.rendering.alpha_threshold > 0.0
-            || style.rendering.wet_edge > 0.0
-            || style.rendering.burnt_edge > 0.0;
+        let edged = style.rendering.wet_edge > 0.0 || style.rendering.burnt_edge > 0.0;
         let material = match style.execution {
             BrushExecution::Liquify => MaterialOperation::Liquify,
             BrushExecution::Smudge => MaterialOperation::Smudge,
@@ -537,13 +524,9 @@ impl BrushPassPlan {
             BrushExecution::Dry if state.coverage => MaterialOperation::Coverage,
             BrushExecution::Dry => MaterialOperation::Deposit,
         };
-        let direct = (!needs_destination).then_some(match (textured, &style.tip, style.mode) {
-            (true, _, DabMode::Paint) => DirectPipelineKind::TexturedPaint,
-            (true, _, DabMode::Erase) => DirectPipelineKind::TexturedErase,
-            (false, BrushTip::AnalyticEllipse, DabMode::Paint) => DirectPipelineKind::AnalyticPaint,
-            (false, BrushTip::AnalyticEllipse, DabMode::Erase) => DirectPipelineKind::AnalyticErase,
-            (false, BrushTip::Mask(_), DabMode::Paint) => DirectPipelineKind::MaskPaint,
-            (false, BrushTip::Mask(_), DabMode::Erase) => DirectPipelineKind::MaskErase,
+        let direct = (!needs_destination && edged).then_some(match style.mode {
+            DabMode::Paint => DirectPipelineKind::TexturedPaint,
+            DabMode::Erase => DirectPipelineKind::TexturedErase,
         });
         Self {
             direct,
@@ -556,26 +539,13 @@ impl BrushPassPlan {
 
     fn for_device(style: &layer_render::DabStyle, device: &PipelineDevice) -> Self {
         let mut plan = Self::for_style(style);
-        if device.portable_blend()
-            || (device.working_format() == wgpu::TextureFormat::Rgba32Float
-                && style.execution == BrushExecution::Dry
-                && style.rendering.blend_mode == BrushBlendMode::Normal
-                && style.rendering.wet_edge == 0. && style.rendering.burnt_edge == 0.)
-        {
-            // Native Flow paint uses the existing ordered dry compute pass too.
-            // Per-page blended draws and transparent-preview clears cost more
-            // to finalize on mobile than the pigment evaluation itself. A
-            // single predicted batch reads persistent paint directly.
+        if device.portable_blend() {
             plan.direct = None;
         }
         plan
     }
     fn requires_destination(self) -> bool {
         self.direct.is_none()
-    }
-
-    fn uses_texture_set(self) -> bool {
-        self.requires_destination() || self.direct.is_some_and(DirectPipelineKind::is_textured)
     }
 
     fn uses_paint_state(self) -> bool {
@@ -787,7 +757,7 @@ struct TextureSet {
 }
 
 struct Pipelines {
-    dry_material: Option<dry_material::Pipelines>,
+    dry_material: dry_material::Pipelines,
     dry_in_place: Option<dry_material::Pipelines>,
     direct: [Deferred<wgpu::RenderPipeline>; DirectPipelineKind::COUNT],
     material: [Deferred<wgpu::RenderPipeline>;
@@ -796,18 +766,13 @@ struct Pipelines {
     watercolor_transport: [Deferred<wgpu::RenderPipeline>; WATERCOLOR_TRANSPORT_STEPS as usize],
     reservoir: Deferred<wgpu::RenderPipeline>,
     stroke_edge: Deferred<wgpu::RenderPipeline>,
-    background: wgpu::RenderPipeline,
-    background_empty: wgpu::BindGroup,
-    composite: wgpu::RenderPipeline,
     watercolor_composite: Deferred<wgpu::RenderPipeline>,
     export: Deferred<wgpu::RenderPipeline>,
 }
 
 impl Pipelines {
     fn compile_all(&self) {
-        if let Some(dry) = &self.dry_material {
-            for p in &dry.kernels { p.compile(); }
-        }
+        for p in &self.dry_material.kernels { p.compile(); }
         for p in self
             .direct
             .iter()
@@ -909,17 +874,12 @@ pub struct WgpuRasterizer {
     composite_view: Option<wgpu::TextureView>,
     composite_bind_group: Option<wgpu::BindGroup>,
     preview_pages: Vec<LayerPage>,
-    // Direct destination prediction writes only its damage. Exact artwork
-    // queries complete the unchanged portions before using whole preview tiles.
-    preview_full_pages: bool,
-    preview_completion: Option<Arc<std::sync::atomic::AtomicBool>>,
     preview_coverage_pages: Vec<StrokeCoveragePage>,
     preview_watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
     preview_damage: PixelRect,
     preview_contact_tiles: Option<std::collections::BTreeSet<[u32; 2]>>,
     preview_layer_id: Option<LayerId>,
     preview_requires_base: bool,
-    preview_direct_to_composite: bool,
     masks: Vec<MaskAsset>,
     texture_sets: Vec<TextureSet>,
     sampler: wgpu::Sampler,
@@ -974,37 +934,7 @@ impl WgpuRasterizer {
         &self.queue
     }
 
-    #[deprecated(
-        note = "Interactive hosts must use staged startup; headless tests should use new_headless"
-    )]
-    pub fn new() -> Result<Self, GpuRasterError> {
-        Self::new_headless()
-    }
-
-    #[deprecated(
-        note = "Interactive hosts must use staged startup; headless tests should use new_headless_async"
-    )]
-    pub async fn new_async() -> Result<Self, GpuRasterError> {
-        Self::new_headless_async().await
-    }
-
-    /// Fully warmed hardware renderer for headless tests and benchmarks.
-    /// Interactive applications use from_wgpu_staged[_cached] instead.
-    pub fn new_headless() -> Result<Self, GpuRasterError> {
-        pollster::block_on(Self::new_headless_async())
-    }
-
-    pub async fn new_headless_async() -> Result<Self, GpuRasterError> {
-        Self::headless_with_working_format(SRGB8_FORMAT, Default::default(), Initialization::Warm).await
-    }
-
-    #[cfg(test)]
-    fn new_float32() -> Result<Self, GpuRasterError> {
-        pollster::block_on(Self::headless_with_working_format(
-            wgpu::TextureFormat::Rgba32Float, Default::default(), Initialization::Warm,
-        ))
-    }
-
+    #[cfg(not(target_arch = "wasm32"))]
     fn headless_instance() -> wgpu::Instance {
         let create = || {
             let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -1012,22 +942,17 @@ impl WgpuRasterizer {
             descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
             wgpu::Instance::new(descriptor)
         };
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            static RESIDENT_DRIVERS: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
-            RESIDENT_DRIVERS.get_or_init(create);
-        }
+        static RESIDENT_DRIVERS: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
+        RESIDENT_DRIVERS.get_or_init(create);
         create()
     }
 
-    async fn headless_with_working_format(format: wgpu::TextureFormat, space: layer_core::color::RgbSpace, initialization: Initialization) -> Result<Self, GpuRasterError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn headless(space: layer_core::color::RgbSpace, initialization: Initialization) -> Result<Self, GpuRasterError> {
         let instance = Self::headless_instance();
-        #[cfg(not(target_arch = "wasm32"))]
         let indexed_adapter = std::env::var("LAYER_GPU_INDEX")
             .ok()
             .and_then(|value| value.parse::<usize>().ok());
-        #[cfg(target_arch = "wasm32")]
-        let indexed_adapter = None;
         let adapter = if let Some(index) = indexed_adapter {
             instance
                 .enumerate_adapters(wgpu::Backends::PRIMARY)
@@ -1050,22 +975,15 @@ impl WgpuRasterizer {
             }
         };
         let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
-        let working_features = if format == wgpu::TextureFormat::Rgba32Float {
-            wgpu::Features::FLOAT32_FILTERABLE | (adapter.features() & if std::env::var_os("CAPY_GPU_NO_FLOAT32_BLEND").is_some() { wgpu::Features::empty() } else { wgpu::Features::FLOAT32_BLENDABLE })
-        } else {
-            wgpu::Features::empty()
-        };
+        let blendable = if std::env::var_os("CAPY_GPU_NO_FLOAT32_BLEND").is_some() { wgpu::Features::empty() } else { wgpu::Features::FLOAT32_BLENDABLE };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("layer canvas device"),
-                required_features: (adapter.features()
-                    & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE))
-                    | working_features
-                    | if format == wgpu::TextureFormat::Rgba32Float { native_tiles::native_in_place_features(&adapter) } else { wgpu::Features::empty() },
+                required_features: (adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | blendable))
+                    | wgpu::Features::FLOAT32_FILTERABLE
+                    | native_tiles::native_in_place_features(&adapter),
                 required_limits: limits,
-                memory_hints: if format == wgpu::TextureFormat::Rgba32Float {
-                    wgpu::MemoryHints::Manual { suballocated_device_memory_block_size: (64 * 1024 * 1024)..(128 * 1024 * 1024) }
-                } else { wgpu::MemoryHints::Performance },
+                memory_hints: wgpu::MemoryHints::Manual { suballocated_device_memory_block_size: (64 * 1024 * 1024)..(128 * 1024 * 1024) },
                 ..Default::default()
             })
             .await
@@ -1073,46 +991,10 @@ impl WgpuRasterizer {
 
         Self::from_wgpu_inner(
             adapter,
-            PipelineDevice::from(device).with_working_format(format)?.with_working_space(space),
+            PipelineDevice::from(device).require_float32()?.with_working_space(space),
             queue,
             initialization,
         )
-    }
-
-    /// Legacy blocking constructor. Interactive presenters use the staged
-    /// constructor with their surface-compatible device and queue instead.
-    #[deprecated(
-        note = "Interactive hosts must use from_wgpu_staged[_cached] and drive the four-stage startup lifecycle"
-    )]
-    pub fn from_wgpu(
-        adapter: wgpu::Adapter,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-    ) -> Result<Self, GpuRasterError> {
-        Self::from_wgpu_inner(adapter, device.into(), queue, Initialization::Warm)
-    }
-
-    /// Show compositing first; the native host drives dependency-prioritized warmup.
-    pub fn from_wgpu_staged(
-        adapter: wgpu::Adapter,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-    ) -> Result<Self, GpuRasterError> {
-        Self::from_wgpu_inner(adapter, device.into(), queue, Initialization::Interactive)
-    }
-
-    /// Native staged startup with a disposable cache in a host-owned private directory.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn from_wgpu_staged_cached(
-        adapter: wgpu::Adapter,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        directory: &std::path::Path,
-    ) -> Result<Self, GpuRasterError> {
-        let device = PipelineDevice::cached(device, &adapter, directory);
-        let mut renderer = Self::from_wgpu_inner(adapter, device, queue, Initialization::Interactive)?;
-        renderer.startup.as_mut().unwrap().host_catalog_pending = true;
-        Ok(renderer)
     }
 
     fn from_wgpu_inner(
@@ -1303,15 +1185,12 @@ impl WgpuRasterizer {
             composite_view: None,
             composite_bind_group: None,
             preview_pages: Vec::with_capacity(16),
-            preview_full_pages: true,
-            preview_completion: None,
             preview_coverage_pages: Vec::with_capacity(8),
             preview_watercolor_wetness_pages: Vec::with_capacity(8),
             preview_damage: PixelRect::EMPTY,
             preview_contact_tiles: None,
             preview_layer_id: None,
             preview_requires_base: false,
-            preview_direct_to_composite: false,
             masks: Vec::with_capacity(8),
             texture_sets: Vec::with_capacity(16),
             sampler,
@@ -1370,8 +1249,6 @@ impl WgpuRasterizer {
         }
         if initialization == Initialization::Interactive {
             renderer.upload_mask(&AssetId::from(WHITE_MASK_ASSET), 1, 1, 1, &[255])?;
-            // Hosts can present paper with the flat compositor; tiled document
-            // composition is prepared next, before loaded content is replayed.
             renderer.validated_effects = Some(renderer.scene_pipelines.effects(&renderer));
             renderer.startup = Some(startup::Startup::new(&renderer.device)?);
         }
@@ -1686,7 +1563,6 @@ impl WgpuRasterizer {
             if batch.style.brush_to_layer.inverse().is_none() {
                 return Err(GpuRasterError::InvalidTransform("Invalid brush target transform"));
             }
-            let plan = BrushPassPlan::for_device(&batch.style, &self.device);
             if batch.style.execution == BrushExecution::Liquify
                 && batch.style.deform.mode == LiquifyMode::Reconstruct
             {
@@ -1694,11 +1570,7 @@ impl WgpuRasterizer {
                     "liquify reconstruct snapshot",
                 ));
             }
-            if plan.uses_texture_set() {
-                self.ensure_texture_set(Self::texture_set_key(&batch.style))?;
-            } else if let BrushTip::Mask(id) = &batch.style.tip {
-                self.mask(id)?;
-            }
+            self.ensure_texture_set(Self::texture_set_key(&batch.style))?;
         }
         Ok(())
     }
@@ -1779,7 +1651,6 @@ impl WgpuRasterizer {
             self.preview_contact_tiles = None;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
-            self.preview_direct_to_composite = false;
         }
 
         self.update_target_geometry(layers, resized)?;
@@ -1816,15 +1687,6 @@ impl WgpuRasterizer {
             }
         }
         Ok(resized)
-    }
-
-    fn target_index(&self, coordinate: [u32; 2]) -> usize {
-        let columns = self.document_extent[0].div_ceil(PAGE_SIZE) as usize;
-        1 + coordinate[1] as usize * columns + coordinate[0] as usize
-    }
-
-    fn target_offset(&self, coordinate: [u32; 2]) -> u32 {
-        (self.target_index(coordinate) as u64 * self.target_stride) as u32
     }
 
     fn create_page(&self, coordinate: [u32; 2], label: &'static str) -> LayerPage {
@@ -2340,15 +2202,10 @@ impl WgpuRasterizer {
     fn prepare_uploads(
         &mut self,
         packet: FramePacket<'_>,
-        scene_required: bool,
         batch_tiles: &mut [Vec<BrushTile>],
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<usize, GpuRasterError> {
-        // The direct compositor uses final layer opacity and surface position.
-        // Exact scene captures need raw watercolor in tile coordinates even
-        // when the displayed frame used that direct path.
-        let scene_base = packet.dab_batches.len() + if scene_required { 0 } else { packet.layers.len() };
-        let background_index = scene_base + packet.layers.len();
+    ) -> Result<(), GpuRasterError> {
+        let records = packet.dab_batches.len() + packet.layers.len();
         self.dab_upload.clear();
         self.dab_upload.extend(packet.dabs.iter().copied().map(DabGpu::from));
         for batch in packet.dab_batches {
@@ -2369,7 +2226,7 @@ impl WgpuRasterizer {
                 tile.dabs = start..end;
             }
         }
-        self.ensure_upload_capacity(self.dab_upload.len(), background_index + 1)?;
+        self.ensure_upload_capacity(self.dab_upload.len(), records)?;
         if !packet.dabs.is_empty() {
             self.uploads.write(
                 encoder,
@@ -2378,7 +2235,7 @@ impl WgpuRasterizer {
                 dab_bytes(&self.dab_upload),
             )?;
         }
-        let used = self.style_stride as usize * (background_index + 1);
+        let used = self.style_stride as usize * records;
         self.style_upload.clear();
         self.style_upload.resize(used, 0);
         for index in 0..packet.dab_batches.len() {
@@ -2389,7 +2246,8 @@ impl WgpuRasterizer {
         }
         self.layer_style_records.clear();
         for (index, layer) in packet.layers.iter().enumerate() {
-            self.layer_style_records.insert(layer.id, (scene_base + index) as u32);
+            let record_index = packet.dab_batches.len() + index;
+            self.layer_style_records.insert(layer.id, record_index as u32);
             let watercolor = packet
                 .dab_batches
                 .iter()
@@ -2405,34 +2263,16 @@ impl WgpuRasterizer {
                         .find(|stored| stored.id == layer.id)
                         .and_then(|stored| stored.watercolor)
                 });
-            let mut record = StyleGpu::layer(
-                packet.document_extent,
-                if scene_required { 1.0 } else { layer.opacity },
-                watercolor,
-            );
-            record.color[0] = f32::from(scene_required);
-            let offset = (packet.dab_batches.len() + index) * self.style_stride as usize;
+            let record = StyleGpu::layer(packet.document_extent, watercolor);
+            let offset = record_index * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
-            if !scene_required {
-                record.canvas_opacity[2] = 1.;
-                record.color[0] = 1.;
-                let offset = (scene_base + index) * self.style_stride as usize;
-                self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
-                    .copy_from_slice(style_bytes(&record));
-            }
         }
-        let background = StyleGpu::plain(
-            packet.document_extent,
-            packet.view.background_rgba_linear,
-            1.0,
-        );
-        let offset = background_index * self.style_stride as usize;
-        self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
-            .copy_from_slice(style_bytes(&background));
-        self.uploads
-            .write(encoder, &self.queue, &self.style_buffer, &self.style_upload)?;
-        Ok(background_index)
+        if !self.style_upload.is_empty() {
+            self.uploads
+                .write(encoder, &self.queue, &self.style_buffer, &self.style_upload)?;
+        }
+        Ok(())
     }
 
     fn update_watercolor_layer_styles(&mut self, batches: &[DabBatch]) -> PixelRect {
@@ -2469,53 +2309,6 @@ impl WgpuRasterizer {
             }
         }
         dirty
-    }
-
-    fn watercolor_neighborhood_bind_group(
-        &self,
-        layer: &PaintLayer,
-        coordinate: [u32; 2],
-        preview: bool,
-    ) -> Option<wgpu::BindGroup> {
-        debug_assert!(!self.tiled_sources.contains_key(&layer.id));
-        let mut color_views = Vec::with_capacity(5);
-        let mut any_source = false;
-        for [offset_x, offset_y] in [[0_i32, 0_i32], [-1, 0], [1, 0], [0, -1], [0, 1]] {
-            let x = coordinate[0] as i32 + offset_x;
-            let y = coordinate[1] as i32 + offset_y;
-            let view = if x < 0 || y < 0 {
-                &self.empty_view
-            } else {
-                let neighbor = [x as u32, y as u32];
-                let preview_page = preview
-                    .then(|| {
-                        self.preview_page(neighbor)
-                    })
-                    .flatten();
-                let page = preview_page
-                    .or_else(|| layer.pages.iter().find(|page| page.coordinate == neighbor));
-                if page.is_some() {
-                    any_source = true;
-                }
-                page.map(|page| &page.active().view)
-                    .unwrap_or(&self.empty_view)
-            };
-            color_views.push(view);
-        }
-        any_source |= layer
-            .watercolor_wetness_pages
-            .iter()
-            .chain(
-                self.preview_watercolor_wetness_pages
-                    .iter()
-                    .filter(|_| preview),
-            )
-            .any(|p| {
-                p.coordinate[0].abs_diff(coordinate[0]) <= 1
-                    && p.coordinate[1].abs_diff(coordinate[1]) <= 1
-            });
-        any_source
-            .then(|| self.watercolor_binding_with_colors(layer, coordinate, preview, &color_views))
     }
 
     fn watercolor_binding_with_colors(
@@ -2638,25 +2431,12 @@ impl WgpuRasterizer {
             .direct
             .expect("destination brushes use the material encoder");
         let pipeline = self.pipelines.direct(direct);
-        let mask = if direct.is_textured() {
-            None
-        } else {
-            match &batch.style.tip {
-                BrushTip::AnalyticEllipse => None,
-                BrushTip::Mask(id) => Some(self.mask(id)?),
-            }
-        };
-        let texture_set = if direct.is_textured() {
-            let key = Self::texture_set_key(&batch.style);
-            Some(
-                self.texture_sets
-                    .iter()
-                    .find(|set| set.key == key)
-                    .expect("advanced brush resources are prepared before encoding"),
-            )
-        } else {
-            None
-        };
+        let key = Self::texture_set_key(&batch.style);
+        let texture_set = self
+            .texture_sets
+            .iter()
+            .find(|set| set.key == key)
+            .expect("advanced brush resources are prepared before encoding");
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("layer raster brush batch"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2686,18 +2466,10 @@ impl WgpuRasterizer {
             &[batch_index as u32 * self.style_stride as u32],
         );
         pass.set_bind_group(1, binding, &[target_offset]);
-        if let Some(mask) = mask {
-            pass.set_bind_group(2, &mask.bind_group, &[]);
-        } else if let Some(set) = texture_set {
-            pass.set_bind_group(2, &set.bind_group, &[]);
-        }
+        pass.set_bind_group(2, &texture_set.bind_group, &[]);
         pass.set_vertex_buffer(0, self.dab_buffer.slice(start..end));
         pass.draw(0..4, 0..batch.dab_count);
         Ok(())
-    }
-
-    fn prepare_selection(&mut self, encoder: &mut crate::submission::CommandEncoder, style: &layer_render::DabStyle) -> Result<(), GpuRasterError> {
-        self.prepare_target_selection(encoder, style, self.document_extent)
     }
 
     fn prepare_target_selection(
@@ -3629,15 +3401,6 @@ impl CanvasRenderer for WgpuRasterizer {
         let mut cpu_phases = [0.; 6];
         self.metrics.frame_cpu_ms = [0.; 6];
         self.metrics.material_cpu_ms = [0.; 5];
-        let scene_required = self.device.portable_blend() || needs_scene(packet) || {
-            self.native_edit.is_some()
-        };
-        // Staged native initialization already prepared these general layouts
-        // and pipelines. Keep them while displaying the initial paper frame.
-        let keep_scene = self.startup.is_some();
-        if !scene_required && !keep_scene {
-            self.scene = None;
-        }
         if let Some(scene) = &mut self.scene {
             scene.effect_passes = 0;
         }
@@ -3723,7 +3486,6 @@ impl CanvasRenderer for WgpuRasterizer {
             self.preview_contact_tiles = None;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
-            self.preview_direct_to_composite = false;
         }
         let mut encoder = crate::submission::CommandEncoder::new(
             &self.device,
@@ -3845,23 +3607,6 @@ impl CanvasRenderer for WgpuRasterizer {
                     .saturating_add(dab_candidate_pixels(*dab, self.target_extent(batch.layer_id)));
             }
         }
-        if !scene_required && let Some(preview_layer_id) = new_preview_layer
-            && packet
-                .layers
-                .iter()
-                .find(|layer| layer.id == preview_layer_id)
-                .is_some_and(|layer| layer.opacity != 1.0)
-        {
-            // The simple compositor draws base and overlay independently.
-            // Scene composition resolves them together before layer opacity.
-            new_preview_requires_base = true;
-        }
-        let new_preview_direct_to_composite = !scene_required
-            && new_preview_layer.is_some()
-            && !new_preview_requires_base
-            && new_preview_layer.is_some_and(|layer_id| {
-                preview_layer_is_frontmost_visible(layer_id, packet.layers)
-            });
         let destination_preview_batches = packet
             .dab_batches
             .iter()
@@ -3887,8 +3632,6 @@ impl CanvasRenderer for WgpuRasterizer {
             self.preview_pages.clear();
             self.preview_coverage_pages.clear();
             self.preview_watercolor_wetness_pages.clear();
-        } else if new_preview_direct_to_composite {
-            self.preview_pages.clear();
         } else {
             self.ensure_preview_pages(new_preview_damage, new_preview_contact_tiles.as_ref());
             self.ensure_preview_watercolor_wetness_pages(new_preview_damage, preview_is_watercolor);
@@ -3907,7 +3650,7 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(cache) = &self.live_display {
             self.uploads.write(&mut encoder, &self.queue, &cache.geometry, &cache.geometry_bytes())?;
         }
-        let background_offset = self.prepare_uploads(packet, scene_required, &mut batch_tiles, &mut encoder)?;
+        self.prepare_uploads(packet, &mut batch_tiles, &mut encoder)?;
         self.layer_masks.prepare(
             &self.device,
             &mut encoder,
@@ -4150,13 +3893,7 @@ impl CanvasRenderer for WgpuRasterizer {
 
         self.preview_damage = new_preview_damage;
         self.preview_contact_tiles = new_preview_contact_tiles;
-        // Scene composition, placement mips and exact queries consume whole
-        // local pages. Direct material prediction writes unchanged pixels too.
-        self.preview_full_pages = scene_required || !new_preview_from_persistent;
-        self.preview_completion = None;
-        if let Some(layer_id) = new_preview_layer
-            && !new_preview_direct_to_composite
-        {
+        if let Some(layer_id) = new_preview_layer {
             for page in &mut self.preview_pages {
                 page.active_secondary = false;
             }
@@ -4179,19 +3916,7 @@ impl CanvasRenderer for WgpuRasterizer {
                         .iter()
                         .find(|page| page.coordinate == coordinate)
                         .expect("preview pages are prepared before encoding");
-                    // Material sampling can reach outside the dab's scissor.
-                    // Seed complete neighbor pages for a private prediction fork.
-                    let local = if preview_is_watercolor
-                        || scene_required
-                        || new_preview_requires_base
-                        || destination_preview_batches > 0
-                    {
-                        page_rect(coordinate).page_local(coordinate)
-                    } else {
-                        copied
-                            .intersect(page_rect(coordinate))
-                            .page_local(coordinate)
-                    };
+                    let local = page_rect(coordinate).page_local(coordinate);
                     if new_preview_requires_base
                         && let Some(source) = source
                             .pages
@@ -4384,7 +4109,6 @@ impl CanvasRenderer for WgpuRasterizer {
         self.telemetry.phase_begin(2, &self.device, &self.queue, &mut encoder);
         self.preview_layer_id = new_preview_layer;
         self.preview_requires_base = new_preview_requires_base;
-        self.preview_direct_to_composite = new_preview_direct_to_composite;
 
         let mut displayed = false;
         if let Some(preview) = self.transform_preview.clone() {
@@ -4431,7 +4155,7 @@ impl CanvasRenderer for WgpuRasterizer {
         // Pointwise edits need only their touched tiles, not the rectangle
         // enclosing a fast curved stroke. Global effects and full rebuilds
         // retain complete damage propagation.
-        let local_contacts = scene_required && !original_batches.is_empty()
+        let local_contacts = !original_batches.is_empty()
             && watercolor_style_dirty.is_empty()
             && original_batches.iter().all(|b| {
                 matches!(b.kind, DabBatchKind::Persistent | DabBatchKind::Preview)
@@ -4518,8 +4242,6 @@ impl CanvasRenderer for WgpuRasterizer {
         // the document itself did not change (for example after navigation).
         if !dirty.is_empty() || animated {
             self.composite_revision = self.composite_revision.wrapping_add(1);
-        }
-        if (!dirty.is_empty() || animated) && scene_required {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             // A moved target's damage is stored in image coordinates. Round to
             // scene tiles after applying the target's document translation.
@@ -4540,273 +4262,6 @@ impl CanvasRenderer for WgpuRasterizer {
             }
             scene.compose(self, packet, dirty, &mut encoder, true, composite_tiles.as_ref())?;
             self.scene = Some(scene);
-        } else if !dirty.is_empty() {
-            struct WatercolorBinding {
-                layer_id: LayerId,
-                coordinate: [u32; 2],
-                preview: bool,
-                bind_group: wgpu::BindGroup,
-            }
-
-            // Bind groups must outlive the render pass that references them.
-            // Build only sparse pages whose 3x3 neighborhood contains layer
-            // color; this also covers the narrow outside edge halo.
-            let mut watercolor_bindings = Vec::new();
-            for layer in packet.layers.iter().filter(|layer| layer.visible) {
-                let Some(stored) = self
-                    .paint_layers
-                    .iter()
-                    .find(|stored| stored.id == layer.id)
-                else {
-                    continue;
-                };
-                let active_preview = self.preview_layer_id == Some(layer.id)
-                    && packet.dab_batches.iter().any(|batch| {
-                        batch.kind == DabBatchKind::Preview
-                            && batch.layer_id == layer.id
-                            && batch.style.execution == BrushExecution::Watercolor
-                    });
-                if stored.watercolor.is_none() && !active_preview {
-                    continue;
-                }
-                for coordinate in page_coordinates(dirty) {
-                    if let Some(bind_group) =
-                        self.watercolor_neighborhood_bind_group(stored, coordinate, false)
-                    {
-                        watercolor_bindings.push(WatercolorBinding {
-                            layer_id: layer.id,
-                            coordinate,
-                            preview: false,
-                            bind_group,
-                        });
-                    }
-                    let use_preview = self.preview_layer_id == Some(layer.id)
-                        && !self.preview_direct_to_composite
-                        && !self
-                            .preview_damage
-                            .intersect(page_rect(coordinate))
-                            .is_empty();
-                    if use_preview
-                        && let Some(bind_group) =
-                            self.watercolor_neighborhood_bind_group(stored, coordinate, true)
-                    {
-                        watercolor_bindings.push(WatercolorBinding {
-                            layer_id: layer.id,
-                            coordinate,
-                            preview: true,
-                            bind_group,
-                        });
-                    }
-                }
-            }
-
-            // Encode composition directly so the background may use its own
-            // dynamic record even when brush record zero is live.
-            let target = self
-                .composite_view
-                .as_ref()
-                .expect("composite exists")
-                .clone();
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("layer incremental composition"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_scissor_rect(dirty.min_x(), dirty.min_y(), dirty.width(), dirty.height());
-            pass.set_pipeline(&self.pipelines.background);
-            pass.set_bind_group(
-                0,
-                &self.style_bind_group,
-                &[background_offset as u32 * self.style_stride as u32],
-            );
-            pass.set_bind_group(2, &self.target_bind_group, &[0]);
-            pass.set_bind_group(1, &self.pipelines.background_empty, &[]);
-            pass.draw(0..3, 0..1);
-            let mut composited_pixels = 0_u64;
-            for (layer_index, layer) in packet
-                .layers
-                .iter()
-                .enumerate()
-                .rev()
-                .filter(|(_, layer)| layer.visible)
-            {
-                let Some(stored) = self
-                    .paint_layers
-                    .iter()
-                    .find(|stored| stored.id == layer.id)
-                else {
-                    continue;
-                };
-                let record = packet.dab_batches.len() + layer_index;
-                pass.set_bind_group(
-                    0,
-                    &self.style_bind_group,
-                    &[record as u32 * self.style_stride as u32],
-                );
-                let watercolor = stored.watercolor.is_some()
-                    || packet.dab_batches.iter().any(|batch| {
-                        batch.layer_id == layer.id
-                            && batch.style.execution == BrushExecution::Watercolor
-                    });
-                if watercolor {
-                    pass.set_pipeline(&self.pipelines.watercolor_composite);
-                    for coordinate in page_coordinates(dirty) {
-                        let page_dirty = dirty.intersect(page_rect(coordinate));
-                        if page_dirty.is_empty() {
-                            continue;
-                        }
-                        let use_preview = self.preview_layer_id == Some(layer.id)
-                            && !self.preview_direct_to_composite
-                            && !self
-                                .preview_damage
-                                .intersect(page_rect(coordinate))
-                                .is_empty();
-                        let preview_clip = if use_preview {
-                            page_dirty.intersect(self.preview_damage)
-                        } else {
-                            PixelRect::EMPTY
-                        };
-                        let persistent = watercolor_bindings.iter().find(|binding| {
-                            binding.layer_id == layer.id
-                                && binding.coordinate == coordinate
-                                && !binding.preview
-                        });
-                        let preview = watercolor_bindings.iter().find(|binding| {
-                            binding.layer_id == layer.id
-                                && binding.coordinate == coordinate
-                                && binding.preview
-                        });
-                        let mut draws = [(None, PixelRect::EMPTY); 5];
-                        if use_preview && self.preview_requires_base {
-                            for (slot, region) in
-                                page_dirty.subtract(preview_clip).into_iter().enumerate()
-                            {
-                                draws[slot] = (persistent, region);
-                            }
-                            draws[4] = (preview, preview_clip);
-                        } else {
-                            draws[0] = (persistent, page_dirty);
-                            draws[1] = (preview, preview_clip);
-                        }
-                        for (binding, clipped) in draws
-                            .into_iter()
-                            .filter_map(|(binding, clipped)| {
-                                binding.map(|binding| (binding, clipped))
-                            })
-                            .filter(|(_, clipped)| !clipped.is_empty())
-                        {
-                            pass.set_scissor_rect(
-                                clipped.min_x(),
-                                clipped.min_y(),
-                                clipped.width(),
-                                clipped.height(),
-                            );
-                            pass.set_bind_group(
-                                1,
-                                &self.target_bind_group,
-                                &[self.target_offset(coordinate)],
-                            );
-                            pass.set_bind_group(2, &binding.bind_group, &[]);
-                            pass.draw(0..3, 0..1);
-                            composited_pixels = composited_pixels.saturating_add(clipped.area());
-                        }
-                    }
-                    continue;
-                }
-
-                pass.set_pipeline(&self.pipelines.composite);
-                for coordinate in page_coordinates(dirty) {
-                    let use_preview = self.preview_layer_id == Some(layer.id)
-                        && !self.preview_direct_to_composite
-                        && !self
-                            .preview_damage
-                            .intersect(page_rect(coordinate))
-                            .is_empty();
-                    let preview = if use_preview {
-                        self.preview_page(coordinate)
-                    } else {
-                        None
-                    };
-                    let persistent = stored
-                        .pages
-                        .iter()
-                        .find(|page| page.coordinate == coordinate);
-                    let page_dirty = dirty.intersect(page_rect(coordinate));
-                    if page_dirty.is_empty() {
-                        continue;
-                    }
-                    let preview_clip = if use_preview {
-                        page_dirty.intersect(self.preview_damage)
-                    } else {
-                        PixelRect::EMPTY
-                    };
-                    let mut draws = [(None, PixelRect::EMPTY); 5];
-                    if use_preview && self.preview_requires_base {
-                        for (slot, region) in
-                            page_dirty.subtract(preview_clip).into_iter().enumerate()
-                        {
-                            draws[slot] = (persistent, region);
-                        }
-                        draws[4] = (preview, preview_clip);
-                    } else {
-                        draws[0] = (persistent, page_dirty);
-                        draws[1] = (preview, preview_clip);
-                    }
-                    for (page, clipped) in draws
-                        .into_iter()
-                        .filter_map(|(page, clipped)| page.map(|page| (page, clipped)))
-                        .filter(|(_, clipped)| !clipped.is_empty())
-                    {
-                        pass.set_scissor_rect(
-                            clipped.min_x(),
-                            clipped.min_y(),
-                            clipped.width(),
-                            clipped.height(),
-                        );
-                        pass.set_bind_group(1, &page.active().texture_bind_group, &[]);
-                        pass.set_bind_group(
-                            2,
-                            &self.target_bind_group,
-                            &[self.target_offset(coordinate)],
-                        );
-                        pass.draw(0..3, 0..1);
-                        composited_pixels = composited_pixels.saturating_add(clipped.area());
-                    }
-                }
-            }
-            drop(pass);
-            if self.preview_direct_to_composite {
-                for (index, batch) in packet
-                    .dab_batches
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, batch)| batch.kind == DabBatchKind::Preview)
-                {
-                    let batch_dirty = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
-                    if batch.dab_count != 0 && !batch_dirty.is_empty() {
-                        self.prepare_selection(&mut encoder, &batch.style)?;
-                        self.encode_batch(&mut encoder, index, batch, &target, batch_dirty, 0)?;
-                    }
-                }
-            }
-            self.metrics.composited_pixels = self
-                .metrics
-                .composited_pixels
-                .saturating_add(dirty.area().saturating_add(composited_pixels));
-        }
-
-        if !dirty.is_empty() || animated {
             let pointwise_scene = packet.layers.iter().all(|layer| {
                 matches!(layer.kind, LayerKind::Paint | LayerKind::Background)
                     && layer.effect.is_none()
@@ -4829,7 +4284,6 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(commit) = native_commit {
             self.finish_native_rasters(commit, submission)?;
         }
-        self.commit_rasters(packet.layers)?;
         if let Some(cache) = &mut self.live_display { cache.finish_frame(); }
         if (animated || packet.reset_layers || !packet.dabs.is_empty() || !packet.restore_rasters.is_empty()
             || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear)))
@@ -4966,8 +4420,8 @@ impl StyleGpu {
         }
     }
 
-    fn layer(extent: [u32; 2], opacity: f32, watercolor: Option<WatercolorLayerStyle>) -> Self {
-        let mut result = Self::plain(extent, [0.0; 4], opacity);
+    fn layer(extent: [u32; 2], watercolor: Option<WatercolorLayerStyle>) -> Self {
+        let mut result = Self::plain(extent, [0.0; 4], 1.0);
         if let Some(watercolor) = watercolor {
             result.edges = [
                 watercolor.wet_edge,
@@ -5081,13 +4535,6 @@ impl StyleGpu {
         result.color[3] = f32::from(style.alpha_locked);
         result
     }
-}
-
-fn preview_layer_is_frontmost_visible(layer_id: LayerId, layers: &[Layer]) -> bool {
-    let Some(index) = layers.iter().position(|layer| layer.id == layer_id) else {
-        return false;
-    };
-    layers[index].visible && layers[..index].iter().all(|layer| !layer.visible)
 }
 
 fn blend_mode_code(mode: BrushBlendMode) -> f32 {
@@ -5722,24 +5169,6 @@ fn compose_wgsl(parts: &[&str]) -> Cow<'static, str> {
 }
 
 fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pipelines {
-    let brush = {
-        let device = device.clone();
-        Deferred::new(move || {
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("layer dry brush shader"),
-                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                    include_str!("analytic_coverage.wgsl"),
-                    include_str!("brush.wgsl"),
-                    include_str!("brush_geometry.wgsl"),
-                    include_str!("selection_clip.wgsl"),
-                ])),
-            })
-        })
-    };
-    let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("layer composite shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("composite.wgsl").into()),
-    });
     let advanced_brush = {
         let device = device.clone();
         Deferred::new(move || {
@@ -5756,12 +5185,10 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         })
     };
     let material_shader = dry_material::shader(device, false);
-    let dry_material = (device.working_format() == wgpu::TextureFormat::Rgba32Float)
-        .then(|| dry_material::Pipelines::new(device, &layouts, &material_shader, false));
+    let dry_material = dry_material::Pipelines::new(device, &layouts, &material_shader, false);
     // Native hosts request this feature only after checking Float32 read/write
     // storage support. Each dry invocation owns exactly one destination texel.
-    let dry_in_place = (dry_material.is_some()
-        && device.features().contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES))
+    let dry_in_place = device.features().contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
         .then(|| dry_material::Pipelines::new(device, &layouts, &dry_material::shader(device, true), true));
     let stroke_edge_shader = {
         let device = device.clone();
@@ -5807,20 +5234,6 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             })
         })
     };
-    let analytic_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("layer analytic brush pipeline layout"),
-        bind_group_layouts: &[Some(layouts.style), Some(layouts.target)],
-        immediate_size: 0,
-    });
-    let mask_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("layer mask brush pipeline layout"),
-        bind_group_layouts: &[
-            Some(layouts.style),
-            Some(layouts.target),
-            Some(layouts.texture),
-        ],
-        immediate_size: 0,
-    });
     let advanced_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("layer textured brush pipeline layout"),
         bind_group_layouts: &[
@@ -5849,15 +5262,6 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         ],
         immediate_size: 0,
     });
-    let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("layer composite pipeline layout"),
-        bind_group_layouts: &[
-            Some(layouts.style),
-            Some(layouts.texture),
-            Some(layouts.target),
-        ],
-        immediate_size: 0,
-    });
     let watercolor_pipeline_layout =
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("layer live watercolor composite pipeline layout"),
@@ -5879,26 +5283,6 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             ],
             immediate_size: 0,
         });
-    // Older WebGPU implementations reject null slots in pipeline layouts.
-    // Keep the shared shader's group numbering, with an explicit empty group.
-    let empty_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("layer background empty layout"),
-        entries: &[],
-    });
-    let background_empty = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("layer background empty binding"),
-        layout: &empty_layout,
-        entries: &[],
-    });
-    let background_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("layer background pipeline layout"),
-        bind_group_layouts: &[
-            Some(layouts.style),
-            Some(&empty_layout),
-            Some(layouts.target),
-        ],
-        immediate_size: 0,
-    });
     let export_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("layer export pipeline layout"),
         bind_group_layouts: &[Some(layouts.texture)],
@@ -5929,53 +5313,13 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         },
     };
     let direct = [
-        (
-            &analytic_layout,
-            &brush,
-            "analytic_fragment",
-            paint_blend,
-            "layer analytic paint",
-        ),
-        (
-            &analytic_layout,
-            &brush,
-            "analytic_fragment",
-            erase_blend,
-            "layer analytic erase",
-        ),
-        (
-            &mask_layout,
-            &brush,
-            "mask_fragment",
-            paint_blend,
-            "layer mask paint",
-        ),
-        (
-            &mask_layout,
-            &brush,
-            "mask_fragment",
-            erase_blend,
-            "layer mask erase",
-        ),
-        (
-            &advanced_layout,
-            &advanced_brush,
-            "fragment_main",
-            paint_blend,
-            "layer textured paint",
-        ),
-        (
-            &advanced_layout,
-            &advanced_brush,
-            "fragment_main",
-            erase_blend,
-            "layer textured erase",
-        ),
+        (paint_blend, "layer textured paint"),
+        (erase_blend, "layer textured erase"),
     ]
-    .map(|(layout, shader, entry, blend, label)| {
-        let (device, layout, shader) = (device.clone(), layout.clone(), shader.clone());
+    .map(|(blend, label)| {
+        let (device, layout, shader) = (device.clone(), advanced_layout.clone(), advanced_brush.clone());
         Deferred::pipeline(move |mode| {
-            brush_pipeline_recipe(mode, &device, &layout, &shader, entry, blend, label)
+            brush_pipeline_recipe(mode, &device, &layout, &shader, "fragment_main", blend, label)
         })
     });
     let max_blend = wgpu::BlendState {
@@ -6159,24 +5503,6 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             )
         })
     };
-    let background = fullscreen_pipeline(
-        device,
-        &background_layout,
-        &composite_shader,
-        "background_fragment",
-        None,
-        device.working_format(),
-        "layer background",
-    );
-    let composite = fullscreen_pipeline(
-        device,
-        &composite_layout,
-        &composite_shader,
-        "layer_fragment",
-        Some(paint_blend),
-        device.working_format(),
-        "layer composition",
-    );
     let watercolor_composite = {
         let (device, layout, shader) = (
             device.clone(),
@@ -6221,9 +5547,6 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         watercolor_transport,
         reservoir,
         stroke_edge,
-        background,
-        background_empty,
-        composite,
         watercolor_composite,
         export,
     }
@@ -6721,7 +6044,7 @@ mod tests {
 
     #[test]
     fn thumbnails_frame_nontransparent_pixels_and_show_paper_and_checkerboard() {
-        let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).expect("physical GPU required");
         let mut paper = Layer::paint(LayerId(2), "Paper");
         paper.kind = LayerKind::Background;
         let paint = Layer::paint(LayerId(1), "Small mark");
@@ -6826,7 +6149,7 @@ mod tests {
 
     #[test]
     fn empty_4k_layers_allocate_no_layer_pixels() {
-        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).expect("physical GPU is required");
         renderer.resize_surface(4096, 4096).unwrap();
         let layers = (1..=128)
             .map(|id| Layer::paint(LayerId(id), format!("Layer {id}")))
@@ -6854,7 +6177,6 @@ mod tests {
         assert_eq!(metrics.paint_pages, 0);
         assert_eq!(metrics.paint_storage_bytes, 0);
         assert_eq!(metrics.preview_storage_bytes, 0);
-        assert_eq!(metrics.composite_storage_bytes, 64 * 1024 * 1024);
     }
 
     #[test]

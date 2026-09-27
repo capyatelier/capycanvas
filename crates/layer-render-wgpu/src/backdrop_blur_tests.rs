@@ -28,7 +28,7 @@ fn view(size: [u32; 2], x: f32) -> ViewState {
 }
 
 fn document(size: [u32; 2]) -> WgpuRasterizer {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     r.submit(FramePacket {
         view: view(size, 0.),
         document_extent: [size[0] / 2, size[1]],
@@ -117,7 +117,7 @@ fn camera_motion_moves_the_cached_blur_between_refreshes() {
 
 #[test]
 fn region_list_changes_repaint_only_added_and_removed_glass() {
-    let r = WgpuRasterizer::new_headless().unwrap();
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut blur = BackdropBlur::new(r.device(), FORMAT);
     let frame = |blur: &mut BackdropBlur| {
         let mut encoder = r.device().create_command_encoder(&Default::default());
@@ -280,7 +280,7 @@ fn layout(scale: f32, extent: [u32; 2]) -> Vec<BackdropRegion> {
 #[test]
 #[ignore = "hardware GPU timing: cargo test --release -p layer-render-wgpu backdrop_blur_cost -- --ignored --nocapture"]
 fn backdrop_blur_cost() {
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     eprintln!("adapter: {:?}", r.adapter().get_info());
     let iterations = std::env::var("LAYER_BLUR_BENCH_ITERATIONS").map_or(200, |v| v.parse().unwrap());
     for (scale, extent) in [(1., [1600, 1000]), (2., [3200, 2000]), (1., [3840, 2160]), (2., [5120, 2880])] {

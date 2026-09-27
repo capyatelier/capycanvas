@@ -22,24 +22,20 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
     o.uv = uv; return o;
 }
 fn scene_sample(image:texture_2d<f32>,uv:vec2<f32>)->vec4<f32> {
-    if WORKING_EXTENDED {return working_sample_float(image,uv*vec2<f32>(textureDimensions(image)));}
-    return textureSampleLevel(image,sampling,uv,0.);
+    return working_sample_float(image,uv*vec2<f32>(textureDimensions(image)));
 }
 // A one-to-one copy has exact half-pixel coordinates. Reconstructing them
 // from interpolated UVs introduces a crop-size-dependent bilinear footprint.
 fn scene_read(image:texture_2d<f32>,v:Vertex)->vec4<f32> {
-    if WORKING_EXTENDED {
-        let local=v.position.xy-settings.rect.xy;
-        let dimensions=vec2<f32>(textureDimensions(image));
-        if all(dimensions==settings.rect.zw) {
-            if all(fract(settings.rect.xy)==vec2<f32>(0.)) {
-                return textureLoad(image,clamp(vec2<i32>(floor(local)),vec2<i32>(0),vec2<i32>(dimensions)-1),0);
-            }
-            return working_sample_float(image,local);
+    let local=v.position.xy-settings.rect.xy;
+    let dimensions=vec2<f32>(textureDimensions(image));
+    if all(dimensions==settings.rect.zw) {
+        if all(fract(settings.rect.xy)==vec2<f32>(0.)) {
+            return textureLoad(image,clamp(vec2<i32>(floor(local)),vec2<i32>(0),vec2<i32>(dimensions)-1),0);
         }
-        return working_sample_float(image,local*(dimensions/settings.rect.zw));
+        return working_sample_float(image,local);
     }
-    return textureSampleLevel(image,sampling,v.uv,0.);
+    return working_sample_float(image,local*(dimensions/settings.rect.zw));
 }
 fn scene_image_texel(p:vec2<i32>)->vec4<f32> {
     if any(p<vec2(0)) || any(p>=vec2<i32>(textureDimensions(front))) {return vec4(0.);}

@@ -70,7 +70,7 @@ impl FilterPreviews {
         let mask = create_target(
             &r.device,
             [info.width, info.height],
-            SRGB8_FORMAT,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
             "G-Pen preview silhouette",
         );
         r.queue.write_texture(

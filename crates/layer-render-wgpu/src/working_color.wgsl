@@ -1,35 +1,23 @@
 // Shared color arithmetic for compositing and materials. Scalar wetness/slop
 // thresholds are separate from the question of whether pigment has coverage.
 fn working_unassociate(c:vec4<f32>)->vec3<f32> {
-    if WORKING_EXTENDED {
-        if c.a>0. {return c.rgb/c.a;}
-        return vec3<f32>(0.);
-    }
-    return c.rgb/max(c.a,.000001);
+    if c.a>0. {return c.rgb/c.a;}
+    return vec3<f32>(0.);
 }
 fn working_has_color(alpha:f32)->bool {
-    if WORKING_EXTENDED {return alpha>0.;}
-    return alpha>.000001;
+    return alpha>0.;
 }
 fn working_ratio(value:f32,denominator:f32)->f32 {
-    if WORKING_EXTENDED {
-        if denominator>0. {return value/denominator;}
-        return 0.;
-    }
-    return value/max(denominator,.000001);
+    if denominator>0. {return value/denominator;}
+    return 0.;
 }
 fn working_clamp(c:vec4<f32>)->vec4<f32> {
-    if WORKING_EXTENDED {
-        if c.a<=0. {return vec4<f32>(0.);}
-        return vec4<f32>(c.rgb,clamp(c.a,0.,1.));
-    }
-    return clamp(c,vec4<f32>(0.),vec4<f32>(1.));
+    if c.a<=0. {return vec4<f32>(0.);}
+    return vec4<f32>(c.rgb,clamp(c.a,0.,1.));
 }
 fn working_mix(a:vec3<f32>,b:vec3<f32>,amount:f32)->vec3<f32> {
-    if WORKING_EXTENDED {
-        if amount==0. {return a;}
-        if amount==1. {return b;}
-    }
+    if amount==0. {return a;}
+    if amount==1. {return b;}
     return mix(a,b,amount);
 }
 // Texture coordinates are texel centers; callers retain their edge policy.
@@ -73,6 +61,5 @@ fn working_from_oklab(color: vec3<f32>) -> vec3<f32> {
        -1.2684380046 * lms.x + 2.6097574011 * lms.y - 0.3413193965 * lms.z,
        -0.0041960863 * lms.x - 0.7034186147 * lms.y + 1.7076147010 * lms.z,
     );
-    if WORKING_EXTENDED {return working_from_srgb(srgb);}
-    return max(srgb, vec3<f32>(0.));
+    return working_from_srgb(srgb);
 }

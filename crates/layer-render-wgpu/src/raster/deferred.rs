@@ -48,30 +48,6 @@ impl Drop for RasterPresentation {
         }
     }
 }
-pub(super) enum CaptureBatch {
-    Mapped(Vec<RasterCapture>),
-    Native(NativeCapture),
-}
-impl CaptureBatch {
-    pub fn storage_bytes(&self) -> u64 {
-        match self {
-            Self::Mapped(captures) => captures.iter().map(|c| c.staging_bytes).sum(),
-            Self::Native(capture) => capture.storage_bytes(),
-        }
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn finish(self) -> Result<(), String> {
-        match self {
-            Self::Mapped(captures) => {
-                for capture in captures {
-                    capture.finish()?;
-                }
-                Ok(())
-            }
-            Self::Native(capture) => capture.finish(),
-        }
-    }
-}
 pub(super) struct NativeOutput {
     pub resource: pool::Resource,
     pub tile: RasterTile,
@@ -95,11 +71,11 @@ pub(super) struct NativeCapture {
     pub queue: wgpu::Queue,
 }
 impl NativeCapture {
-    fn storage_bytes(&self) -> u64 {
+    pub fn storage_bytes(&self) -> u64 {
         STATUS_BYTES + self.outputs.iter().map(|o| o.resource.bytes()).sum::<u64>()
     }
     #[cfg(not(target_arch = "wasm32"))]
-    fn finish(mut self) -> Result<(), String> {
+    pub fn finish(mut self) -> Result<(), String> {
         let mut validated = false;
         while !self.outputs.is_empty() {
             self.pool.priority.wait()?;
@@ -143,9 +119,9 @@ impl NativeCapture {
             // Recheck after preparation. A frame can race this check, but only
             // this one bounded transfer can then precede it on the GPU queue.
             self.pool.priority.wait()?;
-            let submission = self.queue.submit([commands]);
+            self.queue.submit([commands]);
             capture
-                .submitted_device(&self.device, submission)
+                .submitted_device(&self.device)
                 .finish()?;
             validated = true;
             // Never recycle a writable output before its GPU readback completes.
@@ -187,20 +163,8 @@ impl PresentationPriority {
     }
 }
 #[cfg(target_arch = "wasm32")]
-impl CaptureBatch {
-    pub(super) async fn finish_browser(self, encoder: &browser::BrowserRasterEncoder) -> Result<(), String> {
-        match self {
-            Self::Mapped(captures) => {
-                for capture in captures { capture.finish_browser(encoder).await?; }
-                Ok(())
-            }
-            Self::Native(capture) => capture.finish_browser(encoder).await,
-        }
-    }
-}
-#[cfg(target_arch = "wasm32")]
 impl NativeCapture {
-    async fn finish_browser(mut self, worker: &browser::BrowserRasterEncoder) -> Result<(), String> {
+    pub(super) async fn finish_browser(mut self, worker: &browser::BrowserRasterEncoder) -> Result<(), String> {
         let mut validated = false;
         while !self.outputs.is_empty() {
             self.pool.priority.wait_browser().await;
@@ -224,8 +188,8 @@ impl NativeCapture {
             self.pool.transfer.fetch_add(capture.staging_bytes, Ordering::Relaxed);
             let _transfer = Transfer(self.pool.clone(), capture.staging_bytes);
             self.pool.priority.wait_browser().await;
-            let submission = self.queue.submit([commands.finish()]);
-            capture.submitted_device(&self.device, submission).finish_browser(worker).await?;
+            self.queue.submit([commands.finish()]);
+            capture.submitted_device(&self.device).finish_browser(worker).await?;
             validated = true;
             for output in self.outputs.drain(..count) { self.pool.put_resource(output.resource); }
         }

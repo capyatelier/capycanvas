@@ -50,7 +50,7 @@ fn tiny_portrait_photo_thumbnail_has_color_and_checkered_letterbox() {
     let source = photo([24, 48]);
     let mut layer = Layer::paint(LayerId(1), "tiny photo");
     layer.source = Some(source);
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     r.ensure_document([24, 48], &[layer]).unwrap();
     let bytes = thumbnail(&mut r, LayerId(1));
     assert!(bytes.chunks_exact(4).all(|p| p[3] == 255));

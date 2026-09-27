@@ -181,7 +181,7 @@ fn native_writeback_codes_boundaries_and_partial_tiles() { writeback_corpus(fals
 fn native_in_place_writeback_codes_boundaries_and_partial_tiles() { writeback_corpus(true); }
 
 fn writeback_corpus(in_place: bool) {
-    let r = if in_place { WgpuRasterizer::new_native_headless(Default::default()).unwrap() } else { WgpuRasterizer::new_headless().unwrap() };
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let encoder = if in_place { NativeTileEncoder::validated_in_place(&r.device) } else { NativeTileEncoder::new(&r.device) };
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
@@ -336,7 +336,7 @@ fn writeback_corpus(in_place: bool) {
 fn native_restore_writeback_capture_round_trip_preserves_committed_codes() {
     use crate::raster::TileCapture;
     use layer_core::raster::RasterTile;
-    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let encoder = NativeTileEncoder::with_device(&r.device);
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r, wgpu::TextureFormat::Rgba32Float);

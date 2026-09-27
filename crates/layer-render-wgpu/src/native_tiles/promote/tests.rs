@@ -39,7 +39,7 @@ fn floats(values: impl Iterator<Item = f32>) -> Vec<u8> {
 
 #[test]
 fn promotion_preserves_float32_bits_and_pixels_outside_each_region() {
-    let r = WgpuRasterizer::new_headless().unwrap();
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let promoter = NativePromoter::new(&r.device);
     let status = NativeEncodeStatus::new(&r.device);
     for format in [

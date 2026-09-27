@@ -26,7 +26,6 @@ impl Drop for CompileTrace<'_> {
 #[derive(Clone)]
 pub(crate) struct PipelineDevice {
     device: wgpu::Device,
-    working_format: wgpu::TextureFormat,
     working_space: layer_core::color::RgbSpace,
     hdr: bool,
     pub source_samples: std::sync::Arc<layer_core::raster::DecodedTileCache>,
@@ -41,7 +40,6 @@ impl From<wgpu::Device> for PipelineDevice {
             device,
             tone_pipelines: Default::default(),
             blend_pipelines: Default::default(),
-            working_format: super::SRGB8_FORMAT,
             working_space: Default::default(),
             hdr: false,
             source_samples: std::sync::Arc::new(layer_core::raster::DecodedTileCache::new(
@@ -62,7 +60,7 @@ impl PipelineDevice {
     /// A working attachment choice, independent of native integer backing and
     /// document primaries. All deferred recipes retain this same choice.
     pub fn working_format(&self) -> wgpu::TextureFormat {
-        self.working_format
+        wgpu::TextureFormat::Rgba32Float
     }
     pub fn hdr(&self) -> bool { self.hdr }
     pub fn with_hdr(mut self, hdr: bool) -> Self { self.hdr = hdr; self }
@@ -74,41 +72,21 @@ impl PipelineDevice {
         self
     }
     pub fn portable_blend(&self) -> bool {
-        self.working_format == wgpu::TextureFormat::Rgba32Float
-            && !self.features().contains(wgpu::Features::FLOAT32_BLENDABLE)
+        !self.features().contains(wgpu::Features::FLOAT32_BLENDABLE)
     }
     pub fn attachment_blend(&self, format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>) -> Option<wgpu::BlendState> {
         if matches!(format, wgpu::TextureFormat::Rgba32Float | wgpu::TextureFormat::Rg32Float | wgpu::TextureFormat::R32Float)
             && !self.features().contains(wgpu::Features::FLOAT32_BLENDABLE) { None } else { blend }
     }
     pub fn scalar_format(&self) -> wgpu::TextureFormat {
-        if self.working_format == wgpu::TextureFormat::Rgba32Float {
-            wgpu::TextureFormat::R32Float
-        } else {
-            wgpu::TextureFormat::R8Unorm
-        }
+        wgpu::TextureFormat::R32Float
     }
-    pub fn with_working_format(
-        mut self,
-        format: wgpu::TextureFormat,
-    ) -> Result<Self, super::GpuRasterError> {
-        let required = match format {
-            wgpu::TextureFormat::Rgba8UnormSrgb => wgpu::Features::empty(),
-            wgpu::TextureFormat::Rgba32Float => {
-                wgpu::Features::FLOAT32_FILTERABLE
-            }
-            _ => {
-                return Err(super::GpuRasterError::Color(
-                    "Unsupported working texture format".into(),
-                ));
-            }
-        };
-        if !self.features().contains(required) {
+    pub fn require_float32(self) -> Result<Self, super::GpuRasterError> {
+        if !self.features().contains(wgpu::Features::FLOAT32_FILTERABLE) {
             return Err(super::GpuRasterError::Color(
                 "This device cannot sample Float32 working tiles".into(),
             ));
         }
-        self.working_format = format;
         Ok(self)
     }
     #[cfg(not(target_arch = "wasm32"))]

@@ -671,59 +671,47 @@ fn placed_photo_edits_and_restores_tiles_outside_canvas_bounds() {
         builder.push_row(&vec![255; size[0] as usize * 4]).unwrap();
     }
     let source = Arc::new(builder.finish().unwrap());
-    for native in [false, true] {
-        let mut r = if native {
-            WgpuRasterizer::new_native_headless(Default::default())
-        } else {
-            WgpuRasterizer::new_headless()
-        }
-        .unwrap();
-        let mut layer = Layer::paint(LayerId(1), "placed editable photo");
-        layer.source = Some(source.clone());
-        layer.properties.placement = Affine::translation(Point { x: -560., y: -440. });
-        submit(&mut r, &[layer.clone()], &[], &[], true);
-        let before = layer.raster.clone();
-        layer.raster = RasterRevision::pending();
-        let mut ink = dab([1., 0., 0., 1.]);
-        ink.center = Point { x: 624., y: 504. };
-        ink.radii = [24.; 2];
-        let mut stroke = batch(1);
-        stroke.damage = ink.bounds();
-        stroke.style.selection = Some(Arc::new(
-            Selection::polygon(vec![
-                Point { x: 610., y: 490. },
-                Point { x: 650., y: 490. },
-                Point { x: 650., y: 540. },
-                Point { x: 610., y: 540. },
-            ])
-            .unwrap(),
-        ));
-        submit(&mut r, &[layer.clone()], &[ink], &[stroke], false);
-        let data = layer.raster.wait_data().unwrap();
-        assert!(data.tiles.keys().any(|key| key.coordinate == [2, 1]));
-        assert_eq!(pixel(&mut r, 64, 64), [255, 0, 0, 255], "native={native}");
-        assert_eq!(
-            pixel(&mut r, 45, 64),
-            [255; 4],
-            "selection clips in source coordinates"
-        );
-        let after = layer.raster.clone();
-        layer.raster = before;
-        submit(&mut r, &[layer.clone()], &[], &[], false);
-        assert_eq!(pixel(&mut r, 64, 64), [255; 4]);
-        layer.raster = after;
-        submit(&mut r, &[layer.clone()], &[], &[], false);
-        assert_eq!(pixel(&mut r, 64, 64), [255, 0, 0, 255]);
-        // Recreate the renderer to exercise cold restoration, not just resident history.
-        let mut reopened = if native {
-            WgpuRasterizer::new_native_headless(Default::default())
-        } else {
-            WgpuRasterizer::new_headless()
-        }
-        .unwrap();
-        submit(&mut reopened, &[layer], &[], &[], true);
-        assert_eq!(pixel(&mut reopened, 64, 64), [255, 0, 0, 255]);
-    }
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut layer = Layer::paint(LayerId(1), "placed editable photo");
+    layer.source = Some(source.clone());
+    layer.properties.placement = Affine::translation(Point { x: -560., y: -440. });
+    submit(&mut r, &[layer.clone()], &[], &[], true);
+    let before = layer.raster.clone();
+    layer.raster = RasterRevision::pending();
+    let mut ink = dab([1., 0., 0., 1.]);
+    ink.center = Point { x: 624., y: 504. };
+    ink.radii = [24.; 2];
+    let mut stroke = batch(1);
+    stroke.damage = ink.bounds();
+    stroke.style.selection = Some(Arc::new(
+        Selection::polygon(vec![
+            Point { x: 610., y: 490. },
+            Point { x: 650., y: 490. },
+            Point { x: 650., y: 540. },
+            Point { x: 610., y: 540. },
+        ])
+        .unwrap(),
+    ));
+    submit(&mut r, &[layer.clone()], &[ink], &[stroke], false);
+    let data = layer.raster.wait_data().unwrap();
+    assert!(data.tiles.keys().any(|key| key.coordinate == [2, 1]));
+    assert_eq!(pixel(&mut r, 64, 64), [255, 0, 0, 255]);
+    assert_eq!(
+        pixel(&mut r, 45, 64),
+        [255; 4],
+        "selection clips in source coordinates"
+    );
+    let after = layer.raster.clone();
+    layer.raster = before;
+    submit(&mut r, &[layer.clone()], &[], &[], false);
+    assert_eq!(pixel(&mut r, 64, 64), [255; 4]);
+    layer.raster = after;
+    submit(&mut r, &[layer.clone()], &[], &[], false);
+    assert_eq!(pixel(&mut r, 64, 64), [255, 0, 0, 255]);
+    // Recreate the renderer to exercise cold restoration, not just resident history.
+    let mut reopened = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    submit(&mut reopened, &[layer], &[], &[], true);
+    assert_eq!(pixel(&mut reopened, 64, 64), [255, 0, 0, 255]);
 }
 
 #[test]
@@ -855,87 +843,80 @@ fn retained_placement_samples_full_source_across_tiles_without_creating_raster()
     }
     let source = Arc::new(builder.finish().unwrap());
     let digests: Vec<_> = source.tiles.values().map(|t| t.digest).collect();
-    for mode in [0, 1, 2] {
-        let mut r = match mode {
-            0 => WgpuRasterizer::new_headless(),
-            1 => WgpuRasterizer::new_float32(),
-            _ => WgpuRasterizer::new_native_headless(Default::default()),
-        }
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut layer = Layer::paint(LayerId(1), "retained placement");
+    layer.source = Some(source.clone());
+    for (n, affine) in [
+        Affine([0.125, 0., 0., 0.125, 30., 10.]),
+        Affine::around(
+            Point::default(),
+            [0.23, 0.19],
+            0.3,
+            Point { x: 60., y: -20. },
+        ),
+        Affine([-0.2, 0., 0., 0.2, 350., 15.]),
+        Affine([1., 0., 0., 1., -1050., -700.]),
+        Affine::IDENTITY,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        layer.properties.placement = affine;
+        r.submit(FramePacket {
+            view: ViewState {
+                width_px: canvas[0],
+                height_px: canvas[1],
+                ..view()
+            },
+            document_extent: canvas,
+            layers: std::slice::from_ref(&layer),
+            dabs: &[],
+            dab_batches: &[],
+            restore_rasters: &[],
+            reset_layers: n == 0,
+            composite_all: true,
+            time_seconds: 0.,
+        })
         .unwrap();
-        let mut layer = Layer::paint(LayerId(1), "retained placement");
-        layer.source = Some(source.clone());
-        for (n, affine) in [
-            Affine([0.125, 0., 0., 0.125, 30., 10.]),
-            Affine::around(
-                Point::default(),
-                [0.23, 0.19],
-                0.3,
-                Point { x: 60., y: -20. },
-            ),
-            Affine([-0.2, 0., 0., 0.2, 350., 15.]),
-            Affine([1., 0., 0., 1., -1050., -700.]),
-            Affine::IDENTITY,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            layer.properties.placement = affine;
-            r.submit(FramePacket {
-                view: ViewState {
-                    width_px: canvas[0],
-                    height_px: canvas[1],
-                    ..view()
-                },
-                document_extent: canvas,
-                layers: std::slice::from_ref(&layer),
-                dabs: &[],
-                dab_batches: &[],
-                restore_rasters: &[],
-                reset_layers: n == 0,
-                composite_all: true,
-                time_seconds: 0.,
-            })
-            .unwrap();
-            let pixels = r.readback_srgb_rgba8().unwrap();
-            let inverse = affine.inverse().unwrap();
-            let [a, b, c, d, _, _] = inverse.0;
-            // A minified pixel averages a grid of bilinear taps over its area.
-            let count = [a.hypot(b), c.hypot(d)].map(|reach| ((reach + 0.5).floor() as u32).clamp(1, 4));
-            let bilinear = |p: Point| {
-                let (sx, sy) = (p.x - 0.5, p.y - 0.5);
-                let (ix, iy) = (sx.floor() as i32, sy.floor() as i32);
-                let (tx, ty) = (sx - sx.floor(), sy - sy.floor());
-                (alpha(ix, iy) * (1. - tx) + alpha(ix + 1, iy) * tx) * (1. - ty)
-                    + (alpha(ix, iy + 1) * (1. - tx) + alpha(ix + 1, iy + 1) * tx) * ty
-            };
-            for y in 0..canvas[1] {
-                for x in 0..canvas[0] {
-                    let mut expected = 0.;
-                    for j in 0..count[1] {
-                        for i in 0..count[0] {
-                            expected += bilinear(inverse.map(Point {
-                                x: x as f32 + (i as f32 + 0.5) / count[0] as f32,
-                                y: y as f32 + (j as f32 + 0.5) / count[1] as f32,
-                            }));
-                        }
+        let pixels = r.readback_srgb_rgba8().unwrap();
+        let inverse = affine.inverse().unwrap();
+        let [a, b, c, d, _, _] = inverse.0;
+        // A minified pixel averages a grid of bilinear taps over its area.
+        let count = [a.hypot(b), c.hypot(d)].map(|reach| ((reach + 0.5).floor() as u32).clamp(1, 4));
+        let bilinear = |p: Point| {
+            let (sx, sy) = (p.x - 0.5, p.y - 0.5);
+            let (ix, iy) = (sx.floor() as i32, sy.floor() as i32);
+            let (tx, ty) = (sx - sx.floor(), sy - sy.floor());
+            (alpha(ix, iy) * (1. - tx) + alpha(ix + 1, iy) * tx) * (1. - ty)
+                + (alpha(ix, iy + 1) * (1. - tx) + alpha(ix + 1, iy + 1) * tx) * ty
+        };
+        for y in 0..canvas[1] {
+            for x in 0..canvas[0] {
+                let mut expected = 0.;
+                for j in 0..count[1] {
+                    for i in 0..count[0] {
+                        expected += bilinear(inverse.map(Point {
+                            x: x as f32 + (i as f32 + 0.5) / count[0] as f32,
+                            y: y as f32 + (j as f32 + 0.5) / count[1] as f32,
+                        }));
                     }
-                    let expected = expected / (count[0] * count[1]) as f32 * 255.;
-                    let actual = pixels[((y * canvas[0] + x) * 4 + 3) as usize] as f32;
-                    assert!(
-                        (actual - expected).abs() <= 1.1,
-                        "mode={mode} pose={n} at={x},{y} alpha={actual} expected={expected}"
-                    );
                 }
+                let expected = expected / (count[0] * count[1]) as f32 * 255.;
+                let actual = pixels[((y * canvas[0] + x) * 4 + 3) as usize] as f32;
+                assert!(
+                    (actual - expected).abs() <= 1.1,
+                    "pose={n} at={x},{y} alpha={actual} expected={expected}"
+                );
             }
-            assert!(layer.raster.is_empty());
-            assert!(
-                r.paint_layers.iter().all(|p| p.pages.is_empty()),
-                "placement must not create paint backing"
-            );
-            assert_eq!(
-                source.tiles.values().map(|t| t.digest).collect::<Vec<_>>(),
-                digests
-            );
         }
+        assert!(layer.raster.is_empty());
+        assert!(
+            r.paint_layers.iter().all(|p| p.pages.is_empty()),
+            "placement must not create paint backing"
+        );
+        assert_eq!(
+            source.tiles.values().map(|t| t.digest).collect::<Vec<_>>(),
+            digests
+        );
     }
 }

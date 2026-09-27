@@ -276,11 +276,21 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
     let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Windows runtime filter correctness"),
+        required_features: adapter.features()
+            & (wgpu::Features::FLOAT32_FILTERABLE
+                | wgpu::Features::FLOAT32_BLENDABLE
+                | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
         required_limits: limits,
         ..Default::default()
     }))
     .unwrap();
-    let gpu = layer_render_wgpu::WgpuRasterizer::from_wgpu_staged(adapter, device, queue).unwrap();
+    let gpu = layer_render_wgpu::WgpuRasterizer::from_wgpu_native_staged(
+        adapter,
+        device,
+        queue,
+        Default::default(),
+    )
+    .unwrap();
     let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     native.session = layer_ui::UiSession::from_project(
         layer_host::Renderer(Some(gpu.into())),
