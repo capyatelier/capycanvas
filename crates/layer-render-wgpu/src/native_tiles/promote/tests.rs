@@ -1,38 +1,7 @@
 use super::*;
+use crate::test_support::{page_texture as texture, upload_page as upload};
 use crate::{WgpuRasterizer, layer_tests::page_bytes};
 
-fn texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
-    r.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("canonical promotion fixture"),
-        size: wgpu::Extent3d {
-            width: 256,
-            height: 256,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::STORAGE_BINDING
-            | wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    })
-}
-fn upload(r: &WgpuRasterizer, t: &wgpu::Texture, bytes: &[u8]) {
-    r.queue.write_texture(
-        t.as_image_copy(),
-        bytes,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(256 * t.format().block_copy_size(None).unwrap()),
-            rows_per_image: None,
-        },
-        t.size(),
-    );
-}
 fn floats(values: impl Iterator<Item = f32>) -> Vec<u8> {
     values.flat_map(f32::to_le_bytes).collect()
 }

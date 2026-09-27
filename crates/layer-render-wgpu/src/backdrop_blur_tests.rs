@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::packet;
 use crate::{ViewportPresenter, WgpuRasterizer};
 use layer_core::{Layer, LayerId};
 use layer_render::{CanvasRenderer, FramePacket, ViewState};
@@ -31,14 +32,8 @@ fn document(size: [u32; 2]) -> WgpuRasterizer {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     r.submit(FramePacket {
         view: view(size, 0.),
-        document_extent: [size[0] / 2, size[1]],
-        layers: &[Layer::paint(LayerId(1), "backdrop")],
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
         reset_layers: true,
-        time_seconds: 0.,
-        composite_all: true,
+        ..packet(&[Layer::paint(LayerId(1), "backdrop")], [size[0] / 2, size[1]])
     })
     .unwrap();
     r
@@ -152,14 +147,10 @@ fn paint_near_glass(r: &mut WgpuRasterizer, size: [u32; 2]) {
     batch.damage = layer_core::Rect { min: layer_core::Point { x: 100., y: 54. }, max: layer_core::Point { x: 120., y: 74. } };
     r.submit(FramePacket {
         view: view(size, 0.),
-        document_extent: [size[0] / 2, size[1]],
-        layers: &[Layer::paint(LayerId(1), "backdrop")],
         dabs: &[dab],
         dab_batches: &[batch],
-        restore_rasters: &[],
-        reset_layers: false,
-        time_seconds: 0.,
         composite_all: false,
+        ..packet(&[Layer::paint(LayerId(1), "backdrop")], [size[0] / 2, size[1]])
     })
     .unwrap();
 }
@@ -292,14 +283,8 @@ fn backdrop_blur_cost() {
         };
         r.submit(FramePacket {
             view: camera(200.),
-            document_extent: [4096, 3072],
-            layers: &[Layer::paint(LayerId(1), "bench")],
-            dabs: &[],
-            dab_batches: &[],
-            restore_rasters: &[],
             reset_layers: true,
-            time_seconds: 0.,
-            composite_all: true,
+            ..packet(&[Layer::paint(LayerId(1), "bench")], [4096, 3072])
         })
         .unwrap();
         let target = texture(&r, extent).create_view(&Default::default());

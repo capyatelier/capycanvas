@@ -653,7 +653,7 @@ pub(crate) async fn wait_async(device: &wgpu::Device, queue: &wgpu::Queue) -> Re
         rx.await.map_err(|e| e.to_string())
     }
 }
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 fn range(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -661,7 +661,7 @@ fn range(
 ) -> Result<(f32, f32, u32, f32), String> {
     pollster::block_on(range_async(device, queue, source))
 }
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use layer_core::color::{DocumentColor, SampleDepth, hdr::LocalToneBuilder};

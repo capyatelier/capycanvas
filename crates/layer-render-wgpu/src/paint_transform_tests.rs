@@ -107,19 +107,7 @@ fn bicubic_transforms_clamp_overshoot_at_every_sample_depth() {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth }).unwrap();
         let frame = |r: &mut WgpuRasterizer| {
             r.submit(FramePacket {
-                view: ViewState {
-                    width_px: extent[0],
-                    height_px: extent[1],
-                    ..view()
-                },
-                document_extent: extent,
-                layers: std::slice::from_ref(&layer),
-                dabs: &[],
-                dab_batches: &[],
-                restore_rasters: &[],
-                reset_layers: false,
-                time_seconds: 0.,
-                composite_all: true,
+                ..packet(std::slice::from_ref(&layer), extent)
             })
             .unwrap();
         };
@@ -162,14 +150,10 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
     let frame = |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch]| {
         r.submit(FramePacket {
             view,
-            document_extent: extent,
-            layers,
             dabs,
             dab_batches: batches,
-            time_seconds: 0.,
-            restore_rasters: &[],
-            reset_layers: false,
             composite_all: false,
+            ..packet(layers, extent)
         })
         .unwrap();
     };
@@ -229,14 +213,10 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
         );
         r.submit(FramePacket {
             view,
-            document_extent: extent,
-            layers: std::slice::from_ref(&layer),
             dabs: &[d],
             dab_batches: &[batch(1)],
-            time_seconds: 0.,
-            restore_rasters: &[],
             reset_layers: true,
-            composite_all: true,
+            ..packet(std::slice::from_ref(&layer), extent)
         })
         .unwrap();
     }
@@ -258,14 +238,11 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
         |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch], reset| {
             r.submit(FramePacket {
                 view,
-                document_extent: extent,
-                layers,
                 dabs,
                 dab_batches: batches,
-                time_seconds: 0.,
-                restore_rasters: &[],
                 reset_layers: reset,
                 composite_all: false,
+                ..packet(layers, extent)
             })
             .unwrap();
         };
@@ -384,14 +361,11 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
         |r: &mut WgpuRasterizer, layer: &Layer, dabs: &[Dab], batches: &[DabBatch], reset| {
             r.submit(FramePacket {
                 view,
-                document_extent: extent,
-                layers: std::slice::from_ref(layer),
                 dabs,
                 dab_batches: batches,
-                restore_rasters: &[],
                 reset_layers: reset,
-                time_seconds: 0.,
                 composite_all: false,
+                ..packet(std::slice::from_ref(layer), extent)
             })
             .unwrap();
         };

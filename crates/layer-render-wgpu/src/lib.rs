@@ -70,6 +70,8 @@ mod performance_trace;
 mod layer_masks;
 #[cfg(test)]
 mod layer_tests;
+#[cfg(test)]
+mod test_support;
 mod present;
 mod backdrop_blur;
 pub use backdrop_blur::{BackdropBlurStyle, BackdropRegion};
@@ -5776,18 +5778,14 @@ mod tests {
     }
     mod adjustments;
     pub(crate) mod image_windows;
-    #[cfg(not(target_arch = "wasm32"))]
     mod live_windows;
-    #[cfg(not(target_arch = "wasm32"))]
     mod cold_paint;
-    #[cfg(not(target_arch = "wasm32"))]
     mod color_picker;
     mod curve_reference;
     mod filter_library;
-    #[cfg(not(target_arch = "wasm32"))]
     mod native_effects;
-    #[cfg(not(target_arch = "wasm32"))]
     mod view_color;
+    use crate::test_support::packet;
     use layer_core::{BrushDeform, BrushRendering, BrushWetMix, Point, Rect};
     use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
     use std::sync::Arc;
@@ -5847,33 +5845,18 @@ mod tests {
         let mut layers = vec![paint, paper];
         let mut dab = test_dab([40., 100.], [1., 0., 0., 1.], 1.);
         dab.radii = [3., 6.];
-        let mut batch = DabBatch {
-            material_update: 0,
-            stroke_id: StrokeId(1),
-            layer_id: LayerId(1),
-            kind: DabBatchKind::Persistent,
-            stroke_start: true,
-            stroke_end: true,
-            first_dab: 0,
-            dab_count: 1,
-            style: test_style(BrushExecution::Dry),
-            damage: Rect {
-                min: Point { x: 32., y: 92. },
-                max: Point { x: 48., y: 108. },
-            },
-        };
+        let mut batch = crate::test_support::dab_batch(
+            LayerId(1),
+            test_style(BrushExecution::Dry),
+            Rect { min: Point { x: 32., y: 92. }, max: Point { x: 48., y: 108. } },
+        );
         let frame =
             |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch]| {
                 r.submit(FramePacket {
                     view: test_view(),
-                    document_extent: [128, 128],
-                    layers,
                     dabs,
                     dab_batches: batches,
-                    restore_rasters: &[],
-                    reset_layers: false,
-                    time_seconds: 0.,
-                    composite_all: true,
+                    ..packet(layers, [128, 128])
                 })
                 .unwrap();
             };
@@ -5952,20 +5935,9 @@ mod tests {
             .collect::<Vec<_>>();
         renderer
             .submit(FramePacket {
-                view: ViewState {
-                    width_px: 4096,
-                    height_px: 4096,
-                    document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-                    background_rgba_linear: [1.0, 1.0, 1.0, 1.0],
-                },
-                document_extent: [4096, 4096],
-                layers: &layers,
-                dabs: &[],
-                dab_batches: &[],
-                restore_rasters: &[],
+                view: ViewState { width_px: 4096, height_px: 4096, document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], background_rgba_linear: [1.0, 1.0, 1.0, 1.0] },
                 reset_layers: true,
-                time_seconds: 0.,
-                composite_all: true,
+                ..packet(&layers, [4096, 4096])
             })
             .unwrap();
         renderer.wait_idle().unwrap();

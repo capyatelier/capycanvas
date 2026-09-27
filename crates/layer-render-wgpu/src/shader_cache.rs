@@ -342,36 +342,17 @@ mod tests {
             contact: [0.0; 4],
             previous_contact: [0.0; 4],
         }];
-        let batches = [layer_render::DabBatch {
-            material_update: 0,
-            stroke_id: layer_core::StrokeId(1),
-            layer_id: doc.active_layer,
-            kind: layer_render::DabBatchKind::Persistent,
-            stroke_start: true,
-            stroke_end: true,
-            first_dab: 0,
-            dab_count: 1,
-            style: layer_render::DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush),
-            damage: layer_core::Rect {
-                min: layer_core::Point { x: 16., y: 16. },
-                max: layer_core::Point { x: 48., y: 48. },
-            },
-        }];
+        let batches = [crate::test_support::dab_batch(
+            doc.active_layer,
+            layer_render::DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush),
+            layer_core::Rect { min: layer_core::Point { x: 16., y: 16. }, max: layer_core::Point { x: 48., y: 48. } },
+        )];
         let packet = layer_render::FramePacket {
-            time_seconds: 0.,
-            view: layer_render::ViewState {
-                width_px: 64,
-                height_px: 64,
-                document_to_surface: [1., 0., 0., 1., 0., 0.],
-                background_rgba_linear: [1.; 4],
-            },
-            document_extent: [64; 2],
-            layers: &doc.layers,
+            view: layer_render::ViewState { background_rgba_linear: [1.; 4], ..crate::test_support::view([64; 2]) },
             dabs: &dabs,
             dab_batches: &batches,
-            restore_rasters: &[],
             reset_layers: true,
-            composite_all: true,
+            ..crate::test_support::packet(&doc.layers, [64; 2])
         };
         reference.submit(packet).unwrap();
         let expected = reference.readback_srgb_rgba8().unwrap();

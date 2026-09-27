@@ -1,6 +1,7 @@
 //! A zero-sized mutable cache forces native artwork through its lossless backing.
 //! Compare complete consumers, not just allocation counts or the decoded cache.
 use super::*;
+use crate::test_support::complete;
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
 use layer_core::{Document, Project};
@@ -43,18 +44,9 @@ fn project(color: DocumentColor) -> Project {
 }
 fn packet(project: &Project, all: bool) -> FramePacket<'_> {
     FramePacket {
-        document_extent: EXTENT,
-        layers: &project.document.layers,
-        view: ViewState {
-            background_rgba_linear: [0.; 4],
-            ..test_view()
-        },
-        time_seconds: 0.,
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: false,
+        view: ViewState { background_rgba_linear: [0.; 4], ..test_view() },
         composite_all: all,
+        ..crate::test_support::packet(&project.document.layers, EXTENT)
     }
 }
 fn renderer(project: &Project, limit: u64) -> WgpuRasterizer {
@@ -62,14 +54,6 @@ fn renderer(project: &Project, limit: u64) -> WgpuRasterizer {
     r.native_edit.as_mut().unwrap().color_cache_bytes = limit;
     r.submit(packet(project, true)).unwrap();
     r
-}
-fn complete(r: &WgpuRasterizer) {
-    r.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(READBACK_TIMEOUT),
-        })
-        .unwrap();
 }
 fn image(r: &WgpuRasterizer) -> Vec<u8> {
     crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap())
@@ -187,21 +171,11 @@ fn cold_native_paint_rehydrates_only_damage_and_keeps_other_tiles_in_saved_revis
     let mut r = renderer(&p, 0);
     let before = image(&r);
     let dabs = [test_dab([275., 275.], [0.13, 0.72, 0.41, 0.37], 0.5)];
-    let batches = [DabBatch {
-        material_update: 0,
-        stroke_id: StrokeId(1),
-        layer_id: id,
-        kind: DabBatchKind::Persistent,
-        stroke_start: true,
-        stroke_end: true,
-        first_dab: 0,
-        dab_count: 1,
-        style: test_style(BrushExecution::Dry),
-        damage: Rect {
-            min: Point { x: 257., y: 257. },
-            max: Point { x: 295., y: 295. },
-        },
-    }];
+    let batches = [crate::test_support::dab_batch(
+        id,
+        test_style(BrushExecution::Dry),
+        Rect { min: Point { x: 257., y: 257. }, max: Point { x: 295., y: 295. } },
+    )];
     p.document.layers[0].raster = RasterRevision::pending();
     r.submit(FramePacket {
         dabs: &dabs,
@@ -358,19 +332,12 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
         dab.motion = [13.25, -24.5];
         dab.material = [0., 0.8, 0.9, 0.7];
         let mut batch = DabBatch {
-            material_update: 0,
-            stroke_id: StrokeId(1),
-            layer_id: id,
-            kind: DabBatchKind::Persistent,
-            stroke_start: true,
             stroke_end: false,
-            first_dab: 0,
-            dab_count: 1,
-            style,
-            damage: Rect {
-                min: Point { x: 225., y: 225. },
-                max: Point { x: 288., y: 284. },
-            },
+            ..crate::test_support::dab_batch(
+                id,
+                style,
+                Rect { min: Point { x: 225., y: 225. }, max: Point { x: 288., y: 284. } },
+            )
         };
         for phase in 0..4 {
             eprintln!("cold neighborhood {execution:?} phase={phase}");
@@ -436,16 +403,8 @@ fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges(
         style.rendering.burnt_edge = 0.4;
         style.rendering.edge_width = 4.;
         let mut batch = DabBatch {
-            material_update: 0,
-            stroke_id: StrokeId(1),
-            layer_id: id,
-            kind: DabBatchKind::Persistent,
-            stroke_start: true,
             stroke_end: false,
-            first_dab: 0,
-            dab_count: 1,
-            style,
-            damage: Rect::default(),
+            ..crate::test_support::dab_batch(id, style, Rect::default())
         };
         // Consecutive and returning writes exercise both ping-pong roles. The
         // final edge pass must recreate destinations at the distant earlier mark.
@@ -557,16 +516,14 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
         }
         let operation = LayerOperation { placement: layer_core::Affine::IDENTITY, coverage, kind };
         let batch = DabBatch {
-            material_update: 0,
             stroke_id: StrokeId(8),
-            layer_id: id,
             kind: DabBatchKind::LayerOperation(0),
-            stroke_start: true,
-            stroke_end: true,
-            first_dab: 0,
             dab_count: 0,
-            style: test_style(BrushExecution::Dry),
-            damage: operation.bounds(EXTENT),
+            ..crate::test_support::dab_batch(
+                id,
+                test_style(BrushExecution::Dry),
+                operation.bounds(EXTENT),
+            )
         };
         for (r, p) in [(&mut resident, &mut a), (&mut cold, &mut b)] {
             if let LayerOperationKind::Transform(transform) = &operation.kind {

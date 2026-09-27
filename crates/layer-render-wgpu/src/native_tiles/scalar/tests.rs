@@ -7,36 +7,10 @@ use crate::{
 use layer_core::raster::RasterTile;
 
 fn texture(r: &WgpuRasterizer) -> wgpu::Texture {
-    r.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("scalar native test"),
-        size: wgpu::Extent3d {
-            width: 256,
-            height: 256,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R32Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::STORAGE_BINDING
-            | wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    })
+    crate::test_support::page_texture(r, wgpu::TextureFormat::R32Float)
 }
 fn upload(r: &WgpuRasterizer, t: &wgpu::Texture, values: &[f32]) {
-    let bytes: Vec<_> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
-    r.queue.write_texture(
-        t.as_image_copy(),
-        &bytes,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(1024),
-            rows_per_image: None,
-        },
-        t.size(),
-    );
+    crate::test_support::upload_page(r, t, &values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
 }
 fn buffer(r: &WgpuRasterizer, depth: SampleDepth) -> wgpu::Buffer {
     r.device.create_buffer(&wgpu::BufferDescriptor {

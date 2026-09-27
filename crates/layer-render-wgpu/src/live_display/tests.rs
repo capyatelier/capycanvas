@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::packet;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 use layer_core::Point;
 use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
@@ -79,16 +80,17 @@ fn filter_working_allowance_does_not_expand_unfiltered_caches() {
     let unpainted = present(&r, &mut presenter, v);
     let mut dab = crate::tests::test_dab([310., 230.], [0.8, 0.04, 0.2, 1.], 1.);
     dab.radii = [90.; 2];
-    let batch = DabBatch {
-        material_update: 0, stroke_id: StrokeId(1), layer_id: doc.layers[0].id,
-        kind: DabBatchKind::Persistent, stroke_start: true, stroke_end: true,
-        first_dab: 0, dab_count: 1, damage: dab.bounds(),
-        style: crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen),
-    };
+    let batch = crate::test_support::dab_batch(
+        doc.layers[0].id,
+        crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen),
+        dab.bounds(),
+    );
     r.submit(FramePacket {
-        layers: &doc.layers, document_extent: [doc.width, doc.height], view: v,
-        time_seconds: 0., dabs: &[dab], dab_batches: &[batch],
-        restore_rasters: &[], reset_layers: false, composite_all: false,
+        view: v,
+        dabs: &[dab],
+        dab_batches: &[batch],
+        composite_all: false,
+        ..packet(&doc.layers, [doc.width, doc.height])
     }).unwrap();
     let original = present(&r, &mut presenter, v);
     assert_ne!(original, unpainted);
@@ -251,16 +253,23 @@ fn sparse_contact_prediction_retirement_matches_full_recomposition() {
         dab.contact = [1., 0., 0., 0.];
         dab.previous_contact = [0.7, 0., 0., 0.];
         let batch = DabBatch {
-            material_update: 0, stroke_id: StrokeId(1), layer_id: doc.layers[0].id,
             kind: if preview { DabBatchKind::Preview } else { DabBatchKind::Persistent },
-            stroke_start: frame == 0, stroke_end: frame == 4, first_dab: 0, dab_count: 1,
-            style: style.clone(), damage: dab.bounds(),
+            stroke_start: frame == 0,
+            stroke_end: frame == 4,
+            ..crate::test_support::dab_batch(
+                doc.layers[0].id,
+                style.clone(),
+                dab.bounds(),
+            )
         };
         for (r, all) in [(&mut incremental, frame == 0), (&mut reference, true)] {
             r.submit(FramePacket {
-                layers: &doc.layers, document_extent: [doc.width, doc.height], view: v,
-                time_seconds: 0., dabs: &[dab], dab_batches: std::slice::from_ref(&batch),
-                restore_rasters: &[], reset_layers: frame == 0, composite_all: all,
+                view: v,
+                dabs: &[dab],
+                dab_batches: std::slice::from_ref(&batch),
+                reset_layers: frame == 0,
+                composite_all: all,
+                ..packet(&doc.layers, [doc.width, doc.height])
             }).unwrap();
         }
         assert_eq!(present(&incremental, &mut a, v), present(&reference, &mut b, v), "frame {frame}");
@@ -283,30 +292,33 @@ fn centered_view(extent: [u32; 2], viewport: [u32; 2], scale: f32, angle: f32) -
 }
 
 #[test]
-fn complete_admission_respects_texture_extent_even_with_free_memory() {
-    let mut r = bounded_renderer(DocumentColor::default()).unwrap();
-    r.set_complete_display_allowance(u64::MAX);
-    r.document_extent = [r.device.limits().max_texture_dimension_2d + 1, 16];
-    let pipelines = display_mips::Pipelines::new(&r.device);
-    let cache = Cache::new(&r, &pipelines, CACHE_BYTES, r.native_edit.as_ref().unwrap().display_complete_bytes).unwrap();
-    assert!(cache.retained.iter().all(|level| level.level > 0));
-    assert!(cache.retained.iter().all(|level|
-        level.texture.width() <= r.device.limits().max_texture_dimension_2d));
-    assert!(cache.storage_bytes() <= CACHE_BYTES);
-}
-
-#[test]
-fn unchanged_hidpi_navigation_keeps_reserved_detail_slots() {
-    let mut r = bounded_renderer(DocumentColor::default()).unwrap();
-    let pipelines = display_mips::Pipelines::new(&r.device);
-    for extent in [[8192, 7324], [9504, 6336]] {
+fn display_cache_admission_and_navigation_stay_within_their_budgets() {
+    let setup = |mut r: WgpuRasterizer, extent: [u32; 2], allowance: Option<u64>| {
+        if let Some(allowance) = allowance {
+            r.set_complete_display_allowance(allowance);
+        }
         r.document_extent = extent;
-        let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES, r.native_edit.as_ref().unwrap().display_complete_bytes).unwrap();
+        let pipelines = display_mips::Pipelines::new(&r.device);
+        let cache = Cache::new(&r, &pipelines, CACHE_BYTES, r.native_edit.as_ref().unwrap().display_complete_bytes).unwrap();
+        (r, cache)
+    };
+    let prepare = |r: &mut WgpuRasterizer, cache: &mut Cache, v| {
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        cache.prepare(r, v, &mut encoder).unwrap();
+    };
+
+    let r = bounded_renderer(DocumentColor::default()).unwrap();
+    let limit = r.device.limits().max_texture_dimension_2d;
+    let (_, cache) = setup(r, [limit + 1, 16], Some(u64::MAX));
+    assert!(cache.retained.iter().all(|level| level.level > 0 && level.texture.width() <= limit),
+        "complete admission respects the texture extent even with free memory");
+    assert!(cache.storage_bytes() <= CACHE_BYTES);
+
+    for extent in [[8192, 7324], [9504, 6336]] {
+        let (mut r, mut cache) = setup(bounded_renderer(DocumentColor::default()).unwrap(), extent, None);
         let mut previous = 0;
         for (scale, angle) in [(1., 0.), (1., 0.2), (2., 0.2), (1., 0.), (0.5, 0.)] {
-            let v = centered_view(extent, [2752, 2064], scale, angle);
-            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            cache.prepare(&mut r, v, &mut encoder).unwrap();
+            prepare(&mut r, &mut cache, centered_view(extent, [2752, 2064], scale, angle));
             let slots = cache.fine.as_ref().unwrap().keys.len();
             assert!(slots >= previous,
                 "unchanged viewport shrank its detail cache: {extent:?}, {scale}, {previous} -> {slots}");
@@ -314,46 +326,28 @@ fn unchanged_hidpi_navigation_keeps_reserved_detail_slots() {
             previous = slots;
         }
     }
-}
 
-#[test]
-fn partial_admission_preserves_reduced_levels_during_hidpi_zoom() {
-    let mut r = bounded_renderer(DocumentColor::default()).unwrap();
-    r.document_extent = [9504, 6336];
     let allowance = 768 * 1024 * 1024;
-    r.set_complete_display_allowance(allowance);
-    let pipelines = display_mips::Pipelines::new(&r.device);
-    let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES, r.native_edit.as_ref().unwrap().display_complete_bytes).unwrap();
+    let (mut r, mut cache) = setup(bounded_renderer(DocumentColor::default()).unwrap(), [9504, 6336], Some(allowance));
     assert!(cache.retained.iter().all(|level| level.level > 0));
     let original_mips = cache.retained_bytes();
     for scale in [2., 1., 0.50001, 0.25, 0.125, 0.50001] {
         for angle in [0., 0.12, 0.7, 1.2] {
-            let v = centered_view(r.document_extent, [2752, 2064], scale, angle);
-            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            cache.prepare(&mut r, v, &mut encoder).unwrap();
+            prepare(&mut r, &mut cache, centered_view([9504, 6336], [2752, 2064], scale, angle));
             assert!(cache.storage_bytes() <= allowance);
             assert_eq!(cache.retained_bytes(), original_mips,
                 "unused admitted memory must preserve completed zoomed-out pixels");
         }
     }
-}
 
-#[test]
-fn large_rotated_hidpi_views_fit_the_original_display_budget() {
-    let mut r = bounded_renderer(DocumentColor {
-        space: RgbSpace::ProPhoto, depth: SampleDepth::U16,
-    }).unwrap();
-    r.document_extent = [9504, 6336];
-    let pipelines = display_mips::Pipelines::new(&r.device);
-    let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES, r.native_edit.as_ref().unwrap().display_complete_bytes).unwrap();
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
+    let (mut r, mut cache) = setup(bounded_renderer(color).unwrap(), [9504, 6336], None);
     let original_mips = cache.retained_bytes();
     for viewport in [[2400, 1800], [3840, 2160]] {
         for scale in [0.50001, 0.6, 0.75, 1., 0.25, 2.] {
             for step in 0..72 {
-                let v = centered_view(r.document_extent, viewport, scale,
-                    step as f32 * std::f32::consts::TAU / 72.);
-                let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-                cache.prepare(&mut r, v, &mut encoder).unwrap();
+                let angle = step as f32 * std::f32::consts::TAU / 72.;
+                prepare(&mut r, &mut cache, centered_view([9504, 6336], viewport, scale, angle));
                 assert!(cache.storage_bytes() <= CACHE_BYTES);
                 if let Some(fine) = &cache.fine {
                     assert!(cache.visible.len() <= fine.keys.len());
@@ -634,17 +628,7 @@ fn view(matrix: [f32; 6]) -> ViewState {
     }
 }
 fn submit(r: &mut WgpuRasterizer, doc: &layer_core::Document, view: ViewState, all: bool) {
-    r.submit(FramePacket {
-        layers: &doc.layers,
-        document_extent: [doc.width, doc.height],
-        view,
-        time_seconds: 0.,
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: false,
-        composite_all: all,
-    })
+    r.submit(FramePacket { view, composite_all: all, ..packet(&doc.layers, [doc.width, doc.height]) })
     .unwrap();
 }
 fn pixels(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
@@ -824,19 +808,9 @@ fn rejected_views_and_abandoned_cache_writes_preserve_artwork_and_rebuild_missin
     let bytes = r.live_display.as_ref().unwrap().storage_bytes();
     let rejected = r
         .submit(FramePacket {
-            layers: &doc.layers,
-            document_extent: [doc.width, doc.height],
-            view: ViewState {
-                width_px: 2048,
-                height_px: 1536,
-                ..v
-            },
-            time_seconds: 0.,
-            dabs: &[],
-            dab_batches: &[],
-            restore_rasters: &[],
-            reset_layers: false,
+            view: ViewState { width_px: 2048, height_px: 1536, ..v },
             composite_all: false,
+            ..packet(&doc.layers, [doc.width, doc.height])
         })
         .unwrap_err();
     assert!(rejected.to_string().contains("cache limit"));

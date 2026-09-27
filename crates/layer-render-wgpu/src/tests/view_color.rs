@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::complete;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, rgb, source::*};
 
 fn source(space: RgbSpace, codes: [u16; 4]) -> Layer {
@@ -34,26 +35,8 @@ fn view() -> ViewState {
     }
 }
 fn frame(r: &mut WgpuRasterizer, layer: &Layer) {
-    r.submit(FramePacket {
-        view: view(),
-        document_extent: [256; 2],
-        layers: std::slice::from_ref(layer),
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: true,
-        composite_all: true,
-        time_seconds: 0.,
-    })
+    r.submit(FramePacket { reset_layers: true, ..packet(std::slice::from_ref(layer), [256; 2]) })
     .unwrap();
-}
-fn complete(r: &WgpuRasterizer) {
-    r.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(READBACK_TIMEOUT),
-        })
-        .unwrap();
 }
 fn linear(space: RgbSpace, codes: [u16; 4], target: RgbSpace) -> [f64; 3] {
     rgb::apply(

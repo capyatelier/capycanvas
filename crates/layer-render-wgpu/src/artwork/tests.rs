@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::{complete, packet};
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
 use layer_core::{Document, LayerMask, Point};
@@ -41,30 +42,7 @@ fn document(color: DocumentColor) -> Document {
     doc
 }
 fn frame<'a>(doc: &'a Document) -> FramePacket<'a> {
-    FramePacket {
-        layers: &doc.layers,
-        document_extent: EXTENT,
-        view: ViewState {
-            width_px: 640,
-            height_px: 480,
-            document_to_surface: [1., 0., 0., 1., 0., 0.],
-            background_rgba_linear: [0.; 4],
-        },
-        time_seconds: 0.,
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: false,
-        composite_all: true,
-    }
-}
-fn complete(r: &WgpuRasterizer) {
-    r.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(READBACK_TIMEOUT),
-        })
-        .unwrap();
+    FramePacket { view: crate::test_support::view([640, 480]), ..packet(&doc.layers, EXTENT) }
 }
 fn sample(r: &mut WgpuRasterizer, position: [u32; 2], area: ColorSampleArea) -> [f32; 4] {
     assert!(

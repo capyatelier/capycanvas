@@ -32,14 +32,9 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
     for count in 1..=layers.len() {
         r.submit(FramePacket {
             view: view(),
-            document_extent: extent,
-            layers: &layers[..count],
-            dabs: &[],
             dab_batches: &batches[count - 1..count],
-            restore_rasters: &[],
             reset_layers: count == 1,
-            time_seconds: 0.,
-            composite_all: true,
+            ..packet(&layers[..count], extent)
         })
         .unwrap();
         r.wait_idle().unwrap();
@@ -50,14 +45,9 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
         r.set_telemetry_enabled(telemetry);
         r.submit(FramePacket {
             view: view(),
-            document_extent: extent,
-            layers: &layers,
-            dabs: &[],
             dab_batches: &batches,
-            restore_rasters: &[],
             reset_layers: true,
-            time_seconds: 0.,
-            composite_all: true,
+            ..packet(&layers, extent)
         })
         .unwrap();
         r.wait_idle().unwrap();

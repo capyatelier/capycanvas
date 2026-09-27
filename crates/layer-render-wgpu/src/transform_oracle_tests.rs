@@ -245,19 +245,9 @@ fn preimage(h: [f64; 9], [x, y]: [f64; 2]) -> Option<[f64; 2]> {
 
 fn frame(r: &mut WgpuRasterizer, layer: &Layer, reset: bool) {
     r.submit(FramePacket {
-        view: ViewState {
-            width_px: EXTENT[0],
-            height_px: EXTENT[1],
-            ..view()
-        },
-        document_extent: EXTENT,
-        layers: std::slice::from_ref(layer),
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
         reset_layers: reset,
-        time_seconds: 0.,
         composite_all: reset,
+        ..packet(std::slice::from_ref(layer), EXTENT)
     })
     .unwrap();
 }

@@ -1063,7 +1063,7 @@ impl WgpuRasterizer {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod native_tests;
 
 #[cfg(test)]

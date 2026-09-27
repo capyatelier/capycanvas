@@ -87,25 +87,12 @@ fn submit(
         dab.radii = [radius; 2];
         dabs.push(dab);
         batches.push(DabBatch {
-            material_update: 0,
             stroke_id: StrokeId(77),
-            layer_id: LayerId(1),
-            kind: DabBatchKind::Persistent,
-            stroke_start: true,
-            stroke_end: true,
-            first_dab: 0,
-            dab_count: 1,
-            style: test_style(BrushExecution::Dry),
-            damage: Rect {
-                min: Point {
-                    x: center[0] - radius - 1.,
-                    y: center[1] - radius - 1.,
-                },
-                max: Point {
-                    x: center[0] + radius + 1.,
-                    y: center[1] + radius + 1.,
-                },
-            },
+            ..crate::test_support::dab_batch(
+                LayerId(1),
+                test_style(BrushExecution::Dry),
+                Rect { min: Point { x: center[0] - radius - 1., y: center[1] - radius - 1. }, max: Point { x: center[0] + radius + 1., y: center[1] + radius + 1. } },
+            )
         });
     }
     let view = ViewState {
@@ -115,15 +102,13 @@ fn submit(
         ..test_view()
     };
     r.submit(FramePacket {
-        time_seconds: time,
         view,
-        document_extent: extent,
-        layers,
+        time_seconds: time,
         dabs: &dabs,
         dab_batches: &batches,
-        restore_rasters: &[],
         reset_layers: reset,
         composite_all: all,
+        ..packet(layers, extent)
     })
     .unwrap();
 }

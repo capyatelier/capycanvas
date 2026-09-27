@@ -3,7 +3,7 @@
 use super::*;
 use layer_core::{BrushSnapshot, Document, StrokeTool};
 use std::sync::Arc;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 use std::sync::Mutex;
 
 const DOCUMENT: u8 = 2;
@@ -467,7 +467,7 @@ impl WgpuRasterizer {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -536,7 +536,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod gpu_tests {
     use super::*;
     #[test]

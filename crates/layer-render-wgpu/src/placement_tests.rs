@@ -10,36 +10,16 @@ use layer_core::{
 fn placed_material_backtrace(execution: BrushExecution, alpha_locked: bool) {
     let alpha = if alpha_locked { 128 } else { 255 };
     let source = |side: u32, pose: Affine| {
-        let mut builder = SourceBuilder::new(
-            [side; 2],
-            SourceInterpretation {
-                channels: SourceChannels::Rgba,
-                depth: SampleDepth::U8,
-                profile: Default::default(),
-                profile_assumed: false,
-            },
-            80 * 1024 * 1024,
-        )
-        .unwrap();
-        for y in 0..side {
-            let row: Vec<u8> = (0..side)
-                .flat_map(|x| {
-                    let at = pose.map(Point {
-                        x: x as f32 + 0.5,
-                        y: y as f32 + 0.5,
-                    });
-                    if at.x < 0. || at.y < 0. || at.x >= 4096. || at.y >= 4096. {
-                        [0; 4]
-                    } else if at.x < 1792. {
-                        [255, 0, 0, 255]
-                    } else {
-                        [0, 255, 0, alpha]
-                    }
-                })
-                .collect();
-            builder.push_row(&row).unwrap();
-        }
-        Arc::new(builder.finish().unwrap())
+        rgba8_source([side; 2], |x, y| {
+            let at = pose.map(Point { x: x as f32 + 0.5, y: y as f32 + 0.5 });
+            if at.x < 0. || at.y < 0. || at.x >= 4096. || at.y >= 4096. {
+                [0; 4]
+            } else if at.x < 1792. {
+                [255, 0, 0, 255]
+            } else {
+                [0, 255, 0, alpha]
+            }
+        })
     };
     let original = source(4096, Affine::IDENTITY);
     let digests: Vec<_> = original.tiles.values().map(|tile| tile.digest).collect();
@@ -180,22 +160,8 @@ fn placed_photo_smudge_reads_beyond_adjacent_source_tiles() {
 #[test]
 fn placed_photo_gradient_and_figure_use_document_geometry() {
     let size = [900, 700];
-    let mut builder = SourceBuilder::new(
-        size,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::U8,
-            profile: Default::default(),
-            profile_assumed: false,
-        },
-        8 * 1024 * 1024,
-    )
-    .unwrap();
-    for _ in 0..size[1] {
-        builder.push_row(&vec![255; size[0] as usize * 4]).unwrap();
-    }
     let mut layer = Layer::paint(LayerId(1), "placed operation geometry");
-    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    layer.source = Some(rgba8_source(size, |_, _| [255; 4]));
     let affine = Affine::around(
         Point { x: 450., y: 350. },
         [0.2, 0.3],
@@ -260,19 +226,10 @@ fn placed_photo_gradient_and_figure_use_document_geometry() {
 #[test]
 fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
     let size = [1024, 768];
-    let mut builder = SourceBuilder::new(size, SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false,
-    }, 8 * 1024 * 1024).unwrap();
-    for y in 0..size[1] {
-        let row: Vec<_> = (0..size[0]).flat_map(|x| [
-            (x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8,
-            ((x / 7 + y / 11) % 256) as u8,
-        ]).collect();
-        builder.push_row(&row).unwrap();
-    }
     let mut photo = Layer::paint(LayerId(1), "moving alpha photo");
-    photo.source = Some(Arc::new(builder.finish().unwrap()));
+    photo.source = Some(rgba8_source(size, |x, y| {
+        [(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8, ((x / 7 + y / 11) % 256) as u8]
+    }));
     photo.opacity = 0.63;
     let mut behind = photo.clone();
     behind.id = LayerId(2);
@@ -296,11 +253,9 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
         for tiled in [false, true] {
             if let Some(scene) = r.scene.as_mut() { scene.set_tiled_composition(tiled); }
             r.submit(FramePacket {
-                view: ViewState { width_px: canvas[0], height_px: canvas[1],
-                    background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
-                document_extent: canvas, layers: &layers, dabs: &[], dab_batches: &[],
-                restore_rasters: &[], reset_layers: step == 0 && !tiled,
-                composite_all: true, time_seconds: 0.,
+                view: ViewState { width_px: canvas[0], height_px: canvas[1], background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
+                reset_layers: step == 0 && !tiled,
+                ..packet(&layers, canvas)
             }).unwrap();
             // Export intentionally uses exact source tiles. Inspect the live
             // composite instead, so this covers the cached display draw.
@@ -342,13 +297,11 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
                 r.scene.as_mut().unwrap().set_tiled_composition(tiled);
                 let before = r.metrics.composited_pixels;
                 r.submit(FramePacket {
-                    view: ViewState { width_px: canvas[0], height_px: canvas[1],
-                        background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
-                    document_extent: canvas, layers: &layers,
+                    view: ViewState { width_px: canvas[0], height_px: canvas[1], background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
                     dabs: if prediction { std::slice::from_ref(&ink) } else { &[] },
                     dab_batches: if prediction { std::slice::from_ref(&stroke) } else { &[] },
-                    restore_rasters: &[], reset_layers: false,
-                    composite_all: tiled || baseline.is_none(), time_seconds: 0.,
+                    composite_all: tiled || baseline.is_none(),
+                    ..packet(&layers, canvas)
                 }).unwrap();
                 if prediction && !tiled {
                     assert!(r.metrics.composited_pixels - before < u64::from(canvas[0]) * u64::from(canvas[1]),
@@ -376,13 +329,11 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
             for full in [false, true] {
                 r.scene.as_mut().unwrap().set_tiled_composition(full);
                 r.submit(FramePacket {
-                    view: ViewState { width_px: canvas[0], height_px: canvas[1],
-                        background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
-                    document_extent: canvas, layers: &layers,
+                    view: ViewState { width_px: canvas[0], height_px: canvas[1], background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
                     dabs: if full { &[] } else { std::slice::from_ref(&ink) },
                     dab_batches: if full { &[] } else { std::slice::from_ref(&stroke) },
-                    restore_rasters: &[], reset_layers: false,
-                    composite_all: full, time_seconds: 0.,
+                    composite_all: full,
+                    ..packet(&layers, canvas)
                 }).unwrap();
                 images.push(page_bytes(&r, r.composite_texture.as_ref().unwrap()));
             }
@@ -398,22 +349,8 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
 #[test]
 fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
     let size = [2048; 2];
-    let mut builder = SourceBuilder::new(
-        size,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::U8,
-            profile: Default::default(),
-            profile_assumed: false,
-        },
-        32 * 1024 * 1024,
-    )
-    .unwrap();
-    for _ in 0..size[1] {
-        builder.push_row(&vec![255; size[0] as usize * 4]).unwrap();
-    }
     let mut layer = Layer::paint(LayerId(1), "cached photo");
-    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    layer.source = Some(rgba8_source(size, |_, _| [255; 4]));
     layer.properties.placement = Affine([0.0625, 0., 0., 0.0625, 0., 0.]);
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     // Exercise the admitted cache independently of measured host headroom.
@@ -514,20 +451,8 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
 #[test]
 fn oversized_photo_preview_uses_admitted_memory_across_scale_boundary() {
     let size = [8192, 4352]; // Half-size Float32 pixels exceed the old 128 MiB cap.
-    let mut builder = SourceBuilder::new(
-        size,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::U8,
-            profile: Default::default(),
-            profile_assumed: false,
-        },
-        160 * 1024 * 1024,
-    ).unwrap();
-    let row = vec![255; size[0] as usize * 4];
-    for _ in 0..size[1] { builder.push_row(&row).unwrap(); }
     let mut layer = Layer::paint(LayerId(1), "oversized cached photo");
-    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    layer.source = Some(rgba8_source(size, |_, _| [255; 4]));
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let allowance = 160 * 1024 * 1024;
     r.native_edit.as_mut().unwrap().display_complete_bytes = allowance + 128 * 128 * 16;
@@ -553,22 +478,8 @@ fn oversized_photo_preview_uses_admitted_memory_across_scale_boundary() {
 #[test]
 fn placed_photo_mask_linking_preserves_pose_and_apply_preserves_pixels() {
     let size = [600, 400];
-    let mut builder = SourceBuilder::new(
-        size,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::U8,
-            profile: Default::default(),
-            profile_assumed: false,
-        },
-        8 * 1024 * 1024,
-    )
-    .unwrap();
-    for _ in 0..size[1] {
-        builder.push_row(&vec![255; size[0] as usize * 4]).unwrap();
-    }
     let mut layer = Layer::paint(LayerId(1), "placed masked photo");
-    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    layer.source = Some(rgba8_source(size, |_, _| [255; 4]));
     layer.properties.placement = Affine([0.2, 0., 0., 0.2, 0., 0.]);
     let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
     mask.default_coverage = 0.;
@@ -656,21 +567,7 @@ fn placed_photo_mask_linking_preserves_pose_and_apply_preserves_pixels() {
 fn placed_photo_edits_and_restores_tiles_outside_canvas_bounds() {
     use layer_core::raster::RasterRevision;
     let size = [900, 700];
-    let mut builder = SourceBuilder::new(
-        size,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::U8,
-            profile: Default::default(),
-            profile_assumed: false,
-        },
-        8 * 1024 * 1024,
-    )
-    .unwrap();
-    for _ in 0..size[1] {
-        builder.push_row(&vec![255; size[0] as usize * 4]).unwrap();
-    }
-    let source = Arc::new(builder.finish().unwrap());
+    let source = rgba8_source(size, |_, _| [255; 4]);
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut layer = Layer::paint(LayerId(1), "placed editable photo");
     layer.source = Some(source.clone());
@@ -717,21 +614,7 @@ fn placed_photo_edits_and_restores_tiles_outside_canvas_bounds() {
 #[test]
 fn placed_photo_brush_footprint_matches_document_brush_under_affine() {
     let size = [900, 700];
-    let mut builder = SourceBuilder::new(
-        size,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::U8,
-            profile: Default::default(),
-            profile_assumed: false,
-        },
-        8 * 1024 * 1024,
-    )
-    .unwrap();
-    for _ in 0..size[1] {
-        builder.push_row(&vec![255; size[0] as usize * 4]).unwrap();
-    }
-    let source = Arc::new(builder.finish().unwrap());
+    let source = rgba8_source(size, |_, _| [255; 4]);
     let mut reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut placed = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut layer = Layer::paint(LayerId(1), "photo brush geometry");
@@ -863,19 +746,8 @@ fn retained_placement_samples_full_source_across_tiles_without_creating_raster()
     {
         layer.properties.placement = affine;
         r.submit(FramePacket {
-            view: ViewState {
-                width_px: canvas[0],
-                height_px: canvas[1],
-                ..view()
-            },
-            document_extent: canvas,
-            layers: std::slice::from_ref(&layer),
-            dabs: &[],
-            dab_batches: &[],
-            restore_rasters: &[],
             reset_layers: n == 0,
-            composite_all: true,
-            time_seconds: 0.,
+            ..packet(std::slice::from_ref(&layer), canvas)
         })
         .unwrap();
         let pixels = r.readback_srgb_rgba8().unwrap();

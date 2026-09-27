@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::packet;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace};
 use layer_core::raster::{RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey};
 use layer_core::{Affine, Document, EffectInstance, LayerMask, Point, Selection, SelectionPixels};
@@ -35,10 +36,11 @@ fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
     let mut before = None;
     for (elapsed, speed, phase) in [(2.,1.,2.),(2.,2.,2.),(3.,2.,4.),(3.,0.,4.),(8.,0.,4.),(8.,2.,4.),(9.,2.,6.)] {
         Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("speed", layer_core::EffectValue::Number(speed)).unwrap();
-        live.submit(layer_render::FramePacket {
-            layers: &doc.layers, time_seconds: elapsed, document_extent: [32,32],
+        live.submit(FramePacket {
             view: layer_render::ViewState { width_px:32, height_px:32, document_to_surface: [1.,0.,0.,1.,0.,0.], background_rgba_linear: [1.;4] },
-            dabs: &[], dab_batches: &[], restore_rasters: &[], reset_layers: before.is_none(), composite_all: true,
+            time_seconds: elapsed,
+            reset_layers: before.is_none(),
+            ..packet(&doc.layers, [32,32])
         }).unwrap();
         let pixels = live.readback_srgb_rgba8().unwrap();
         if let Some((previous_time, previous_pixels)) = &before {
@@ -251,20 +253,8 @@ fn frame(project: &Project) -> (WgpuRasterizer, Vec<[f32; 4]>) {
     let mut r = WgpuRasterizer::new_native_headless(project.document.color).unwrap();
     let extent = [project.document.width, project.document.height];
     r.submit(FramePacket {
-        view: layer_render::ViewState {
-            width_px: extent[0],
-            height_px: extent[1],
-            background_rgba_linear: [0.; 4],
-            document_to_surface: [1., 0., 0., 1., 0., 0.],
-        },
-        document_extent: extent,
-        layers: &project.document.layers,
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
         reset_layers: true,
-        composite_all: true,
-        time_seconds: 0.,
+        ..packet(&project.document.layers, extent)
     })
     .unwrap();
     let bytes = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
@@ -598,20 +588,7 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
         for i in 0..16 {
             layers[0].opacity = if i % 2 == 0 { 0.2 } else { 0.9 };
             live.submit(FramePacket {
-                view: layer_render::ViewState {
-                    width_px: width,
-                    height_px: height,
-                    background_rgba_linear: [0.; 4],
-                    document_to_surface: [1., 0., 0., 1., 0., 0.],
-                },
-                document_extent: [width, height],
-                layers: &layers,
-                dabs: &[],
-                dab_batches: &[],
-                restore_rasters: &[],
-                reset_layers: false,
-                composite_all: true,
-                time_seconds: 0.,
+                ..packet(&layers, [width, height])
             })
             .unwrap();
             live.wait_idle().unwrap();

@@ -289,9 +289,13 @@ fn photo_filter_frame_time() {
         view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
     }
     let submit_frame = |r: &mut WgpuRasterizer, layers: &[Layer], time, reset, all| {
-        r.submit(FramePacket { view, document_extent: extent, layers,
-            dabs: &[], dab_batches: &[], restore_rasters: &[],
-            time_seconds: time, reset_layers: reset, composite_all: all }).unwrap();
+        r.submit(FramePacket {
+            view,
+            time_seconds: time,
+            reset_layers: reset,
+            composite_all: all,
+            ..packet(layers, extent)
+        }).unwrap();
     };
     let bytes = if project.is_some() { Vec::new() } else {
         let bytes = std::fs::read(std::env::var("CAPY_FILTER_PHOTO_RGBA").unwrap()).unwrap();

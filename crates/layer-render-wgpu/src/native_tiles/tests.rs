@@ -1,38 +1,8 @@
 use super::*;
+use crate::test_support::{page_texture as texture, upload_page as upload};
 use crate::{READBACK_TIMEOUT, WgpuRasterizer, layer_tests::page_bytes};
 use layer_core::color::RgbSpace;
 
-fn texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
-    r.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("native writeback test"),
-        size: wgpu::Extent3d {
-            width: 256,
-            height: 256,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::STORAGE_BINDING
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    })
-}
-fn upload(r: &WgpuRasterizer, texture: &wgpu::Texture, bytes: &[u8]) {
-    r.queue.write_texture(
-        texture.as_image_copy(),
-        bytes,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(256 * texture.format().block_copy_size(None).unwrap()),
-            rows_per_image: None,
-        },
-        texture.size(),
-    );
-}
 fn working_bytes(pixels: &[[f32; 4]]) -> Vec<u8> {
     pixels
         .iter()

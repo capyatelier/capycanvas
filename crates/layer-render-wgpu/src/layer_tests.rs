@@ -1,9 +1,7 @@
 //! Pixel assertions and bounded GPU-completion timings for layer composition.
 use super::*;
-use layer_core::{
-    BrushDeform, BrushRendering, BrushWetMix, LayerMask, LayerOperation, LayerOperationKind, Point,
-    Rect, Selection, StrokeId,
-};
+use crate::test_support::packet;
+use layer_core::{LayerMask, LayerOperation, LayerOperationKind, Point, Rect, Selection, StrokeId};
 use layer_render::{DabStyle, ViewState};
 #[path = "tonal_tests.rs"]
 mod tonal_selection;
@@ -47,34 +45,8 @@ pub(super) fn dab(color: [f32; 4]) -> Dab {
     }
 }
 pub(super) fn batch(id: u64) -> DabBatch {
-    DabBatch {
-        material_update: 0,
-        stroke_id: StrokeId(1),
-        layer_id: LayerId(id),
-        kind: DabBatchKind::Persistent,
-        stroke_start: true,
-        stroke_end: true,
-        first_dab: 0,
-        dab_count: 1,
-        style: DabStyle {
-            brush_to_layer: layer_core::Affine::IDENTITY,
-            alpha_locked: false,
-            selection: None,
-            tip: BrushTip::AnalyticEllipse,
-            mode: DabMode::Paint,
-            execution: BrushExecution::Dry,
-            grain: None,
-            rendering: BrushRendering::default(),
-            wet_mix: BrushWetMix::default(),
-            transport: None,
-            deform: BrushDeform::default(),
-            contact: None,
-        },
-        damage: Rect {
-            min: Point { x: 0., y: 0. },
-            max: Point { x: 128., y: 128. },
-        },
-    }
+    let damage = Rect { min: Point { x: 0., y: 0. }, max: Point { x: 128., y: 128. } };
+    crate::test_support::dab_batch(LayerId(id), crate::tests::test_style(BrushExecution::Dry), damage)
 }
 fn submit(
     r: &mut WgpuRasterizer,
@@ -83,17 +55,7 @@ fn submit(
     batches: &[DabBatch],
     reset: bool,
 ) {
-    r.submit(FramePacket {
-        view: view(),
-        document_extent: [128, 128],
-        layers,
-        dabs,
-        dab_batches: batches,
-        restore_rasters: &[],
-        reset_layers: reset,
-        time_seconds: 0.,
-        composite_all: true,
-    })
+    r.submit(FramePacket { dabs, dab_batches: batches, reset_layers: reset, ..packet(layers, [128, 128]) })
     .unwrap();
 }
 fn pixel(r: &mut WgpuRasterizer, x: usize, y: usize) -> [u8; 4] {
@@ -135,9 +97,14 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
         stroke.kind = if preview { DabBatchKind::Preview } else { DabBatchKind::Persistent };
         stroke.style = preset_style(layer_core::DefaultBrushPreset::Pencil);
         stroke.damage = ink.bounds();
-        r.submit(FramePacket { view: camera, document_extent: [1024; 2], layers: &layers,
-            dabs: &[ink], dab_batches: &[stroke], restore_rasters: &[],
-            reset_layers: i == 0, composite_all: i == 0, time_seconds: 0., }).unwrap();
+        r.submit(FramePacket {
+            view: camera,
+            dabs: &[ink],
+            dab_batches: &[stroke],
+            reset_layers: i == 0,
+            composite_all: i == 0,
+            ..packet(&layers, [1024; 2])
+        }).unwrap();
         if i > 0 { assert!(r.composite_damage.area() < 1024 * 1024); }
         retained.present(&r, &target.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
         let mut full = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
@@ -260,18 +227,11 @@ fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
         d.center = Point { x: 1024., y: 64. };
         d.radii = [3000.; 2];
         r.submit(FramePacket {
-            view: ViewState {
-                width_px: 2048,
-                ..view()
-            },
-            document_extent: extent,
-            layers: std::slice::from_ref(layer),
+            view: ViewState { width_px: 2048, ..view() },
             dabs: &[d],
             dab_batches: std::slice::from_ref(brush),
-            restore_rasters: &[],
             reset_layers: true,
-            time_seconds: 0.,
-            composite_all: true,
+            ..packet(std::slice::from_ref(layer), extent)
         })
         .unwrap();
         r.readback_srgb_rgba8().unwrap()
@@ -457,9 +417,11 @@ fn small_swept_contact_preview_matches_commit_and_preserves_distant_pixels() {
     let layers = [Layer::paint(LayerId(1), "small swept preview")];
     let render = |r: &mut WgpuRasterizer, dabs: &[Dab], batches: &[DabBatch], reset| {
         r.submit(FramePacket {
-            view: view(), document_extent: [1024; 2], layers: &layers,
-            dabs, dab_batches: batches, restore_rasters: &[], reset_layers: reset,
-            time_seconds: 0., composite_all: true,
+            view: view(),
+            dabs,
+            dab_batches: batches,
+            reset_layers: reset,
+            ..packet(&layers, [1024; 2])
         }).unwrap();
     };
     for preset in layer_core::CONTACT_BRUSH_PRESETS {

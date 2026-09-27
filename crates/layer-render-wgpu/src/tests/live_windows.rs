@@ -7,18 +7,8 @@ use layer_core::{LayerMask, Selection};
 
 fn packet(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
     FramePacket {
-        document_extent: extent,
-        layers,
-        view: ViewState {
-            background_rgba_linear: [0.; 4],
-            ..test_view()
-        },
-        time_seconds: 0.,
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: false,
-        composite_all: true,
+        view: ViewState { background_rgba_linear: [0.; 4], ..test_view() },
+        ..crate::test_support::packet(layers, extent)
     }
 }
 fn pixels(r: &WgpuRasterizer) -> Vec<u8> {
@@ -191,21 +181,11 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
     let before = pixels(&r);
     layers[2].raster = RasterRevision::pending();
     let dabs = [test_dab([255., 256.], [0.13, 0.72, 0.41, 0.37], 0.5)];
-    let batches = [DabBatch {
-        material_update: 0,
-        stroke_id: StrokeId(1),
-        layer_id: LayerId(1),
-        kind: DabBatchKind::Persistent,
-        stroke_start: true,
-        stroke_end: true,
-        first_dab: 0,
-        dab_count: 1,
-        style: test_style(BrushExecution::Dry),
-        damage: Rect {
-            min: Point { x: 235., y: 236. },
-            max: Point { x: 275., y: 276. },
-        },
-    }];
+    let batches = [crate::test_support::dab_batch(
+        LayerId(1),
+        test_style(BrushExecution::Dry),
+        Rect { min: Point { x: 235., y: 236. }, max: Point { x: 275., y: 276. } },
+    )];
     r.submit(FramePacket {
         dabs: &dabs,
         dab_batches: &batches,

@@ -108,20 +108,10 @@ fn cases() -> Vec<(&'static str, Box<dyn Fn(f32) -> ImageTransform>)> {
 fn submit(r: &mut WgpuRasterizer, layer: &Layer, reset: bool) {
     let zoom = (1920. / EXTENT[0] as f32).min(1080. / EXTENT[1] as f32);
     r.submit(FramePacket {
-        view: ViewState {
-            width_px: 1920,
-            height_px: 1080,
-            document_to_surface: [zoom, 0., 0., zoom, 0., 0.],
-            ..view()
-        },
-        document_extent: EXTENT,
-        layers: std::slice::from_ref(layer),
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
+        view: ViewState { width_px: 1920, height_px: 1080, document_to_surface: [zoom, 0., 0., zoom, 0., 0.], ..view() },
         reset_layers: reset,
-        time_seconds: 0.,
         composite_all: reset,
+        ..packet(std::slice::from_ref(layer), EXTENT)
     })
     .unwrap();
 }
@@ -346,20 +336,10 @@ fn native_submit(r: &mut WgpuRasterizer, layers: &[Layer], reset: bool) {
         (height as f32 - EXTENT[1] as f32 * zoom) * 0.5,
     ];
     r.submit(FramePacket {
-        view: ViewState {
-            width_px: width,
-            height_px: height,
-            document_to_surface: [zoom, 0., 0., zoom, offset[0], offset[1]],
-            ..view()
-        },
-        document_extent: EXTENT,
-        layers,
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
+        view: ViewState { width_px: width, height_px: height, document_to_surface: [zoom, 0., 0., zoom, offset[0], offset[1]], ..view() },
         reset_layers: reset,
-        time_seconds: 0.,
         composite_all: reset,
+        ..packet(layers, EXTENT)
     })
     .unwrap();
 }

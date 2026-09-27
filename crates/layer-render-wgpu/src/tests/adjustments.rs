@@ -52,32 +52,18 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
     view.background_rgba_linear = [0.; 4];
     let mut dab = test_dab([255., 150.], [0.8, 0.2, 0.1, 0.65], 1.);
     dab.radii = [45.; 2];
-    let batch = DabBatch {
-        material_update: 0,
-        stroke_id: StrokeId(1),
-        layer_id: LayerId(1),
-        kind: DabBatchKind::Persistent,
-        stroke_start: true,
-        stroke_end: true,
-        first_dab: 0,
-        dab_count: 1,
-        style: test_style(BrushExecution::Dry),
-        damage: Rect {
-            min: Point { x: 209., y: 104. },
-            max: Point { x: 301., y: 196. },
-        },
-    };
+    let batch = crate::test_support::dab_batch(
+        LayerId(1),
+        test_style(BrushExecution::Dry),
+        Rect { min: Point { x: 209., y: 104. }, max: Point { x: 301., y: 196. } },
+    );
     let render = |r: &mut WgpuRasterizer, all, dabs: &[Dab], batches: &[DabBatch]| {
         r.submit(FramePacket {
             view,
-            document_extent: [333, 291],
-            layers: &layers,
             dabs,
             dab_batches: batches,
-            restore_rasters: &[],
-            reset_layers: false,
-            time_seconds: 0.,
             composite_all: all,
+            ..packet(&layers, [333, 291])
         })
         .unwrap();
         let mut bytes = vec![0; 333 * 291 * 4];

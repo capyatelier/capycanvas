@@ -35,20 +35,7 @@ fn source(rgb: [f32; 3], alpha: f32) -> Layer {
 }
 fn frame(r: &mut WgpuRasterizer, layers: &[Layer]) -> [f32; 4] {
     r.submit(FramePacket {
-        view: ViewState {
-            width_px: 256,
-            height_px: 256,
-            background_rgba_linear: [0.; 4],
-            ..test_view()
-        },
-        document_extent: [256; 2],
-        layers,
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: false,
-        composite_all: true,
-        time_seconds: 0.,
+        ..packet(layers, [256; 2])
     })
     .unwrap();
     let bytes = crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap());

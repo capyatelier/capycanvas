@@ -1,37 +1,7 @@
 use super::*;
+use crate::test_support::{page_texture as texture, upload_page as upload};
 use layer_core::color::SampleDepth;
 
-fn texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
-    r.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("native capture fixture"),
-        size: wgpu::Extent3d {
-            width: PAGE_SIZE,
-            height: PAGE_SIZE,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::STORAGE_BINDING,
-        view_formats: &[],
-    })
-}
-fn upload(r: &WgpuRasterizer, t: &wgpu::Texture, bytes: &[u8]) {
-    r.queue.write_texture(
-        t.as_image_copy(),
-        bytes,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(PAGE_SIZE * t.format().block_copy_size(None).unwrap()),
-            rows_per_image: None,
-        },
-        t.size(),
-    );
-}
 fn descriptor(depth: SampleDepth) -> PixelDescriptor {
     PixelDescriptor {
             sample: layer_core::color::SampleType::Unsigned,

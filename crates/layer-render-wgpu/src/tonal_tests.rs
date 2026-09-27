@@ -108,18 +108,8 @@ fn tonal_cache_preserves_alpha_and_tracks_artwork_not_selection_or_navigation() 
             layers.insert(0, Layer::selection(LayerId(2), "Saved", saved));
         }
         r.submit(FramePacket {
-            view: ViewState {
-                document_to_surface: [2., 0., 0., 2., 15., 15.],
-                ..view()
-            },
-            document_extent: [3, 1],
-            layers: &layers,
-            dabs: &[],
-            dab_batches: &[],
-            restore_rasters: &[],
-            reset_layers: false,
-            time_seconds: 0.,
-            composite_all: true,
+            view: ViewState { document_to_surface: [2., 0., 0., 2., 15., 15.], ..view() },
+            ..packet(&layers, [3, 1])
         })
         .unwrap();
     };
@@ -208,17 +198,7 @@ fn opaque_photo_cache_preserves_odd_rows_and_falls_back_for_opacity() {
     layer.source = Some(Arc::new(builder.finish().unwrap()));
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let submit = |r: &mut WgpuRasterizer, layer: &Layer| {
-        r.submit(FramePacket {
-            view: view(),
-            document_extent: extent,
-            layers: std::slice::from_ref(layer),
-            dabs: &[],
-            dab_batches: &[],
-            restore_rasters: &[],
-            reset_layers: false,
-            time_seconds: 0.,
-            composite_all: true,
-        })
+        r.submit(FramePacket { view: view(), ..packet(std::slice::from_ref(layer), extent) })
         .unwrap()
     };
     submit(&mut r, &layer);
@@ -294,17 +274,7 @@ fn tonal_61mp_performance() {
     let mut layer = Layer::paint(LayerId(1), "Generated 61 MP photograph");
     layer.source = Some(Arc::new(builder.finish().unwrap()));
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-    r.submit(FramePacket {
-        view: view(),
-        document_extent: extent,
-        layers: &[layer.clone()],
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: true,
-        time_seconds: 0.,
-        composite_all: true,
-    })
+    r.submit(FramePacket { view: view(), reset_layers: true, ..packet(&[layer.clone()], extent) })
     .unwrap();
     let before = r.telemetry().resident_bytes;
     let mut held = Vec::new();
@@ -469,17 +439,7 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
     }
     let mut layer = Layer::paint(LayerId(1), "HDR ramp");
     layer.source = Some(Arc::new(source.finish().unwrap()));
-    r.submit(FramePacket {
-        view: view(),
-        document_extent: extent,
-        layers: &[layer],
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: true,
-        time_seconds: 0.,
-        composite_all: true,
-    })
+    r.submit(FramePacket { view: view(), reset_layers: true, ..packet(&[layer], extent) })
     .unwrap();
     let bands = vec![
         TonalBand::defaults()[0].clone(),
@@ -646,14 +606,10 @@ fn tonal_sdr_native_painted_source_and_composite() {
     };
     r.submit(FramePacket {
         view: view(),
-        document_extent: [512, 512],
-        layers: &[Layer::paint(LayerId(1), "Paint"), white],
         dabs: &[ink],
         dab_batches: &[stroke],
-        restore_rasters: &[],
         reset_layers: true,
-        time_seconds: 0.,
-        composite_all: true,
+        ..packet(&[Layer::paint(LayerId(1), "Paint"), white], [512, 512])
     })
     .unwrap();
     let _ = receive(

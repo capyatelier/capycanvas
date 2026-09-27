@@ -106,20 +106,7 @@ fn image_windows_match_full_composition_with_halos_masks_and_clipping() {
                 l.properties.parent = Some(LayerId(10));
             }
             let packet = FramePacket {
-                document_extent: extent,
-                layers: &layers,
-                view: ViewState {
-                    width_px: extent[0],
-                    height_px: extent[1],
-                    background_rgba_linear: [0.; 4],
-                    ..test_view()
-                },
-                time_seconds: 0.,
-                dabs: &[],
-                dab_batches: &[],
-                restore_rasters: &[],
-                reset_layers: false,
-                composite_all: true,
+                ..crate::test_support::packet(&layers, extent)
             };
             r.submit(packet).unwrap(); // Initializes real mask pages and renderer metadata.
             let mut scene = scene::Scene::new(&r);
@@ -176,17 +163,7 @@ fn image_windows_keep_document_sampler_dependencies_complete() {
         effect(2, false, false),
         effect(1, true, false),
     ];
-    let packet = FramePacket {
-        document_extent: extent,
-        layers: &layers,
-        view: test_view(),
-        time_seconds: 0.,
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: false,
-        composite_all: true,
-    };
+    let packet = FramePacket { view: test_view(), ..crate::test_support::packet(&layers, extent) };
     r.submit(packet).unwrap();
     let mut scene = scene::Scene::new(&r);
     let full = capture(&mut r, &mut scene, packet, PixelRect::full(extent));

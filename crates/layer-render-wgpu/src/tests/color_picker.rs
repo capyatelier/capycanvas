@@ -53,20 +53,7 @@ fn color_picker_circular_oklab_averaging_keeps_points_alpha_and_extended_values(
         doc.layers[0].raster = RasterRevision::backed(data);
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         r.submit(FramePacket {
-            document_extent: [128, 128],
-            layers: &doc.layers,
-            view: ViewState {
-                width_px: 128,
-                height_px: 128,
-                document_to_surface: [1., 0., 0., 1., 0., 0.],
-                background_rgba_linear: [0.; 4],
-            },
-            time_seconds: 0.,
-            dabs: &[],
-            dab_batches: &[],
-            restore_rasters: &[],
-            reset_layers: false,
-            composite_all: true,
+            ..packet(&doc.layers, [128, 128])
         })
         .unwrap();
         for area in [ColorSampleArea::Point, ColorSampleArea::Circle5] {

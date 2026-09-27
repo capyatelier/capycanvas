@@ -335,17 +335,7 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
 }
 
 fn packet<'a>(layers: &'a [Layer], reset: bool) -> FramePacket<'a> {
-    FramePacket {
-        view: view(),
-        document_extent: [256 * 17, 256],
-        layers,
-        dabs: &[],
-        dab_batches: &[],
-        restore_rasters: &[],
-        reset_layers: reset,
-        time_seconds: 0.,
-        composite_all: true,
-    }
+    FramePacket { view: view(), reset_layers: reset, ..crate::test_support::packet(layers, [256 * 17, 256]) }
 }
 fn restored_fixture(r: &mut WgpuRasterizer) -> Vec<Layer> {
     let color = r.document_color();
