@@ -626,7 +626,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 | WorkspaceInput::EditSwitcher { .. }
                 | WorkspaceInput::Search { .. }
                 | WorkspaceInput::FocusFailed { .. }
-        ) {
+        ) && (self.view.ready || !matches!(input, WorkspaceInput::Close))
+        {
             self.view.error = if matches!(input, WorkspaceInput::Cancel | WorkspaceInput::Dismiss) {
                 self.manager.error().map(|error| error.to_string())
             } else {
@@ -755,6 +756,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                             | WorkspaceInput::Retry
                     ) {
                         self.queued = Some(input);
+                        self.view.busy = true;
                         return Ok(change);
                     }
                     return Err(StoreError::invalid(
@@ -786,7 +788,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.view.switcher_busy = self.preferences.is_some();
         self.view.busy = (self.task.is_some() && !self.quiet)
             || self.incoming.is_some()
-            || self.install.is_some();
+            || self.install.is_some()
+            || self.queued.is_some();
         self.view.loading = self.preview.is_some();
         self.view.dirty = self.manager.dirty();
         self.view.saving = self.manager.saving();
@@ -991,14 +994,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         }
         let customize = |action| UiAction::Customize { action };
         Ok(match action {
-            ManagerAction::Switch(id) => self.switch(session, id, now)?,
-            ManagerAction::SwitchToWindow(id) => match self.focus_target(&id, now) {
-                Some(target) => {
-                    self.view.focus_window = Some(target);
-                    self.dismiss(session)
-                }
-                None => self.switch(session, id, now)?,
-            },
+            ManagerAction::Switch(id) | ManagerAction::SwitchToWindow(id) => {
+                self.switch(session, id, now)?
+            }
             ManagerAction::History(_) => self.open(session, ManagerPage::History)?,
             ManagerAction::RetryStorage => self.retry(session, now)?,
             ManagerAction::AddToolbar(id) => {
@@ -1107,13 +1105,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 });
                 Ok(change)
             }
-            Some(ManagerPage::Workspaces) => match self.focus_target(&id, now) {
-                Some(target) => {
-                    self.view.focus_window = Some(target);
-                    Ok(self.dismiss(session))
-                }
-                None => self.switch(session, id, now),
-            },
+            Some(ManagerPage::Workspaces) => self.switch(session, id, now),
             _ => {
                 let primary = self
                     .view

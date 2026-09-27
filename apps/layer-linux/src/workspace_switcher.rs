@@ -1,6 +1,6 @@
 //! Configurable header choices use normal workspace switching and ownership.
 use super::*;
-use layer_workspace::{DEFAULT_WORKSPACES, ManagerAction};
+use layer_workspace::DEFAULT_WORKSPACES;
 
 pub(super) fn build() -> (gtk::Box, gtk::Box) {
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -8,13 +8,15 @@ pub(super) fn build() -> (gtk::Box, gtk::Box) {
     root.add_css_class("workspace-switcher");
     root.set_valign(gtk::Align::Center);
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-    let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::External)
-        .vscrollbar_policy(gtk::PolicyType::Never)
-        .propagate_natural_width(true)
-        .max_content_width(420)
-        .child(&buttons)
-        .build());
+    let scroll = crate::input::pen_scroller(
+        gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::External)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_width(true)
+            .max_content_width(420)
+            .child(&buttons)
+            .build(),
+    );
     root.append(&scroll);
     (root, buttons)
 }
@@ -22,25 +24,17 @@ pub(super) fn build() -> (gtk::Box, gtk::Box) {
 impl NativeWorkspaces {
     pub fn switcher_popup(&self, w: &Rc<Workspace>) -> gtk::PopoverMenu {
         let menu = gtk::gio::Menu::new();
-        let active = self.manager.as_ref().and_then(|m| m.active_id());
+        let view = self.view();
         let action = gtk::gio::SimpleAction::new_stateful(
             "select",
             Some(glib::VariantTy::STRING),
-            &active.unwrap_or_default().to_variant(),
+            &view.id.clone().unwrap_or_default().to_variant(),
         );
-        action.set_enabled(self.manager.is_some() && self.ready.get());
-        if let Some(manager) = &self.manager {
-            let items = manager.items();
-            for id in manager.switcher_display_ids() {
-                if let Some(item) = items.iter().find(|item| item.id == id) {
-                    let row = gtk::gio::MenuItem::new(Some(&item.metadata.name), None);
-                    row.set_action_and_target_value(
-                        Some("switcher.select"),
-                        Some(&id.to_variant()),
-                    );
-                    menu.append_item(&row);
-                }
-            }
+        action.set_enabled(self.controller.borrow().is_some() && view.ready);
+        for row in &view.switcher_display {
+            let item = gtk::gio::MenuItem::new(Some(&row.title), None);
+            item.set_action_and_target_value(Some("switcher.select"), Some(&row.id.to_variant()));
+            menu.append_item(&item);
         }
         let popup = gtk::PopoverMenu::from_model(Some(&menu));
         popup.set_widget_name("workspace-switcher-popup");
@@ -71,13 +65,13 @@ impl NativeWorkspaces {
         let Some(w) = self.switch_owner.borrow().upgrade() else {
             return;
         };
-        let ids = self
-            .manager
-            .as_ref()
-            .map(|m| m.switcher_display_ids())
-            .unwrap_or_default();
-        let active = self.manager.as_ref().and_then(|m| m.active_id());
-        let items = self.manager.as_ref().map(|m| m.items()).unwrap_or_default();
+        let view = self.view();
+        let ids: Vec<_> = view
+            .switcher_display
+            .iter()
+            .map(|row| row.id.clone())
+            .collect();
+        let active = view.id.clone();
         let mut buttons = self.switch_buttons.borrow_mut();
         if buttons.iter().map(|(id, _)| id).ne(ids.iter()) {
             let body = &self.switch_body;
@@ -114,11 +108,8 @@ impl NativeWorkspaces {
                 scroll.hadjustment().set_value(0.);
             }
         }
-        for (id, button) in buttons.iter() {
-            let Some(item) = items.iter().find(|i| &i.id == id) else {
-                continue;
-            };
-            let name = &item.metadata.name;
+        for ((id, button), row) in buttons.iter().zip(&view.switcher_display) {
+            let name = &row.title;
             if let Some(label) = button.child().and_downcast::<gtk::Label>() {
                 label.set_text(name);
             }
@@ -128,40 +119,22 @@ impl NativeWorkspaces {
         }
         self.switcher.set_visible(!ids.is_empty());
         self.switcher
-            .set_sensitive(self.manager.is_some() && self.ready.get());
+            .set_sensitive(self.controller.borrow().is_some() && view.ready);
     }
 
     fn switch_to(&self, w: &Rc<Workspace>, id: String) {
         // Both presentations reflect the workspace actually adopted, even if
         // the requested switch fails or focuses a different window.
         self.update_switcher();
-        if !self.ready.get()
+        let view = self.view();
+        if !view.ready
+            || view.busy
             || !self.accepts_input(w)
-            || self.busy.get()
-            || self.switch_pending.get()
-            || self
-                .manager
-                .as_ref()
-                .is_none_or(|m| m.active_id().as_deref() == Some(id.as_str()))
+            || view.id.as_deref() == Some(id.as_str())
         {
             return;
         }
-        self.switch_pending.set(true);
-        self.update_switcher();
-        glib::spawn_future_local(glib::clone!(
-            #[weak]
-            w,
-            async move {
-                let native = &w.workspaces;
-                let result = native.perform(&w, ManagerAction::Switch(id.into())).await;
-                if let Err(error) = result {
-                    w.status.set_text(&error.to_string());
-                    w.status.set_visible(true);
-                }
-                native.switch_pending.set(false);
-                native.update_status();
-            }
-        ));
+        self.send(w, WorkspaceInput::Switch { id });
     }
 }
 

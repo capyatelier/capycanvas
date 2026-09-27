@@ -83,6 +83,20 @@ impl Workspace {
     }
 
     pub(crate) fn service_requests(self: &Rc<Self>) {
+        let workspace = self.gpu.borrow().as_ref().is_some_and(|g| {
+            g.session
+                .state()
+                .requests
+                .iter()
+                .any(|r| matches!(r.kind, HostRequestKind::Workspace { .. }))
+        });
+        if workspace {
+            glib::idle_add_local_once(glib::clone!(
+                #[weak(rename_to = w)]
+                self,
+                move || w.workspaces.tick(&w)
+            ));
+        }
         if self.servicing.replace(true) {
             return;
         }
@@ -97,7 +111,14 @@ impl Workspace {
                         .gpu
                         .borrow()
                         .as_ref()
-                        .and_then(|g| g.session.state().requests.first().cloned());
+                        .and_then(|g| {
+                            g.session
+                                .state()
+                                .requests
+                                .iter()
+                                .find(|r| !matches!(r.kind, HostRequestKind::Workspace { .. }))
+                                .cloned()
+                        });
                     let Some(request) = next else {
                         break;
                     };
@@ -171,9 +192,6 @@ impl Workspace {
                                 HostRequestKind::SaveSettings { settings } => {
                                     crate::preferences::persist(&w, settings).await
                                 }
-                                HostRequestKind::Workspace { command } => {
-                                    w.workspaces.command(&w, command).await
-                                }
                                 HostRequestKind::OpenLink { link } => {
                                     gtk::UriLauncher::new(link.url())
                                         .launch_future(Some(&w.window))
@@ -184,7 +202,9 @@ impl Workspace {
                                     crate::preferences::export_keymap(&w, name, text).await
                                 }
                                 HostRequestKind::ImportKeymap => crate::preferences::import_keymap(&w).await,
-                                HostRequestKind::Document { .. } => unreachable!(),
+                                HostRequestKind::Document { .. } | HostRequestKind::Workspace { .. } => {
+                                    unreachable!()
+                                }
                             };
                             w.dispatch(UiAction::CompleteRequest {
                                 id: request.id,

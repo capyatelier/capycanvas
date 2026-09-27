@@ -61,14 +61,8 @@ fn native_workspace_transition_stability() {
             click(&w, &mut input, &button);
             until(
                 || {
-                    !w.workspaces.busy.get()
-                        && w.workspaces
-                            .manager
-                            .as_ref()
-                            .unwrap()
-                            .active_id()
-                            .as_deref()
-                            == Some(id)
+                    !w.workspaces.busy()
+                        && w.workspaces.manager().unwrap().active_id().as_deref() == Some(id)
                 },
                 "workspace switch",
             );
@@ -77,7 +71,8 @@ fn native_workspace_transition_stability() {
     }
     // The same owner validation runs after a lease has expired or ownership
     // was lost while this window was inactive.
-    w.workspaces.revalidate(&w);
+    w.workspaces
+        .send(&w, layer_workspace::WorkspaceInput::Resume);
     pump(300);
     // Hold the host's pause long enough to deliver real input. Checking the
     // button signal catches native activation even if the model rejects it.
@@ -92,9 +87,8 @@ fn native_workspace_transition_stability() {
         move |_| activations.set(activations.get() + 1)
     ));
     assert!(painter.grab_focus());
-    let active = w.workspaces.manager.as_ref().unwrap().active_id();
-    w.workspaces.busy.set(true);
-    w.workspaces.update_status();
+    let active = w.workspaces.manager().unwrap().active_id();
+    w.workspaces.pause(&w, true);
     click(&w, &mut input, painter.upcast_ref());
     let point = screen_point(painter.upcast_ref(), &w.window, [0.5, 0.5]);
     input.perform(serde_json::json!([
@@ -107,9 +101,8 @@ fn native_workspace_transition_stability() {
         0,
         "Paused editor must block mouse, touch and keyboard activation"
     );
-    assert_eq!(w.workspaces.manager.as_ref().unwrap().active_id(), active);
-    w.workspaces.busy.set(false);
-    w.workspaces.update_status();
+    assert_eq!(w.workspaces.manager().unwrap().active_id(), active);
+    w.workspaces.pause(&w, false);
     click(&w, &mut input, painter.upcast_ref());
     assert_eq!(
         activations.get(),
@@ -117,12 +110,7 @@ fn native_workspace_transition_stability() {
         "Input resumes without replacing widgets or losing their signals"
     );
     assert_eq!(
-        w.workspaces
-            .manager
-            .as_ref()
-            .unwrap()
-            .active_id()
-            .as_deref(),
+        w.workspaces.manager().unwrap().active_id().as_deref(),
         Some(DEFAULT_WORKSPACES[0].0)
     );
     pump(250);
@@ -131,11 +119,7 @@ fn native_workspace_transition_stability() {
     capture_reference(&w, &input.dir.join("steady.png").to_string_lossy(), 1.0);
     // A real failure still needs visible recovery actions, without moving the
     // canvas or changing its viewport and GPU swapchain size.
-    w.workspaces.show_error(layer_workspace::StoreError::new(
-        layer_workspace::ErrorKind::FailedWrite,
-        "Test storage failure",
-    ));
-    w.workspaces.update_status();
+    w.workspaces.report_error(&w, "Test storage failure");
     pump(200);
     assert!(w.workspaces.root.is_visible());
     capture_reference(&w, &input.dir.join("notice.png").to_string_lossy(), 1.0);
@@ -257,7 +241,7 @@ fn native_workspace_manager_visual() {
             )
             .unwrap();
         }
-        w.workspaces.ui.close();
+        w.workspaces.ui.close(&w);
         pump(250);
     }
     input.finish();
@@ -273,7 +257,7 @@ fn native_starting_layout_preview() {
     let w = Workspace::new(&app);
     w.window.present();
     wait_workspaces(&w);
-    let manager = w.workspaces.manager.as_ref().unwrap();
+    let manager = w.workspaces.manager().unwrap();
     let baseline = manager
         .current()
         .unwrap()
@@ -301,22 +285,12 @@ fn native_starting_layout_preview() {
     assert_ne!(before.history.layout(), &baseline);
     let id = manager.active_id().unwrap();
     for confirm in [false, true] {
-        let done = Rc::new(Cell::new(false));
-        glib::spawn_future_local(glib::clone!(
-            #[strong]
-            w,
-            #[strong]
-            id,
-            #[strong]
-            done,
-            async move {
-                w.workspaces
-                    .perform(&w, layer_workspace::ManagerAction::Reset(id))
-                    .await
-                    .unwrap();
-                done.set(true);
-            }
-        ));
+        w.workspaces.send(
+            &w,
+            layer_workspace::WorkspaceInput::Form {
+                action: layer_workspace::ManagerAction::Reset(id.clone()),
+            },
+        );
         let deadline = Instant::now() + Duration::from_secs(10);
         let restore = loop {
             pump(20);
@@ -345,10 +319,13 @@ fn native_starting_layout_preview() {
                 .unwrap()
                 .emit_clicked();
         }
-        while !done.get() {
-            pump(20);
-            assert!(Instant::now() < deadline);
-        }
+        until(
+            || {
+                let view = w.workspaces.view();
+                view.prompt.is_none() && !view.busy
+            },
+            "starting layout dialog closes",
+        );
         pump(200);
         if !confirm {
             assert_eq!(capture(), before);
@@ -390,13 +367,30 @@ fn check_active_workspace_delete(occupied_default: bool) {
     let w = Workspace::new(&app);
     w.window.present();
     wait_workspaces(&w);
-    let manager = w.workspaces.manager.as_ref().unwrap();
+    let manager = w.workspaces.manager().unwrap();
     let original = manager.current().unwrap().capture().unwrap();
     let create = |name: &str| {
-        glib::MainContext::default().block_on(async {
-            let incoming = manager.create_workspace(name, now_ms()).await.unwrap();
-            w.workspaces.adopt(&w, Ok(incoming)).await;
-        });
+        w.workspaces.send(
+            &w,
+            layer_workspace::WorkspaceInput::Form {
+                action: layer_workspace::ManagerAction::New,
+            },
+        );
+        w.workspaces.send(
+            &w,
+            layer_workspace::WorkspaceInput::Submit {
+                name: name.into(),
+                description: None,
+                choice: None,
+            },
+        );
+        until(
+            || {
+                let view = w.workspaces.view();
+                view.name == name && !view.busy && view.prompt.is_none()
+            },
+            "workspace creation",
+        );
         pump(100);
         manager.active_id().unwrap()
     };
@@ -499,7 +493,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
         assert_eq!(other.current().unwrap().capture().unwrap(), original);
         assert!(other.lease_valid(now_ms()));
     }
-    w.workspaces.ui.close();
+    w.workspaces.ui.close(&w);
     pump(300);
     w.window.close();
     until(|| !w.window.is_visible(), "acknowledged close");
@@ -508,7 +502,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
     let reopened = Workspace::new(&app);
     reopened.window.present();
     wait_workspaces(&reopened);
-    let manager = reopened.workspaces.manager.as_ref().unwrap();
+    let manager = reopened.workspaces.manager().unwrap();
     assert_eq!(manager.active_id().as_deref(), Some(replacement));
     assert!(
         !manager
@@ -626,7 +620,7 @@ fn native_workspace_switcher_input() {
     w.window.present();
     wait_workspaces(&w);
     pump(300);
-    let manager = w.workspaces.manager.as_ref().unwrap();
+    let manager = w.workspaces.manager().unwrap();
     let [p, i, f] = DEFAULT_WORKSPACES.map(|(id, _)| id.to_string());
     let original = manager.current().unwrap().capture().unwrap();
     let document = w
@@ -993,7 +987,7 @@ fn native_workspace_switcher_input() {
     reopened.window.present();
     wait_workspaces(&reopened);
     assert_eq!(
-        reopened.workspaces.manager.as_ref().unwrap().switcher_ids(),
+        reopened.workspaces.manager().unwrap().switcher_ids(),
         [p, custom.clone()]
     );
     // This fixture may import its unbound legacy settings on reopening. Any
@@ -1001,8 +995,7 @@ fn native_workspace_switcher_input() {
     assert!(
         reopened
             .workspaces
-            .manager
-            .as_ref()
+            .manager()
             .unwrap()
             .workspace_ids()
             .starts_with(&saved_order)

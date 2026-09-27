@@ -1,18 +1,23 @@
-//! GTK lifecycle and asynchronous transport for the shared workspace manager.
+//! GTK widgets, input gate, window activation and the owner-window registry
+//! around the shared workspace controller.
 use super::*;
-use layer_workspace::{StoreError, StoreWorker, StoredEntity, WorkspaceManager};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use layer_workspace::{
+    ManagerAction, ManagerPage, StoreWorker, WorkspaceController, WorkspaceInput, WorkspaceView,
+};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
-type Manager = WorkspaceManager<StoreWorker>;
+type Controller = WorkspaceController<StoreWorker>;
 thread_local! {
     static WINDOWS: RefCell<std::collections::BTreeMap<String, std::rc::Weak<Workspace>>> = RefCell::new(std::collections::BTreeMap::new());
 }
-#[path = "workspace_manager_actions.rs"]
-mod actions;
 #[path = "workspace_manager_dialog.rs"]
 mod dialog;
-#[path = "workspace_history_dialog.rs"]
-mod history;
 #[path = "workspace_manager_storage.rs"]
 mod storage;
 #[path = "workspace_switcher.rs"]
@@ -23,36 +28,29 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
+fn window(owner: &str) -> Option<Rc<Workspace>> {
+    WINDOWS.with(|windows| windows.borrow().get(owner).and_then(std::rc::Weak::upgrade))
+}
 
 pub(crate) struct NativeWorkspaces {
     pub ui: dialog::ManagerUi,
-    pub manager: Option<Rc<Manager>>,
+    store: RefCell<Option<StoreWorker>>,
+    controller: RefCell<Option<Controller>>,
+    view: RefCell<WorkspaceView>,
     pub root: gtk::Box,
     pub label: gtk::Label,
     pub switcher: gtk::Box,
     switch_body: gtk::Box,
     switch_buttons: RefCell<Vec<(String, gtk::ToggleButton)>>,
     switch_owner: RefCell<std::rc::Weak<Workspace>>,
-    switch_pending: Cell<bool>,
     retry: gtk::Button,
     recovery: gtk::Button,
-    pub ready: Cell<bool>,
-    pub busy: Cell<bool>,
-    operation_generation: Cell<u64>,
-    validating_owner: Cell<bool>,
-    owner_lost: Cell<bool>,
-    interrupted_count: Cell<usize>,
-    interruption_error: RefCell<Option<String>>,
-    close_ready: Cell<bool>,
     close_requested: Cell<bool>,
     close_prompt: Cell<bool>,
-    layout_pending: Cell<bool>,
-    captured_generation: Cell<Option<u64>>,
-    last_edit: Cell<Instant>,
-    last_save: Cell<Instant>,
-    last_renew: Cell<Instant>,
-    last_maintenance: Cell<Instant>,
-    failed_snapshot: RefCell<Option<WorkspaceCapture>>,
+    focused: RefCell<Option<layer_workspace::FocusTarget>>,
+    switcher_revision: Cell<u64>,
+    #[cfg(test)]
+    paused: Cell<bool>,
 }
 impl NativeWorkspaces {
     pub fn new() -> Self {
@@ -61,9 +59,7 @@ impl NativeWorkspaces {
             .or_else(|| {
                 (!cfg!(test)).then(|| glib::user_data_dir().join("art.capycanvas.CapyCanvas"))
             });
-        let manager = directory
-            .and_then(|directory| StoreWorker::shared(&directory).ok())
-            .map(|worker| Rc::new(Manager::new(worker, Platform::Gtk)));
+        let store = directory.and_then(|directory| StoreWorker::shared(&directory).ok());
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         root.set_widget_name("workspace-save-status");
         root.add_css_class("workspace-save-status");
@@ -85,39 +81,28 @@ impl NativeWorkspaces {
         let recovery = gtk::Button::with_label("Save as New Workspace…");
         recovery.set_visible(false);
         root.append(&recovery);
-        root.set_visible(manager.is_some());
+        root.set_visible(store.is_some());
         let (switcher, switch_body) = switcher::build();
         switcher.set_sensitive(false);
-        let now = Instant::now();
         Self {
             ui: dialog::ManagerUi::new(),
-            ready: Cell::new(manager.is_none()),
-            manager,
+            store: RefCell::new(store),
+            controller: RefCell::new(None),
+            view: RefCell::new(WorkspaceView::default()),
             root,
             label,
             switcher,
             switch_body,
             switch_buttons: RefCell::new(Vec::new()),
             switch_owner: RefCell::new(std::rc::Weak::new()),
-            switch_pending: Cell::new(false),
             retry,
             recovery,
-            busy: Cell::new(false),
-            operation_generation: Cell::new(0),
-            validating_owner: Cell::new(false),
-            owner_lost: Cell::new(false),
-            interrupted_count: Cell::new(0),
-            interruption_error: RefCell::new(None),
-            close_ready: Cell::new(false),
             close_requested: Cell::new(false),
             close_prompt: Cell::new(false),
-            layout_pending: Cell::new(false),
-            captured_generation: Cell::new(None),
-            last_edit: Cell::new(now),
-            last_save: Cell::new(now),
-            last_renew: Cell::new(now),
-            last_maintenance: Cell::new(now),
-            failed_snapshot: RefCell::new(None),
+            focused: RefCell::new(None),
+            switcher_revision: Cell::new(0),
+            #[cfg(test)]
+            paused: Cell::new(false),
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
@@ -153,69 +138,27 @@ impl NativeWorkspaces {
             }
         ));
         w.surface.add_controller(gate);
-        if let Some(manager) = &self.manager {
-            WINDOWS.with(|windows| {
-                windows
-                    .borrow_mut()
-                    .insert(manager.owner.id.clone(), Rc::downgrade(w));
-            });
-        }
         self.ui.bind(w);
         self.bind_switcher(w);
-        w.window.connect_is_active_notify(glib::clone!(
-            #[weak]
-            w,
-            move |window| {
-                if window.is_active() {
-                    // A live lease already fences other writers. Disabling the
-                    // editor on ordinary activation cancels the native click
-                    // that focused it, including menu and context-menu grabs.
-                    if w.workspaces.owner_lost.get()
-                        || w.workspaces
-                            .manager
-                            .as_ref()
-                            .is_some_and(|m| !m.lease_valid(now_ms()))
-                    {
-                        w.workspaces.revalidate(&w);
-                    }
-                } else if w.workspaces.ready.get() {
-                    w.workspaces.save(&w, false);
-                }
-            }
-        ));
         self.recovery.connect_clicked(glib::clone!(
             #[weak]
             w,
             move |_| {
-                w.workspaces.ui.run(
-                    &w,
-                    if w.workspaces.interrupted_count.get() > 0
-                        && w.workspaces
-                            .manager
-                            .as_ref()
-                            .is_some_and(|m| m.error().is_none())
-                    {
-                        layer_workspace::ManagerAction::RecoverInterrupted
-                    } else {
-                        layer_workspace::ManagerAction::SaveAsNew
-                    },
-                );
+                let view = w.workspaces.view();
+                let action = if view.interrupted > 0 && view.error.is_none() {
+                    ManagerAction::RecoverInterrupted
+                } else {
+                    ManagerAction::SaveAsNew
+                };
+                w.workspaces.send(&w, WorkspaceInput::Form { action });
             }
         ));
         self.retry.connect_clicked(glib::clone!(
             #[weak]
             w,
-            move |_| {
-                if w.workspaces.ready.get() {
-                    w.workspaces
-                        .ui
-                        .run(&w, layer_workspace::ManagerAction::RetryStorage);
-                } else {
-                    w.workspaces.start(&w);
-                }
-            }
+            move |_| w.workspaces.send(&w, WorkspaceInput::Retry)
         ));
-        if self.manager.is_none() {
+        if self.store.borrow().is_none() {
             return;
         }
         glib::timeout_add_local(
@@ -233,387 +176,239 @@ impl NativeWorkspaces {
         );
     }
     pub fn start(&self, w: &Rc<Workspace>) {
-        let Some(manager) = self.manager.clone() else {
+        let Some(store) = self.store.borrow_mut().take() else {
             return;
         };
-        if self.busy.replace(true) {
-            return;
-        }
-        let recovery = w
-            .gpu
-            .borrow_mut()
-            .as_mut()
-            .and_then(|g| g.session.capture_workspace().ok())
-            .filter(|capture| {
-                self.failed_snapshot
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|old| old != capture)
-            });
-        self.update_input_state(w);
-        self.label.set_text("Opening workspace…");
-        glib::spawn_future_local(glib::clone!(
-            #[weak]
-            w,
-            async move {
-                // Startup can still be compiling installed filter resources.
-                // Let rendering finish that preparation before the idle-only
-                // workspace adoption, while editor input remains paused.
-                let deadline = Instant::now() + Duration::from_secs(30);
-                loop {
-                    let result = w
-                        .gpu
-                        .borrow_mut()
-                        .as_mut()
-                        .ok_or("Canvas unavailable".to_string())
-                        .and_then(|g| g.session.begin_workspace_transition());
-                    match result {
-                        Ok(()) => break,
-                        Err(error)
-                            if w.workspaces.failed_snapshot.borrow().is_some()
-                                || Instant::now() >= deadline =>
-                        {
-                            w.workspaces
-                                .adopt(&w, Err(StoreError::invalid(error)))
-                                .await;
-                            return;
-                        }
-                        Err(_) => {
-                            w.wake();
-                            glib::timeout_future(Duration::from_millis(16)).await;
-                        }
+        let mut controller = Controller::new(store, Platform::Gtk, now_ms());
+        let owner = controller.manager.owner.id.clone();
+        let pending = Arc::new(AtomicBool::new(false));
+        let target = owner.clone();
+        controller.set_wake(Arc::new(move || {
+            if !pending.swap(true, Ordering::AcqRel) {
+                let pending = pending.clone();
+                let target = target.clone();
+                glib::idle_add_once(move || {
+                    pending.store(false, Ordering::Release);
+                    if let Some(w) = window(&target) {
+                        w.workspaces.tick(&w);
                     }
-                }
-                let _ = manager
-                    .store
-                    .request(layer_workspace::StoreRequest::Reopen)
-                    .await;
-                let mut result = manager.initialize(now_ms()).await;
-                if let Err(error) = manager.refresh_switcher().await {
-                    w.workspaces.ui.error(&error.to_string());
-                }
-                if let (Ok(incoming), Some(capture)) = (&result, recovery) {
-                    manager.release(incoming).await;
-                    result = manager
-                        .save_as_new(capture, "Recovered Workspace", now_ms())
-                        .await;
-                }
-                w.workspaces.adopt(&w, result).await;
+                });
             }
-        ));
+        }));
+        WINDOWS.with(|windows| windows.borrow_mut().insert(owner, Rc::downgrade(w)));
+        *self.controller.borrow_mut() = Some(controller);
+        self.tick(w);
     }
-    pub async fn adopt(&self, w: &Rc<Workspace>, incoming: Result<StoredEntity, StoreError>) {
-        let manager = self.manager.as_ref().unwrap();
-        match incoming {
-            Ok(incoming) => {
-                let result = incoming
-                    .entity
-                    .capture()
-                    .and_then(|capture| {
-                        PreparedWorkspace::new(capture).map_err(StoreError::invalid)
-                    })
-                    .and_then(|prepared| {
-                        w.gpu
-                            .borrow_mut()
-                            .as_mut()
-                            .ok_or_else(|| StoreError::invalid("Canvas unavailable."))?
-                            .session
-                            .adopt_workspace(prepared)
-                            .map_err(StoreError::invalid)
-                    });
-                match result {
-                    Ok(change) => {
-                        self.owner_lost.set(false);
-                        if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
-                            gpu.session.set_workspace_read_only(false);
-                        }
-                        let outgoing = manager.activate(incoming);
-                        self.sync_binding(w);
-                        self.ready.set(true);
-                        self.layout_pending.set(false);
-                        self.captured_generation.set(None);
-                        w.changed(Ok(change));
-                        if let Some(outgoing) = outgoing
-                            && manager.active_id().as_deref() != Some(&outgoing.entity.id)
-                        {
-                            manager.release(&outgoing).await;
-                        }
-                        if let Err(error) = manager.refresh().await {
-                            self.show_error(error);
-                        }
-                        self.refresh_interrupted().await;
-                    }
-                    Err(error) => {
-                        manager.release(&incoming).await;
-                        self.show_error(error);
-                    }
-                }
-            }
-            Err(error) => {
-                if !self.ready.get() {
-                    *self.failed_snapshot.borrow_mut() = w
-                        .gpu
-                        .borrow_mut()
-                        .as_mut()
-                        .and_then(|g| g.session.capture_workspace().ok());
-                }
-                self.show_error(error);
-            }
-        }
-        if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
-            gpu.session.end_workspace_transition();
-        }
-        self.busy.set(false);
-        self.update_input_state(w);
-        self.update_status();
-        if self.close_requested.get() {
-            w.window.close();
-        }
+    #[cfg(test)]
+    pub fn manager(&self) -> Option<Rc<layer_workspace::WorkspaceManager<StoreWorker>>> {
+        self.controller.borrow().as_ref().map(|c| c.manager.clone())
+    }
+    /// The controller view as last rendered.
+    pub fn view(&self) -> WorkspaceView {
+        self.view.borrow().clone()
+    }
+    #[cfg(test)]
+    pub fn ready(&self) -> bool {
+        self.controller.borrow().is_none() && self.store.borrow().is_none()
+            || self.view.borrow().ready
+    }
+    #[cfg(test)]
+    pub fn busy(&self) -> bool {
+        self.view.borrow().busy
+    }
+    /// Startup has not adopted a workspace yet.
+    pub fn starting(&self) -> bool {
+        self.controller.borrow().is_some() && !self.view.borrow().ready
     }
     pub fn observe(&self, w: &Workspace, regions: u32) {
-        if !self.ready.get() || self.busy.get() {
-            return;
+        if let Ok(mut controller) = self.controller.try_borrow_mut()
+            && let Some(controller) = controller.as_mut()
+            && let Ok(mut gpu) = w.gpu.try_borrow_mut()
+            && let Some(gpu) = gpu.as_mut()
+        {
+            controller.observe_regions(&mut gpu.session, regions, now_ms());
         }
-        let Some(manager) = self.manager.as_ref() else {
-            return;
-        };
-        if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
-            self.layout_pending.set(true);
-        }
-        if regions & (regions::BRUSH | regions::LAYOUT | regions::COMMANDS) != 0 {
-            if let Some(gpu) = w.gpu.borrow().as_ref() {
-                manager.observe_working(gpu.session.workspace_working_state());
-            }
-            self.last_edit.set(Instant::now());
-        }
-        self.capture(w);
-        self.update_status();
     }
-    fn capture(&self, w: &Workspace) {
-        if !self.layout_pending.get() {
+    fn run(
+        &self,
+        w: &Rc<Workspace>,
+        step: impl FnOnce(
+            &mut Controller,
+            &mut UiSession<crate::render_thread::RenderWorker>,
+        ) -> UiChange,
+    ) -> bool {
+        let change = {
+            let (Ok(mut controller), Ok(mut gpu)) =
+                (self.controller.try_borrow_mut(), w.gpu.try_borrow_mut())
+            else {
+                return false;
+            };
+            let (Some(controller), Some(gpu)) = (controller.as_mut(), gpu.as_mut()) else {
+                return true;
+            };
+            step(controller, &mut gpu.session)
+        };
+        if change.regions != 0 || change.canvas_wake {
+            w.changed(Ok(change));
+        }
+        true
+    }
+    pub fn tick(&self, w: &Rc<Workspace>) {
+        let ticked = self.run(w, |controller, session| controller.tick(session, now_ms()));
+        if !ticked {
+            glib::idle_add_local_once(glib::clone!(
+                #[weak]
+                w,
+                move || w.workspaces.tick(&w)
+            ));
             return;
         }
-        let generation = w
-            .gpu
+        self.render(w);
+    }
+    pub fn send(&self, w: &Rc<Workspace>, input: WorkspaceInput) {
+        let mut input = Some(input);
+        let sent = self.run(w, |controller, session| {
+            match controller.input(session, input.take().unwrap(), now_ms()) {
+                Ok(change) => change,
+                Err(error) => {
+                    controller.view.error = Some(error.to_string());
+                    UiChange::default()
+                }
+            }
+        });
+        if !sent {
+            let input = input.take().unwrap();
+            glib::idle_add_local_once(glib::clone!(
+                #[weak]
+                w,
+                move || w.workspaces.send(&w, input)
+            ));
+            return;
+        }
+        self.tick(w);
+    }
+    pub fn accepts_input(&self, _w: &Rc<Workspace>) -> bool {
+        #[cfg(test)]
+        if self.paused.get() {
+            return false;
+        }
+        let controller = self.controller.borrow();
+        let Some(controller) = controller.as_ref() else {
+            return true;
+        };
+        let view = &controller.view;
+        !view.busy
+            && !view.owner_lost
+            && !view.closing
+            && !view.closed
+            && (!view.ready || controller.manager.lease_valid(now_ms()))
+    }
+    fn render(&self, w: &Rc<Workspace>) {
+        let Some(view) = self
+            .controller
             .borrow()
             .as_ref()
-            .and_then(|g| g.session.workspace_layout_generation());
-        if generation.is_some() && generation == self.captured_generation.get() {
-            self.layout_pending.set(false);
-            return;
-        }
-        if let Some(manager) = &self.manager
-            && let Some(gpu) = w.gpu.borrow_mut().as_mut()
-            && let Ok(capture) = gpu.session.capture_workspace()
-        {
-            manager.observe(capture, now_ms());
-            self.layout_pending.set(false);
-            self.captured_generation.set(generation);
-        }
-    }
-    fn tick(&self, w: &Rc<Workspace>) {
-        if !self.ready.get() || self.busy.get() {
-            return;
-        }
-        let Some(manager) = &self.manager else {
+            .map(|controller| controller.view.clone())
+        else {
             return;
         };
-        if !manager.lease_valid(now_ms()) {
-            if !self.owner_lost.get() {
-                self.revalidate(w);
-            }
-            return;
-        }
-        self.capture(w);
-        if self.last_maintenance.get().elapsed() >= Duration::from_secs(60)
-            && !manager.saving()
-            && manager.error().is_none()
-            && w.gpu
-                .borrow()
-                .as_ref()
-                .is_some_and(|g| g.session.require_workspace_idle().is_ok())
-        {
-            self.last_maintenance.set(Instant::now());
-            glib::spawn_future_local(glib::clone!(
-                #[weak]
-                w,
-                async move {
-                    if let Err(error) = w.workspaces.maintain_storage(&w).await {
-                        w.workspaces.show_error(error);
-                    }
-                }
-            ));
-            return;
-        }
-        if self.last_renew.get().elapsed() >= Duration::from_millis(layer_workspace::OWNER_RENEW_MS)
-        {
-            self.last_renew.set(Instant::now());
-            let manager = manager.clone();
-            glib::spawn_future_local(glib::clone!(
-                #[weak]
-                w,
-                async move {
-                    let id = manager.active_id();
-                    let result = manager.renew().await;
-                    if manager.active_id() != id {
-                        return;
-                    }
-                    if let Err(error) = result {
-                        w.workspaces.show_error(error);
-                        if !manager.lease_valid(now_ms()) {
-                            w.workspaces.owner_lost.set(true);
-                            if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
-                                gpu.session.set_workspace_read_only(true);
-                            }
-                        }
-                    }
-                    w.workspaces.refresh_interrupted().await;
-                    w.workspaces.update_status();
-                }
-            ));
-        }
-        if manager.dirty()
-            && !manager.saving()
-            && manager.error().is_none()
-            && (self.last_edit.get().elapsed() >= Duration::from_millis(250)
-                || self.last_save.get().elapsed() >= Duration::from_secs(2))
-        {
-            self.save(w, false);
-        }
-    }
-    pub fn accepts_input(&self, w: &Rc<Workspace>) -> bool {
-        if self.manager.is_none() {
-            return true;
-        }
-        if self.busy.get() || self.validating_owner.get() {
-            return false;
-        }
-        if !self.ready.get() {
-            return true;
-        }
-        if self.owner_lost.get() {
-            return false;
-        }
-        if self.manager.as_ref().unwrap().lease_valid(now_ms()) {
-            return true;
-        }
-        self.revalidate(w);
-        false
-    }
-    fn update_input_state(&self, w: &Workspace) {
-        w.surface.update_state(&[gtk::accessible::State::Busy(
-            self.busy.get() || self.validating_owner.get(),
-        )]);
-    }
-    pub fn revalidate(&self, w: &Rc<Workspace>) {
-        if !self.ready.get() || self.busy.get() || self.validating_owner.replace(true) {
-            return;
-        }
-        let manager = self.manager.as_ref().unwrap().clone();
-        let id = manager.active_id();
-        self.update_input_state(w);
-        glib::spawn_future_local(glib::clone!(
-            #[weak]
-            w,
-            async move {
-                while manager.saving() {
-                    glib::timeout_future(Duration::from_millis(10)).await;
-                }
-                let result = manager.revalidate_owner(now_ms()).await;
-                let _ = manager.refresh_switcher().await;
-                if manager.active_id() == id {
-                    w.workspaces.owner_lost.set(result.is_err());
-                    if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
-                        gpu.session.set_workspace_read_only(result.is_err());
-                    }
-                    if let Err(error) = result {
-                        w.workspaces.show_error(error);
-                    }
-                }
-                w.workspaces.validating_owner.set(false);
-                w.workspaces.update_input_state(&w);
-                w.workspaces.update_status();
-            }
-        ));
-    }
-    fn save(&self, w: &Rc<Workspace>, retry: bool) {
-        let Some(manager) = self.manager.clone() else {
-            return;
-        };
-        if self.busy.get() || manager.saving() || (!retry && manager.error().is_some()) {
-            return;
-        }
-        self.capture(w);
-        self.last_save.set(Instant::now());
-        glib::spawn_future_local(glib::clone!(
-            #[weak]
-            w,
-            async move {
-                if let Err(error) = manager.save_once().await {
-                    w.workspaces.show_error(error);
-                }
-                w.workspaces.update_status();
-            }
-        ));
-    }
-    pub fn show_error(&self, error: StoreError) {
-        if let Some(manager) = &self.manager
-            && manager.error().as_ref() != Some(&error)
-        {
-            manager.set_error(error.clone());
-        }
-        self.label.set_text(&error.message);
-        self.label.add_css_class("error");
-        self.retry.set_visible(true);
-        self.recovery.set_visible(true);
-    }
-    pub fn update_status(&self) {
+        *self.view.borrow_mut() = view.clone();
+        w.surface
+            .update_state(&[gtk::accessible::State::Busy(view.busy)]);
+        self.update_status(&view);
         self.update_switcher();
-        let Some(manager) = &self.manager else {
+        self.ui.render(w, &view);
+        if view.ready
+            && self.switcher_revision.replace(view.switcher_revision) != view.switcher_revision
+        {
+            for other in WINDOWS.with(|windows| {
+                windows
+                    .borrow()
+                    .values()
+                    .filter_map(std::rc::Weak::upgrade)
+                    .collect::<Vec<_>>()
+            }) {
+                if !Rc::ptr_eq(&other, w) {
+                    glib::idle_add_local_once(move || {
+                        other
+                            .workspaces
+                            .send(&other, WorkspaceInput::RefreshSwitcher)
+                    });
+                }
+            }
+        }
+        if view.focus_window != *self.focused.borrow() {
+            *self.focused.borrow_mut() = view.focus_window.clone();
+            if let Some(target) = view.focus_window {
+                match window(&target.owner) {
+                    Some(other) => other.window.present(),
+                    None => {
+                        glib::idle_add_local_once(glib::clone!(
+                            #[weak]
+                            w,
+                            move || {
+                                w.workspaces.send(
+                                &w,
+                                WorkspaceInput::FocusFailed {
+                                    error: "This workspace is open in another application window. Close it there or try again after it closes.".into(),
+                                },
+                            )
+                            }
+                        ));
+                    }
+                }
+            }
+        }
+        if self.close_requested.get() {
+            if view.closed {
+                glib::idle_add_local_once(glib::clone!(
+                    #[weak]
+                    w,
+                    move || w.window.close()
+                ));
+            } else if view.closing && view.error.is_some() && !view.busy {
+                self.recover_close(w);
+            }
+        }
+    }
+    fn update_status(&self, view: &WorkspaceView) {
+        if self.controller.borrow().is_none() {
             return;
+        }
+        let name = if view.name.is_empty() {
+            "My Workspace"
+        } else {
+            &view.name
         };
-        if let Some(error) = manager.error() {
+        if let Some(error) = &view.error {
             self.recovery.set_label("Save as New Workspace…");
             self.root.set_visible(true);
-            self.label.set_text(&format!(
-                "{} — {}",
-                manager
-                    .active_name()
-                    .unwrap_or_else(|| "Session-only workspace".into()),
-                error.message
-            ));
+            self.label.set_text(&format!("{name} — {error}"));
             self.label.add_css_class("error");
             self.retry.set_visible(true);
             self.recovery.set_visible(true);
-        } else if self.interrupted_count.get() > 0 && !self.busy.get() {
+        } else if view.interrupted > 0 && !view.busy {
             self.recovery.set_label("Recover Changes…");
             self.root.set_visible(true);
             self.retry.set_visible(false);
             self.recovery.set_visible(true);
             self.label.remove_css_class("error");
-            self.label.set_text(
-                &self.interruption_error.borrow().clone().unwrap_or_else(|| {
-                    format!(
-                        "{} unsaved changes can be recovered.",
-                        self.interrupted_count.get()
-                    )
-                }),
-            );
+            self.label.set_text(&format!(
+                "{} unsaved changes can be recovered.",
+                view.interrupted
+            ));
         } else {
             // Routine switches and autosaves need no flashing status message.
             // Keep startup and actionable recovery visible.
-            self.root.set_visible(!self.ready.get());
+            self.root.set_visible(!view.ready);
             self.label.remove_css_class("error");
             self.retry.set_visible(false);
             self.recovery.set_visible(false);
             self.label.set_text(&format!(
-                "{} · {}",
-                manager
-                    .active_name()
-                    .unwrap_or_else(|| "My Workspace".into()),
-                if self.busy.get() {
+                "{name} · {}",
+                if !view.ready {
                     "Opening workspace…"
-                } else if manager.dirty() || manager.saving() {
+                } else if view.dirty || view.saving {
                     "Saving changes…"
                 } else {
                     "Changes saved automatically"
@@ -621,106 +416,37 @@ impl NativeWorkspaces {
             ));
         }
     }
-    pub(super) async fn refresh_interrupted(&self) {
-        let Some(manager) = &self.manager else {
-            return;
-        };
-        match manager.interrupted_changes(now_ms()).await {
-            Ok(changes) => {
-                self.interrupted_count.set(changes.len());
-                *self.interruption_error.borrow_mut() = None;
-            }
-            Err(error) => {
-                self.interrupted_count.set(1);
-                *self.interruption_error.borrow_mut() = Some(format!(
-                    "Some unsaved changes couldn’t be recovered: {error}."
-                ));
-            }
-        }
-    }
     /// Return true while the close must wait for acknowledged workspace writes.
     pub fn request_close(&self, w: &Rc<Workspace>) -> bool {
-        let Some(manager) = self.manager.clone() else {
-            return false;
+        let view = {
+            let controller = self.controller.borrow();
+            let Some(controller) = controller.as_ref() else {
+                return false;
+            };
+            controller.view.clone()
         };
-        if self.close_ready.get() {
+        if view.closed {
             return false;
-        }
-        self.ui.close();
-        if self.busy.get() {
-            self.close_requested.set(true);
-            return true;
-        }
-        if !self.ready.get() {
-            let capture = w
-                .gpu
-                .borrow_mut()
-                .as_mut()
-                .and_then(|g| g.session.capture_workspace().ok());
-            if capture.as_ref() != self.failed_snapshot.borrow().as_ref() {
-                self.show_error(StoreError::new(
-                    layer_workspace::ErrorKind::Unavailable,
-                    "Your workspace couldn’t be saved. Keep this window open and try again.",
-                ));
-                self.recover_close(w);
-                return true;
-            }
         }
         self.close_requested.set(true);
-        if self.busy.get() {
-            return true;
+        if !view.closing {
+            self.send(w, WorkspaceInput::Close);
         }
-        let captured = w
-            .gpu
-            .borrow_mut()
-            .as_mut()
-            .map(|g| g.session.capture_workspace());
-        if let Some(Ok(capture)) = captured {
-            manager.observe(capture, now_ms());
-        }
-        let transition = w
-            .gpu
-            .borrow_mut()
-            .as_mut()
-            .map(|g| g.session.begin_workspace_transition());
-        if let Some(Err(error)) = transition {
-            self.close_requested.set(false);
-            if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
-                gpu.session.reset_document_close();
-            }
-            self.show_error(StoreError::invalid(error));
-            self.update_status();
-            return true;
-        }
-        self.busy.set(true);
-        self.operation_generation
-            .set(self.operation_generation.get().wrapping_add(1));
-        self.update_input_state(w);
-        glib::spawn_future_local(glib::clone!(
-            #[weak]
-            w,
-            async move {
-                while manager.saving() {
-                    glib::timeout_future(Duration::from_millis(10)).await;
-                }
-                match manager.close().await {
-                    Ok(()) => {
-                        w.workspaces.close_ready.set(true);
-                        w.window.close();
-                    }
-                    Err(error) => {
-                        w.workspaces.close_requested.set(false);
-                        if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
-                            gpu.session.end_workspace_transition();
-                        }
-                        w.workspaces.show_error(error);
-                        w.workspaces.recover_close(&w);
-                    }
-                }
-                w.workspaces.busy.set(false);
-                w.workspaces.update_input_state(&w);
-            }
-        ));
         true
+    }
+    pub fn open(&self, w: &Rc<Workspace>, page: ManagerPage) {
+        self.send(w, WorkspaceInput::Open { page });
+    }
+    #[cfg(test)]
+    pub fn pause(&self, w: &Rc<Workspace>, paused: bool) {
+        self.paused.set(paused);
+        self.render(w);
+    }
+    #[cfg(test)]
+    pub fn report_error(&self, w: &Rc<Workspace>, error: &str) {
+        if let Some(controller) = self.controller.borrow_mut().as_mut() {
+            controller.view.error = Some(error.into());
+        }
+        self.render(w);
     }
 }

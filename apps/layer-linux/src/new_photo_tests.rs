@@ -6,8 +6,8 @@ pub(super) fn ready(w: &Rc<Workspace>) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         pump(20);
-        if w.workspaces.ready.get()
-            && !w.workspaces.busy.get()
+        if w.workspaces.ready()
+            && !w.workspaces.busy()
             && w.workspaces.accepts_input(w)
             && w.gpu.borrow().as_ref().is_some_and(|g| {
                 g.session.engine().backend().startup.complete

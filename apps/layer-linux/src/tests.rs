@@ -91,6 +91,17 @@ fn pump(ms: u64) {
         std::thread::sleep(Duration::from_millis(1));
     }
 }
+fn perform(w: &Rc<Workspace>, action: layer_workspace::ManagerAction) {
+    w.workspaces
+        .send(w, layer_workspace::WorkspaceInput::Action { action });
+    until(
+        || {
+            let view = w.workspaces.view();
+            !view.busy && view.prompt.is_none()
+        },
+        "workspace action",
+    );
+}
 fn until(mut ready: impl FnMut() -> bool, message: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !ready() {
@@ -100,8 +111,8 @@ fn until(mut ready: impl FnMut() -> bool, message: &str) {
 }
 fn wait_workspaces(w: &Workspace) {
     let deadline = Instant::now() + Duration::from_secs(30);
-    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
-        let error = w.workspaces.manager.as_ref().and_then(|m| m.error());
+    while !w.workspaces.ready() || w.workspaces.busy() {
+        let error = w.workspaces.manager().and_then(|m| m.error());
         assert!(Instant::now() < deadline, "workspace startup: {error:?}");
         pump(20);
     }
@@ -12741,7 +12752,7 @@ fn native_workspace_menu_input() {
     let mut click = |point: [f32; 2], button: u32| {
         input.perform(serde_json::json!([{ "point": point }, { "button": button, "down": true }, { "button": button, "down": false }]));
     };
-    let manager = w.workspaces.manager.as_ref().unwrap();
+    let manager = w.workspaces.manager().unwrap();
     assert_eq!(
         manager.active_id().as_deref(),
         Some(layer_workspace::DEFAULT_WORKSPACES[1].0)
@@ -12855,9 +12866,9 @@ fn native_workspace_menu_input() {
             popup.is_visible(),
             "{label} menu did not remain open after a native click; sensitive={}, ready={}, busy={}, storage={:?}",
             w.surface.is_sensitive(),
-            w.workspaces.ready.get(),
-            w.workspaces.busy.get(),
-            w.workspaces.manager.as_ref().unwrap().error()
+            w.workspaces.ready(),
+            w.workspaces.busy(),
+            w.workspaces.manager().unwrap().error()
         );
         assert!(popup.is_mapped());
         capture_popover(&popup, dir.join(format!("{label}.png")).to_str().unwrap());
@@ -12916,7 +12927,7 @@ fn native_workspace_menu_input() {
                 ],
                 272,
             );
-            w.workspaces.ui.close();
+            w.workspaces.ui.close(&w);
             pump(250);
             click(
                 [
@@ -12939,7 +12950,7 @@ fn native_workspace_menu_input() {
                 ],
                 272,
             );
-            until(|| !w.workspaces.busy.get(), "workspace switch");
+            until(|| !w.workspaces.busy(), "workspace switch");
             assert!(
                 manager
                     .current()
@@ -13002,7 +13013,7 @@ fn native_workspace_database_resume_and_independent_windows() {
     let app = native_test_app("art.capycanvas.WorkspacePersistence");
     let wait_saved = |w: &Workspace| {
         let deadline = Instant::now() + Duration::from_secs(10);
-        let manager = w.workspaces.manager.as_ref().unwrap();
+        let manager = w.workspaces.manager().unwrap();
         while manager.dirty() || manager.saving() {
             pump(20);
             assert!(
@@ -13017,7 +13028,7 @@ fn native_workspace_database_resume_and_independent_windows() {
     let w = Workspace::new(&app);
     w.window.present();
     wait_workspaces(&w);
-    let id = w.workspaces.manager.as_ref().unwrap().active_id().unwrap();
+    let id = w.workspaces.manager().unwrap().active_id().unwrap();
     let baseline = durable_layout(&state(&w).workspace.layout);
     let document = w
         .gpu
@@ -13059,8 +13070,7 @@ fn native_workspace_database_resume_and_independent_windows() {
     assert_eq!(
         reopened
             .workspaces
-            .manager
-            .as_ref()
+            .manager()
             .unwrap()
             .active_id()
             .unwrap(),
@@ -13094,10 +13104,10 @@ fn native_workspace_database_resume_and_independent_windows() {
     second.window.present();
     wait_workspaces(&second);
     assert_ne!(
-        again.workspaces.manager.as_ref().unwrap().active_id(),
-        second.workspaces.manager.as_ref().unwrap().active_id()
+        again.workspaces.manager().unwrap().active_id(),
+        second.workspaces.manager().unwrap().active_id()
     );
-    let second_manager = second.workspaces.manager.as_ref().unwrap();
+    let second_manager = second.workspaces.manager().unwrap();
     assert!(second_manager.current().unwrap().metadata.builtin);
     assert_eq!(
         second_manager.items().len(),
@@ -13126,7 +13136,7 @@ fn native_named_workspace_manager_library_and_history() {
     let w = Workspace::new(&app);
     w.window.present();
     wait_workspaces(&w);
-    let manager = w.workspaces.manager.as_ref().unwrap();
+    let manager = w.workspaces.manager().unwrap();
     let run = |action: A, name: Option<&str>, confirm: Option<&str>| {
         if name.is_some() || confirm.is_some() {
             let w = w.clone();
@@ -13161,11 +13171,9 @@ fn native_named_workspace_manager_library_and_history() {
                 glib::ControlFlow::Break
             });
         }
-        glib::MainContext::default()
-            .block_on(w.workspaces.perform(&w, action))
-            .unwrap();
+        perform(&w, action);
         pump(100);
-        assert!(!w.workspaces.busy.get());
+        assert!(!w.workspaces.busy());
     };
     let drawing = w
         .gpu
@@ -13306,7 +13314,7 @@ fn native_named_workspace_manager_library_and_history() {
                 .emit_clicked();
         }
         until(
-            || !(w.workspaces.ui.dialog.is_mapped() || w.workspaces.busy.get()),
+            || !(w.workspaces.ui.dialog.is_mapped() || w.workspaces.busy()),
             "Workspace selection did not finish",
         );
         if commit {
@@ -13380,40 +13388,34 @@ fn native_named_workspace_manager_library_and_history() {
         original.history.generation
     );
     let open_history = || {
-        let done = Rc::new(Cell::new(false));
-        glib::spawn_future_local(glib::clone!(
-            #[strong]
-            w,
-            #[strong]
-            painting,
-            #[strong]
-            done,
-            async move {
-                w.workspaces
-                    .perform(&w, A::History(painting))
-                    .await
-                    .unwrap();
-                done.set(true);
-            }
-        ));
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let dialog = loop {
-            pump(20);
-            if let Some(dialog) = find_named(w.window.upcast_ref(), "workspace-layout-history") {
-                break dialog.downcast::<adw::AlertDialog>().unwrap();
-            }
-            assert!(Instant::now() < deadline, "History modal did not open");
-        };
+        w.workspaces.send(
+            &w,
+            layer_workspace::WorkspaceInput::Action {
+                action: A::History(painting.clone()),
+            },
+        );
+        until(
+            || {
+                w.workspaces.view().page == Some(ManagerPage::History)
+                    && !w.workspaces.busy()
+                    && w.workspaces.ui.dialog.is_mapped()
+            },
+            "History page did not open",
+        );
         pump(100);
-        let list = find_named(dialog.upcast_ref(), "workspace-history-items")
+        let dialog = w.workspaces.ui.dialog.clone();
+        let list = find_named(dialog.upcast_ref(), "workspace-manager-items")
             .unwrap()
             .downcast::<gtk::ListBox>()
             .unwrap();
-        (dialog, list, done)
+        let apply = find_named(dialog.upcast_ref(), "workspace-manager-apply")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        (dialog, list, apply)
     };
     for response in ["cancel", "restore"] {
-        let (dialog, list, done) = open_history();
-        assert!(dialog.body().is_empty());
+        let (dialog, list, apply) = open_history();
         let before = glib::MainContext::default()
             .block_on(manager.load(&painting))
             .unwrap()
@@ -13421,7 +13423,7 @@ fn native_named_workspace_manager_library_and_history() {
             .capture()
             .unwrap();
         assert_eq!(before, persisted_original);
-        assert!(!dialog.is_response_enabled("restore"));
+        assert!(!apply.is_sensitive());
         let current_row = list.selected_row().unwrap();
         let starting = list
             .last_child()
@@ -13456,10 +13458,10 @@ fn native_named_workspace_manager_library_and_history() {
             durable_layout(&state(&w).workspace.layout),
             *original.history.layout()
         );
-        assert!(!dialog.is_response_enabled("restore"));
+        assert!(!apply.is_sensitive());
         list.select_row(Some(&starting));
         pump(100);
-        assert!(dialog.is_response_enabled("restore"));
+        assert!(apply.is_sensitive());
         if response == "cancel" {
             let expires = manager
                 .current_record()
@@ -13478,19 +13480,19 @@ fn native_named_workspace_manager_library_and_history() {
             assert_eq!(renewed.entity.capture().unwrap(), persisted_original);
         }
         crate::capture(&w, "/tmp/capy-workspace-layout-history.png");
-        find_button(
-            dialog.upcast_ref(),
-            if response == "restore" {
-                "Restore This Version"
-            } else {
-                "Cancel"
-            },
-        )
-        .unwrap()
-        .emit_clicked();
-        until(|| done.get(), "workspace operation");
+        if response == "restore" {
+            apply.emit_clicked();
+        } else {
+            find_button(dialog.upcast_ref(), "Cancel")
+                .unwrap()
+                .emit_clicked();
+        }
+        until(
+            || w.workspaces.view().page.is_none() && !w.workspaces.busy(),
+            "workspace operation",
+        );
         pump(100);
-        assert!(!w.workspaces.busy.get());
+        assert!(!w.workspaces.busy());
         let after = w
             .gpu
             .borrow_mut()
@@ -13522,6 +13524,7 @@ fn native_named_workspace_manager_library_and_history() {
             );
         }
     }
+    until(|| saved(&painting) == capture(), "workspace autosave");
     w.workspaces.ui.show(&w, ManagerPage::Workspaces);
     pump(200);
     let details = find_named(w.window.upcast_ref(), "workspace-manager-details");
@@ -13538,14 +13541,18 @@ fn native_named_workspace_manager_library_and_history() {
     );
     let saved_before_close = saved(&painting);
     select_item("Inking");
-    pump(150);
-    assert!(w.workspaces.busy.get());
+    until(|| !w.workspaces.view().loading, "Inking preview");
+    assert!(w.workspaces.view().selected.is_some());
+    assert_ne!(
+        durable_layout(&state(&w).workspace.layout),
+        *saved_before_close.history.layout()
+    );
     // GTK dismisses the modal on the first window-close action. A second
     // request closes the application, preserving the original saved layout.
     w.window.close();
     pump(200);
     assert!(!w.workspaces.ui.dialog.is_mapped());
-    assert!(!w.workspaces.busy.get());
+    assert!(!w.workspaces.busy());
     assert_eq!(
         durable_layout(&state(&w).workspace.layout),
         *saved_before_close.history.layout()
@@ -13568,19 +13575,20 @@ fn native_workspace_unavailable_close_recovery() {
     let w = Workspace::new(&app);
     w.window.present();
     until(
-        || !w.workspaces.busy.get() && w.workspaces.manager.as_ref().unwrap().error().is_some(),
+        || !w.workspaces.busy() && w.workspaces.view().error.is_some(),
         "startup error was not presented",
     );
-    assert!(!w.workspaces.ready.get());
+    assert!(!w.workspaces.ready());
+    let diameter = state(&w).brush.diameter;
     w.dispatch(UiAction::SetBrushSize { value: 83. });
-    assert_eq!(state(&w).brush.diameter, 83.);
+    assert_eq!(state(&w).brush.diameter, diameter);
     w.window.close();
     pump(100);
     let dialog = find_named(w.window.upcast_ref(), "workspace-close-recovery").unwrap();
     find_button(&dialog, "Keep Open").unwrap().emit_clicked();
     pump(100);
     assert!(w.window.is_visible());
-    assert_eq!(state(&w).brush.diameter, 83.);
+    assert_eq!(state(&w).brush.diameter, diameter);
     assert!(!state(&w).document_file.close_ready);
     w.window.close();
     pump(100);
@@ -13606,25 +13614,26 @@ fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
     first.window.present();
     wait_workspaces(&first);
     first.dispatch(UiAction::SetBrushSize { value: 73. });
-    let manager = first.workspaces.manager.as_ref().unwrap();
+    let manager = first.workspaces.manager().unwrap();
     let id = manager.active_id().unwrap();
-    // Suspend the first host's input and renewal while releasing its lease.
-    // Otherwise GTK focus events can correctly reacquire the released lease
-    // before the second window starts. Fake-clock expiry has shared store tests.
-    first.workspaces.busy.set(true);
-    glib::MainContext::default()
-        .block_on(manager.close())
-        .unwrap();
+    first
+        .workspaces
+        .send(&first, layer_workspace::WorkspaceInput::Suspend);
+    until(
+        || !manager.lease_valid(crate::workspace::manager::now_ms()),
+        "suspended lease release",
+    );
     let second = Workspace::new(&app);
     second.window.present();
     wait_workspaces(&second);
     assert_eq!(
-        second.workspaces.manager.as_ref().unwrap().active_id(),
+        second.workspaces.manager().unwrap().active_id(),
         Some(id.clone())
     );
-    first.workspaces.busy.set(false);
-    first.workspaces.revalidate(&first);
-    until(|| manager.error().is_some(), "ownership loss");
+    first
+        .workspaces
+        .send(&first, layer_workspace::WorkspaceInput::Resume);
+    until(|| first.workspaces.view().owner_lost, "ownership loss");
     assert!(!first.workspaces.accepts_input(&first));
     first.dispatch(UiAction::SetBrushSize { value: 119. });
     assert_eq!(state(&first).brush.diameter, 73.);
@@ -13640,9 +13649,7 @@ fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
             .unwrap()
             .emit_clicked();
     });
-    glib::MainContext::default()
-        .block_on(first.workspaces.perform(&first, A::SaveAsNew))
-        .unwrap();
+    perform(&first, A::SaveAsNew);
     pump(100);
     assert_ne!(manager.active_id(), Some(id));
     assert_eq!(manager.active_name().as_deref(), Some("Recovered Painting"));

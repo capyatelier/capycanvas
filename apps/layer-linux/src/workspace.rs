@@ -2020,8 +2020,7 @@ impl Workspace {
         {
             return;
         }
-        if !self.workspaces.ready.get()
-            && self.workspaces.busy.get()
+        if self.workspaces.starting()
             && !matches!(
                 &action,
                 UiAction::MeasureColumnDrawers { .. }

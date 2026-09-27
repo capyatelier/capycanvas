@@ -520,19 +520,12 @@ impl Header {
                 }
             }
             if let Some(compact) = &item.compact {
-                let name = w
-                    .workspaces
-                    .manager
-                    .as_ref()
-                    .and_then(|m| {
-                        m.active_id().and_then(|id| {
-                            m.items()
-                                .into_iter()
-                                .find(|i| i.id == id)
-                                .map(|i| i.metadata.name)
-                        })
-                    })
-                    .unwrap_or_else(|| "Workspaces".into());
+                let view = w.workspaces.view();
+                let name = if view.id.is_some() {
+                    view.name
+                } else {
+                    "Workspaces".into()
+                };
                 compact.set_label(&name);
             }
         }

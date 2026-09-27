@@ -242,8 +242,7 @@ fn native_header_managed_input() {
     let mut d = Driver::managed("art.capycanvas.HeaderStorage");
     assert_eq!(
         d.w.workspaces
-            .manager
-            .as_ref()
+            .manager()
             .unwrap()
             .active_name()
             .as_deref(),
@@ -259,8 +258,7 @@ fn native_header_managed_input() {
     assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     assert_eq!(
         d.w.workspaces
-            .manager
-            .as_ref()
+            .manager()
             .unwrap()
             .active_name()
             .as_deref(),
@@ -330,8 +328,7 @@ fn native_header_managed_input() {
     pump(500);
     assert_eq!(
         d.w.workspaces
-            .manager
-            .as_ref()
+            .manager()
             .unwrap()
             .active_name()
             .as_deref(),
@@ -360,8 +357,7 @@ fn native_workspace_ownership_input() {
         .join("workspaces.sqlite3");
     let original =
         d.w.workspaces
-            .manager
-            .as_ref()
+            .manager()
             .unwrap()
             .active_id()
             .unwrap();
@@ -391,8 +387,7 @@ fn native_workspace_ownership_input() {
     wait_workspaces(&d.w);
     assert_eq!(
         d.w.workspaces
-            .manager
-            .as_ref()
+            .manager()
             .unwrap()
             .active_id()
             .as_deref(),
@@ -406,7 +401,7 @@ fn native_workspace_ownership_input() {
     drop(external);
     d.click_name(target_button);
     wait_workspaces(&d.w);
-    let manager = d.w.workspaces.manager.as_ref().unwrap();
+    let manager = d.w.workspaces.manager().unwrap();
     assert_eq!(manager.active_id().as_deref(), Some(target_id));
     assert!(manager.error().is_none());
     let mut adopted = saved.entity.working.unwrap();
@@ -434,12 +429,10 @@ fn native_workspace_ownership_input() {
         .block_on(manager.refresh())
         .unwrap();
     drop(external);
-    glib::MainContext::default()
-        .block_on(d.w.workspaces.perform(
-            &d.w,
-            layer_workspace::ManagerAction::SwitchToWindow(original.clone()),
-        ))
-        .unwrap();
+    perform(
+        &d.w,
+        layer_workspace::ManagerAction::SwitchToWindow(original.clone()),
+    );
     wait_workspaces(&d.w);
     assert_eq!(manager.active_id().as_deref(), Some(original.as_str()));
 
@@ -450,18 +443,15 @@ fn native_workspace_ownership_input() {
     wait_workspaces(&second);
     let second_id = second
         .workspaces
-        .manager
-        .as_ref()
+        .manager()
         .unwrap()
         .active_id()
         .unwrap();
     assert_ne!(second_id, original);
-    glib::MainContext::default()
-        .block_on(d.w.workspaces.perform(
-            &d.w,
-            layer_workspace::ManagerAction::Switch(second_id.clone()),
-        ))
-        .unwrap();
+    perform(
+        &d.w,
+        layer_workspace::ManagerAction::Switch(second_id.clone()),
+    );
     pump(500);
     assert_eq!(manager.active_id().as_deref(), Some(original.as_str()));
     assert!(
@@ -471,12 +461,10 @@ fn native_workspace_ownership_input() {
     second.window.close();
     until(|| !second.window.is_visible(), "second window close");
     d.w.window.present();
-    glib::MainContext::default()
-        .block_on(d.w.workspaces.perform(
-            &d.w,
-            layer_workspace::ManagerAction::Switch(second_id.clone()),
-        ))
-        .unwrap();
+    perform(
+        &d.w,
+        layer_workspace::ManagerAction::Switch(second_id.clone()),
+    );
     wait_workspaces(&d.w);
     assert_eq!(manager.active_id().as_deref(), Some(second_id.as_str()));
     assert!(manager.error().is_none());
@@ -522,7 +510,7 @@ fn native_default_workspace_recovery_input() {
     wait_workspaces(&d.w);
     pump(400);
     assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
-    assert!(d.w.workspaces.manager.as_ref().unwrap().error().is_none());
+    assert!(d.w.workspaces.manager().unwrap().error().is_none());
     assert_eq!(
         sql(
             "SELECT json_extract(working,'$.colors.shape') FROM items WHERE id='builtin:workspace:painter'"
@@ -547,8 +535,7 @@ fn native_default_workspace_recovery_input() {
     pump(500);
     assert_eq!(
         d.w.workspaces
-            .manager
-            .as_ref()
+            .manager()
             .unwrap()
             .active_name()
             .as_deref(),
@@ -575,8 +562,7 @@ fn native_default_workspace_recovery_input() {
     );
     assert_eq!(
         d.w.workspaces
-            .manager
-            .as_ref()
+            .manager()
             .unwrap()
             .active_name()
             .as_deref(),
@@ -612,7 +598,7 @@ fn native_default_workspace_recovery_input() {
         sql("SELECT count(*) FROM items WHERE json_extract(working,'$.colors.shape')='wheel'"),
         "0"
     );
-    assert!(d.w.workspaces.manager.as_ref().unwrap().error().is_none());
+    assert!(d.w.workspaces.manager().unwrap().error().is_none());
     d.click_name(&d.header_tool(ToolbarControl::Color));
     assert!(state(&d.w).customization.drawer.is_some());
     crate::capture(
@@ -2253,29 +2239,34 @@ fn native_header_compact_switcher_input() {
         d.w.surface.width() <= 800,
         "use LAYER_MOTION_VIEWPORT=640x600"
     );
-    let manager = d.w.workspaces.manager.as_ref().unwrap().clone();
-    glib::MainContext::default().block_on(async {
-        let wide = manager
-            .create_workspace("Wide workspace", crate::workspace::manager::now_ms())
-            .await
-            .unwrap();
-        let id = wide.entity.id.clone();
-        d.w.workspaces.adopt(&d.w, Ok(wide)).await;
-        manager
-            .edit_switcher(layer_workspace::SwitcherEdit::Show { id, visible: true })
-            .await
-            .unwrap();
+    let manager = d.w.workspaces.manager().unwrap();
+    let settle = |input| {
+        d.w.workspaces.send(&d.w, input);
+        until(
+            || {
+                let view = d.w.workspaces.view();
+                !view.busy && !view.switcher_busy && view.prompt.is_none()
+            },
+            "workspace edit",
+        );
+    };
+    settle(layer_workspace::WorkspaceInput::Form {
+        action: layer_workspace::ManagerAction::New,
+    });
+    settle(layer_workspace::WorkspaceInput::Submit {
+        name: "Wide workspace".into(),
+        description: None,
+        choice: None,
     });
     wait_workspaces(&d.w);
     let ids = manager.switcher_display_ids();
     assert_eq!(ids.len(), 4);
-    glib::MainContext::default()
-        .block_on(manager.edit_switcher(layer_workspace::SwitcherEdit::Move {
+    settle(layer_workspace::WorkspaceInput::EditSwitcher {
+        edit: layer_workspace::SwitcherEdit::Move {
             id: ids[2].clone(),
             before: Some(ids[0].clone()),
-        }))
-        .unwrap();
-    d.w.workspaces.update_status();
+        },
+    });
 
     for theme in [Theme::Dark, Theme::Light] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });

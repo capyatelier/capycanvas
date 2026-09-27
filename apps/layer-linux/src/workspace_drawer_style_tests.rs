@@ -146,7 +146,7 @@ fn check_theme(w: &Rc<Workspace>, theme: Theme, output: &std::path::Path, input:
             );
             let drawer = state(&w).customization.drawer.unwrap_or_else(|| panic!(
                 "{theme:?}/{edge:?}/{id}: drawer did not open; ready={}, busy={}, sensitive={}, error={:?}",
-                w.workspaces.ready.get(), w.workspaces.busy.get(), w.surface.is_sensitive(), state(&w).host_error
+                w.workspaces.ready(), w.workspaces.busy(), w.surface.is_sensitive(), state(&w).host_error
             ));
             assert!(
                 synchronous_origin.get(),

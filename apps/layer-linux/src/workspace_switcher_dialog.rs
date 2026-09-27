@@ -19,63 +19,10 @@ fn picked(row: &adw::ActionRow, x: f64, y: f64) -> (bool, bool) {
 }
 
 impl ManagerUi {
-    fn refresh_order(&self, w: &Rc<Workspace>) {
-        if !self.presented.get()
-            || self.page.get() != ManagerPage::Workspaces
-            || self.dragged.borrow().is_some()
-        {
-            return;
-        }
-        let scroll = self
-            .list
-            .ancestor(gtk::ScrolledWindow::static_type())
-            .and_downcast::<gtk::ScrolledWindow>();
-        let position = scroll.as_ref().map(|s| s.vadjustment().value());
-        self.preserve_preview.set(true);
-        self.rows(w);
-        self.preserve_preview.set(false);
-        if let (Some(scroll), Some(position)) = (scroll, position) {
-            scroll.vadjustment().set_value(position);
-        }
-    }
-
     fn edit_switcher(&self, w: &Rc<Workspace>, edit: SwitcherEdit) {
-        if self.switcher_pending.replace(true) {
-            return;
+        if !self.switcher_pending.get() {
+            w.workspaces.send(w, WorkspaceInput::EditSwitcher { edit });
         }
-        glib::spawn_future_local(glib::clone!(
-            #[weak]
-            w,
-            async move {
-                let manager = w.workspaces.manager.as_ref().unwrap();
-                let result = manager.edit_switcher(edit).await;
-                w.workspaces.ui.switcher_pending.set(false);
-                if let Err(error) = result {
-                    w.workspaces.ui.error(&error.to_string());
-                }
-                w.workspaces.update_switcher();
-                w.workspaces.ui.refresh_order(&w);
-                // Update other windows in this app without changing their selection.
-                let windows = WINDOWS.with(|windows| {
-                    windows
-                        .borrow()
-                        .values()
-                        .filter_map(|v| v.upgrade())
-                        .collect::<Vec<_>>()
-                });
-                for other in windows {
-                    if Rc::ptr_eq(&other, &w) {
-                        continue;
-                    }
-                    if let Some(manager) = &other.workspaces.manager {
-                        let _ = manager.refresh().await;
-                        let _ = manager.refresh_switcher().await;
-                        other.workspaces.update_switcher();
-                        other.workspaces.ui.refresh_order(&other);
-                    }
-                }
-            }
-        ));
     }
 
     pub(super) fn add_switcher_actions(
@@ -111,7 +58,7 @@ impl ManagerUi {
             }
         ));
         controls.append(&check);
-        let order = w.workspaces.manager.as_ref().unwrap().workspace_ids();
+        let order = self.order.borrow().clone();
         if let Some(index) = order.iter().position(|i| i == &id) {
             for (label, enabled, before) in [
                 (
@@ -232,8 +179,7 @@ impl ManagerUi {
                 if w.workspaces.ui.switcher_pending.get() || picked(&row, x, y).0 {
                     return None;
                 }
-                if crate::input::touch_or_pen(source) && !held.get()
-                {
+                if crate::input::touch_or_pen(source) && !held.get() {
                     return None;
                 }
                 popup.popdown();

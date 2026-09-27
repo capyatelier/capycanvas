@@ -84,8 +84,8 @@ failed close must preserve the option to keep the window open.
 | Lists, action availability, prompts | [`presentation.rs`](../../crates/layer-workspace/src/presentation.rs) |
 | Asynchronous store protocol | [`protocol.rs`](../../crates/layer-workspace/src/protocol.rs), `WorkspaceStore::execute` |
 | Native SQLite and worker | [`sqlite.rs`](../../crates/layer-workspace/src/sqlite.rs), [`worker.rs`](../../crates/layer-workspace/src/worker.rs) |
-| GTK lifecycle and recovery reference | [`workspace_manager.rs`](../../apps/layer-linux/src/workspace_manager.rs), `workspace_manager_actions.rs`, `workspace_manager_storage.rs` |
-| GTK selection/confirmation and preview lifetime | [`workspace_manager_dialog.rs`](../../apps/layer-linux/src/workspace_manager_dialog.rs), [`workspace_history_dialog.rs`](../../apps/layer-linux/src/workspace_history_dialog.rs) |
+| Manager pages, forms, previews, autosave, ownership and close | [`controller.rs`](../../crates/layer-workspace/src/controller.rs), `WorkspaceController` |
+| GTK rendering of the controller view | [`workspace_manager.rs`](../../apps/layer-linux/src/workspace_manager.rs), [`workspace_manager_dialog.rs`](../../apps/layer-linux/src/workspace_manager_dialog.rs) |
 
 Hosts own toolkit controls, async transport, lifecycle notifications, and native
 window focus. Keep workspace decisions in shared Rust. In particular:
