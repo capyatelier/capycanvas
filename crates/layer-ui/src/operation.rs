@@ -614,12 +614,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             PenPhase::Move | PenPhase::Up => {
-                if let Some(drag) = &mut t.drag {
-                    drag.current = p;
-                }
-                if let Some(drag) = t.drag {
-                    t.apply_drag(drag, p, self.interaction.modifiers, self.operation.aspect);
-                }
+                let Some(drag) = &mut t.drag else {
+                    return Ok(());
+                };
+                drag.current = p;
+                let drag = *drag;
+                t.apply_drag(drag, p, self.interaction.modifiers, self.operation.aspect);
                 if event.phase == PenPhase::Up {
                     t.drag = None;
                     self.layer_interaction.path.clear();

@@ -460,6 +460,23 @@ fn selection_bar_masks_the_active_layer_in_one_step() {
 }
 
 #[test]
+fn a_stroke_that_misses_the_transform_publishes_nothing() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    s.frame(2, 2).unwrap();
+    let before = s.operation.quad();
+    let outside = Point { x: 900., y: 800. };
+    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), outside).unwrap();
+    for (sequence, x) in [(2, 910.), (3, 930.)] {
+        s.transform_pen(event(&s, sequence, PenPhase::Move, 1.), Point { x, y: 800. }).unwrap();
+        assert_eq!(s.frame(sequence, sequence).unwrap().regions, 0);
+    }
+    s.transform_pen(event(&s, 4, PenPhase::Up, 1.), Point { x: 930., y: 800. }).unwrap();
+    assert_eq!(s.frame(4, 4).unwrap().regions, 0);
+    assert_eq!(s.operation.quad(), before);
+}
+
+#[test]
 fn transform_values_publish_when_a_handle_drag_ends() {
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
