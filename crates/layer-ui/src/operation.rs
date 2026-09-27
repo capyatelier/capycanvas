@@ -454,7 +454,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.engine.preview_edit(layer_core::Edit::Batch(edits)).map_err(error)?;
             }
             t.revision = self.engine.document().revision;
-            self.layer_interaction.changed = true;
+            if !moving {
+                self.layer_interaction.changed = true;
+            }
         } else {
             self.engine
                 .set_transform_preview(Some(t.request.clone()))

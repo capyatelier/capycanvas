@@ -683,3 +683,31 @@ fn cancelling_or_editing_a_pending_apply_discards_its_coverage() {
     assert!(s.operation.active(), "the stale coverage is discarded");
 }
 
+
+#[test]
+fn a_placement_drag_publishes_the_document_on_release() {
+    use layer_core::color::{SampleDepth, source::*};
+    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
+        profile: Default::default(), profile_assumed: false,
+    }, 1024 * 1024).unwrap();
+    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
+        Document::new("placement drag", 200, 150), [800, 600], Platform::Gtk).unwrap();
+    s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    s.frame(1, 1).unwrap();
+    let quad = s.operation.quad();
+    let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
+    let moved = Point { x: centre.x + 12., y: centre.y + 8. };
+    let placement = |s: &UiSession<Recorder>| s.engine.document().layers[0].properties.placement;
+    let before = placement(&s);
+    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), centre).unwrap();
+    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), moved).unwrap();
+    let change = s.frame(2, 2).unwrap();
+    assert_eq!(change.regions & regions::DOCUMENT, 0, "drag samples leave the document panels alone");
+    assert_ne!(placement(&s), before, "the preview still moves the photo");
+    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), moved).unwrap();
+    let change = s.frame(3, 3).unwrap();
+    assert_ne!(change.regions & regions::DOCUMENT, 0, "release publishes the placed photo");
+}
+
