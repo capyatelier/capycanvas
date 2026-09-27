@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Manage a Windows 11 evaluation VM that builds the Windows client and runs GPU-free tests.
+"""Manage Windows 11 evaluation VMs that build the Windows client and run its tests.
 
 See docs/development/windows-vm.md.
 """
 
 import argparse
+import base64
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shlex
 import shutil
@@ -16,6 +19,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from urllib.parse import unquote, urlparse
 
@@ -26,12 +30,19 @@ PROGRAM = sys.argv[0]
 ISO_URL = "https://aka.ms/Win11E-ISO-25H2-en-us"
 STATE = Path(os.environ.get("CAPYCANVAS_VM_DIR") or Path(
     os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "capycanvas/windows-vm")
+RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) / (
+    f"capycanvas-vm-{os.getuid()}-{hashlib.sha256(bytes(STATE)).hexdigest()[:8]}")
 CPUS = os.environ.get("CAPYCANVAS_VM_CPUS") or str(min(8, os.cpu_count() or 1))
 MEMORY = os.environ.get("CAPYCANVAS_VM_MEMORY") or "16G"
+DISPLAY = os.environ.get("CAPYCANVAS_VM_DISPLAY") or "2560x1600"
+VGA = "VGA,xres={},yres={},vgamem_mb=64".format(*DISPLAY.split("x"))
 DISK_SIZE = "128G"
 USER = "capy"
 SEED_LABEL = "CAPYSEED"
 GUEST_REPO = "C:\\capycanvas"
+GUEST_PWSH = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+DESKTOP_TASK = "capycanvas-desktop"
+SOFTWARE_BUILD = f"{GUEST_REPO}\\artifacts\\windows\\SoftwareAdapter"
 ISO_RECORD = STATE / "iso"
 FIRMWARE = STATE / "firmware.json"
 KEY = STATE / "id_ed25519"
@@ -39,12 +50,10 @@ KNOWN_HOSTS = STATE / "known_hosts"
 PASSWORD = STATE / "password"
 INSTALL = STATE / "install"
 BASE = STATE / "base"
-RUN = STATE / "run"
-QMP_SOCKET = STATE / "qmp.sock"
-TPM_SOCKET = STATE / "swtpm.sock"
-QEMU_PID = STATE / "qemu.pid"
-TPM_PID = STATE / "swtpm.pid"
-SSH_PORT = STATE / "ssh-port"
+VMS = STATE / "vms"
+LEGACY_RUN = STATE / "run"
+LEGACY_PID = STATE / "qemu.pid"
+VM_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 COMMANDS = ("qemu-system-x86_64", "qemu-img", "swtpm", "xorriso", "ssh", "ssh-keygen", "curl")
 PACKAGES = {
     "fedora": [["dnf", "install", "-y", "qemu-system-x86", "qemu-img", "qemu-ui-gtk", "edk2-ovmf",
@@ -60,6 +69,35 @@ HYPERV = ("hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,hv-vpindex,hv-runtime,hv-syni
 SYNC = (f"$repo = '{GUEST_REPO}'; New-Item -ItemType Directory -Force $repo | Out-Null; "
         "Get-ChildItem -Force $repo | Where-Object Name -NotIn 'target', 'artifacts' | "
         "Remove-Item -Recurse -Force; tar -xf - -C $repo; exit $LASTEXITCODE")
+
+
+class Machine:
+    def __init__(self, name, directory):
+        self.name = name
+        self.directory = directory
+        self.runtime = RUNTIME / name
+        self.qmp_socket = self.runtime / "qmp.sock"
+        self.tpm_socket = self.runtime / "swtpm.sock"
+        self.qemu_pid = self.runtime / "qemu.pid"
+        self.tpm_pid = self.runtime / "swtpm.pid"
+        self.ssh_port = self.runtime / "ssh-port"
+        self.prepared = directory / "prepared"
+
+
+def installer():
+    return Machine(".install", INSTALL)
+
+
+def machines():
+    return [Machine(path.name, path) for path in sorted(VMS.glob("*")) if VM_NAME.fullmatch(path.name)]
+
+
+def selected(args):
+    name = args.vm or os.environ.get("CAPYCANVAS_VM") or (
+        re.sub(r"[^a-z0-9]+", "-", ROOT.name.lower()).strip("-")[:32] or "default")
+    if not VM_NAME.fullmatch(name):
+        sys.exit(f"VM names use lowercase letters, digits and hyphens, up to 32 characters: {name}")
+    return Machine(name, VMS / name)
 
 
 def run(*command, check=True, **options):
@@ -176,13 +214,13 @@ def process(pidfile, name):
         return None
 
 
-def running():
-    return process(QEMU_PID, "qemu-system-x86") is not None
+def running(machine):
+    return process(machine.qemu_pid, "qemu-system-x86") is not None
 
 
-def require_running():
-    if not running():
-        sys.exit(f"The VM is not running; run `{PROGRAM} start`.")
+def require_running(machine):
+    if not running(machine):
+        sys.exit(f"The {machine.name} VM is not running; run `{PROGRAM} --vm {machine.name} start`.")
 
 
 def wait_for_exit(pid, timeout):
@@ -201,9 +239,9 @@ def terminate(pidfile, name):
         wait_for_exit(pid, 10)
 
 
-def qmp(command, **arguments):
+def qmp(machine, command, **arguments):
     with socket.socket(socket.AF_UNIX) as connection:
-        connection.connect(str(QMP_SOCKET))
+        connection.connect(str(machine.qmp_socket))
         stream = connection.makefile("rw")
         stream.readline()
         for message in ({"execute": "qmp_capabilities"}, {"execute": command, "arguments": arguments}):
@@ -226,26 +264,30 @@ def free_port():
 
 
 def launch(machine, cdroms=(), gui=False):
-    terminate(TPM_PID, "swtpm")
-    selected = json.loads(FIRMWARE.read_text())
+    for directory in (RUNTIME, machine.runtime):
+        directory.mkdir(mode=0o700, exist_ok=True)
+    terminate(machine.tpm_pid, "swtpm")
+    selected_firmware = json.loads(FIRMWARE.read_text())
     port = free_port()
-    SSH_PORT.write_text(f"{port}\n")
-    run("swtpm", "socket", "--tpm2", "--tpmstate", f"dir={machine / 'tpm'}",
-        "--ctrl", f"type=unixio,path={TPM_SOCKET}", "--pid", f"file={TPM_PID}", "--terminate", "--daemon")
+    machine.ssh_port.write_text(f"{port}\n")
+    run("swtpm", "socket", "--tpm2", "--tpmstate", f"dir={machine.directory / 'tpm'}",
+        "--ctrl", f"type=unixio,path={machine.tpm_socket}", "--pid", f"file={machine.tpm_pid}",
+        "--terminate", "--daemon")
     command = [
-        "qemu-system-x86_64", "-name", "capycanvas-windows", "-nodefaults",
+        "qemu-system-x86_64", "-name", f"capycanvas-windows-{machine.name.lstrip('.')}", "-nodefaults",
         "-machine", "q35,accel=kvm,smm=on", "-global", "driver=cfi.pflash01,property=secure,value=on",
         "-cpu", f"host,{HYPERV}", "-smp", CPUS, "-m", MEMORY, "-rtc", "base=utc",
-        "-drive", f"if=pflash,unit=0,readonly=on,format={selected['code_format']},file={selected['code']}",
-        "-drive", f"if=pflash,unit=1,format={selected['vars_format']},file={machine / 'efivars'}",
-        "-chardev", f"socket,id=tpm,path={TPM_SOCKET}", "-tpmdev", "emulator,id=tpm,chardev=tpm",
+        "-drive", f"if=pflash,unit=0,readonly=on,format={selected_firmware['code_format']},"
+                  f"file={selected_firmware['code']}",
+        "-drive", f"if=pflash,unit=1,format={selected_firmware['vars_format']},file={machine.directory / 'efivars'}",
+        "-chardev", f"socket,id=tpm,path={machine.tpm_socket}", "-tpmdev", "emulator,id=tpm,chardev=tpm",
         "-device", "tpm-crb,tpmdev=tpm",
-        "-drive", f"if=none,id=disk,format=qcow2,discard=unmap,file={machine / 'disk.qcow2'}",
+        "-drive", f"if=none,id=disk,format=qcow2,discard=unmap,file={machine.directory / 'disk.qcow2'}",
         "-device", "nvme,drive=disk,serial=capycanvas,bootindex=0",
         "-netdev", f"user,id=net,hostfwd=tcp:127.0.0.1:{port}-:22", "-device", "e1000e,netdev=net",
-        "-device", "qemu-xhci", "-device", "usb-tablet", "-device", "VGA",
-        "-qmp", f"unix:{QMP_SOCKET},server=on,wait=off", "-display", "gtk" if gui else "none",
-        "-daemonize", "-pidfile", QEMU_PID,
+        "-device", "qemu-xhci", "-device", "usb-tablet", "-device", VGA,
+        "-qmp", f"unix:{machine.qmp_socket},server=on,wait=off", "-display", "gtk" if gui else "none",
+        "-daemonize", "-pidfile", machine.qemu_pid,
     ]
     for index, image in enumerate(cdroms):
         command += ["-drive", f"if=none,id=cd{index},media=cdrom,readonly=on,file={image}",
@@ -253,26 +295,34 @@ def launch(machine, cdroms=(), gui=False):
     try:
         run(*command)
     except subprocess.CalledProcessError:
-        terminate(TPM_PID, "swtpm")
+        terminate(machine.tpm_pid, "swtpm")
         raise
 
 
-def ssh_command(*remote):
-    return ["ssh", "-i", str(KEY), "-p", SSH_PORT.read_text().strip(), "-o", "IdentitiesOnly=yes",
+def ssh_command(machine, *remote):
+    return ["ssh", "-i", str(KEY), "-p", machine.ssh_port.read_text().strip(), "-o", "IdentitiesOnly=yes",
             "-o", "BatchMode=yes", "-o", f"UserKnownHostsFile={KNOWN_HOSTS}",
             "-o", "StrictHostKeyChecking=accept-new", "-o", "HostKeyAlias=capycanvas-windows-vm",
-            "-o", "ConnectTimeout=10", "-o", "LogLevel=ERROR", f"{USER}@127.0.0.1", *remote]
+            "-o", "ConnectTimeout=30", "-o", "LogLevel=ERROR", f"{USER}@127.0.0.1", *remote]
 
 
-def guest(command):
-    run(*ssh_command(command))
+def guest(machine, command, **options):
+    return run(*ssh_command(machine, command), **options)
 
 
-def wait_for_ssh(timeout):
+def guest_script(machine, script):
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode()
+    status = guest(machine, f"powershell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand {encoded}",
+                   check=False).returncode
+    if status:
+        sys.exit(f"A PowerShell script in the {machine.name} VM exited with status {status}.")
+
+
+def wait_for_ssh(machine, timeout):
     deadline = time.monotonic() + timeout
-    while run(*ssh_command("exit"), stdin=subprocess.DEVNULL, capture_output=True,
+    while run(*ssh_command(machine, "exit"), stdin=subprocess.DEVNULL, capture_output=True,
               check=False).returncode:
-        if not running():
+        if not running(machine):
             sys.exit("The VM stopped before SSH became available.")
         if time.monotonic() > deadline:
             sys.exit(f"SSH did not become available; inspect the VM with `{PROGRAM} screenshot`.")
@@ -281,21 +331,22 @@ def wait_for_ssh(timeout):
 
 def create(args):
     if (BASE / "disk.qcow2").exists():
-        sys.exit(f"The VM already exists; run `{PROGRAM} destroy` to rebuild it.")
-    if running():
-        sys.exit("A VM is running.")
+        sys.exit(f"The base image already exists; run `{PROGRAM} destroy` to rebuild it.")
+    machine = installer()
+    if running(machine):
+        sys.exit("A base image install is running.")
     iso = Path(ISO_RECORD.read_text().strip()) if ISO_RECORD.exists() else None
     if iso is None or not iso.is_file():
         sys.exit(f"The Windows ISO is missing; run `{PROGRAM} setup`.")
-    selected = firmware()
-    if selected is None:
+    selected_firmware = firmware()
+    if selected_firmware is None:
         sys.exit(f"No Secure Boot OVMF firmware was found; run `{PROGRAM} setup`.")
-    FIRMWARE.write_text(json.dumps(selected))
+    FIRMWARE.write_text(json.dumps(selected_firmware))
     remove(INSTALL)
     seed = INSTALL / "seed"
     (INSTALL / "tpm").mkdir(parents=True)
     seed.mkdir()
-    shutil.copyfile(selected["vars"], INSTALL / "efivars")
+    shutil.copyfile(selected_firmware["vars"], INSTALL / "efivars")
     run("qemu-img", "create", "-q", "-f", "qcow2", INSTALL / "disk.qcow2", DISK_SIZE)
     if not KEY.exists():
         run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "capycanvas-windows-vm", "-f", KEY)
@@ -303,21 +354,21 @@ def create(args):
     PASSWORD.write_text(f"{password}\n")
     unattend = (GUEST_FILES / "autounattend.xml").read_text().replace("@PASSWORD@", password)
     (seed / "autounattend.xml").write_text(unattend)
-    for name in ("bootstrap.ps1", "provision.ps1"):
+    for name in ("bootstrap.ps1", "provision.ps1", "prepare.ps1"):
         shutil.copy(GUEST_FILES / name, seed)
     shutil.copy(KEY.with_suffix(".pub"), seed / "administrators_authorized_keys")
     image = run("xorriso", "-as", "mkisofs", "-quiet", "-J", "-joliet-long", "-r", "-V", SEED_LABEL,
                 "-o", INSTALL / "seed.iso", seed, capture_output=True, text=True, check=False)
     if image.returncode:
         sys.exit(image.stderr)
-    launch(INSTALL, [iso, INSTALL / "seed.iso"], args.gui)
+    launch(machine, [iso, INSTALL / "seed.iso"], args.gui)
     print("Installing Windows and the build tools; this takes a while.", flush=True)
     for _ in range(30):
-        qmp("send-key", keys=[{"type": "qcode", "data": "ret"}])
+        qmp(machine, "send-key", keys=[{"type": "qcode", "data": "ret"}])
         time.sleep(1)
-    wait_for_ssh(3 * 60 * 60)
-    guest(f"& ('{{0}}:\\provision.ps1' -f (Get-Volume -FileSystemLabel {SEED_LABEL}).DriveLetter)")
-    stop(args)
+    wait_for_ssh(machine, 3 * 60 * 60)
+    guest(machine, f"& ('{{0}}:\\provision.ps1' -f (Get-Volume -FileSystemLabel {SEED_LABEL}).DriveLetter)")
+    stop_machine(machine)
     remove(seed)
     remove(INSTALL / "seed.iso")
     INSTALL.rename(BASE)
@@ -325,51 +376,81 @@ def create(args):
     print(f"Created the base image. Next: {PROGRAM} check")
 
 
-def boot(gui):
-    if running():
+def restart(machine):
+    def booted():
+        return guest(machine, "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.Ticks", stdin=subprocess.DEVNULL,
+                     capture_output=True, text=True, check=False).stdout.strip()
+    previous = booted()
+    guest(machine, "Restart-Computer -Force", check=False)
+    deadline = time.monotonic() + 10 * 60
+    while booted() in ("", previous):
+        if time.monotonic() > deadline:
+            sys.exit(f"The {machine.name} VM did not restart.")
+        time.sleep(3)
+
+
+def prepare(machine):
+    script = (GUEST_FILES / "prepare.ps1").read_text()
+    digest = hashlib.sha256(f"{VGA}\n{script}".encode()).hexdigest()
+    if machine.prepared.exists() and machine.prepared.read_text().strip() == digest:
+        return
+    guest_script(machine, script)
+    restart(machine)
+    machine.prepared.write_text(f"{digest}\n")
+
+
+def boot(machine, gui):
+    if running(machine):
         return
     if not (BASE / "disk.qcow2").exists():
-        sys.exit(f"The VM does not exist; run `{PROGRAM} create`.")
-    if not RUN.exists():
-        fresh = STATE / "run.partial"
+        sys.exit(f"The base image does not exist; run `{PROGRAM} create`.")
+    if not machine.directory.exists():
+        fresh = machine.directory.with_name(f"{machine.name}.partial")
         remove(fresh)
         shutil.copytree(BASE, fresh, ignore=shutil.ignore_patterns("disk.qcow2"))
         run("qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", BASE / "disk.qcow2",
             fresh / "disk.qcow2")
-        fresh.rename(RUN)
-    launch(RUN, gui=gui)
-    wait_for_ssh(10 * 60)
+        fresh.rename(machine.directory)
+    launch(machine, gui=gui)
+    wait_for_ssh(machine, 10 * 60)
+    prepare(machine)
 
 
 def start(args):
-    boot(args.gui)
-    print(f"The VM is running. Connect with `{PROGRAM} ssh`.")
+    machine = selected(args)
+    boot(machine, args.gui)
+    print(f"The {machine.name} VM is running. Connect with `{PROGRAM} --vm {machine.name} ssh`.")
 
 
-def stop(args):
-    pid = process(QEMU_PID, "qemu-system-x86")
+def stop_machine(machine):
+    pid = process(machine.qemu_pid, "qemu-system-x86")
     if pid is None:
         return
-    qmp("system_powerdown")
+    qmp(machine, "system_powerdown")
     if not wait_for_exit(pid, 5 * 60):
-        qmp("quit")
+        qmp(machine, "quit")
         wait_for_exit(pid, 30)
 
 
+def stop(args):
+    stop_machine(selected(args))
+
+
 def ssh(args):
-    require_running()
-    os.execvp("ssh", ssh_command(*args.command))
+    machine = selected(args)
+    require_running(machine)
+    os.execvp("ssh", ssh_command(machine, *args.command))
 
 
-def sync(args):
-    require_running()
+def sync_machine(machine):
+    require_running(machine)
     listing = run("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard",
                   cwd=ROOT, capture_output=True).stdout
     files = b"".join(name + b"\0" for name in listing.split(b"\0")
                      if name and os.path.lexists(ROOT / os.fsdecode(name)))
     archive = subprocess.Popen(["tar", "--null", "--files-from=-", "--create", "--file=-"], cwd=ROOT,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    extract = subprocess.Popen(ssh_command(SYNC), stdin=archive.stdout)
+    extract = subprocess.Popen(ssh_command(machine, SYNC), stdin=archive.stdout)
     archive.stdout.close()
     archive.stdin.write(files)
     archive.stdin.close()
@@ -377,33 +458,108 @@ def sync(args):
         sys.exit("Copying the working tree to the VM failed.")
 
 
+def sync(args):
+    sync_machine(selected(args))
+
+
 def check(args):
-    boot(gui=False)
-    sync(args)
+    machine = selected(args)
+    boot(machine, gui=False)
+    sync_machine(machine)
     configuration = "Release" if args.release else "Debug"
-    guest(f"& '{GUEST_REPO}\\apps\\layer-windows\\scripts\\test-without-gpu.ps1' "
-          f"-Configuration {configuration}")
+    guest(machine, f"& '{GUEST_REPO}\\apps\\layer-windows\\scripts\\test-without-gpu.ps1' "
+                   f"-Configuration {configuration}")
+
+
+def desktop(machine, arguments):
+    guest_script(machine, f"""$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+while (!(Get-Process explorer -IncludeUserName -ErrorAction SilentlyContinue | Where-Object UserName -Like '*\\{USER}')) {{ Start-Sleep 2 }}
+$action = New-ScheduledTaskAction -Execute conhost.exe -Argument '"{GUEST_PWSH}" -NoProfile -Sta -ExecutionPolicy Bypass {arguments}' -WorkingDirectory '{GUEST_REPO}'
+$principal = New-ScheduledTaskPrincipal -UserId {USER} -LogonType Interactive -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
+Register-ScheduledTask {DESKTOP_TASK} -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+Start-ScheduledTask {DESKTOP_TASK}
+""")
+
+
+def desktop_running(machine):
+    state = guest(machine, f"(Get-ScheduledTask {DESKTOP_TASK}).State", capture_output=True, text=True, check=False)
+    return state.returncode != 0 or state.stdout.strip() == "Running"
+
+
+def fixtures(args):
+    machine = selected(args)
+    boot(machine, gui=False)
+    sync_machine(machine)
+    if not args.no_build:
+        guest(machine, f"& '{GUEST_REPO}\\apps\\layer-windows\\scripts\\build.ps1' -Configuration Release "
+                       f"-SoftwareAdapterTests -OutputDirectory '{SOFTWARE_BUILD}'")
+    name = time.strftime("%Y%m%d-%H%M%S")
+    output = f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures\\{name}"
+    selection = f" -Name {','.join(args.names)}" if args.names else ""
+    desktop(machine, f"-File {GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1 "
+                     f"-Executable {SOFTWARE_BUILD}\\CapyCanvas.exe -Output {output}{selection}")
+    results = []
+    finished = False
+    while not finished:
+        time.sleep(15)
+        finished = not desktop_running(machine)
+        lines = guest(machine, f"Get-Content -ErrorAction SilentlyContinue {output}\\results.jsonl",
+                      capture_output=True, text=True, check=False).stdout.splitlines()
+        for line in lines[len(results):]:
+            result = json.loads(line)
+            results.append(result)
+            print(f"{'pass' if result['exit'] == 0 else 'FAIL'} {result['seconds']:5.0f}s {result['name']}",
+                  flush=True)
+    local = ROOT / "artifacts" / "windows-vm" / machine.name
+    local.mkdir(parents=True, exist_ok=True)
+    fetch = subprocess.Popen(ssh_command(machine, f"tar -cf - -C {GUEST_REPO}\\artifacts\\windows\\vm-fixtures {name}"),
+                             stdout=subprocess.PIPE)
+    run("tar", "-xf", "-", "-C", local, stdin=fetch.stdout)
+    fetch.wait()
+    failed = [result["name"] for result in results if result["exit"] != 0]
+    print(f"{len(results) - len(failed)} passed, {len(failed)} failed. Logs: {local / name}")
+    if not (local / name / "complete").exists():
+        sys.exit("The fixture runner stopped before finishing.")
+    if failed:
+        sys.exit(1)
 
 
 def screenshot(args):
-    require_running()
-    qmp("screendump", filename=str(args.file.resolve()), format="png")
+    machine = selected(args)
+    require_running(machine)
+    qmp(machine, "screendump", filename=str(args.file.resolve()), format="png")
 
 
 def reset(args):
-    if running():
-        sys.exit(f"Stop the VM first with `{PROGRAM} stop`.")
-    remove(RUN)
+    machine = selected(args)
+    if running(machine):
+        sys.exit(f"Stop the VM first with `{PROGRAM} --vm {machine.name} stop`.")
+    remove(machine.directory)
+
+
+def list_machines(args):
+    for machine in machines():
+        state = f"running, ssh port {machine.ssh_port.read_text().strip()}" if running(machine) else "stopped"
+        print(f"{machine.name}\t{state}")
+    if process(LEGACY_PID, "qemu-system-x86"):
+        print("(unnamed VM from an older windows-vm.py)\trunning")
 
 
 def destroy(args):
-    stop(args)
-    for path in (INSTALL, BASE, RUN, STATE / "run.partial", FIRMWARE, PASSWORD, KNOWN_HOSTS):
+    active = [machine.name for machine in machines() + [installer()] if running(machine)]
+    if process(LEGACY_PID, "qemu-system-x86"):
+        active.append("(unnamed VM from an older windows-vm.py)")
+    if active:
+        sys.exit(f"Stop these VMs first: {', '.join(active)}")
+    for path in (INSTALL, BASE, VMS, LEGACY_RUN, STATE / "run.partial", FIRMWARE, PASSWORD, KNOWN_HOSTS):
         remove(path)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--vm", help="VM name (default: $CAPYCANVAS_VM or the worktree directory name)")
     commands = parser.add_subparsers(required=True, metavar="command")
 
     def command(name, handler, summary):
@@ -414,18 +570,22 @@ def main():
     command("setup", setup, "install host packages, grant KVM access and download the ISO").add_argument(
         "--iso", type=Path, help="use this ISO instead of downloading one")
     command("create", create, "install Windows and the build tools into the base image").add_argument(
-        "--gui", action="store_true", help="show the VM display in a window")
-    command("start", start, "boot the VM").add_argument(
+        "--gui", action="store_true", help="show the installer display in a window")
+    command("start", start, "boot the VM, creating it from the base image if needed").add_argument(
         "--gui", action="store_true", help="show the VM display in a window")
     command("stop", stop, "shut the VM down")
+    command("list", list_machines, "list the VMs made from the base image")
     command("ssh", ssh, "open a PowerShell session or run a command in the VM").add_argument(
         "command", nargs=argparse.REMAINDER)
     command("sync", sync, f"copy the working tree to {GUEST_REPO}, keeping build outputs")
     command("check", check, "sync, build and run the tests that need no GPU").add_argument(
         "--release", action="store_true", help="build the Release configuration")
+    fixture = command("fixtures", fixtures, "sync, build and run the UI fixtures on the software adapter")
+    fixture.add_argument("names", nargs="*", help="fixtures to run, e.g. layers or header:pen (default: all)")
+    fixture.add_argument("--no-build", action="store_true", help="reuse the last software-adapter build")
     command("screenshot", screenshot, "save the VM display as a PNG").add_argument("file", type=Path)
-    command("reset", reset, "discard every change made since create")
-    command("destroy", destroy, "delete the VM, keeping the downloaded ISO")
+    command("reset", reset, "delete the VM; the next start makes a fresh one from the base image")
+    command("destroy", destroy, "delete the base image and every VM, keeping the downloaded ISO")
     args = parser.parse_args()
     try:
         args.handler(args)

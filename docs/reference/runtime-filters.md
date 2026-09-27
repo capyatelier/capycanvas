@@ -404,12 +404,13 @@ cargo test -p layer-render-wgpu scalar_color_oracles -- --test-threads=1
 ```
 
 For numerical diagnostics only, renderer unit-test binaries accept CPU adapters
-when `LAYER_TEST_SOFTWARE_GPU=numerical` is explicitly set. Select the intended
+when `LAYER_TEST_SOFTWARE_GPU` is set, as do builds with the
+`software-adapter-tests` feature. Select the intended
 adapter with `WGPU_ADAPTER_NAME`; an unmatched name fails selection. On Apple,
 `--features wgpu/vulkan-portability` enables Vulkan in that test build. A local
 Vulkan loader and ICD must also be configured for the test process. This opt-in
-prints a warning, is compiled out of production hosts, and must never supply
-hardware performance evidence. Keep local loader paths and machine logs in
+is compiled out of production hosts and must never supply hardware performance
+evidence. Keep local loader paths and machine logs in
 ignored artifacts. No runtime dependency or default backend selection changes.
 
 The full strict v3 comparison remained a failing cross-backend gate. Its reference,

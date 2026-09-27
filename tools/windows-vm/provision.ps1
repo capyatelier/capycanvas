@@ -17,3 +17,4 @@ Install-Download 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msv
 $nuget = New-Item -ItemType Directory -Force (Join-Path $env:USERPROFILE '.local\tools\nuget')
 Invoke-WebRequest 'https://dist.nuget.org/win-x86-commandline/latest/nuget.exe' -OutFile (Join-Path $nuget 'nuget.exe') -UseBasicParsing
 Remove-Item -Recurse -Force $downloads
+& (Join-Path $PSScriptRoot 'prepare.ps1')

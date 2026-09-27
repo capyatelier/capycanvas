@@ -297,6 +297,13 @@ pub struct GpuRasterMetrics {
     pub image_window_peak_bytes: u64,
 }
 
+/// Unit tests and `software-adapter-tests` builds admit a CPU adapter while
+/// `LAYER_TEST_SOFTWARE_GPU` is set. Production hosts always require hardware.
+pub fn software_adapter_tests() -> bool {
+    cfg!(any(test, feature = "software-adapter-tests"))
+        && std::env::var_os("LAYER_TEST_SOFTWARE_GPU").is_some()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GpuAdapterInfo {
     pub name: String,
@@ -1048,20 +1055,7 @@ impl WgpuRasterizer {
         queue: wgpu::Queue,
         initialization: Initialization,
     ) -> Result<Self, GpuRasterError> {
-        let hardware = adapter.get_info().device_type != wgpu::DeviceType::Cpu;
-        // Unit-test binaries can explicitly admit a software backend for
-        // numerical comparisons. Production hosts always require hardware.
-        #[cfg(test)]
-        let hardware = hardware || {
-            let numerical = std::env::var("LAYER_TEST_SOFTWARE_GPU").as_deref() == Ok("numerical");
-            if numerical {
-                eprintln!(
-                    "NUMERICAL TEST ONLY: software renderer; timings are not hardware measurements"
-                );
-            }
-            numerical
-        };
-        if !hardware {
+        if adapter.get_info().device_type == wgpu::DeviceType::Cpu && !software_adapter_tests() {
             return Err(GpuRasterError::HardwareAdapterRequired);
         }
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {

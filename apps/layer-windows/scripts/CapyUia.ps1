@@ -30,7 +30,7 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$scri
         try{if(& $Condition){return}}catch [System.Windows.Automation.ElementNotAvailableException]{}
         if($review){$review.Refresh();if($review.HasExited){if($Closing){return};throw "Owned review exited with code $($review.ExitCode): $Message"}}
         Start-Sleep -Milliseconds 50
-    }while($watch.Elapsed.TotalSeconds -lt $Seconds)
+    }while($watch.Elapsed.TotalSeconds -lt $Seconds*$(if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}))
     throw $Message
 }
 function Find([string]$Value,[switch]$Name,$Within=$root,$Type){

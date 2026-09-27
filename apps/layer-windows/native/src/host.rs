@@ -269,7 +269,7 @@ impl CapyHost {
                 apply_limit_buckets: false,
             }))
             .map_err(err)?;
-        if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+        if adapter.get_info().device_type == wgpu::DeviceType::Cpu && !layer_render_wgpu::software_adapter_tests() {
             return Err("Painting requires a hardware D3D12 GPU".into());
         }
         let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
@@ -952,6 +952,7 @@ struct WindowsMetadata {
     windows_glass: serde_json::Value,
     windows_tab_styles: serde_json::Map<String, serde_json::Value>,
     windows_isolated_settings: bool,
+    windows_adapter: Option<String>,
     windows_workspace: Option<serde_json::Value>,
     windows_settings_close: Option<crate::settings::CloseStatus>,
 }
@@ -997,6 +998,10 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
             windows_isolated_settings: std::env::var_os("CAPY_SETTINGS_DIRECTORY")
                 .map(std::path::PathBuf::from)
                 .is_some_and(|path| path.is_absolute()),
+            windows_adapter: host.native.session.engine().backend().0.as_ref().map(|gpu| {
+                let info = gpu.adapter().get_info();
+                format!("{} ({:?})", info.name, info.device_type)
+            }),
         };
         let extension = serde_json::to_vec(&metadata).map_err(err)?;
         if let Some(bytes) = host.native.take_update_bytes().map_err(err)? {

@@ -21,8 +21,9 @@ be on `PATH` or at `~/.local/tools/nuget/nuget.exe`.
 
 Use a Windows development machine with a hardware D3D12-capable GPU. The current
 scripts produce unpackaged development builds, not a Microsoft Store submission.
-On Linux, a [Windows VM](windows-vm.md) can build the client and run the tests
-that need no GPU.
+On Linux, [Windows VMs](windows-vm.md) build the client, run the tests that need
+no GPU and run the UI fixtures on the software D3D12 adapter. They do not replace
+validation on a hardware GPU.
 
 ## Build and run
 
