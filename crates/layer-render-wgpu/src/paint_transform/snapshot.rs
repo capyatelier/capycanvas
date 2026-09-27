@@ -296,21 +296,15 @@ impl SourceMap {
         if transform.is_identity() {
             return Ok(map(SourceKind::Identity));
         }
-        let projective = match &transform.map {
-            layer_core::TransformMap::Affine(affine) => {
-                layer_core::Projective::from_affine(*affine)
-            }
-            layer_core::TransformMap::Projective(projective) => *projective,
-            layer_core::TransformMap::Mesh(_) => {
-                let geometry = mesh.ok_or(GpuRasterError::InvalidTransform("Unsupported transform"))?;
-                return Ok(map(SourceKind::Mesh(geometry)));
-            }
+        let Some(projective) = transform.map.projective() else {
+            let geometry = mesh.ok_or(GpuRasterError::InvalidTransform("Unsupported transform"))?;
+            return Ok(map(SourceKind::Mesh(geometry)));
         };
         if let Some(affine) = projective.as_affine() {
             return Ok(map(SourceKind::Affine(affine.inverse().ok_or(invalid)?.0)));
         }
         let forward = projective.0.map(f64::from);
-        let inverse = invert(forward).ok_or(invalid)?;
+        let inverse = layer_core::Projective::invert(forward).ok_or(invalid)?;
         let reach = support + 1.;
         let bounds = [
             f64::from(bounds.min_x()) - reach,
@@ -378,7 +372,7 @@ impl SourceMap {
                 let weight = |p: [f64; 2]| m[6] * p[0] + m[7] * p[1] + m[8];
                 let corners =
                     [[0, 1], [2, 1], [2, 3], [0, 3]].map(|[x, y]| [centers[x], centers[y]]);
-                let visible = clip(&corners, |p| weight(p) - floor);
+                let visible = layer_core::clip_convex(&corners, |p| weight(p) - floor);
                 let nearest = visible
                     .iter()
                     .map(|p| weight(*p))
@@ -396,7 +390,7 @@ impl SourceMap {
                 let [x0, y0, x1, y1] = *bounds;
                 let mut inside = mapped;
                 for (axis, edge, sign) in [(0, x0, 1.), (1, y0, 1.), (0, x1, -1.), (1, y1, -1.)] {
-                    inside = clip(&inside, |p| (p[axis] - edge) * sign);
+                    inside = layer_core::clip_convex(&inside, |p| (p[axis] - edge) * sign);
                 }
                 if inside.is_empty() {
                     return None;
@@ -429,40 +423,6 @@ impl SourceMap {
             }
         }
     }
-}
-
-/// Keep the part of a convex polygon where `side` is non-negative.
-fn clip(polygon: &[[f64; 2]], side: impl Fn([f64; 2]) -> f64) -> Vec<[f64; 2]> {
-    let mut kept = Vec::with_capacity(polygon.len() + 2);
-    for (i, p) in polygon.iter().enumerate() {
-        let q = polygon[(i + 1) % polygon.len()];
-        let [a, b] = [side(*p), side(q)];
-        if a >= 0. {
-            kept.push(*p);
-        }
-        if (a >= 0.) != (b >= 0.) {
-            let t = a / (a - b);
-            kept.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
-        }
-    }
-    kept
-}
-
-fn invert(m: [f64; 9]) -> Option<[f64; 9]> {
-    let [a, b, c, d, e, f, g, h, i] = m;
-    let adjugate = [
-        e * i - f * h,
-        c * h - b * i,
-        b * f - c * e,
-        f * g - d * i,
-        a * i - c * g,
-        c * d - a * f,
-        d * h - e * g,
-        b * g - a * h,
-        a * e - b * d,
-    ];
-    let determinant = a * adjugate[0] + b * adjugate[3] + c * adjugate[6];
-    (determinant != 0. && determinant.is_finite()).then(|| adjugate.map(|v| v / determinant))
 }
 
 #[cfg(test)]

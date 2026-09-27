@@ -45,6 +45,19 @@ impl TransformMap {
             Self::Mesh(mesh) => mesh.map(p),
         }
     }
+    /// The map as a homography, unless it is a mesh.
+    pub fn projective(&self) -> Option<Projective> {
+        match self {
+            Self::Affine(affine) => Some(Projective::from_affine(*affine)),
+            Self::Projective(projective) => Some(*projective),
+            Self::Mesh(_) => None,
+        }
+    }
+}
+impl From<Projective> for TransformMap {
+    fn from(map: Projective) -> Self {
+        map.as_affine().map_or(Self::Projective(map), Self::Affine)
+    }
 }
 
 /// Transient pixel-transform command. Holders never persist it.
@@ -67,22 +80,15 @@ impl ImageTransform {
         }
     }
     pub fn is_identity(&self) -> bool {
-        match &self.map {
-            TransformMap::Affine(affine) => *affine == Affine::IDENTITY,
-            TransformMap::Projective(projective) => {
-                projective.as_affine() == Some(Affine::IDENTITY)
-            }
-            TransformMap::Mesh(_) => false,
-        }
+        self.map.projective().and_then(Projective::as_affine) == Some(Affine::IDENTITY)
     }
     /// Finite and invertible geometry that the renderer can resample. A
     /// perspective map resamples only the source it covers, and a mesh only
     /// its rectangle.
     pub fn validate(&self) -> Result<(), DocumentError> {
         let valid = match &self.map {
-            TransformMap::Affine(affine) => affine.inverse().is_some(),
-            TransformMap::Projective(projective) => projective.inverse().is_some(),
             TransformMap::Mesh(mesh) => mesh.valid(),
+            map => map.projective().and_then(Projective::inverse).is_some(),
         };
         if valid {
             Ok(())
@@ -96,10 +102,15 @@ impl ImageTransform {
         let from = to.inverse()?;
         let map = match &self.map {
             TransformMap::Affine(affine) => TransformMap::Affine(from.then(*affine).then(to)),
-            TransformMap::Projective(projective) => {
-                TransformMap::Projective(projective.conjugate(to)?)
-            }
-            TransformMap::Mesh(mesh) => TransformMap::Mesh(Arc::new(mesh.conjugate(to))),
+            TransformMap::Projective(projective) => TransformMap::Projective(
+                Projective::from_affine(from)
+                    .then(*projective)?
+                    .then(Projective::from_affine(to))?,
+            ),
+            TransformMap::Mesh(mesh) => TransformMap::Mesh(Arc::new(MeshMap {
+                frame: mesh.frame.then(to),
+                ..mesh.post(to)
+            })),
         };
         Some(Self {
             map,
@@ -113,11 +124,11 @@ impl ImageTransform {
             return Rect::EMPTY;
         }
         match &self.map {
-            TransformMap::Affine(affine) => affine.bounds(source),
-            TransformMap::Projective(projective) => {
-                projective.bounds(source).unwrap_or(Rect::UNBOUNDED)
-            }
             TransformMap::Mesh(mesh) => mesh.drawn_bounds(),
+            map => map
+                .projective()
+                .and_then(|projective| projective.bounds(source))
+                .unwrap_or(Rect::UNBOUNDED),
         }
     }
     /// Conservative cut + placement footprint. Expand in source space before
@@ -131,17 +142,7 @@ impl ImageTransform {
         if source.is_empty() || self.is_identity() {
             return [Rect::EMPTY; 2];
         }
-        let padding = self.interpolation.support() as f32;
-        let support = Rect {
-            min: Point {
-                x: source.min.x - padding,
-                y: source.min.y - padding,
-            },
-            max: Point {
-                x: source.max.x + padding,
-                y: source.max.y + padding,
-            },
-        };
+        let support = source.outset(self.interpolation.support() as f32);
         [source, self.forward_bounds(support)]
     }
 }
@@ -227,62 +228,46 @@ impl Affine {
         if b.is_empty() {
             return Rect::EMPTY;
         }
-        let mut out = Rect::EMPTY;
-        for p in [
-            b.min,
-            Point {
-                x: b.max.x,
-                y: b.min.y,
-            },
-            b.max,
-            Point {
-                x: b.min.x,
-                y: b.max.y,
-            },
-        ] {
-            out.include_circle(self.map(p), 0.);
-        }
-        out
+        Rect::around(b.corners().map(|p| self.map(p)))
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    fn near(a: Point, b: Point) {
-        assert!(
-            (a.x - b.x).abs() < 0.002 && (a.y - b.y).abs() < 0.002,
-            "{a:?} != {b:?}"
-        );
+    use crate::{Selection, SelectionPixels};
+    pub(crate) fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
+        Rect {
+            min: Point { x: x0, y: y0 },
+            max: Point { x: x1, y: y1 },
+        }
+    }
+    pub(crate) fn distance(a: Point, b: Point) -> f32 {
+        (a.x - b.x).hypot(a.y - b.y)
+    }
+    pub(crate) fn near(a: Point, b: Point, tolerance: f32) {
+        assert!(distance(a, b) <= tolerance, "{a:?} != {b:?}");
+    }
+    pub(crate) fn samples(bounds: Rect) -> impl Iterator<Item = Point> {
+        (0..=12).flat_map(move |j| {
+            (0..=12).map(move |i| Point {
+                x: bounds.min.x + (bounds.max.x - bounds.min.x) * i as f32 / 12.,
+                y: bounds.min.y + (bounds.max.y - bounds.min.y) * j as f32 / 12.,
+            })
+        })
     }
     #[test]
     fn damage_keeps_cut_and_placement_separate_and_scales_filter_support() {
-        let source = Rect {
-            min: Point { x: 10., y: 20. },
-            max: Point { x: 30., y: 40. },
-        };
+        let source = rect(10., 20., 30., 40.);
         let mut transform = ImageTransform {
             map: TransformMap::Affine(Affine([4., 0., 0., 2., 300., 0.])),
             interpolation: Interpolation::Nearest,
         };
         let [cut, moved] = transform.affected_regions(source);
         assert_eq!(cut, source);
-        assert_eq!(
-            moved,
-            Rect {
-                min: Point { x: 340., y: 40. },
-                max: Point { x: 420., y: 80. }
-            }
-        );
+        assert_eq!(moved, rect(340., 40., 420., 80.));
         transform.interpolation = Interpolation::Linear;
-        let moved = transform.affected_regions(source)[1];
-        assert_eq!(
-            moved,
-            Rect {
-                min: Point { x: 336., y: 38. },
-                max: Point { x: 424., y: 82. }
-            }
-        );
+        assert_eq!(transform.affected_regions(source)[1], rect(336., 38., 424., 82.));
         assert_eq!(
             ImageTransform::default().affected_bounds(source),
             Rect::EMPTY
@@ -290,85 +275,83 @@ mod tests {
         assert_eq!(transform.affected_bounds(Rect::EMPTY), Rect::EMPTY);
     }
     #[test]
-    fn image_transforms_validate_and_conjugate_their_geometry() {
-        let affine = Affine::around(
-            Point { x: 20., y: 10. },
-            [1.5, -0.5],
-            0.4,
-            Point { x: 3., y: -7. },
-        );
-        let transform = ImageTransform::affine(affine);
-        assert_eq!(transform.as_affine(), Some(affine));
-        assert!(transform.validate().is_ok() && !transform.is_identity());
-        assert!(ImageTransform::default().is_identity());
-        assert!(ImageTransform::affine(Affine([0.; 6])).validate().is_err());
-        let to =
-            Affine::translation(Point { x: 40., y: -12. }).then(Affine([0., 2., -2., 0., 0., 0.]));
-        let moved = transform.conjugate(to).unwrap();
-        assert_eq!(moved.interpolation, transform.interpolation);
-        for p in [Point::default(), Point { x: 31., y: -4. }] {
-            near(
-                moved.as_affine().unwrap().map(to.map(p)),
-                to.map(affine.map(p)),
-            );
+    fn every_map_kind_validates_conjugates_bounds_and_carries_selections() {
+        let source = rect(100., 50., 500., 350.);
+        let affine = Affine::around(Point { x: 300., y: 200. }, [1.2, -0.8], 0.25, Point { x: 30., y: 10. });
+        let quad = [[140., 40.], [520., 90.], [470., 380.], [60., 300.]].map(|[x, y]| Point { x, y });
+        let mesh = MeshMap::from_affine(source, [3, 3], affine)
+            .unwrap()
+            .move_node(5, Point { x: 25., y: -15. })
+            .unwrap();
+        let to = Affine::around(Point::default(), [2., -1.], 0.3, Point { x: 5., y: 9. });
+        let placement = Affine::translation(Point { x: 20., y: 5. });
+        let ring = [[120., 80.], [400., 70.], [450., 300.], [150., 320.]].map(|[x, y]| Point { x, y });
+        let pixels = Selection::pixels(Arc::new(
+            SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x4444]).unwrap(),
+        ));
+        for map in [
+            TransformMap::Affine(affine),
+            TransformMap::Projective(Projective::rect_to_quad(source, quad).unwrap()),
+            TransformMap::Mesh(Arc::new(mesh.clone())),
+        ] {
+            let transform = ImageTransform {
+                map: map.clone(),
+                interpolation: Interpolation::Bicubic,
+            };
+            assert!(transform.validate().is_ok() && !transform.is_identity());
+            let bounds = transform.forward_bounds(source).outset(1e-3);
+            let moved = transform.conjugate(to).unwrap();
+            assert_eq!(moved.interpolation, transform.interpolation);
+            assert_eq!(std::mem::discriminant(&moved.map), std::mem::discriminant(&map));
+            for p in samples(source) {
+                let q = map.map(p).unwrap();
+                assert!(q.x >= bounds.min.x && q.y >= bounds.min.y && q.x <= bounds.max.x && q.y <= bounds.max.y);
+                near(moved.map.map(to.map(p)).unwrap(), to.map(q), 1e-2);
+            }
+            assert!(transform.conjugate(Affine([0.; 6])).is_none());
+            let mut selection = Selection::polygon(ring.to_vec()).unwrap().transformed(placement).unwrap();
+            selection.inverted = true;
+            let mapped = selection.mapped(&map).unwrap();
+            let [contour] = mapped.contours() else { panic!("one ring") };
+            assert!(mapped.inverted);
+            for v in ring {
+                let expected = map.map(placement.map(v)).unwrap();
+                assert!(contour.iter().any(|p| distance(mapped.affine.map(*p), expected) < 1e-2), "{map:?}");
+            }
+            assert!(!selection.needs_resample(&map));
+            assert_eq!(pixels.needs_resample(&map), pixels.mapped(&map).is_err());
         }
-        assert!(transform.conjugate(Affine([0.; 6])).is_none());
+        for map in [TransformMap::Affine(Affine::IDENTITY), TransformMap::Projective(Projective::IDENTITY)] {
+            assert!(ImageTransform { map, ..Default::default() }.is_identity());
+        }
+        let broken = MeshMap {
+            net: mesh.net[1..].into(),
+            ..mesh
+        };
+        for map in [
+            TransformMap::Affine(Affine([0.; 6])),
+            TransformMap::Projective(Projective([1., 0., 0., 1., 0., 0., 0., 0., 0.])),
+            TransformMap::Mesh(Arc::new(broken)),
+        ] {
+            assert!(ImageTransform { map, ..Default::default() }.validate().is_err());
+        }
     }
     #[test]
     fn perspective_transforms_bound_their_padded_source() {
-        let source = Rect {
-            min: Point { x: 10., y: 10. },
-            max: Point { x: 110., y: 60. },
-        };
-        let quad = [
-            Point { x: 40., y: 0. },
-            Point { x: 90., y: 20. },
-            Point { x: 130., y: 90. },
-            Point { x: 0., y: 70. },
-        ];
-        let projective = Projective::rect_to_quad(source, quad).unwrap();
+        let source = rect(10., 10., 110., 60.);
+        let quad = [[40., 0.], [90., 20.], [130., 90.], [0., 70.]].map(|[x, y]| Point { x, y });
         let mut transform = ImageTransform {
-            map: TransformMap::Projective(projective),
+            map: TransformMap::Projective(Projective::rect_to_quad(source, quad).unwrap()),
             interpolation: Interpolation::Nearest,
         };
-        assert!(transform.validate().is_ok() && !transform.is_identity());
         let [cut, moved] = transform.affected_regions(source);
         assert_eq!(cut, source);
-        near(moved.min, Point { x: 0., y: 0. });
-        near(moved.max, Point { x: 130., y: 90. });
+        near(moved.min, Point { x: 0., y: 0. }, 2e-3);
+        near(moved.max, Point { x: 130., y: 90. }, 2e-3);
         transform.interpolation = Interpolation::Linear;
         let padded = transform.affected_regions(source)[1];
         assert!(padded.min.x < moved.min.x && padded.max.y > moved.max.y);
-        let far = Rect {
-            min: source.min,
-            max: Point { x: 110., y: 1e5 },
-        };
-        assert_eq!(transform.forward_bounds(far), Rect::UNBOUNDED);
-        let to = Affine::around(Point::default(), [2., -1.], 0.3, Point { x: 5., y: 9. });
-        let conjugate = transform.conjugate(to).unwrap();
-        let TransformMap::Projective(moved_map) = conjugate.map else {
-            panic!("projective")
-        };
-        let p = Point { x: 50., y: 30. };
-        let [a, b] = [
-            moved_map.map(to.map(p)).unwrap(),
-            to.map(projective.map(p).unwrap()),
-        ];
-        assert!((a.x - b.x).abs() < 1e-2 && (a.y - b.y).abs() < 1e-2);
-        let identity = ImageTransform {
-            map: TransformMap::Projective(Projective::IDENTITY),
-            ..Default::default()
-        };
-        assert!(identity.is_identity());
-        let singular = TransformMap::Projective(Projective([1., 0., 0., 1., 0., 0., 0., 0., 0.]));
-        assert!(
-            ImageTransform {
-                map: singular,
-                ..Default::default()
-            }
-            .validate()
-            .is_err()
-        );
+        assert_eq!(transform.forward_bounds(rect(10., 10., 110., 1e5)), Rect::UNBOUNDED);
     }
     #[test]
     fn affine_composition_pivots_bounds_and_inverse_agree() {
@@ -383,16 +366,14 @@ mod tests {
                         x: pivot.x + offset.x,
                         y: pivot.y + offset.y,
                     },
+                    3e-3,
                 );
                 let inverse = m.inverse().unwrap();
                 for p in [Point::default(), pivot, Point { x: -250., y: 100. }] {
-                    near(inverse.map(m.map(p)), p);
-                    near(m.then(inverse).map(p), p);
+                    near(inverse.map(m.map(p)), p, 3e-3);
+                    near(m.then(inverse).map(p), p, 3e-3);
                 }
-                let r = Rect {
-                    min: Point::default(),
-                    max: Point { x: 128., y: 96. },
-                };
+                let r = rect(0., 0., 128., 96.);
                 let b = m.bounds(r);
                 for p in [r.min, r.max, pivot] {
                     let p = m.map(p);

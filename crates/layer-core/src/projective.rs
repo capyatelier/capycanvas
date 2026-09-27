@@ -1,5 +1,6 @@
 //! Perspective maps between layer-local pixel spaces.
 use crate::{Affine, Point, Rect};
+use std::sync::Arc;
 
 /// Forward homography from source to destination layer-local pixels, row-major:
 /// `[x', y', w'] = M [x, y, 1]`, mapping to `(x'/w', y'/w')`. Only points with
@@ -85,7 +86,12 @@ impl Projective {
         (w > 0. && point.x.is_finite() && point.y.is_finite()).then_some(point)
     }
     pub fn inverse(self) -> Option<Self> {
-        let [a, b, c, d, e, f, g, h, i] = self.wide();
+        Self::invert(self.wide()).and_then(Self::narrow)
+    }
+    /// The adjugate over the determinant, without the positive rescaling that
+    /// `inverse` applies to the stored matrix.
+    pub fn invert(m: [f64; 9]) -> Option<[f64; 9]> {
+        let [a, b, c, d, e, f, g, h, i] = m;
         let adjugate = [
             e * i - f * h,
             c * h - b * i,
@@ -98,56 +104,38 @@ impl Projective {
             a * e - b * d,
         ];
         let determinant = a * adjugate[0] + b * adjugate[3] + c * adjugate[6];
-        if determinant == 0. || !determinant.is_finite() {
-            return None;
-        }
-        Self::narrow(adjugate.map(|v| v / determinant))
+        (determinant != 0. && determinant.is_finite()).then(|| adjugate.map(|v| v / determinant))
     }
-    /// Apply self, then next (not the reverse).
-    pub fn then(self, next: Self) -> Self {
-        Self::narrow(multiply(next.wide(), self.wide())).unwrap_or(Self([f32::NAN; 9]))
+    /// Apply self, then next (not the reverse). None when the product is not finite.
+    pub fn then(self, next: Self) -> Option<Self> {
+        Self::narrow(multiply(next.wide(), self.wide()))
     }
     /// Every point of `rect` has an image, so its image is one convex,
     /// unfolded quadrilateral.
-    pub fn covers(self, rect: Rect) -> bool {
+    fn covers(self, rect: Rect) -> bool {
         if rect.is_empty() || self.0.iter().any(|v| !v.is_finite()) {
             return false;
         }
-        let weights = corners(rect).map(|p| self.homogeneous(p)[2]);
+        let weights = rect.corners().map(|p| self.homogeneous(p)[2]);
         let largest = weights.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         weights.iter().all(|w| *w > largest * MIN_WEIGHT_RATIO)
-            && corners(rect).iter().all(|p| self.map(*p).is_some())
+            && rect.corners().iter().all(|p| self.map(*p).is_some())
     }
     /// Bounds of the mapped rectangle, when the map covers it.
     pub fn bounds(self, rect: Rect) -> Option<Rect> {
-        if !self.covers(rect) {
-            return None;
-        }
-        let mut bounds = Rect::EMPTY;
-        for p in corners(rect) {
-            bounds.include_circle(self.map(p)?, 0.);
-        }
-        Some(bounds)
-    }
-    /// The same motion in the space that `to` maps this map's space into.
-    pub fn conjugate(self, to: Affine) -> Option<Self> {
-        let from = Self::from_affine(to.inverse()?);
-        let map = from.then(self).then(Self::from_affine(to));
-        map.0.iter().all(|v| v.is_finite()).then_some(map)
+        self.covers(rect)
+            .then(|| Rect::around(rect.corners().into_iter().filter_map(|p| self.map(p))))
     }
 
     /// Map closed polygons exactly, first clipping away the parts with no image
     /// (w' below a floor relative to their largest w'). Even-odd interiors
     /// survive the clip because it is convex. Polygons that vanish are dropped.
-    pub(crate) fn map_polygons(
-        self,
-        polygons: &[std::sync::Arc<[Point]>],
-    ) -> Vec<std::sync::Arc<[Point]>> {
-        let weight = |p: Point| self.homogeneous(p)[2];
+    pub(crate) fn map_polygons(self, polygons: &[Arc<[Point]>]) -> Vec<Arc<[Point]>> {
+        let weight = |[x, y]: [f64; 2]| self.homogeneous(Point { x: x as f32, y: y as f32 })[2];
         let largest = polygons
             .iter()
             .flat_map(|ring| ring.iter())
-            .map(|p| weight(*p))
+            .map(|p| weight([p.x, p.y].map(f64::from)))
             .fold(f64::NEG_INFINITY, f64::max);
         if !(largest > 0.) {
             return Vec::new();
@@ -156,22 +144,11 @@ impl Projective {
         polygons
             .iter()
             .filter_map(|ring| {
-                let mut clipped = Vec::with_capacity(ring.len() + 2);
-                for (i, p) in ring.iter().enumerate() {
-                    let q = ring[(i + 1) % ring.len()];
-                    let [dp, dq] = [weight(*p) - floor, weight(q) - floor];
-                    if dp >= 0. {
-                        clipped.push(*p);
-                    }
-                    if (dp >= 0.) != (dq >= 0.) {
-                        let t = (dp / (dp - dq)) as f32;
-                        clipped.push(Point {
-                            x: p.x + (q.x - p.x) * t,
-                            y: p.y + (q.y - p.y) * t,
-                        });
-                    }
-                }
-                let mapped: Option<Vec<Point>> = clipped.into_iter().map(|p| self.map(p)).collect();
+                let ring: Vec<_> = ring.iter().map(|p| [p.x, p.y].map(f64::from)).collect();
+                let mapped: Option<Vec<Point>> = clip_convex(&ring, |p| weight(p) - floor)
+                    .into_iter()
+                    .map(|[x, y]| self.map(Point { x: x as f32, y: y as f32 }))
+                    .collect();
                 mapped.filter(|ring| ring.len() >= 3).map(Into::into)
             })
             .collect()
@@ -205,37 +182,27 @@ fn multiply(a: [f64; 9], b: [f64; 9]) -> [f64; 9] {
     })
 }
 
-pub(crate) fn corners(rect: Rect) -> [Point; 4] {
-    [
-        rect.min,
-        Point {
-            x: rect.max.x,
-            y: rect.min.y,
-        },
-        rect.max,
-        Point {
-            x: rect.min.x,
-            y: rect.max.y,
-        },
-    ]
+/// The part of a convex polygon where `side` is non-negative (Sutherland-Hodgman).
+pub fn clip_convex(polygon: &[[f64; 2]], side: impl Fn([f64; 2]) -> f64) -> Vec<[f64; 2]> {
+    let mut kept = Vec::with_capacity(polygon.len() + 2);
+    for (i, p) in polygon.iter().enumerate() {
+        let q = polygon[(i + 1) % polygon.len()];
+        let [a, b] = [side(*p), side(q)];
+        if a >= 0. {
+            kept.push(*p);
+        }
+        if (a >= 0.) != (b >= 0.) {
+            let t = a / (a - b);
+            kept.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+        }
+    }
+    kept
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn near(a: Point, b: Point, tolerance: f32) {
-        assert!(
-            (a.x - b.x).abs() <= tolerance && (a.y - b.y).abs() <= tolerance,
-            "{a:?} != {b:?}"
-        );
-    }
-    fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
-        Rect {
-            min: Point { x: x0, y: y0 },
-            max: Point { x: x1, y: y1 },
-        }
-    }
+    use crate::affine::tests::{near, rect};
 
     #[test]
     fn affine_maps_behave_identically_as_projective_maps() {
@@ -284,7 +251,7 @@ mod tests {
                     inverse.map(p),
                     1e-2,
                 );
-                let composed = projective.then(Projective::from_affine(other));
+                let composed = projective.then(Projective::from_affine(other)).unwrap();
                 near(
                     composed.map(p).unwrap(),
                     affine.then(other).map(p),
@@ -294,15 +261,6 @@ mod tests {
             let [a, b] = [projective.bounds(source).unwrap(), affine.bounds(source)];
             near(a.min, b.min, 1e-2 * b.min.x.abs().max(1.));
             near(a.max, b.max, 1e-2 * b.max.x.abs().max(1.));
-            let to = Affine::around(Point::default(), [2., 2.], 0.5, Point { x: 7., y: -8. });
-            let conjugate = projective.conjugate(to).unwrap().as_affine().unwrap();
-            let expected = to.inverse().unwrap().then(affine).then(to);
-            for (x, y) in conjugate.0.into_iter().zip(expected.0) {
-                assert!(
-                    (x - y).abs() <= 1e-3 * y.abs().max(1.),
-                    "{conjugate:?} != {expected:?}"
-                );
-            }
         }
         let quad = [
             Point { x: 5., y: 7. },
@@ -328,7 +286,7 @@ mod tests {
             Point { x: 90., y: 430. },
         ];
         let map = Projective::rect_to_quad(source, quad).unwrap();
-        for (corner, target) in corners(source).into_iter().zip(quad) {
+        for (corner, target) in source.corners().into_iter().zip(quad) {
             near(map.map(corner).unwrap(), target, 1e-3);
         }
         let inverse = map.inverse().unwrap();
@@ -338,7 +296,7 @@ mod tests {
             Point { x: 1000., y: -100. },
         ] {
             near(inverse.map(map.map(p).unwrap()).unwrap(), p, 2e-3);
-            near(map.then(inverse).map(p).unwrap(), p, 2e-3);
+            near(map.then(inverse).unwrap().map(p).unwrap(), p, 2e-3);
         }
         let mid = Point { x: 400., y: 250. };
         let crossing = |[a, b, c, d]: [Point; 4]| {
@@ -417,5 +375,6 @@ mod tests {
         let singular = Projective([1., 0., 0., 2., 0., 0., 0., 0., 1.]);
         assert!(singular.inverse().is_none());
         assert!(Projective([f32::INFINITY; 9]).inverse().is_none());
+        assert!(map.then(Projective([f32::NAN; 9])).is_none());
     }
 }

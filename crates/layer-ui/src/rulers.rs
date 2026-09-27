@@ -256,16 +256,7 @@ impl<B: CanvasRenderer> UiSession<B> {
         if !self.rulers.visible {
             return;
         }
-        let matrix = self.state.camera.view().document_to_surface;
-        let scale = self
-            .logical_viewport
-            .map_or(1., |v| self.state.camera.viewport[0] as f32 / v[0]);
-        let map = |p: Point| {
-            [
-                (matrix[0] * p.x + matrix[2] * p.y + matrix[4]) / scale,
-                (matrix[1] * p.x + matrix[3] * p.y + matrix[5]) / scale,
-            ]
-        };
+        let map = self.document_to_logical();
         let bounds = Rect {
             min: Point::default(),
             max: Point {

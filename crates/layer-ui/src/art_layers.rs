@@ -1951,16 +1951,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn append_layer_overlay(&self, segments: &mut Vec<layer_render::CursorSegment>) {
         self.append_ruler_overlay(segments);
         self.append_transform_overlay(segments);
-        let matrix = self.state.camera.view().document_to_surface;
-        let scale = self
-            .logical_viewport
-            .map_or(1., |v| self.state.camera.viewport[0] as f32 / v[0]);
-        let transform = |p: Point| {
-            [
-                (matrix[0] * p.x + matrix[2] * p.y + matrix[4]) / scale,
-                (matrix[1] * p.x + matrix[3] * p.y + matrix[5]) / scale,
-            ]
-        };
+        let transform = self.document_to_logical();
         let mut path = |points: &[Point], closed: bool, affine: layer_core::Affine| {
             let mut distance = 0.;
             for (a, b) in points

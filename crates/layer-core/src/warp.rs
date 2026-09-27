@@ -1,5 +1,5 @@
 //! Warp meshes: tensor-product cubic Bézier patches over a source rectangle.
-use crate::{Affine, Point, Projective, Rect};
+use crate::{Affine, Point, Projective, Rect, clip_convex};
 use std::sync::Arc;
 
 /// `frame` maps the unit square onto the source rectangle, split into
@@ -25,23 +25,9 @@ pub struct Tessellation {
     pub sources: Vec<Point>,
 }
 
-impl Tessellation {
-    /// The two triangles of each quad, row by row, as vertex indices.
-    pub fn triangles(&self) -> impl Iterator<Item = [u32; 3]> + '_ {
-        let [columns, rows] = self.grid;
-        (0..rows).flat_map(move |j| {
-            (0..columns).flat_map(move |i| {
-                let a = j * (columns + 1) + i;
-                let [b, c, d] = [a + 1, a + columns + 1, a + columns + 2];
-                [[a, b, d], [a, d, c]]
-            })
-        })
-    }
-}
-
 /// Tangent handle directions around a node: along the row, down the column,
 /// back along the row, and up the column.
-pub const TANGENT_SIDES: [[i32; 2]; 4] = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+const TANGENT_SIDES: [[i32; 2]; 4] = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 
 impl MeshMap {
     /// Grid presets, in cells. Three by three cells has four by four nodes.
@@ -51,66 +37,38 @@ impl MeshMap {
     /// destination and source pixels, so the filter can soften it.
     pub const SKIRT: f32 = 2.;
 
-    /// The mesh that leaves `bounds` in place.
-    pub fn identity(bounds: Rect, cells: [u16; 2]) -> Option<Self> {
-        Self::from_affine(bounds, cells, Affine::IDENTITY)
-    }
-
-    /// The mesh equal to an affine map over `bounds`. Bézier patches are affine
-    /// invariant, so this is exact.
-    pub fn from_affine(bounds: Rect, cells: [u16; 2], affine: Affine) -> Option<Self> {
+    /// The mesh through `f` at every third of each cell of `bounds`, exact
+    /// for maps that are cubic across each cell.
+    pub fn fit(bounds: Rect, cells: [u16; 2], f: impl Fn(Point) -> Option<Point>) -> Option<Self> {
+        const THIRDS: [[f64; 4]; 4] = [
+            [1., 0., 0., 0.],
+            [-5. / 6., 3., -1.5, 1. / 3.],
+            [1. / 3., -1.5, 3., -5. / 6.],
+            [0., 0., 0., 1.],
+        ];
         let frame = unit_frame(bounds)?;
-        let map = frame.then(affine);
         let [width, height] = net_size(cells)?;
-        let net = (0..height)
-            .flat_map(|j| {
-                (0..width).map(move |i| {
-                    map.map(Point {
-                        x: i as f32 / (width - 1) as f32,
-                        y: j as f32 / (height - 1) as f32,
-                    })
-                })
+        let samples = (0..width * height)
+            .map(|n| {
+                f(frame.map(Point {
+                    x: (n % width) as f32 / (width - 1) as f32,
+                    y: (n / width) as f32 / (height - 1) as f32,
+                }))
             })
-            .collect();
-        let mesh = Self { frame, cells, net };
-        mesh.valid().then_some(mesh)
-    }
-
-    /// A mesh through the perspective image of each node, with tangents and
-    /// interior points from the map's derivatives at the nodes (bicubic
-    /// Hermite with twist vectors). Exact when the map is affine.
-    pub fn from_projective(bounds: Rect, cells: [u16; 2], map: &Projective) -> Option<Self> {
-        let frame = unit_frame(bounds)?;
-        let [width, height] = net_size(cells)?;
-        if !map.covers(bounds) {
-            return None;
-        }
-        let [du, dv] = [1. / f64::from(cells[0]), 1. / f64::from(cells[1])];
-        let mut net = vec![Point::default(); width * height];
-        for row in 0..=usize::from(cells[1]) {
-            for column in 0..=usize::from(cells[0]) {
-                let [u, v] = [column as f64 * du, row as f64 * dv];
-                let [f, fu, fv, fuv] = jet(map, frame, u, v)?;
-                for (di, dj) in [
-                    (-1i32, -1i32),
-                    (-1, 0),
-                    (-1, 1),
-                    (0, -1),
-                    (0, 0),
-                    (0, 1),
-                    (1, -1),
-                    (1, 0),
-                    (1, 1),
-                ] {
-                    let [i, j] = [column as i32 * 3 + di, row as i32 * 3 + dj];
-                    if i < 0 || j < 0 || i >= width as i32 || j >= height as i32 {
-                        continue;
-                    }
-                    let [a, b] = [f64::from(di) * du / 3., f64::from(dj) * dv / 3.];
-                    let point = [0, 1].map(|k| f[k] + a * fu[k] + b * fv[k] + a * b * fuv[k]);
-                    net[j as usize * width + i as usize] = Point {
-                        x: point[0] as f32,
-                        y: point[1] as f32,
+            .collect::<Option<Vec<_>>>()?;
+        let mut net = samples.clone();
+        for cy in 0..usize::from(cells[1]) {
+            for cx in 0..usize::from(cells[0]) {
+                let at = |i: usize, j: usize| (3 * cy + j) * width + 3 * cx + i;
+                for (j, i) in (0..4).flat_map(|j| (0..4).map(move |i| (j, i))) {
+                    let [x, y] = (0..16).fold([0f64; 2], |[x, y], n| {
+                        let [k, l] = [n % 4, n / 4];
+                        let (w, s) = (THIRDS[j][l] * THIRDS[i][k], samples[at(k, l)]);
+                        [x + w * f64::from(s.x), y + w * f64::from(s.y)]
+                    });
+                    net[at(i, j)] = Point {
+                        x: x as f32,
+                        y: y as f32,
                     };
                 }
             }
@@ -121,6 +79,15 @@ impl MeshMap {
             net: net.into(),
         };
         mesh.valid().then_some(mesh)
+    }
+    pub fn identity(bounds: Rect, cells: [u16; 2]) -> Option<Self> {
+        Self::fit(bounds, cells, Some)
+    }
+    pub fn from_affine(bounds: Rect, cells: [u16; 2], affine: Affine) -> Option<Self> {
+        Self::fit(bounds, cells, |p| Some(affine.map(p)))
+    }
+    pub fn from_projective(bounds: Rect, cells: [u16; 2], map: &Projective) -> Option<Self> {
+        Self::fit(bounds, cells, |p| map.map(p))
     }
 
     /// Finite, invertible framing, bounded cells and a net of matching size.
@@ -141,10 +108,8 @@ impl MeshMap {
     pub fn map(&self, p: Point) -> Option<Point> {
         let unit = self.frame.inverse()?.map(p);
         let range = -1e-5..=1. + 1e-5;
-        if !range.contains(&unit.x) || !range.contains(&unit.y) {
-            return None;
-        }
-        Some(self.evaluate(unit.x.clamp(0., 1.), unit.y.clamp(0., 1.)))
+        (range.contains(&unit.x) && range.contains(&unit.y))
+            .then(|| self.evaluate(unit.x.clamp(0., 1.), unit.y.clamp(0., 1.)))
     }
 
     /// The surface at unit coordinates.
@@ -176,11 +141,7 @@ impl MeshMap {
 
     /// Bounds of the destination surface: the control net's hull.
     pub fn bounds(&self) -> Rect {
-        let mut bounds = Rect::EMPTY;
-        for p in self.net.iter() {
-            bounds.include_circle(*p, 0.);
-        }
-        bounds
+        Rect::around(self.net.iter().copied())
     }
 
     /// Bounds of everything a renderer draws for the mesh: the control hull
@@ -188,97 +149,64 @@ impl MeshMap {
     /// source pixels at the steepest rate the patches can reach.
     pub fn drawn_bounds(&self) -> Rect {
         let width = self.width();
-        let height = self.net.len() / width;
-        let source = self.source();
+        let [a, b, c, d, _, _] = self.frame.0;
         let per_cell = [
-            (source.max.x - source.min.x) / f32::from(self.cells[0]),
-            (source.max.y - source.min.y) / f32::from(self.cells[1]),
+            a.hypot(b) / f32::from(self.cells[0]),
+            c.hypot(d) / f32::from(self.cells[1]),
         ];
         let mut rate = 1f32;
-        for j in 0..height {
-            for i in 0..width {
-                let p = self.point(i, j);
-                for (axis, q) in [
-                    (0, (i + 1 < width).then(|| self.point(i + 1, j))),
-                    (1, (j + 1 < height).then(|| self.point(i, j + 1))),
-                ] {
-                    if let Some(q) = q {
-                        rate = rate.max(3. * (q.x - p.x).hypot(q.y - p.y) / per_cell[axis]);
-                    }
+        for (n, p) in self.net.iter().enumerate() {
+            for (axis, q) in [
+                (0, (n % width + 1 < width).then(|| self.net[n + 1])),
+                (1, self.net.get(n + width).copied()),
+            ] {
+                if let Some(q) = q {
+                    rate = rate.max(3. * (q.x - p.x).hypot(q.y - p.y) / per_cell[axis]);
                 }
             }
         }
-        let reach = Self::SKIRT * rate;
-        let hull = self.bounds();
-        Rect {
-            min: Point {
-                x: hull.min.x - reach,
-                y: hull.min.y - reach,
-            },
-            max: Point {
-                x: hull.max.x + reach,
-                y: hull.max.y + reach,
-            },
-        }
+        self.bounds().outset(Self::SKIRT * rate)
     }
 
-    /// The source rectangle the mesh covers.
-    pub fn source(&self) -> Rect {
-        self.frame.bounds(Rect {
-            min: Point::default(),
-            max: Point { x: 1., y: 1. },
-        })
-    }
-
-    /// Map closed polygons in source pixels, clipped to the mesh's rectangle
-    /// and subdivided to at most one source pixel per edge so they follow the
-    /// patches. Even-odd interiors survive the convex clip.
-    pub(crate) fn map_polygons(&self, polygons: &[Arc<[Point]>]) -> Vec<Arc<[Point]>> {
-        let source = self.source();
-        polygons
-            .iter()
-            .filter_map(|ring| {
-                let mut clipped: Vec<Point> = ring.to_vec();
-                for (axis, edge, sign) in [
-                    (0, source.min.x, 1.),
-                    (1, source.min.y, 1.),
-                    (0, source.max.x, -1.),
-                    (1, source.max.y, -1.),
-                ] {
-                    let side = |p: Point| (if axis == 0 { p.x } else { p.y } - edge) * sign;
-                    let mut kept = Vec::with_capacity(clipped.len() + 2);
+    /// Map closed polygons placed by `placement` in source pixels, clipped to
+    /// the mesh's rectangle and subdivided to at most one source pixel per edge.
+    pub(crate) fn map_polygons(
+        &self,
+        polygons: &[Arc<[Point]>],
+        placement: Affine,
+    ) -> Option<Vec<Arc<[Point]>>> {
+        let to_unit = placement.then(self.frame.inverse()?);
+        let [a, b, c, d, _, _] = self.frame.0.map(f64::from);
+        Some(
+            polygons
+                .iter()
+                .filter_map(|ring| {
+                    let mut clipped: Vec<[f64; 2]> = ring
+                        .iter()
+                        .map(|p| {
+                            let unit = to_unit.map(*p);
+                            [unit.x, unit.y].map(f64::from)
+                        })
+                        .collect();
+                    for edge in 0..4 {
+                        let axis = edge % 2;
+                        clipped = clip_convex(&clipped, |p| if edge < 2 { p[axis] } else { 1. - p[axis] });
+                    }
+                    let mut dense = Vec::with_capacity(clipped.len());
                     for (i, p) in clipped.iter().enumerate() {
                         let q = clipped[(i + 1) % clipped.len()];
-                        let [a, b] = [side(*p), side(q)];
-                        if a >= 0. {
-                            kept.push(*p);
-                        }
-                        if (a >= 0.) != (b >= 0.) {
-                            let t = a / (a - b);
-                            kept.push(Point {
-                                x: p.x + (q.x - p.x) * t,
-                                y: p.y + (q.y - p.y) * t,
-                            });
-                        }
+                        let [du, dv] = [q[0] - p[0], q[1] - p[1]];
+                        let steps = (a * du + c * dv).hypot(b * du + d * dv).ceil().max(1.) as usize;
+                        dense.extend((0..steps).map(|k| {
+                            let t = k as f64 / steps as f64;
+                            let [u, v] = [0, 1].map(|axis| (p[axis] + (q[axis] - p[axis]) * t).clamp(0., 1.) as f32);
+                            self.evaluate(u, v)
+                        }));
                     }
-                    clipped = kept;
-                }
-                let mut dense = Vec::with_capacity(clipped.len());
-                for (i, p) in clipped.iter().enumerate() {
-                    let q = clipped[(i + 1) % clipped.len()];
-                    let steps = (p.x - q.x).hypot(p.y - q.y).ceil().max(1.) as usize;
-                    for k in 0..steps {
-                        let t = k as f32 / steps as f32;
-                        dense.push(Point {
-                            x: p.x + (q.x - p.x) * t,
-                            y: p.y + (q.y - p.y) * t,
-                        });
-                    }
-                }
-                let mapped: Option<Vec<Point>> = dense.into_iter().map(|p| self.map(p)).collect();
-                mapped.filter(|ring| ring.len() >= 3).map(Into::into)
-            })
-            .collect()
+                    (dense.len() >= 3).then(|| dense.into())
+                })
+                .collect(),
+        )
     }
 
     /// Apply `affine` after the mesh, exactly.
@@ -286,14 +214,6 @@ impl MeshMap {
         Self {
             net: self.net.iter().map(|p| affine.map(*p)).collect(),
             ..self.clone()
-        }
-    }
-
-    /// The same motion in the space that `to` maps this mesh's space into.
-    pub fn conjugate(&self, to: Affine) -> Self {
-        Self {
-            frame: self.frame.then(to),
-            ..self.post(to)
         }
     }
 
@@ -418,10 +338,9 @@ impl MeshMap {
     /// patches around it follow the change in their Coons interior, so edits
     /// keep the patches' own shaping and stay continuous across patches.
     pub fn move_node(&self, node: u32, delta: Point) -> Option<Self> {
-        let [ni, nj] = self.node_grid(node)?;
-        let mut moved = vec![[ni, nj]];
+        let mut moved = vec![self.node_grid(node)?];
         moved.extend((0..4).filter_map(|side| self.tangent_grid(node, side)));
-        Some(self.edit(&moved, |_| delta))
+        Some(self.edit(&moved, delta))
     }
 
     /// Place one tangent handle, leaving the node and its other handles.
@@ -432,46 +351,33 @@ impl MeshMap {
             x: position.x - old.x,
             y: position.y - old.y,
         };
-        Some(self.edit(&[[i, j]], |_| delta))
+        Some(self.edit(&[[i, j]], delta))
     }
 
-    /// Move boundary control points, then shift each touched patch's interior
+    /// Move boundary control points, then shift every patch's interior
     /// points by the change in its Coons interior.
-    fn edit(&self, points: &[[usize; 2]], delta: impl Fn([usize; 2]) -> Point) -> Self {
+    fn edit(&self, points: &[[usize; 2]], delta: Point) -> Self {
         let width = self.width();
         let mut deltas = vec![Point::default(); self.net.len()];
-        for p in points {
-            deltas[p[1] * width + p[0]] = delta(*p);
+        for [i, j] in points {
+            deltas[j * width + i] = delta;
         }
-        let mut net: Vec<Point> = self.net.to_vec();
-        for (point, d) in net.iter_mut().zip(&deltas) {
-            point.x += d.x;
-            point.y += d.y;
-        }
-        let touched = |i: usize, j: usize| {
-            let [ci, cj] = [i / 3, j / 3];
-            let mut cells = vec![[ci, cj]];
-            if i % 3 == 0 && ci > 0 {
-                cells.push([ci - 1, cj]);
-            }
-            if j % 3 == 0 && cj > 0 {
-                cells.push([ci, cj - 1]);
-            }
-            if i % 3 == 0 && j % 3 == 0 && ci > 0 && cj > 0 {
-                cells.push([ci - 1, cj - 1]);
-            }
-            cells
-        };
-        let mut cells: Vec<[usize; 2]> = points.iter().flat_map(|p| touched(p[0], p[1])).collect();
-        cells.retain(|c| c[0] < usize::from(self.cells[0]) && c[1] < usize::from(self.cells[1]));
-        cells.sort_unstable();
-        cells.dedup();
-        for [ci, cj] in cells {
-            let d = |i: usize, j: usize| deltas[(cj * 3 + j) * width + ci * 3 + i];
-            for (i, j, coons) in coons_interior(|i, j| d(i, j)) {
-                let point = &mut net[(cj * 3 + j) * width + ci * 3 + i];
-                point.x += coons.x;
-                point.y += coons.y;
+        let mut net: Vec<Point> = self
+            .net
+            .iter()
+            .zip(&deltas)
+            .map(|(p, d)| Point {
+                x: p.x + d.x,
+                y: p.y + d.y,
+            })
+            .collect();
+        for cj in 0..usize::from(self.cells[1]) {
+            for ci in 0..usize::from(self.cells[0]) {
+                let at = |i: usize, j: usize| (cj * 3 + j) * width + ci * 3 + i;
+                for (i, j, coons) in coons_interior(|i, j| deltas[at(i, j)]) {
+                    net[at(i, j)].x += coons.x;
+                    net[at(i, j)].y += coons.y;
+                }
             }
         }
         Self {
@@ -514,30 +420,6 @@ fn coons_interior(b: impl Fn(usize, usize) -> Point) -> [(usize, usize, Point); 
     ]
 }
 
-/// A perspective map over the unit square and its first derivatives and
-/// twist at (u, v): the numerators and w' are affine in (u, v).
-fn jet(map: &Projective, frame: Affine, u: f64, v: f64) -> Option<[[f64; 2]; 4]> {
-    let [a, b, c, d, x, y] = frame.0.map(f64::from);
-    let m = map.0.map(f64::from);
-    let row = |k: usize| {
-        let [p, q, r] = [m[k * 3], m[k * 3 + 1], m[k * 3 + 2]];
-        let value = p * (a * u + c * v + x) + q * (b * u + d * v + y) + r;
-        [value, p * a + q * b, p * c + q * d]
-    };
-    let [[nx, nxu, nxv], [ny, nyu, nyv], [w, wu, wv]] = [row(0), row(1), row(2)];
-    if !(w > 0.) {
-        return None;
-    }
-    let [n, nu, nv] = [[nx, ny], [nxu, nyu], [nxv, nyv]];
-    let f = n.map(|v| v / w);
-    let fu = std::array::from_fn(|k| (nu[k] * w - n[k] * wu) / (w * w));
-    let fv = std::array::from_fn(|k| (nv[k] * w - n[k] * wv) / (w * w));
-    let fuv = std::array::from_fn(|k| {
-        -(nu[k] * wv + nv[k] * wu) / (w * w) + 2. * n[k] * wu * wv / (w * w * w)
-    });
-    Some([f, fu, fv, fuv])
-}
-
 fn bernstein(t: f32) -> [f32; 4] {
     let s = 1. - t;
     [s * s * s, 3. * s * s * t, 3. * s * t * t, t * t * t]
@@ -560,27 +442,11 @@ fn unit_frame(bounds: Rect) -> Option<Affine> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
-        Rect {
-            min: Point { x: x0, y: y0 },
-            max: Point { x: x1, y: y1 },
-        }
-    }
-    fn distance(a: Point, b: Point) -> f32 {
-        (a.x - b.x).hypot(a.y - b.y)
-    }
-    fn samples(bounds: Rect) -> impl Iterator<Item = Point> {
-        (0..=12).flat_map(move |j| {
-            (0..=12).map(move |i| Point {
-                x: bounds.min.x + (bounds.max.x - bounds.min.x) * i as f32 / 12.,
-                y: bounds.min.y + (bounds.max.y - bounds.min.y) * j as f32 / 12.,
-            })
-        })
-    }
+    use crate::affine::tests::{distance, rect, samples};
+    use crate::{ImageTransform, Selection, TransformMap};
 
     #[test]
-    fn affine_seeds_are_exact_and_post_and_conjugate_stay_exact() {
+    fn affine_fits_are_exact_and_post_stays_exact() {
         let bounds = rect(40., 30., 1040., 830.);
         let affine = Affine::around(
             Point { x: 500., y: 400. },
@@ -595,22 +461,15 @@ mod tests {
                 mesh.net.len(),
                 (cells[0] as usize * 3 + 1) * (cells[1] as usize * 3 + 1)
             );
-            assert_eq!(mesh.source(), bounds);
+            let flip = Affine([-1., 0., 0., 1., 900., 0.]);
+            let posted = mesh.post(flip);
             for p in samples(bounds) {
                 assert!(distance(identity.map(p).unwrap(), p) < 2e-3);
                 assert!(
                     distance(mesh.map(p).unwrap(), affine.map(p)) < 2e-3,
                     "{cells:?} {p:?}"
                 );
-            }
-            let flip = Affine([-1., 0., 0., 1., 900., 0.]);
-            let posted = mesh.post(flip);
-            let to = Affine::around(Point::default(), [2., 2.], 0.3, Point { x: 5., y: 7. });
-            let moved = mesh.conjugate(to);
-            for p in samples(bounds) {
                 assert!(distance(posted.map(p).unwrap(), flip.map(affine.map(p))) < 2e-3);
-                let expected = to.map(affine.map(p));
-                assert!(distance(moved.map(to.map(p)).unwrap(), expected) < 5e-3);
             }
             assert!(
                 mesh.map(Point { x: 0., y: 0. }).is_none(),
@@ -620,37 +479,45 @@ mod tests {
         assert!(MeshMap::identity(bounds, [0, 3]).is_none());
         assert!(MeshMap::identity(bounds, [MeshMap::MAX_CELLS + 1, 3]).is_none());
         assert!(MeshMap::identity(rect(0., 0., 0., 10.), [3, 3]).is_none());
+        assert!(MeshMap::fit(bounds, [3, 3], |p| (p.x < 500.).then_some(p)).is_none());
     }
 
     #[test]
-    fn perspective_seeds_hit_every_node_and_stay_near_the_map() {
+    fn fits_follow_a_perspective_even_over_a_warp() {
         let bounds = rect(0., 0., 1200., 800.);
-        let quad = [[80., 40.], [1100., 120.], [1180., 760.], [20., 700.]];
-        let map = Projective::rect_to_quad(bounds, quad.map(|[x, y]| Point { x, y })).unwrap();
-        for (cells, tolerance) in [([3, 3], 1.5), ([4, 4], 0.6), ([8, 8], 0.1)] {
-            let mesh = MeshMap::from_projective(bounds, cells, &map).unwrap();
+        let keystone = [[400., 0.], [800., 0.], [1200., 800.], [0., 800.]].map(|[x, y]| Point { x, y });
+        let map = Projective::rect_to_quad(bounds, keystone).unwrap();
+        let worst = |mesh: &MeshMap, truth: &dyn Fn(Point) -> Option<Point>| {
+            samples(rect(7., 5., 1193., 795.))
+                .map(|p| distance(mesh.map(p).unwrap(), truth(p).unwrap()))
+                .fold(0f32, f32::max)
+        };
+        for (cells, tolerance) in [([3, 3], 0.6), ([4, 4], 0.25), ([8, 8], 0.05)] {
+            let mesh = MeshMap::fit(bounds, cells, |p| map.map(p)).unwrap();
+            let columns = u32::from(cells[0]) + 1;
             for node in 0..mesh.node_count() {
-                let columns = u32::from(cells[0]) + 1;
                 let p = Point {
                     x: (node % columns) as f32 / cells[0] as f32 * 1200.,
                     y: (node / columns) as f32 / cells[1] as f32 * 800.,
                 };
                 assert!(distance(mesh.node(node).unwrap(), map.map(p).unwrap()) < 1e-2);
             }
-            let worst = samples(bounds)
-                .map(|p| distance(mesh.map(p).unwrap(), map.map(p).unwrap()))
-                .fold(0f32, f32::max);
-            assert!(
-                worst < tolerance,
-                "{cells:?}: {worst}px from the perspective map"
-            );
+            let error = worst(&mesh, &|p| map.map(p));
+            assert!(error < tolerance, "{cells:?}: {error}px from the perspective map");
         }
-        let affine = Affine::around(Point::default(), [0.5, 2.], 0.3, Point { x: 7., y: 1. });
-        let exact =
-            MeshMap::from_projective(bounds, [3, 3], &Projective::from_affine(affine)).unwrap();
-        for p in samples(bounds) {
-            assert!(distance(exact.map(p).unwrap(), affine.map(p)) < 2e-2);
-        }
+        let warp = MeshMap::identity(bounds, [3, 3])
+            .unwrap()
+            .move_node(5, Point { x: 90., y: -60. })
+            .unwrap();
+        let keystone = Projective::rect_to_quad(warp.bounds(), keystone).unwrap();
+        let truth = |p| keystone.map(warp.map(p)?);
+        let fitted = MeshMap::fit(bounds, [3, 3], truth).unwrap();
+        let pushed = MeshMap {
+            net: warp.net.iter().map(|p| keystone.map(*p).unwrap()).collect(),
+            ..warp.clone()
+        };
+        let [fitted, pushed] = [worst(&fitted, &truth), worst(&pushed, &truth)];
+        assert!(fitted < 1. && fitted * 20. < pushed, "{fitted}px fitted, {pushed}px pushed");
     }
 
     #[test]
@@ -702,8 +569,6 @@ mod tests {
             ) < 1e-3
         );
         assert_eq!(moved.map(Point { x: 0., y: 0. }), Some(corner));
-        // Starting from an affine mesh, every patch interior is its boundary's
-        // Coons interior, before and after the edit.
         let tangent = moved
             .move_tangent(node, 1, Point { x: 350., y: 330. })
             .unwrap();
@@ -723,8 +588,6 @@ mod tests {
         }
         assert_eq!(tangent.tangent(node, 1), Some(Point { x: 350., y: 330. }));
         assert_eq!(tangent.tangent(node, 3), moved.tangent(node, 3));
-        // Neighbouring patches share their boundary curves: the surface is
-        // continuous across every patch edge.
         for edited in [&moved, &tangent] {
             for k in 1..3 {
                 for c in 0..3 {
@@ -744,40 +607,18 @@ mod tests {
     }
 
     #[test]
-    fn mesh_transforms_bound_conjugate_and_carry_contour_selections() {
-        use crate::{ImageTransform, Selection, SelectionPixels, TransformMap};
+    fn mesh_bounds_reach_the_skirt_and_contours_follow_the_patches() {
         let bounds = rect(100., 50., 500., 350.);
         let affine = Affine::around(Point::default(), [1.2, 0.8], 0.25, Point { x: 30., y: 10. });
         let mesh = MeshMap::from_affine(bounds, [3, 3], affine)
             .unwrap()
             .move_node(5, Point { x: 25., y: -15. })
             .unwrap();
-        let transform = ImageTransform {
-            map: TransformMap::Mesh(Arc::new(mesh.clone())),
-            ..Default::default()
-        };
-        assert!(transform.validate().is_ok() && !transform.is_identity());
-        let [hull, drawn] = [mesh.bounds(), transform.forward_bounds(bounds)];
-        assert_eq!(drawn, mesh.drawn_bounds());
+        let [hull, drawn] = [mesh.bounds(), mesh.drawn_bounds()];
         assert!(
             drawn.min.x <= hull.min.x - MeshMap::SKIRT
                 && drawn.max.y >= hull.max.y + MeshMap::SKIRT
         );
-        let mut broken = mesh.clone();
-        broken.net = broken.net[1..].into();
-        let broken = ImageTransform {
-            map: TransformMap::Mesh(Arc::new(broken)),
-            ..Default::default()
-        };
-        assert!(broken.validate().is_err());
-        let to = Affine::around(Point::default(), [2., 2.], -0.4, Point { x: 7., y: -3. });
-        let TransformMap::Mesh(moved) = transform.conjugate(to).unwrap().map else {
-            panic!("mesh")
-        };
-        for p in samples(bounds) {
-            let expected = to.map(mesh.map(p).unwrap());
-            assert!(distance(moved.map(to.map(p)).unwrap(), expected) < 5e-3);
-        }
         let ring = vec![
             Point { x: 0., y: 100. },
             Point { x: 400., y: 60. },
@@ -785,13 +626,9 @@ mod tests {
             Point { x: 150., y: 320. },
         ];
         let placement = Affine::translation(Point { x: 20., y: 5. });
-        let mut selection = Selection::polygon(ring)
-            .unwrap()
-            .transformed(placement)
-            .unwrap();
-        selection.inverted = true;
-        let mapped = selection.mapped(&transform.map).unwrap();
-        assert!(mapped.inverted && mapped.affine == Affine::IDENTITY);
+        let map = TransformMap::Mesh(Arc::new(mesh.clone()));
+        let selection = Selection::polygon(ring).unwrap().transformed(placement).unwrap();
+        let mapped = selection.mapped(&map).unwrap();
         let [contour] = mapped.contours() else {
             panic!("one ring")
         };
@@ -799,7 +636,6 @@ mod tests {
             contour.len() > 800,
             "edges follow the patches pixel by pixel"
         );
-        let hull = mesh.bounds();
         assert!(contour.iter().all(|p| p.x >= hull.min.x - 1e-3
             && p.x <= hull.max.x + 1e-3
             && p.y >= hull.min.y - 1e-3
@@ -815,17 +651,30 @@ mod tests {
             Point { x: 50., y: 40. },
         ])
         .unwrap();
-        assert!(
-            outside
-                .mapped(&transform.map)
-                .unwrap()
-                .contours()
-                .is_empty()
-        );
-        let pixels = Selection::pixels(Arc::new(
-            SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x4444]).unwrap(),
-        ));
-        assert!(pixels.mapped(&transform.map).is_err());
+        assert!(outside.mapped(&map).unwrap().contours().is_empty());
+    }
+
+    #[test]
+    fn rotated_frames_keep_the_skirt_and_selection_of_their_mesh() {
+        let bounds = rect(0., 0., 600., 600.);
+        let mesh = MeshMap::from_affine(bounds, [3, 3], Affine([3., 0., 0., 3., 0., 0.])).unwrap();
+        let to = Affine::around(Point { x: 300., y: 300. }, [1., 1.], 0.7, Point { x: 40., y: -20. });
+        let transform = ImageTransform {
+            map: TransformMap::Mesh(Arc::new(mesh.clone())),
+            ..Default::default()
+        };
+        let moved = transform.conjugate(to).unwrap().map;
+        let TransformMap::Mesh(rotated) = &moved else { panic!("mesh") };
+        let reach = |mesh: &MeshMap| mesh.bounds().min.x - mesh.drawn_bounds().min.x;
+        assert!((reach(&mesh) - 3. * MeshMap::SKIRT).abs() < 1e-3);
+        assert!((reach(rotated) - reach(&mesh)).abs() < 1e-2, "{} != {}", reach(rotated), reach(&mesh));
+        let ring = [[100., 100.], [500., 120.], [300., 550.]].map(|[x, y]| Point { x, y });
+        let placed = Selection::polygon(ring.map(|p| to.map(p)).to_vec()).unwrap();
+        let [contour] = placed.mapped(&moved).unwrap().contours().to_vec().try_into().unwrap();
+        for v in ring {
+            let expected = to.map(mesh.map(v).unwrap());
+            assert!(contour.iter().any(|p| distance(*p, expected) < 1e-2), "{v:?}");
+        }
     }
 
     #[test]
@@ -840,28 +689,23 @@ mod tests {
         for tolerance in [2., 0.5] {
             let t = mesh.tessellate(tolerance);
             assert_eq!(t.positions.len(), t.sources.len());
+            assert_eq!(t.positions.len(), (t.grid[0] as usize + 1) * (t.grid[1] as usize + 1));
             for (position, source) in t.positions.iter().zip(&t.sources) {
                 assert!(distance(mesh.map(*source).unwrap(), *position) < 1e-3);
             }
-            for [a, b, c] in t.triangles() {
-                for (p, q) in [(a, b), (b, c), (c, a)] {
-                    let [p, q] = [p as usize, q as usize];
-                    let chord = Point {
-                        x: (t.positions[p].x + t.positions[q].x) / 2.,
-                        y: (t.positions[p].y + t.positions[q].y) / 2.,
-                    };
-                    let source = Point {
-                        x: (t.sources[p].x + t.sources[q].x) / 2.,
-                        y: (t.sources[p].y + t.sources[q].y) / 2.,
-                    };
-                    assert!(distance(mesh.map(source).unwrap(), chord) <= tolerance * 1.5);
+            let width = t.grid[0] as usize + 1;
+            for (a, next) in (0..t.positions.len()).flat_map(|a| [(a, 1), (a, width), (a, width + 1)]) {
+                let b = a + next;
+                if b >= t.positions.len() || (next != width && (a + 1) % width == 0) {
+                    continue;
                 }
+                let middle = |v: &[Point]| Point {
+                    x: (v[a].x + v[b].x) / 2.,
+                    y: (v[a].y + v[b].y) / 2.,
+                };
+                let chord = middle(&t.positions);
+                assert!(distance(mesh.map(middle(&t.sources)).unwrap(), chord) <= tolerance * 1.5);
             }
-            assert!(
-                t.triangles()
-                    .flatten()
-                    .all(|v| (v as usize) < t.positions.len())
-            );
         }
         let hull = mesh.bounds();
         for p in mesh.tessellate(0.5).positions {

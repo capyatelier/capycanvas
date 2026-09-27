@@ -346,14 +346,9 @@ impl SelectionClip {
                 "Contour selections map on the CPU",
             ));
         };
-        let map = match map {
-            layer_core::TransformMap::Affine(affine) => layer_core::Projective::from_affine(*affine),
-            layer_core::TransformMap::Projective(projective) => *projective,
-            layer_core::TransformMap::Mesh(_) => layer_core::Projective::IDENTITY,
-        };
         let m = layer_core::Projective::from_affine(selection.affine)
-            .then(map)
-            .inverse()
+            .then(map.projective().unwrap_or(layer_core::Projective::IDENTITY))
+            .and_then(layer_core::Projective::inverse)
             .ok_or(GpuRasterError::InvalidTransform("Invalid selection transform"))?
             .0;
         Ok((self.pixel_buffer(device, pixels), [[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]]))

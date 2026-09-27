@@ -326,23 +326,14 @@ pub(crate) fn resample_map(
     placement: layer_core::Affine,
     local: u32,
     level: u32,
-) -> layer_core::ImageTransform {
-    let moved = match &transform.map {
-        layer_core::TransformMap::Affine(affine) => layer_core::Projective::from_affine(*affine),
-        layer_core::TransformMap::Projective(projective) => *projective,
-        layer_core::TransformMap::Mesh(_) => layer_core::Projective::IDENTITY,
-    };
+) -> Result<layer_core::ImageTransform, GpuRasterError> {
+    let moved = transform.map.projective().unwrap_or(layer_core::Projective::IDENTITY);
     let scale = |s: f32| layer_core::Projective([s, 0., 0., 0., s, 0., 0., 0., 1.]);
-    let map = scale((1u32 << local) as f32)
-        .then(moved)
-        .then(layer_core::Projective::from_affine(placement))
-        .then(scale(1. / (1u32 << level) as f32));
-    layer_core::ImageTransform {
-        map: map
-            .as_affine()
-            .map_or(layer_core::TransformMap::Projective(map), layer_core::TransformMap::Affine),
-        interpolation: layer_core::Interpolation::Linear,
-    }
+    let map = [moved, layer_core::Projective::from_affine(placement), scale(1. / (1u32 << level) as f32)]
+        .into_iter()
+        .try_fold(scale((1u32 << local) as f32), layer_core::Projective::then)
+        .ok_or(GpuRasterError::InvalidTransform("Transform must be finite and invertible"))?;
+    Ok(layer_core::ImageTransform { map: map.into(), interpolation: layer_core::Interpolation::Linear })
 }
 
 /// Whether `selection` fully covers every pixel of `bounds`, so a transform
@@ -1439,8 +1430,8 @@ impl ImageTransformState {
                 extent: display.extent.map(|n| n.div_ceil(side)),
                 ..display
             };
-            let transform = resample_map(&next.transform, placement, local, display_level);
-            let kept = resample_map(&layer_core::ImageTransform::default(), placement, local, display_level);
+            let transform = resample_map(&next.transform, placement, local, display_level)?;
+            let kept = resample_map(&layer_core::ImageTransform::default(), placement, local, display_level)?;
             let clip = layer_core::Affine([side as f32, 0., 0., side as f32, 0., 0.])
                 .then(placement.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid layer placement"))?);
             let positions = match &mesh {

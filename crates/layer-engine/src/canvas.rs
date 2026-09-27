@@ -130,6 +130,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
     transform_preview: Option<layer_render::TransformPreview>,
+    transform_selection: std::sync::OnceLock<Option<layer_core::Selection>>,
     selection_display: Option<Option<layer_core::Selection>>,
     rebuild_all: bool,
     composite_all: bool,
@@ -187,6 +188,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             dabs: Vec::with_capacity(DAB_CAPACITY),
             batches: Vec::with_capacity(BATCH_CAPACITY),
             transform_preview: None,
+            transform_selection: Default::default(),
             selection_display: None,
             rebuild_all: true,
             composite_all: true,
@@ -423,6 +425,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             }
         }
         self.transform_preview = preview;
+        self.transform_selection = Default::default();
         Ok(())
     }
 
@@ -438,40 +441,74 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     /// Commit the displayed pixels and moved selection as one undoable edit.
     /// The GPU can keep the matching preview result instead of resampling it.
-    pub fn commit_transform(&mut self) -> Result<bool, DocumentError> {
+    /// `resampled` is the coverage `transform_selection_request` produced; the
+    /// preview's inversion is kept.
+    pub fn commit_transform(
+        &mut self,
+        resampled: Option<std::sync::Arc<layer_core::SelectionPixels>>,
+    ) -> Result<bool, DocumentError> {
         let preview = self
             .transform_preview
-            .as_ref()
-            .ok_or(DocumentError::InvalidLayerOperation(
-                "No transform to apply",
-            ))?;
-        if !preview.transform.is_identity()
-            && self.selection_display.is_none()
-            && let Some(Err(error)) = preview.selection.as_ref().map(|s| s.mapped(&preview.transform.map))
-        {
-            return Err(error);
+            .clone()
+            .ok_or(DocumentError::InvalidLayerOperation("No transform to apply"))?;
+        if preview.transform.is_identity() {
+            self.transform_preview = None;
+            return Ok(false);
         }
-        let selection = self.display_selection().map(|s| s.into_owned());
-        self.commit_transform_as(selection)
+        let basis = self.document().layer_transform(preview.layer);
+        let selection = match (resampled, &preview.selection) {
+            (Some(pixels), _) if pixels.extent() != self.document().target_extent(preview.layer) => {
+                return Err(DocumentError::InvalidLayerOperation(
+                    "The resampled selection belongs to another layer",
+                ));
+            }
+            (Some(pixels), selection) => Some(
+                layer_core::Selection {
+                    inverted: selection.as_ref().is_some_and(|s| s.inverted),
+                    ..layer_core::Selection::pixels(pixels)
+                }
+                .transformed(basis)?,
+            ),
+            (None, Some(selection)) if self.selection_display.is_none() => {
+                Some(selection.mapped(&preview.transform.map)?.transformed(basis)?)
+            }
+            (None, _) => self.display_selection().map(|s| s.into_owned()),
+        };
+        let companion = preview.companion(&self.document().layers);
+        let mut operations = Vec::with_capacity(2);
+        for target in std::iter::once(preview).chain(companion) {
+            let mut coverage = layer_core::LayerMask::reveal_all(
+                self.allocate_layer_id(),
+                layer_core::Point::default(),
+            );
+            coverage.default_coverage = f32::from(target.selection.is_none());
+            coverage.initial = target.selection;
+            operations.push((
+                target.layer,
+                layer_core::LayerOperation {
+                    placement: layer_core::Affine::IDENTITY,
+                    coverage,
+                    kind: layer_core::LayerOperationKind::Transform(target.transform.clone()),
+                },
+            ));
+        }
+        self.append_operations(operations, Some(selection))?;
+        Ok(true)
     }
 
     /// The GPU request that carries the preview's pixel selection through a
     /// map its metadata cannot express, in the transformed target's pixels.
-    /// Apply waits for its result and passes it to
-    /// `commit_transform_with_selection`. None means `commit_transform` can
-    /// apply directly.
+    /// Apply waits for its result and passes it to `commit_transform`.
     pub fn transform_selection_request(
         &self,
         request_id: u64,
     ) -> Option<layer_render::RegionRequest> {
         let preview = self.transform_preview.as_ref()?;
-        let selection = preview.selection.as_ref()?;
-        if preview.transform.is_identity()
-            || self.selection_display.is_some()
-            || selection.mapped(&preview.transform.map).is_ok()
-        {
-            return None;
-        }
+        let selection = preview.selection.as_ref().filter(|s| {
+            !preview.transform.is_identity()
+                && self.selection_display.is_none()
+                && s.needs_resample(&preview.transform.map)
+        })?;
         Some(layer_render::RegionRequest {
             contiguous: false,
             selection: None,
@@ -488,67 +525,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         })
     }
 
-    /// Apply the preview with the coverage `transform_selection_request`
-    /// resampled, as one undoable edit. The preview's inversion is kept.
-    pub fn commit_transform_with_selection(
-        &mut self,
-        pixels: std::sync::Arc<layer_core::SelectionPixels>,
-    ) -> Result<bool, DocumentError> {
-        let preview = self
-            .transform_preview
-            .as_ref()
-            .ok_or(DocumentError::InvalidLayerOperation(
-                "No transform to apply",
-            ))?;
-        if pixels.extent() != self.document().target_extent(preview.layer) {
-            return Err(DocumentError::InvalidLayerOperation(
-                "The resampled selection belongs to another layer",
-            ));
-        }
-        let mut selection = layer_core::Selection::pixels(pixels);
-        selection.inverted = preview.selection.as_ref().is_some_and(|s| s.inverted);
-        let selection = selection.transformed(self.document().layer_transform(preview.layer))?;
-        self.commit_transform_as(Some(selection))
-    }
-
-    fn commit_transform_as(
-        &mut self,
-        selection: Option<layer_core::Selection>,
-    ) -> Result<bool, DocumentError> {
-        let preview = self
-            .transform_preview
-            .as_ref()
-            .ok_or(DocumentError::InvalidLayerOperation(
-                "No transform to apply",
-            ))?
-            .clone();
-        if preview.transform.is_identity() {
-            self.transform_preview = None;
-            return Ok(false);
-        }
-        let companion = preview.companion(&self.document().layers);
-        let mut operations = Vec::with_capacity(2);
-        for target in std::iter::once(preview).chain(companion) {
-            let mut coverage = layer_core::LayerMask::reveal_all(
-                self.allocate_layer_id(),
-                layer_core::Point::default(),
-            );
-            // Inversion is in the immutable packed selection, not mask metadata.
-            coverage.default_coverage = f32::from(target.selection.is_none());
-            coverage.initial = target.selection;
-            operations.push((
-                target.layer,
-                layer_core::LayerOperation {
-                    placement: layer_core::Affine::IDENTITY,
-                    coverage,
-                    kind: layer_core::LayerOperationKind::Transform(target.transform.clone()),
-                },
-            ));
-        }
-        self.append_operations(operations, Some(selection))?;
-        Ok(true)
-    }
-
     /// Override only the display mask. Artwork clipping always uses the document selection.
     pub fn set_selection_display(&mut self, selection: Option<Option<layer_core::Selection>>) {
         self.selection_display = selection;
@@ -560,13 +536,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return selection.as_ref().map(std::borrow::Cow::Borrowed);
         }
         if let Some(preview) = &self.transform_preview {
-            let selection = preview.selection.as_ref()?;
+            let mapped = self.transform_selection.get_or_init(|| {
+                preview.selection.as_ref()?.mapped(&preview.transform.map).ok()
+            });
             let basis = self.document().layer_transform(preview.layer);
-            return selection
-                .mapped(&preview.transform.map)
-                .ok()
-                .and_then(|s| s.transformed(basis).ok())
-                .map(std::borrow::Cow::Owned);
+            return mapped.as_ref()?.transformed(basis).ok().map(std::borrow::Cow::Owned);
         }
         self.document()
             .selection
@@ -2745,7 +2719,7 @@ mod tests {
             engine.render_frame().unwrap();
             engine.set_transform_preview(Some(preview.clone())).unwrap();
             let moved = engine.display_selection().unwrap().into_owned();
-            assert!(engine.commit_transform().unwrap());
+            assert!(engine.commit_transform(None).unwrap());
             let layer = &engine.document().layers[0];
             for p in [&preview, &companion] {
                 let ops = layer.target_operations(p.layer).unwrap();
@@ -2813,7 +2787,7 @@ mod tests {
         assert_eq!(engine.display_selection().as_deref(), Some(&selection));
         assert!(!engine.can_undo());
         engine.set_transform_preview(Some(preview.clone())).unwrap();
-        assert!(engine.commit_transform().unwrap());
+        assert!(engine.commit_transform(None).unwrap());
         assert!(engine.transform_preview.is_none());
         assert_eq!(engine.document().selection.as_ref(), Some(&placed));
         let operation = &engine.document().layer(layer).unwrap().pending_operations[0];
@@ -2841,7 +2815,7 @@ mod tests {
         let mut inverted = preview.clone();
         inverted.selection.as_mut().unwrap().inverted = true;
         engine.set_transform_preview(Some(inverted)).unwrap();
-        assert!(engine.commit_transform().unwrap());
+        assert!(engine.commit_transform(None).unwrap());
         assert!(engine.document().selection.as_ref().unwrap().inverted);
         assert!(engine.undo().unwrap());
         assert_eq!(engine.document().selection.as_ref(), Some(&placed));
@@ -2852,7 +2826,7 @@ mod tests {
             }))
             .unwrap();
         assert!(
-            !engine.commit_transform().unwrap(),
+            !engine.commit_transform(None).unwrap(),
             "identity must not add history"
         );
     }
@@ -2892,7 +2866,7 @@ mod tests {
         engine.set_transform_preview(Some(preview.clone())).unwrap();
         let expected = selection.mapped(&map).unwrap();
         assert_eq!(engine.display_selection().as_deref(), Some(&expected));
-        assert!(engine.commit_transform().unwrap());
+        assert!(engine.commit_transform(None).unwrap());
         assert_eq!(engine.document().selection.as_ref(), Some(&expected));
         assert!(engine.undo().unwrap());
         assert_eq!(engine.document().selection.as_ref(), Some(&selection));
@@ -2907,7 +2881,7 @@ mod tests {
             .unwrap();
         assert!(engine.display_selection().is_none(), "no outline until coverage is resampled");
         assert_eq!(
-            engine.commit_transform(),
+            engine.commit_transform(None),
             Err(DocumentError::InvalidLayerOperation(Selection::RESAMPLE_PIXELS))
         );
         assert!(engine.transform_preview().is_some());
@@ -2931,13 +2905,13 @@ mod tests {
                 .unwrap(),
         );
         let elsewhere = std::sync::Arc::new(SelectionPixels::bytes([64, 64], [0; 4], vec![0; 16 * 64]).unwrap());
-        assert!(engine.commit_transform_with_selection(elsewhere).is_err());
+        assert!(engine.commit_transform(Some(elsewhere)).is_err());
         assert!(engine.can_redo(), "a mismatched result leaves history untouched");
         for inverted in [false, true] {
             let mut preview = pending.clone();
             preview.selection.as_mut().unwrap().inverted = inverted;
             engine.set_transform_preview(Some(preview)).unwrap();
-            assert!(engine.commit_transform_with_selection(moved.clone()).unwrap());
+            assert!(engine.commit_transform(Some(moved.clone())).unwrap());
             let mut expected = Selection::pixels(moved.clone());
             expected.inverted = inverted;
             assert_eq!(engine.document().selection.as_ref(), Some(&expected));

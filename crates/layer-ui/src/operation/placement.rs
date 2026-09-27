@@ -80,26 +80,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 insertion,
                 selected,
             }),
-            request: TransformPreview {
-                transaction: self.operation.serial,
-                moving: false,
-                layer: layer.id,
-                selection: None,
-                transform: Default::default(),
-            },
-            revision: doc.revision,
-            basis,
-            bounds,
-            frame: bounds,
-            inner: None,
-            mesh: None,
-            cells: MeshMap::PRESETS[0],
-            node: None,
-            mode: TransformMode::Free,
-            perspective: false,
-            start: pose,
-            pose,
-            drag: None,
+            ..Transaction::new(self.operation.serial, layer.id, None, doc.revision, basis, bounds, pose)
         });
         // Establish the first valid preview before switching the visible tool
         // or selection. A rejected preview must not strand an active operation.
@@ -198,9 +179,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             placement.members = members;
             t.bounds = batch_bounds(self.engine.document(), &placement.members);
-            t.frame = t.bounds;
-            t.pose = Pose::identity();
-        } else { t.pose.scale = [1.; 2]; }
+            t.geometry.frame = t.bounds;
+            t.geometry.pose = Pose::identity();
+        } else { t.geometry.pose.scale = [1.; 2]; }
         self.update_transform()
     }
 }

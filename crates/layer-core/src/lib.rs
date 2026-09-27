@@ -38,9 +38,9 @@ pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler}
 mod affine;
 pub use affine::{Affine, ImageTransform, Interpolation, TransformMap};
 mod projective;
-pub use projective::Projective;
+pub use projective::{Projective, clip_convex};
 mod warp;
-pub use warp::{MeshMap, TANGENT_SIDES, Tessellation};
+pub use warp::{MeshMap, Tessellation};
 mod project;
 mod project_storage;
 pub use project_storage::SelectionIndex as ProjectSelections;
@@ -153,6 +153,43 @@ impl Rect {
         self.min.y = self.min.y.min(center.y - radius);
         self.max.x = self.max.x.max(center.x + radius);
         self.max.y = self.max.y.max(center.y + radius);
+    }
+
+    pub fn around(points: impl IntoIterator<Item = Point>) -> Self {
+        let mut bounds = Self::EMPTY;
+        for p in points {
+            bounds.include_circle(p, 0.);
+        }
+        bounds
+    }
+
+    pub fn outset(self, amount: f32) -> Self {
+        Self {
+            min: Point {
+                x: self.min.x - amount,
+                y: self.min.y - amount,
+            },
+            max: Point {
+                x: self.max.x + amount,
+                y: self.max.y + amount,
+            },
+        }
+    }
+
+    /// Top-left, top-right, bottom-right, then bottom-left.
+    pub fn corners(self) -> [Point; 4] {
+        [
+            self.min,
+            Point {
+                x: self.max.x,
+                y: self.min.y,
+            },
+            self.max,
+            Point {
+                x: self.min.x,
+                y: self.max.y,
+            },
+        ]
     }
 
     pub fn union(self, other: Self) -> Self {

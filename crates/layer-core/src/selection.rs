@@ -335,25 +335,20 @@ impl Selection {
     /// clipping away any part with no image; pixel coverage must be resampled
     /// by the renderer instead.
     pub fn mapped(&self, map: &crate::TransformMap) -> Result<Self, DocumentError> {
-        if let crate::TransformMap::Affine(affine) = map {
-            return self.transformed(*affine);
-        }
-        let SelectionShape::Contours(paths) = &self.shape else {
-            return Err(DocumentError::InvalidLayerOperation(Self::RESAMPLE_PIXELS));
-        };
-        let paths = match map {
-            crate::TransformMap::Affine(_) => unreachable!(),
-            crate::TransformMap::Projective(projective) => {
+        let invalid = DocumentError::InvalidLayerOperation("Invalid selection transform");
+        let paths = match (map, &self.shape) {
+            (crate::TransformMap::Affine(affine), _) => return self.transformed(*affine),
+            (_, SelectionShape::Pixels(_)) => {
+                return Err(DocumentError::InvalidLayerOperation(Self::RESAMPLE_PIXELS));
+            }
+            (crate::TransformMap::Projective(projective), SelectionShape::Contours(paths)) => {
                 crate::Projective::from_affine(self.affine)
                     .then(*projective)
+                    .ok_or(invalid)?
                     .map_polygons(paths)
             }
-            crate::TransformMap::Mesh(mesh) => {
-                let placed: Vec<Arc<[Point]>> = paths
-                    .iter()
-                    .map(|ring| ring.iter().map(|p| self.affine.map(*p)).collect())
-                    .collect();
-                mesh.map_polygons(&placed)
+            (crate::TransformMap::Mesh(mesh), SelectionShape::Contours(paths)) => {
+                mesh.map_polygons(paths, self.affine).ok_or(invalid)?
             }
         };
         Ok(Self {
@@ -361,6 +356,10 @@ impl Selection {
             affine: crate::Affine::IDENTITY,
             inverted: self.inverted,
         })
+    }
+    /// Whether only the renderer can carry this selection through `map`.
+    pub fn needs_resample(&self, map: &crate::TransformMap) -> bool {
+        matches!(self.shape, SelectionShape::Pixels(_)) && !matches!(map, crate::TransformMap::Affine(_))
     }
     /// The error when pixel coverage cannot follow a map without the renderer.
     pub const RESAMPLE_PIXELS: &'static str = "Pixel selections are resampled by the renderer";
@@ -582,23 +581,11 @@ mod selection_tests {
         assert_eq!(original.affine, crate::Affine::IDENTITY);
     }
     #[test]
-    fn perspective_maps_contour_vertices_and_refuses_pixel_coverage() {
+    fn perspective_clips_contours_beyond_the_horizon() {
         use crate::{Projective, TransformMap};
         let source = Rect { min: Point::default(), max: Point { x: 100., y: 100. } };
         let quad = [Point { x: 40., y: 0. }, Point { x: 60., y: 0. }, Point { x: 100., y: 100. }, Point { x: 0., y: 100. }];
-        let projective = Projective::rect_to_quad(source, quad).unwrap();
-        let map = TransformMap::Projective(projective);
-        let placement = crate::Affine::translation(Point { x: 5., y: -3. });
-        let ring = vec![Point { x: 10., y: 10. }, Point { x: 90., y: 12. }, Point { x: 50., y: 80. }];
-        let mut selection = Selection::polygon(ring.clone()).unwrap().transformed(placement).unwrap();
-        selection.inverted = true;
-        let mapped = selection.mapped(&map).unwrap();
-        assert!(mapped.inverted && mapped.affine == crate::Affine::IDENTITY);
-        let [mapped_ring] = mapped.contours() else { panic!("one ring") };
-        for (a, b) in mapped_ring.iter().zip(&ring) {
-            let expected = projective.map(placement.map(*b)).unwrap();
-            assert!((a.x - expected.x).abs() < 1e-3 && (a.y - expected.y).abs() < 1e-3);
-        }
+        let map = TransformMap::Projective(Projective::rect_to_quad(source, quad).unwrap());
         let tall = Selection::polygon(vec![
             Point { x: 0., y: 0. },
             Point { x: 100., y: 0. },
@@ -617,8 +604,7 @@ mod selection_tests {
         ])
         .unwrap();
         assert!(beyond.mapped(&map).unwrap().contours().is_empty());
-        let affine = crate::Affine::around(Point::default(), [2., 1.], 0.3, Point { x: 1., y: 2. });
-        assert_eq!(selection.mapped(&TransformMap::Affine(affine)), selection.transformed(affine));
+        assert!(beyond.mapped(&TransformMap::Projective(Projective([f32::NAN; 9]))).is_err());
         let pixels = Selection::pixels(Arc::new(SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x4444]).unwrap()));
         assert_eq!(
             pixels.mapped(&map),

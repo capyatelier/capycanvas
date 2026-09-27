@@ -201,7 +201,7 @@ impl PlacementDrag {
         match &mut self.copy.display {
             Some((captured, original)) if !ready => {
                 let back = layer_core::ImageTransform::affine(original.inverse().unwrap());
-                let transform = paint_transform::resample_map(&back, placement, self.level, self.level);
+                let transform = paint_transform::resample_map(&back, placement, self.level, self.level)?;
                 let over_paper = pixel_transform::DisplayLevel { opacity: 1., ..at_level };
                 let captured_at = clip.then(*original);
                 let document = r.document_extent;
@@ -213,7 +213,7 @@ impl PlacementDrag {
                     placement,
                     self.copy.key.1,
                     self.level,
-                );
+                )?;
                 self.copy
                     .reduced
                     .draw(r, pass, encoder, target, &transform, &transform, clip, extent, texels, at_level, None)?;

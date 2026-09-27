@@ -3,7 +3,7 @@
 //! premultiplied color together.
 use crate::submission::ColorPass;
 use super::{Deferred, PipelineDevice, Uploads};
-use layer_core::{ImageTransform, Interpolation, Projective, TransformMap};
+use layer_core::{ImageTransform, Interpolation, Projective};
 
 pub(super) const TRANSFORM_SLOTS: usize = 16;
 /// Mesh source positions per attachment pixel, bound in the last source slot;
@@ -434,11 +434,7 @@ fn filter_flags(interpolation: Interpolation) -> f32 {
 /// reads its source positions from a texture instead.
 pub(super) fn inverse_rows(transform: &ImageTransform) -> Result<[[f32; 3]; 3], &'static str> {
     let invalid = "Transform must be finite and invertible";
-    let projective = match &transform.map {
-        TransformMap::Affine(affine) => Projective::from_affine(*affine),
-        TransformMap::Projective(projective) => *projective,
-        TransformMap::Mesh(_) => Projective::IDENTITY,
-    };
+    let projective = transform.map.projective().unwrap_or(Projective::IDENTITY);
     if let Some(affine) = projective.as_affine() {
         let [a, b, c, d, x, y] = affine.inverse().ok_or(invalid)?.0;
         return Ok([[a, c, x], [b, d, y], [0., 0., 1.]]);
