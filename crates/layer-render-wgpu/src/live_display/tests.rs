@@ -1901,6 +1901,62 @@ fn a_drag_held_until_its_layer_is_reduced_ends_without_allocating() {
 }
 
 #[test]
+fn a_transform_reduces_its_layer_before_recomposing_a_placement_drag() {
+    let extent = [1536, 1024];
+    let mut doc = document(extent);
+    let layer = doc.layers[0].id;
+    let [mut direct, mut reference] = complete_pair(&doc);
+    let v = centered_view(extent, [320, 240], 0.2, 0.);
+    for r in [&mut direct, &mut reference] {
+        submit(r, &doc, v, true);
+    }
+    for step in 1..4 {
+        let s = 1. + step as f32 * 0.1;
+        doc.layers[0].properties.placement = layer_core::Affine::around(Point { x: 768., y: 512. }, [s, s], 0., Point::default());
+        for r in [&mut direct, &mut reference] {
+            submit(r, &doc, v, true);
+        }
+    }
+    for _ in 0..16 {
+        submit(&mut direct, &doc, v, false);
+    }
+    assert!(direct.recompose.is_some(), "the released placement is still being recomposed");
+    direct.prepare_moving_layer(None);
+    direct.preparation.limit(1);
+    let [w, h] = extent.map(|n| n as f32);
+    let inverse = doc.layers[0].properties.placement.inverse().unwrap();
+    let corners = [[0., 0.], [w, 0.], [w, h], [0., h]].map(|[x, y]| inverse.map(Point { x, y }));
+    let all = layer_core::Selection::polygon(corners.to_vec()).unwrap();
+    let [still, moving] = [(false, 0.), (true, 30.)].map(|(moving, x)| {
+        let map = layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x, y: -x }));
+        preview(layer, moving, Some(all.clone()), map)
+    });
+    direct.set_transform_preview(Some(&still)).unwrap();
+    submit(&mut direct, &doc, v, false);
+    assert!(direct.reducing);
+    for frame in 0.. {
+        assert!(frame < 64, "the layer is reduced");
+        let composed = direct.metrics.composited_pixels;
+        direct.set_transform_preview(Some(if frame == 2 { &moving } else { &still })).unwrap();
+        submit(&mut direct, &doc, v, false);
+        if !direct.reducing {
+            assert!(frame > 2 && direct.recompose.is_some());
+            break;
+        }
+        assert_eq!(
+            direct.metrics.composited_pixels, composed,
+            "frame {frame}: idle and held frames reduce the layer before recomposing anything"
+        );
+    }
+    for r in [&mut direct, &mut reference] {
+        r.set_transform_preview(Some(&still)).unwrap();
+        submit(r, &doc, v, false);
+    }
+    drain(&mut direct, &doc, v, 256, "the placement drag and the still transform are recomposed");
+    assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
+}
+
+#[test]
 fn layered_display_previews_fall_back_for_effects_clips_and_blends_above() {
     let mut doc = document([1025, 769]);
     let extent = [doc.width, doc.height];

@@ -4310,9 +4310,10 @@ impl CanvasRenderer for WgpuRasterizer {
             self.transforms = Some(transforms);
             self.reducing = reducing?;
         }
-        if let Some((preview, (_, _, stack))) = &eligible
+        let preparing = eligible.as_ref().is_some_and(|(_, (_, _, stack))| !built(self, stack) || self.reducing);
+        if let Some((preview, _)) = &eligible
             && (preview.moving || ending_held(self, preview.layer))
-            && (!built(self, stack) || self.reducing)
+            && preparing
         {
             displayed = true;
             self.displayed_transform.get_or_insert((preview.layer, PixelRect::EMPTY));
@@ -4341,7 +4342,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 if let Some(damage) = settled? {
                     let shown = self.displayed_transform.take().map_or(PixelRect::EMPTY, |(_, shown)| shown);
                     let region = damage.into_iter().fold(shown, |region, (_, damage)| region.union(damage));
-                    self.recompose = Some((preview.layer, page_coordinates(region).collect()));
+                    self.recompose = (!region.is_empty()).then(|| (preview.layer, page_coordinates(region).collect()));
                     self.recompose_placement = false;
                 }
             }
@@ -4435,7 +4436,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 let region = tiles.iter().fold(PixelRect::EMPTY, |region, c| region.union(page_rect(*c).intersect(full)));
                 let shown = self.displayed_transform.map_or(region, |(_, shown)| shown.union(region));
                 self.displayed_transform = Some((layer, shown));
-            } else if settling && !self.placement_ready() {
+            } else if preparing || (settling && !self.placement_ready()) {
                 self.recompose = Some((layer, tiles));
             } else {
                 let count = if displayed || settling {
