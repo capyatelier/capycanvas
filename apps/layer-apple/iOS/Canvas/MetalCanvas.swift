@@ -103,6 +103,10 @@ final class CanvasView: UIView {
                 DocumentScene.close(window?.windowScene, store: store)
             }
             contentScaleFactor = window.screen.scale
+            store.acceptsGamepad = { [weak window] in
+                window?.isKeyWindow == true && window?.windowScene?.activationState == .foregroundActive
+            }
+            GamepadInput.shared.start()
             if displayLink == nil {
                 let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
                 let maximum = Float(window.screen.maximumFramesPerSecond)
@@ -114,6 +118,7 @@ final class CanvasView: UIView {
             setNeedsLayout()
         } else {
             store.focusWindow = nil
+            store.acceptsGamepad = nil
             if store.state["document_file"]["close_ready"].bool { store.recovery.close() }
             stop()
         }

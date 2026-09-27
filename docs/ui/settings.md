@@ -154,10 +154,11 @@ media keys, which hosts may report as, for example, `AudioVolumeUp` or
 The app claims it only while a shortcut uses it.
 
 Standard-layout gamepad buttons record and resolve as keys named `gamepad_a`,
-`gamepad_r1` and so on. Web polls the Gamepad API and Android forwards gamepad
-key events. Gamepad buttons do not repeat natively, so the Web adapter repeats a
-held button after 500 ms and then every 50 ms, and only repeatable bindings act
-on those repeats.
+`gamepad_r1` and so on. Web polls the Gamepad API, Android forwards gamepad
+key events, and macOS and iPadOS read the GameController framework's extended
+gamepad and send its input to the key editor window. Gamepad buttons do not
+repeat natively, so the Web and Apple adapters repeat a held button after 500 ms
+and then every 50 ms, and only repeatable bindings act on those repeats.
 
 Sticks send their current deflection as `axes` input:
 
@@ -167,7 +168,8 @@ Sticks send their current deflection as `axes` input:
 Rust applies a 0.15 radial dead zone and a squared response, scaled by the
 scroll pan and zoom speeds. It integrates motion on each frame, pauses it while a
 stroke or other canvas contact owns the view, and clears it on blur. A
-disconnect releases held buttons and centers the sticks on both hosts.
+disconnect releases held buttons and centers the sticks on Web, Android, macOS
+and iPadOS.
 
 GTK has no gamepad adapter, because GTK itself exposes no gamepad API. A
 Bluetooth device works only when it presents one of these standard input

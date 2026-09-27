@@ -474,7 +474,10 @@ key's action picker, adding and removing a modifier key, chord search and, on
 macOS, a keymap export/import round trip. iPadOS lists the shared two-, three-
 and four-finger taps on Pen & Input; `EditorLaunchTests/testTouchGestureTaps`
 checks the default Undo and Redo taps, rebinding a tap to Nothing and Reset on a
-physical iPad. The focused
+physical iPad. Game controllers reach the key editor window through the
+GameController framework; `tests/gamepad-input.swift` records a gamepad button
+as a shortcut, invokes it and pans and zooms with the sticks on both policies.
+The focused
 `EditorLaunchTests/testShortcutConflictAndEditorEffect` test exercises capture
 and the resulting Zen action without automating the system menu bar. The shared
 inventory command emits the settled default document/workspace, every command

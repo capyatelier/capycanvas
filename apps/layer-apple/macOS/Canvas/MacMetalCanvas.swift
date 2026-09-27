@@ -69,6 +69,11 @@ final class MacCanvasView: NSView {
             })
             window.acceptsMouseMovedEvents = true
             window.makeFirstResponder(self)
+            store.acceptsGamepad = { [weak window] in
+                guard let window else { return false }
+                return window.isKeyWindow || window.attachedSheet?.isKeyWindow == true
+            }
+            GamepadInput.shared.start()
             for name in [NSWindow.didResignKeyNotification, NSWindow.willCloseNotification] {
                 windowObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                     MainActor.assumeIsolated { self?.store.input(["type": "blur"]) }
@@ -92,7 +97,7 @@ final class MacCanvasView: NSView {
                 displayLink = link
             }
             needsLayout = true
-        } else { stop() }
+        } else { store.acceptsGamepad = nil; stop() }
     }
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()

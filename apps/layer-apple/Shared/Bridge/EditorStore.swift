@@ -18,6 +18,8 @@ import SwiftUI
     @Published var storagePending = true
     @Published var canRetryStorage = false
     private static let instances = NSHashTable<EditorStore>.weakObjects()
+    var acceptsGamepad: (() -> Bool)?
+    static var gamepadTarget: EditorStore? { instances.allObjects.first { $0.acceptsGamepad?() == true } }
     /// Measured native window controls; editor geometry otherwise comes from Rust.
     @Published var headerLeadingInset: CGFloat = 0
     var cameraRevision: UInt64 = 0
