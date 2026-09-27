@@ -70,7 +70,8 @@ extension XCTestCase {
         let native = app.switches["preference-platform_prediction"]
         let amount = app.buttons["number-value-Prediction amount"]
         XCTAssertTrue(master.waitForExistence(timeout: 10)); XCTAssertTrue(native.exists); XCTAssertTrue(hide.exists)
-        XCTAssertEqual(app.switches.count, 3)
+        XCTAssertTrue(app.switches["preference-eraser_erase"].exists, "macOS offers the tablet eraser end")
+        XCTAssertEqual(app.switches.count, 4)
         active(hide, true); workspaceActivate(hide); active(hide, false)
         reopen("input"); active(hide, false); workspaceActivate(hide); active(hide, true)
         active(master, true); active(native, false); enabled(native, false)

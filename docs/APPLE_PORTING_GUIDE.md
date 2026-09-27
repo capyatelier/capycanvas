@@ -75,6 +75,10 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
   Metal. Add shared UI journeys under `apps/layer-apple/Shared/Tests` and register
   them in both `EditorLaunchTests`. Physical iPad XCUITests need **Settings →
   Developer → Enable UI Automation** and an unlocked device.
+- **Shared defects.** Apple's defaults (2048 × 1536 drawings, Metal, Retina
+  surfaces) can expose shared bugs that the reference hosts' journeys miss.
+  Reproduce them headlessly in a `layer-host` or `layer-render-wgpu` test and fix
+  them in shared Rust with that regression test, not with a Swift workaround.
 - **Stale journeys.** Shared layout and tool changes (fitted columns, renamed
   tools, merged tool sets) break journeys that assume window positions or
   labels. Place canvas strokes and samples relative to `editorPaper(in:)`,
@@ -82,8 +86,9 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
   activating them, and wait for published state instead of reading it right
   after a click. When a journey fails, first check whether the reference hosts
   changed the rule; fix Apple only when it disagrees with them.
-- **iPad automation limits.** Finger drags on the iPad canvas navigate; only
-  Pencil draws, and XCTest cannot synthesize Pencil. Create selections and
+- **iPad automation limits.** Finger drags on the iPad canvas navigate unless
+  the session claims the finger, as on a transform handle, inside a transform
+  box or on a Warp node; only Pencil draws, and XCTest cannot synthesize Pencil. Create selections and
   artwork through menus in iPad journeys. XCTest's Escape never reaches an iPad
   app, so assert Escape on macOS and use visible controls on iPad. iOS reports a
   SwiftUI accessibility container's frame as the union of its children, so do not
@@ -94,8 +99,10 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
   as `canvas_bar_layout`) to a container that is always present.
 - **Window size in Mac journeys.** macOS saves window frames per build, even
   with `-ApplePersistenceIgnoreState`, so a zoomed window carries into the next
-  test. For a wider work area, enter full screen and leave it in a teardown
-  block.
+  test, and a new build opens at its default size. Do not depend on the width a
+  journey starts at. For a wider work area, enter full screen and leave it in a
+  teardown block; a journey that resizes the window restores its size the same
+  way, since every later journey inherits the saved `editor-AppWindow-1` frame.
 - **Settings sub-pages.** macOS sheets have no title bar, so navigation titles
   and `.navigation` toolbar items inside Settings never appear. Put a sub-page's
   title and Back button in its content, as the shortcut page does.

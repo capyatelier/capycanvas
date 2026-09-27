@@ -23,9 +23,19 @@ extension XCTestCase {
         // Keep the isolated test window clear of the unrelated iCloud prompt.
         let window = app.windows.firstMatch
         let corner = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -2, dy: -2))
+        let width = window.frame.width
         corner.press(forDuration: 0.1, thenDragTo: corner.withOffset(CGVector(dx: -320, dy: 0)))
         expectation(for: NSPredicate { _,_ in window.frame.width < 950 }, evaluatedWith: window)
         waitForExpectations(timeout: 10)
+        addTeardownBlock {
+            await MainActor.run {
+                guard window.exists else { return }
+                let restored = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -2, dy: -2))
+                restored.press(forDuration: 0.1, thenDragTo: restored.withOffset(CGVector(dx: 320, dy: 0)))
+                let widened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in abs(window.frame.width - width) < 2 }, object: window)
+                _ = XCTWaiter.wait(for: [widened], timeout: 5)
+            }
+        }
         func open(_ url: URL) {
             editorMenu(in: app, menu: "File", id: "open_document", label: "Open…")
             let button = app.windows.buttons["OKButton"].firstMatch

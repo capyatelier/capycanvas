@@ -74,7 +74,16 @@ extension XCTestCase {
             waitForExpectations(timeout: 15)
         }
         func focus(_ name: String) {
-            editorMenu(in: app, menu: "Window", id: "", label: name)
+            let bar = app.menuBars.menuBarItems["Window"]
+            workspaceActivate(bar)
+            let item = bar.descendants(matching: .menuItem)[name].firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 5))
+            let screen = XCUIScreen.main.screenshot().image.size
+            let origin = first.frame.origin
+            let scroll = first.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: item.frame.midX - origin.x, dy: screen.height - 4 - origin.y))
+            for _ in 0..<20 where !item.isHittable { scroll.hover(); Thread.sleep(forTimeInterval: 0.3) }
+            item.click()
         }
         func expectRows(_ window: XCUIElement, _ count: Int) {
             let rows = window.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
