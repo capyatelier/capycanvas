@@ -185,9 +185,6 @@ impl WebApp {
         let context = serde_wasm_bindgen::from_value(context).map_err(js)?;
         serialize(&self.session.canvas_bar_menu(context, shown))
     }
-    pub fn canvas_bar_reappear_ms(&self) -> u32 {
-        layer_ui::CANVAS_BAR_REAPPEAR_MS
-    }
     pub fn palette_menu(&self, target: JsValue) -> Result<JsValue, JsValue> {
         let target = serde_wasm_bindgen::from_value(target).map_err(js)?;
         serialize(

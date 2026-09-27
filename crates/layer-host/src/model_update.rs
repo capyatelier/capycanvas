@@ -11,7 +11,6 @@ type Fields<'a> = BTreeMap<&'a str, &'a RawValue>;
 #[derive(Default, Serialize)]
 struct Update<'a> {
     model_update: Vec<(Vec<String>, &'a RawValue)>,
-    removed: Vec<Vec<String>>,
 }
 
 fn difference<'a>(
@@ -64,27 +63,22 @@ pub(crate) struct ModelBaseline {
 
 impl NativeHost {
     /// Same full snapshots and workspace/camera updates as the layout stream;
-    /// subsequent full models may use `model_update` (path/value pairs) and
-    /// `removed` (paths). Apply them to the last full model before consuming it.
-    /// Null is a value, distinct from removal. Paths contain literal object keys,
-    /// and a segment under an array is a decimal index. Arrays whose length
-    /// changes and objects whose keys change are replaced whole, so every
-    /// object keeps the key order of a full model. Only top-level fields are
-    /// listed in `removed`. The header's primary menu carries only its
-    /// title: its sections are the application menus, in order, as submenus.
-    /// Camera, search and workspace layout messages leave the baseline alone,
-    /// so updates stay relative to the last full model, not to those messages.
+    /// subsequent full models may use `model_update` (path/value pairs). Apply
+    /// them to the last full model before consuming it. Paths contain literal
+    /// object keys, and a segment under an array is a decimal index. Arrays whose
+    /// length changes and objects whose keys change are replaced whole, so every
+    /// object keeps the key order of a full model. The header omits its primary
+    /// menu; query it as `ApplicationMenu::Primary`. Camera, search and workspace
+    /// layout messages leave the baseline alone, so updates stay relative to the
+    /// last full model, not to those messages.
     pub fn take_model_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
-        let previous = self.last_model_snapshot.take();
         self.model_transport = true;
         let Some(next) = self.layout_update_bytes()? else {
-            self.last_model_snapshot = previous;
             return Ok(None);
         };
         let text = String::from_utf8(next).map_err(serde::de::Error::custom)?;
         let fields: Fields = serde_json::from_str(&text)?;
         if !fields.contains_key("state") {
-            self.last_model_snapshot = previous;
             return Ok(Some(text.into_bytes()));
         }
         let ranges = fields
@@ -94,33 +88,29 @@ impl NativeHost {
                 (key.to_owned(), start..start + value.get().len())
             })
             .collect();
-        let bytes = match previous {
-            Some(previous) => {
+        let bytes = match &self.last_model_snapshot {
+            Some(previous)
+                if previous
+                    .fields
+                    .keys()
+                    .map(String::as_str)
+                    .eq(fields.keys().copied()) =>
+            {
                 let mut update = Update::default();
                 let mut path = Vec::new();
                 for (&key, &value) in &fields {
                     path.push(key.to_owned());
-                    match previous.fields.get(key) {
-                        Some(range) => difference(
-                            &previous.text[range.clone()],
-                            value,
-                            &mut path,
-                            &mut update,
-                        )?,
-                        None => update.model_update.push((path.clone(), value)),
-                    }
+                    difference(
+                        &previous.text[previous.fields[key].clone()],
+                        value,
+                        &mut path,
+                        &mut update,
+                    )?;
                     path.pop();
-                }
-                for key in previous
-                    .fields
-                    .keys()
-                    .filter(|key| !fields.contains_key(key.as_str()))
-                {
-                    update.removed.push(vec![key.clone()]);
                 }
                 serde_json::to_vec(&update)?
             }
-            None => text.clone().into_bytes(),
+            _ => text.clone().into_bytes(),
         };
         drop(fields);
         self.last_model_snapshot = Some(ModelBaseline {
@@ -155,17 +145,6 @@ mod tests {
                 target = child(target, key);
             }
             *target = change[1].clone();
-        }
-        for path in update["removed"].as_array().unwrap() {
-            let path = path.as_array().unwrap();
-            let mut target = &mut *value;
-            for key in &path[..path.len() - 1] {
-                target = child(target, key);
-            }
-            target
-                .as_object_mut()
-                .unwrap()
-                .remove(path.last().unwrap().as_str().unwrap());
         }
     }
 
@@ -215,7 +194,6 @@ mod tests {
                 [["rows", "1", "1"], 5]
             ])
         );
-        assert_eq!(patch["removed"], json!([]));
         apply(&mut previous, patch);
         assert_eq!(previous, next);
     }
@@ -229,7 +207,6 @@ mod tests {
         let next: &RawValue = serde_json::from_str(&next).unwrap();
         let mut update = Update::default();
         difference(&previous, next, &mut Vec::new(), &mut update).unwrap();
-        assert!(update.removed.is_empty());
         assert_eq!(update.model_update.len(), 1);
         assert_eq!(update.model_update[0].0, ["root"]);
         assert_eq!(update.model_update[0].1.get(), split);
@@ -255,41 +232,6 @@ mod tests {
                 serde_json::from_slice(&serde_json::to_vec(&expected).unwrap()).unwrap();
             assert_eq!(retained, expected);
         }
-    }
-
-    #[test]
-    fn the_primary_menu_rebuilds_from_the_application_menus() {
-        use layer_ui::{ApplicationMenu, CommandId, Platform, UiAction};
-        let mut host = NativeHost::new(Platform::Android).unwrap();
-        host.resize(2200, 1440, 1.75).unwrap();
-        host.dispatch(UiAction::Invoke {
-            command: CommandId::SelectAll,
-        })
-        .unwrap();
-        let model: Value =
-            serde_json::from_slice(&host.take_model_update_bytes().unwrap().unwrap()).unwrap();
-        let compact = &model["header"]["primary_menu"];
-        assert_eq!(compact["sections"], json!([]));
-        let submenus: Vec<Value> = model["application_menus"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|menu| {
-                let sections: Vec<Value> = menu["model"]["sections"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter(|section| !section.as_array().unwrap().is_empty())
-                    .cloned()
-                    .collect();
-                json!({"label": menu["label"], "selected": null, "action": null, "enabled": !sections.is_empty(),
-                    "hint": "", "bindings": [], "sections": sections})
-            })
-            .collect();
-        assert_eq!(
-            json!({"title": compact["title"], "sections": [submenus]}),
-            serde_json::to_value(host.session.application_menu(ApplicationMenu::Primary)).unwrap()
-        );
     }
 
     #[test]

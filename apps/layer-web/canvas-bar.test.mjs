@@ -73,13 +73,12 @@ function harness({ layout = measure => ({ bounds: { x: 100.2, y: 50, width: 300,
   const element = (tag, className, text) => { const node = new FakeElement(tag, className); if (text != null) node.textContent = text; return node; };
   const button = (text, click, className = "") => { const node = element("button", className, text); node.addEventListener("click", click); return node; };
   const app = {
-    canvas_bar_reappear_ms: () => 180,
     canvas_bar_layout: measure => { measures.push(structuredClone(measure)); return layout(measure); },
     canvas_bar_menu: (context, shown) => { menus.push({ context, shown }); return { title: "More", sections: [] }; },
   };
   const bar = createCanvasBar({
     app, workspace, element, button, icon: name => element("svg", name), dispatch: action => dispatched.push(action),
-    glass: { queue: () => glassQueued++ },
+    glass: { queue: () => glassQueued++ }, reappearMs: 180,
     openMenu: node => { menu.menuOwner = node; menu.open = true; return menu; },
     explain: node => explained.push(node.dataset.command), presented: () => presented.push(clock),
     setTimer: (callback, ms) => { const timer = { id: timers.length + 1, callback, at: clock + ms, cleared: false }; timers.push(timer); return timer.id; },

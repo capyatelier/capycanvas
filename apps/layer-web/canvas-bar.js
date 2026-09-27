@@ -12,7 +12,7 @@ export const barSchema = view => text([view.context, view.label ?? null,
       : ["other", label]))]);
 
 export function createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, openMenu, presented,
-  reappearMs = app.canvas_bar_reappear_ms(), setTimer = setTimeout, clearTimer = clearTimeout, explain = revealTooltip }) {
+  reappearMs, setTimer = setTimeout, clearTimer = clearTimeout, explain = revealTooltip }) {
   const root = element("section", "canvas-action-bar suppressed");
   root.setAttribute("role", "toolbar"); root.setAttribute("aria-label", "Canvas actions");
   root.style.gap = `${GAP}px`; root.style.padding = `${PADDING}px`; root.hidden = true;

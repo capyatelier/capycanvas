@@ -1760,8 +1760,8 @@ try {
   capy.id = "zen-capy"; capy.hidden = true;
   customization.target(capy, {kind:"zen_mode"});
   workspace.append(capy);
-  canvasBar = createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, openMenu: node => customization.openMenu(node),
-    presented: () => notice?.place() });
+  canvasBar = createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, reappearMs: catalog.canvas_bar_reappear_ms,
+    openMenu: node => customization.openMenu(node), presented: () => notice?.place() });
   notice = createNotice({ workspace, element, button, answer: answerNotice, layout: () => layout, bar: () => canvasBar.bounds() });
   performance.mark("capy.startup.controls");
   update(255);

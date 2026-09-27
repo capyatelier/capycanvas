@@ -182,9 +182,9 @@ take an active workspace and can acquire it after its owner closes.
 ([`model_update.rs`](../../crates/layer-host/src/model_update.rs)). Arrays of
 unchanged length are diffed element by element, with a decimal index as the path
 segment. An object whose keys change, such as a layout node switching variant,
-is sent whole, so every object keeps a full model's key order. The header's
-primary menu carries only its title, and `primaryMenu()` in `WorkspaceHeader.kt`
-rebuilds its sections from `application_menus`. A single command-availability
+is sent whole, so every object keeps a full model's key order. The model omits
+the header's primary menu; `WorkspaceHeader.kt` opens it with the
+`application_menu` query. A single command-availability
 change, such as Select All, is about 1.5 KB. On the owner thread, Rust still
 builds and serializes the full 178 KB snapshot and splits it by top-level field
 before diffing. That takes about 0.7 ms per publication on a desktop and 6–9 ms

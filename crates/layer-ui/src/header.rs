@@ -572,7 +572,8 @@ pub struct HeaderView {
     pub items: Vec<HeaderItemView>,
     pub sizes: Vec<HeaderSizeView>,
     pub components: Vec<HeaderComponentView>,
-    pub primary_menu: ContextMenu,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_menu: Option<ContextMenu>,
 }
 #[derive(Serialize)]
 pub struct HeaderItemView {
@@ -602,7 +603,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
         self.header_view_with(true)
     }
 
-    pub fn header_view_with(&self, primary_sections: bool) -> HeaderView {
+    pub fn header_view_with(&self, primary_menu: bool) -> HeaderView {
         let state = self.state();
         let model = state.workspace.layout.header.projected_for(state.platform);
         let items = model
@@ -649,14 +650,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                     singleton: item.singleton(),
                 })
                 .collect(),
-            primary_menu: if primary_sections {
-                self.application_menu(ApplicationMenu::Primary)
-            } else {
-                ContextMenu {
-                    title: ApplicationMenu::Primary.label().into(),
-                    sections: Vec::new(),
-                }
-            },
+            primary_menu: primary_menu.then(|| self.application_menu(ApplicationMenu::Primary)),
         }
     }
 }

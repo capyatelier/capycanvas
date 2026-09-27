@@ -137,7 +137,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         canvasBarHolds = if (held) canvasBarHolds or source else canvasBarHolds and source.inv()
         main.removeCallbacks(canvasBarReturn)
         if (canvasBarHolds != 0) canvasBarVisible = false
-        else if (!canvasBarVisible) main.postDelayed(canvasBarReturn, catalog.optLong("canvas_bar_reappear_ms", 180))
+        else if (!canvasBarVisible) main.postDelayed(canvasBarReturn, catalog.optLong("canvas_bar_reappear_ms"))
     }
     private fun deferCanvasBar() {
         if (canvasBar?.optString("placement") != "near_object") return
@@ -846,9 +846,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 .filter { it !in listOf("workspace", "revision", "settings_open", "preferences", "command_search", "canvas_bar") }
                 .any { before.opt(it) !== after.opt(it) }
     }
-    /** Copy only changed ancestors; null and removed fields are distinct. A path
-     * segment under an array is an index. The packet is produced by the shared
-     * native host for any model change. */
     private fun applyModelUpdate(previous: JSONObject, packet: JSONObject): JSONObject {
         val result = previous.copy()
         val copied = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Any, Boolean>()).apply { add(result) }
@@ -875,11 +872,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             val target = parent(path)
             val name = path.getString(path.length() - 1)
             set(target, name, shareModel(get(target, name), change.get(1)))
-        }
-        val removed = packet.getJSONArray("removed")
-        for (i in 0 until removed.length()) {
-            val path = removed.getJSONArray(i)
-            (parent(path) as JSONObject).remove(path.getString(path.length() - 1))
         }
         return result
     }

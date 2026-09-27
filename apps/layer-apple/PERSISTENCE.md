@@ -331,7 +331,6 @@ python3 apps/layer-apple/scripts/test-recovery-interruption.py
 cargo test -p layer-apple project_ --lib
 cargo test -p layer-apple renderer_failure_retains -- --test-threads=1
 cargo test -p layer-apple ui_actions_change_only_the_addressed_apple_session
-cargo test -p layer-host workspace_persistence --lib
 ```
 
 The focused `testIndependentEditorWindows` UI check is shared by both Xcode test

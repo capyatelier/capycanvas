@@ -71,7 +71,6 @@ pub struct NativeHost {
     last_workspace_content_revision: Option<u64>,
     last_camera_revision: Option<u64>,
     document_view_revision: u64,
-    last_durable_workspace: Option<layer_ui::WorkspaceState>,
     service_changes: u32,
     header_drag: Option<layer_ui::HeaderDrag>,
     preview_clock: std::time::Instant,
@@ -133,7 +132,6 @@ impl NativeHost {
             last_camera_revision: None,
             document_count: 1,
             document_view_revision: 0,
-            last_durable_workspace: None,
             service_changes: 0,
             header_drag: None,
             preview_clock: std::time::Instant::now(),
@@ -802,11 +800,7 @@ impl NativeHost {
                 self.dirty |= change.canvas_wake;
                 json!(self.session.state().filter_load)
             }
-            Query::Catalog => {
-                let mut catalog = json!(layer_ui::ui_catalog());
-                catalog["canvas_bar_reappear_ms"] = json!(layer_ui::CANVAS_BAR_REAPPEAR_MS);
-                catalog
-            }
+            Query::Catalog => json!(layer_ui::ui_catalog()),
             Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),
@@ -1246,95 +1240,6 @@ mod tests {
     }
 
     #[test]
-    fn workspace_persistence_only_emits_committed_topology_changes() {
-        for platform in [layer_ui::Platform::Mac, layer_ui::Platform::Ios] {
-            let mut app = NativeHost::new(platform).unwrap();
-            let viewport = [1200., 900.];
-            app.resize(2400, 1800, 2.).unwrap();
-            let initial = app.take_value().unwrap()["workspace_persistence"].clone();
-            assert_eq!(initial["version"], 1);
-            app.dispatch(UiAction::SetBrushSize { value: 40. }).unwrap();
-            assert!(
-                app.take_value()
-                    .unwrap()
-                    .get("workspace_persistence")
-                    .is_none()
-            );
-            app.dispatch(UiAction::MeasurePanels {
-                measurements: vec![layer_ui::PanelMeasurement {
-                    panel: layer_ui::Panel::Brushes,
-                    tab_width: 100.,
-                    content_height: 900.,
-                    scroll: None,
-                }],
-            })
-            .unwrap();
-            if let Some(snapshot) = app.take_value() {
-                assert!(
-                    snapshot.get("workspace_persistence").is_none(),
-                    "Host measurements are transient"
-                );
-            }
-            let divider = app.session.layout(viewport).dividers[0].clone();
-            let point = [
-                divider.bounds.x + divider.bounds.width / 2.,
-                divider.bounds.y + divider.bounds.height / 2.,
-            ];
-            for end in [ContactPhase::Cancel, ContactPhase::Up] {
-                for (phase, delta) in [(ContactPhase::Down, 0.), (ContactPhase::Move, 40.)] {
-                    app.dispatch(UiAction::DragDivider {
-                        id: divider.id,
-                        phase,
-                        position: [point[0] + delta, point[1]],
-                        viewport,
-                    })
-                    .unwrap();
-                    if let Some(snapshot) = app.take_value() {
-                        assert!(
-                            snapshot.get("workspace_persistence").is_none(),
-                            "Never persist a provisional resize"
-                        );
-                    }
-                }
-                app.dispatch(UiAction::DragDivider {
-                    id: divider.id,
-                    phase: end,
-                    position: [point[0] + 40., point[1]],
-                    viewport,
-                })
-                .unwrap();
-                let snapshot = app.take_value().unwrap();
-                if end == ContactPhase::Cancel {
-                    assert!(snapshot.get("workspace_persistence").is_none());
-                } else {
-                    let saved = snapshot["workspace_persistence"].clone();
-                    assert!(!saved.is_null() && saved != initial);
-                    let mut restored = NativeHost::new(platform).unwrap();
-                    restored
-                        .dispatch(
-                            serde_json::from_value(
-                                json!({"type":"restore_workspace", "workspace":saved}),
-                            )
-                            .unwrap(),
-                        )
-                        .unwrap();
-                    assert_eq!(
-                        restored.take_value().unwrap()["workspace_persistence"],
-                        saved
-                    );
-                    app.dispatch(UiAction::Invoke {
-                        command: layer_ui::CommandId::UndoWorkspace,
-                    })
-                    .unwrap();
-                    assert_eq!(
-                        app.take_value().unwrap()["workspace_persistence"],
-                        initial
-                    );
-                }
-            }
-        }
-    }
-    #[test]
     fn native_navigation_preserves_camera_patches_and_rejects_nonfinite_input() {
         let mut app = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         app.resize(2400, 1800, 2.0).unwrap();
@@ -1542,62 +1447,7 @@ mod tests {
         assert!(app.take_value().is_some());
     }
     #[test]
-    fn canvas_bar_queries_place_list_and_expire_with_the_bar() {
-        use layer_ui::CommandId;
-        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
-        app.resize(2560, 1600, 2.0).unwrap();
-        assert_eq!(
-            app.query(json!({"type": "catalog"})).unwrap()["canvas_bar_reappear_ms"],
-            layer_ui::CANVAS_BAR_REAPPEAR_MS
-        );
-        app.dispatch(UiAction::Invoke { command: CommandId::RectangleSelect }).unwrap();
-        app.dispatch(UiAction::Invoke { command: CommandId::SelectAll }).unwrap();
-        let bar = app.session.state().canvas_bar.clone().expect("selection bar");
-        let snapshot = app.snapshot();
-        assert_eq!(snapshot["state"]["canvas_bar"]["context"], json!(bar.context));
-        let measure = |context: Value, items: usize| {
-            json!({"type": "canvas_bar_layout", "measure": {
-                "context": context, "label": 0, "items": vec![90.; items],
-                "completion": vec![70.; bar.completion.len()], "more": 32, "height": 44, "gap": 4, "padding": 6,
-            }})
-        };
-        let layout = app.query(measure(json!(bar.context), bar.items.len())).unwrap();
-        let bounds = &layout["bounds"];
-        assert!(bounds["width"].as_f64().unwrap() > 0. && bounds["height"] == 44.);
-        let shown = layout["items"].as_u64().unwrap() as usize;
-        assert!((1..=bar.items.len()).contains(&shown));
-        assert!(layout["side"].is_string());
-        assert!(app.query(measure(json!(bar.context), bar.items.len() + 1)).unwrap().is_null());
-        let mut stale = json!(bar.context);
-        stale["generation"] = json!(bar.context.generation + 1);
-        assert!(app.query(measure(stale.clone(), bar.items.len())).unwrap().is_null());
-
-        let menu = app
-            .query(json!({"type": "canvas_bar_menu", "context": bar.context, "shown": 0}))
-            .unwrap();
-        let labels: Vec<&str> = menu["sections"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|section| section.as_array().unwrap())
-            .filter_map(|item| item["label"].as_str())
-            .collect();
-        assert!(labels.contains(&CommandId::Deselect.label()), "overflowed items are in More: {labels:?}");
-        assert!(labels.contains(&CommandId::ShowCanvasActionBar.label()));
-        let overflow = &menu["sections"][0][0]["action"];
-        assert_eq!(overflow["type"], "canvas_bar_edit");
-        app.dispatch(serde_json::from_value(overflow.clone()).unwrap()).unwrap();
-        assert!(app.session.engine().document().selection.is_none(), "an overflowed Deselect applies");
-        assert!(app.query(json!({"type": "canvas_bar_menu", "context": bar.context, "shown": 0})).unwrap().is_null());
-        assert!(
-            app.query(json!({"type": "canvas_bar_reason", "context": bar.context, "command": "deselect"}))
-                .unwrap()
-                .is_null()
-        );
-    }
-
-    #[test]
-    fn canvas_bar_choice_menus_list_wrapped_edits_for_the_current_bar() {
+    fn canvas_bar_queries_answer_for_the_current_bar() {
         use layer_ui::CommandId;
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
         app.resize(2560, 1600, 2.0).unwrap();
@@ -1605,24 +1455,22 @@ mod tests {
             app.dispatch(UiAction::Invoke { command }).unwrap();
         }
         let bar = app.session.state().canvas_bar.clone().expect("transform bar");
-        let query = |context: Value| json!({"type": "canvas_bar_choice_menu", "context": context, "id": "transform-interpolation"});
-        let menu = app.query(query(json!(bar.context))).unwrap();
-        let items = menu["sections"][0].as_array().unwrap();
-        assert_eq!(items.len(), 3, "{menu}");
-        assert!(items.iter().all(|item| item["action"]["type"] == "canvas_bar_edit"));
-        assert_eq!(items.iter().filter(|item| item["selected"] == true).count(), 1);
-        let nearest = items.iter().find(|item| item["label"] == "Nearest").unwrap();
+        let measure = json!({"context": bar.context, "label": 0, "items": vec![90.; bar.items.len()],
+            "completion": vec![70.; bar.completion.len()], "more": 32, "height": 44, "gap": 4, "padding": 6});
+        let layout = app.query(json!({"type": "canvas_bar_layout", "measure": measure})).unwrap();
+        assert!(layout["bounds"].is_object());
+        assert_eq!(layout, json!(app.session.canvas_bar_layout(&serde_json::from_value(measure).unwrap())));
+        let menu = app.query(json!({"type": "canvas_bar_menu", "context": bar.context, "shown": 0})).unwrap();
+        assert!(menu["sections"].is_array());
+        assert_eq!(menu, json!(app.session.canvas_bar_menu(bar.context, 0)));
+        let reason = json!({"type": "canvas_bar_reason", "context": bar.context, "command": "apply_transform"});
+        assert_eq!(app.query(reason).unwrap(), json!(app.session.command_disabled_reason(CommandId::ApplyTransform)));
+        let choice = app
+            .query(json!({"type": "canvas_bar_choice_menu", "context": bar.context, "id": "transform-interpolation"}))
+            .unwrap();
+        let nearest = choice["sections"][0].as_array().unwrap().iter().find(|item| item["label"] == "Nearest").unwrap();
         app.dispatch(serde_json::from_value(nearest["action"].clone()).unwrap()).unwrap();
-        let chosen = app.query(query(json!(app.session.state().canvas_bar.as_ref().unwrap().context))).unwrap();
-        assert!(chosen["sections"][0].as_array().unwrap().iter().any(|item| item["label"] == "Nearest" && item["selected"] == true));
-        let mut stale = json!(bar.context);
-        stale["generation"] = json!(bar.context.generation + 1);
-        assert!(app.query(query(stale)).unwrap().is_null());
-        assert!(
-            app.query(json!({"type": "canvas_bar_choice_menu", "context": bar.context, "id": "missing"}))
-                .unwrap()
-                .is_null()
-        );
+        assert!(app.session.state().commands.iter().any(|c| c.id == CommandId::TransformNearest && c.selected));
     }
 
     #[test]

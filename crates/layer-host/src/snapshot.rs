@@ -40,6 +40,7 @@ impl NativeHost {
     /// Full snapshots and motion use the same acknowledgement/serialization path.
     pub fn take_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
         self.model_transport = false;
+        self.last_model_snapshot = None;
         let mut bytes = Vec::new();
         let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SnapshotFormatter);
         Ok(self
@@ -52,6 +53,7 @@ impl NativeHost {
     /// take_update_bytes refresh all models for dimension changes.
     pub fn take_layout_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
         self.model_transport = false;
+        self.last_model_snapshot = None;
         self.layout_update_bytes()
     }
 
@@ -77,8 +79,6 @@ impl NativeHost {
         serializer: S,
         layout: bool,
     ) -> Result<Option<S::Ok>, S::Error> {
-        // Switching publication consumers must reestablish the model baseline.
-        self.last_model_snapshot = None;
         let key = SnapshotKey {
             revision: self.session.state().revision,
             command_search_revision: self.session.command_search_revision(),
@@ -172,29 +172,19 @@ impl NativeHost {
             self.last_camera_revision = Some(camera.revision);
             return Ok(Some(snapshot));
         }
-        let workspace = self.session.durable_workspace();
-        let changed_workspace = self.last_durable_workspace.as_ref() != Some(&workspace);
-        let snapshot =
-            self.serialize_snapshot(serializer, changed_workspace.then_some(&workspace), &update)?;
+        let snapshot = self.serialize_snapshot(serializer, &update)?;
         // A serializer failure cannot acknowledge an update that was not sent.
         self.last_snapshot = Some(key);
         self.last_workspace_content_revision = Some(update.content_revision);
         self.last_workspace_model_revision = Some(update.model_revision);
         self.last_camera_revision = Some(self.session.state().camera.revision);
-        if changed_workspace {
-            self.last_durable_workspace = Some(workspace);
-        }
         Ok(Some(snapshot))
     }
 
     #[cfg(test)]
     pub(super) fn snapshot(&self) -> serde_json::Value {
-        self.serialize_snapshot(
-            serde_json::value::Serializer,
-            None,
-            &self.session.workspace_update(),
-        )
-        .expect("Native snapshot contains JSON-compatible fields")
+        self.serialize_snapshot(serde_json::value::Serializer, &self.session.workspace_update())
+            .expect("Native snapshot contains JSON-compatible fields")
     }
 
     #[cfg(test)]
@@ -225,7 +215,6 @@ impl NativeHost {
     fn serialize_snapshot<S: Serializer>(
         &self,
         serializer: S,
-        workspace: Option<&layer_ui::WorkspaceState>,
         update: &layer_ui::WorkspaceUpdate,
     ) -> Result<S::Ok, S::Error> {
         let layout = self.session.layout(self.logical);
@@ -329,9 +318,6 @@ impl NativeHost {
         map.serialize_entry("brush_ready", &(gpu_ready && progress.brush_ready))?;
         map.serialize_entry("shaders_ready", &(gpu_ready && progress.complete))?;
         map.serialize_entry("error", &self.error)?;
-        if let Some(workspace) = workspace {
-            map.serialize_entry("workspace_persistence", workspace)?;
-        }
         map.end()
     }
 }
@@ -489,7 +475,6 @@ mod tests {
             resize_divider(&mut host, Up, 370.);
             let committed = layout_update(&mut host);
             assert_ne!(committed["state"]["workspace"], saved);
-            assert!(committed.get("workspace_persistence").is_some());
             host.dispatch(UiAction::Invoke {
                 command: CommandId::UndoWorkspace,
             })
@@ -699,7 +684,6 @@ mod tests {
             drag(&mut host, Move, [510., 410.]);
             let detached = update(&mut host);
             assert!(detached.get("state").is_some());
-            assert!(detached.get("workspace_persistence").is_none());
             for x in [520., 535., 510.] {
                 drag(&mut host, Move, [x, 410.]);
                 let next = update(&mut host);
@@ -707,7 +691,6 @@ mod tests {
                 let group = &next["workspace_update"]["drag"]["group"];
                 let expected = layer_ui::Bounds { x: x - 10., y: 400., ..bounds };
                 assert_eq!(group["bounds"], serde_json::to_value(expected).unwrap());
-                assert!(next.get("workspace_persistence").is_none());
             }
             drag(&mut host, Cancel, [510., 410.]);
             let canceled = update(&mut host);
@@ -718,7 +701,6 @@ mod tests {
             update(&mut host);
             drag(&mut host, Up, [510., 410.]);
             let committed = update(&mut host);
-            assert!(committed.get("workspace_persistence").is_some());
             host.dispatch(UiAction::Invoke {
                 command: CommandId::UndoWorkspace,
             })
@@ -808,7 +790,7 @@ mod tests {
         };
         let mut host = host(Platform::Mac);
         fail(&mut host);
-        assert!(update(&mut host).get("workspace_persistence").is_some());
+        assert!(update(&mut host).get("state").is_some());
         host.dispatch(UiAction::Invoke {
             command: CommandId::ZoomIn,
         })
@@ -827,7 +809,7 @@ mod tests {
         })
         .unwrap();
         fail(&mut host);
-        assert!(update(&mut host).get("workspace_persistence").is_some());
+        assert!(update(&mut host).get("state").is_some());
         assert!(host.take_update_bytes().unwrap().is_none());
     }
 }
