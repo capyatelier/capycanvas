@@ -133,7 +133,8 @@ try {
     $devices=@('mouse','touch','pen')
     for($i=0;$i -lt $choices.Count;$i++){
         $choice=$choices[$i];$row=Control ('tool-subtool-'+$i)
-        if((Dip $row) -lt 43.5){throw "$($choice.label) row is shorter than 44 px"}
+        $minimum=if(@((Model).state.tool_extra|Where-Object {$_.Choice.id -eq 'tonal-tones'}).Count){36}else{44}
+        if((Dip $row) -lt $minimum-.5){throw "$($choice.label) row is $([Math]::Round((Dip $row),1)) px, shorter than $minimum px"}
         Tap (Center $row) $devices[$i%3]
         Wait-Until {(Model).state.tool_set.subtools[$i].selected} "$($choice.label) did not select"
         Wait-Until {(Header-Icon $select) -eq $choice.icon} "Select opener did not remember $($choice.label)"

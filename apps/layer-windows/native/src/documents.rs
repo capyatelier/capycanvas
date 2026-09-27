@@ -1228,7 +1228,7 @@ mod gpu_tests {
     fn d3d12_save_checkpoint_survives_later_edits() {
         let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         assert_eq!(gpu.adapter().get_info().backend, wgpu::Backend::Dx12);
-        assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
+        assert!(gpu.adapter().get_info().device_type != wgpu::DeviceType::Cpu || layer_render_wgpu::software_adapter_tests());
         let project = layer_ui::new_drawing(63, 47).unwrap();
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session =
@@ -1286,7 +1286,7 @@ mod gpu_tests {
     fn d3d12_background_save_open_new_and_stale_adoption() {
         let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         assert_eq!(gpu.adapter().get_info().backend, wgpu::Backend::Dx12);
-        assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
+        assert!(gpu.adapter().get_info().device_type != wgpu::DeviceType::Cpu || layer_render_wgpu::software_adapter_tests());
         let mut host = NativeHost::new(Platform::Gtk).unwrap();
         host.session = UiSession::from_project(
             Renderer(Some(gpu.into())),

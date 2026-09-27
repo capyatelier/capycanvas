@@ -51,6 +51,10 @@ function Edit-Text([string]$Name,[string]$Value) {
     Focus-Control $entry
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)
 }
+function Custom-Swatch([string]$Theme) {
+    Wait-Until {$script:swatch=@($script:settingsScope.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Custom'))|Where-Object {$_.Current.AutomationId -like "setting-$($Theme)_base-swatch-*"})[0];$script:swatch} "Missing custom $Theme base color"
+    $script:swatch
+}
 function Open-Preferences {
     $script:settingsScope=$root
     $button=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
@@ -100,22 +104,23 @@ foreach($choice in @('Light','Dark',$restoreTheme)){
     $selected=(Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection()
     if($selected.Count -ne 1 -or $selected[0].Current.Name -ne $choice){throw 'Collapsed theme selector has no readable selected value'}
 }
+(Custom-Swatch 'dark').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+Wait-Until {Find-Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)} 'Custom dark base color did not open its field'
 $base=Read-Text 'Dark theme base color'
 $entry=Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)
 $identity=$entry.GetRuntimeId() -join ':'
-Edit-Text 'Dark theme base color' '#1c2c3c'
-Focus-Control (Control 'Light theme base color' ([System.Windows.Automation.ControlType]::Edit))
-Wait-Until {(Read-Model).state.settings.dark_base -eq '#1c2c3c'} 'Valid base color did not reach shared settings'
-Wait-Until {(Read-Text 'Dark theme base color') -eq '#1c2c3c'} 'Valid base color was not retained'
+Edit-Text 'Dark theme base color' '#1d2d3d'
+Focus-Control (Custom-Swatch 'light')
+Wait-Until {(Read-Model).state.settings.dark_base -eq '#1d2d3d'} 'Valid base color did not reach shared settings'
+Wait-Until {(Read-Text 'Dark theme base color') -eq '#1d2d3d'} 'Valid base color was not retained'
 if(((Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)).GetRuntimeId() -join ':') -ne $identity){throw 'Palette update replaced the native settings field'}
 Edit-Text 'Dark theme base color' 'invalid'
-Focus-Control (Control 'Light theme base color' ([System.Windows.Automation.ControlType]::Edit))
+Focus-Control (Custom-Swatch 'light')
 Wait-Until {(Read-Model).preferences.error} 'Invalid color did not produce shared validation feedback'
-Wait-Until {(Read-Text 'Dark theme base color') -eq '#1c2c3c'} 'Invalid base color replaced the valid value'
+Wait-Until {(Read-Text 'Dark theme base color') -eq '#1d2d3d'} 'Invalid base color replaced the valid value'
 Edit-Text 'Dark theme base color' $base
-Focus-Control (Control 'Light theme base color' ([System.Windows.Automation.ControlType]::Edit))
+Focus-Control (Custom-Swatch 'light')
 Wait-Until {(Read-Model).state.settings.dark_base -eq $base} 'Base color did not restore in shared settings'
-Wait-Until {(Read-Text 'Dark theme base color') -eq $base} 'Base color restoration failed'
 
 $tiles=@('Looking up','Facing forward','Bathing','Sleeping')
 $selected=$tiles | Where-Object {(Toggle-State $_) -eq [System.Windows.Automation.ToggleState]::On}

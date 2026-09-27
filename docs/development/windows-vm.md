@@ -8,8 +8,8 @@ software D3D12 adapter (WARP):
 
 | Runs in a VM | Needs a hardware GPU |
 | --- | --- |
-| `check`: the build, native input tests and Rust unit tests, including the GPU-backed `layer-host` tests | `layer-render-wgpu` unit tests, which time out and exceed pixel tolerances on WARP |
-| `fixtures`: the native UI fixtures | ignored `layer-windows` tests, which remove devices or need an explicitly selected adapter |
+| `check`: the build, native input tests and Rust unit tests, including the GPU-backed `layer-host` tests and the D3D12 document, tab and filter-package tests | `layer-render-wgpu` unit tests, which time out and exceed pixel tolerances on WARP |
+| `fixtures`: the native UI fixtures | ignored `layer-windows` tests that remove devices, the HDR document test and the color import/export round trip |
 | | `tools/performance` scripts, PresentMon, physical pens and touch screens, HDR output, multiple displays and visual parity captures |
 
 Requirements: x86_64 Linux with KVM, Python 3, about 150 GB of free disk space for
@@ -49,8 +49,8 @@ tools/windows-vm/windows-vm.py list
 and untracked files, to `C:\capycanvas`, and runs
 [`test-without-gpu.ps1`](../../apps/layer-windows/scripts/test-without-gpu.ps1):
 the Debug build (`--release` for Release), the native input tests, and the
-shared and Windows Rust unit tests, with the `layer-host` GPU tests on WARP. Build
-outputs persist between syncs. Run other commands from the synced tree, for example strict Clippy:
+shared and Windows Rust unit tests, with the `layer-host` GPU tests and the
+ignored `d3d12_` document tests on WARP. Build outputs persist between syncs. Run other commands from the synced tree, for example strict Clippy:
 
 ```sh
 tools/windows-vm/windows-vm.py ssh 'cd C:\capycanvas; cargo clippy --locked -p layer-windows --all-targets -- -D warnings'
