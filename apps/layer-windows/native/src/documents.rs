@@ -789,15 +789,15 @@ impl DocumentService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
     use layer_ui::{CommandId, Platform, UiAction};
-    use std::sync::{atomic::AtomicU64, mpsc};
+    use std::sync::mpsc;
     use std::time::Duration;
-    static NEXT: AtomicU64 = AtomicU64::new(0);
     struct Fixture {
         host: NativeHost,
         service: DocumentService,
         done: mpsc::Receiver<()>,
-        directory: PathBuf,
+        directory: TempDir,
     }
     impl Fixture {
         fn new() -> Self {
@@ -808,17 +808,11 @@ mod tests {
             .unwrap();
             let mut host = NativeHost::new(Platform::Gtk).unwrap();
             host.session.set_document_replacement(true);
-            let directory = std::env::temp_dir().join(format!(
-                "capy-document-service-test-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            std::fs::create_dir(&directory).unwrap();
             Self {
                 host,
                 service,
                 done,
-                directory,
+                directory: TempDir::new(),
             }
         }
         fn invoke(&mut self, command: CommandId) {
@@ -842,20 +836,12 @@ mod tests {
             self.service.poll(&mut self.host).unwrap();
         }
         fn path(&self, name: &str) -> String {
-            self.directory.join(name).to_str().unwrap().into()
+            self.directory.path.join(name).to_str().unwrap().into()
         }
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
             self.service.stop_worker().unwrap();
-            // Only files created in this uniquely reserved fixture directory.
-            for entry in std::fs::read_dir(&self.directory).unwrap() {
-                let entry = entry.unwrap();
-                if entry.file_type().unwrap().is_file() {
-                    std::fs::remove_file(entry.path()).unwrap();
-                }
-            }
-            std::fs::remove_dir(&self.directory).unwrap();
         }
     }
 
@@ -1180,6 +1166,7 @@ mod tests {
 #[cfg(all(test, target_os = "windows"))]
 mod gpu_tests {
     use super::*;
+    use crate::test_support::TempDir;
     use layer_ui::{CommandId, Platform, UiAction};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -1253,16 +1240,8 @@ mod gpu_tests {
             .import_layer_source("Synthetic alpha", std::sync::Arc::unwrap_or_clone(source))
             .unwrap();
         host.dirty = true;
-        let directory = std::env::temp_dir().join(format!(
-            "capy-save-gpu-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&directory).unwrap();
-        let source = directory.join("source.capy");
+        let directory = TempDir::new();
+        let source = directory.path.join("source.capy");
         let (wake, done) = mpsc::channel();
         let mut service = DocumentService::open(move || {
             let _ = wake.send(());
@@ -1301,8 +1280,6 @@ mod gpu_tests {
         );
         assert_eq!(std::fs::read(&source).unwrap(), saved);
         service.stop_worker().unwrap();
-        std::fs::remove_file(source).unwrap();
-        std::fs::remove_dir(directory).unwrap();
     }
     #[test]
     #[ignore = "Requires an explicitly selected hardware D3D12 adapter"]
@@ -1321,10 +1298,9 @@ mod gpu_tests {
         .unwrap();
         host.session.set_document_replacement(true);
         host.resize(64, 48, 1.).unwrap();
-        let directory =
-            std::env::temp_dir().join(format!("capy-document-gpu-test-{}", std::process::id()));
-        std::fs::create_dir(&directory).unwrap();
+        let directory = TempDir::new();
         let path = directory
+            .path
             .join("round-trip.capy")
             .to_str()
             .unwrap()
@@ -1418,7 +1394,7 @@ mod gpu_tests {
         assert!(service.open_queue.is_empty());
         assert_eq!(host.session.state().document_file.epoch, epoch + 3);
         let original = host.session.engine().document().clone();
-        let corrupt = directory.join("invalid.capy");
+        let corrupt = directory.path.join("invalid.capy");
         std::fs::write(&corrupt, b"not a project").unwrap();
         invoke(&mut host, CommandId::OpenDocument);
         let (id, epoch, revision) = request(&host);
@@ -1478,8 +1454,6 @@ mod gpu_tests {
         assert!(host.session.state().document_file.modified);
         assert!(!host.session.state().document_file.busy);
         service.stop_worker().unwrap();
-        std::fs::remove_file(path).unwrap();
-        std::fs::remove_dir(directory).unwrap();
     }
 }
 

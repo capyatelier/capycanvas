@@ -1,23 +1,24 @@
 use super::*;
-use layer_workspace::{PackageKind, StoreWorker, new_id};
+use crate::test_support::TempDir;
+use layer_workspace::{PackageKind, StoreWorker};
 use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
 
 struct Fixture {
-    directory: std::path::PathBuf,
     service: WorkspaceService<StoreWorker>,
     native: NativeHost,
     notifications: mpsc::Receiver<()>,
+    directory: TempDir,
 }
 impl Fixture {
     fn new() -> Self {
-        let directory = std::env::temp_dir().join(format!("capy-windows-workspaces-{}", new_id()));
+        let directory = TempDir::new();
         let (notify, notifications) = mpsc::channel();
         let service = WorkspaceService::new(
-            StoreWorker::shared(&directory).unwrap(),
-            directory.clone(),
+            StoreWorker::shared(&directory.path).unwrap(),
+            directory.path.clone(),
             move || {
                 let _ = notify.send(());
             },
@@ -25,10 +26,10 @@ impl Fixture {
         let mut native = NativeHost::new(Platform::Windows).unwrap();
         crate::workspace::initialize(&mut native).unwrap();
         let mut f = Self {
-            directory,
             service,
             native,
             notifications,
+            directory,
         };
         f.pump(|f| f.service.view().ready);
         f
@@ -56,7 +57,7 @@ impl Fixture {
 #[test]
 fn export_backup_waits_for_idle_and_reports_notice() {
     let mut f = Fixture::new();
-    let path = f.directory.join("backup.capyworkspace");
+    let path = f.directory.path.join("backup.capyworkspace");
     f.service
         .export_backup(&mut f.native, path.to_string_lossy().into_owned())
         .unwrap();
@@ -86,7 +87,4 @@ fn export_backup_waits_for_idle_and_reports_notice() {
         1
     );
     f.service.stop();
-    let directory = f.directory.clone();
-    drop(f);
-    std::fs::remove_dir_all(directory).unwrap();
 }

@@ -574,30 +574,14 @@ impl Drop for Service {
 #[cfg(test)]
 mod tests {
     use super::*;
-    struct Directory(PathBuf);
-    impl Directory {
-        fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "capy-recovery-test-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&path).unwrap();
-            Self(path)
-        }
-    }
-    impl Drop for Directory {
-        fn drop(&mut self) {
-            fs::remove_dir_all(&self.0).unwrap();
-        }
-    }
-    fn open(dir: &Directory) -> (Storage, Option<String>) {
-        let mut storage = Storage::open(dir.0.clone()).unwrap();
+    use crate::test_support::TempDir;
+    fn open(dir: &TempDir) -> (Storage, Option<String>) {
+        let mut storage = Storage::open(dir.path.clone()).unwrap();
         let offer = storage.claim(&BTreeSet::new()).unwrap();
         (storage, offer)
     }
-    fn checkpoint(dir: &Directory, age: u64) -> String {
-        let storage = Storage::open(dir.0.clone()).unwrap();
+    fn checkpoint(dir: &TempDir, age: u64) -> String {
+        let storage = Storage::open(dir.path.clone()).unwrap();
         let path = storage.path(&storage.key).unwrap();
         fs::write(&path, b"durable checkpoint").unwrap();
         File::options()
@@ -610,7 +594,7 @@ mod tests {
     }
     #[test]
     fn live_windows_cannot_claim_each_others_checkpoint() {
-        let dir = Directory::new();
+        let dir = TempDir::new();
         let (first, offer) = open(&dir);
         assert!(offer.is_none());
         fs::write(first.path(&first.key).unwrap(), b"durable checkpoint").unwrap();
@@ -630,11 +614,11 @@ mod tests {
     }
     #[test]
     fn each_released_copy_leads_to_the_next_newest_unless_kept_for_later() {
-        let dir = Directory::new();
+        let dir = TempDir::new();
         let oldest = checkpoint(&dir, 30);
         let newest = checkpoint(&dir, 10);
         let middle = checkpoint(&dir, 20);
-        let mut storage = Storage::open(dir.0.clone()).unwrap();
+        let mut storage = Storage::open(dir.path.clone()).unwrap();
         let mut kept = BTreeSet::new();
         assert_eq!(storage.claim(&kept).unwrap().as_deref(), Some(newest.as_str()));
         assert!(storage.claim(&kept).unwrap().is_none());
@@ -653,8 +637,8 @@ mod tests {
     }
     #[test]
     fn failed_atomic_checkpoint_preserves_the_durable_copy() {
-        let dir = Directory::new();
-        let storage = Storage::open(dir.0.clone()).unwrap();
+        let dir = TempDir::new();
+        let storage = Storage::open(dir.path.clone()).unwrap();
         let path = storage.path(&storage.key).unwrap();
         fs::write(&path, b"previous").unwrap();
         let cancel = AtomicBool::new(false);

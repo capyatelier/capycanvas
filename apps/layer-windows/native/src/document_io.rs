@@ -124,20 +124,12 @@ fn replace_when_available(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
     use std::fs::File;
-    pub(super) fn directory() -> PathBuf {
-        let directory = std::env::temp_dir().join(format!(
-            "capy-document-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&directory).unwrap();
-        directory
-    }
     #[test]
     fn atomic_failure_and_cancellation_preserve_the_previous_project() {
-        let directory = directory();
-        let path = directory.join("drawing.capy");
+        let directory = TempDir::new();
+        let path = directory.path.join("drawing.capy");
         let cancel = AtomicBool::new(false);
         let project = layer_ui::new_drawing(32, 24).unwrap();
         atomic_write(&path, &cancel, |f| project.write(f)).unwrap();
@@ -149,7 +141,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(error, "Simulated disk full");
         assert_eq!(fs::read(&path).unwrap(), before);
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
         assert!(
             atomic_write(&path, &cancel, |f| {
                 f.write_all(b"incomplete").unwrap();
@@ -159,7 +151,7 @@ mod tests {
             .is_err()
         );
         assert_eq!(fs::read(&path).unwrap(), before);
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
         cancel.store(false, Ordering::Release);
         let next = layer_ui::new_drawing(40, 30).unwrap();
         atomic_write(&path, &cancel, |f| next.write(f)).unwrap();
@@ -167,13 +159,11 @@ mod tests {
             layer_core::Project::read(File::open(&path).unwrap(), Default::default()).unwrap(),
             next
         );
-        fs::remove_file(path).unwrap();
-        fs::remove_dir(directory).unwrap();
     }
     #[test]
     fn failed_replacement_and_unwind_remove_only_the_reserved_temporary() {
-        let directory = directory();
-        let destination = directory.join("existing-directory");
+        let directory = TempDir::new();
+        let destination = directory.path.join("existing-directory");
         fs::create_dir(&destination).unwrap();
         let cancel = AtomicBool::new(false);
         assert!(
@@ -184,14 +174,12 @@ mod tests {
         );
         assert!(destination.is_dir());
         let result = std::panic::catch_unwind(|| {
-            atomic_write(&directory.join("drawing.capy"), &cancel, |_| {
+            atomic_write(&directory.path.join("drawing.capy"), &cancel, |_| {
                 panic!("Simulated encoder panic");
             })
         });
         assert!(result.is_err());
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
-        fs::remove_dir(destination).unwrap();
-        fs::remove_dir(directory).unwrap();
+        assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
     }
 
     #[test]
@@ -203,8 +191,8 @@ mod tests {
             time::Duration,
         };
         for cancelled in [false, true] {
-            let directory = directory();
-            let path = directory.join("drawing.capy");
+            let directory = TempDir::new();
+            let path = directory.path.join("drawing.capy");
             let project = layer_ui::new_drawing(32, 24).unwrap();
             std::fs::write(&path, b"previous destination").unwrap();
             let mut locked = Some(
@@ -253,23 +241,20 @@ mod tests {
                     expected
                 );
             }
-            assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
-            fs::remove_file(&path).unwrap();
-            fs::remove_dir(&directory).unwrap();
+            assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
         }
     }
     #[test]
     fn location_rejects_relative_paths_and_invalid_names() {
         assert!(location("drawing.capy").is_err());
         assert!(location("").is_err());
-        let directory = directory();
-        assert!(location(directory.join("drawing.capy:stream").to_str().unwrap()).is_err());
-        assert!(location(directory.join("bad\n.capy").to_str().unwrap()).is_err());
-        let path = directory.join("試し café.capy");
+        let directory = TempDir::new();
+        assert!(location(directory.path.join("drawing.capy:stream").to_str().unwrap()).is_err());
+        assert!(location(directory.path.join("bad\n.capy").to_str().unwrap()).is_err());
+        let path = directory.path.join("試し café.capy");
         assert_eq!(
             location(path.to_str().unwrap()).unwrap().name,
             "試し café.capy"
         );
-        fs::remove_dir(directory).unwrap();
     }
 }

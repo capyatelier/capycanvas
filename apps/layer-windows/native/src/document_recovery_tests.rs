@@ -4,17 +4,17 @@ use super::*;
 use crate::device::D3d12Watch;
 use layer_host::DeviceWatch;
 use crate::gpu_recovery_tests::{remove_device, renderer};
+use crate::test_support::TempDir;
 use layer_ui::{CommandId, Platform};
-use std::sync::{atomic::AtomicU64, mpsc};
+use std::sync::mpsc;
 use std::time::Duration;
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture {
     host: NativeHost,
     service: DocumentService,
     done: mpsc::Receiver<()>,
     device: DeviceWatch,
-    directory: PathBuf,
+    directory: TempDir,
 }
 impl Fixture {
     fn new() -> Self {
@@ -35,22 +35,16 @@ impl Fixture {
             let _ = wake.send(());
         })
         .unwrap();
-        let directory = std::env::temp_dir().join(format!(
-            "capy-document-removal-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed),
-        ));
-        std::fs::create_dir(&directory).unwrap();
         Self {
             host,
             service,
             done,
             device,
-            directory,
+            directory: TempDir::new(),
         }
     }
     fn path(&self, name: &str) -> String {
-        self.directory.join(name).to_str().unwrap().into()
+        self.directory.path.join(name).to_str().unwrap().into()
     }
     fn dispatch(&mut self, action: DocumentAction) {
         self.service.dispatch(&mut self.host, action).unwrap();
@@ -105,13 +99,6 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.service.stop_worker().unwrap();
-        // Only ordinary files in this test's uniquely reserved directory.
-        for entry in std::fs::read_dir(&self.directory).unwrap() {
-            let entry = entry.unwrap();
-            assert!(entry.file_type().unwrap().is_file());
-            std::fs::remove_file(entry.path()).unwrap();
-        }
-        std::fs::remove_dir(&self.directory).unwrap();
     }
 }
 

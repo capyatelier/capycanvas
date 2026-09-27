@@ -149,6 +149,7 @@ impl Service {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
     fn settle(service: &mut Service, host: &mut NativeHost) {
         for _ in 0..500 {
@@ -163,31 +164,29 @@ mod tests {
 
     #[test]
     fn exported_palettes_import_through_the_worker_and_failures_leave_the_library() {
-        let directory = std::env::temp_dir().join(format!("capy-palette-files-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory = TempDir::new();
         let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
         let mut service = Service::new(Arc::new(|| {}));
         let id = host.session.state().colors.library.palettes[0].id;
         let count = host.session.state().colors.library.palettes.len();
         for format in PaletteFormat::ALL {
-            let path = directory.join(format!("round trip.{}", format.extension()));
+            let path = directory.path.join(format!("round trip.{}", format.extension()));
             service.dispatch(&mut host, Action::Export { id, format, path: path.to_string_lossy().into() }).unwrap();
             assert!(service.dispatch(&mut host, Action::Import { path: String::new() }).is_err());
             settle(&mut service, &mut host);
             assert!(service.status.error.is_none(), "{format:?}: {:?}", service.status.error);
-            assert!(path.exists() && !directory.join(format!("round trip.{}.partial", format.extension())).exists());
+            assert!(path.exists() && !directory.path.join(format!("round trip.{}.partial", format.extension())).exists());
             service.dispatch(&mut host, Action::Import { path: path.to_string_lossy().into() }).unwrap();
             settle(&mut service, &mut host);
             assert!(service.status.error.is_none(), "{format:?}: {:?}", service.status.error);
         }
         assert_eq!(host.session.state().colors.library.palettes.len(), count + PaletteFormat::ALL.len());
-        let broken = directory.join("broken.aco");
+        let broken = directory.path.join("broken.aco");
         std::fs::write(&broken, b"not a palette").unwrap();
         service.dispatch(&mut host, Action::Import { path: broken.to_string_lossy().into() }).unwrap();
         settle(&mut service, &mut host);
         assert!(service.status.error.is_some());
         assert_eq!(host.session.state().colors.library.palettes.len(), count + PaletteFormat::ALL.len());
         assert_eq!(service.status().get("generation").and_then(|v| v.as_u64()), Some(11));
-        std::fs::remove_dir_all(directory).unwrap();
     }
 }

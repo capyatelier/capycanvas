@@ -11,7 +11,7 @@ struct Fixture {
     native: NativeHost,
     service: FilterService,
     device: DeviceWatch,
-    directory: Directory,
+    directory: TempDir,
 }
 impl Fixture {
     fn new() -> Self {
@@ -32,8 +32,8 @@ impl Fixture {
             .import_layer_source("Synthetic color", std::sync::Arc::unwrap_or_clone(source))
             .unwrap();
         native.dirty = true;
-        let directory = Directory::new();
-        directory.example();
+        let directory = TempDir::new();
+        copy_example(&directory);
         let mut service = FilterService::new(|| {});
         service
             .load(

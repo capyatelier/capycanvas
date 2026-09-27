@@ -1,71 +1,42 @@
 use super::*;
+use crate::test_support::TempDir;
 use std::{
     fs,
-    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
-struct Directory {
-    base: PathBuf,
-    path: PathBuf,
-}
-impl Directory {
-    fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../artifacts/windows/filter-tests");
-        fs::create_dir_all(&base).unwrap();
-        let base = base.canonicalize().unwrap();
-        let path = base.join(format!(
-            "{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&path).unwrap();
-        Self { base, path }
-    }
-    fn example(&self) {
-        let example =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../examples/filters/tent-blur");
-        for name in ["manifest.json", "prepare.wgsl", "tent.wgsl"] {
-            fs::copy(example.join(name), self.path.join(name)).unwrap();
-        }
-    }
-    fn manifest(&self) -> serde_json::Value {
-        serde_json::from_str(&fs::read_to_string(self.path.join("manifest.json")).unwrap()).unwrap()
-    }
-    fn set_manifest(&self, value: serde_json::Value) {
-        fs::write(
-            self.path.join("manifest.json"),
-            serde_json::to_vec(&value).unwrap(),
-        )
-        .unwrap();
-    }
-    fn read(&self) -> Result<Package, String> {
-        read_directory(&self.path, EffectInstallMode::Merge, false)
+fn copy_example(directory: &TempDir) {
+    let example =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../examples/filters/tent-blur");
+    for name in ["manifest.json", "prepare.wgsl", "tent.wgsl"] {
+        fs::copy(example.join(name), directory.path.join(name)).unwrap();
     }
 }
-impl Drop for Directory {
-    fn drop(&mut self) {
-        if let Ok(path) = self.path.canonicalize()
-            && path == self.path
-            && path.parent() == Some(self.base.as_path())
-        {
-            let _ = fs::remove_dir_all(path);
-        }
-    }
+fn read_manifest(directory: &TempDir) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(directory.path.join("manifest.json")).unwrap())
+        .unwrap()
 }
-fn error(directory: &Directory) -> String {
-    match directory.read() {
+fn write_manifest(directory: &TempDir, value: serde_json::Value) {
+    fs::write(
+        directory.path.join("manifest.json"),
+        serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+}
+fn read_package(directory: &TempDir) -> Result<Package, String> {
+    read_directory(&directory.path, EffectInstallMode::Merge, false)
+}
+fn error(directory: &TempDir) -> String {
+    match read_package(directory) {
         Ok(_) => panic!("Invalid package was accepted"),
         Err(error) => error,
     }
 }
 #[test]
 fn file_transport_resolves_shared_render_and_preparation_modules() {
-    let directory = Directory::new();
-    directory.example();
-    let package = directory.read().unwrap();
+    let directory = TempDir::new();
+    copy_example(&directory);
+    let package = read_package(&directory).unwrap();
     assert_eq!(package.modules.len(), 2);
     let catalog = EffectPackage::parse(&package.manifest)
         .unwrap()
@@ -83,15 +54,15 @@ fn file_transport_resolves_shared_render_and_preparation_modules() {
         + "\n// Edited without rebuilding the application\n";
     fs::write(directory.path.join("tent.wgsl"), &changed).unwrap();
     assert_eq!(
-        directory.read().unwrap().modules["tent.wgsl"].as_ref(),
+        read_package(&directory).unwrap().modules["tent.wgsl"].as_ref(),
         changed
     );
 }
 #[test]
 fn manifest_paths_are_rejected_before_any_module_read() {
-    let directory = Directory::new();
-    directory.example();
-    let original = directory.manifest();
+    let directory = TempDir::new();
+    copy_example(&directory);
+    let original = read_manifest(&directory);
     for name in [
         "../outside.wgsl",
         "C:/outside.wgsl",
@@ -101,14 +72,14 @@ fn manifest_paths_are_rejected_before_any_module_read() {
     ] {
         let mut manifest = original.clone();
         manifest["filters"][0]["program"]["wgsl"] = serde_json::json!([name]);
-        directory.set_manifest(manifest);
+        write_manifest(&directory, manifest);
         assert!(error(&directory).contains("module filename"));
     }
 }
 #[test]
 fn missing_invalid_and_oversized_resources_preserve_source_files() {
-    let directory = Directory::new();
-    directory.example();
+    let directory = TempDir::new();
+    copy_example(&directory);
     let manifest = fs::read(directory.path.join("manifest.json")).unwrap();
     fs::remove_file(directory.path.join("prepare.wgsl")).unwrap();
     assert!(error(&directory).contains("open"));
@@ -131,12 +102,12 @@ fn missing_invalid_and_oversized_resources_preserve_source_files() {
 }
 #[test]
 fn aggregate_module_reads_are_bounded() {
-    let directory = Directory::new();
-    directory.example();
-    let mut manifest = directory.manifest();
+    let directory = TempDir::new();
+    copy_example(&directory);
+    let mut manifest = read_manifest(&directory);
     let modules: Vec<_> = (0..17).map(|i| format!("module{i}.wgsl")).collect();
     manifest["filters"][0]["program"]["wgsl"] = serde_json::json!(modules);
-    directory.set_manifest(manifest);
+    write_manifest(&directory, manifest);
     for name in modules {
         fs::File::create(directory.path.join(name))
             .unwrap()
@@ -155,8 +126,8 @@ fn finish_read(service: &mut FilterService, native: &mut NativeHost) {
 }
 #[test]
 fn asynchronous_read_retains_bytes_until_gpu_attachment_and_rejects_overlap() {
-    let directory = Directory::new();
-    directory.example();
+    let directory = TempDir::new();
+    copy_example(&directory);
     let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     let before = native.session.state().adjustments.clone();
     let mut service = FilterService::new(|| {});
@@ -182,7 +153,7 @@ fn asynchronous_read_retains_bytes_until_gpu_attachment_and_rejects_overlap() {
 }
 #[test]
 fn asynchronous_failure_is_visible_and_a_later_read_can_retry() {
-    let directory = Directory::new();
+    let directory = TempDir::new();
     let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     let mut service = FilterService::new(|| {});
     let request = || Request {
@@ -196,7 +167,7 @@ fn asynchronous_failure_is_visible_and_a_later_read_can_retry() {
     assert_eq!(service.status.phase, "failed");
     assert!(service.status.error.is_some());
     assert_eq!(native.session.state().filter_catalog_revision, 0);
-    directory.example();
+    copy_example(&directory);
     service.load(&mut native, request()).unwrap();
     finish_read(&mut service, &mut native);
     assert_eq!(service.status.phase, "waiting_for_canvas");
@@ -208,8 +179,8 @@ fn asynchronous_failure_is_visible_and_a_later_read_can_retry() {
 #[test]
 fn delayed_explicit_import_cannot_migrate_a_replacement_document() {
     for library in [false, true] {
-        let directory = Directory::new();
-        directory.example();
+        let directory = TempDir::new();
+        copy_example(&directory);
         let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
         let mut service = FilterService::new(|| {});
         service
@@ -307,8 +278,8 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
         .import_layer_source("Synthetic color", std::sync::Arc::unwrap_or_clone(source))
         .unwrap();
     native.dirty = true;
-    let directory = Directory::new();
-    directory.example();
+    let directory = TempDir::new();
+    copy_example(&directory);
     let shader = fs::read_to_string(directory.path.join("tent.wgsl")).unwrap();
     let mut service = FilterService::new(|| {});
     let request = |mode, library| Request {
@@ -397,13 +368,13 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
         shader.replace("tent_", "library_tent_"),
     )
     .unwrap();
-    let mut manifest = directory.manifest();
+    let mut manifest = read_manifest(&directory);
     manifest["filters"][0]["program"]["entry"] = serde_json::json!("library_tent_vertical");
     manifest["filters"][0]["program"]["passes"][0]["entry"] =
         serde_json::json!("library_tent_horizontal");
     manifest["filters"][0]["program"]["passes"][1]["entry"] =
         serde_json::json!("library_tent_vertical");
-    directory.set_manifest(manifest);
+    write_manifest(&directory, manifest);
     service
         .load(&mut native, request(EffectInstallMode::Merge, true))
         .unwrap();
@@ -465,8 +436,8 @@ mod recovery_tests;
 #[test]
 fn suspension_finishes_pending_reads_and_rejects_new_loads() {
     for acquired in [false, true] {
-        let directory = Directory::new();
-        directory.example();
+        let directory = TempDir::new();
+        copy_example(&directory);
         let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
         let mut service = FilterService::new(|| {});
         let request = || Request {

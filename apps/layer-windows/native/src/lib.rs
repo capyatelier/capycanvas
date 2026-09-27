@@ -51,3 +51,25 @@ pub use color::*;
 
 #[cfg(all(test, target_os = "windows"))]
 mod gpu_recovery_tests;
+
+#[cfg(test)]
+mod test_support {
+    use std::path::PathBuf;
+
+    pub(crate) struct TempDir {
+        pub(crate) path: PathBuf,
+    }
+    impl TempDir {
+        pub(crate) fn new() -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("capy-windows-test-{}", layer_workspace::new_id()));
+            std::fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}

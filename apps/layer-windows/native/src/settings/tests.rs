@@ -1,43 +1,9 @@
 use super::*;
+use crate::test_support::TempDir;
 use std::{sync::mpsc, time::Duration};
 
-struct Directory {
-    base: PathBuf,
-    path: PathBuf,
-}
-impl Directory {
-    fn new() -> Self {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../artifacts/windows/settings-tests");
-        fs::create_dir_all(&base).unwrap();
-        let base = fs::canonicalize(base).unwrap();
-        loop {
-            let path = base.join(format!(
-                "{}.{}",
-                std::process::id(),
-                TEMP_ID.fetch_add(1, Ordering::Relaxed)
-            ));
-            match fs::create_dir(&path) {
-                Ok(()) => return Self { base, path },
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => panic!("{error}"),
-            }
-        }
-    }
-    fn file(&self) -> SettingsFile {
-        SettingsFile::new(self.path.clone()).unwrap()
-    }
-}
-impl Drop for Directory {
-    fn drop(&mut self) {
-        // Resolve and verify the owned test directory before recursive cleanup.
-        if let Ok(path) = fs::canonicalize(&self.path)
-            && path.parent() == Some(self.base.as_path())
-            && path == self.path
-        {
-            let _ = fs::remove_dir_all(path);
-        }
-    }
+fn storage(directory: &TempDir) -> SettingsFile {
+    SettingsFile::new(directory.path.clone()).unwrap()
 }
 fn edited(gamma: f32) -> Settings {
     Settings {
@@ -56,8 +22,8 @@ fn preference(id: layer_ui::PreferenceId, value: f32) -> UiAction {
 
 #[test]
 fn settings_round_trip_uses_shared_validation() {
-    let directory = Directory::new();
-    let mut file = directory.file();
+    let directory = TempDir::new();
+    let mut file = storage(&directory);
     assert!(file.load().unwrap().is_none());
     let first = edited(1.25);
     file.write(&encode(&first).unwrap()).unwrap();
@@ -77,10 +43,10 @@ fn settings_round_trip_uses_shared_validation() {
 
 #[test]
 fn oversized_saved_preferences_are_bounded_and_not_rewritten_on_load() {
-    let directory = Directory::new();
+    let directory = TempDir::new();
     let path = directory.path.join("settings.json");
     fs::write(&path, vec![b' '; MAX_BYTES + 1]).unwrap();
-    assert!(directory.file().load().unwrap_err().contains("size limit"));
+    assert!(storage(&directory).load().unwrap_err().contains("size limit"));
     assert_eq!(fs::metadata(path).unwrap().len(), (MAX_BYTES + 1) as u64);
 }
 
@@ -88,8 +54,8 @@ fn oversized_saved_preferences_are_bounded_and_not_rewritten_on_load() {
 #[test]
 fn failed_replace_preserves_last_good_file_and_retry_succeeds() {
     use std::os::windows::fs::OpenOptionsExt;
-    let directory = Directory::new();
-    let mut file = directory.file();
+    let directory = TempDir::new();
+    let mut file = storage(&directory);
     file.write(&encode(&edited(1.25)).unwrap()).unwrap();
     // Deny FILE_SHARE_DELETE, reproducing a real Windows replacement failure.
     let locked = OpenOptions::new()
@@ -162,8 +128,8 @@ fn blocked_storage_retains_only_latest_pending_value_and_flushes_on_finish() {
 
 #[test]
 fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
-    let directory = Directory::new();
-    let mut file = directory.file();
+    let directory = TempDir::new();
+    let mut file = storage(&directory);
     let (entered, wait) = mpsc::channel();
     let (release, gate) = mpsc::channel();
     let mut first = true;
@@ -222,19 +188,19 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
             request: layer_ui::DocumentRequest::Open
         }
     ));
-    assert_eq!(directory.file().load().unwrap().unwrap().pressure_gamma, 2.);
+    assert_eq!(storage(&directory).load().unwrap().unwrap().pressure_gamma, 2.);
     assert!(host.session.state().host_error.is_none());
 }
 
 #[test]
 fn windows_merge_unrelated_edits_and_share_current_preferences() {
-    let directory = Directory::new();
+    let directory = TempDir::new();
     let mut first = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     let mut second = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     let wakes = Arc::new(AtomicU64::new(0));
     let count = wakes.clone();
-    let mut a = SettingsService::at(&mut first, Ok(directory.file()), || {});
-    let mut b = SettingsService::at(&mut second, Ok(directory.file()), move || {
+    let mut a = SettingsService::at(&mut first, Ok(storage(&directory)), || {});
+    let mut b = SettingsService::at(&mut second, Ok(storage(&directory)), move || {
         count.fetch_add(1, Ordering::Relaxed);
     });
     for host in [&mut first, &mut second] {
@@ -264,21 +230,21 @@ fn windows_merge_unrelated_edits_and_share_current_preferences() {
     let expected = first.session.state().settings.clone();
     a.finish(&mut first).unwrap();
     b.finish(&mut second).unwrap();
-    assert_eq!(directory.file().load().unwrap(), Some(expected));
+    assert_eq!(storage(&directory).load().unwrap(), Some(expected));
     assert!(first.session.state().requests.is_empty());
     assert!(second.session.state().requests.is_empty());
 }
 
 #[test]
 fn new_window_inherits_pending_settings_and_stale_writes_cannot_replace_them() {
-    let directory = Directory::new();
-    let hub = shared::Hub::open(directory.file(), Settings::default()).unwrap();
+    let directory = TempDir::new();
+    let hub = shared::Hub::open(storage(&directory), Settings::default()).unwrap();
     let mut first = shared::Subscription::new(hub.clone(), || {});
     let old = first.edit(&edited(1.25)).unwrap();
     let latest = first.edit(&edited(1.75)).unwrap();
     // There is no disk checkpoint yet. A new owner still sees the live value.
     assert!(!directory.path.join("settings.json").exists());
-    let again = shared::Hub::open(directory.file(), Settings::default()).unwrap();
+    let again = shared::Hub::open(storage(&directory), Settings::default()).unwrap();
     assert!(Arc::ptr_eq(&hub, &again));
     let mut second = shared::Subscription::new(again, || {});
     assert_eq!(
@@ -288,17 +254,17 @@ fn new_window_inherits_pending_settings_and_stale_writes_cannot_replace_them() {
     hub.write(&latest).unwrap();
     hub.write(&old).unwrap();
     assert_eq!(
-        directory.file().load().unwrap().unwrap().pressure_gamma,
+        storage(&directory).load().unwrap().unwrap().pressure_gamma,
         1.75
     );
 }
 
 #[test]
 fn settings_profiles_are_isolated_and_closed_callbacks_are_disarmed() {
-    let first = Directory::new();
-    let other = Directory::new();
-    let a = shared::Hub::open(first.file(), Settings::default()).unwrap();
-    let b = shared::Hub::open(other.file(), Settings::default()).unwrap();
+    let first = TempDir::new();
+    let other = TempDir::new();
+    let a = shared::Hub::open(storage(&first), Settings::default()).unwrap();
+    let b = shared::Hub::open(storage(&other), Settings::default()).unwrap();
     assert!(!Arc::ptr_eq(&a, &b));
     let wakes = Arc::new(AtomicU64::new(0));
     let count = wakes.clone();
@@ -317,8 +283,8 @@ fn settings_profiles_are_isolated_and_closed_callbacks_are_disarmed() {
 
 #[test]
 fn disconnect_waits_for_an_inflight_settings_callback() {
-    let directory = Directory::new();
-    let hub = shared::Hub::open(directory.file(), Settings::default()).unwrap();
+    let directory = TempDir::new();
+    let hub = shared::Hub::open(storage(&directory), Settings::default()).unwrap();
     let (entered, started) = mpsc::channel();
     let (release, held) = mpsc::channel();
     let client = Arc::new(shared::Subscription::new(hub, move || {
@@ -348,10 +314,10 @@ fn disconnect_waits_for_an_inflight_settings_callback() {
 
 #[test]
 fn concurrent_shortcut_edits_do_not_resurrect_a_removed_override() {
-    let directory = Directory::new();
+    let directory = TempDir::new();
     let mut baseline = Settings::default();
     baseline.shortcuts.insert("command.Undo".into(), vec![]);
-    let hub = shared::Hub::open(directory.file(), baseline.clone()).unwrap();
+    let hub = shared::Hub::open(storage(&directory), baseline.clone()).unwrap();
     let mut first = shared::Subscription::new(hub.clone(), || {});
     let mut second = shared::Subscription::new(hub, || {});
     let mut removed = baseline.clone();
@@ -367,13 +333,12 @@ fn concurrent_shortcut_edits_do_not_resurrect_a_removed_override() {
 
 #[test]
 fn restoring_settings_does_not_echo_a_save_request() {
-    let directory = Directory::new();
-    directory
-        .file()
+    let directory = TempDir::new();
+    storage(&directory)
         .write(&encode(&edited(1.5)).unwrap())
         .unwrap();
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-    let mut service = SettingsService::at(&mut host, Ok(directory.file()), || {});
+    let mut service = SettingsService::at(&mut host, Ok(storage(&directory)), || {});
     assert_eq!(host.session.state().settings.pressure_gamma, 1.5);
     assert!(host.session.state().requests.is_empty());
     service.finish(&mut host).unwrap();
@@ -381,10 +346,10 @@ fn restoring_settings_does_not_echo_a_save_request() {
 
 #[test]
 fn slider_bookmarks_survive_the_shared_save_and_sync() {
-    let directory = Directory::new();
+    let directory = TempDir::new();
     let (wake, woke) = mpsc::channel();
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-    let mut service = SettingsService::at(&mut host, Ok(directory.file()), move || {
+    let mut service = SettingsService::at(&mut host, Ok(storage(&directory)), move || {
         let _ = wake.send(());
     });
     let context = host.session.state().toolbar_context();
@@ -403,7 +368,7 @@ fn slider_bookmarks_survive_the_shared_save_and_sync() {
     }
     service.poll(&mut host).unwrap();
     assert_eq!(host.session.state().settings.slider_bookmarks, saved);
-    assert_eq!(directory.file().load().unwrap().unwrap().slider_bookmarks, saved);
+    assert_eq!(storage(&directory).load().unwrap().unwrap().slider_bookmarks, saved);
     service.finish(&mut host).unwrap();
 }
 
@@ -479,8 +444,8 @@ fn pump_close(
 
 #[test]
 fn close_waits_for_the_latest_write_and_does_not_stop_the_worker() {
-    let directory = Directory::new();
-    let mut file = directory.file();
+    let directory = TempDir::new();
+    let mut file = storage(&directory);
     let (entered, started) = mpsc::channel();
     let (release, gate) = mpsc::channel();
     let (wake, completed) = mpsc::channel();
@@ -523,7 +488,7 @@ fn close_waits_for_the_latest_write_and_does_not_stop_the_worker() {
     release.send(()).unwrap();
     pump_close(&mut host, &mut service, &completed, false);
     assert_eq!(
-        directory.file().load().unwrap().unwrap().pressure_gamma,
+        storage(&directory).load().unwrap().unwrap().pressure_gamma,
         1.75
     );
     service.finish(&mut host).unwrap();
@@ -533,9 +498,8 @@ fn close_waits_for_the_latest_write_and_does_not_stop_the_worker() {
 #[test]
 fn failed_close_retains_edits_and_retries_without_changing_a_preference() {
     use std::os::windows::fs::OpenOptionsExt;
-    let directory = Directory::new();
-    directory
-        .file()
+    let directory = TempDir::new();
+    storage(&directory)
         .write(&encode(&edited(1.25)).unwrap())
         .unwrap();
     let locked = OpenOptions::new()
@@ -545,7 +509,7 @@ fn failed_close_retains_edits_and_retries_without_changing_a_preference() {
         .unwrap();
     let (wake, completed) = mpsc::channel();
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-    let mut service = SettingsService::at(&mut host, Ok(directory.file()), move || {
+    let mut service = SettingsService::at(&mut host, Ok(storage(&directory)), move || {
         let _ = wake.send(());
     });
     change_preferences(&mut host, 1.75);
@@ -557,7 +521,7 @@ fn failed_close_retains_edits_and_retries_without_changing_a_preference() {
     pump_close(&mut host, &mut service, &completed, true);
     assert!(service.close_status().attempt > attempt);
     assert_eq!(
-        directory.file().load().unwrap().unwrap().pressure_gamma,
+        storage(&directory).load().unwrap().unwrap().pressure_gamma,
         1.25
     );
     service.keep_open(&mut host);
@@ -569,7 +533,7 @@ fn failed_close_retains_edits_and_retries_without_changing_a_preference() {
     host.session.request_document_close().unwrap();
     pump_close(&mut host, &mut service, &completed, false);
     assert_eq!(
-        directory.file().load().unwrap().unwrap().pressure_gamma,
+        storage(&directory).load().unwrap().unwrap().pressure_gamma,
         1.75
     );
     assert!(host.session.state().host_error.is_none());
@@ -580,9 +544,9 @@ fn failed_close_retains_edits_and_retries_without_changing_a_preference() {
 #[test]
 fn discard_failed_preferences_leaves_the_saved_file_unchanged() {
     use std::os::windows::fs::OpenOptionsExt;
-    let directory = Directory::new();
+    let directory = TempDir::new();
     let expected = encode(&edited(1.25)).unwrap();
-    directory.file().write(&expected).unwrap();
+    storage(&directory).write(&expected).unwrap();
     let locked = OpenOptions::new()
         .read(true)
         .share_mode(3)
@@ -590,7 +554,7 @@ fn discard_failed_preferences_leaves_the_saved_file_unchanged() {
         .unwrap();
     let (wake, completed) = mpsc::channel();
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-    let mut service = SettingsService::at(&mut host, Ok(directory.file()), move || {
+    let mut service = SettingsService::at(&mut host, Ok(storage(&directory)), move || {
         let _ = wake.send(());
     });
     change_preferences(&mut host, 1.75);
@@ -611,9 +575,8 @@ fn discard_failed_preferences_leaves_the_saved_file_unchanged() {
 #[test]
 fn another_window_can_flush_shared_unsaved_preferences_when_closing() {
     use std::os::windows::fs::OpenOptionsExt;
-    let directory = Directory::new();
-    directory
-        .file()
+    let directory = TempDir::new();
+    storage(&directory)
         .write(&encode(&edited(1.25)).unwrap())
         .unwrap();
     let locked = OpenOptions::new()
@@ -623,7 +586,7 @@ fn another_window_can_flush_shared_unsaved_preferences_when_closing() {
         .unwrap();
     let (wake_a, completed_a) = mpsc::channel();
     let mut first = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-    let mut a = SettingsService::at(&mut first, Ok(directory.file()), move || {
+    let mut a = SettingsService::at(&mut first, Ok(storage(&directory)), move || {
         let _ = wake_a.send(());
     });
     change_preferences(&mut first, 1.75);
@@ -635,7 +598,7 @@ fn another_window_can_flush_shared_unsaved_preferences_when_closing() {
     assert!(first.session.state().host_error.is_some());
     let (wake_b, completed_b) = mpsc::channel();
     let mut second = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-    let mut b = SettingsService::at(&mut second, Ok(directory.file()), move || {
+    let mut b = SettingsService::at(&mut second, Ok(storage(&directory)), move || {
         let _ = wake_b.send(());
     });
     assert_eq!(second.session.state().settings.pressure_gamma, 1.75);
@@ -644,7 +607,7 @@ fn another_window_can_flush_shared_unsaved_preferences_when_closing() {
     second.session.request_document_close().unwrap();
     pump_close(&mut second, &mut b, &completed_b, false);
     assert_eq!(
-        directory.file().load().unwrap().unwrap().pressure_gamma,
+        storage(&directory).load().unwrap().unwrap().pressure_gamma,
         1.75
     );
     a.finish(&mut first).unwrap();
@@ -653,9 +616,9 @@ fn another_window_can_flush_shared_unsaved_preferences_when_closing() {
 
 #[test]
 fn clean_close_does_not_write_missing_preferences() {
-    let directory = Directory::new();
+    let directory = TempDir::new();
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-    let mut service = SettingsService::at(&mut host, Ok(directory.file()), || {});
+    let mut service = SettingsService::at(&mut host, Ok(storage(&directory)), || {});
     host.session.request_document_close().unwrap();
     service.poll(&mut host).unwrap();
     assert!(service.close_status().ready);
