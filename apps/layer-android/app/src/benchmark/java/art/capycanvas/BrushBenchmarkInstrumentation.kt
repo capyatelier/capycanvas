@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Instrumentation
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -75,7 +76,12 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)) as MainActivity
             stage("activity-started")
             val active = activity
-            runOnMainSync { active.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            runOnMainSync {
+                active.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                // Keep the fixed trajectory and fit zoom comparable regardless
+                // of how the tablet is held. This applies only to this activity.
+                active.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
             val host = active.host
             fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
             fun waitFor(condition: () -> Boolean) {
@@ -147,10 +153,19 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             action(obj("type" to "select_brush", "id" to preset))
             if (state().getJSONObject("brush").getString("tool") in setOf("clone", "heal", "spot_heal")) invoke("use_reference_below")
             action(obj("type" to "set_brush_size", "value" to size))
+            arguments.getString("paintLoad")?.let {
+                val load = it.toDouble()
+                check(load in 0.0..1.0)
+                action(obj("type" to "set_tool_setting", "id" to "bristle_load", "value" to load))
+            }
             for ((id, value) in listOf("feedback" to prediction, "platform_prediction" to false, "prediction_horizon" to 16))
                 action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
             SystemClock.sleep(1500)
             waitFor { host.snapshot?.optBoolean("brush_ready") == true }
+            waitFor {
+                val viewport = state().getJSONObject("camera").getJSONArray("viewport")
+                viewport.getInt(0) > viewport.getInt(1)
+            }
             val initial = state()
             check(abs(initial.getJSONObject("brush").getDouble("diameter") - size) < .01)
             val camera = initial.getJSONObject("camera")

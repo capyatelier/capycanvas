@@ -27,7 +27,7 @@ pub(super) fn shader_source(device: &PipelineDevice, in_place: bool, material: &
         &working_color::shader(device), include_str!("blend_modes.wgsl"), &shader_destination(in_place), include_str!("brush_types.wgsl"), include_str!("brush_textures.wgsl"), include_str!("retouch_sample.wgsl"), material,
         include_str!("brush_footprint.wgsl"),
         include_str!("brush_geometry.wgsl"), include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
-        include_str!("contact.wgsl"), include_str!("selection_clip.wgsl"),
+        include_str!("contact.wgsl"), include_str!("bristle.wgsl"), include_str!("selection_clip.wgsl"),
     ])
 }
 
@@ -98,6 +98,7 @@ pub(super) fn contact_flags(contact: Option<layer_core::BrushContact>) -> u32 {
         | (u32::from(c.depletion > 0.) << 5)
         | (u32::from(c.tip_bias > 0. || c.tilt_shading > 0.) << 6)
         | (u32::from(c.linear_edge) << 8)
+        | (u32::from(c.bristles.is_some()) << 9)
 }
 
 impl Pipelines {

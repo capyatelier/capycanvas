@@ -22,7 +22,7 @@ PRESETS = {
     23: "palette-knife", 24: "natural-blender",
     25: "pointy-pencil", 26: "shading-pencil", 27: "charcoal", 28: "rough-gpen",
     29: "calligraphy-pen", 30: "antique-pen", 31: "realistic-pen", 32: "wet-ink",
-    33: "blotty-ink", 34: "brushed-ink", 36: "liquify-twirl-cw", 37: "liquify-pinch",
+    33: "blotty-ink", 34: "brushed-ink", 35: "bristle-paintbrush", 36: "liquify-twirl-cw", 37: "liquify-pinch",
     38: "liquify-expand", 39: "liquify-crystals", 40: "clone-stamp", 41: "healing-brush",
     42: "spot-healing-brush",
 }
@@ -40,6 +40,7 @@ def main():
     p.add_argument("--duration", type=int, default=10000)
     p.add_argument("--size", type=int, default=1000)
     p.add_argument("--mode", default="constant")
+    p.add_argument("--paint-load", type=float, help="Bristle paint supply, 0 to 1; omit for the preset default")
     p.add_argument("--speed", type=float, default=1)
     p.add_argument("--prediction", choices=["true", "false"], default="true")
     p.add_argument("--blending", choices=["linear", "perceptual"],
@@ -53,6 +54,8 @@ def main():
     p.add_argument("--profile", action="store_true", help="Also sample the isolated process with simpleperf")
     p.add_argument("--prefix", default="screen")
     args = p.parse_args()
+    if args.paint_load is not None and not 0 <= args.paint_load <= 1:
+        p.error("--paint-load must be between 0 and 1")
     args.output.mkdir(parents=True, exist_ok=True)
     adb = [args.adb, "-s", args.serial]
     remote = f"/sdcard/Android/data/{args.package}/files/brush-benchmark"
@@ -79,6 +82,8 @@ def main():
             cmd += ["-e", key, str(value)]
         if args.blending:
             cmd += ["-e", "blending", args.blending]
+        if args.paint_load is not None:
+            cmd += ["-e", "paintLoad", str(args.paint_load)]
         cmd += [f"{args.package}/art.capycanvas.BrushBenchmarkInstrumentation"]
         trace = None
         profile = None
@@ -142,7 +147,8 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
         if f"BRUSH_COMPLETE {label}" not in log or process.returncode != 0:
             # A native crash may leave no screenshot or completed stroke report.
             # Preserve its evidence and continue the remaining preset matrix.
-            for suffix in ["-info.json"] + [f"-{i}.json" for i in range(args.repeats)]:
+            for suffix in ["-info.json"] + [suffix for i in range(args.repeats)
+                    for suffix in (f"-{i}.json", f"-{i}-diagnostic.json")]:
                 subprocess.run(adb + ["pull", f"{remote}/{label}{suffix}",
                     str(args.output / f"{label}{suffix}")], capture_output=True)
             with (args.output / f"{label}-crash-logcat.txt").open("w") as out:

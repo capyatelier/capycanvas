@@ -112,6 +112,7 @@ struct ActiveStroke {
     replay_after_contact: bool,
     /// The Clone source as this stroke found it, before anchoring it.
     clone_start: Option<CloneSource>,
+    barrel_twist: bool,
 }
 
 pub struct CanvasEngine<B: CanvasRenderer> {
@@ -432,6 +433,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             // Hovering pens report zero pressure; show the nominal footprint.
             point.pressure = 1.0;
             hover.set_space(self.document().color.space);
+            hover.set_barrel_twist(event.flags.contains(SampleFlags::BARREL_TWIST));
             hover.cursor_seed(self.document().next_stroke_id(), self.brush());
             hover.cursor_contacts(point, self.brush())
         };
@@ -1707,6 +1709,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     ruler,
                     replay_after_contact: false,
                     clone_start: None,
+                    barrel_twist: event.flags.contains(SampleFlags::BARREL_TWIST),
                 };
                 self.active_stroke = Some(active);
                 self.recording.begin(
@@ -1729,8 +1732,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.builder.begin(event, transform, self.pressure);
                 self.record_builder_sample(event);
                 self.track_estimate(event, transform);
-                self.dab_generator
-                    .reset_for_stroke(id, &self.active_stroke.as_ref().expect("set above").brush);
+                let active = self.active_stroke.as_ref().expect("set above");
+                self.dab_generator.reset_for_stroke(id, &active.brush);
+                self.dab_generator.set_barrel_twist(active.barrel_twist);
                 let point = *self
                     .builder
                     .real_points()
@@ -1821,6 +1825,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .map_err(EngineError::Document)?;
                 stroke.alpha_locked = alpha_locked;
                 stroke.blend_space = active.style.blend_space;
+                stroke.barrel_twist = active.barrel_twist;
                 stroke.material_updates = active.material_updates.into();
                 stroke.selection = active.style.selection.clone();
                 stroke.retouch = active.style.retouch.clone();
@@ -2222,6 +2227,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if let Some(active) = self.active_stroke.as_ref() {
             let mut generator = DabGenerator::new(self.document().color.space);
             generator.reset_for_stroke(active.id, &active.brush);
+            generator.set_barrel_twist(active.barrel_twist);
             let point_count = if active.feedback.enabled {
                 self.finalized_real_points
             } else {
@@ -4743,6 +4749,25 @@ mod tests {
                 35.
             );
         }
+    }
+
+    #[test]
+    fn a_hovering_bristle_fan_turns_with_a_measured_barrel() {
+        let (_producer, mut engine) = engine("hover-twist", 256, 256);
+        engine.set_brush(default_brush(DefaultBrushPreset::BristlePaintbrush)).unwrap();
+        let facing = |twist: f32, flags: SampleFlags| {
+            let mut hover = DabGenerator::default();
+            let mut sample = event(1, PenPhase::Hover, 128.);
+            sample.tilt_radians = [0.3, 0.];
+            sample.twist_radians = twist;
+            sample.flags = flags;
+            let outline = engine.cursor_contacts(sample, &mut hover, 0);
+            outline[0].rotation[1].atan2(outline[0].rotation[0])
+        };
+        let measured = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::BARREL_TWIST.0);
+        let turned = facing(1.1, measured) - facing(0.6, measured);
+        assert!((turned - 0.5).abs() < 0.1, "the outline follows the barrel: {turned}");
+        assert_eq!(facing(1.1, SampleFlags::PRIMARY), facing(0.6, SampleFlags::PRIMARY), "pens without a sensor face their lean");
     }
 
     #[test]

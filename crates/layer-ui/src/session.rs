@@ -4925,11 +4925,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn apply_brush(&mut self) -> Result<(), String> {
         self.cursor.hover.reset();
         let state = &self.state.brush;
-        let (color, tool) = stroke_paint(state.tool, &self.state.colors, self.engine.document().color.space)?;
         let mut brush = self.engine.configured_brush().clone();
         brush.diameter = state.diameter;
         brush.opacity = state.opacity;
-        brush.color_rgba_linear = color;
+        let tool = stroke_paint(state.tool, &self.state.colors, self.engine.document().color.space, &mut brush)?;
         self.engine.set_brush(brush).map_err(error)?;
         self.engine.set_paint_color(self.state.colors.definition());
         self.engine.set_tool(tool);
@@ -5477,12 +5476,14 @@ fn valid_viewport(viewport: [f32; 2]) -> Result<(), String> {
 }
 /// The brush color and stroke kind `tool` paints with. A retouching tool
 /// copies pixels, so it has no color of its own and never erases.
-fn stroke_paint(tool: Tool, colors: &ColorState, space: layer_core::color::RgbSpace) -> Result<([f32; 4], StrokeTool), String> {
+fn stroke_paint(tool: Tool, colors: &ColorState, space: layer_core::color::RgbSpace, brush: &mut layer_core::BrushSnapshot) -> Result<StrokeTool, String> {
     if tools::is_retouching(tool) {
-        return Ok(([0., 0., 0., 1.], StrokeTool::Brush));
+        brush.color_rgba_linear = [0., 0., 0., 1.];
+        return Ok(StrokeTool::Brush);
     }
     let erases = tool == Tool::Eraser || colors.transparent();
-    Ok((colors.definition().linear_in(space)?, if erases { StrokeTool::Eraser } else { StrokeTool::Brush }))
+    colors.load_paint(brush, space)?;
+    Ok(if erases { StrokeTool::Eraser } else { StrokeTool::Brush })
 }
 
 fn pen_phase(phase: ContactPhase) -> PenPhase {
@@ -14571,6 +14572,21 @@ mod tests {
             }
             assert_eq!(segment.marker, 0.0);
         }
+    }
+
+    #[test]
+    fn hovering_a_bristle_brush_outlines_its_fan() {
+        let mut s = session(Platform::Gtk);
+        let mut brush = default_brush(DefaultBrushPreset::BristlePaintbrush);
+        brush.diameter = 200.0;
+        s.engine.set_brush(brush).unwrap();
+        s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.0)));
+        let cursor = s.canvas_cursor().unwrap();
+        let reach = cursor.segments.iter()
+            .filter(|segment| segment.marker == 0.0)
+            .map(|segment| (segment.from[0] - cursor.center[0]).hypot(segment.from[1] - cursor.center[1]))
+            .fold(0.0_f32, f32::max);
+        assert!(reach > 20.0, "the hover outline spans the fan: {reach}");
     }
 
     #[test]

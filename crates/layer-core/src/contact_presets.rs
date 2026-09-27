@@ -2,7 +2,7 @@
 use crate::*;
 use std::sync::Arc;
 
-pub const CONTACT_BRUSH_PRESETS: [DefaultBrushPreset; 22] = [
+pub const CONTACT_BRUSH_PRESETS: [DefaultBrushPreset; 23] = [
     DefaultBrushPreset::Pencil,
     DefaultBrushPreset::PointyPencil,
     DefaultBrushPreset::ShadingPencil,
@@ -17,6 +17,7 @@ pub const CONTACT_BRUSH_PRESETS: [DefaultBrushPreset; 22] = [
     DefaultBrushPreset::BrushedInk,
     DefaultBrushPreset::Eraser,
     DefaultBrushPreset::Paintbrush,
+    DefaultBrushPreset::BristlePaintbrush,
     DefaultBrushPreset::Airbrush,
     DefaultBrushPreset::Chalk,
     DefaultBrushPreset::Marker,
@@ -26,6 +27,39 @@ pub const CONTACT_BRUSH_PRESETS: [DefaultBrushPreset; 22] = [
     DefaultBrushPreset::PastelBlock,
     DefaultBrushPreset::TransparentGlaze,
 ];
+
+pub(crate) fn bristle_paintbrush() -> BrushSnapshot {
+    BrushSnapshot {
+        diameter: 460.,
+        opacity: 1.,
+        flow: 1.,
+        color_rgba_linear: [0.12, 0.025, 0.012, 1.],
+        seed: 0x4252_4953,
+        grain: Some(BrushGrain {
+            asset: AssetId::from(CONTACT_PAPER_TEXTURE_ASSET),
+            behavior: BrushGrainBehavior::Canvas,
+            scale: 1.25,
+            depth: 0.6,
+            rotation_radians: 0.,
+            offset_jitter: 0.,
+        }),
+        contact: Some(BrushContact {
+            bristles: Some(BrushBristles::default()),
+            paper: 1.,
+            ..Default::default()
+        }),
+        shape: BrushShape {
+            follow_twist: 1.,
+            ..Default::default()
+        },
+        rendering: BrushRendering {
+            accumulation: BrushAccumulation::Uniform,
+            ..Default::default()
+        },
+        mappings: Arc::from([]),
+        ..Default::default()
+    }
+}
 
 pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
     use DefaultBrushPreset::*;

@@ -335,6 +335,22 @@ impl ColorState {
             _ => self.foreground,
         }
     }
+    /// The remembered color that is not painting.
+    pub fn other_definition(&self) -> RgbColor {
+        match self.paint_slot {
+            ColorSlot::Background => self.foreground,
+            _ => self.background,
+        }
+    }
+    /// Loads the painting color into a brush, and the other color into a
+    /// bristle brush's streaks.
+    pub fn load_paint(&self, brush: &mut layer_core::BrushSnapshot, space: RgbSpace) -> Result<(), String> {
+        brush.color_rgba_linear = self.definition().linear_in(space)?;
+        if let Some(bristles) = brush.contact.as_mut().and_then(|contact| contact.bristles.as_mut()) {
+            bristles.streak_rgba_linear = self.other_definition().linear_in(space)?;
+        }
+        Ok(())
+    }
     pub fn rgb_space(&self) -> RgbSpace {
         self.rgb_space
     }

@@ -44,6 +44,8 @@ pub struct PointerBatch<'a> {
     pub records: &'a [f64],
     pub predicted: bool,
     pub view_revision: u64,
+    /// Twist is a measured barrel rotation rather than an absent axis.
+    pub barrel_twist: bool,
 }
 
 pub struct NativeHost {
@@ -391,6 +393,7 @@ impl NativeHost {
             records,
             predicted,
             view_revision: self.session.state().camera.revision,
+            barrel_twist: false,
         })
     }
 
@@ -422,6 +425,7 @@ impl NativeHost {
             records,
             predicted,
             view_revision,
+            barrel_twist,
         } = batch;
         if records.is_empty()
             || !records.len().is_multiple_of(9)
@@ -499,6 +503,11 @@ impl NativeHost {
                         }
                         | if predicted {
                             SampleFlags::PREDICTED.0
+                        } else {
+                            0
+                        }
+                        | if barrel_twist {
+                            SampleFlags::BARREL_TWIST.0
                         } else {
                             0
                         },
@@ -1773,7 +1782,7 @@ mod tests {
                     (clock.get() + u64::from(i) * 1_000_000) as f64, phase]
             })
             .collect();
-        host.pointer_batch(PointerBatch { id: 77, tool: 1, button: 0, records: &records, predicted: false, view_revision })
+        host.pointer_batch(PointerBatch { id: 77, tool: 1, button: 0, records: &records, predicted: false, view_revision, barrel_twist: false })
             .unwrap();
         for _ in 0..8 {
             frame(&mut host, true);
@@ -1896,6 +1905,7 @@ mod tests {
                     button: 0,
                     predicted: false,
                     view_revision: revision,
+                    barrel_twist: false,
                     records: &[x, 24., 0.25, 0., 0., 0., 0., time, phase],
                 },
                 &[token, pending],
@@ -1928,6 +1938,7 @@ mod tests {
                 button: 0,
                 predicted: false,
                 view_revision: revision,
+                barrel_twist: false,
                 records: &[24., 24., 0.9, 0.2, -0.3, 1.7, 0., 10_000_000., 1.],
             },
             &[9001, 0],

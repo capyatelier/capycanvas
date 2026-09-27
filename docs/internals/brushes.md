@@ -9,7 +9,9 @@ CPU engine and pixel work in the GPU renderer. Every platform uses both parts.
 The pencil, charcoal and ink presets now share a swept GPU contact model with
 stationary paper, pressure thresholds, directional shading and coherent ink
 coverage. See [Contact brush engine](contact-brush-engine.md) for
-the implementation, preset catalog, review samples and measured costs.
+the implementation, preset catalog, review samples and measured costs. The
+[Bristle Paintbrush](../development/bristle-paintbrush.md) sweeps a fan of hairs
+through the same contact path.
 
 ## Brush definitions and strokes
 

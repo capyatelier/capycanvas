@@ -139,6 +139,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         active.committed_smudge_dabs = 0;
         self.dab_generator
             .reset_for_stroke(active.id, &active.brush);
+        self.dab_generator.set_barrel_twist(active.barrel_twist);
         self.pending_smudge_dabs.clear();
         // A correction may invalidate persistent pigment or smudge work. Replay
         // faithfully; do not try to cover the old result with a second stroke.

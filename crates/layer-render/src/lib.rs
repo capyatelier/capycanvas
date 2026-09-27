@@ -75,14 +75,20 @@ pub struct Dab {
     pub color_rgba_linear: [f32; 4],
     pub flow: f32,
     pub hardness: f32,
-    /// Pre-resolved horizontal and vertical tip flips, each `-1` or `1`.
+    /// Pre-resolved horizontal and vertical tip flips, each `-1` or `1`. A
+    /// bristle fan carries its recent travel direction at the start and end
+    /// poses instead, as angles from the fan's normal.
     pub texture_sign: [f32; 2],
-    /// Resolved grain depth, pull, deposit, and deformation strength.
+    /// Resolved grain depth, pull, deposit, and deformation strength. A bristle
+    /// fan sets grain depth to 2 for the lift that ends its stroke, and pull and
+    /// deformation strength to 1 where the hairs streak and 0 for a pressed
+    /// imprint, at the start and end poses.
     pub material: [f32; 4],
     /// Previous contact's radii and rotation for the continuous GPU footprint.
     /// Zero radii select the legacy isolated-dab behavior.
     pub previous: [f32; 4],
     /// Pressure, tilt amount, distance in nominal diameters, and stroke seed.
+    /// A bristle fan carries the height of its rolled edge in place of tilt.
     pub contact: [f32; 4],
     /// The preceding contact's sensor values, for interpolation on the GPU.
     pub previous_contact: [f32; 4],

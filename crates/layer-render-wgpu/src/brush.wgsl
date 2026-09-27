@@ -1,7 +1,7 @@
 struct Style {
     color: vec4<f32>,
     canvas_opacity: vec4<f32>,
-    unused_brush_material: array<vec4<f32>, 13>,
+    unused_brush_material: array<vec4<f32>, 14>,
     brush_to_layer_linear: vec4<f32>,
     brush_to_layer_offset: vec4<f32>,
     layer_to_brush_linear: vec4<f32>,

@@ -252,6 +252,7 @@ const PRESETS: &[(DefaultBrushPreset, &str, ToolGroup)] = &[
         "Paintbrush",
         ToolGroup::Paint,
     ),
+    (DefaultBrushPreset::BristlePaintbrush, "Bristle Paintbrush", ToolGroup::Paint),
     (
         DefaultBrushPreset::TexturedFlat,
         "Textured Flat",
@@ -769,7 +770,7 @@ mod tests {
 
     #[test]
     fn every_brush_has_one_tool_and_group_and_every_group_is_populated() {
-        assert_eq!(PRESETS.len(), 41);
+        assert_eq!(PRESETS.len(), 42);
         let mut ids = std::collections::BTreeSet::new();
         for &(preset, _, group) in PRESETS {
             assert!(ids.insert(preset as u32));
