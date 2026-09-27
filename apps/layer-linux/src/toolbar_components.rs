@@ -415,6 +415,10 @@ impl Field {
             }
             (Field::Action(b), ToolOption::Action { state, .. }) => {
                 b.set_sensitive(state.enabled);
+                let tooltip = state.disabled_reason.as_deref().unwrap_or(&state.tooltip);
+                if b.tooltip_text().as_deref() != Some(tooltip) {
+                    b.set_tooltip_text(Some(tooltip));
+                }
                 if let Some(b) = b.downcast_ref::<gtk::ToggleButton>() {
                     b.set_active(state.selected);
                 }
