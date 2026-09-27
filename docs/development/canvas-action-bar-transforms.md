@@ -5,11 +5,7 @@
 Status: **done** (2026-09-27). Every step shipped: A1–A3, B1–B3, C1 (GTK), D1–D12, E1, E2, F1 (Web, including Chrome on the MovinkPad 11), F2 (Android), F3 (macOS and iPadOS), F4 (Windows), G1, G2 and finger-touch handles for every transform.
 
 - **Measured (G1):** drags of a 24 MP photo draw at display resolution. On GTK they hold 120 Hz alone and layered, in Free, Distort and Warp. On the MovinkPad 11, selection, photo and placement drags run at 119–217 Hz (see [rendering internals](../internals/rendering.md)).
-- **Follow-ups, on Android:**
-  - the first transform of an unscaled photo and a selection's first reduction (270–330 ms);
-  - the first warp drag after launch while the mesh pipelines compile;
-  - drags begun while the transform pipelines compile on a cold shader cache;
-  - the UI's recomposition when a drag ends.
+- **Follow-ups, on Android:** Rust still builds and serializes the full model before diffing each publication (about 9 ms on the MovinkPad 11; see [the Android guide](android.md)).
 - **Later:** adjustment layers above a transformed layer. The current behavior is documented in [the canvas action bar guide](../ui/canvas-action-bar.md).
 
 Two refinements made during implementation:

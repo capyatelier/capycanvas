@@ -156,8 +156,12 @@ for them.
 the work after one, including the layer's copy, the static layers around it, a
 still preview's exact display and settled pages, and the recomposition, is
 spread over frames by the GPU time that earlier work of the same kind took,
-measured with timestamps where the device has them. A drag that starts
-meanwhile waits behind at most a frame of that work. Neither drag frames nor
+measured with timestamps where the device has them. Each measured frame sets
+the next frames' units from its own cost per unit, to fit 10 ms of GPU time for
+work a drag waits for and 5 ms for work after a release. Timestamps arrive a
+few frames late, so a count never grows past twice what the measured frame was
+allowed, and late measurements do not compound. A drag that starts meanwhile
+waits behind at most a frame of that work. Neither drag frames nor
 the frame that ends a drag allocate pages: the pages a still preview settles
 into are reserved a few per still frame, from the layer's reduction until its
 first drag and then as settling needs them, and settling waits for them.

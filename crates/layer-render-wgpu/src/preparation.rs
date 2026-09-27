@@ -23,8 +23,16 @@ pub(super) enum Work {
 }
 const KINDS: usize = 6;
 
-/// GPU time a frame that prepares should take.
-const TARGET: Duration = Duration::from_millis(10);
+/// GPU time a frame may spend on each kind of preparation: more on what a
+/// drag waits for, less on what follows a release, which a drag does not.
+const TARGET: [Duration; KINDS] = [
+    Duration::from_millis(10),
+    Duration::from_millis(10),
+    Duration::from_millis(10),
+    Duration::from_millis(5),
+    Duration::from_millis(5),
+    Duration::from_millis(5),
+];
 /// Units of each kind a frame prepares before any has been measured: a page
 /// drawn exactly into the display or settled costs far more than a tile or a
 /// reduced page. Without GPU timestamps a frame always prepares the most.
@@ -35,10 +43,12 @@ const PENDING_FRAMES: usize = 8;
 
 /// Units of each kind of preparation a frame may do: tiles or pages.
 /// Measured from the start of a frame's first preparation to the end of its
-/// last, and counted against the kind that started, the count doubles after
-/// preparation that took under half of TARGET on the GPU, grows by one under
-/// TARGET, and halves after longer. It grows only after a frame that did
-/// all the units it was allowed. Unmeasured, it stays where it began.
+/// last, and counted against the kind that started, a frame's GPU time sets
+/// the count to the units that fit the kind's TARGET at the cost per unit it
+/// measured: at most twice the units that frame was allowed, and no more
+/// than them after a frame that did fewer. Frames still in flight when the
+/// count changes report the units they were allowed, so late measurements
+/// do not compound. Unmeasured, it stays where it began.
 pub(super) struct Preparation {
     units: [usize; KINDS],
     measured: bool,
@@ -47,7 +57,7 @@ pub(super) struct Preparation {
     started: Option<Work>,
     ended: bool,
     filled: bool,
-    pending: VecDeque<(u64, Work, bool)>,
+    pending: VecDeque<(u64, Work, usize, bool)>,
 }
 impl Preparation {
     /// Preparation measured by GPU timestamps when `measured` and the device
@@ -77,14 +87,18 @@ impl Preparation {
         let mut samples = [GpuFrameSample::default(); 4];
         let count = timer.take_into(&mut samples);
         for sample in &samples[..count] {
-            let Some(index) = self.pending.iter().position(|(frame, _, _)| *frame == sample.frame) else {
-                continue;
-            };
-            let (_, work, filled) = self.pending.remove(index).unwrap();
-            if sample.status == 1 {
-                let units = &mut self.units[work as usize];
-                *units = adjust(*units, Duration::from_nanos(sample.elapsed_ns), filled);
-            }
+            let elapsed = (sample.status == 1).then(|| Duration::from_nanos(sample.elapsed_ns));
+            self.measured(sample.frame, elapsed);
+        }
+    }
+    /// Take in `frame`'s GPU time, when it could be read.
+    fn measured(&mut self, frame: u64, elapsed: Option<Duration>) {
+        let Some(index) = self.pending.iter().position(|(pending, ..)| *pending == frame) else {
+            return;
+        };
+        let (_, work, units, filled) = self.pending.remove(index).unwrap();
+        if let Some(elapsed) = elapsed {
+            self.units[work as usize] = adjust(units, elapsed, TARGET[work as usize], filled);
         }
     }
     /// The units of `work` this frame may do.
@@ -127,7 +141,7 @@ impl Preparation {
         if self.pending.len() == PENDING_FRAMES {
             self.pending.pop_front();
         }
-        self.pending.push_back((self.frame, work, self.filled));
+        self.pending.push_back((self.frame, work, self.units[work as usize], self.filled));
     }
     /// Note that the measured frame was submitted.
     pub fn submitted(&mut self, queue: &wgpu::Queue) {
@@ -137,18 +151,15 @@ impl Preparation {
     }
 }
 
-/// The units after a frame allowed `units` took `elapsed` on the GPU, having
-/// done all of them when `filled`.
-fn adjust(units: usize, elapsed: Duration, filled: bool) -> usize {
-    if elapsed > TARGET {
-        (units / 2).max(1)
-    } else if !filled {
-        units
-    } else if elapsed <= TARGET / 2 {
-        (units * 2).min(MOST_UNITS)
-    } else {
-        (units + 1).min(MOST_UNITS)
+/// The units that fit `target` after a frame allowed `units` took `elapsed`
+/// on the GPU, having done all of them when `filled`.
+fn adjust(units: usize, elapsed: Duration, target: Duration, filled: bool) -> usize {
+    let most = if filled { units * 2 } else { units }.min(MOST_UNITS);
+    if elapsed.is_zero() {
+        return most;
     }
+    let fitting = units as f64 * target.as_secs_f64() / elapsed.as_secs_f64();
+    (fitting as usize).clamp(1, most)
 }
 
 #[cfg(test)]
@@ -157,13 +168,34 @@ mod tests {
 
     #[test]
     fn units_follow_the_measured_gpu_time() {
-        assert_eq!(adjust(4, TARGET / 4, true), 8);
-        assert_eq!(adjust(4, TARGET * 3 / 4, true), 5);
-        assert_eq!(adjust(4, TARGET * 2, true), 2);
-        assert_eq!(adjust(1, TARGET * 10, true), 1, "a frame always prepares something");
-        assert_eq!(adjust(MOST_UNITS, Duration::ZERO, true), MOST_UNITS);
-        assert_eq!(adjust(4, TARGET / 4, false), 4, "a frame held back by something else does not grow it");
-        assert_eq!(adjust(4, TARGET * 2, false), 2);
+        let target = Duration::from_millis(10);
+        assert_eq!(adjust(4, target / 4, target, true), 8, "a count at most doubles");
+        assert_eq!(adjust(4, target * 3 / 4, target, true), 5);
+        assert_eq!(adjust(4, target * 2, target, true), 2);
+        assert_eq!(adjust(9, target * 4, target, true), 2);
+        assert_eq!(adjust(1, target * 10, target, true), 1, "a frame always prepares something");
+        assert_eq!(adjust(MOST_UNITS, Duration::ZERO, target, true), MOST_UNITS);
+        assert_eq!(adjust(4, target / 4, target, false), 4, "a frame held back by something else does not grow it");
+        assert_eq!(adjust(4, target * 2, target, false), 2);
         assert_eq!(Preparation::new(false).units(Work::Settle), MOST_UNITS);
+    }
+
+    #[test]
+    fn measurements_of_frames_in_flight_do_not_compound() {
+        let work = Work::Display;
+        let target = TARGET[work as usize];
+        let mut preparation = Preparation::new(true);
+        preparation.pending.extend((1..=4).map(|frame| (frame, work, 1, true)));
+        for frame in 1..=4 {
+            preparation.measured(frame, Some(target / 10));
+        }
+        assert_eq!(preparation.units(work), 2, "four cheap frames of one page each allow two, not sixteen");
+        preparation.pending.extend((5..=8).map(|frame| (frame, work, 8, true)));
+        for frame in 5..=8 {
+            preparation.measured(frame, Some(target * 3));
+        }
+        assert_eq!(preparation.units(work), 2, "four costly frames of eight pages each allow two, not one");
+        preparation.measured(9, Some(target / 10));
+        assert_eq!(preparation.units(work), 2, "an unknown frame changes nothing");
     }
 }
