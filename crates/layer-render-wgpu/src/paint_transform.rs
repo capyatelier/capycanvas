@@ -43,17 +43,7 @@ impl PaintTransforms {
         }
     }
     pub fn storage_bytes(&self) -> u64 {
-        // Empty selection and ordered source-record buffers are shared by both targets.
-        self.0
-            .iter()
-            .map(ImageTransformState::storage_bytes)
-            .sum::<u64>()
-            - 3 * 48
-            - self.0[0].color.shared_source_bytes(&self.0[1].color)
-            - self.0[0].scalar.shared_source_bytes(&self.0[1].scalar)
-            - self.0[0]
-                .visibility
-                .shared_source_bytes(&self.0[1].visibility)
+        self.0.iter().map(ImageTransformState::storage_bytes).sum::<u64>() - 3 * 48
     }
     pub fn has_preview(&self) -> bool {
         self.0.iter().any(ImageTransformState::has_preview)
@@ -482,12 +472,8 @@ impl PreviewPages {
 }
 impl ImageTransformState {
     pub fn new(device: &PipelineDevice) -> Self {
-        Self::with_passes(
-            PixelTransform::staged(device, false),
-            PixelTransform::staged(device, true),
-            PixelTransform::staged_visibility(device),
-            mesh::Positions::new(device),
-        )
+        let [color, scalar, visibility] = PixelTransform::passes(device);
+        Self::with_passes(color, scalar, visibility, mesh::Positions::new(device))
     }
     pub fn fork(&self) -> Self {
         Self::with_passes(
@@ -894,7 +880,7 @@ impl ImageTransformState {
             if channel == 0 && r.device.working_format().block_copy_size(None) == Some(4) {
                 self.capture_originals(r, encoder, &windows)?;
             }
-            self.draw_windows(r, encoder, channel, transform, &windows)?;
+            self.draw_windows(r, encoder, channel, transform, &windows, self.has_selection)?;
         }
         // The next stroke establishes fresh stroke-scoped accumulation. Keep
         // persistent wetness and the layer-level watercolor edge style intact.
@@ -981,6 +967,7 @@ impl ImageTransformState {
         channel: usize,
         transform: &layer_core::ImageTransform,
         windows: &[Window],
+        selected: bool,
     ) -> Result<(), GpuRasterError> {
         let format = self.atlas_format(r, channel);
         let scalar = format != r.device.working_format() || channel != 0;
@@ -992,11 +979,12 @@ impl ImageTransformState {
         let records: Vec<_> = windows
             .iter()
             .flat_map(|window| {
-                window.jobs.iter().map(|(job, _)| pixel_transform::TiledTransformRecord {
+                window.jobs.iter().map(|(job, unmoved)| pixel_transform::TiledTransformRecord {
                     source_size: [PAGE_SIZE; 2],
                     target: window.origin,
                     sources: &job.sources,
                     texels: [0; 4],
+                    unmoved: *unmoved,
                 })
             })
             .collect();
@@ -1010,7 +998,7 @@ impl ImageTransformState {
         } else {
             &mut self.scalar
         };
-        let offsets = pass
+        let offset = pass
             .prepare_tiled(
                 &r.device,
                 &mut r.uploads,
@@ -1022,7 +1010,7 @@ impl ImageTransformState {
                 None,
             )
             .map_err(GpuRasterError::InvalidTransform)?;
-        let selection = self.has_selection.then_some(self.selection.as_ref()).flatten();
+        let selection = selected.then_some(self.selection.as_ref()).flatten();
         let mut first = 0;
         for window in windows {
             let origin = window.origin.map(|v| v * PAGE_SIZE);
@@ -1047,11 +1035,10 @@ impl ImageTransformState {
                 let draws: Vec<_> = batch
                     .zip(&sources)
                     .map(|(index, source)| {
-                        let (job, unmoved) = &window.jobs[index];
+                        let (job, _) = &window.jobs[index];
                         pixel_transform::BatchDraw {
                             source,
                             job: first + index,
-                            identity: *unmoved,
                             scissor: [
                                 job.region.min_x() - origin[0],
                                 job.region.min_y() - origin[1],
@@ -1061,7 +1048,7 @@ impl ImageTransformState {
                         }
                     })
                     .collect();
-                pass.encode_batch(encoder, &atlas.1, n == 0, offsets, &draws);
+                pass.encode_batch(encoder, &atlas.1, n == 0, meshed, offset, &draws);
             }
             first += window.jobs.len();
             for (c, target) in &window.pages {
@@ -1143,10 +1130,7 @@ impl ImageTransformState {
             .collect();
         let identity = layer_core::ImageTransform::default();
         let copies = self.plan_windows(r, 0, &identity, None, targets)?;
-        let has_selection = std::mem::replace(&mut self.has_selection, false);
-        let result = self.draw_windows(r, encoder, 0, &identity, &copies);
-        self.has_selection = has_selection;
-        result?;
+        self.draw_windows(r, encoder, 0, &identity, &copies, false)?;
         let snapshot = self.sources[0].as_mut().unwrap();
         for (coordinate, _) in copies.iter().flat_map(|window| &window.pages) {
             let capture = &self.captures[0][coordinate];
@@ -1417,7 +1401,7 @@ impl ImageTransformState {
                 let Some(block) = self.exacting.as_mut().unwrap().1.pop() else {
                     break;
                 };
-                self.draw_exact(r, encoder, &transform, block, level, display)?;
+                self.draw_exact(r, encoder, &transform, block, level, display, pixel_transform::Part::Whole)?;
                 drawn = drawn.union(block);
                 if started.elapsed() >= PREPARE_MOVING {
                     break;
@@ -1517,12 +1501,13 @@ impl ImageTransformState {
                 self.exacting = Some((next.clone(), blocks));
             }
         } else {
-            self.draw_exact(r, encoder, &next.drawn(), drawn, level, display)?;
+            self.draw_exact(r, encoder, &next.drawn(), drawn, level, display, pixel_transform::Part::Whole)?;
         }
         Ok(Some(shown))
     }
-    /// Draw `drawn`, whose corners lie on texel corners, by evaluating every
-    /// layer pixel of every texel from the captured originals.
+    /// Draw `part` of `drawn`, whose corners lie on texel corners, by
+    /// evaluating every layer pixel of every texel from the captured originals.
+    #[allow(clippy::too_many_arguments)]
     fn draw_exact(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -1531,6 +1516,7 @@ impl ImageTransformState {
         drawn: PixelRect,
         level: &wgpu::TextureView,
         display: pixel_transform::DisplayLevel,
+        part: pixel_transform::Part,
     ) -> Result<(), GpuRasterError> {
         let side = display.side;
         let snapshot = self.sources[0].as_ref().unwrap();
@@ -1565,9 +1551,10 @@ impl ImageTransformState {
                 target: [0; 2],
                 sources: &job.sources,
                 texels: texels(job.region),
+                unmoved: false,
             })
             .collect();
-        let offsets = self
+        let offset = self
             .color
             .prepare_tiled(
                 &r.device,
@@ -1577,7 +1564,7 @@ impl ImageTransformState {
                 0.,
                 transform,
                 &records,
-                Some(display),
+                Some((display, part)),
             )
             .map_err(GpuRasterError::InvalidTransform)?;
         let selection = self.has_selection.then_some(self.selection.as_ref()).flatten();
@@ -1594,11 +1581,10 @@ impl ImageTransformState {
                 .map(|(index, source)| pixel_transform::BatchDraw {
                     source,
                     job: index,
-                    identity: false,
                     scissor: texels(pieces[index].0.region),
                 })
                 .collect();
-            self.color.encode_display(&r.device, encoder, level, side, offsets, &draws);
+            self.color.encode_display(&r.device, encoder, level, side, offset, &draws);
         }
         Ok(())
     }
@@ -1748,12 +1734,7 @@ impl ImageTransformState {
         {
             self.reduced_exactly += 1;
         }
-        let drawn = parts.iter().try_for_each(|(part, view)| {
-            self.color.part = *part;
-            self.draw_exact(r, encoder, &identity, page, view, display)
-        });
-        self.color.part = pixel_transform::Part::Whole;
-        drawn
+        parts.iter().try_for_each(|(part, view)| self.draw_exact(r, encoder, &identity, page, view, display, *part))
     }
     /// Allocate, a few per still frame, the spare paint pages the preview
     /// settles into at `pages`, which settling waits for: those a layer

@@ -1,4 +1,4 @@
-//! Immutable originals and bounded affine source neighborhoods. Unchanged paint
+//! Immutable originals and bounded source neighborhoods. Unchanged paint
 //! surfaces are shared. Before overwriting one, copy it into a reusable snapshot
 //! tile; untouched paint and original-photo tiles require no capture allocation.
 use super::*;
@@ -22,11 +22,6 @@ pub(super) struct TileSnapshot {
         layer_core::color::RgbSpace,
     )>,
     pub bounds: PixelRect,
-}
-/// A page-local destination region and the source pages its samples read.
-pub(crate) struct RegionJob {
-    pub region: PixelRect,
-    pub sources: Vec<[u32; 2]>,
 }
 /// A destination rectangle and the source pages its samples read.
 pub(crate) struct Footprint {
@@ -249,36 +244,6 @@ fn split_point(start: u32, end: u32, align: u32) -> u32 {
         } else {
             aligned + align
         })
-}
-
-/// Shared finite, inverse-mapped neighborhoods for pixel edits and retained placement.
-pub(crate) fn region_jobs(
-    bounds: PixelRect,
-    transform: &layer_core::ImageTransform,
-    coordinates: impl Iterator<Item = [u32; 2]>,
-    regions: &[PixelRect],
-    contains: impl Fn([u32; 2]) -> bool,
-) -> Result<Vec<RegionJob>, GpuRasterError> {
-    let splitter = Splitter::new(bounds, transform, None, contains)?;
-    let mut found = Vec::new();
-    let mut owners = Vec::new();
-    for coordinate in coordinates {
-        let region = regions
-            .iter()
-            .copied()
-            .map(|b| b.intersect(page_rect(coordinate)))
-            .fold(PixelRect::EMPTY, PixelRect::union);
-        splitter.split(region, &mut found)?;
-        owners.resize(found.len(), coordinate);
-    }
-    Ok(found
-        .into_iter()
-        .zip(owners)
-        .map(|(job, coordinate)| RegionJob {
-            region: job.region.page_local(coordinate),
-            sources: job.sources,
-        })
-        .collect())
 }
 
 /// How a destination region reaches back into its source, for choosing the

@@ -1,7 +1,8 @@
 //! Render placed content from immutable source and local paint tiles. The
 //! compositor owns disposable output; accepting a pose never publishes raster.
 use super::*;
-use pixel_transform::{TiledTransformRecord, TransformTarget, TransformTile};
+use paint_transform::snapshot::Splitter;
+use pixel_transform::{BatchDraw, TiledTransformRecord, TransformTile};
 mod mips;
 pub(super) use mips::Mip;
 
@@ -37,44 +38,14 @@ impl Scene {
                 tile,
             ));
         }
-        let bounds = PixelRect::full(extent);
-        let transform = layer_core::ImageTransform::affine(affine);
-        let jobs = paint_transform::snapshot::region_jobs(
-            bounds,
-            &transform,
-            std::iter::once(tile),
-            &[page_rect(tile)],
-            |c| !page_rect(c).intersect(bounds).is_empty(),
-        )?;
         let background = if mask.inverted {
             1. - mask.default_coverage
         } else {
             mask.default_coverage
         };
-        let out = self.alloc(r, wgpu::Color::TRANSPARENT);
-        for job in jobs {
-            let mut sources = Vec::new();
-            let mut scratch = Vec::new();
-            for c in job.sources {
-                let page = self.mask_tile(r, mask, layer_core::Point::default(), c);
-                sources.push((c, self.pool[page].view.clone()));
-                scratch.push(page);
-            }
-            self.jobs.push(Job::Placement(Box::new(PlacementJob {
-                target: self.pool[out].view.clone(),
-                tile,
-                region: job.region,
-                extent,
-                transform: transform.clone(),
-                background,
-                sources,
-                source_size: [PAGE_SIZE; 2],
-            })));
-            for page in scratch {
-                self.free(page);
-            }
-        }
-        Ok(out)
+        self.placed_jobs(r, affine, extent, tile, background, |scene, c| {
+            Ok(scene.mask_tile(r, mask, layer_core::Point::default(), c))
+        })
     }
 
     pub(super) fn placed_tile(
@@ -86,9 +57,7 @@ impl Scene {
     ) -> Result<usize, GpuRasterError> {
         let layer = &packet.layers[index];
         let extent = layer.local_extent(r.document_extent);
-        let bounds = PixelRect::new(0, 0, extent[0], extent[1]);
         let affine = layer_core::target_transform(packet.layers, layer.id);
-        let transform = layer_core::ImageTransform::affine(affine);
         if self.placement_display
             && let Some(mip) = self.placement_mips.get(&layer.id).filter(|m| m.usable)
         {
@@ -111,33 +80,44 @@ impl Scene {
             })));
             return Ok(out);
         }
-        let jobs = paint_transform::snapshot::region_jobs(
-            bounds,
-            &transform,
-            std::iter::once(tile),
-            &[page_rect(tile)],
-            |c| !page_rect(c).intersect(bounds).is_empty(),
-        )?;
+        self.placed_jobs(r, affine, extent, tile, 0., |scene, c| scene.local_color_tile(r, packet, layer, c))
+    }
+
+    /// Place `tile` of a layer `extent` pixels large through `affine`, one job
+    /// per piece whose source pages `source` draws into scratch.
+    fn placed_jobs(
+        &mut self,
+        r: &WgpuRasterizer,
+        affine: layer_core::Affine,
+        extent: [u32; 2],
+        tile: [u32; 2],
+        background: f32,
+        mut source: impl FnMut(&mut Self, [u32; 2]) -> Result<usize, GpuRasterError>,
+    ) -> Result<usize, GpuRasterError> {
+        let bounds = PixelRect::full(extent);
+        let transform = layer_core::ImageTransform::affine(affine);
+        let mut pieces = Vec::new();
+        Splitter::new(bounds, &transform, None, |c| !page_rect(c).intersect(bounds).is_empty())?
+            .split(page_rect(tile), &mut pieces)?;
         let out = self.alloc(r, wgpu::Color::TRANSPARENT);
-        for job in jobs {
-            let mut sources = Vec::with_capacity(job.sources.len());
-            let mut scratch = Vec::new();
-            for c in job.sources {
-                let page = self.local_color_tile(r, packet, layer, c)?;
+        for piece in pieces {
+            let mut sources = Vec::with_capacity(piece.sources.len());
+            let mut scratch = Vec::with_capacity(piece.sources.len());
+            for c in piece.sources {
+                let page = source(self, c)?;
                 sources.push((c, self.pool[page].view.clone()));
                 scratch.push(page);
             }
             self.jobs.push(Job::Placement(Box::new(PlacementJob {
                 target: self.pool[out].view.clone(),
                 tile,
-                region: job.region,
+                region: piece.region.page_local(tile),
                 extent,
                 transform: transform.clone(),
-                background: 0.,
+                background,
                 sources,
                 source_size: [PAGE_SIZE; 2],
             })));
-            // Jobs execute in order. Reuse scratch only after its consuming draw.
             for page in scratch {
                 self.free(page);
             }
@@ -198,7 +178,7 @@ pub(super) fn encode(
 ) -> Result<(), GpuRasterError> {
     let coordinates: Vec<_> = job.sources.iter().map(|(c, _)| *c).collect();
     let bounds = [0, 0, job.extent[0] as i32, job.extent[1] as i32];
-    let offsets = pass
+    let offset = pass
         .prepare_tiled(
             &r.device,
             &mut r.uploads,
@@ -211,6 +191,7 @@ pub(super) fn encode(
                 sources: &coordinates,
                 source_size: job.source_size,
                 texels: [0; 4],
+                unmoved: false,
             }],
             None,
         )
@@ -227,23 +208,8 @@ pub(super) fn encode(
     let source = pass
         .source_views(&r.device, &views, bounds, None, None, &r.empty_view)
         .map_err(GpuRasterError::InvalidTransform)?;
-    pass.encode_prepared(
-        encoder,
-        &source,
-        offsets,
-        0,
-        false,
-        &TransformTarget {
-            view: &job.target,
-            extent: [PAGE_SIZE; 2],
-            origin: job.tile.map(|v| (v * PAGE_SIZE) as i32),
-            region: [
-                job.region.min_x(),
-                job.region.min_y(),
-                job.region.width(),
-                job.region.height(),
-            ],
-        },
-    );
+    let region = job.region;
+    let scissor = [region.min_x(), region.min_y(), region.width(), region.height()];
+    pass.encode_batch(encoder, &job.target, false, false, offset, &[BatchDraw { source: &source, job: 0, scissor }]);
     Ok(())
 }
