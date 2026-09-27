@@ -27,6 +27,15 @@ extension XCTestCase {
                 XCTFail("\(element) \(format) \(message)")
             }
         }
+        func drag(_ from: CGPoint, _ to: CGPoint) {
+            let start = window.coordinate(withNormalizedOffset: CGVector(dx: from.x, dy: from.y))
+            let end = window.coordinate(withNormalizedOffset: CGVector(dx: to.x, dy: to.y))
+            #if os(macOS)
+            start.click(forDuration: 0.05, thenDragTo: end)
+            #else
+            start.press(forDuration: 0.05, thenDragTo: end)
+            #endif
+        }
         func press(_ point: CGPoint) {
             let target = window.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: point.x - window.frame.minX, dy: point.y - window.frame.minY))
@@ -48,7 +57,7 @@ extension XCTestCase {
             revealEditorControl(item, in: menu); workspaceActivate(item)
         }
         func perform(_ id: String, _ label: String) {
-            if action(id).exists { workspaceActivate(action(id)); return }
+            if action(id).waitForExistence(timeout: 2) { workspaceActivate(action(id)); return }
             openMore(); activate(menu.buttons["menu-action-" + label]); expect(menu, "exists == NO")
         }
         func offered(_ id: String, _ label: String) -> Bool {
@@ -104,17 +113,24 @@ extension XCTestCase {
         press(CGPoint(x: bar.frame.minX + 3, y: bar.frame.midY))
         expect(action("deselect"), "exists == YES", "A tap on the bar padding keeps the selection")
         #if os(macOS)
-        XCTAssertFalse(action("fill_selection").exists, "A narrow work area moves items to More")
+        let shown = bar.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "canvas-bar-action-"))
+        let windowed = shown.count
         fullscreen(true)
-        expect(action("fill_selection"), "exists == YES", "A wider work area shows more of the bar")
-        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        expectation(for: NSPredicate { _, _ in shown.count > windowed }, evaluatedWith: bar)
+        waitForExpectations(timeout: 10)
         #endif
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
 
         let paper = bluePaperBounds(in: app)
         let sides = [CGPoint(x: paper.minX + paper.width * 0.05, y: paper.midY), CGPoint(x: paper.midX, y: paper.midY),
             CGPoint(x: paper.maxX - paper.width * 0.05, y: paper.midY)]
         let filled = [true, true, true], turned = [false, true, false]
         for apply in [false, true] {
+            var hull = CGRect.zero
+            if !apply {
+                for _ in 0..<2 { editorMenu(in: app, menu: "View", id: "zoom_out", label: "Zoom out") }
+                hull = bluePaperBounds(in: app)
+            }
             perform("scale_rotate", "Transform")
             expect(action("apply_transform"), "exists == YES", "Transform replaces the selection bar")
             XCTAssertFalse(action("deselect").exists)
@@ -125,6 +141,19 @@ extension XCTestCase {
                 XCTAssertFalse(offered("transform_perspective", "Perspective"))
                 choose("transform-interpolation", "Interpolation", index: 0, "Nearest", segmented: false)
                 attachEditor(in: app, name: "canvas-bar-transform")
+                choose("transform-mode", "Mode", index: 3, "Warp", segmented: true)
+                choose("transform-warp-grid", "Grid", index: 0, "3 × 3", segmented: false)
+                let node = CGPoint(x: hull.minX + hull.width / 3, y: hull.minY)
+                let probes = [CGPoint(x: node.x + hull.width * 0.08, y: hull.minY + hull.height * 0.06),
+                    CGPoint(x: hull.minX + hull.width * 0.9, y: hull.minY + hull.height * 0.06)]
+                expectBluePaper([true, true], at: probes, in: app)
+                drag(node, CGPoint(x: node.x, y: hull.minY + hull.height * 0.3))
+                expectBluePaper([false, true], at: probes, in: app)
+                attachEditor(in: app, name: "canvas-bar-warp")
+                perform("reset_transform", "Reset transform")
+                expectBluePaper([true, true], at: probes, in: app)
+                editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+                expectBluePaper(filled, at: sides, in: app)
             }
             perform("transform_rotate_right", "Rotate 90° right")
             expectBluePaper(turned, at: sides, in: app)
