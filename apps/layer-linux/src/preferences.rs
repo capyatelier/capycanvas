@@ -1,6 +1,8 @@
 //! Native controls for the Rust preferences view. All edits and shortcut
 //! recording go back to UiSession; no validation or keymap lives in GTK.
 use crate::workspace::Workspace;
+#[path = "shortcut_page.rs"]
+mod shortcut_page;
 use adw::prelude::*;
 use gtk::glib;
 use layer_ui::*;
@@ -87,24 +89,8 @@ pub struct Preferences {
     fields: RefCell<BTreeMap<PreferenceId, Field>>,
     display: RefCell<Option<adw::ActionRow>>,
     groups: RefCell<Vec<(SettingsPage, usize, adw::PreferencesGroup)>>,
-    shortcuts: adw::PreferencesGroup,
-    shortcut_rows: RefCell<Vec<(String, adw::ActionRow, gtk::Label)>>,
-    keymap: adw::PreferencesGroup,
-    keymap_combo: adw::ComboRow,
-    keymap_ids: RefCell<Vec<String>>,
-    keymap_differences: adw::ExpanderRow,
-    keymap_difference_rows: RefCell<Vec<adw::ActionRow>>,
-    keymap_signature: RefCell<String>,
-    keymap_import: RefCell<Option<adw::AlertDialog>>,
-    editor: adw::Dialog,
-    editor_body: gtk::Box,
-    editor_signature: RefCell<String>,
-    capture: adw::Dialog,
-    capture_label: gtk::Label,
-    capture_key: gtk::Label,
-    capture_error: gtk::Label,
-    confirm: gtk::Button,
-    shown: Cell<[bool; 3]>,
+    shortcut_page: shortcut_page::ShortcutPage,
+    shown: Cell<bool>,
     updating: Cell<bool>,
     context: gtk::PopoverMenu,
     context_reset: RefCell<Option<(PreferenceId, gtk::gio::SimpleAction)>>,
@@ -353,15 +339,6 @@ fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x:
         popup.popup();
     }
 }
-fn action_button(label: &str, w: &Rc<Workspace>, action: UiAction) -> gtk::Button {
-    let button = gtk::Button::with_label(label);
-    button.connect_clicked(glib::clone!(
-        #[weak]
-        w,
-        move |_| w.dispatch(action.clone())
-    ));
-    button
-}
 fn text_row(title: &str, subtitle: &str) -> adw::ActionRow {
     let row = adw::ActionRow::new();
     // GObject may apply builder text properties before use-markup. Set plain
@@ -398,6 +375,8 @@ impl Preferences {
         content_view.set_widget_name("preferences-content");
         let header = adw::HeaderBar::new();
         header.set_show_start_title_buttons(false);
+        let shortcut_page = shortcut_page::ShortcutPage::new();
+        header.pack_start(&shortcut_page.back);
         content_view.add_top_bar(&header);
         let search = gtk::SearchEntry::builder()
             .placeholder_text("Search preferences")
@@ -446,30 +425,6 @@ impl Preferences {
         dialog.add_breakpoint(breakpoint);
         let error = gtk::Label::builder().wrap(true).xalign(0.0).build();
         error.add_css_class("error");
-        let capture = adw::Dialog::builder()
-            .title("Set Shortcut")
-            .content_width(410)
-            .content_height(250)
-            .build();
-        capture.add_css_class("layer-preferences");
-        capture.set_widget_name("shortcut-capture");
-        let capture_label = gtk::Label::builder().wrap(true).build();
-        let capture_key = gtk::Label::new(None);
-        capture_key.add_css_class("title-2");
-        let capture_error = gtk::Label::builder().wrap(true).build();
-        capture_error.add_css_class("warning");
-        let editor = adw::Dialog::builder()
-            .title("Keyboard Shortcut")
-            .content_width(460)
-            .build();
-        editor.add_css_class("layer-preferences");
-        editor.set_widget_name("shortcut-editor");
-        let editor_body = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        let editor_view = adw::ToolbarView::new();
-        editor_view.add_top_bar(&adw::HeaderBar::new());
-        margins(&editor_body, 18);
-        editor_view.set_content(Some(&editor_body));
-        editor.set_child(Some(&editor_view));
         let shortcut_search = gtk::SearchEntry::builder()
             .placeholder_text("Search shortcuts")
             .build();
@@ -498,24 +453,8 @@ impl Preferences {
             fields: RefCell::new(BTreeMap::new()),
             display: RefCell::new(None),
             groups: RefCell::default(),
-            shortcuts: adw::PreferencesGroup::new(),
-            shortcut_rows: RefCell::default(),
-            keymap: adw::PreferencesGroup::new(),
-            keymap_combo: adw::ComboRow::builder().title("Keymap").build(),
-            keymap_ids: RefCell::default(),
-            keymap_differences: adw::ExpanderRow::new(),
-            keymap_difference_rows: RefCell::default(),
-            keymap_signature: RefCell::default(),
-            keymap_import: RefCell::default(),
-            editor,
-            editor_body,
-            editor_signature: RefCell::default(),
-            capture,
-            capture_label,
-            capture_key,
-            capture_error,
-            confirm: gtk::Button::with_label("Set Shortcut"),
-            shown: Cell::new([false; 3]),
+            shortcut_page,
+            shown: Cell::new(false),
             updating: Cell::new(false),
         }
     }
@@ -625,83 +564,6 @@ impl Preferences {
                 );
             }
         ));
-        self.editor.connect_closed(glib::clone!(
-            #[weak]
-            w,
-            move |_| {
-                send(&w, PreferenceAction::CloseShortcutEditor);
-            }
-        ));
-        let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        body.append(&adw::HeaderBar::new());
-        for label in [&self.capture_label, &self.capture_key, &self.capture_error] {
-            margins(label, 6);
-            body.append(label);
-        }
-        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        margins(&footer, 12);
-        footer.append(&action_button(
-            "Cancel",
-            w,
-            UiAction::Preferences {
-                action: PreferenceAction::CancelShortcut,
-            },
-        ));
-        self.confirm.add_css_class("suggested-action");
-        self.confirm.set_widget_name("confirm-shortcut");
-        self.confirm.set_hexpand(true);
-        self.confirm.connect_clicked(glib::clone!(
-            #[weak]
-            w,
-            move |_| {
-                let replace = w
-                    .gpu
-                    .borrow()
-                    .as_ref()
-                    .and_then(|g| g.session.preferences())
-                    .and_then(|v| v.capture)
-                    .is_some_and(|c| c.conflict.is_some());
-                send(&w, PreferenceAction::ConfirmShortcut { replace });
-            }
-        ));
-        footer.append(&self.confirm);
-        body.append(&footer);
-        self.capture.set_child(Some(&body));
-        self.capture.connect_closed(glib::clone!(
-            #[weak]
-            w,
-            move |_| {
-                if w.gpu
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|g| g.session.state().preferences.capture.is_some())
-                {
-                    send(&w, PreferenceAction::CancelShortcut);
-                }
-            }
-        ));
-        // Dialogs have their own shortcut scope. Record before its native
-        // bindings consume Escape, Space, arrows or accelerators.
-        let keys = gtk::EventControllerKey::new();
-        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-        keys.connect_key_pressed(glib::clone!(
-            #[weak]
-            w,
-            #[upgrade_or]
-            glib::Propagation::Proceed,
-            move |_, key, _, modifiers| {
-                w.interact(crate::input::key_input(key, true, modifiers, false, None));
-                glib::Propagation::Stop
-            }
-        ));
-        keys.connect_key_released(glib::clone!(
-            #[weak]
-            w,
-            move |_, key, _, modifiers| {
-                w.interact(crate::input::key_input(key, false, modifiers, false, None));
-            }
-        ));
-        self.capture.add_controller(keys);
     }
     fn build(&self, w: &Rc<Workspace>, view: &PreferencesView) {
         for page in &view.pages {
@@ -1006,54 +868,13 @@ impl Preferences {
                 content.add(&native);
                 self.groups.borrow_mut().push((page.id, index, native));
             }
-            if page.id == SettingsPage::Shortcuts {
-                self.keymap.set_title("Keymap");
-                self.keymap_combo.set_widget_name("keymap-preset");
-                self.keymap_combo.connect_selected_notify(glib::clone!(
-                    #[weak]
-                    w,
-                    move |combo| {
-                        if w.preferences.updating.get() {
-                            return;
-                        }
-                        let id = w.preferences.keymap_ids.borrow().get(combo.selected() as usize).cloned();
-                        if let Some(id) = id {
-                            send(&w, PreferenceAction::SelectKeymap { id });
-                        }
-                    }
-                ));
-                self.keymap.add(&self.keymap_combo);
-                self.keymap_differences.set_widget_name("keymap-differences");
-                self.keymap.add(&self.keymap_differences);
-                let files = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                for (label, action, name) in [
-                    ("Import…", PreferenceAction::ChooseKeymapFile, "keymap-import"),
-                    ("Export…", PreferenceAction::ExportKeymap, "keymap-export"),
-                ] {
-                    let button = action_button(label, w, UiAction::Preferences { action });
-                    button.set_widget_name(name);
-                    button.set_valign(gtk::Align::Center);
-                    files.append(&button);
+            let child: gtk::Widget = match page.id {
+                SettingsPage::Shortcuts => {
+                    self.shortcut_page.build(w, &content, &self.shortcut_search, &self.content_page).upcast()
                 }
-                self.keymap.set_header_suffix(Some(&files));
-                content.add(&self.keymap);
-                let search_group = adw::PreferencesGroup::new();
-                search_group.add(&self.shortcut_search);
-                content.add(&search_group);
-                self.shortcuts.set_title("Shortcuts");
-                self.shortcuts
-                    .set_description(Some("Select an action to edit its shortcuts."));
-                let reset = action_button(
-                    "Reset All",
-                    w,
-                    UiAction::Preferences {
-                        action: PreferenceAction::ResetAllShortcuts,
-                    },
-                );
-                reset.set_valign(gtk::Align::Center);
-                self.shortcuts.set_header_suffix(Some(&reset));
-                content.add(&self.shortcuts);
-            }
+                SettingsPage::Input => self.shortcut_page.build_triggers(w, &content).upcast(),
+                _ => content.clone().upcast(),
+            };
             if page.id == SettingsPage::Color {
                 let group = adw::PreferencesGroup::new();
                 let row = text_row("Drawing defaults and presets", "Choose dimensions, use a saved preset, or manage your drawing presets.");
@@ -1087,7 +908,7 @@ impl Preferences {
                 content.add(&group);
             }
             self.stack.add_titled_with_icon(
-                &content,
+                &child,
                 Some(page.id.key()),
                 &page.title,
                 &format!("layer-{}-symbolic", page.icon),
@@ -1119,13 +940,9 @@ impl Preferences {
         }
         self.updating.set(true);
         if let Some(row) = self.display.borrow().as_ref() { row.set_subtitle(&w.display_description()); }
-        let open = [
-            view.is_some(),
-            view.as_ref().is_some_and(|v| v.shortcut_editor.is_some()),
-            view.as_ref().is_some_and(|v| v.capture.is_some()),
-        ];
+        let open = view.is_some();
         let was_open = self.shown.replace(open);
-        if !open[0] {
+        if !open {
             self.reveal.set(None);
         }
         if let Some(view) = view {
@@ -1191,49 +1008,10 @@ impl Preferences {
             }
             self.error.set_text(view.error.as_deref().unwrap_or(""));
             self.error.set_visible(view.error.is_some());
-            self.refresh_keymap(w, &view.keymap);
-            if self
-                .shortcut_rows
-                .borrow()
-                .iter()
-                .map(|r| &r.0)
-                .ne(view.shortcuts.iter().map(|r| &r.id))
-            {
-                for (_, row, _) in self.shortcut_rows.borrow_mut().drain(..) {
-                    self.shortcuts.remove(&row);
-                }
-                for spec in &view.shortcuts {
-                    let row = text_row(&spec.label, &spec.group);
-                    row.set_activatable(true);
-                    let id = spec.id.clone();
-                    row.connect_activated(glib::clone!(
-                        #[weak]
-                        w,
-                        move |_| send(&w, PreferenceAction::EditShortcut { id: id.clone() })
-                    ));
-                    let binding = gtk::Label::new(None);
-                    binding.add_css_class("dim-label");
-                    row.add_suffix(&binding);
-                    row.set_widget_name(&format!("shortcut-{}", spec.id));
-                    self.shortcuts.add(&row);
-                    self.shortcut_rows
-                        .borrow_mut()
-                        .push((spec.id.clone(), row, binding));
-                }
-            }
-            for ((_, row, binding), spec) in self.shortcut_rows.borrow().iter().zip(&view.shortcuts)
-            {
-                row.set_visible(spec.visible);
-                binding.set_text(&spec.shortcut);
-                if spec.modified {
-                    binding.add_css_class("heading");
-                } else {
-                    binding.remove_css_class("heading");
-                }
-            }
+            self.shortcut_page.refresh(w, &self.dialog, &view);
             // A closing dialog remains rooted during its animation. Present
             // on the model's closed -> open transition, even while rooted.
-            if !was_open[0] {
+            if !was_open {
                 self.dialog.present(Some(&w.window));
                 self.split.set_show_content(true);
                 // A retained dialog can remember a focus widget that was
@@ -1249,196 +1027,20 @@ impl Preferences {
                 // supplies the page/target, independent of GTK's widget tree.
                 field.widget().child_focus(gtk::DirectionType::TabForward);
             }
-            if let Some(editor) = &view.shortcut_editor {
-                let signature = serde_json::to_string(&(editor, &view.error)).unwrap();
-                if *self.editor_signature.borrow() != signature {
-                    while let Some(child) = self.editor_body.first_child() {
-                        self.editor_body.remove(&child);
-                    }
-                    self.editor.set_title(&editor.label);
-                    let description = gtk::Label::new(Some(&format!("{} · {} · {}", editor.group, editor.scope, editor.source)));
-                    description.add_css_class("dim-label");
-                    self.editor_body.append(&description);
-                    for overlap in &editor.overlaps {
-                        let label = gtk::Label::builder().label(overlap).wrap(true).xalign(0.0).build();
-                        label.add_css_class("dim-label");
-                        self.editor_body.append(&label);
-                    }
-                    let list = gtk::ListBox::new();
-                    list.set_selection_mode(gtk::SelectionMode::None);
-                    list.add_css_class("boxed-list");
-                    for (index, binding) in editor.bindings.iter().enumerate() {
-                        let row = text_row(binding, "");
-                        let remove = action_button(
-                            "Remove",
-                            w,
-                            UiAction::Preferences {
-                                action: PreferenceAction::RemoveShortcut {
-                                    id: editor.id.clone(),
-                                    index,
-                                },
-                            },
-                        );
-                        remove.set_valign(gtk::Align::Center);
-                        row.add_suffix(&remove);
-                        list.append(&row);
-                    }
-                    self.editor_body.append(&list);
-                    let defaults = gtk::Label::builder()
-                        .label(format!(
-                            "Default: {}",
-                            if editor.defaults.is_empty() {
-                                "Disabled".into()
-                            } else {
-                                editor.defaults.join(" / ")
-                            }
-                        ))
-                        .wrap(true)
-                        .xalign(0.0)
-                        .build();
-                    defaults.add_css_class("dim-label");
-                    self.editor_body.append(&defaults);
-                    if let Some(error) = &view.error {
-                        let label = gtk::Label::builder().label(error).wrap(true).build();
-                        label.add_css_class("error");
-                        self.editor_body.append(&label);
-                    }
-                    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                    for (label, action, enabled) in [
-                        (
-                            "Reset",
-                            PreferenceAction::ResetShortcut {
-                                id: editor.id.clone(),
-                            },
-                            editor.modified,
-                        ),
-                        (
-                            "Add Shortcut",
-                            PreferenceAction::BeginShortcut {
-                                id: editor.id.clone(),
-                            },
-                            editor.can_add,
-                        ),
-                        ("Done", PreferenceAction::CloseShortcutEditor, true),
-                    ] {
-                        let button = action_button(label, w, UiAction::Preferences { action });
-                        button.set_sensitive(enabled);
-                        button.set_hexpand(true);
-                        if label == "Add Shortcut" {
-                            button.set_widget_name("add-shortcut");
-                        }
-                        buttons.append(&button);
-                    }
-                    self.editor_body.append(&buttons);
-                    *self.editor_signature.borrow_mut() = signature;
-                }
-                if !was_open[1] {
-                    self.editor.present(Some(&self.dialog));
-                }
-            }
-            if let Some(capture) = view.capture {
-                self.capture_label.set_text(&capture.label);
-                self.capture_key.set_text(&capture.shortcut);
-                self.capture_error.set_text(&capture.notice);
-                self.capture_error
-                    .set_visible(capture.error.is_some() || capture.conflict.is_some());
-                self.confirm
-                    .set_sensitive(capture.chord.is_some() && capture.error.is_none());
-                self.confirm.set_label(if capture.conflict.is_some() {
-                    "Replace Shortcut"
-                } else {
-                    "Set Shortcut"
-                });
-                if !was_open[2] {
-                    self.capture.present(Some(if self.editor.root().is_some() {
-                        &self.editor
-                    } else {
-                        &self.dialog
-                    }));
-                }
-            }
         }
-        for (index, dialog) in [&self.dialog, &self.editor, &self.capture]
-            .into_iter()
-            .enumerate()
-            .rev()
-        {
-            if was_open[index] && !open[index] {
-                dialog.close();
+        if !open {
+            self.shortcut_page.close_dialogs();
+            if was_open {
+                self.dialog.close();
             }
         }
         self.updating.set(false);
     }
     pub fn recording(&self) -> bool {
-        self.capture.root().is_some()
+        self.shortcut_page.recording()
     }
-    fn refresh_keymap(&self, w: &Rc<Workspace>, keymap: &layer_ui::keymaps::KeymapView) {
-        let ids: Vec<_> = keymap.presets.iter().map(|p| p.id.clone()).collect();
-        if *self.keymap_ids.borrow() != ids {
-            let titles: Vec<_> = keymap.presets.iter().map(|p| p.title.as_str()).collect();
-            self.keymap_combo.set_model(Some(&gtk::StringList::new(&titles)));
-            *self.keymap_ids.borrow_mut() = ids;
-        }
-        if let Some(index) = self.keymap_ids.borrow().iter().position(|id| *id == keymap.selected) {
-            self.keymap_combo.set_selected(index as u32);
-        }
-        self.keymap_combo.set_subtitle(&keymap.source);
-        let signature = serde_json::to_string(&(&keymap.selected, &keymap.differences)).unwrap();
-        if self.keymap_signature.replace(signature.clone()) != signature {
-            for row in self.keymap_difference_rows.borrow_mut().drain(..) {
-                self.keymap_differences.remove(&row);
-            }
-            self.keymap_differences.set_title(&format!("Differences from {}", keymap.title.trim_end_matches("-inspired")));
-            for difference in &keymap.differences {
-                let row = text_row(&difference.trigger, &difference.note);
-                self.keymap_differences.add_row(&row);
-                self.keymap_difference_rows.borrow_mut().push(row);
-            }
-        }
-        self.keymap_differences.set_visible(!keymap.differences.is_empty());
-        let shown = self.keymap_import.borrow().clone();
-        match (&keymap.import, shown) {
-            (Some(preview), None) => {
-                let mut lines = Vec::new();
-                for (title, items) in [
-                    ("Added", &preview.added),
-                    ("Changed", &preview.changed),
-                    ("Removed", &preview.removed),
-                    ("Not available", &preview.unavailable),
-                ] {
-                    if !items.is_empty() {
-                        lines.push(format!("{title}: {}", items.len()));
-                        lines.extend(items.iter().take(6).map(|item| format!("  {item}")));
-                    }
-                }
-                if lines.is_empty() {
-                    lines.push("No shortcuts change.".into());
-                }
-                let dialog = adw::AlertDialog::builder()
-                    .heading(format!("Import {}?", preview.title))
-                    .body(lines.join("\n"))
-                    .build();
-                dialog.add_responses(&[("cancel", "Cancel"), ("import", "Import")]);
-                dialog.set_close_response("cancel");
-                dialog.set_response_appearance("import", adw::ResponseAppearance::Suggested);
-                dialog.connect_response(None, glib::clone!(
-                    #[weak]
-                    w,
-                    move |_, response| send(&w, if response == "import" {
-                        PreferenceAction::ConfirmKeymapImport
-                    } else {
-                        PreferenceAction::CancelKeymapImport
-                    })
-                ));
-                dialog.present(Some(&self.dialog));
-                *self.keymap_import.borrow_mut() = Some(dialog);
-            }
-            (None, Some(dialog)) => {
-                self.keymap_import.borrow_mut().take();
-                dialog.close();
-            }
-            _ => {}
-        }
+    pub fn editing_shortcut(&self) -> bool {
+        self.shortcut_page.editing()
     }
 }
 
@@ -1458,7 +1060,7 @@ pub(crate) async fn export_keymap(w: &Rc<Workspace>, name: String, text: String)
 pub(crate) async fn import_keymap(w: &Rc<Workspace>) -> Result<(), String> {
     let filter = gtk::FileFilter::new();
     filter.set_name(Some("Keymaps"));
-    filter.add_suffix("json");
+    filter.add_suffix("capykeys");
     let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
     filters.append(&filter);
     let dialog = gtk::FileDialog::builder().title("Import Keymap").filters(&filters).build();

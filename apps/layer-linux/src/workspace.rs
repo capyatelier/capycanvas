@@ -1368,11 +1368,14 @@ impl Workspace {
             glib::Propagation::Proceed,
             move |_, key, _, modifiers| {
                 this.update_zen();
+                if this.preferences.recording() {
+                    this.interact(crate::input::key_input(key, true, modifiers, false, None));
+                    return glib::Propagation::Stop;
+                }
                 // Native sheets own their keys. The main Preferences dialog
                 // retains the shared type-to-search behavior; its focused text
                 // inputs and nested sheets still own ordinary typing.
                 if this.window.visible_dialog().is_some_and(|d| d != this.preferences.dialog)
-                    || this.preferences.recording()
                     || this.header.is_editing()
                 {
                     return glib::Propagation::Proceed;
@@ -1416,7 +1419,9 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |_, key, _, modifiers| {
-                if this.window.visible_dialog().is_some_and(|d| d != this.preferences.dialog) {
+                if this.window.visible_dialog().is_some_and(|d| d != this.preferences.dialog)
+                    && !this.preferences.editing_shortcut()
+                {
                     return;
                 }
                 // Release the shortcut that opened the editor, even though its
@@ -1426,6 +1431,7 @@ impl Workspace {
             }
         ));
         self.window.add_controller(keys);
+        self.window.add_controller(crate::input::pad_buttons(self));
     }
 
     pub fn action_button(self: &Rc<Self>, label: &str, action: UiAction) -> gtk::Button {

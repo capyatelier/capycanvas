@@ -91,6 +91,12 @@ impl KeyChord {
         })
     }
     fn device_label(key: &str) -> Option<String> {
+        if let Some(button) = key.strip_prefix("pad_button_") {
+            return Some(format!("Pad button {button}"));
+        }
+        if let Some(name) = key.strip_prefix("xf86").filter(|name| !name.is_empty()) {
+            return Some(name[..1].to_uppercase() + &name[1..]);
+        }
         if let Some(button) = key.strip_prefix("gamepad_") {
             return GAMEPAD_BUTTONS
                 .contains(&key)
@@ -113,6 +119,16 @@ impl KeyChord {
             _ => return None,
         }
         .into())
+    }
+    /// Any key or button, alone or combined; Escape stays free to cancel.
+    pub fn holdable(&self) -> bool {
+        match self.key.as_str() {
+            "shift" => !self.shift,
+            "alt" => !self.alt,
+            "control" => !self.command,
+            "meta" => true,
+            _ => self.validate().is_ok(),
+        }
     }
     pub fn validate_for(&self, held: bool) -> Result<(), String> {
         if held && matches!(self.key.as_str(), "shift" | "control" | "alt") && !self.command && !self.shift && !self.alt {
@@ -138,6 +154,9 @@ impl KeyChord {
                 | "arrowup"
                 | "arrowdown"
         ) || Self::device_label(&self.key).is_some()
+            || (self.key.len() > 1
+                && !self.key.starts_with("gamepad_")
+                && self.key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
             || self
             .key
             .strip_prefix('f')
@@ -185,6 +204,9 @@ impl KeyChord {
                     && matches!(self.key.as_str(), "w" | "t" | "n" | "r" | "l" | "q" | "p")))
     }
     pub fn label(&self, platform: Platform) -> String {
+        self.label_parts(platform).join("+")
+    }
+    pub fn label_parts(&self, platform: Platform) -> Vec<String> {
         let mut parts = Vec::new();
         if self.command {
             parts.push(if platform.apple() { "⌘" } else { "Ctrl" }.to_string());
@@ -212,7 +234,7 @@ impl KeyChord {
                 })
             }
         });
-        parts.join("+")
+        parts
     }
 }
 
@@ -224,13 +246,18 @@ pub enum ShortcutAction {
     },
     /// A momentary input mode: release its recorded key to leave it.
     Pan,
+    /// Use a tool or brush until release, then return to the previous one.
     Hold {
-        command: CommandId,
+        action: Box<UiAction>,
+    },
+    /// Turn a mode on until release, then restore what it replaced.
+    Momentary {
+        action: Box<UiAction>,
     },
 }
 impl ShortcutAction {
     pub fn held(&self) -> bool {
-        matches!(self, Self::Pan | Self::Hold { .. })
+        matches!(self, Self::Pan | Self::Hold { .. } | Self::Momentary { .. })
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,13 +321,62 @@ pub struct GestureTrigger {
     pub default: &'static str,
     pub held: bool,
 }
-pub const GESTURE_TRIGGERS: [GestureTrigger; 5] = [
+pub const GESTURE_TRIGGERS: [GestureTrigger; 6] = [
     GestureTrigger { id: "touch.tap.2", label: "Two-finger tap", default: "command.Undo", held: false },
     GestureTrigger { id: "touch.tap.3", label: "Three-finger tap", default: "command.Redo", held: false },
     GestureTrigger { id: "touch.tap.4", label: "Four-finger tap", default: "", held: false },
-    GestureTrigger { id: "pen.button.primary", label: "Pen side button", default: "", held: true },
-    GestureTrigger { id: "pen.button.secondary", label: "Pen second side button", default: "", held: true },
+    GestureTrigger { id: "pen.button.primary", label: "Lower side button", default: "", held: true },
+    GestureTrigger { id: "pen.button.secondary", label: "Upper side button", default: "", held: true },
+    GestureTrigger { id: "pen.button.tertiary", label: "Third side button", default: "", held: true },
 ];
+pub const MODIFIER_CAPTURE: &str = "modifier";
+pub(crate) const MODIFIER_PREFIX: &str = "modifier:";
+/// Holding the key uses an action until it's released, chosen per kind of tool.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldKey {
+    pub key: KeyChord,
+    #[serde(default)]
+    pub actions: std::collections::BTreeMap<ToolCategory, String>,
+}
+/// Commands that can be switched on only while a key or button is held.
+pub const MOMENTARY_COMMANDS: [CommandId; 7] = [
+    CommandId::SnapRulers,
+    CommandId::ShowRulers,
+    CommandId::FlipHorizontal,
+    CommandId::FlipVertical,
+    CommandId::ZenMode,
+    CommandId::SoftProof,
+    CommandId::PreviewSdr,
+];
+/// Tools the pen's eraser end can use in place of the current one.
+pub const ERASER_END_TOOLS: [CommandId; 6] =
+    [CommandId::Eraser, CommandId::Pen, CommandId::Pencil, CommandId::Brush, CommandId::Airbrush, CommandId::Blend];
+/// The held variant of a press action, if it has one.
+pub fn hold_id(target: &str) -> Option<String> {
+    match target {
+        "command.Eyedropper" => Some("hold.eyedropper".into()),
+        "command.Eraser" => Some("hold.eraser".into()),
+        "command.Move" => Some("hold.move".into()),
+        "command.Hand" => Some("canvas.pan".into()),
+        _ => holdable(target).then(|| format!("hold.{target}")),
+    }
+}
+/// The press action a held binding belongs to.
+pub fn hold_target(id: &str) -> Option<String> {
+    match id {
+        "hold.eyedropper" => Some("command.Eyedropper".into()),
+        "hold.eraser" => Some("command.Eraser".into()),
+        "hold.move" => Some("command.Move".into()),
+        "canvas.pan" => Some("command.Hand".into()),
+        _ => id.strip_prefix("hold.").filter(|target| holdable(target)).map(String::from),
+    }
+}
+fn holdable(target: &str) -> bool {
+    let command = |id: &str| CommandId::ALL.into_iter().find(|c| c.shortcut_id() == id);
+    target == "color.transparent"
+        || target.strip_prefix("brush.").is_some_and(|id| brush_catalog().any(|b| b.id.to_string() == id))
+        || command(target).is_some_and(|c| CommandId::TOOLS.contains(&c) || MOMENTARY_COMMANDS.contains(&c))
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShortcutDefinition {
     pub id: String,
@@ -310,12 +386,20 @@ pub struct ShortcutDefinition {
     pub repeat: bool,
     #[serde(default, skip_serializing_if = "BindingScope::is_application")]
     pub scope: BindingScope,
+    /// Held variants name the press action they belong to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ShortcutRow {
     pub id: String,
     pub label: String,
     pub group: String,
+    pub subgroup: String,
+    pub detail: String,
+    pub scope: String,
+    pub bindings: Vec<Vec<String>>,
+    pub gestures: Vec<String>,
     pub shortcut: String,
     /// Whether the current binding set differs from the defaults, not merely
     /// whether a saved override exists. The order of alternatives is immaterial.
@@ -328,8 +412,13 @@ pub struct ShortcutCapture {
     pub label: String,
     pub chord: Option<KeyChord>,
     pub shortcut: String,
+    #[serde(default)]
+    pub keys: Vec<String>,
     pub conflict: Option<String>,
     pub error: Option<String>,
+    /// A new modifier key that already exists opens it instead.
+    #[serde(default)]
+    pub existing: bool,
     /// Authored in the core; hosts display this without composing messages.
     #[serde(default)]
     pub notice: String,
@@ -444,6 +533,40 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
     vec![chord]
 }
 
+pub const SHORTCUT_SECTIONS: [&str; 13] = [
+    "Tools", "Painting", "Edit", "Select", "Transform", "Layer", "View", "Color", "File", "Window", "Help",
+    "Brush presets", "Brush sizes",
+];
+
+fn command_section(command: CommandId) -> &'static str {
+    use CommandId as C;
+    match command {
+        C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::PasteImage | C::ClearLayer | C::FillSelection => "Edit",
+        C::ApplyTransform | C::CancelTransform | C::TransformAspect | C::PlacementOriginalSize | C::ResetTransform
+        | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
+        | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
+        | C::TransformBilinear | C::TransformBicubic => "Transform",
+        command if CommandId::TOOLS.contains(&command) => "Tools",
+        C::TonalSelect | C::QuickMask | C::ReturnToArtwork | C::NewSelectionLayer | C::SaveSelectionLayer | C::Reselect
+        | C::SelectionOutline | C::MaskOverlay | C::MaskOverlayProtected | C::ResetMaskColors | C::SwapMaskColors
+        | C::FillSelectionMask | C::ClearSelectionMask | C::SelectionBrushPressure | C::SelectionNew | C::SelectionAdd
+        | C::SelectionSubtract | C::SelectionIntersect | C::SelectionAntialias | C::SelectionConstrainAngles
+        | C::SelectionFixedRatio | C::SelectionFixedSize | C::SelectionFromCenter | C::CompleteSelection
+        | C::CancelSelection | C::SelectionVisible | C::SelectionEditing | C::SelectionReference | C::SelectAll
+        | C::Deselect | C::InvertSelection | C::RemoveSelectionPoint | C::MaskSelection => "Select",
+        C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RepairSourceProfile => "Layer",
+        C::FitCanvas | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
+        | C::ZenMode | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
+        | C::ToggleTheme => "View",
+        C::SdrRendition | C::PreviewSdr | C::SoftProofSetup | C::SoftProof | C::GamutWarning | C::Histogram
+        | C::AssignProfile | C::ConvertColorSpace | C::ChangeBitDepth => "Color",
+        C::NewDocument | C::OpenDocument | C::SaveDocument | C::SaveDocumentAs | C::ExportDocument | C::CloseDocument
+        | C::ImportImage | C::DocumentProperties | C::NewWindow | C::Drawings => "File",
+        C::About | C::Website | C::SourceCode => "Help",
+        _ => "Window",
+    }
+}
+
 pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'static str)> {
     let mut rows: Vec<_> = CommandId::ALL
         .into_iter()
@@ -458,8 +581,9 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                     },
                     repeat: matches!(command, CommandId::Undo | CommandId::Redo),
                     scope: BindingScope::Application,
+                    target: None,
                 },
-                "Commands",
+                command_section(command),
             )
         })
         .collect();
@@ -473,35 +597,11 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                 },
                 repeat: false,
                 scope: BindingScope::Application,
+                target: None,
             },
             "Tools",
         )
     }));
-    rows.push((
-        ShortcutDefinition {
-            id: "canvas.pan".into(),
-            label: "Pan while held".into(),
-            action: ShortcutAction::Pan,
-            repeat: false,
-            scope: BindingScope::Canvas,
-        },
-        "Canvas",
-    ));
-    use ToolCategory as C;
-    for (id, label, command, scope) in [
-        ("hold.eyedropper", "Sample color while held", CommandId::Eyedropper,
-            BindingScope::Tools { categories: vec![C::Drawing, C::Blending, C::FillGradient] }),
-        ("hold.eraser", "Erase while held", CommandId::Eraser,
-            BindingScope::Tools { categories: vec![C::Drawing, C::Blending] }),
-        ("hold.move", "Move while held", CommandId::Move, BindingScope::Canvas),
-    ] {
-        if command.available_on(platform) {
-            rows.push((
-                ShortcutDefinition { id: id.into(), label: label.into(), action: ShortcutAction::Hold { command }, repeat: false, scope },
-                "Canvas",
-            ));
-        }
-    }
     for (setting, noun) in [("size", "brush size"), ("opacity", "brush opacity")] {
         for (direction, steps) in [("decrease", -1.), ("increase", 1.)] {
             rows.push((
@@ -513,15 +613,17 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                     },
                     repeat: true,
                     scope: BindingScope::Canvas,
+                    target: None,
                 },
-                "Tool settings",
+                "Painting",
             ));
         }
     }
     for (id, label, action, group) in [
-        ("color.swap", "Swap colors", UiAction::Color { action: ColorAction::Swap }, "Colors"),
-        ("layer.duplicate", "Duplicate layer", UiAction::Layer { action: LayerAction::DuplicateSelected }, "Layers"),
-        ("layer.group", "Group layers", UiAction::Layer { action: LayerAction::GroupSelected }, "Layers"),
+        ("color.swap", "Swap colors", UiAction::Color { action: ColorAction::Swap }, "Painting"),
+        ("color.transparent", "Paint with transparency", UiAction::Color { action: ColorAction::ToggleTransparent }, "Painting"),
+        ("layer.duplicate", "Duplicate layer", UiAction::Layer { action: LayerAction::DuplicateSelected }, "Layer"),
+        ("layer.group", "Group layers", UiAction::Layer { action: LayerAction::GroupSelected }, "Layer"),
     ] {
         rows.push((
             ShortcutDefinition {
@@ -530,6 +632,7 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                 action: ShortcutAction::Action { action: Box::new(action) },
                 repeat: false,
                 scope: BindingScope::Application,
+                target: None,
             },
             group,
         ));
@@ -544,8 +647,9 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                 },
                 repeat: false,
                 scope: BindingScope::Application,
+                target: None,
             },
-            "Brushes",
+            "Brush presets",
         )
     }));
     rows.extend(BRUSH_SIZES.iter().map(|&value| {
@@ -558,11 +662,53 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                 },
                 repeat: false,
                 scope: BindingScope::Application,
+                target: None,
             },
             "Brush sizes",
         )
     }));
+    let held: Vec<_> = rows.iter().filter_map(|(definition, section)| held(definition, section)).collect();
+    rows.extend(held);
     rows
+}
+fn held(target: &ShortcutDefinition, section: &'static str) -> Option<(ShortcutDefinition, &'static str)> {
+    use ToolCategory as C;
+    let id = hold_id(&target.id)?;
+    let ShortcutAction::Action { action } = &target.action else {
+        return None;
+    };
+    let (label, action, scope) = match id.as_str() {
+        "canvas.pan" => ("Pan while held".to_string(), ShortcutAction::Pan, BindingScope::Canvas),
+        "hold.eyedropper" => (
+            "Sample color while held".into(),
+            ShortcutAction::Hold { action: action.clone() },
+            BindingScope::Tools { categories: vec![C::Drawing, C::Blending, C::FillGradient] },
+        ),
+        "hold.eraser" => (
+            "Erase while held".into(),
+            ShortcutAction::Hold { action: action.clone() },
+            BindingScope::Tools { categories: vec![C::Drawing, C::Blending] },
+        ),
+        "hold.move" => ("Move while held".into(), ShortcutAction::Hold { action: action.clone() }, BindingScope::Canvas),
+        _ => {
+            let momentary = match **action {
+                UiAction::Color { action: ColorAction::ToggleTransparent } => {
+                    Some(UiAction::Color { action: ColorAction::Select { slot: crate::ColorSlot::Transparent } })
+                }
+                UiAction::Invoke { command } if MOMENTARY_COMMANDS.contains(&command) => Some(UiAction::Invoke { command }),
+                _ => None,
+            };
+            (
+                format!("{} while held", target.label),
+                match momentary {
+                    Some(action) => ShortcutAction::Momentary { action: Box::new(action) },
+                    None => ShortcutAction::Hold { action: action.clone() },
+                },
+                if target.id == "command.ZenMode" { BindingScope::Application } else { BindingScope::Canvas },
+            )
+        }
+    };
+    Some((ShortcutDefinition { id, label, action, repeat: false, scope, target: Some(target.id.clone()) }, section))
 }
 impl Settings {
     /// Resolve action identity, not translated labels or widget names.
@@ -633,10 +779,23 @@ impl Settings {
         }
         // An upgrade may add defaults on keys the artist already assigned.
         // Explicit saved bindings win; two explicit bindings still conflict.
+        let scope = self.scope_of(id);
         self.base_keys(id)
             .into_iter()
-            .filter(|key| !self.shortcuts.values().any(|keys| keys.contains(key)))
+            .filter(|key| {
+                !self.shortcuts.iter().any(|(other, keys)| keys.contains(key) && self.scope_of(other).overlaps(&scope))
+            })
             .collect()
+    }
+    pub(crate) fn scope_of(&self, id: &str) -> BindingScope {
+        static DEFAULTS: std::sync::LazyLock<std::collections::HashMap<String, BindingScope>> = std::sync::LazyLock::new(|| {
+            [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios]
+                .into_iter()
+                .flat_map(definitions)
+                .map(|(definition, _)| (definition.id, definition.scope))
+                .collect()
+        });
+        DEFAULTS.get(id).cloned().unwrap_or_default()
     }
     pub(crate) fn command_keys(&self, command: CommandId) -> Vec<KeyChord> {
         let mut keys = self.keys(&command.shortcut_id());
@@ -674,6 +833,7 @@ impl Settings {
         definitions(platform)
             .into_iter()
             .map(|(definition, _)| definition)
+            .filter(|definition| definition.target.is_none())
             .filter(|definition| definition.scope.applies(canvas) && self.keys(&definition.id).contains(chord))
             .max_by_key(|definition| definition.scope.specificity())
     }
@@ -716,20 +876,66 @@ impl Settings {
     pub(crate) fn held_shortcut(&self, id: &str, platform: Platform) -> bool {
         definitions(platform).iter().any(|(definition, _)| definition.id == id && definition.action.held())
     }
-    pub(crate) fn conflict(
-        &self,
-        id: &str,
-        chord: &KeyChord,
-        platform: Platform,
-    ) -> Option<ShortcutDefinition> {
+    /// Every other action this chord would also trigger in a shared context.
+    pub(crate) fn conflicts(&self, id: &str, chord: &KeyChord, platform: Platform) -> Vec<ShortcutDefinition> {
         let all = definitions(platform);
         let scope = all.iter().find(|(d, _)| d.id == id).map(|(d, _)| d.scope.clone()).unwrap_or_default();
-        all.into_iter().find_map(|(definition, _)| {
-            (definition.id != id
-                && definition.scope.specificity() == scope.specificity()
-                && definition.scope.overlaps(&scope)
-                && self.keys(&definition.id).contains(chord))
-            .then_some(definition)
+        let mut conflicts: Vec<_> = all
+            .into_iter()
+            .map(|(definition, _)| definition)
+            .filter(|definition| {
+                definition.target.is_none()
+                    && definition.id != id
+                    && definition.scope.overlaps(&scope)
+                    && self.keys(&definition.id).contains(chord)
+            })
+            .collect();
+        let press = definitions(platform).iter().any(|(d, _)| d.id == id && d.target.is_none());
+        if press && self.hold_keys(platform).iter().any(|h| h.key == *chord && !h.actions.is_empty()) {
+            conflicts.push(ShortcutDefinition {
+                id: format!("{MODIFIER_PREFIX}{}", chord.label(platform)),
+                label: format!("the modifier key {}", chord.label(platform)),
+                action: ShortcutAction::Pan,
+                repeat: false,
+                scope: BindingScope::Canvas,
+                target: None,
+            });
+        }
+        conflicts
+    }
+    /// Modifier keys, from the artist's table or derived from the keymap.
+    pub(crate) fn hold_keys(&self, platform: Platform) -> Vec<HoldKey> {
+        self.hold_keys.clone().unwrap_or_else(|| self.default_hold_keys(platform))
+    }
+    pub(crate) fn default_hold_keys(&self, platform: Platform) -> Vec<HoldKey> {
+        let mut table: Vec<HoldKey> = Vec::new();
+        for (definition, _) in definitions(platform) {
+            let Some(target) = &definition.target else {
+                continue;
+            };
+            let categories = match &definition.scope {
+                BindingScope::Tools { categories } => categories.clone(),
+                _ => crate::shortcut_page::CONTEXTS.to_vec(),
+            };
+            for key in self.keys(&definition.id).into_iter().filter(KeyChord::holdable) {
+                let index = table.iter().position(|h| h.key == key).unwrap_or_else(|| {
+                    table.push(HoldKey { key, actions: Default::default() });
+                    table.len() - 1
+                });
+                for category in &categories {
+                    table[index].actions.entry(*category).or_insert_with(|| target.clone());
+                }
+            }
+        }
+        table
+    }
+    pub(crate) fn conflict(&self, id: &str, chord: &KeyChord, platform: Platform) -> Option<ShortcutDefinition> {
+        self.conflicts(id, chord, platform).into_iter().next()
+    }
+    fn ambiguous(&self, id: &str, chord: &KeyChord, platform: Platform) -> bool {
+        let scope = definitions(platform).into_iter().find(|(d, _)| d.id == id).map(|(d, _)| d.scope);
+        self.conflicts(id, chord, platform).iter().any(|other| {
+            !other.id.starts_with(MODIFIER_PREFIX) && scope.as_ref().is_some_and(|s| s.specificity() == other.scope.specificity())
         })
     }
     pub(crate) fn gesture_default(&self, trigger: &str) -> &'static str {
@@ -741,6 +947,18 @@ impl Settings {
     }
     pub(crate) fn gesture_binding(&self, trigger: &str) -> &str {
         self.gestures.get(trigger).map_or_else(|| self.gesture_default(trigger), String::as_str)
+    }
+    /// What a pen button does with each kind of tool, by press action id.
+    pub(crate) fn pen_actions(&self, trigger: &str) -> std::collections::BTreeMap<ToolCategory, String> {
+        if let Some(actions) = self.pen_buttons.get(trigger) {
+            return actions.clone();
+        }
+        let bound = self.gesture_binding(trigger);
+        let target = hold_target(bound).unwrap_or_else(|| bound.to_string());
+        if target.is_empty() {
+            return Default::default();
+        }
+        crate::shortcut_page::CONTEXTS.into_iter().map(|c| (c, target.clone())).collect()
     }
     pub(crate) fn gesture_definition(&self, trigger: &str, platform: Platform) -> Option<ShortcutDefinition> {
         let id = self.gesture_binding(trigger);
@@ -770,11 +988,30 @@ impl Settings {
                 return Err(format!("{} cannot hold an action", trigger.label));
             }
         }
+        for (trigger, actions) in &self.pen_buttons {
+            if !GESTURE_TRIGGERS.iter().any(|t| t.id == trigger && t.held) {
+                return Err("Unknown pen button".into());
+            }
+            if actions.values().any(|id| !all.iter().any(|(d, _)| d.id == *id && d.target.is_none())) {
+                return Err("Unknown pen button action".into());
+            }
+        }
         Ok(())
     }
     pub(crate) fn validate_shortcuts(&self) -> Result<(), String> {
         self.validate_gestures()?;
         let all = definitions(Platform::Gtk);
+        for (index, hold) in self.hold_keys.iter().flatten().enumerate() {
+            if !hold.key.holdable() {
+                return Err("Modifier keys use Space, Shift, Ctrl or Alt".into());
+            }
+            if self.hold_keys.iter().flatten().take(index).any(|other| other.key == hold.key) {
+                return Err("Each modifier key is listed once".into());
+            }
+            if hold.actions.values().any(|target| hold_id(target).is_none()) {
+                return Err("This action can't be used while a key is held".into());
+            }
+        }
         for (id, keys) in &self.shortcuts {
             if !all.iter().any(|(a, _)| a.id == *id) || keys.len() > MAX_SHORTCUTS {
                 return Err("Unknown action or too many shortcut alternatives".into());
@@ -785,7 +1022,7 @@ impl Settings {
                 if keys[..index].contains(chord) {
                     return Err("Duplicate shortcut alternative".into());
                 }
-                if self.conflict(id, chord, Platform::Gtk).is_some() {
+                if self.ambiguous(id, chord, Platform::Gtk) {
                     return Err("Two actions cannot use the same shortcut".into());
                 }
             }

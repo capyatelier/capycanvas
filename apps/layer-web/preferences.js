@@ -429,7 +429,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       const signature = JSON.stringify([keymap.selected, keymap.differences]);
       if (keymapSignature !== signature) {
         keymapSignature = signature;
-        const summary = element("summary", "", `Differences from ${keymap.title.replace(/-inspired$/, "")}`);
+        const summary = element("summary", "", `Differences from ${keymap.app}`);
         keymapDifferences.replaceChildren(summary, ...keymap.differences.map(d => {
           const row = element("div", "preference-row"); const text = element("span", "preference-text");
           text.append(element("span", "", d.trigger), element("p", "", d.note)); row.append(text); return row;

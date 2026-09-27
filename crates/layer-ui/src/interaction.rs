@@ -24,12 +24,14 @@ pub enum PointerKind {
 pub enum PenButton {
     Primary,
     Secondary,
+    Tertiary,
 }
 impl PenButton {
     pub fn trigger(self) -> &'static str {
         match self {
             Self::Primary => "pen.button.primary",
             Self::Secondary => "pen.button.secondary",
+            Self::Tertiary => "pen.button.tertiary",
         }
     }
 }
@@ -214,6 +216,22 @@ pub(crate) struct PointerContact {
     pub position: [f32; 2],
 }
 
+/// What a momentary binding replaced, restored on release.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Restore {
+    Toggle(crate::CommandId, bool),
+    Slot(crate::ColorSlot),
+    Tool(crate::LayerCanvasTool, u32),
+}
+
+/// A tool or mode key held down: releasing it after use returns to `restore`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Spring {
+    pub key: String,
+    pub restore: Restore,
+    pub used: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct Interaction {
     pub modifiers: Modifiers,
@@ -228,8 +246,21 @@ pub(crate) struct Interaction {
     pub viewport: Option<[f32; 2]>,
     pub pointer: Option<PointerContact>,
     pub keys: std::collections::BTreeSet<String>,
-    pub holds: Vec<(String, crate::CommandId)>,
-    pub held_tool: Option<crate::CommandId>,
+    pub holds: Vec<(String, crate::UiAction)>,
+    pub held_tool: Option<crate::UiAction>,
+    pub momentary: Vec<(String, Restore)>,
+    pub restores: Vec<Restore>,
+    /// The eraser end's tool stays in use while that end is near the tablet.
+    pub eraser_end: bool,
+    /// Regions a hold changed outside `input`, reported by the next frame.
+    pub hold_regions: u32,
+    /// Keys held down, oldest first, by their canonical names.
+    pub pressed: Vec<String>,
+    /// Modifier keys in effect, by token, with the action each holds.
+    pub modifier_holds: Vec<(String, String)>,
+    /// Modifier keys an explicit tool choice ended, ignored until released.
+    pub suppressed: Vec<String>,
+    pub spring: Option<Spring>,
     pub hold_base: Option<(crate::LayerCanvasTool, u32)>,
     pub applying_hold: bool,
     pub taps: TouchTaps,

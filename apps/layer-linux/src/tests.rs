@@ -5738,8 +5738,12 @@ fn native_settings_typography() {
                 for id in std::iter::once("shortcuts-search".into())
                     .chain(view.shortcuts.iter().map(|s| format!("shortcut-{}", s.id)))
                 {
-                    let widget = find_named(w.preferences.dialog.upcast_ref(), &id).unwrap();
-                    let b = widget.compute_bounds(&content).unwrap();
+                    let Some(widget) = find_named(w.preferences.dialog.upcast_ref(), &id) else {
+                        continue;
+                    };
+                    let Some(b) = widget.compute_bounds(&content).filter(|_| widget.is_mapped()) else {
+                        continue;
+                    };
                     let mut text = Vec::new();
                     labels(&widget, &content, &mut text);
                     rows.push(serde_json::json!({"id":id,"bounds":[b.x(),b.y(),b.width(),b.height()],"labels":text}));
@@ -8605,14 +8609,18 @@ fn native_preferences_and_shortcuts() {
     }
     search.set_text("");
     pump(300);
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::ShortcutCategory { id: Some("Tools".into()) },
+    });
+    pump(300);
     // Hand has a direct default; Brush's B now belongs to its cycling family.
     let row: adw::ActionRow =
         find_named(w.preferences.dialog.upcast_ref(), "shortcut-command.Hand")
             .unwrap()
             .downcast()
             .unwrap();
-    let binding = find_css(row.upcast_ref(), "dim-label").unwrap();
-    assert!(!binding.has_css_class("heading"));
+    let binding = find_named(row.upcast_ref(), "shortcut-reset-command.Hand").unwrap();
+    assert!(!binding.is_visible());
     row.emit_by_name::<()>("activated", &[]);
     pump(200);
     w.dispatch(UiAction::Preferences {
@@ -8621,29 +8629,21 @@ fn native_preferences_and_shortcuts() {
             index: 0,
         },
     });
-    assert!(binding.has_css_class("heading"));
+    assert!(binding.is_visible());
     w.dispatch(UiAction::Preferences {
         action: PreferenceAction::ResetShortcut {
             id: CommandId::Hand.shortcut_id(),
         },
     });
-    assert!(!binding.has_css_class("heading"));
-    click(
-        &find_named(w.window.upcast_ref(), "add-shortcut")
-            .unwrap()
-            .downcast()
-            .unwrap(),
-    );
-    let capture_dialog = find_named(w.window.upcast_ref(), "shortcut-capture").unwrap();
-    let controllers = capture_dialog.observe_controllers();
+    assert!(!binding.is_visible());
+    find_named(w.window.upcast_ref(), "add-shortcut")
+        .unwrap()
+        .emit_by_name::<()>("activated", &[]);
+    pump(200);
+    assert!(find_named(w.window.upcast_ref(), "shortcut-recording").unwrap().is_mapped());
+    let controllers = find_named(w.window.upcast_ref(), "shortcut-editor").unwrap().observe_controllers();
     let keys = (0..controllers.n_items())
-        .find_map(|i| {
-            controllers
-                .item(i)
-                .unwrap()
-                .downcast::<gtk::EventControllerKey>()
-                .ok()
-        })
+        .find_map(|i| controllers.item(i).and_downcast::<gtk::EventControllerKey>())
         .unwrap();
     assert!(keys.emit_by_name::<bool>(
         "key-pressed",
@@ -8657,6 +8657,7 @@ fn native_preferences_and_shortcuts() {
         state(&w).preferences.capture.unwrap().conflict.as_deref(),
         Some("Eraser")
     );
+    pump(200);
     capture_reference(&w, &format!("{dir}/gtk-shortcut-conflict.png"), 1.0);
     let confirm: gtk::Button = find_named(w.window.upcast_ref(), "confirm-shortcut")
         .unwrap()
@@ -8665,7 +8666,7 @@ fn native_preferences_and_shortcuts() {
     click(&confirm);
     assert!(state(&w).preferences.capture.is_none());
     assert_eq!(state(&w).settings.shortcuts["command.Hand"][1].key, "e");
-    assert!(binding.has_css_class("heading"));
+    assert!(binding.is_visible());
     w.dispatch(UiAction::Preferences {
         action: PreferenceAction::CloseShortcutEditor,
     });
@@ -8677,22 +8678,7 @@ fn native_preferences_and_shortcuts() {
             adw::StyleManager::for_display(&w.area.display()).is_dark(),
             theme == Theme::Dark
         );
-        assert_eq!(
-            binding
-                .clone()
-                .downcast::<gtk::Label>()
-                .unwrap()
-                .layout()
-                .iter()
-                .run_readonly()
-                .unwrap()
-                .item()
-                .analysis()
-                .font()
-                .describe()
-                .weight(),
-            gtk::pango::Weight::Bold
-        );
+        assert!(binding.is_mapped(), "a changed shortcut offers its reset button");
         capture_reference(
             &w,
             &format!("{dir}/gtk-shortcut-modified-{theme:?}.png"),

@@ -114,6 +114,7 @@ pub fn install(workspace: &Rc<Workspace>) {
             let pen_button = match button {
                 2 => Some(PenButton::Primary),
                 3 => Some(PenButton::Secondary),
+                8 => Some(PenButton::Tertiary),
                 _ => None,
             };
             if let Some(button) = pen_button {
@@ -452,6 +453,41 @@ pub fn key_input(
             alt: modifiers.contains(gdk::ModifierType::ALT_MASK),
         },
     }
+}
+
+/// Tablet pad buttons the compositor leaves to the app arrive as keys.
+pub fn pad_buttons(workspace: &Rc<Workspace>) -> gtk::EventControllerLegacy {
+    let pads = gtk::EventControllerLegacy::new();
+    pads.set_propagation_phase(gtk::PropagationPhase::Capture);
+    pads.connect_event(glib::clone!(
+        #[weak]
+        workspace,
+        #[upgrade_or]
+        glib::Propagation::Proceed,
+        move |_, event| {
+            let pressed = match event.event_type() {
+                gdk::EventType::PadButtonPress => true,
+                gdk::EventType::PadButtonRelease => false,
+                _ => return glib::Propagation::Proceed,
+            };
+            let Some(pad) = event.downcast_ref::<gdk::PadEvent>() else {
+                return glib::Propagation::Proceed;
+            };
+            let UiInput::Key { modifiers, .. } = key_input(gdk::Key::VoidSymbol, pressed, event.modifier_state(), false, None) else {
+                return glib::Propagation::Proceed;
+            };
+            workspace.interact(UiInput::Key {
+                key: format!("pad_button_{}", pad.button() + 1),
+                pressed,
+                repeat: false,
+                editing: false,
+                divider: None,
+                modifiers,
+            });
+            glib::Propagation::Stop
+        }
+    ));
+    pads
 }
 
 fn contact_phase(phase: PenPhase) -> ContactPhase {

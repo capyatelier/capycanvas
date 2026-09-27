@@ -57,22 +57,44 @@ modifiers and reserved OS interactions also need native testing.
 
 Each binding has a scope: Application, Canvas, or specific tool categories.
 Canvas and tool scopes apply only while no chrome control such as a divider owns
-keyboard focus. The most specific applicable scope wins, so `[` can step brush
-size on the canvas and still reach an Application binding elsewhere. Two
-bindings conflict only when their chord, specificity and scopes overlap. Tool
-scopes use the tool underneath an active hold, so Alt followed by a held eraser
-key works from a sampling override. An explicitly saved binding still suppresses
-a newer default on the same chord, so upgrades never shadow existing choices.
+keyboard focus. Recording a chord that another action already uses anywhere its
+scope overlaps is a conflict; Reassign moves the chord. The most specific scope
+still wins at runtime for overlaps saved by earlier versions. An explicitly saved
+binding suppresses a newer default on the same chord in an overlapping scope, so
+upgrades never shadow existing choices.
 
-Held bindings temporarily replace the tool: Alt samples color with drawing,
-blending, fill and gradient tools, and Space still pans. Held rows may record a
-lone Shift, Ctrl or Alt. The newest held key wins. Releasing it returns to the
-earlier hold, or to the tool captured before the first hold. A hold pressed or
-released during a stroke or other canvas interaction applies when that
-interaction finishes. Blur ends every hold. Explicitly choosing a tool also ends
-them and keeps the chosen tool. Modifiers owned by a hold do not change later
-chords, so Ctrl+Z still undoes while Alt samples. Relative step bindings use the
-setting's own numeric step and bounds and repeat while held.
+Tool, brush and mode keys work on tap and while held: a tap switches, and holding
+the key while drawing returns to the previous tool or mode on release. Modes are
+Paint with transparency and the view and ruler toggles such as Snap to rulers.
+Relative step bindings use the setting's own numeric step and bounds and repeat
+while held.
+
+The shortcuts page lists categories, with one search line that also accepts a
+pressed chord, a tool filter and an All actions / With shortcuts / Customized
+filter. A single typed character matches keys, not names. The editor is one
+sheet: the action's keys, Add Shortcut with inline recording, and reset. Actions
+that share a name, such as the Eraser tool and the Eraser brush, describe which
+is which.
+
+## Modifier keys
+
+Modifier keys are the first shortcut category. Holding one uses an action until
+release, chosen per tool category, so Alt samples color with drawing, blending,
+fill and gradient tools and does nothing with selection tools, which keep their
+own Alt behavior. Space pans. Any key or button can be a modifier key, alone or
+with Shift, Ctrl or Alt, including letters, F13–F24, gamepad and tablet pad
+buttons. Escape stays free to cancel recording. A key is either a shortcut or a
+modifier key, never both; recording one against the other offers Reassign, and
+recording an existing modifier key opens it.
+
+The table is derived from the keymap until the artist edits it, then stored
+whole in `hold_keys`. While drawing, every fully held entry is in effect; a
+combination such as Ctrl+Space replaces the keys it contains, and among equals
+the newest press wins. Releasing returns to the earlier hold, or to the tool
+captured before the first hold. A hold pressed or released during a stroke
+applies when the stroke finishes. Blur ends every hold. Explicitly choosing a
+tool ends tool holds until their keys are released. Modifiers owned by a hold do
+not change later chords, so Ctrl+Z still undoes while Ctrl samples.
 
 ## Keymap presets, import and export
 
@@ -89,8 +111,8 @@ Bindings resolve in layers: CapyCanvas defaults, then the chosen preset, then
 the user's overrides. Choosing or changing a preset never touches overrides.
 Resetting one shortcut returns it to the preset's binding.
 
-The initial presets are Photoshop-, Krita-, Clip Studio Paint- and
-Procreate-inspired. They reproduce only rows marked as sourced in the
+The presets are Photoshop Style, Krita Style, GIMP Style, Affinity Style, Clip
+Studio Paint Style and Procreate Style. They reproduce only rows marked as sourced in the
 [shortcut audit](../history/command-input-shortcut-audit-2026-09-25.md) and map
 them to actions with the same meaning in CapyCanvas. Everything else is listed
 as a difference, for example:
@@ -103,8 +125,9 @@ Unverified rows are never shipped as bindings. A preset change that alters
 bindings needs a new revision. The shortcuts page marks a saved keymap with an
 older revision as outdated.
 
-Keymap files use format `capycanvas-keymap`, version 1. A file contains the
-preset reference, shortcut overrides and gesture overrides. Export is
+Keymap files use the `.capykeys` extension, format `capycanvas-keymap`, version
+1. A file contains the preset reference, shortcut overrides, gesture overrides,
+per-tool pen buttons and a customized modifier key table. Export is
 deterministic. Import is previewed before anything changes:
 
 - The preview lists added, changed and removed bindings, and unavailable
@@ -117,10 +140,8 @@ deterministic. Import is previewed before anything changes:
 Each host provides the file chooser. GTK uses `GtkFileDialog`, Web uses a
 download link and a file input, and Android uses the Storage Access Framework.
 
-The binding editor shows each action's group, scope (everywhere, on the canvas,
-or specific tools) and where its binding came from: CapyCanvas default, a preset
-or custom. It also lists any chord that a more or less specific scope resolves
-differently.
+The binding editor shows the action's description, its keys and default, and
+any chord that a more or less specific scope resolves differently.
 
 ## Remotes and gamepads
 
@@ -155,10 +176,17 @@ classes. Bluetooth support alone does not make a device compatible.
 
 Input settings map finger taps and pen side buttons to the same shortcut
 definitions. By default a two-finger tap undoes and a three-finger tap redoes.
-Four-finger taps and both side buttons do nothing until chosen. An unbound side
-button stays with the tablet driver and the host's previous behavior. Only
-overrides are stored, under `gestures`, keyed by trigger ID. An empty value turns
-off a default.
+Four-finger taps and the lower, upper and third side buttons do nothing until
+chosen. An unbound side button stays with the tablet driver and the host's
+previous behavior. Tap overrides are stored under `gestures`, keyed by trigger ID.
+An empty value turns off a default.
+
+Each pen button opens its own page with an action per tool category, stored
+under `pen_buttons`. Tools, brushes and modes last while the button is held;
+other actions run once on press. The eraser end is a separate setting: it can
+keep the current tool or switch to a drawing tool group while that end is near
+the tablet, and it can paint with transparency. By default it erases with the
+current brush.
 
 Hosts supply native contact timestamps, the platform long-press time and touch
 slop. The shared recognizer turns a tap into an action only when all of these
@@ -175,8 +203,9 @@ cannot supply timestamps send `time_ns: 0`, which disables taps.
 Side-button presses and releases arrive as `pen_button` input, never as pen
 samples. They use the same hold lifecycle as held keys. A button pressed during
 a stroke changes the tool only after the stroke ends, and blur releases it. GTK
-reports Wayland stylus buttons 2 and 3. Web reports pointer `buttons` bits 2 and
-4. Android reports the stylus primary and secondary buttons. Windows, macOS and
+reports Wayland stylus buttons 2, 3 and 8, and tablet pad buttons as
+`pad_button_N` keys when the compositor leaves them to the app. Web reports
+pointer `buttons` bits 2 and 4. Android reports the stylus primary and secondary buttons. Windows, macOS and
 iPadOS do not show these rows until their hosts deliver the same input.
 
 ## Saving and loading

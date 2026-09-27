@@ -99,14 +99,22 @@ fn procreate_keymap_changes_gesture_defaults_and_resets_to_them() {
     s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
     preference(&mut s, PreferenceAction::SelectKeymap { id: "procreate".into() });
     assert_eq!(s.state.settings.gesture_binding("touch.tap.4"), "command.ZenMode");
-    edit_preference(&mut s, PreferenceId::FourFingerTap, PreferenceValue::Choice(0));
+    let trigger = |s: &UiSession<Recorder>| {
+        s.preferences().unwrap().shortcut_page.triggers.into_iter().find(|t| t.id == "touch.tap.4").unwrap()
+    };
+    assert_eq!(trigger(&s).action, CommandId::ZenMode.label());
+    assert!(!trigger(&s).modified);
+    preference(&mut s, PreferenceAction::OpenActionPicker { trigger: "touch.tap.4".into() });
+    preference(&mut s, PreferenceAction::ChooseAction { id: String::new() });
     assert_eq!(s.state.settings.gesture_binding("touch.tap.4"), "");
-    let row = s.state.settings.field(PreferenceId::FourFingerTap, Platform::Android).unwrap();
-    assert!(row.reset.as_ref().unwrap().enabled);
-    preference(&mut s, PreferenceAction::Reset { id: PreferenceId::FourFingerTap });
+    assert!(trigger(&s).modified);
+    assert_eq!(trigger(&s).action, "Nothing");
+    preference(&mut s, PreferenceAction::ResetTrigger { trigger: "touch.tap.4".into() });
     assert_eq!(s.state.settings.gesture_binding("touch.tap.4"), "command.ZenMode");
-    let row = s.state.settings.field(PreferenceId::FourFingerTap, Platform::Android).unwrap();
-    assert!(!row.reset.as_ref().unwrap().enabled);
+    assert!(!trigger(&s).modified);
+    preference(&mut s, PreferenceAction::OpenActionPicker { trigger: "touch.tap.4".into() });
+    preference(&mut s, PreferenceAction::ChooseAction { id: "command.ZenMode".into() });
+    assert!(!s.state.settings.gestures.contains_key("touch.tap.4"), "choosing the default stores nothing");
     let view = s.preferences().unwrap().keymap;
     assert_eq!(view.selected, "procreate");
     assert!(view.differences.iter().any(|d| d.trigger == "Space"));
@@ -133,10 +141,10 @@ fn keymap_files_round_trip_with_a_preview() {
     file["shortcuts"]["command.FutureThing"] = serde_json::json!([{"key": "q", "command": false, "shift": false, "alt": false}]);
     preference(&mut s, PreferenceAction::ImportKeymap { text: file.to_string() });
     let preview = s.preferences().unwrap().keymap.import.unwrap();
-    assert_eq!(preview.title, "Clip Studio Paint-inspired");
+    assert_eq!(preview.title, "Clip Studio Paint Style");
     assert_eq!(preview.unavailable, ["command.FutureThing"]);
     assert!(preview.changed.iter().any(|c| c.starts_with("Undo:")), "{preview:?}");
-    assert!(preview.changed.iter().any(|c| c.starts_with("Pen side button: Nothing →")), "{preview:?}");
+    assert!(preview.changed.iter().any(|c| c.starts_with("Lower side button: Nothing →")), "{preview:?}");
     assert!(preview.changed.iter().any(|c| c.starts_with(&format!("{}: O → K", CommandId::Move.label()))), "{preview:?}");
     assert!(preview.added.iter().any(|c| c == "Swap colors: X"), "{preview:?}");
     assert!(preview.removed.iter().any(|c| c == "Redo: Volume Down"), "{preview:?}");
@@ -160,7 +168,7 @@ fn keymap_files_round_trip_with_a_preview() {
     assert!(s.preferences().unwrap().keymap.import.is_none());
     let change = s.dispatch(UiAction::Preferences { action: PreferenceAction::ExportKeymap }).unwrap();
     assert!(change.regions & regions::HOST != 0);
-    assert!(s.state.requests.iter().any(|r| matches!(&r.kind, HostRequestKind::ExportKeymap { name, text } if name.ends_with(".json") && text.contains("clip-studio"))));
+    assert!(s.state.requests.iter().any(|r| matches!(&r.kind, HostRequestKind::ExportKeymap { name, text } if name.ends_with(".capykeys") && text.contains("clip-studio"))));
     s.dispatch(UiAction::Preferences { action: PreferenceAction::ChooseKeymapFile }).unwrap();
     assert!(s.state.requests.iter().any(|r| matches!(r.kind, HostRequestKind::ImportKeymap)));
 }
@@ -182,10 +190,155 @@ fn shortcut_editor_explains_scope_source_and_overlaps() {
     assert_eq!(editor.overlaps, ["[ does Undo elsewhere"]);
     preference(&mut s, PreferenceAction::EditShortcut { id: "hold.eyedropper".into() });
     let editor = s.preferences().unwrap().shortcut_editor.unwrap();
-    assert_eq!(editor.scope, "With drawing, blending and fill and gradient tools");
+    assert_eq!(editor.id, "command.Eyedropper", "a held action opens the action it holds");
+    assert_eq!(editor.description, "Pick a color from the canvas");
     assert_eq!(editor.source, "CapyCanvas default");
     preference(&mut s, PreferenceAction::SelectKeymap { id: "photoshop".into() });
     preference(&mut s, PreferenceAction::EditShortcut { id: "command.Move".into() });
-    assert_eq!(s.preferences().unwrap().shortcut_editor.unwrap().source, "Photoshop-inspired");
+    assert_eq!(s.preferences().unwrap().shortcut_editor.unwrap().source, "Photoshop Style");
     assert_eq!(s.preferences().unwrap().shortcut_editor.unwrap().defaults, ["V"]);
+}
+
+#[test]
+fn shortcut_page_categories_filters_and_key_search() {
+    let mut s = session(Platform::Gtk);
+    s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
+    let view = s.preferences().unwrap();
+    let page = &view.shortcut_page;
+    assert!(!page.filtering && page.category.is_none() && page.empty.is_none());
+    let ids: Vec<_> = page.categories.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids[0], "Modifier keys", "modifier keys come first");
+    assert_eq!(ids[1..], crate::shortcuts::SHORTCUT_SECTIONS);
+    assert_eq!(page.categories.iter().find(|c| c.id == "Brush presets").unwrap().count, 34);
+    assert!(view.shortcuts.iter().all(|r| !r.visible), "the category list shows no rows until one is opened");
+    let row = |view: &PreferencesView, id: &str| view.shortcuts.iter().find(|r| r.id == id).unwrap().clone();
+
+    preference(&mut s, PreferenceAction::ShortcutCategory { id: Some("Brush presets".into()) });
+    let view = s.preferences().unwrap();
+    assert_eq!(view.shortcut_page.category.as_deref(), Some("Brush presets"));
+    let visible: Vec<_> = view.shortcuts.iter().filter(|r| r.visible).collect();
+    assert_eq!(visible.len(), 34);
+    assert!(visible.iter().all(|r| r.group == "Brush presets" && !r.subgroup.is_empty() && r.detail.is_empty()));
+    assert_eq!(row(&view, "brush.2").subgroup, "Pencil", "presets are grouped under their tool");
+    preference(&mut s, PreferenceAction::ShortcutCategory { id: Some("Nope".into()) });
+    assert!(s.preferences().unwrap().error.is_some());
+    preference(&mut s, PreferenceAction::ShortcutCategory { id: Some("Edit".into()) });
+    let view = s.preferences().unwrap();
+    let undo = row(&view, "command.Undo");
+    assert!(undo.visible);
+    assert_eq!(undo.bindings, [vec!["Ctrl".to_string(), "Z".into()]]);
+    assert_eq!(undo.gestures, ["Two-finger tap"]);
+    assert_eq!(row(&view, "command.Redo").bindings.len(), 2, "every alternative is listed");
+    assert_eq!(row(&view, "tools.ink").detail, "Press again to switch between them");
+
+    preference(&mut s, PreferenceAction::SearchShortcuts { query: "pencil".into() });
+    let view = s.preferences().unwrap();
+    assert!(view.shortcut_page.filtering && view.shortcut_page.category.is_none());
+    assert!(row(&view, "command.Pencil").visible && row(&view, "brush.2").visible);
+    assert_eq!(row(&view, "brush.2").detail, "Brush for the Pencil tool", "search results explain which tool a preset belongs to");
+    assert_eq!(row(&view, "command.Pencil").detail, "Switch to the tool with its current brush", "a tool sharing a brush's name says so");
+    assert!(row(&view, "command.Pen").detail.is_empty());
+    preference(&mut s, PreferenceAction::SearchShortcuts { query: "z".into() });
+    let view = s.preferences().unwrap();
+    let visible: Vec<_> = view.shortcuts.iter().filter(|r| r.visible).map(|r| r.id.as_str()).collect();
+    assert!(visible.contains(&"command.Undo") && visible.contains(&"command.Redo"));
+    assert!(!visible.contains(&"command.ZoomIn") && !visible.contains(&"command.Sculpt"), "one letter finds keys, not names: {visible:?}");
+    preference(&mut s, PreferenceAction::SearchShortcuts { query: "nothing like this".into() });
+    let empty = s.preferences().unwrap().shortcut_page.empty.unwrap();
+    assert_eq!(empty.title, "No Results Found");
+
+    preference(&mut s, PreferenceAction::SearchShortcutKey { chord: chord("z", true, false, false) });
+    let view = s.preferences().unwrap();
+    assert_eq!(view.shortcut_query, "Ctrl+Z");
+    assert_eq!(view.shortcut_page.key.as_deref(), Some("Ctrl+Z"));
+    let visible: Vec<_> = view.shortcuts.iter().filter(|r| r.visible).map(|r| r.id.as_str()).collect();
+    assert_eq!(visible, ["command.Undo"], "a pressed key finds exactly what it runs");
+    preference(&mut s, PreferenceAction::SearchShortcutKey { chord: chord("f7", false, false, false) });
+    let empty = s.preferences().unwrap().shortcut_page.empty.unwrap();
+    assert_eq!(empty.description, "F7 isn't assigned to anything.");
+    preference(&mut s, PreferenceAction::SearchShortcuts { query: String::new() });
+    assert!(s.preferences().unwrap().shortcut_page.key.is_none());
+
+    preference(&mut s, PreferenceAction::ShortcutContext { category: Some(ToolCategory::Selection) });
+    let view = s.preferences().unwrap();
+    assert!(!view.shortcut_page.modifiers.iter().any(|m| m.label == "Alt" && m.visible), "Alt does not sample with selection tools");
+    assert!(row(&view, "command.Undo").visible);
+    s.state.settings.shortcuts.insert("command.Figure".into(), vec![chord("u", false, false, false)]);
+    s.state.settings.shortcuts.insert("tool_setting.size.decrease".into(), vec![chord("u", false, false, false)]);
+    preference(&mut s, PreferenceAction::ShortcutContext { category: Some(ToolCategory::Drawing) });
+    let view = s.preferences().unwrap();
+    assert!(view.shortcut_page.modifiers.iter().any(|m| m.label == "Alt" && m.visible && m.action == "Sample color"));
+    assert!(!row(&view, "command.Figure").visible, "U resolves to the canvas step while drawing");
+    preference(&mut s, PreferenceAction::ShortcutContext { category: None });
+
+    preference(&mut s, PreferenceAction::ShortcutShow { show: ShortcutShow::Customized });
+    let view = s.preferences().unwrap();
+    let visible: Vec<_> = view.shortcuts.iter().filter(|r| r.visible).map(|r| r.id.as_str()).collect();
+    assert_eq!(visible, ["tool_setting.size.decrease"]);
+    preference(&mut s, PreferenceAction::ShortcutShow { show: ShortcutShow::Assigned });
+    let view = s.preferences().unwrap();
+    assert!(row(&view, "command.Undo").visible && row(&view, "tool_setting.size.decrease").visible);
+    assert!(!row(&view, "command.ClearLayer").visible);
+    assert_eq!(view.shortcut_page.shows.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["All actions", "With shortcuts", "Customized"]);
+    assert_eq!(view.shortcut_page.contexts[1].label, "Drawing tools");
+    s.state.settings.shortcuts.clear();
+    preference(&mut s, PreferenceAction::ShortcutShow { show: ShortcutShow::Customized });
+    assert_eq!(s.preferences().unwrap().shortcut_page.empty.unwrap().title, "No Customized Shortcuts");
+    preference(&mut s, PreferenceAction::ShortcutShow { show: ShortcutShow::All });
+
+    let triggers: Vec<_> = view.shortcut_page.triggers.iter().map(|t| (t.label.as_str(), t.action.as_str())).collect();
+    assert_eq!(triggers[0], ("Lower side button", "Nothing"), "pen buttons come first, beside the eraser end");
+    assert_eq!(triggers[3], ("Two-finger tap", "Undo"));
+    preference(&mut s, PreferenceAction::Search { query: "lower side".into() });
+    let results = s.preferences().unwrap().search_results;
+    assert!(results.iter().any(|r| r.title == "Lower side button" && r.action == PreferenceAction::Page { page: SettingsPage::Input }));
+    preference(&mut s, PreferenceAction::Page { page: SettingsPage::Shortcuts });
+    assert!(s.preferences().unwrap().shortcut_page.category.is_none());
+
+    preference(&mut s, PreferenceAction::OpenActionPicker { trigger: "touch.tap.2".into() });
+    let picker = s.preferences().unwrap().shortcut_page.picker.unwrap();
+    assert!(!picker.nothing);
+    let pencil = picker.sections.iter().flat_map(|s| &s.actions).find(|a| a.id == "brush.2").unwrap();
+    assert_eq!(pencil.detail, "Brush for the Pencil tool");
+    let undo = picker.sections.iter().flat_map(|s| &s.actions).find(|a| a.id == "command.Undo").unwrap();
+    assert!(undo.selected && undo.detail == "Ctrl+Z");
+    preference(&mut s, PreferenceAction::CloseActionPicker);
+
+    preference(&mut s, PreferenceAction::KeymapDetails { open: true });
+    assert!(s.preferences().unwrap().keymap.details);
+    preference(&mut s, PreferenceAction::KeymapDetails { open: false });
+    assert!(!s.preferences().unwrap().keymap.details);
+}
+
+#[test]
+fn gimp_and_affinity_keymaps_follow_their_apps() {
+    let mut gimp = Settings::default();
+    crate::keymaps::select(&mut gimp, "gimp").unwrap();
+    for (key, command, shift, expected) in [
+        ("e", false, true, Some("command.Eraser")),
+        ("e", false, false, Some("command.EllipseSelect")),
+        ("m", false, false, Some("command.Move")),
+        ("x", false, false, Some("color.swap")),
+        ("/", false, false, Some("command.SearchCommands")),
+        ("y", true, false, Some("command.Redo")),
+        ("a", true, true, Some("command.Deselect")),
+        ("d", true, false, None),
+        ("z", true, true, None),
+    ] {
+        assert_eq!(bound(&gimp, &chord(key, command, shift, false)).as_deref(), expected, "GIMP {key}");
+    }
+    let mut affinity = Settings::default();
+    crate::keymaps::select(&mut affinity, "affinity").unwrap();
+    for (key, command, shift, alt, expected) in [
+        ("x", false, true, false, Some("color.swap")),
+        ("x", false, false, false, None),
+        ("v", false, false, false, Some("command.Move")),
+        ("z", true, true, false, Some("command.Redo")),
+        ("y", true, false, false, None),
+        ("f", true, true, true, Some("command.SearchCommands")),
+        ("j", true, false, false, Some("layer.duplicate")),
+        ("d", true, false, false, Some("command.Deselect")),
+    ] {
+        assert_eq!(bound(&affinity, &chord(key, command, shift, alt)).as_deref(), expected, "Affinity {key}");
+    }
 }

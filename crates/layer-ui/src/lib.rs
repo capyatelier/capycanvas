@@ -79,6 +79,7 @@ mod session;
 pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, ToolCategory};
 pub mod keymaps;
 mod settings;
+mod shortcut_page;
 mod shortcuts;
 mod theme;
 mod glass;
@@ -132,9 +133,14 @@ pub use settings::{
     PreferenceGroup, PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
     PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,
     SettingsPage, ShortcutEditor, Swatch, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,
+    EraserEnd, ModifierKeyAction, ModifierKeyEditor,
+};
+pub use shortcut_page::{
+    ActionPickerView, MODIFIER_SECTION, ModifierKeyRow, PenButtonEditor, PickerAction, PickerSection, ShortcutCategoryView,
+    ShortcutContextChoice, ShortcutEmpty, ShortcutPageView, ShortcutShow, ShortcutShowChoice, TriggerRow,
 };
 pub use shortcuts::{
-    BindingScope, GAMEPAD_BUTTONS, GESTURE_TRIGGERS, GestureTrigger, KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
+    BindingScope, GAMEPAD_BUTTONS, GESTURE_TRIGGERS, GestureTrigger, HoldKey, KeyChord, MODIFIER_CAPTURE, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
     TextEditMenuItem, text_edit_menu,
 };
 pub use theme::{

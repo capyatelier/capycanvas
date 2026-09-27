@@ -83,13 +83,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.state.settings_open || self.interaction.facts.popup_open || self.state.command_search.is_some() {
             return Ok(());
         }
-        let Some(definition) = self.state.settings.gesture_definition(trigger, self.state.platform) else {
+        let category = self.binding_category();
+        let Some(target) = self.state.settings.pen_actions(trigger).remove(&category) else {
+            return Ok(());
+        };
+        let id = crate::shortcuts::hold_id(&target).unwrap_or(target);
+        let Some((definition, _)) = crate::shortcuts::definitions(self.state.platform).into_iter().find(|(d, _)| d.id == id)
+        else {
             return Ok(());
         };
         reply.handled = true;
         match definition.action {
             ShortcutAction::Pan => self.interaction.pan_key = Some(trigger.into()),
-            ShortcutAction::Hold { command } => self.press_hold(trigger.into(), command),
+            ShortcutAction::Hold { action } => self.press_hold(trigger.into(), *action),
+            ShortcutAction::Momentary { action } => {
+                let change = self.press_momentary(trigger.into(), *action)?;
+                reply.change = merge_change(reply.change, change);
+            }
             ShortcutAction::Action { action } => {
                 if !matches!(*action, UiAction::Invoke { command } if !self.command(command).enabled) {
                     let change = self.dispatch(*action)?;

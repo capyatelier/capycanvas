@@ -611,7 +611,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
                     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("keymap-differences").clickable { differences = !differences }.padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Text("Differences from " + keymap.getString("title").removeSuffix("-inspired"), Modifier.weight(1f))
+                        Text("Differences from " + keymap.getString("app"), Modifier.weight(1f))
                         SharedIcon("chevron-down", null, Modifier.size(20.dp).rotate(if (differences) 180f else 0f), tint = colors.settingsSecondary)
                     }
                     if (differences) items.forEach { item ->

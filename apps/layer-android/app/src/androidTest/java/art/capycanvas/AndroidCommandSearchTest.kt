@@ -362,7 +362,7 @@ class AndroidCommandSearchTest {
         waitFor("imported keymap") { keymap() == "photoshop" }
         action(obj("type" to "preferences", "action" to obj("type" to "edit_shortcut", "id" to "command.Move")))
         waitFor("editor context") {
-            tagged("shortcut-editor-context")?.second?.config?.getOrNull(SemanticsProperties.Text)?.any { it.text.contains("Photoshop-inspired") } == true
+            tagged("shortcut-editor-context")?.second?.config?.getOrNull(SemanticsProperties.Text)?.any { it.text.contains("Photoshop Style") } == true
         }
         action(obj("type" to "preferences", "action" to obj("type" to "close_shortcut_editor")))
         action(obj("type" to "preferences", "action" to obj("type" to "select_keymap", "id" to "capy")))

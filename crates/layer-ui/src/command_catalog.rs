@@ -32,7 +32,7 @@ impl CommandSearchStyle {
 }
 
 /// Behavior scopes, independent of brush media, cycling families and edit target.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCategory {
     Drawing,
@@ -791,24 +791,33 @@ impl<R: CanvasRenderer> UiSession<R> {
         pan.descriptor.shortcut = settings.shortcut_label("canvas.pan", platform);
         pan.action = None;
         entries.push(pan);
-        for (definition, _) in crate::shortcuts::definitions(platform) {
+        let definitions = crate::shortcuts::definitions(platform);
+        let bound = |id: &str| {
+            !settings.keys(id).is_empty()
+                || crate::GESTURE_TRIGGERS.iter().any(|t| settings.gesture_binding(t.id) == id)
+        };
+        for (definition, _) in definitions.clone() {
+            let momentary = matches!(definition.action, crate::shortcuts::ShortcutAction::Momentary { .. });
             match definition.action {
-                crate::shortcuts::ShortcutAction::Hold { command } => {
-                    let mut held = entry(
-                        &definition.label,
-                        "Canvas",
-                        UiAction::Invoke { command },
-                        self.command(command).enabled,
-                        None,
-                        settings,
-                        platform,
-                    );
+                crate::shortcuts::ShortcutAction::Hold { action } | crate::shortcuts::ShortcutAction::Momentary { action }
+                    if bound(&definition.id) =>
+                {
+                    let target = definitions
+                        .iter()
+                        .find(|(d, _)| Some(&d.id) == definition.target.as_ref())
+                        .map_or_else(String::new, |(d, _)| d.label.clone());
+                    let enabled = match *action {
+                        UiAction::Invoke { command } => self.command(command).enabled,
+                        _ => true,
+                    };
+                    let mut held = entry(&definition.label, "Canvas", *action, enabled, None, settings, platform);
                     held.descriptor.id = definition.id.clone();
                     held.descriptor.kind = CommandKind::Held;
-                    held.descriptor.description = format!(
-                        "Temporarily use {}; release to return to the tool.",
-                        self.command_label(command)
-                    );
+                    held.descriptor.description = if momentary {
+                        format!("Turn on {target} until you release the key.")
+                    } else {
+                        format!("Temporarily use {target}; release to return to the tool.")
+                    };
                     held.descriptor.shortcut = settings.shortcut_label(&definition.id, platform);
                     held.action = None;
                     entries.push(held);

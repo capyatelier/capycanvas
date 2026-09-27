@@ -131,23 +131,43 @@ fn taps_yield_to_pens_strokes_and_the_picker() {
     assert_eq!(s.engine.document().layers, stroked.layers);
 }
 
+fn bind(s: &mut UiSession<Recorder>, trigger: &str, id: &str) {
+    s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
+    preference(s, PreferenceAction::OpenActionPicker { trigger: trigger.into() });
+    preference(s, PreferenceAction::ChooseAction { id: id.into() });
+    assert!(s.preferences().unwrap().error.is_none());
+    s.dispatch(UiAction::CloseSettings).unwrap();
+}
+
 #[test]
 fn tap_bindings_are_configurable_and_validated() {
     let mut s = painted_session();
     let painted = s.engine.document().clone();
-    edit_preference(&mut s, PreferenceId::TwoFingerTap, PreferenceValue::Choice(0));
+    bind(&mut s, "touch.tap.2", "");
     assert_eq!(s.state.settings.gestures.get("touch.tap.2").map(String::as_str), Some(""));
     tap(&mut s, 2, 0, 100);
     assert_eq!(s.engine.document(), &painted);
-    let row = s.state.settings.field(PreferenceId::ThreeFingerTap, Platform::Android).unwrap();
-    let PreferenceKind::Choice { options, selected, .. } = row.kind else { panic!("choice") };
-    assert_eq!(options[selected as usize], "Redo");
-    assert!(!options.iter().any(|o| o.contains("held")), "taps cannot hold");
-    let search = options.iter().position(|o| o.starts_with("Search Commands")).unwrap();
-    edit_preference(&mut s, PreferenceId::ThreeFingerTap, PreferenceValue::Choice(search as u32));
+    s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
+    preference(&mut s, PreferenceAction::OpenActionPicker { trigger: "touch.tap.3".into() });
+    let picker = s.preferences().unwrap().shortcut_page.picker.unwrap();
+    assert_eq!(picker.title, "Three-finger tap");
+    let actions: Vec<_> = picker.sections.iter().flat_map(|s| &s.actions).collect();
+    assert!(actions.iter().any(|a| a.id == "command.Redo" && a.selected));
+    assert!(!actions.iter().any(|a| a.id.starts_with("hold.") || a.id == "canvas.pan"), "taps cannot hold");
+    assert!(actions.len() > 100, "every instant action is available");
+    preference(&mut s, PreferenceAction::SearchActionPicker { query: "search com".into() });
+    let picker = s.preferences().unwrap().shortcut_page.picker.unwrap();
+    assert_eq!(picker.sections.iter().flat_map(|s| &s.actions).map(|a| a.id.as_str()).collect::<Vec<_>>(), ["command.SearchCommands"]);
+    preference(&mut s, PreferenceAction::ChooseAction { id: "hold.eyedropper".into() });
+    assert!(s.preferences().unwrap().error.unwrap().contains("cannot hold"));
+    preference(&mut s, PreferenceAction::ChooseAction { id: "command.SearchCommands".into() });
+    assert!(s.preferences().unwrap().shortcut_page.picker.is_none());
+    s.dispatch(UiAction::CloseSettings).unwrap();
     tap(&mut s, 3, 1000, 100);
     assert!(s.state.command_search.is_some());
-    preference(&mut s, PreferenceAction::Reset { id: PreferenceId::TwoFingerTap });
+    s.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Close }).unwrap();
+    s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
+    preference(&mut s, PreferenceAction::ResetTrigger { trigger: "touch.tap.2".into() });
     assert!(!s.state.settings.gestures.contains_key("touch.tap.2"));
     let mut settings = Settings::default();
     settings.gestures.insert("touch.tap.2".into(), "hold.eyedropper".into());
@@ -161,8 +181,9 @@ fn tap_bindings_are_configurable_and_validated() {
     let saved = serde_json::to_value(&settings).unwrap();
     assert_eq!(serde_json::from_value::<Settings>(saved).unwrap(), settings);
     assert!(serde_json::to_value(Settings::default()).unwrap().get("gestures").is_none());
-    assert!(Settings::default().field(PreferenceId::TwoFingerTap, Platform::Mac).is_err());
-    assert!(Settings::default().field(PreferenceId::PenButton, Platform::Ios).is_err());
+    let triggers = |platform| crate::shortcut_page::triggers(platform).map(|t| t.id).collect::<Vec<_>>();
+    assert!(triggers(Platform::Mac).is_empty() && triggers(Platform::Ios).is_empty());
+    assert_eq!(triggers(Platform::Android).len(), 6);
 }
 
 #[test]
@@ -175,21 +196,13 @@ fn pen_buttons_are_opt_in_and_use_the_hold_lifecycle() {
     assert!(!press(&mut s, PenButton::Primary, true).handled, "unbound buttons stay with the driver");
     assert!(!press(&mut s, PenButton::Primary, false).handled);
     assert!(painting_with(&s, preset));
-    let options = |s: &UiSession<Recorder>, id| {
-        let PreferenceKind::Choice { options, .. } = s.state.settings.field(id, Platform::Gtk).unwrap().kind else {
-            panic!("choice")
-        };
-        options
-    };
-    let sample = options(&s, PreferenceId::PenButton).iter().position(|o| o == "Sample color while held").unwrap();
-    edit_preference(&mut s, PreferenceId::PenButton, PreferenceValue::Choice(sample as u32));
+    bind(&mut s, "pen.button.primary", "hold.eyedropper");
     assert!(press(&mut s, PenButton::Primary, true).handled);
     assert!(sampling(&s));
     assert!(press(&mut s, PenButton::Primary, false).handled);
     assert!(painting_with(&s, preset));
 
-    let pan = options(&s, PreferenceId::PenSecondaryButton).iter().position(|o| o == "Pan while held").unwrap();
-    edit_preference(&mut s, PreferenceId::PenSecondaryButton, PreferenceValue::Choice(pan as u32));
+    bind(&mut s, "pen.button.secondary", "canvas.pan");
     assert!(press(&mut s, PenButton::Secondary, true).handled);
     assert!(!s.pointer_contact_paints(PointerButton::Primary), "a held pan button turns contacts into navigation");
     press(&mut s, PenButton::Secondary, false);
@@ -206,8 +219,7 @@ fn pen_buttons_are_opt_in_and_use_the_hold_lifecycle() {
     assert!(painting_with(&s, preset));
     assert!(!press(&mut s, PenButton::Primary, false).handled);
 
-    let undo = options(&s, PreferenceId::PenButton).iter().position(|o| o == "Undo").unwrap();
-    edit_preference(&mut s, PreferenceId::PenButton, PreferenceValue::Choice(undo as u32));
+    bind(&mut s, "pen.button.primary", "command.Undo");
     let before = s.engine.document().clone();
     assert!(press(&mut s, PenButton::Primary, true).handled);
     press(&mut s, PenButton::Primary, false);

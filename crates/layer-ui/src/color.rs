@@ -98,6 +98,8 @@ pub enum ColorAction {
     Select {
         slot: ColorSlot,
     },
+    /// Switch between transparent paint and the last paint color.
+    ToggleTransparent,
     Swap,
     Shape {
         shape: ColorShape,
@@ -652,6 +654,9 @@ impl ColorState {
                 if slot != ColorSlot::Transparent {
                     self.paint_slot = slot;
                 }
+            }
+            ColorAction::ToggleTransparent => {
+                self.slot = if self.slot == ColorSlot::Transparent { self.paint_slot } else { ColorSlot::Transparent };
             }
             ColorAction::Swap => {
                 std::mem::swap(&mut self.foreground, &mut self.background);

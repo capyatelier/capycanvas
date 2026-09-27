@@ -64,7 +64,7 @@ export async function checkInputDevices({call,evaluate,settle}) {
   assert.equal((await state()).settings.keymap.id,'photoshop');
   assert.ok(await evaluate(`!document.querySelector('#keymap-differences').hidden&&document.querySelector('#keymap-differences summary').textContent.includes('Photoshop')`));
   await send({type:'preferences',action:{type:'edit_shortcut',id:'command.Move'}});
-  assert.ok(await evaluate(`document.querySelector('#shortcut-editor').textContent.includes('Photoshop-inspired')`),'the editor names the binding source');
+  assert.ok(await evaluate(`document.querySelector('#shortcut-editor').textContent.includes('Photoshop Style')`),'the editor names the binding source');
   await send({type:'preferences',action:{type:'close_shortcut_editor'}});
   await evaluate(`window.keymapDownload=null;const create=URL.createObjectURL;URL.createObjectURL=blob=>{window.keymapBlob=blob;return create(blob)};const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){if(this.download){window.keymapDownload={name:this.download};return;}return click.call(this)};null`);
   await evaluate(`document.querySelector('#keymap-export-button').click()`);await settle();
@@ -76,7 +76,7 @@ export async function checkInputDevices({call,evaluate,settle}) {
   assert.equal((await state()).settings.keymap,undefined);
   await send({type:'preferences',action:{type:'import_keymap',text:exported}});
   await wait("document.querySelector('#keymap-import').open");
-  assert.ok(await evaluate(`document.querySelector('#keymap-import').textContent.includes('Photoshop-inspired')`));
+  assert.ok(await evaluate(`document.querySelector('#keymap-import').textContent.includes('Photoshop Style')`));
   await evaluate(`document.querySelector('#confirm-keymap-import').click()`);await settle();
   await wait("!document.querySelector('#keymap-import').open");
   assert.equal((await state()).settings.keymap.id,'photoshop','importing restores the exported keymap');

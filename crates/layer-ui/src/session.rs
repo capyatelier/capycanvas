@@ -12,6 +12,7 @@ mod art_layers;
 mod color_picker_session;
 #[path = "held_actions.rs"]
 mod held_actions;
+use held_actions::{ERASER_END, merge_change};
 #[path = "gesture_input.rs"]
 mod gesture_input;
 #[path = "source_edit.rs"]
@@ -528,7 +529,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     /// Hover is presentation input, separate from the paint queue and UI state.
-    pub fn cursor_input(&mut self, event: Option<PenEvent>) {
+    pub fn cursor_input(&mut self, mut event: Option<PenEvent>) {
+        match &mut event {
+            Some(event) => self.eraser_end(event),
+            None if self.interaction.eraser_end => {
+                self.interaction.eraser_end = false;
+                self.release_hold(ERASER_END);
+            }
+            None => {}
+        }
         self.engine.backend_mut().shader_input();
         if event.is_some_and(|e| {
             ![
@@ -972,11 +981,24 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(reply);
                 }
                 let key = key.to_ascii_lowercase();
+                let name = KeyChord::new(&key, Modifiers::default()).key;
+                let hold_allowed = !editing
+                    && divider.is_none()
+                    && !self.state.settings_open
+                    && !self.interaction.facts.popup_open
+                    && self.state.command_search.is_none();
+                if pressed && !self.interaction.pressed.contains(&name) {
+                    self.interaction.pressed.push(name.clone());
+                } else if !pressed {
+                    self.interaction.pressed.retain(|k| *k != name);
+                    self.release_spring(&name);
+                    let (change, changed) = self.sync_modifier_keys(hold_allowed)?;
+                    reply.change = merge_change(reply.change, change);
+                    reply.handled |= changed;
+                }
                 if self.state.command_search.is_some() {
                     if !pressed {
                         self.interaction.keys.remove(&key);
-                        if self.interaction.pan_key.as_deref() == Some(&key) { self.interaction.pan_key = None; }
-                        self.release_hold(&key);
                         self.settle_holds_into(&mut reply)?;
                     }
                     // Native search entry/list owns text, IME and navigation.
@@ -990,10 +1012,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 if !pressed {
                     self.interaction.keys.remove(&key);
-                    if self.interaction.pan_key.as_deref() == Some(&key) {
-                        self.interaction.pan_key = None;
-                    }
-                    reply.handled |= self.release_hold(&key);
                 } else {
                     let repeat = !self.interaction.keys.insert(key.clone()) || repeat;
                     if self.state.preferences.capture.is_some() {
@@ -1089,19 +1107,28 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 viewport,
                             })?;
                             reply.handled = true;
+                        } else if hold_allowed && {
+                            let (change, _) = self.sync_modifier_keys(true)?;
+                            reply.change = merge_change(reply.change, change);
+                            self.in_modifier_hold(&name)
+                        } {
+                            reply.handled = true;
                         } else if let Some(binding) = self.held_shortcut_match(&key, modifiers, divider.is_none()) {
                             reply.handled = true;
                             if !repeat || binding.repeat {
                                 match binding.action {
-                                    ShortcutAction::Pan => self.interaction.pan_key = Some(key),
-                                    ShortcutAction::Hold { command } => self.press_hold(key, command),
                                     ShortcutAction::Action { action } => {
                                         if !matches!(*action, UiAction::Invoke { command } if !self.command(command).enabled)
                                             && !matches!(&*action, UiAction::StepToolSetting { id, .. } if !self.state.tool_settings.iter().any(|c| c.id == *id))
                                         {
+                                            let restore = (!repeat).then(|| self.spring_restore(&action)).flatten();
                                             reply.change = self.dispatch(*action)?;
+                                            if let Some(restore) = restore {
+                                                self.interaction.spring = Some(crate::interaction::Spring { key: name.clone(), restore, used: false });
+                                            }
                                         }
                                     }
+                                    ShortcutAction::Pan | ShortcutAction::Hold { .. } | ShortcutAction::Momentary { .. } => {}
                                 }
                             }
                         }
@@ -1120,6 +1147,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             } => {
                 if !position.into_iter().all(f32::is_finite) {
                     return Err("Invalid pointer position".into());
+                }
+                if phase == ContactPhase::Down
+                    && let Some(spring) = &mut self.interaction.spring
+                {
+                    spring.used = true;
                 }
                 let transform_contact = kind == PointerKind::Touch
                     && (self.interaction.pointer.is_some_and(|contact| contact.id == id && contact.kind == kind)
@@ -1184,6 +1216,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.interaction.modifiers = Modifiers::default();
                 self.interaction.pan_key = None;
                 self.interaction.holds.clear();
+                self.interaction.pressed.clear();
+                self.interaction.modifier_holds.clear();
+                self.interaction.suppressed.clear();
+                self.interaction.spring = None;
+                let released: Vec<_> = self.interaction.momentary.drain(..).map(|(_, restore)| restore).collect();
+                self.interaction.restores.extend(released);
                 self.interaction.axes.clear();
                 self.interaction.keyboard_chrome = false;
                 self.interaction.facts.held = false;
@@ -3050,7 +3088,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::Preferences { action: PreferenceAction::ExportKeymap } if self.state.settings_open => {
                 self.request(HostRequestKind::ExportKeymap {
-                    name: "capycanvas-keymap.json".into(),
+                    name: "capycanvas.capykeys".into(),
                     text: crate::keymaps::export(&self.state.settings),
                 })?;
                 (HOST, false)
@@ -3316,7 +3354,13 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
-    pub fn pen(&mut self, event: PenEvent) -> Result<(), PenEvent> {
+    pub fn pen(&mut self, mut event: PenEvent) -> Result<(), PenEvent> {
+        self.eraser_end(&mut event);
+        if event.phase == PenPhase::Down
+            && let Some(spring) = &mut self.interaction.spring
+        {
+            spring.used = true;
+        }
         self.engine.backend_mut().shader_input();
         if event.phase == PenPhase::Down && self.layer_interaction.tool.selection_tool().is_some()
             && self.layer_interaction.path.is_empty() && self.selection_tools.gesture_mode.is_none() {
@@ -3777,6 +3821,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(change) = self.settle_holds()? {
             changed |= change.regions;
         }
+        changed |= std::mem::take(&mut self.interaction.hold_regions);
         changed |= self.advance_axes(now_ns)?;
         let tonal_changed=std::mem::take(&mut self.tonal_tools.changed);
         if tonal_changed {self.refresh_tools();changed |= regions::DOCUMENT | regions::BRUSH | regions::COMMANDS;}
@@ -4955,6 +5000,7 @@ mod tests {
     include!("held_action_tests.rs");
     include!("gesture_tests.rs");
     include!("keymap_tests.rs");
+    include!("binding_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -15933,8 +15979,12 @@ mod tests {
         invoke(&mut s, CommandId::KeyboardShortcuts);
         record_shortcut(&mut s, "size.48", "k", false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
-        record_shortcut(&mut s, "canvas.pan", "g", false);
-        preference(&mut s, PreferenceAction::ConfirmShortcut { replace: true });
+        let shift = KeyChord::new("shift", Modifiers::default());
+        preference(&mut s, PreferenceAction::AddModifierKey);
+        key(&mut s, "shift_l", true, false, false);
+        preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
+        key(&mut s, "shift_l", false, false, false);
+        preference(&mut s, PreferenceAction::SetModifierKeyAction { key: shift, category: None, action: "command.Hand".into() });
         s.dispatch(UiAction::CloseSettings).unwrap();
         assert!(
             !key(&mut s, "k", true, false, true).handled,
@@ -15945,9 +15995,9 @@ mod tests {
         assert_eq!(s.state.brush.diameter, 48.0);
         assert!(key(&mut s, " ", true, false, false).pan_cursor);
         key(&mut s, " ", false, false, false);
-        assert!(key(&mut s, "g", true, false, false).pan_cursor);
+        assert!(key(&mut s, "shift_l", true, false, false).pan_cursor);
         assert!(
-            !key(&mut s, "g", false, true, true).pan_cursor,
+            !key(&mut s, "shift_l", false, true, true).pan_cursor,
             "release clears pan even if modifiers/focus changed"
         );
     }

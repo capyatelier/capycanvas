@@ -95,6 +95,14 @@ pub struct Settings {
     pub shortcuts: BTreeMap<String, Vec<KeyChord>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub gestures: BTreeMap<String, String>,
+    /// What each pen button does per kind of tool, when set that way.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub pen_buttons: BTreeMap<String, BTreeMap<ToolCategory, String>>,
+    /// The artist's modifier keys; `None` follows the keymap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold_keys: Option<Vec<crate::shortcuts::HoldKey>>,
+    #[serde(skip_serializing_if = "EraserEnd::is_default")]
+    pub eraser_end: EraserEnd,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keymap: Option<crate::keymaps::KeymapRef>,
     /// Per-preset slider values, shared by every placement of that slider.
@@ -125,13 +133,41 @@ impl Default for Settings {
             prediction_ms: 16.0,
             shortcuts: BTreeMap::new(),
             gestures: BTreeMap::new(),
+            hold_keys: None,
+            pen_buttons: BTreeMap::new(),
+            eraser_end: EraserEnd::default(),
             keymap: None,
             slider_bookmarks: BTreeMap::new(),
         }
     }
 }
+/// What the pen's eraser end does, beside the keyboard and button bindings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EraserEnd {
+    /// `None` keeps the current tool.
+    pub tool: Option<CommandId>,
+    /// Paint with transparency, erasing with the tool's brush.
+    pub erase: bool,
+}
+impl Default for EraserEnd {
+    fn default() -> Self {
+        Self { tool: None, erase: true }
+    }
+}
+impl EraserEnd {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    pub fn erases(&self) -> bool {
+        self.erase || self.tool == Some(CommandId::Eraser)
+    }
+}
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
+        if self.eraser_end.tool.is_some_and(|t| !crate::shortcuts::ERASER_END_TOOLS.contains(&t)) {
+            return Err("The eraser end can't use this tool".into());
+        }
         for marks in self.slider_bookmarks.values() {
             marks.validate()?;
         }
@@ -256,16 +292,13 @@ pub enum PreferenceId {
     Feedback,
     PlatformPrediction,
     PredictionHorizon,
+    EraserTool,
+    EraserErase,
     Version,
     License,
     Renderer,
     Website,
     SourceCode,
-    TwoFingerTap,
-    ThreeFingerTap,
-    FourFingerTap,
-    PenButton,
-    PenSecondaryButton,
 }
 impl PreferenceId {
     pub fn key(self) -> &'static str {
@@ -291,49 +324,16 @@ impl PreferenceId {
             Self::Feedback => "feedback",
             Self::PlatformPrediction => "platform-prediction",
             Self::PredictionHorizon => "prediction-horizon",
+            Self::EraserTool => "eraser-tool",
+            Self::EraserErase => "eraser-erase",
             Self::Version => "version",
             Self::License => "license",
             Self::Renderer => "renderer",
             Self::Website => "website",
             Self::SourceCode => "source-code",
-            Self::TwoFingerTap => "two-finger-tap",
-            Self::ThreeFingerTap => "three-finger-tap",
-            Self::FourFingerTap => "four-finger-tap",
-            Self::PenButton => "pen-button",
-            Self::PenSecondaryButton => "pen-secondary-button",
         }
     }
-    fn gesture_trigger(self) -> Option<&'static GestureTrigger> {
-        let id = match self {
-            Self::TwoFingerTap => "touch.tap.2",
-            Self::ThreeFingerTap => "touch.tap.3",
-            Self::FourFingerTap => "touch.tap.4",
-            Self::PenButton => "pen.button.primary",
-            Self::PenSecondaryButton => "pen.button.secondary",
-            _ => return None,
-        };
-        GESTURE_TRIGGERS.iter().find(|t| t.id == id)
-    }
 }
-const TAP_CHOICES: [&str; 6] = [
-    "",
-    "command.Undo",
-    "command.Redo",
-    "command.Eyedropper",
-    "command.SearchCommands",
-    "command.ZenMode",
-];
-const PEN_BUTTON_CHOICES: [&str; 9] = [
-    "",
-    "hold.eyedropper",
-    "hold.eraser",
-    "canvas.pan",
-    "hold.move",
-    "command.Undo",
-    "command.Redo",
-    "command.Eyedropper",
-    "command.SearchCommands",
-];
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PreferenceValue {
@@ -506,6 +506,16 @@ pub struct PreferencesState {
     pub error: Option<String>,
     #[serde(skip)]
     pub(crate) keymap_import: Option<crate::keymaps::KeymapImport>,
+    #[serde(skip)]
+    pub(crate) keymap_details: bool,
+    #[serde(skip)]
+    pub(crate) shortcut_page: crate::shortcut_page::ShortcutPageState,
+    /// The open modifier key and whether it lists every kind of tool.
+    #[serde(skip)]
+    pub(crate) modifier_editor: Option<(KeyChord, bool)>,
+    /// The open pen button and whether it lists every kind of tool.
+    #[serde(skip)]
+    pub(crate) pen_editor: Option<(String, bool)>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferencesView {
@@ -521,6 +531,9 @@ pub struct PreferencesView {
     pub search_results: Vec<PreferenceSearchResult>,
     pub shortcut_query: String,
     pub shortcut_editor: Option<ShortcutEditor>,
+    pub modifier_editor: Option<ModifierKeyEditor>,
+    pub pen_button_editor: Option<crate::shortcut_page::PenButtonEditor>,
+    pub shortcut_page: crate::shortcut_page::ShortcutPageView,
     pub shortcuts: Vec<ShortcutRow>,
     pub keymap: crate::keymaps::KeymapView,
     pub capture: Option<ShortcutCapture>,
@@ -533,15 +546,33 @@ pub struct PreferenceSearchResult {
     pub description: String,
     pub action: PreferenceAction,
 }
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ModifierKeyAction {
+    /// `None` sets every kind of tool at once.
+    pub category: Option<ToolCategory>,
+    pub label: String,
+    pub action: String,
+}
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ModifierKeyEditor {
+    pub key: KeyChord,
+    pub label: String,
+    pub per_tool: bool,
+    pub actions: Vec<ModifierKeyAction>,
+    pub modified: bool,
+}
 #[derive(Clone, Debug, Serialize)]
 pub struct ShortcutEditor {
     pub id: String,
     pub label: String,
+    pub description: String,
     pub group: String,
     pub scope: String,
     pub source: String,
     pub overlaps: Vec<String>,
     pub bindings: Vec<String>,
+    pub keys: Vec<Vec<String>>,
+    pub gestures: Vec<String>,
     pub defaults: Vec<String>,
     pub modified: bool,
     pub can_add: bool,
@@ -590,6 +621,43 @@ pub enum PreferenceAction {
         id: String,
     },
     ResetAllShortcuts,
+    EditModifierKey {
+        key: KeyChord,
+    },
+    CloseModifierKey,
+    AddModifierKey,
+    /// No category sets every kind of tool; an empty action does nothing.
+    SetModifierKeyAction {
+        key: KeyChord,
+        category: Option<ToolCategory>,
+        action: String,
+    },
+    ModifierKeyPerTool {
+        key: KeyChord,
+        per_tool: bool,
+    },
+    OpenModifierPicker {
+        key: KeyChord,
+        category: Option<ToolCategory>,
+    },
+    RemoveModifierKey {
+        key: KeyChord,
+    },
+    ResetModifierKey {
+        key: KeyChord,
+    },
+    EditPenButton {
+        trigger: String,
+    },
+    ClosePenButton,
+    PenButtonPerTool {
+        trigger: String,
+        per_tool: bool,
+    },
+    OpenPenButtonPicker {
+        trigger: String,
+        category: Option<ToolCategory>,
+    },
     SelectKeymap {
         id: String,
     },
@@ -600,6 +668,34 @@ pub enum PreferenceAction {
     },
     ConfirmKeymapImport,
     CancelKeymapImport,
+    KeymapDetails {
+        open: bool,
+    },
+    ShortcutCategory {
+        id: Option<String>,
+    },
+    SearchShortcutKey {
+        chord: KeyChord,
+    },
+    ShortcutContext {
+        category: Option<crate::ToolCategory>,
+    },
+    ShortcutShow {
+        show: crate::ShortcutShow,
+    },
+    OpenActionPicker {
+        trigger: String,
+    },
+    SearchActionPicker {
+        query: String,
+    },
+    ChooseAction {
+        id: String,
+    },
+    ResetTrigger {
+        trigger: String,
+    },
+    CloseActionPicker,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -735,18 +831,6 @@ impl Settings {
                 value,
                 enabled: row.enabled && row.kind.value().as_ref() != Some(&default_value),
             });
-            if let Some(trigger) = row.id.gesture_trigger()
-                && let Some(reset) = &mut row.reset
-            {
-                let default = self.gesture_default(trigger.id);
-                reset.value = self
-                    .gesture_choices(trigger, platform)
-                    .into_iter()
-                    .find(|(id, _)| id == default)
-                    .map_or_else(|| "Nothing".into(), |(_, label)| label);
-                reset.hint = reset.value.clone();
-                reset.enabled = row.enabled && self.gestures.contains_key(trigger.id);
-            }
             if let (PreferenceKind::Number { control, .. }, PreferenceValue::Number(value)) =
                 (&mut row.kind, default_value)
             {
@@ -911,11 +995,36 @@ impl Settings {
                     rows: input,
                 },
                 PreferenceGroup {
-                    title: "Touch and pen buttons".into(),
-                    rows: [TwoFingerTap, ThreeFingerTap, FourFingerTap, PenButton, PenSecondaryButton]
-                        .into_iter()
-                        .filter_map(|id| self.gesture_row(id, platform))
-                        .collect(),
+                    title: "Eraser end".into(),
+                    rows: vec![
+                        PreferenceRow {
+                            visible: platform.pen_buttons(),
+                            ..row(
+                                EraserTool,
+                                "Tool",
+                                "Flip the pen to use this tool.",
+                                PreferenceKind::Choice {
+                                    presentation: ChoicePresentation::Dropdown,
+                                    options: std::iter::once("Current tool".to_string())
+                                        .chain(crate::shortcuts::ERASER_END_TOOLS.iter().map(|c| c.label().to_string()))
+                                        .collect(),
+                                    icons: Vec::new(),
+                                    selected: self.eraser_end.tool.map_or(0, |tool| {
+                                        1 + crate::shortcuts::ERASER_END_TOOLS.iter().position(|c| *c == tool).unwrap_or(0) as u32
+                                    }),
+                                },
+                            )
+                        },
+                        PreferenceRow {
+                            visible: platform.pen_buttons() && self.eraser_end.tool != Some(CommandId::Eraser),
+                            ..row(
+                                EraserErase,
+                                "Paint with transparency",
+                                "Erase with the tool's brush.",
+                                PreferenceKind::Switch { active: self.eraser_end.erase },
+                            )
+                        },
+                    ],
                 },
             ],
             Vec::new(),
@@ -1067,43 +1176,6 @@ impl Settings {
         })
     }
 
-    fn gesture_choices(&self, trigger: &GestureTrigger, platform: Platform) -> Vec<(String, String)> {
-        let definitions = crate::shortcuts::definitions(platform);
-        let label = |id: &str| {
-            if id.is_empty() {
-                Some("Nothing".to_string())
-            } else {
-                definitions.iter().find(|(d, _)| d.id == id).map(|(d, _)| d.label.clone())
-            }
-        };
-        let current = self.gesture_binding(trigger.id);
-        let curated = if trigger.held { &PEN_BUTTON_CHOICES[..] } else { &TAP_CHOICES[..] };
-        curated
-            .iter()
-            .copied()
-            .chain((!curated.contains(&current)).then_some(current))
-            .filter_map(|id| label(id).map(|label| (id.to_string(), label)))
-            .collect()
-    }
-    fn gesture_row(&self, id: PreferenceId, platform: Platform) -> Option<PreferenceRow> {
-        let trigger = id.gesture_trigger()?;
-        if !(if trigger.held { platform.pen_buttons() } else { platform.touch_gestures() }) {
-            return None;
-        }
-        let choices = self.gesture_choices(trigger, platform);
-        let current = self.gesture_binding(trigger.id);
-        Some(row(
-            id,
-            trigger.label,
-            if trigger.held { "Nothing leaves the button to the tablet driver." } else { "" },
-            PreferenceKind::Choice {
-                presentation: ChoicePresentation::Dropdown,
-                icons: Vec::new(),
-                selected: choices.iter().position(|(c, _)| c == current).unwrap_or(0) as u32,
-                options: choices.into_iter().map(|(_, label)| label).collect(),
-            },
-        ))
-    }
     pub(crate) fn field(&self, id: PreferenceId, platform: Platform) -> Result<PreferenceRow, String> {
         self.pages(platform)
             .into_iter()
@@ -1201,19 +1273,15 @@ impl Settings {
             PlatformPrediction => {
                 self.platform_prediction = matches!(value, PreferenceValue::Bool(true))
             }
+            EraserTool => {
+                self.eraser_end.tool = match value.choice().unwrap() {
+                    0 => None,
+                    index => Some(crate::shortcuts::ERASER_END_TOOLS[index as usize - 1]),
+                }
+            }
+            EraserErase => self.eraser_end.erase = matches!(value, PreferenceValue::Bool(true)),
             Version | License | Renderer | Website | SourceCode => {
                 return Err("This information is read-only".into());
-            }
-            TwoFingerTap | ThreeFingerTap | FourFingerTap | PenButton | PenSecondaryButton => {
-                let trigger = id.gesture_trigger().unwrap();
-                let (choice, _) = self
-                    .gesture_choices(trigger, platform)
-                    .swap_remove(value.choice().unwrap() as usize);
-                if choice == self.gesture_default(trigger.id) {
-                    self.gestures.remove(trigger.id);
-                } else {
-                    self.gestures.insert(trigger.id.into(), choice);
-                }
             }
         }
         Ok(())
@@ -1233,6 +1301,21 @@ impl Settings {
             .and_then(|r| r.kind.value())
             .ok_or_else(|| "This setting cannot be reset.".into())
     }
+}
+const MODIFIER_KEYS: &str = "Choose another key for this modifier key";
+fn reset_binding(settings: &mut Settings, id: &str, platform: Platform) -> Result<(), String> {
+    if !crate::shortcuts::definitions(platform).iter().any(|(d, _)| d.id == id) {
+        return Err("Unknown shortcut action".into());
+    }
+    let mut candidate = settings.clone();
+    candidate.shortcuts.remove(id);
+    for chord in candidate.base_keys(id) {
+        if let Some(conflict) = candidate.conflict(id, &chord, platform).filter(|c| settings.shortcuts.contains_key(&c.id)) {
+            return Err(format!("Remove {}'s shortcut first.", conflict.label));
+        }
+    }
+    *settings = candidate;
+    Ok(())
 }
 impl PreferencesState {
     pub(crate) fn view(
@@ -1309,26 +1392,17 @@ impl PreferencesState {
                 }
             }
         }
-        let shortcut_query = self.shortcut_query.trim().to_lowercase();
-        let shortcuts: Vec<_> = crate::shortcuts::definitions(platform)
-            .into_iter()
-            .map(|(definition, group)| {
-                let mut shortcut = settings.shortcut_label(&definition.id, platform);
-                if shortcut.is_empty() {
-                    shortcut = "Disabled".into();
-                }
-                ShortcutRow {
-                    visible: format!("{group} {} {shortcut}", definition.label)
-                        .to_lowercase()
-                        .contains(&shortcut_query),
-                    modified: settings.shortcut_modified(&definition.id),
-                    shortcut,
-                    id: definition.id,
-                    label: definition.label,
-                    group: group.into(),
-                }
-            })
-            .collect();
+        let shortcuts = crate::shortcut_page::rows(settings, platform, &self.shortcut_page, &self.shortcut_query);
+        let shortcut_page = crate::shortcut_page::view(settings, platform, &self.shortcut_page, &self.shortcut_query, &shortcuts);
+        for trigger in &shortcut_page.triggers {
+            if !query.is_empty() && format!("shortcuts {} {}", trigger.label, trigger.action).to_lowercase().contains(&query) {
+                search_results.push(PreferenceSearchResult {
+                    title: trigger.label.clone(),
+                    description: SettingsPage::Input.title().into(),
+                    action: PreferenceAction::Page { page: SettingsPage::Input },
+                });
+            }
+        }
         for row in &shortcuts {
             if !query.is_empty()
                 && format!(
@@ -1356,6 +1430,13 @@ impl PreferencesState {
             Some(ShortcutEditor {
                 id: id.clone(),
                 label: row.label.clone(),
+                description: CommandId::ALL
+                    .into_iter()
+                    .find(|c| c.shortcut_id() == *id)
+                    .map(|command| crate::customization::tool_choice(crate::ToolbarControl::Command { command }).description)
+                    .or_else(|| (!row.subgroup.is_empty()).then(|| format!("Brush for the {} tool", row.subgroup)))
+                    .or_else(|| (!row.detail.is_empty()).then(|| row.detail.clone()))
+                    .unwrap_or_else(|| row.group.clone()),
                 group: row.group.clone(),
                 scope,
                 source: if settings.shortcuts.contains_key(id) {
@@ -1368,6 +1449,8 @@ impl PreferencesState {
                 overlaps,
                 can_add: bindings.len() < crate::shortcuts::MAX_SHORTCUTS,
                 bindings,
+                keys: settings.keys(id).iter().map(|k| k.label_parts(platform)).collect(),
+                gestures: row.gestures.clone(),
                 defaults: settings
                     .base_keys(id)
                     .iter()
@@ -1390,15 +1473,26 @@ impl PreferencesState {
             search_results,
             shortcut_query: self.shortcut_query.clone(),
             shortcut_editor,
-            keymap: crate::keymaps::view(settings, self.keymap_import.as_ref()),
+            modifier_editor: self.modifier_editor.as_ref().map(|(key, per_tool)| {
+                crate::shortcut_page::modifier_editor(settings, platform, key, *per_tool)
+            }),
+            pen_button_editor: self
+                .pen_editor
+                .as_ref()
+                .and_then(|(trigger, per_tool)| crate::shortcut_page::pen_editor(settings, platform, trigger, *per_tool)),
+            shortcut_page,
+            keymap: crate::keymaps::view(settings, self.keymap_import.as_ref(), self.keymap_details),
             shortcuts,
             capture: self.capture.clone().map(|mut c| {
                 if self.error.is_some() {
                     c.error = self.error.clone();
                 }
                 c.notice = c.error.clone().unwrap_or_else(|| {
+                    if c.existing {
+                        return "Already a modifier key".into();
+                    }
                     c.conflict.as_ref().map_or_else(String::new, |label| {
-                        format!("Replace the shortcut used by {label}?")
+                        format!("Used by {label}")
                     })
                 });
                 c
@@ -1433,6 +1527,9 @@ impl PreferencesState {
             }
             PreferenceAction::Page { page } => {
                 self.page = page;
+                self.shortcut_page.category = None;
+                self.modifier_editor = None;
+                self.pen_editor = None;
                 self.reveal = None;
                 self.query.clear();
                 self.searching = false;
@@ -1456,16 +1553,17 @@ impl PreferencesState {
                 if query.len() > 256 {
                     return Err("Search is too long".into());
                 }
+                if query != self.shortcut_query {
+                    self.shortcut_page.key = None;
+                }
                 self.shortcut_query = query;
             }
             PreferenceAction::Edit { id, value } => settings.edit(id, value, platform)?,
-            PreferenceAction::Reset { id } if let Some(trigger) = id.gesture_trigger() => {
-                settings.gestures.remove(trigger.id);
-            }
             PreferenceAction::Reset { id } => {
                 settings.edit(id, settings.default_value(id, platform)?, platform)?;
             }
             PreferenceAction::EditShortcut { id } => {
+                let id = crate::shortcuts::hold_target(&id).unwrap_or(id);
                 if !crate::shortcuts::definitions(platform)
                     .iter()
                     .any(|(d, _)| d.id == id)
@@ -1483,7 +1581,8 @@ impl PreferencesState {
                 self.capture = None;
             }
             PreferenceAction::RemoveShortcut { id, index } => {
-                if self.editing_shortcut.as_ref() != Some(&id) {
+                let target = crate::shortcuts::hold_target(&id).unwrap_or_else(|| id.clone());
+                if self.editing_shortcut.as_ref() != Some(&target) {
                     return Err("Shortcut editor is not open".into());
                 }
                 let mut keys = settings.keys(&id);
@@ -1501,13 +1600,16 @@ impl PreferencesState {
                 if settings.keys(&id).len() >= crate::shortcuts::MAX_SHORTCUTS {
                     return Err("Remove a shortcut before adding another".into());
                 }
+                self.editing_shortcut = Some(crate::shortcuts::hold_target(&id).unwrap_or_else(|| id.clone()));
                 self.capture = Some(ShortcutCapture {
                     id,
                     label: definition.label,
                     chord: None,
                     shortcut: "Press a new key combination".into(),
+                    keys: Vec::new(),
                     conflict: None,
                     error: None,
+                    existing: false,
                     notice: String::new(),
                 });
             }
@@ -1521,20 +1623,32 @@ impl PreferencesState {
                     .chord
                     .clone()
                     .ok_or("Press a key combination first")?;
-                chord.validate_for(settings.held_shortcut(&capture.id, platform))?;
+                let modifier = capture.id == crate::shortcuts::MODIFIER_CAPTURE;
+                if modifier && !chord.holdable() {
+                    return Err(MODIFIER_KEYS.into());
+                } else if !modifier {
+                    chord.validate_for(settings.held_shortcut(&capture.id, platform))?;
+                }
                 if !chord.available(platform) {
                     return Err("This shortcut is reserved by the browser".into());
                 }
                 let mut keys = settings.keys(&capture.id);
-                if keys.contains(&chord) {
+                if !modifier && keys.contains(&chord) {
                     return Err("This shortcut is already assigned to this action".into());
                 }
-                if keys.len() >= crate::shortcuts::MAX_SHORTCUTS {
+                if !modifier && keys.len() >= crate::shortcuts::MAX_SHORTCUTS {
                     return Err("Remove a shortcut before adding another".into());
                 }
-                if let Some(conflict) = settings.conflict(&capture.id, &chord, platform) {
-                    if !replace {
-                        return Err(format!("Already assigned to {}", conflict.label));
+                let conflicts = settings.conflicts(&capture.id, &chord, platform);
+                if let Some(conflict) = conflicts.first().filter(|_| !replace) {
+                    return Err(format!("Already assigned to {}", conflict.label));
+                }
+                for conflict in conflicts {
+                    if conflict.id.starts_with(crate::shortcuts::MODIFIER_PREFIX) {
+                        let mut table = settings.hold_keys(platform);
+                        table.retain(|h| h.key != chord);
+                        crate::shortcut_page::store_modifiers(settings, platform, table);
+                        continue;
                     }
                     let keys = settings
                         .keys(&conflict.id)
@@ -1543,27 +1657,93 @@ impl PreferencesState {
                         .collect();
                     settings.shortcuts.insert(conflict.id, keys);
                 }
-                keys.push(chord);
-                settings.shortcuts.insert(capture.id.clone(), keys);
+                if modifier {
+                    let mut table = settings.hold_keys(platform);
+                    if !table.iter().any(|h| h.key == chord) {
+                        table.push(crate::shortcuts::HoldKey { key: chord.clone(), actions: Default::default() });
+                    }
+                    crate::shortcut_page::store_modifiers(settings, platform, table);
+                    self.modifier_editor = Some((chord, false));
+                } else {
+                    keys.push(chord);
+                    settings.shortcuts.insert(capture.id.clone(), keys);
+                }
                 self.capture = None;
             }
-            PreferenceAction::ResetShortcut { id } => {
-                if !crate::shortcuts::definitions(platform)
-                    .iter()
-                    .any(|(d, _)| d.id == id)
-                {
-                    return Err("Unknown shortcut action".into());
-                }
-                for chord in settings.base_keys(&id) {
-                    if let Some(conflict) = settings.conflict(&id, &chord, platform) {
-                        return Err(format!("Remove {}'s shortcut first.", conflict.label));
-                    }
-                }
-                settings.shortcuts.remove(&id);
-            }
+            PreferenceAction::ResetShortcut { id } => reset_binding(settings, &id, platform)?,
             PreferenceAction::ResetAllShortcuts => {
                 settings.shortcuts.clear();
+                settings.hold_keys = None;
+                settings.gestures.clear();
+                settings.pen_buttons.clear();
                 self.capture = None;
+            }
+            PreferenceAction::EditModifierKey { key } => {
+                if !settings.hold_keys(platform).iter().any(|h| h.key == key) {
+                    return Err("Unknown modifier key".into());
+                }
+                self.page = SettingsPage::Shortcuts;
+                self.capture = None;
+                self.modifier_editor = Some((key, false));
+            }
+            PreferenceAction::CloseModifierKey => {
+                self.modifier_editor = None;
+                self.shortcut_page.modifier_picker = None;
+                if self.capture.as_ref().is_some_and(|c| c.id == crate::shortcuts::MODIFIER_CAPTURE) {
+                    self.capture = None;
+                }
+            }
+            PreferenceAction::AddModifierKey => {
+                self.editing_shortcut = None;
+                self.modifier_editor = None;
+                self.capture = Some(ShortcutCapture {
+                    id: crate::shortcuts::MODIFIER_CAPTURE.into(),
+                    label: "New modifier key".into(),
+                    chord: None,
+                    shortcut: "Press a key or button".into(),
+                    keys: Vec::new(),
+                    conflict: None,
+                    error: None,
+                    existing: false,
+                    notice: String::new(),
+                });
+            }
+            PreferenceAction::SetModifierKeyAction { key, category, action } => {
+                crate::shortcut_page::set_modifier(settings, platform, &key, category, &action)?;
+                self.shortcut_page.modifier_picker = None;
+                self.shortcut_page.picker = None;
+            }
+            PreferenceAction::ModifierKeyPerTool { key, per_tool } => {
+                if !per_tool {
+                    crate::shortcut_page::unify_modifier(settings, platform, &key)?;
+                }
+                self.modifier_editor = Some((key, per_tool));
+            }
+            PreferenceAction::OpenModifierPicker { key, category } => {
+                if !settings.hold_keys(platform).iter().any(|h| h.key == key) {
+                    return Err("Unknown modifier key".into());
+                }
+                self.shortcut_page.modifier_picker = Some((key, category));
+                self.shortcut_page.picker = Some((crate::shortcuts::MODIFIER_CAPTURE.into(), String::new()));
+            }
+            PreferenceAction::RemoveModifierKey { key } => {
+                let mut table = settings.hold_keys(platform);
+                table.retain(|h| h.key != key);
+                crate::shortcut_page::store_modifiers(settings, platform, table);
+                self.modifier_editor = None;
+            }
+            PreferenceAction::ResetModifierKey { key } => {
+                let default = settings.default_hold_keys(platform).into_iter().find(|h| h.key == key);
+                let mut table = settings.hold_keys(platform);
+                match (table.iter().position(|h| h.key == key), default) {
+                    (Some(index), Some(default)) => table[index] = default,
+                    (Some(index), None) => {
+                        table.remove(index);
+                        self.modifier_editor = None;
+                    }
+                    (None, _) => return Err("Unknown modifier key".into()),
+                }
+                crate::shortcut_page::store_modifiers(settings, platform, table);
             }
             PreferenceAction::SelectKeymap { id } => crate::keymaps::select(settings, &id)?,
             PreferenceAction::ImportKeymap { text } => {
@@ -1574,6 +1754,88 @@ impl PreferencesState {
                 self.capture = None;
             }
             PreferenceAction::CancelKeymapImport => self.keymap_import = None,
+            PreferenceAction::KeymapDetails { open } => self.keymap_details = open,
+            PreferenceAction::ShortcutCategory { id } => {
+                if id.as_deref().is_some_and(|id| {
+                    id != crate::shortcut_page::MODIFIER_SECTION && !crate::shortcuts::SHORTCUT_SECTIONS.contains(&id)
+                }) {
+                    return Err("Unknown shortcut category".into());
+                }
+                self.shortcut_page.category = id;
+            }
+            PreferenceAction::SearchShortcutKey { chord } => {
+                self.shortcut_query = chord.label(platform);
+                self.shortcut_page.key = Some(chord);
+            }
+            PreferenceAction::ShortcutContext { category } => self.shortcut_page.context = category,
+            PreferenceAction::ShortcutShow { show } => self.shortcut_page.show = show,
+            PreferenceAction::OpenActionPicker { trigger } => {
+                if !crate::GESTURE_TRIGGERS.iter().any(|t| t.id == trigger) {
+                    return Err("Unknown gesture or pen button".into());
+                }
+                self.shortcut_page.picker = Some((trigger, String::new()));
+            }
+            PreferenceAction::SearchActionPicker { query } => {
+                if query.len() > 256 {
+                    return Err("Search is too long".into());
+                }
+                if let Some((_, current)) = &mut self.shortcut_page.picker {
+                    *current = query;
+                }
+            }
+            PreferenceAction::ChooseAction { id } => {
+                if let Some((trigger, category)) = self.shortcut_page.pen_picker.take() {
+                    crate::shortcut_page::set_pen_button(settings, platform, &trigger, category, &id)?;
+                    self.shortcut_page.picker = None;
+                    return Ok(());
+                }
+                if let Some((key, category)) = self.shortcut_page.modifier_picker.take() {
+                    crate::shortcut_page::set_modifier(settings, platform, &key, category, &id)?;
+                    self.shortcut_page.picker = None;
+                    return Ok(());
+                }
+                let (trigger, _) = self.shortcut_page.picker.clone().ok_or("Choose a gesture or pen button first")?;
+                crate::shortcut_page::choose(settings, platform, &trigger, &id)?;
+                self.shortcut_page.picker = None;
+            }
+            PreferenceAction::ResetTrigger { trigger } => {
+                if !crate::GESTURE_TRIGGERS.iter().any(|t| t.id == trigger) {
+                    return Err("Unknown gesture or pen button".into());
+                }
+                settings.gestures.remove(&trigger);
+                settings.pen_buttons.remove(&trigger);
+                self.shortcut_page.picker = None;
+            }
+            PreferenceAction::CloseActionPicker => {
+                self.shortcut_page.picker = None;
+                self.shortcut_page.modifier_picker = None;
+                self.shortcut_page.pen_picker = None;
+            }
+            PreferenceAction::EditPenButton { trigger } => {
+                if !GESTURE_TRIGGERS.iter().any(|t| t.id == trigger && t.held) {
+                    return Err("Unknown pen button".into());
+                }
+                self.page = SettingsPage::Input;
+                self.pen_editor = Some((trigger, false));
+            }
+            PreferenceAction::ClosePenButton => {
+                self.pen_editor = None;
+                self.shortcut_page.pen_picker = None;
+            }
+            PreferenceAction::PenButtonPerTool { trigger, per_tool } => {
+                if !per_tool {
+                    crate::shortcut_page::unify_pen_button(settings, platform, &trigger)?;
+                }
+                self.pen_editor = Some((trigger, per_tool));
+            }
+            PreferenceAction::OpenPenButtonPicker { trigger, category } => {
+                if !GESTURE_TRIGGERS.iter().any(|t| t.id == trigger && t.held) {
+                    return Err("Unknown pen button".into());
+                }
+                self.shortcut_page.pen_picker = Some((trigger.clone(), category));
+                self.shortcut_page.modifier_picker = None;
+                self.shortcut_page.picker = Some((trigger, String::new()));
+            }
             PreferenceAction::ExportKeymap | PreferenceAction::ChooseKeymapFile => {
                 return Err("Keymap files need the app's file chooser".into());
             }
@@ -1582,8 +1844,12 @@ impl PreferencesState {
     }
     pub(crate) fn record(&mut self, settings: &Settings, chord: KeyChord, platform: Platform) {
         self.error = None;
+        let modifier = self.capture.as_ref().is_some_and(|c| c.id == crate::shortcuts::MODIFIER_CAPTURE);
         let held = self.capture.as_ref().is_some_and(|c| settings.held_shortcut(&c.id, platform));
-        if KeyChord::modifier(&chord.key) && !(held && chord.validate_for(true).is_ok()) {
+        if KeyChord::modifier(&chord.key)
+            && !(modifier && chord.holdable())
+            && !(held && chord.validate_for(true).is_ok())
+        {
             return;
         }
         if chord.key == "escape" {
@@ -1591,14 +1857,22 @@ impl PreferencesState {
             return;
         }
         if let Some(capture) = &mut self.capture {
-            capture.error = chord.validate_for(held).err().or_else(|| {
+            let valid = if modifier {
+                (!chord.holdable()).then(|| MODIFIER_KEYS.to_string())
+            } else {
+                chord.validate_for(held).err()
+            };
+            capture.error = valid.or_else(|| {
                 (!chord.available(platform))
                     .then(|| "This shortcut is reserved by the browser".into())
             });
+            capture.existing = modifier && settings.hold_keys(platform).iter().any(|h| h.key == chord);
             capture.conflict = settings
                 .conflict(&capture.id, &chord, platform)
-                .map(|d| d.label);
+                .map(|d| d.label)
+                .filter(|_| !capture.existing);
             capture.shortcut = chord.label(platform);
+            capture.keys = chord.label_parts(platform);
             capture.chord = capture.error.is_none().then_some(chord);
         }
     }

@@ -12,6 +12,7 @@ pub struct KeymapPreset {
     pub id: &'static str,
     pub revision: u32,
     pub title: &'static str,
+    pub app: &'static str,
     pub source: &'static str,
     pub links: &'static [&'static str],
     keys: &'static [(&'static str, &'static [&'static str])],
@@ -66,6 +67,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
         id: "capy",
         revision: 1,
         title: "CapyCanvas",
+        app: "CapyCanvas",
         source: "CapyCanvas defaults",
         links: &[],
         keys: &[],
@@ -75,7 +77,8 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     KeymapPreset {
         id: "photoshop",
         revision: 1,
-        title: "Photoshop-inspired",
+        title: "Photoshop Style",
+        app: "Photoshop",
         source: "Adobe Photoshop default keyboard shortcuts, US layout, modern undo; checked 2026-09-25",
         links: &["https://helpx.adobe.com/content/dam/help/en/photoshop/using/default-keyboard-shortcuts/photoshop-keyboard-shortcuts.pdf"],
         keys: &[
@@ -102,8 +105,8 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("F", "Photoshop cycles three screen modes. Capy has one full-screen mode on F11."),
             ("D", "Photoshop resets black and white. Capy's D resets mask colors only."),
             ("Hold ~", "Photoshop erases with the current brush. Bind Erase while held to use Capy's eraser instead."),
-            ("Primary+1", "Capy has no 100% zoom command."),
-            ("Primary+E", "Capy has no merge-down command."),
+            ("Ctrl+1", "Capy has no 100% zoom command."),
+            ("Ctrl+E", "Capy has no merge-down command."),
             ("Shift+[ and Shift+]", "Capy has no brush hardness steps."),
             ("Alt+right-drag", "Capy has no on-canvas brush resize drag."),
         ],
@@ -111,7 +114,8 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     KeymapPreset {
         id: "krita",
         revision: 1,
-        title: "Krita-inspired",
+        title: "Krita Style",
+        app: "Krita",
         source: "Krita 5.3 manual default shortcuts, US layout; checked 2026-09-25",
         links: &[
             "https://docs.krita.org/en/user_manual/getting_started/navigation.html",
@@ -142,13 +146,14 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("5", "Capy has no view rotation reset command."),
             ("Hold Shift and drag", "Capy has no on-canvas brush resize drag."),
             ("/", "Capy has no command to swap to the previous brush preset."),
-            ("+ and -", "Capy zooms with Primary+= and Primary+-."),
+            ("+ and -", "Capy zooms with Ctrl+= and Ctrl+-."),
         ],
     },
     KeymapPreset {
         id: "clip-studio",
         revision: 1,
-        title: "Clip Studio Paint-inspired",
+        title: "Clip Studio Paint Style",
+        app: "Clip Studio Paint",
         source: "Clip Studio Paint manual shortcut lists, Studio Mode defaults; checked 2026-09-25",
         links: &[
             "https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Tool_Shortcuts.htm",
@@ -176,14 +181,15 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("C", "Capy has no transparent-color toggle."),
             ("Hold Ctrl+Alt and drag", "Capy has no on-canvas brush resize drag."),
             ("[ and ]", "Clip Studio steps through preset sizes. Capy steps by the size setting's increment."),
-            ("Primary+E", "Capy has no merge-down command."),
-            ("Primary+Shift+P", "Browsers reserve this command search chord. On the web, open search from the toolbar."),
+            ("Ctrl+E", "Capy has no merge-down command."),
+            ("Ctrl+Shift+P", "Browsers reserve this command search chord. On the web, open search from the toolbar."),
         ],
     },
     KeymapPreset {
         id: "procreate",
         revision: 1,
-        title: "Procreate-inspired",
+        title: "Procreate Style",
+        app: "Procreate",
         source: "Procreate Handbook keyboard and gesture pages, current iPadOS; checked 2026-09-25",
         links: &[
             "https://help.procreate.com/procreate/handbook/interface-gestures/keyboard",
@@ -198,9 +204,113 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("Space", "Capy has no QuickMenu. Space pans the canvas while held."),
             ("L and C", "Capy has no commands that open the Layers or Colors panel."),
             ("X", "Procreate swaps the current and previous color. Capy's swap uses foreground and background."),
-            ("Primary+A", "Procreate copies everything visible. Capy selects all."),
+            ("Ctrl+A", "Procreate copies everything visible. Capy selects all."),
             ("Hold two or three fingers", "Capy does not repeat undo or redo while fingers are held."),
-            ("Quick pinch", "Fit the canvas with Primary+0."),
+            ("Quick pinch", "Fit the canvas with Ctrl+0."),
+        ],
+    },
+    KeymapPreset {
+        id: "gimp",
+        revision: 1,
+        title: "GIMP Style",
+        app: "GIMP",
+        source: "GIMP 3.2 default shortcuts, US layout; checked 2026-09-26",
+        links: &[
+            "https://docs.gimp.org/3.2/en/gimp-tools-paint.html",
+            "https://gitlab.gnome.org/GNOME/gimp/-/tree/GIMP_3_2_6/app/actions",
+            "https://gitlab.gnome.org/GNOME/gimp/-/tree/GIMP_3_2_6/app/tools",
+        ],
+        keys: &[
+            ("command.Redo", &["primary+y"]),
+            ("command.SearchCommands", &["/"]),
+            ("command.ImportImage", &["primary+alt+o"]),
+            ("command.DocumentProperties", &["alt+enter"]),
+            ("hold.eyedropper", &["control"]),
+            ("command.Eraser", &["shift+e"]),
+            ("command.EllipseSelect", &["e"]),
+            ("command.RectangleSelect", &["r"]),
+            ("command.Lasso", &["f"]),
+            ("command.AutoSelect", &["u"]),
+            ("command.Figure", &[]),
+            ("command.ColorSelect", &["shift+o"]),
+            ("command.Move", &["m"]),
+            ("command.ScaleRotate", &["shift+t", "shift+s", "shift+r"]),
+            ("command.SelectionOutline", &["primary+t"]),
+            ("command.Eyedropper", &["o"]),
+            ("command.Fill", &["shift+b"]),
+            ("command.Brush", &["p"]),
+            ("tools.ink", &[]),
+            ("command.Pencil", &["n"]),
+            ("command.Airbrush", &["a"]),
+            ("command.Pen", &["k"]),
+            ("command.Blend", &["s"]),
+            ("command.Liquify", &["w"]),
+            ("command.QuickMask", &["shift+q"]),
+            ("command.Deselect", &["primary+shift+a"]),
+            ("command.InvertSelection", &["primary+i"]),
+            ("command.Reselect", &[]),
+            ("command.FitCanvas", &["primary+shift+j"]),
+            ("command.AddLayer", &["primary+shift+n"]),
+            ("command.NewWindow", &[]),
+            ("command.FillSelection", &["primary+,"]),
+            ("command.Settings", &[]),
+            ("layer.duplicate", &["primary+shift+d"]),
+            ("color.swap", &["x"]),
+        ],
+        gestures: &[],
+        differences: &[
+            ("D", "GIMP resets black and white. Capy's D resets mask colors only."),
+            ("Ctrl+Shift+Z and Ctrl+Shift+Y", "Capy has no strong undo or redo. Ctrl+Shift+Y toggles Capy's gamut warning."),
+            ("+ and -", "Capy zooms with Ctrl+= and Ctrl+-."),
+            ("1", "Capy has no 100% zoom command."),
+            ("Ctrl+E", "Capy has no quick re-export. Export with Ctrl+Shift+E."),
+            ("Delete", "Capy has no command that clears only the selection."),
+            ("{ and }", "Capy has no large brush size steps."),
+            ("B and H", "Capy has no Paths or Heal tool. B and H keep Capy's paint tools and Hand."),
+        ],
+    },
+    KeymapPreset {
+        id: "affinity",
+        revision: 1,
+        title: "Affinity Style",
+        app: "Affinity",
+        source: "Affinity Help Center shortcut lists, Pixel Studio, September 2026 release, Windows keys; checked 2026-09-26",
+        links: &[
+            "https://www.affinity.studio/help/workspace-shortcuts-pixel-studio/",
+            "https://www.affinity.studio/help/workspace-shortcuts-editing/",
+            "https://www.affinity.studio/help/workspace-shortcuts-workspace/",
+            "https://www.affinity.studio/help/workspace-feature-finder/",
+        ],
+        keys: &[
+            ("command.Redo", &["primary+shift+z"]),
+            ("command.SearchCommands", &["primary+alt+shift+f"]),
+            ("command.ImportImage", &["primary+shift+m"]),
+            ("command.ExportDocument", &["primary+alt+shift+w"]),
+            ("hold.move", &["control"]),
+            ("command.Move", &["v"]),
+            ("command.Lasso", &["l"]),
+            ("command.RectangleSelect", &["m"]),
+            ("command.Brush", &["b"]),
+            ("tools.paint", &[]),
+            ("command.AddLayer", &["primary+shift+n"]),
+            ("command.NewWindow", &[]),
+            ("command.RaiseLayer", &["primary+]"]),
+            ("command.LowerLayer", &["primary+["]),
+            ("command.FillSelection", &["alt+backspace"]),
+            ("layer.duplicate", &["primary+j"]),
+            ("layer.group", &["primary+g"]),
+            ("color.swap", &["shift+x"]),
+        ],
+        gestures: &[],
+        differences: &[
+            ("X", "Affinity switches the active color selector. Capy swaps colors with Shift+X."),
+            ("D", "Affinity resets black and white. Capy's D resets mask colors only."),
+            ("G, M and W", "Affinity cycles tool groups. This keymap selects Gradient, Rectangle select and Auto select; Fill stays on F."),
+            ("Number keys", "Capy has no number-key opacity shortcuts."),
+            ("Shift+[ and Shift+]", "Capy has no brush hardness steps."),
+            ("Ctrl+Alt+drag", "Capy has no on-canvas brush resize drag."),
+            ("Ctrl+E", "Capy has no merge-down command."),
+            ("Ctrl+1", "Capy has no 100% zoom command."),
         ],
     },
 ];
@@ -231,11 +341,13 @@ pub struct KeymapView {
     pub presets: Vec<KeymapChoice>,
     pub selected: String,
     pub title: String,
+    pub app: String,
     pub source: String,
     pub links: Vec<String>,
     pub outdated: bool,
     pub differences: Vec<KeymapDifference>,
     pub import: Option<KeymapImportPreview>,
+    pub details: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -258,16 +370,21 @@ struct KeymapFile {
     shortcuts: std::collections::BTreeMap<String, Vec<KeyChord>>,
     #[serde(default)]
     gestures: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    modifiers: Option<Vec<crate::shortcuts::HoldKey>>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pen_buttons: std::collections::BTreeMap<String, std::collections::BTreeMap<crate::ToolCategory, String>>,
 }
 
 use crate::Settings;
 
-pub(crate) fn view(settings: &Settings, import: Option<&KeymapImport>) -> KeymapView {
+pub(crate) fn view(settings: &Settings, import: Option<&KeymapImport>, details: bool) -> KeymapView {
     let current = settings.keymap_preset().map_or(&KEYMAP_PRESETS[0], |p| p.preset);
     KeymapView {
         presets: KEYMAP_PRESETS.iter().map(|p| KeymapChoice { id: p.id.into(), title: p.title.into() }).collect(),
         selected: current.id.into(),
         title: current.title.into(),
+        app: current.app.into(),
         source: current.source.into(),
         links: current.links.iter().map(|l| l.to_string()).collect(),
         outdated: settings.keymap.as_ref().is_some_and(|k| k.revision < current.revision),
@@ -277,6 +394,7 @@ pub(crate) fn view(settings: &Settings, import: Option<&KeymapImport>) -> Keymap
             .map(|(trigger, note)| KeymapDifference { trigger: trigger.to_string(), note: note.to_string() })
             .collect(),
         import: import.map(|i| i.preview.clone()),
+        details,
     }
 }
 
@@ -293,6 +411,8 @@ pub(crate) fn export(settings: &Settings) -> String {
         keymap: settings.keymap.clone(),
         shortcuts: settings.shortcuts.clone(),
         gestures: settings.gestures.clone(),
+        modifiers: settings.hold_keys.clone(),
+        pen_buttons: settings.pen_buttons.clone(),
     })
     .expect("keymap serialization")
 }
@@ -325,6 +445,23 @@ pub(crate) fn import(settings: &Settings, text: &str, platform: crate::Platform)
             }
         }
         candidate.shortcuts.insert(id, keys);
+    }
+    if let Some(mut modifiers) = file.modifiers {
+        for hold in &mut modifiers {
+            hold.actions.retain(|_, target| {
+                let available = crate::shortcuts::hold_id(target).is_some_and(|id| known(&id));
+                if !available {
+                    unavailable.push(format!("{}: {target}", hold.key.label(platform)));
+                }
+                available
+            });
+        }
+        candidate.hold_keys = Some(modifiers);
+    }
+    for (trigger, mut actions) in file.pen_buttons {
+        actions.retain(|_, id| known(id));
+        candidate.gestures.remove(&trigger);
+        candidate.pen_buttons.insert(trigger, actions);
     }
     for (trigger, id) in file.gestures {
         if crate::GESTURE_TRIGGERS.iter().any(|t| t.id == trigger) && (id.is_empty() || known(&id)) {

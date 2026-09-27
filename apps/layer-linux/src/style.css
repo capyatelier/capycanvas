@@ -244,6 +244,7 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .layer-preferences { --window-bg-color: var(--capy-settings); --headerbar-bg-color: var(--capy-settings); --headerbar-backdrop-color: var(--capy-settings); }
 /* Match libadwaita's ActionRow subtitles despite our global label font rule. */
 .layer-preferences row label.subtitle { font-size: smaller; }
+.layer-preferences label.title-2 { font-size: calc(var(--ui-text-size) * 1.36); }
 .preference-entry { background: var(--input-bg); box-shadow: none; }
 .preference-entry:focus-within { box-shadow: none; }
 .layer-preferences *:focus { outline: none; }

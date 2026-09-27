@@ -68,26 +68,27 @@ fn space_and_alt_compose_in_every_press_and_release_order() {
 }
 
 #[test]
-fn held_overrides_compose_and_the_latest_hold_wins() {
-    for release_alt_first in [true, false] {
-        let mut s = session(Platform::Gtk);
-        s.state.settings.shortcuts.insert("hold.eraser".into(), vec![KeyChord::new("e", Modifiers::default())]);
-        let preset = s.state.brush.preset;
-        held_key(&mut s, "Alt_L", true, Modifiers::default());
-        held_key(&mut s, "e", true, alt());
-        assert_eq!(s.state.brush.tool, Tool::Eraser);
-        assert!(s.eyedropper.picking.previous.is_none());
-        if release_alt_first {
-            held_key(&mut s, "Alt_L", false, alt());
-            assert_eq!(s.state.brush.tool, Tool::Eraser);
-            held_key(&mut s, "e", false, Modifiers::default());
-        } else {
-            held_key(&mut s, "e", false, alt());
-            assert!(sampling(&s) && s.eyedropper.picking.previous.is_some());
-            held_key(&mut s, "Alt_L", false, alt());
-        }
-        assert!(painting_with(&s, preset), "{release_alt_first}");
-    }
+fn tool_keys_switch_on_tap_and_return_after_a_held_use() {
+    let mut s = session(Platform::Gtk);
+    let preset = s.state.brush.preset;
+    held_key(&mut s, "e", true, Modifiers::default());
+    held_key(&mut s, "e", false, Modifiers::default());
+    assert_eq!(s.state.brush.tool, Tool::Eraser, "a tap switches tools");
+    invoke(&mut s, CommandId::Brush);
+    s.dispatch(UiAction::SelectBrush { id: preset }).unwrap();
+    held_key(&mut s, "e", true, Modifiers::default());
+    assert_eq!(s.state.brush.tool, Tool::Eraser);
+    s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+    s.pen(event(&s, 2, PenPhase::Up, 1.)).unwrap();
+    held_key(&mut s, "e", false, Modifiers::default());
+    s.frame(3, 3).unwrap();
+    assert!(painting_with(&s, preset), "holding the key and drawing returns on release");
+    held_key(&mut s, "Alt_L", true, Modifiers::default());
+    held_key(&mut s, "e", true, alt());
+    assert_eq!(s.state.brush.tool, Tool::Eraser, "a tool key chosen during a hold replaces it");
+    held_key(&mut s, "e", false, alt());
+    held_key(&mut s, "Alt_L", false, alt());
+    assert_eq!(s.state.brush.tool, Tool::Eraser);
 }
 
 #[test]
@@ -216,7 +217,7 @@ fn relative_steps_follow_the_tool_setting_bounds() {
 }
 
 #[test]
-fn scoped_bindings_resolve_by_specificity_and_conflict_only_when_overlapping() {
+fn scoped_bindings_conflict_whenever_their_tools_overlap() {
     let platform = Platform::Gtk;
     let mut settings = Settings::default();
     let bracket = KeyChord::new("[", Modifiers::default());
@@ -232,21 +233,24 @@ fn scoped_bindings_resolve_by_specificity_and_conflict_only_when_overlapping() {
     settings.shortcuts.insert("tool_setting.size.decrease".into(), vec![bracket.clone()]);
     assert_eq!(matched(&settings, &bracket, Some(ToolCategory::Drawing)).as_deref(), Some("tool_setting.size.decrease"));
     assert_eq!(matched(&settings, &bracket, None), Some(CommandId::Undo.shortcut_id()));
-    assert!(settings.conflict(&CommandId::Undo.shortcut_id(), &bracket, platform).is_none());
-    settings.validate_shortcuts().unwrap();
+    assert_eq!(
+        settings.conflict(&CommandId::Undo.shortcut_id(), &bracket, platform).map(|d| d.id).as_deref(),
+        Some("tool_setting.size.decrease"),
+        "a key that does two things with the same tool is a conflict"
+    );
+    settings.validate_shortcuts().expect("overlaps saved by earlier versions still load");
     let alt = KeyChord::new("alt_l", Modifiers::default());
     assert_eq!(alt.key, "alt");
-    assert_eq!(matched(&settings, &alt, Some(ToolCategory::Drawing)).as_deref(), Some("hold.eyedropper"));
-    assert_eq!(matched(&settings, &alt, Some(ToolCategory::Selection)), None);
-    assert_eq!(matched(&settings, &alt, None), None);
-    assert_eq!(settings.conflict("hold.eraser", &alt, platform).map(|d| d.id).as_deref(), Some("hold.eyedropper"));
-    assert!(settings.conflict("hold.move", &alt, platform).is_none());
-    settings.shortcuts.insert("hold.move".into(), vec![alt.clone()]);
-    assert_eq!(matched(&settings, &alt, Some(ToolCategory::Drawing)).as_deref(), Some("hold.move"));
-    settings.shortcuts.insert("hold.eyedropper".into(), vec![alt.clone()]);
-    settings.validate_shortcuts().unwrap();
-    assert_eq!(matched(&settings, &alt, Some(ToolCategory::Drawing)).as_deref(), Some("hold.eyedropper"));
-    assert_eq!(matched(&settings, &alt, Some(ToolCategory::Selection)).as_deref(), Some("hold.move"));
+    assert_eq!(matched(&settings, &alt, Some(ToolCategory::Drawing)), None, "modifier keys aren't press shortcuts");
+    let table = settings.hold_keys(platform);
+    let alt_key = table.iter().find(|h| h.key == alt).unwrap();
+    assert_eq!(alt_key.actions.get(&ToolCategory::Drawing).map(String::as_str), Some("command.Eyedropper"));
+    assert!(!alt_key.actions.contains_key(&ToolCategory::Selection));
+    assert_eq!(
+        settings.conflict(&CommandId::Undo.shortcut_id(), &alt, platform).map(|d| d.id),
+        Some("modifier:Alt".to_string()),
+        "a modifier key conflicts with shortcuts on the same key"
+    );
     settings.shortcuts.insert(CommandId::Undo.shortcut_id(), vec![alt]);
     assert!(settings.validate_shortcuts().is_err(), "instant actions need a non-modifier key");
 }
@@ -267,20 +271,46 @@ fn stored_bindings_without_scopes_keep_their_meaning() {
 }
 
 #[test]
-fn held_rows_record_modifier_only_triggers() {
+fn modifier_keys_record_bare_modifiers_and_combinations() {
     let mut s = session(Platform::Gtk);
     s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
-    preference(&mut s, PreferenceAction::BeginShortcut { id: "hold.eraser".into() });
+    preference(&mut s, PreferenceAction::AddModifierKey);
     held_key(&mut s, "Shift_L", true, Modifiers::default());
     let capture = s.preferences().unwrap().capture.unwrap();
-    assert_eq!(capture.chord, Some(KeyChord::new("shift", Modifiers::default())));
-    assert_eq!(capture.shortcut, "Shift");
-    held_key(&mut s, "Shift_L", false, Modifiers { shift: true, ..Modifiers::default() });
+    assert_eq!((capture.chord.clone(), capture.shortcut.as_str()), (Some(KeyChord::new("shift", Modifiers::default())), "Shift"));
+    held_key(&mut s, " ", true, Modifiers { shift: true, ..Modifiers::default() });
+    let capture = s.preferences().unwrap().capture.unwrap();
+    assert_eq!(capture.shortcut, "Shift+Space", "the fullest combination held is kept");
     preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
-    assert_eq!(s.state.settings.keys("hold.eraser"), vec![KeyChord::new("shift", Modifiers::default())]);
-    preference(&mut s, PreferenceAction::BeginShortcut { id: CommandId::Undo.shortcut_id() });
-    held_key(&mut s, "Shift_L", true, Modifiers::default());
-    assert!(s.preferences().unwrap().capture.unwrap().chord.is_none());
+    let editor = s.preferences().unwrap().modifier_editor.unwrap();
+    assert_eq!(editor.label, "Shift+Space");
+    assert_eq!(editor.actions.len(), 1, "one action for every tool until asked otherwise");
+    for (key, allowed) in [("q", true), ("F13", true), ("pad_button_3", true), ("gamepad_a", true), ("XF86Tools", true)] {
+        preference(&mut s, PreferenceAction::AddModifierKey);
+        held_key(&mut s, key, true, Modifiers::default());
+        let capture = s.preferences().unwrap().capture.unwrap();
+        assert_eq!(capture.error.is_none(), allowed, "{key}: {capture:?}");
+        held_key(&mut s, key, false, Modifiers::default());
+        preference(&mut s, PreferenceAction::CancelShortcut);
+    }
+    preference(&mut s, PreferenceAction::AddModifierKey);
+    held_key(&mut s, "Escape", true, Modifiers::default());
+    assert!(s.preferences().unwrap().capture.is_none(), "Escape cancels instead");
+    held_key(&mut s, "Escape", false, Modifiers::default());
+    preference(&mut s, PreferenceAction::AddModifierKey);
+    held_key(&mut s, "Alt_L", true, Modifiers::default());
+    let capture = s.preferences().unwrap().capture.unwrap();
+    assert!(capture.existing && capture.notice == "Already a modifier key" && capture.conflict.is_none());
+    held_key(&mut s, "Alt_L", false, alt());
+    preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
+    assert_eq!(s.preferences().unwrap().modifier_editor.unwrap().label, "Alt", "confirming opens the existing key");
+    preference(&mut s, PreferenceAction::AddModifierKey);
+    held_key(&mut s, "e", true, Modifiers::default());
+    assert_eq!(s.preferences().unwrap().capture.unwrap().conflict.as_deref(), Some("Eraser"), "keys used by shortcuts conflict");
+    preference(&mut s, PreferenceAction::ConfirmShortcut { replace: true });
+    held_key(&mut s, "e", false, Modifiers::default());
+    assert!(s.state.settings.keys(&CommandId::Eraser.shortcut_id()).is_empty(), "reassigning takes the key from the shortcut");
+    assert_eq!(s.preferences().unwrap().modifier_editor.unwrap().label, "E");
 }
 
 #[test]
