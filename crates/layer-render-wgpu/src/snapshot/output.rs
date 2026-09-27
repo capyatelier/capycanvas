@@ -192,6 +192,27 @@ impl SnapshotRenderer {
             )
         })
     }
+    pub fn write_webp(
+        &mut self,
+        output: impl std::io::Write,
+        target: &SourceInterpretation,
+        options: layer_core::color::OutputEncoding,
+        matte: Option<[f32; 3]>,
+    ) -> Result<layer_color::OutputStatistics, String> {
+        let resolution = self.output_resolution;
+        self.write_rows(target, options, matte, |extent, target, row| {
+            layer_color::photo::write_webp_rows(
+                output,
+                extent,
+                target,
+                resolution,
+                layer_color::photo::WebpEncodeOptions::from_memory_budget(
+                    layer_color::photo::PhotoMemoryBudget::current(),
+                ),
+                row,
+            )
+        })
+    }
     pub(super) fn write_rows(
         &mut self,
         target: &SourceInterpretation,

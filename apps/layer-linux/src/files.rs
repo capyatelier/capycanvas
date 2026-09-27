@@ -20,6 +20,8 @@ mod preview;
 mod rasterize;
 mod reader;
 mod chooser;
+#[cfg(test)]
+pub(crate) use chooser::choose_next_save;
 
 pub(crate) type OpenDocument =
     Rc<dyn Fn(Project, Option<DocumentLocation>, Option<std::path::PathBuf>)>;

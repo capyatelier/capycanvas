@@ -193,6 +193,9 @@ impl WebApp {
     pub fn canvas_bar_hold(&self) -> u32 {
         self.session.canvas_bar_hold()
     }
+    pub fn zoom_menu(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.zoom_menu())
+    }
     pub fn palette_menu(&self, target: JsValue) -> Result<JsValue, JsValue> {
         let target = serde_wasm_bindgen::from_value(target).map_err(js)?;
         serialize(

@@ -105,7 +105,7 @@ button[aria-pressed="true"], button[aria-selected="true"] { background: var(--se
 .chrome, .dock-group, .dock-tab, .tile-popover, dialog, #canvas { user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
 /* Safari can select SVG artwork independently of pointer hit testing. */
 #canvas { -webkit-touch-callout: none; -webkit-user-drag: none; }
-#document-title, #view-info, #status, input:not([type="range"]):not([type="checkbox"]):not([type="color"]), textarea { user-select: text; -webkit-user-select: text; }
+#document-title, #status, input:not([type="range"]):not([type="checkbox"]):not([type="color"]), textarea { user-select: text; -webkit-user-select: text; }
 .brush-preview, svg { -webkit-user-drag: none; pointer-events: none; }
 #canvas:focus { outline: none; }
 #workspace { overflow: clip; position: relative; width: 100vw; height: 100dvh; min-height: 320px; }
@@ -150,7 +150,7 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 #header-start > button[aria-pressed="true"] { background: var(--selection); }
 .zen-spacer { width: 36px; height: 36px; flex: none; }
 #zen-capy { touch-action: manipulation; position: absolute; left: 6px; top: 6px; z-index: 1001; background: var(--chrome-surface); }
-:where(:root:not([data-touch])) :is(#zen-capy, #canvas-status button.proof-status):hover { background: color-mix(in srgb, var(--text) 8%, var(--chrome-surface)); }
+:where(:root:not([data-touch])) :is(#zen-capy, #canvas-status button.proof-status, #view-info):hover { background: color-mix(in srgb, var(--text) 8%, var(--chrome-surface)); }
 #zen-button { position: absolute; left: 6px; top: 6px; z-index: 1001; background: var(--bg); }
 #zen-button[aria-pressed="true"] { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 .zen-hidden #zen-button[aria-pressed="true"] { background: var(--bg); }
@@ -234,6 +234,11 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel-context-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 180px; border: 0; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; user-select: none; -webkit-user-select: none; }
 .panel-context-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; text-align: left; font-weight: 400; }
 .panel-context-menu hr { height: 1px; border: 0; margin: 6px; background: color-mix(in srgb, var(--text) 15%, transparent); }
+.zoom-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 240px; width: max-content; border: 0; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; font-size: var(--ui-text-size); user-select: none; -webkit-user-select: none; }
+.zoom-menu hr { height: 1px; border: 0; margin: 6px; background: color-mix(in srgb, var(--text) 15%, transparent); }
+.zoom-menu > .number-control { padding: 2px 8px; }
+.zoom-menu-items { display: flex; flex-direction: column; }
+.zoom-menu-items button { width: 100%; text-align: left; }
 .workspace-menu-items button { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-weight: 400; white-space: nowrap; }
 .menu-check { flex: none; width: 16px; height: 16px; }
 .menu-label { flex: 1; min-width: 0; }

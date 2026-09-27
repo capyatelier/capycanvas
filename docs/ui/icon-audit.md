@@ -18,6 +18,7 @@ The Reference column identifies the relevant functional/conventional family. The
 
 | SVG key | Action or role | Chosen drawing | Decision | Reference |
 | --- | --- | --- | --- | --- |
+| `actual-pixels` | Zoom to Actual Pixels (100%) | Fit's framing corners around a 1:1 ratio | Added | [view](https://docs.krita.org/en/reference_manual/main_menu/view_menu.html) |
 | `add-layer` | New paint layer | Document with a plus | Added | [layers](https://help.clip-studio.com/en-us/manual_en/180_layers/Using_layers.htm) |
 | `adjustments` | Filters / adjustments | Three solid slider controls | Redrawn | [adjustments](https://helpx.adobe.com/photoshop/desktop/create-manage-layers/color-adjustment-fill-layers/adjustment-layers-options.html) |
 | `airbrush` | Airbrush | Solid spray gun with separated dots | Redrawn | [tools](https://docs.krita.org/en/reference_manual/tools.html) |

@@ -9,6 +9,7 @@ import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
 import { createCanvasBar } from "./canvas-bar.js";
 import { createNotice } from "./notice.js";
+import { createZoomReadout } from "./zoom-readout.js";
 import { createEditorPanels } from "./editor-panels.js";
 import { createWorkspaceChrome } from "./workspace-chrome.js";
 import { createGlass } from "./glass.js";
@@ -53,7 +54,7 @@ let app,
   dragItem = null,
   statusTimer,
   shownHostError = null;
-let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice;
+let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout;
 let commandBar;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
@@ -864,10 +865,7 @@ function update(regions) {
     systemStatus?.sync();
     refreshPreferences(app.preferences_cached());
   }
-  if (regions & 32) {
-    const info = `${Math.round(state.camera.zoom * 100)}% · ${Math.round((state.camera.rotation * 180) / Math.PI)}°`;
-    if ($("view-info").textContent !== info) $("view-info").textContent = info;
-  }
+  if (regions & 32) zoomReadout?.refresh(state.camera);
   if (regions & (1 | 16)) updateZen();
   editor.flushPaint();
   if (regions & 64) {
@@ -1762,6 +1760,9 @@ try {
   canvasBar = createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, reappearMs: catalog.canvas_bar_reappear_ms,
     openMenu: node => customization.openMenu(node), presented: () => notice?.place() });
   notice = createNotice({ workspace, element, button, answer: answerNotice, layout: () => layout, bar: () => canvasBar.bounds() });
+  zoomReadout = createZoomReadout({ root: $("view-info"), workspace, canvas, element, numberField, control: catalog.zoom,
+    menu: () => app.zoom_menu(), renderMenu: customization.renderMenu, refreshMenu: customization.refreshMenu,
+    dispatch, camera: () => state.camera, toggled: updateZen });
   performance.mark("capy.startup.controls");
   update(255);
   systemStatus.sync();

@@ -122,8 +122,15 @@ pub(super) fn exif(bytes: &[u8]) -> Result<Exif, String> {
 /// Minimal TIFF IFD in an Exif APP1 payload. Resolution remains rational and
 /// orientation is normalized. No stale input tags or thumbnail are propagated.
 pub(super) fn exif_output(resolution: ImageResolution) -> Result<Vec<u8>, String> {
+    let mut bytes = b"Exif\0\0".to_vec();
+    bytes.extend(exif_tiff_output(resolution)?);
+    Ok(bytes)
+}
+
+/// The same IFD without the APP1 identifier, as a WebP EXIF chunk holds it.
+pub(super) fn exif_tiff_output(resolution: ImageResolution) -> Result<Vec<u8>, String> {
     let (unit, density) = resolution.tiff_density()?;
-    let mut bytes = b"Exif\0\0II*\0\x08\0\0\0".to_vec();
+    let mut bytes = b"II*\0\x08\0\0\0".to_vec();
     bytes.extend_from_slice(&4u16.to_le_bytes());
     for (tag, ty, value) in [
         (274u16, 3u16, 1u32),

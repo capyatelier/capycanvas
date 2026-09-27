@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1 and M2.2. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1, M2.2 and M2.6. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -628,6 +628,7 @@ Sizes: S ≤ ½ day, M ≈ 1 day, L 2–3 days, XL > 3 days.
   - GTK `native_selection_pen_input`, and tests that open the portal file chooser;
   - 7 of 15 `AndroidTitleBarTest` cases;
   - Android `detachedPanelsKeepBodiesAndWiderResizeTargets`, and `AndroidInteractionTest#cachedPanelsMatchDirectDrawing` (light docked panels);
+  - Android `AndroidHostTest#cameraNavigationPublishesOnlyReadoutUpdates` (its last assertion); Android two-finger pinch misses about 1% of vsyncs (15.6 ms p99);
   - headless Web `--toolbar-components`, `--tonal-selection`, `--editor` and `--layers`, and 8 pen side-button cases in `pointer.test.mjs`;
   - Clippy with `-D warnings` stops in `layer-core` on lints that are new with Clippy 1.96. New code adds no warnings.
 - **Performance gaps that already exist on main:** GTK `native_frame_pacing` with `photo24` presents the Transform scenario at about 13 ms per frame (GPU p99 17 ms), while GPen, Pan and Hand hold 8.33 ms.
@@ -698,6 +699,11 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - Delete and Backspace resolved by scoped bindings, and a focused drawing tab keeps Delete on Web and Android;
   - Copy and Cut Selection to New Layer in one step through `CanvasEngine::insert_with_operations`;
   - new effects masked by the selection (T-1).
+- **M2.6** on GTK, Web and Android:
+  - Actual Pixels (Ctrl+1 and Ctrl+Alt+0) at whole-pixel translations;
+  - a zoom readout that opens a zoom field and the shared zoom menu;
+  - lossless WebP export ("WebP · lossless", 8-bit RGB, refused above 16,384 px before rendering).
+  - The Web and Android readout keeps pan at 118.8 Hz and pinch at 117.7 Hz on the MovinkPad 14, unchanged.
 
 **Follow-ups**
 - **Erase right after a stroke:** an Erase on a raster that is still pending, or that holds watercolor or wet state, damages the whole layer so the layer settles. Clearing right after a stroke therefore rewrites every page. It is a still-frame cost.
@@ -709,6 +715,7 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - read `CommandState.disabled_reason`;
   - retire `canvas_bar_reason` once Apple reads the field;
   - open bar menu items (`CanvasBarItem.menu` and `icon`, through `canvas_bar_choice_menu`);
-  - add icons for the new commands to Apple's coverage list.
+  - add icons for the new commands to Apple's coverage list;
+  - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M2.3 to M2.6, M3 and M4. Record milestone completion in the research record's section 7.
+**Remaining:** M2.3 to M2.5, M3 and M4. Record milestone completion in the research record's section 7.

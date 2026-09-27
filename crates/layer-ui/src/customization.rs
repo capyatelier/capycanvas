@@ -1056,6 +1056,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::NewToolbar => "Create a named toolbar",
                 CommandId::ManageToolbars => "Select and delete toolbars",
                 CommandId::FitCanvas => "Fit the whole drawing in the available space",
+                CommandId::ActualPixels => "Show one image pixel per screen pixel",
                 CommandId::Settings => "Open application preferences",
                 CommandId::ToggleTheme => "Switch between light and dark appearance",
                 CommandId::AddLayer => "Create a new paint layer",

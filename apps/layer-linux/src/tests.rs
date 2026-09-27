@@ -37,6 +37,8 @@ mod photo_drop;
 mod canvas_bar_tests;
 #[path = "notice_tests.rs"]
 mod notice;
+#[path = "zoom_readout_tests.rs"]
+mod zoom_readout;
 #[path = "file_launch_tests.rs"]
 mod file_launch;
 #[path = "document_tab_tests.rs"]
@@ -8118,7 +8120,7 @@ fn native_stacked_divider() {
             .clone()
             .upcast::<gtk::Widget>(),
         w.size_number.clone().upcast(),
-        w.view_info.clone().upcast(),
+        w.view_info.root.clone().upcast(),
     ] {
         let font = widget.pango_context().font_description().unwrap();
         assert!(

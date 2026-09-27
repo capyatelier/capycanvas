@@ -393,6 +393,36 @@ the drag does not turn its remaining motion into paint. Middle/right drag also
 pans; touch retains two-finger rotation. The momentary pan binding defaults to
 Space and is editable in Preferences alongside semantic command bindings.
 
+Zoom stays between 2% and 1600%. **View ▸ Actual Pixels** (Ctrl+1 or
+Ctrl+Alt+0; Ctrl+1 in the Photoshop and Affinity keymaps, 1 in GIMP's) shows
+one image pixel per device pixel, zooming about the work-area centre. When the
+view rotation is a quarter turn, `Camera::zoom_to` also rounds the translation
+to whole device pixels, so the bilinear presenter samples pixel centres and the
+1:1 view is not blurred. It differs from the placement bar's **Original Size
+(100%)**, which returns a placed image to its own pixel size.
+The footer's "N% · D°" readout is a button. It opens `UiSession::zoom_menu()`:
+Zoom In, Zoom Out, Fit, Actual Pixels, then 25% to 400% as
+`UiAction::SetZoom { zoom }`, beside a typed zoom field described by
+`NumericControl::zoom()` (percent on a logarithmic track). `SetZoom` clamps to
+the camera limits, zooms about the work-area centre and rounds like Actual
+Pixels. The field takes its value from the camera, not a model, and refreshes
+only while the menu is open, so navigation updates one label. Web and Android
+read the field's control from `UiCatalog.zoom` and the menu through the Web
+`zoom_menu` export or the `zoom_menu` native query. Opening the menu or choosing
+an item never takes keyboard focus from the canvas; only typing in the field
+borrows it:
+- GTK's readout button cannot take focus, and closing its popover returns
+  focus to the canvas.
+- Web's `#view-info` button is out of the tab order and its menu cancels the
+  presses that would move focus. Escape closes it and returns focus.
+- Android opens a windowless dropdown that becomes focusable only while the
+  field is being typed in.
+
+The camera works in physical pixels. Web uses the fractional
+`devicePixelRatio` and Android physical pixels, so 100% is 1:1 there. GTK
+renders at the widget's integer `scale_factor()`, so under fractional Wayland
+scaling the compositor rescales the canvas and 100% is not exactly 1:1.
+
 ## Settings and native flows
 
 `OpenSettings { page }` (or the Preferences/Shortcuts/About commands) opens the

@@ -543,3 +543,102 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     w.window.destroy();
     pump(200);
 }
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+#[allow(deprecated)]
+fn native_export_webp_to_a_prechosen_file() {
+    glib::set_prgname(Some("capy-canvas-test"));
+    let app = native_test_app("art.capycanvas.ExportWebp");
+    let output = std::path::Path::new("../../artifacts/photo-m2/export-webp-native")
+        .join(std::process::id().to_string());
+    std::fs::create_dir_all(&output).unwrap();
+    let output = output.canonicalize().unwrap();
+    let mut project = new_drawing(192, 128).unwrap();
+    project.document.resolution = Some(layer_core::ImageResolution::ppi(144));
+    for paper in project.document.layers.iter_mut().filter(|l| l.kind == layer_core::LayerKind::Background) {
+        paper.visible = false;
+    }
+    let pixel = |x: u32, y: u32| [(x * 5 % 256) as u8, (y * 7 % 256) as u8, 180, if x < 96 { 255 } else { 0 }];
+    let mut builder = SourceBuilder::new(
+        [192, 128],
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: SampleDepth::U8,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: false,
+        },
+        1024 * 1024,
+    )
+    .unwrap();
+    for y in 0..128 {
+        builder.push_row(&(0..192).flat_map(|x| pixel(x, y)).collect::<Vec<_>>()).unwrap();
+    }
+    project.document.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
+    let w = Workspace::with_project(&app, Some((project, None)));
+    w.window.present();
+    ready(&w);
+    let before = snapshot(&w);
+    invoke(&w, CommandId::ExportDocument);
+    let format = combo(&w, "export-format");
+    let labels: Vec<_> = (0..format.model().unwrap().n_items())
+        .map(|i| format.model().unwrap().item(i).and_downcast::<gtk::StringObject>().unwrap().string().to_string())
+        .collect();
+    assert_eq!(labels, ["PNG", "TIFF", "JPEG", "WebP · lossless"]);
+    format.set_selected(3);
+    let dialog = w.window.visible_dialog().unwrap();
+    let widget = |name: &str| find_named(dialog.upcast_ref(), name).unwrap();
+    assert!(!widget("export-jpeg-quality").is_visible(), "lossless WebP has no quality");
+    assert!(!widget("export-depth").is_visible(), "WebP's 8-bit depth is fixed");
+    assert_eq!(combo(&w, "export-background").selected(), 0, "WebP keeps transparency");
+    assert!(super::new_photo::export_enabled(&w));
+    let size = combo(&w, "export-size");
+    size.set_selected(1);
+    for name in ["export-width", "export-height"] {
+        widget(name).downcast::<adw::SpinRow>().unwrap().set_value(20000.);
+    }
+    widget("export-enlarge").downcast::<adw::SwitchRow>().unwrap().set_active(true);
+    pump(100);
+    let validation = widget("export-validation").downcast::<gtk::Label>().unwrap();
+    assert!(validation.is_visible() && validation.text().contains("16,384 pixels per side"), "{}", validation.text());
+    assert!(!super::new_photo::export_enabled(&w), "an oversized WebP is refused with its reason");
+    size.set_selected(0);
+    pump(100);
+    assert!(!validation.is_visible());
+    assert!(super::new_photo::export_enabled(&w));
+    capture_ui(&w, &output, "webp-options.png");
+    let file = output.join("copy.webp");
+    crate::files::choose_next_save(file.clone());
+    response(&w, "export");
+    finish(&w);
+    let bytes = std::fs::read(&file).unwrap();
+    assert_eq!((&bytes[..4], &bytes[8..12]), (&b"RIFF"[..], &b"WEBP"[..]));
+    let result = layer_color::photo::read_photo(std::io::Cursor::new(bytes), Default::default()).unwrap();
+    assert_eq!(result.extent, [192, 128]);
+    assert_eq!(result.interpretation.channels, SourceChannels::Rgba);
+    assert_eq!(result.interpretation.depth, SampleDepth::U8);
+    assert_eq!(result.resolution, Some(layer_core::ImageResolution::ppi(144)));
+    assert_eq!(
+        layer_color::profile_bytes(&result.interpretation.profile).unwrap(),
+        layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::Srgb)).unwrap()
+    );
+    let mut rows = result.rows();
+    let mut row = vec![0; result.row_bytes()];
+    for y in 0..128 {
+        rows.read(y, &mut row).unwrap();
+        for (x, actual) in row.chunks_exact(4).enumerate() {
+            let expected = pixel(x as u32, y);
+            assert_eq!(actual[3], expected[3], "({x},{y}) alpha");
+            if expected[3] == 255 {
+                assert!(actual.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "({x},{y}): {actual:?}");
+            }
+        }
+    }
+    assert_eq!(snapshot(&w), before);
+    invoke(&w, CommandId::ExportDocument);
+    assert_eq!(combo(&w, "export-format").selected(), 3, "the destination remembers WebP");
+    response(&w, "cancel");
+    finish(&w);
+    w.window.destroy();
+    pump(100);
+}

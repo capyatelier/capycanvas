@@ -104,6 +104,21 @@ is the open dialog's error or the refusal being shown. Disabled canvas action
 bar items show the command's published `disabled_reason` on a tap, a touch or
 pen hold, or mouse hover.
 
+[`ZoomReadout.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/ZoomReadout.kt)
+turns the footer's "N% · D°" readout into a button (see
+[shared UI](../ui/shared-ui.md#actions-and-observation)). It opens a windowless
+dropdown with a zoom field from `catalog.zoom` above the shared menu, which it
+fetches with the `zoom_menu` native query. Opening the menu and choosing an item
+leave window focus with the canvas. Tapping the field's value makes the popup
+focusable for typing, as the toolbar number menus do, and Back closes it.
+`CanvasHost.cameraZoom` holds the camera stream's exact zoom. Only an open menu
+reads it, so navigation still recomposes one `Text`.
+
+The export dialog offers **WebP · lossless**. `Documents.kt` asks the Storage
+Access Framework for `image/webp` and a `.webp` name; its fallback would
+otherwise label the file PNG. The `export_validate` query refuses an output over
+16,384 pixels per side before the file picker opens.
+
 ## Validation status
 
 The [feature-parity record](../history/android-feature-parity.md) and
@@ -304,6 +319,22 @@ menu. `#hardwareDeleteClearsSelectedPixels` presses the keyboard's Delete and
 Backspace over a selection. A focused text field keeps both keys, and a focused
 drawing tab keeps Delete, which closes that drawing: `MainActivity` does not
 forward that Delete to the core.
+
+`AndroidInteractionTest#zoomReadoutMenuAndFieldAcrossDevices` opens the
+readout with mouse, finger and stylus. It chooses 200%, uses Actual Pixels at a
+quarter turn, types 50, and closes the menu with Back. It checks whole-pixel
+translations and that the canvas keeps window focus, and saves light and dark
+captures in `validation/zoom-readout`.
+`AndroidRasterTest#webpExportThroughTheDialogDecodes` exports strokes through the
+real dialog to a file in app storage. It checks the `image/webp` picker
+request, decodes the file and compares it with an 8-bit PNG delivery. It also
+checks that a saved preset enlarging to 20,000 px is refused before the picker.
+With the readout visible, `AndroidViewportBenchmarkTest` on the MovinkPad 14
+benchmark build (`-e viewportBenchmark true -e motion pinch|pan`, 3 × 5 s)
+presents two-finger pinch zoom at 117.7 Hz, with frame intervals of 8.3 ms p50
+and 15.6 ms p99. Pan presents at 118.8 Hz, 8.3 ms p50 and 12.0 ms p99. The
+build before the readout became a button measured 117.7 Hz, 8.3 and 15.6 ms,
+and 118.7 Hz, 8.3 and 11.5 ms.
 `AndroidInteractionTest#canvasNoticesExplainRefusalsAcrossDevices` covers the
 notice with mouse, finger and stylus. Fingers navigate the canvas, so the finger
 pass makes its tool gestures with the pen and uses the finger for the notice.

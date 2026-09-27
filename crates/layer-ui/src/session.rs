@@ -2123,6 +2123,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .is_some_and(|layer| layer.kind == LayerKind::Paint)
             }
             CommandId::FitCanvas
+            | CommandId::ActualPixels
             | CommandId::Hand
             | CommandId::Eyedropper
             | CommandId::Gradient
@@ -2134,8 +2135,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::RotateRight
             | CommandId::FlipHorizontal
             | CommandId::FlipVertical => idle,
-            CommandId::ZoomIn => idle && self.state.camera.zoom < 16.0,
-            CommandId::ZoomOut => idle && self.state.camera.zoom > 0.02,
+            CommandId::ZoomIn => idle && self.state.camera.zoom < MAX_ZOOM,
+            CommandId::ZoomOut => idle && self.state.camera.zoom > MIN_ZOOM,
             _ => true,
         };
         let selection = self.layer_interaction.tool.selection_tool();
@@ -2463,6 +2464,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                         (0, false)
                     }
                 }
+            }
+            UiAction::SetZoom { zoom } => {
+                self.require_idle()?;
+                self.initial_fit = false;
+                self.state.camera.zoom_to(zoom)?;
+                self.sync_camera();
+                (CAMERA, true)
             }
             UiAction::FilterPicker { action } => {
                 self.state.filter_picker.apply(action);
@@ -4292,6 +4300,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.sync_camera();
                 Ok((CAMERA, true))
             }
+            CommandId::ActualPixels => {
+                self.initial_fit = false;
+                self.state.camera.zoom_to(1.0)?;
+                self.sync_camera();
+                Ok((CAMERA, true))
+            }
             CommandId::ZoomIn
             | CommandId::ZoomOut
             | CommandId::RotateLeft
@@ -5082,6 +5096,7 @@ mod tests {
     include!("gesture_tests.rs");
     include!("keymap_tests.rs");
     include!("binding_tests.rs");
+    include!("view_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -14139,7 +14154,7 @@ mod tests {
             serde_json::json!([
                 ["histogram"],
                 ["soft_proof_setup", "soft_proof", "gamut_warning", "sdr_rendition", "preview_sdr"],
-                ["zoom_in", "zoom_out", "fit_canvas"],
+                ["zoom_in", "zoom_out", "fit_canvas", "actual_pixels"],
                 ["rotate_left", "rotate_right"],
                 ["flip_horizontal", "flip_vertical"],
                 ["show_rulers", "snap_rulers"],

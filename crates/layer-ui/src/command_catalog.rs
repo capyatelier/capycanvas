@@ -414,6 +414,7 @@ fn action_description(action: &UiAction) -> &'static str {
             Move => "Move artwork and manage image placement on the canvas.",
             ScaleRotate => "Resize or rotate the current transform target.",
             FitCanvas => "Adjust the zoom to show the entire canvas.",
+            ActualPixels => "Zoom to 100% so each image pixel covers one screen pixel.",
             FlipHorizontal | FlipVertical => "Mirror the view without changing the artwork.",
             RotateLeft | RotateRight => "Rotate the view without changing the artwork.",
             UndoWorkspace => "Restore the previous toolbar, panel or workspace layout.",

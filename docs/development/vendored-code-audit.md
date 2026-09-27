@@ -204,6 +204,16 @@ build or runtime test of a pruned snapshot.
    lossless/transparent WebP imports. Rejecting animations alone does **not**
    solve the issue: ordinary stills also exercise the patched paths.
 
+**Export.** Lossless WebP export uses the crate's unpatched VP8L
+`WebPEncoder`. It needs the whole frame, copies it to RGBA, buffers the encoded
+frame, writes at most 16,384 pixels per side and has no cancellation hook.
+[`write_webp_rows`](../../crates/layer-color/src/photo/webp_io.rs) refuses larger
+outputs, admits about 12 bytes per pixel plus metadata against the encode
+budget, and gathers rows through the capture provider, which cancels between
+rows. The encode call itself cannot be cancelled: a cancellation that arrives
+during it takes effect at publication, which discards the temporary file.
+Cancelling inside the encoder would need a vendor patch.
+
 **5. `wgpu`: browser asynchronous pipeline creation.**
 
 1. **Why vendored now:** the actual diff contains only two files: public async

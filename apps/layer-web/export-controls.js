@@ -1,4 +1,5 @@
 // The shared recipe describes a delivery copy, independent of the master.
+export const SDR_FORMATS=[["Png","PNG"],["Tiff","TIFF"],["Jpeg","JPEG"],["Webp","WebP · lossless"]];
 export async function chooseExport({app,dialog,element,button,gpuOperation,id}) {
   let control,running,closed=false;
   const model=app.export_form();
@@ -12,7 +13,7 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     const destination=select("Destination",library.names.map((name,i)=>[i,name]));
     const range=select("Dynamic range",["F16","F32"].includes(app.document_color().depth)?[["sdr","SDR rendition"],["jpeg","HDR JPEG · gain map"],["avif","HDR AVIF · gain map with transparency"],["hdr","HDR PNG · BT.2020 PQ"],["exr","OpenEXR · 32-bit float"]]:[["sdr","SDR"]]);
     const clip=field("Clip out-of-range HDR colors",element("input"));clip.type="checkbox";
-    const format=select("Format",[["Png","PNG"],["Tiff","TIFF"],["Jpeg","JPEG"]]);
+    const format=select("Format",SDR_FORMATS);
     const profile=select("Output profile",model.profiles.map((p,i)=>[i,p.name]));
     const depth=select("Bit depth",[["U8","8-bit"],["U16","16-bit"],["F32","32-bit float"]]);
     const background=select("Transparency",[["Preserve","Preserve"],["White","White background"],["Black","Black background"]]);

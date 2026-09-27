@@ -32,7 +32,7 @@ pub unsafe extern "C" fn capy_export_draft(input: *const c_char) -> *mut c_char 
         } else { request.recipe.draft(request.action) };
         if request.validate {
             draft.recipe.validate()?;
-            draft.recipe.size.extent(request.extent.ok_or("Export extent is missing")?)?;
+            draft.recipe.output_extent(request.extent.ok_or("Export extent is missing")?)?;
             draft.recipe.output_resolution(None)?;
         }
         serde_json::to_value(draft).map_err(|e| e.to_string())

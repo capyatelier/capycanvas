@@ -112,7 +112,7 @@ import org.json.JSONObject
                         }
                     }
                     if(!hdrOutput) {
-                    ColorChoice("Format", choices("formats",listOf("Png" to "PNG", "Tiff" to "TIFF", "Jpeg" to "JPEG")), value.getString("format")) { change("format",it) }
+                    ColorChoice("Format", choices("formats",listOf("Png" to "PNG", "Tiff" to "TIFF", "Jpeg" to "JPEG", "Webp" to "WebP · lossless")), value.getString("format")) { change("format",it) }
                     val profiles = model.getJSONArray("profiles").objects()
                     val profile = profiles.indexOfFirst { it.toString() == value.getJSONObject("profile").toString() }.coerceAtLeast(0)
                     ColorChoice("Output profile", profiles.mapIndexed { i, p -> i.toString() to p.getString("name") }, profile.toString()) { change("profile", profiles[it.toInt()]) }

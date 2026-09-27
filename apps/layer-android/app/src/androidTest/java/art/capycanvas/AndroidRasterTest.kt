@@ -208,6 +208,82 @@ class AndroidRasterTest {
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
 
+    @Test fun webpExportThroughTheDialogDecodes() {
+        fun idle(){compose.waitUntil(120_000){!host.documents.working&&!native{state(it).getJSONObject("document_file").getBoolean("busy")}};assertNull(host.failure);assertNull(host.actionError)}
+        fun choice(label:String,text:String){
+            compose.waitUntil(30_000){compose.onAllNodes(hasTestTag("color-choice-$label") and isEnabled()).fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithTag("color-choice-$label").performScrollTo().performClick()
+            compose.onAllNodesWithText(text).onLast().performClick();compose.waitForIdle()
+        }
+        fun pixels(bytes:ByteArray):Triple<Int,Int,IntArray> {
+            val bitmap=android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,android.graphics.BitmapFactory.Options().apply{inPremultiplied=false})!!
+            try { return Triple(bitmap.width,bitmap.height,IntArray(bitmap.width*bitmap.height).also{bitmap.getPixels(it,0,bitmap.width,0,0,bitmap.width,bitmap.height)}) }
+            finally { bitmap.recycle() }
+        }
+        invoke("fit_canvas");invoke("pen")
+        stroke(-40.0);stroke(40.0)
+        val color=native{JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
+        val base=builtinRecipe(0)
+        val webp=native{JSONObject(Native.query(it,obj("type" to "export_draft","recipe" to base,"action" to obj("type" to "format","value" to "Webp")).toString())).getJSONObject("recipe")}
+        assertEquals("U8",webp.getString("depth"))
+        val poster=JSONObject(webp.toString()).put("size",obj("Fit" to obj("bounds" to org.json.JSONArray(listOf(20000,20000)),"enlarge" to true)))
+        val saved=runBlocking{ColorPreferencesStore.presets(activity,color,obj("type" to "save","name" to "Poster WebP","recipe" to poster))}.getInt("index")
+        val target=File(activity.getExternalFilesDir(null),"zoom-webp-${System.nanoTime()}.webp")
+        val picked=java.util.concurrent.atomic.AtomicReference<android.content.Intent>()
+        val monitor=object:android.app.Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent:android.content.Intent):android.app.Instrumentation.ActivityResult? {
+                if(intent.action!=android.content.Intent.ACTION_CREATE_DOCUMENT)return null
+                picked.set(android.content.Intent(intent))
+                return android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK,android.content.Intent().setData(android.net.Uri.fromFile(target)))
+            }
+        }
+        instrumentation.addMonitor(monitor)
+        try {
+            DocumentController.nativeFileJobsForTest=false
+            compose.runOnUiThread{host.invoke("export_document")}
+            choice("Destination","Poster WebP")
+            compose.onNodeWithTag("color-choice-Format").assertTextEquals("WebP · lossless")
+            compose.onNodeWithTag("export-choose-file").performClick()
+            compose.waitUntil(30_000){compose.onAllNodesWithText("WebP export is limited to 16,384 pixels per side",substring=true).fetchSemanticsNodes().isNotEmpty()}
+            assertNull("The size refusal comes before the file picker",picked.get())
+            compose.onNodeWithText("Cancel").performClick();idle()
+
+            compose.runOnUiThread{host.invoke("export_document")}
+            choice("Format","WebP · lossless")
+            compose.onNodeWithTag("color-choice-Bit depth").performScrollTo().performClick()
+            assertTrue("WebP is 8-bit only",compose.onAllNodesWithText("16-bit").fetchSemanticsNodes().isEmpty())
+            compose.onAllNodesWithText("8-bit").onLast().performClick();compose.waitForIdle()
+            compose.onNodeWithTag("export-choose-file").performClick()
+            compose.waitUntil(120_000){picked.get()!=null&&target.length()>0&&!host.documents.working&&!native{state(it).getJSONObject("document_file").getBoolean("busy")}}
+            assertEquals("image/webp",picked.get().type)
+            assertTrue(picked.get().getStringExtra(android.content.Intent.EXTRA_TITLE)!!.endsWith(".webp"))
+            assertEquals("image/webp",host.documents.exportMime())
+            assertNull(host.actionError)
+            DocumentController.nativeFileJobsForTest=true
+            val bytes=target.readBytes()
+            assertEquals("RIFF",bytes.copyOfRange(0,4).decodeToString());assertEquals("WEBP",bytes.copyOfRange(8,12).decodeToString())
+            assertTrue("Lossless VP8L",bytes.decodeToString(throwOnInvalidSequence=false).contains("VP8L"))
+            val extent=native{state(it)}.array("tabs").objects().first().let{it.getInt("width") to it.getInt("height")}
+            val (width,height,decoded)=pixels(bytes)
+            assertEquals(extent,width to height)
+            val (pngWidth,pngHeight,reference)=pixels(png("webp-reference.png",JSONObject(webp.toString()).put("format","Png")))
+            assertEquals(width to height,pngWidth to pngHeight)
+            var differences=0;var ink=0
+            for(i in decoded.indices){
+                if((0 until 4).any{c->kotlin.math.abs(((decoded[i] shr (c*8)) and 255)-((reference[i] shr (c*8)) and 255))>1})differences++
+                if(decoded[i]!=decoded[0])ink++
+            }
+            assertEquals("The WebP matches the 8-bit PNG delivery",0,differences)
+            assertTrue("The strokes are in the WebP: $ink",ink>50)
+            println("PASS WebP export: ${bytes.size} bytes, ${width}×$height, image/webp, refused beyond 16,384 px before the picker")
+        } finally {
+            instrumentation.removeMonitor(monitor)
+            DocumentController.nativeFileJobsForTest=true
+            target.delete()
+            runBlocking{ColorPreferencesStore.presets(activity,color,obj("type" to "remove","index" to saved))}
+        }
+    }
+
     @Test fun selectionToolsRenderAndCombineOnDevice() {
         fun selection() = native { state(it).getJSONObject("layer_tools").getBoolean("has_selection") }
         fun waitSelection() = compose.waitUntil(30_000) { tick(); selection() }

@@ -1,7 +1,77 @@
-//! WebP still import with explicit ICC/EXIF and animation interpretation.
+//! WebP still import with explicit ICC/EXIF and animation interpretation, and
+//! lossless export through the vendored VP8L encoder.
 use super::raster_io::{self, Input};
 use super::*;
 use std::io::SeekFrom;
+
+/// The vendored VP8L encoder's largest width and height.
+pub const WEBP_MAX_DIMENSION: u32 = 16384;
+pub const WEBP_SIZE_LIMIT: &str = "WebP export is limited to 16,384 pixels per side";
+/// Gathered rows, the encoder's RGBA working copy and its buffered frame.
+const WEBP_ENCODE_BYTES_PER_PIXEL: usize = 12;
+const MEMORY_ERROR: &str = "WebP exceeds the codec memory budget; use a smaller image";
+
+/// Lossless WebP output admission. Hosts can pass their current process memory
+/// allowance instead of relying on a native query or the browser fallback.
+#[derive(Clone, Copy, Debug)]
+pub struct WebpEncodeOptions {
+    pub codec_bytes: usize,
+}
+impl WebpEncodeOptions {
+    pub fn from_memory_budget(budget: PhotoMemoryBudget) -> Self {
+        Self {
+            codec_bytes: budget.encode_bytes,
+        }
+    }
+}
+
+/// Encodes straight 8-bit RGB or RGBA rows as lossless VP8L, with an ICC chunk
+/// and EXIF resolution. The encoder needs the whole frame: rows are gathered
+/// first, so provider errors (a cancelled capture) stop before encoding, but
+/// the encode itself runs to completion once started.
+pub fn write_webp_rows(
+    mut output: impl Write,
+    extent: [u32; 2],
+    interpretation: &SourceInterpretation,
+    resolution: Option<layer_core::ImageResolution>,
+    options: WebpEncodeOptions,
+    mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    let row_bytes = output_row_bytes(extent, interpretation)?;
+    if interpretation.depth != SampleDepth::U8 {
+        return Err("WebP output requires 8-bit samples".into());
+    }
+    let color = match interpretation.channels {
+        SourceChannels::Rgb => image_webp::ColorType::Rgb8,
+        SourceChannels::Rgba => image_webp::ColorType::Rgba8,
+        _ => return Err("WebP output requires RGB samples".into()),
+    };
+    if extent.iter().any(|v| *v > WEBP_MAX_DIMENSION) {
+        return Err(WEBP_SIZE_LIMIT.into());
+    }
+    let icc = delivery_icc(interpretation)?;
+    let exif = resolution
+        .map(super::metadata::exif_tiff_output)
+        .transpose()?
+        .unwrap_or_default();
+    let admission = (extent[0] as usize * extent[1] as usize)
+        .checked_mul(WEBP_ENCODE_BYTES_PER_PIXEL)
+        .and_then(|bytes| bytes.checked_add(icc.len() + exif.len()));
+    if admission.is_none_or(|bytes| bytes > options.codec_bytes) {
+        return Err(MEMORY_ERROR.into());
+    }
+    let len = row_bytes * extent[1] as usize;
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(len).map_err(|_| MEMORY_ERROR)?;
+    pixels.resize(len, 0);
+    for (y, row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
+        read_row(y as u32, row)?;
+    }
+    let mut encoder = image_webp::WebPEncoder::new(&mut output);
+    encoder.set_icc_profile(icc);
+    encoder.set_exif_metadata(exif);
+    encoder.encode(&pixels, extent[0], extent[1], color).map_err(err)
+}
 
 pub(super) fn read(
     input: impl BufRead + Seek,

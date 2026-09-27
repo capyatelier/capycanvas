@@ -105,7 +105,9 @@ impl WebApp {
     ) -> Result<js_sys::Promise, JsValue> {
         let preview = preview.unwrap_or(false);
         let recipe: ExportRecipe = serde_wasm_bindgen::from_value(value).map_err(js)?;
+        let document = self.session.engine().document();
         recipe.validate().map_err(js)?;
+        recipe.output_extent([document.width, document.height]).map_err(js)?;
         let snapshot = self.session.capture_project_export(id).map_err(js)?;
         let gpu = self
             .session
@@ -166,7 +168,7 @@ pub(super) async fn render_output(
     } else {
         None
     };
-    let extent = metadata.recipe.size.extent(metadata.extent).map_err(js)?;
+    let extent = metadata.recipe.output_extent(metadata.extent).map_err(js)?;
     let original = (flatten.is_none() && !metadata.recipe.format.is_hdr()).then(|| capture.output_source(
         extent, &metadata.recipe.interpretation(), metadata.recipe.encoding, metadata.recipe.background.matte(),
     )).flatten();
@@ -323,7 +325,7 @@ pub async fn raster_worker_output(
     let recipe = &metadata.recipe;
     recipe.validate().map_err(js)?;
     let target = recipe.interpretation();
-    let extent = recipe.size.extent(metadata.extent).map_err(js)?;
+    let extent = recipe.output_extent(metadata.extent).map_err(js)?;
     let output = WorkerFile {
         write,
         position: 0,
@@ -476,6 +478,14 @@ pub async fn raster_worker_output(
                 target,
                 metadata.resolution,
                 layer_color::photo::JpegEncodeOptions::from_memory_budget(recipe.jpeg_quality, raster_project::photo_memory_budget()),
+                rows,
+            ),
+            ExportFormat::Webp => layer_color::photo::write_webp_rows(
+                output,
+                extent,
+                target,
+                metadata.resolution,
+                layer_color::photo::WebpEncodeOptions::from_memory_budget(raster_project::photo_memory_budget()),
                 rows,
             ),
         }

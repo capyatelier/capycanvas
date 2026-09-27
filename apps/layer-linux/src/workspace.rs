@@ -953,7 +953,7 @@ pub struct Workspace {
     glass_wake_pending: Cell<bool>,
     pub(crate) layer_panel: crate::layers::LayerPanel,
     pub(crate) effects: Rc<crate::effects::EffectPanels>,
-    view_info: gtk::Label,
+    pub(crate) view_info: Rc<crate::zoom_readout::ZoomReadout>,
     notice: Rc<crate::notice::NoticeBubble>,
     status: gtk::Label,
     restart_canvas: gtk::Button,
@@ -1054,8 +1054,7 @@ impl Workspace {
         surface.set_overflow(gtk::Overflow::Hidden);
         let header = header::Header::new();
         let system_status = crate::system_status::SystemStatus::new();
-        let view_info = gtk::Label::new(Some("100% · 0°"));
-        view_info.set_tooltip_text(Some("Canvas zoom and rotation · Ctrl+0 fits the canvas"));
+        let view_info = crate::zoom_readout::ZoomReadout::new();
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let proof = crate::proof_view::ProofView::new();
         let local_tone=crate::local_tone_view::LocalToneView::new();
@@ -1068,11 +1067,10 @@ impl Workspace {
         hdr_status.add_css_class("status-bubble");
         status_bar.append(&hdr_status);
         status_bar.add_css_class("workspace-status");
-        view_info.add_css_class("status-bubble");
-        view_info.set_hexpand(true);
-        view_info.set_halign(gtk::Align::End);
-        view_info.set_valign(gtk::Align::End);
-        status_bar.append(&view_info);
+        view_info.root.set_hexpand(true);
+        view_info.root.set_halign(gtk::Align::End);
+        view_info.root.set_valign(gtk::Align::End);
+        status_bar.append(&view_info.root);
         surface.add(Slot::Canvas, &area);
         surface.add(Slot::Header, &header.root);
         surface.add(Slot::Status, &status_bar);
@@ -1248,6 +1246,7 @@ impl Workspace {
         this.build_controls(&brushes, &sizes);
         this.canvas_bar.bind(&this);
         this.notice.bind(&this);
+        this.view_info.bind(&this);
         this.selection_resize.bind(&this);
         this.color_panel.bind(&this);
         this.palette_panel.bind(&this);
@@ -2610,8 +2609,9 @@ impl Workspace {
             self.header.refresh(self, &state);
         }
         self.view_info
+            .root
             .set_visible(state.workspace.layout.canvas_info.visible);
-        self.view_info.set_halign(gtk::Align::End);
+        self.view_info.root.set_halign(gtk::Align::End);
         if regions & (regions::CAMERA | regions::LAYOUT | regions::DOCUMENT | regions::COMMANDS)
             != 0
         {
@@ -2707,11 +2707,7 @@ impl Workspace {
             self.preferences.refresh(self, view);
         }
         if regions & regions::CAMERA != 0 {
-            self.view_info.set_text(&format!(
-                "{:.0}% · {:.0}°",
-                state.camera.zoom * 100.0,
-                state.camera.rotation.to_degrees()
-            ));
+            self.view_info.refresh(&state.camera);
         }
         if regions & (regions::CANVAS_BAR | regions::COMMANDS | regions::LAYOUT) != 0 {
             self.canvas_bar.refresh(self, state.canvas_bar.as_ref());

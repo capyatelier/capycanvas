@@ -7,7 +7,19 @@ use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
 use std::sync::{Arc, Mutex};
 mod presets;
 mod navigation;
-const FORMATS: [ExportFormat; 3] = [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg];
+
+fn format_label(format: ExportFormat) -> &'static str {
+    match format {
+        ExportFormat::Png => "PNG",
+        ExportFormat::Tiff => "TIFF",
+        ExportFormat::Jpeg => "JPEG",
+        format => format.name(),
+    }
+}
+
+fn fixed_depth(format: ExportFormat) -> bool {
+    ExportRecipe::web_share().draft(ExportDraftAction::Format(format)).depths.len() == 1
+}
 
 use super::profile::{ProfileChooser, ProfilePurpose};
 
@@ -72,7 +84,7 @@ pub(crate) fn write_snapshot(
 ) -> Result<u64, String> {
     let result = (|| {
         recipe.validate_for_document(&snapshot.project.document)?;
-        let extent = recipe.size.extent([
+        let extent = recipe.output_extent([
             snapshot.project.document.width,
             snapshot.project.document.height,
         ])?;
@@ -311,7 +323,16 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     let exr_index = 4;
     let range = combo(&delivery_group, "Output", "export-output", &["SDR", "HDR native · PNG", "HDR JPEG", "HDR with transparency · AVIF", "OpenEXR · 32-bit float"]);
     range.set_visible(document.depth.is_float());
-    let format = combo(&delivery_group, "Format", "export-format", &["PNG", "TIFF", "JPEG"]);
+    let formats = Rc::new(ExportRecipe::web_share().draft(ExportDraftAction::Refresh).formats);
+    let format = combo(&delivery_group, "Format", "export-format", &formats.iter().map(|f| format_label(*f)).collect::<Vec<_>>());
+    let read_format: Rc<dyn Fn() -> ExportFormat> = Rc::new(glib::clone!(
+        #[weak] format, #[strong] formats, #[upgrade_or] ExportFormat::Png,
+        move || formats.get(format.selected() as usize).copied().unwrap_or(ExportFormat::Png)
+    ));
+    let select_format: Rc<dyn Fn(ExportFormat)> = Rc::new(glib::clone!(
+        #[weak] format, #[strong] formats,
+        move |value: ExportFormat| format.set_selected(formats.iter().position(|f| *f == value).unwrap_or(0) as u32)
+    ));
     let flatten=adw::SwitchRow::builder().title("Flatten transparency").visible(false).build();
     flatten.set_widget_name("export-flatten");delivery_group.add(&flatten);
     let rendition_view=crate::panel_controls::segmented("export-rendition-view",&[("hdr","HDR"),("sdr","SDR")]);
@@ -422,15 +443,15 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         quality,
         #[weak]
         jpeg_hint,
-        #[strong] read_background, #[strong] apply_background, #[strong] selected_profile,
-        move |format| {
+        #[strong] read_background, #[strong] apply_background, #[strong] selected_profile, #[strong] read_format,
+        move |_| {
             let recipe = ExportRecipe {
                 depth: if depth.selected() == 0 { SampleDepth::U8 } else { SampleDepth::U16 },
                 profile: selected_profile().unwrap_or_else(|_| ExportRecipe::web_share().profile),
                 background: read_background(),
                 ..ExportRecipe::web_share()
             };
-            let draft = recipe.draft(ExportDraftAction::Format(FORMATS[format.selected().min(2) as usize]));
+            let draft = recipe.draft(ExportDraftAction::Format(read_format()));
             quality.set_visible(draft.recipe.format == ExportFormat::Jpeg);
             jpeg_hint.set_visible(draft.recipe.format == ExportFormat::Jpeg);
             depth.set_sensitive(draft.depths.len() > 1);
@@ -442,19 +463,21 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         #[weak] range, #[weak] format, #[weak] flatten, #[weak] rendition_view, #[weak] space,
         #[weak] depth, #[weak] background, #[weak] quality, #[weak] jpeg_hint,
         #[weak] intent, #[weak] dither, #[weak] color_link, #[weak] advanced_group, #[weak] print_delivery,
+        #[strong] read_format,
         move || {
             let choice=range.selected();
             let hdr = choice != 0;
+            let jpeg = read_format() == ExportFormat::Jpeg;
             advanced_group.set_visible(!hdr); print_delivery.set_visible(!hdr && print_delivery.subtitle().is_some());
             for widget in [format.upcast_ref::<gtk::Widget>(), space.upcast_ref(), depth.upcast_ref(), background.upcast_ref(), intent.upcast_ref()] { widget.set_visible(!hdr); }
             rendition_view.set_visible(choice>=2 && choice != exr_index);
             flatten.set_visible(choice==2 && choice != exr_index);
             color_link.set_visible(!hdr || (choice==2 && choice != exr_index));
             background.set_visible(!hdr || (choice==2 && choice != exr_index));
-            depth.set_visible(!hdr && format.selected() != 2);
+            depth.set_visible(!hdr && !fixed_depth(read_format()));
             dither.set_visible(!hdr && depth.selected() == 0);
-            quality.set_visible((choice>=2 && choice != exr_index) || (!hdr && format.selected() == 2));
-            jpeg_hint.set_visible(!hdr && format.selected() == 2);
+            quality.set_visible((choice>=2 && choice != exr_index) || (!hdr && jpeg));
+            jpeg_hint.set_visible(!hdr && jpeg);
         }
     ));
     for row in [&range, &format] { let sync = sync_range.clone(); row.connect_selected_notify(move |_| sync()); }
@@ -469,20 +492,18 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     space.connect_subtitle_notify(glib::clone!(
         #[weak]
         background,
-        #[weak]
-        format,
         #[strong]
         selected_profile,
-        #[strong] read_background, #[strong] apply_background,
+        #[strong] read_background, #[strong] apply_background, #[strong] read_format, #[strong] select_format,
         move |_| {
             if let Ok(profile) = selected_profile() {
                 let recipe = ExportRecipe {
-                    format: FORMATS[format.selected().min(2) as usize],
+                    format: read_format(),
                     background: read_background(),
                     ..ExportRecipe::web_share()
                 };
                 let draft = recipe.draft(ExportDraftAction::Profile(profile));
-                format.set_selected(FORMATS.iter().position(|f| *f == draft.recipe.format).unwrap() as u32);
+                select_format(draft.recipe.format);
                 apply_background(&draft);
             }
             background.notify("selected");
@@ -504,8 +525,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             resolution,
             #[weak]
             ppi,
-            #[weak]
-            format,
+            #[strong]
+            select_format,
             #[weak]
             range,
             #[weak]
@@ -532,13 +553,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                 range.set_selected(if recipe.format == ExportFormat::Exr { exr_index } else { match recipe.format.gainmap(){Some(layer_color::photo::GainMapFormat::Jpeg)=>2,Some(layer_color::photo::GainMapFormat::Avif)=>3,None=>u32::from(recipe.format.is_hdr())}});
                 flatten.set_active(recipe.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg)&&recipe.background!=ExportBackground::Preserve);
                 clip_hdr.set_active(recipe.format.maps_hdr_range());
-                format.set_selected(match recipe.format {
-                    ExportFormat::Exr => 0,
-                    ExportFormat::Png => 0,
-                    ExportFormat::Tiff => 1,
-                    ExportFormat::Jpeg => 2,
-                    ExportFormat::PngHdr | ExportFormat::PngHdrMapped | ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => 0,
-                });
+                select_format(if recipe.format.is_hdr() { ExportFormat::Png } else { recipe.format });
                 restore_profile(recipe.profile.clone());
                 depth.set_selected(u32::from(recipe.depth == SampleDepth::U16));
                 if !recipe.format.is_hdr() || recipe.format.gainmap().is_some() { apply_background(&recipe.clone().draft(ExportDraftAction::Refresh)); }
@@ -682,8 +697,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         }
     ));
     let read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, String>> = Rc::new(glib::clone!(
-        #[weak]
-        format,
+        #[strong]
+        read_format,
         #[weak]
         range,
         #[weak]
@@ -716,7 +731,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                     (1,false)=>ExportFormat::PngHdr,(1,true)=>ExportFormat::PngHdrMapped,
                     (2,false)=>ExportFormat::JpegHdr,(2,true)=>ExportFormat::JpegHdrMapped,
                     (3,false)=>ExportFormat::AvifHdr,(3,true)=>ExportFormat::AvifHdrMapped,
-                    _=>FORMATS[format.selected().min(2) as usize],
+                    _=>read_format(),
                 },
                 profile: if range.selected() == exr_index { ExportProfile::builtin(document.space) } else if range.selected() != 0 { ExportProfile::builtin(layer_core::color::RgbSpace::Srgb) } else { selected_profile()? },
                 depth: if depth.selected() == 0 {
@@ -748,6 +763,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                 recipe.draft(ExportDraftAction::Refresh).recipe
             } else { recipe };
             recipe.validate()?;
+            recipe.output_extent(extent)?;
             recipe.output_resolution(master_resolution)?;
             Ok(recipe)
         }
@@ -829,10 +845,10 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     let compression_note = gtk::Label::builder().wrap(true).xalign(0.).build();
     compression_note.set_widget_name("export-preview-compression");
     compression_note.add_css_class("dim-label");
-    let preview_note = glib::clone!(#[weak] range, #[weak] format, #[weak] compression_note, #[weak] note, move || {
+    let preview_note = glib::clone!(#[weak] range, #[strong] read_format, #[weak] compression_note, #[weak] note, move || {
         let hdr = range.selected() != 0;
         compression_note.set_label("JPEG compression artifacts are not previewed.");
-        compression_note.set_visible(!hdr && format.selected() == 2);
+        compression_note.set_visible(!hdr && read_format() == ExportFormat::Jpeg);
         note.set_visible(!hdr && !note.text().is_empty());
     });
     for row in [&range, &format] { let update = preview_note.clone(); row.connect_selected_notify(move |_| update()); }
@@ -1042,7 +1058,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
             recipe.format.extension()
         ));
     }
-    let height = recipe.size.extent([
+    let height = recipe.output_extent([
         snapshot.project.document.width,
         snapshot.project.document.height,
     ])?[1];

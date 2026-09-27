@@ -98,7 +98,7 @@ pub use session::{
 };
 pub use stats::{StatRow, StatsView};
 
-pub use camera::{Camera, TouchGesture};
+pub use camera::{Camera, MAX_ZOOM, MIN_ZOOM, TouchGesture};
 pub use cursor::{CanvasCursor, CursorMode};
 pub use customization::{
     ContextMenu, ContextMenuItem, ContextTarget, CustomizationAction, CustomizationState,
@@ -235,7 +235,7 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
     sections: &[
         &[CommandId::Histogram],
         &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning, CommandId::SdrRendition, CommandId::PreviewSdr],
-        &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
+        &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas, CommandId::ActualPixels],
         &[CommandId::RotateLeft, CommandId::RotateRight],
         &[CommandId::FlipHorizontal, CommandId::FlipVertical],
         &[CommandId::ShowRulers, CommandId::SnapRulers],
@@ -294,6 +294,7 @@ pub struct UiCatalog {
     pub brush_size: NumericControl,
     pub opacity: NumericControl,
     pub layer_opacity: NumericControl,
+    pub zoom: NumericControl,
     pub layer_blends: Vec<&'static str>,
 }
 pub fn ui_catalog() -> UiCatalog {
@@ -320,6 +321,7 @@ pub fn ui_catalog() -> UiCatalog {
         brush_size: NumericControl::brush_size(),
         opacity: NumericControl::percent(),
         layer_opacity: NumericControl::layer_opacity(),
+        zoom: NumericControl::zoom(),
         layer_blends: layer_core::LayerBlend::ALL
             .iter()
             .map(|b| b.label())
@@ -478,6 +480,7 @@ command_ids! {
     ClearOutside,
     CopySelectionToLayer,
     CutSelectionToLayer,
+    ActualPixels,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -638,6 +641,7 @@ impl CommandId {
             Self::ClearOutside => "clear-outside",
             Self::CopySelectionToLayer => "copy-to-layer",
             Self::CutSelectionToLayer => "cut-to-layer",
+            Self::ActualPixels => "actual-pixels",
         })
     }
     pub const TOOLS: [Self; 25] = [
@@ -816,6 +820,7 @@ impl CommandId {
             Self::ClearOutside => "Clear Outside Selection",
             Self::CopySelectionToLayer => "Copy Selection to New Layer",
             Self::CutSelectionToLayer => "Cut Selection to New Layer",
+            Self::ActualPixels => "Actual Pixels",
         }
     }
 }
@@ -1048,6 +1053,10 @@ pub enum UiAction {
     },
     Invoke {
         command: CommandId,
+    },
+    /// Zoom about the work-area centre, clamped to the camera limits.
+    SetZoom {
+        zoom: f32,
     },
     SelectBrush {
         id: u32,

@@ -19,9 +19,6 @@ pub fn write_recipe(
         recipe.background.matte(),
         recipe.format.maps_hdr_range(),
     );
-    if let Some(format) = recipe.format.gainmap() {
-        return renderer.write_gainmap(output, format, recipe.jpeg_quality, matte, clip);
-    }
     match recipe.format {
         ExportFormat::Exr => renderer.write_exr(output),
         ExportFormat::Png => renderer.write_png(output, &target, recipe.encoding, matte),
@@ -33,7 +30,12 @@ pub fn write_recipe(
             matte.ok_or("Choose a JPEG background")?,
             recipe.jpeg_quality,
         ),
-        _ => renderer.write_hdr_png(output, clip),
+        ExportFormat::Webp => renderer.write_webp(output, &target, recipe.encoding, matte),
+        ExportFormat::PngHdr | ExportFormat::PngHdrMapped => renderer.write_hdr_png(output, clip),
+        ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => {
+            let format = recipe.format.gainmap().ok_or("Unsupported gain-map format")?;
+            renderer.write_gainmap(output, format, recipe.jpeg_quality, matte, clip)
+        }
     }
 }
 
@@ -57,7 +59,7 @@ pub fn preview_recipe(
     recipe: &ExportRecipe,
 ) -> Result<RecipePreview, String> {
     recipe.validate()?;
-    renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
+    renderer.set_output_extent(recipe.output_extent(renderer.extent())?)?;
     let matte = recipe.background.matte();
     let (after, sdr_base, transparent, statistics) = if let Some(format) = recipe.format.gainmap() {
         let (hdr, base, statistics) = renderer.preview_gainmap_output(
@@ -220,7 +222,7 @@ impl ExportTask {
         }
         let recipe = self.recipe.clone();
         let document = self.document();
-        let extent = recipe.size.extent([document.width, document.height])?;
+        let extent = recipe.output_extent([document.width, document.height])?;
         let resolution = recipe.output_resolution(document.resolution)?;
         let renderer = self.renderer(control)?;
         renderer.set_output_extent(extent)?;
@@ -316,6 +318,66 @@ mod tests {
         .unwrap();
         assert_eq!(photo.extent, [8, 6]);
         assert_eq!(photo.interpretation.depth, SampleDepth::F16);
+        drop((task, host));
+        layer_render_wgpu::finish_shader_compiler_shutdown();
+    }
+
+    #[test]
+    fn webp_export_writes_lossless_rgba_and_refuses_encoder_limits() {
+        let mut document = layer_core::Document::new("Export", 8, 6);
+        document.resolution = Some(layer_core::ImageResolution::ppi(240));
+        for paper in document.layers.iter_mut().filter(|l| l.kind == layer_core::LayerKind::Background) {
+            paper.visible = false;
+        }
+        let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
+        let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
+        host.session = UiSession::new(Renderer(Some(gpu.into())), document, [8, 6], layer_ui::Platform::Mac).unwrap();
+        let pixel = |x: u32, y: u32| [(x * 30) as u8, (y * 40) as u8, 200, if x < 4 { 255 } else { 0 }];
+        let interpretation = SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: SampleDepth::U8,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: false,
+        };
+        let mut source = SourceBuilder::new([8, 6], interpretation, 1 << 20).unwrap();
+        for y in 0..6 {
+            source.push_row(&(0..8).flat_map(|x| pixel(x, y)).collect::<Vec<_>>()).unwrap();
+        }
+        host.session.import_layer_source("Photo", source.finish().unwrap()).unwrap();
+        host.session.frame(0, 0).unwrap();
+        host.dispatch(UiAction::Invoke { command: CommandId::ExportDocument }).unwrap();
+        let request = host.session.state().requests.last().unwrap().id;
+        let mut task = ExportTask::capture(&host.session, request, "Photo.capy", RgbSpace::Srgb).unwrap();
+        let webp = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Webp)).recipe;
+        assert_eq!(webp.filename("Photo.capy"), "Photo.webp");
+        task.configure(webp.clone()).unwrap();
+        task.compare(Default::default()).unwrap();
+        assert_eq!(task.details().unwrap()["format_name"], "WebP · lossless");
+        let bytes = written(&mut task).unwrap();
+        assert_eq!(&bytes[8..12], b"WEBP");
+        let photo = layer_color::photo::read_photo(Cursor::new(bytes), Default::default()).unwrap();
+        assert_eq!(photo.extent, [8, 6]);
+        assert_eq!(photo.interpretation.channels, SourceChannels::Rgba);
+        assert_eq!(photo.interpretation.depth, SampleDepth::U8);
+        assert_eq!(photo.resolution, Some(layer_core::ImageResolution::ppi(240)));
+        let mut rows = photo.rows();
+        let mut row = vec![0; photo.row_bytes()];
+        for y in 0..6 {
+            rows.read(y, &mut row).unwrap();
+            for (x, actual) in row.chunks_exact(4).enumerate() {
+                let expected = pixel(x as u32, y);
+                assert_eq!(actual[3], expected[3], "({x},{y}) alpha");
+                if expected[3] > 0 {
+                    assert!(actual.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "({x},{y}): {actual:?}");
+                }
+            }
+        }
+        let mut oversized = webp;
+        oversized.size = layer_ui::ExportSize::Fit { bounds: [20000, 20000], enlarge: true };
+        let error = task.configure(oversized.clone()).unwrap_err();
+        assert!(error.contains("16,384 pixels per side"), "{error}");
+        oversized.format = ExportFormat::Png;
+        task.configure(oversized).unwrap();
         drop((task, host));
         layer_render_wgpu::finish_shader_compiler_shutdown();
     }

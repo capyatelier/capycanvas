@@ -17,6 +17,7 @@ pub enum ExportFormat {
     Png,
     Tiff,
     Jpeg,
+    Webp,
 }
 impl ExportFormat {
     pub fn is_hdr(self) -> bool { matches!(self, Self::Exr | Self::PngHdr | Self::PngHdrMapped | Self::JpegHdr | Self::JpegHdrMapped | Self::AvifHdr | Self::AvifHdrMapped) }
@@ -40,6 +41,7 @@ impl ExportFormat {
             Self::Tiff => "tif",
             Self::Jpeg | Self::JpegHdr | Self::JpegHdrMapped => "jpg",
             Self::AvifHdr | Self::AvifHdrMapped => "avif",
+            Self::Webp => "webp",
         }
     }
     pub fn name(self) -> &'static str {
@@ -52,6 +54,15 @@ impl ExportFormat {
             Self::Jpeg => "JPEG image",
             Self::JpegHdr | Self::JpegHdrMapped => "HDR JPEG",
             Self::AvifHdr | Self::AvifHdrMapped => "HDR AVIF with transparency",
+            Self::Webp => "WebP · lossless",
+        }
+    }
+    /// SDR formats that can carry a delivery profile with these channels.
+    fn sdr_choices(channels: ProfileChannels) -> Vec<Self> {
+        match channels {
+            ProfileChannels::Rgb => vec![Self::Png, Self::Tiff, Self::Jpeg, Self::Webp],
+            ProfileChannels::Gray => vec![Self::Png, Self::Tiff, Self::Jpeg],
+            ProfileChannels::Cmyk => vec![Self::Tiff, Self::Jpeg],
         }
     }
 }
@@ -183,9 +194,21 @@ impl ExportRecipe {
     /// Validate the complete delivery transform and size on a file worker.
     pub fn validate_for_document(&self, document: &layer_core::Document) -> Result<(), String> {
         self.validate_for_color(document.color)?;
-        self.size.extent([document.width, document.height])?;
+        self.output_extent([document.width, document.height])?;
         self.output_resolution(document.resolution)?;
         Ok(())
+    }
+    /// Delivery pixel dimensions, refused when the format's encoder cannot
+    /// write them.
+    pub fn output_extent(&self, source: [u32; 2]) -> Result<[u32; 2], String> {
+        let extent = self.size.extent(source)?;
+        if self.format == ExportFormat::Webp && extent.iter().any(|v| *v > layer_color::photo::WEBP_MAX_DIMENSION) {
+            return Err(format!(
+                "{}. Fit the size within that or choose another format.",
+                layer_color::photo::WEBP_SIZE_LIMIT
+            ));
+        }
+        Ok(extent)
     }
     pub fn web_share() -> Self {
         Self {
@@ -289,7 +312,7 @@ impl ExportRecipe {
                 ExportFormat::Png | ExportFormat::PngHdr | ExportFormat::PngHdrMapped => {
                     value.png_density()?;
                 }
-                ExportFormat::Tiff => {
+                ExportFormat::Tiff | ExportFormat::Webp => {
                     value.tiff_density()?;
                 }
                 ExportFormat::Exr | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => (),
@@ -331,9 +354,7 @@ impl ExportRecipe {
         if draft.recipe.format == ExportFormat::Exr {
             draft.recipe.profile = ExportProfile::builtin(color.space);
         }
-        draft.formats = if draft.recipe.profile.channels == ProfileChannels::Cmyk {
-            vec![ExportFormat::Tiff, ExportFormat::Jpeg]
-        } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] };
+        draft.formats = ExportFormat::sdr_choices(draft.recipe.profile.channels);
         if color.depth.is_float() {
             draft.formats.extend([ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::Exr,
                 ExportFormat::JpegHdr, ExportFormat::JpegHdrMapped, ExportFormat::AvifHdr, ExportFormat::AvifHdrMapped]);
@@ -364,15 +385,19 @@ impl ExportRecipe {
         }
         if !self.format.is_hdr() && self.depth.is_float() { self.depth = SampleDepth::U16; }
         let cmyk = self.profile.channels == ProfileChannels::Cmyk;
-        if cmyk && self.format == ExportFormat::Png { self.format = ExportFormat::Tiff; }
+        let choices = ExportFormat::sdr_choices(self.profile.channels);
+        if !self.format.is_hdr() && !choices.contains(&self.format) {
+            self.format = if cmyk { ExportFormat::Tiff } else { ExportFormat::Png };
+        }
         let jpeg = self.format == ExportFormat::Jpeg;
-        if jpeg { self.depth = SampleDepth::U8; }
+        let eight_bit = jpeg || self.format == ExportFormat::Webp;
+        if eight_bit { self.depth = SampleDepth::U8; }
         if (jpeg || cmyk) && self.background == ExportBackground::Preserve { self.background = ExportBackground::White; }
         if self.depth != SampleDepth::U8 { self.encoding.dither = OutputDither::None; }
         ExportDraft {
             hdr:self.format.is_hdr(),clip_hdr_range:self.format.maps_hdr_range(),format:self.format.with_hdr_range_mapping(false),
-            formats: if self.format.is_hdr() { vec![ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr, ExportFormat::Exr] } else if cmyk { vec![ExportFormat::Tiff, ExportFormat::Jpeg] } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] },
-            depths: if self.format == ExportFormat::Exr { vec![SampleDepth::F32] } else if self.format.is_hdr() { vec![SampleDepth::U16] } else if jpeg { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] },
+            formats: if self.format.is_hdr() { vec![ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr, ExportFormat::Exr] } else { choices },
+            depths: if self.format == ExportFormat::Exr { vec![SampleDepth::F32] } else if self.format.is_hdr() { vec![SampleDepth::U16] } else if eight_bit { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] },
             backgrounds: if self.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg) { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] } else if self.format.is_hdr() { vec![ExportBackground::Preserve] } else if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] },
             dithers: if self.depth == SampleDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] },
             recipe: self,
@@ -438,7 +463,7 @@ mod tests {
             assert!(!integer.formats.contains(&format));
         }
         let sdr = ExportRecipe::web_share().draft(ExportDraftAction::Refresh);
-        assert_eq!(sdr.formats, [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg]);
+        assert_eq!(sdr.formats, [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg, ExportFormat::Webp]);
         assert_eq!(sdr.depths, [SampleDepth::U8, SampleDepth::U16]);
     }
 
@@ -462,6 +487,69 @@ mod tests {
         cmyk.recipe.validate().unwrap();
         let mut invalid = cmyk.recipe;invalid.jpeg_quality = 0;
         assert!(invalid.draft(ExportDraftAction::Refresh).recipe.validate().is_err());
+    }
+
+    #[test]
+    fn webp_drafts_as_lossless_eight_bit_rgb_with_transparency() {
+        let mut recipe = ExportRecipe::further_editing(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
+        recipe.encoding.dither = layer_core::color::OutputDither::Stochastic8;
+        let webp = recipe.draft(ExportDraftAction::Format(ExportFormat::Webp));
+        assert_eq!(webp.recipe.format, ExportFormat::Webp);
+        assert_eq!((webp.recipe.depth, webp.depths.as_slice()), (SampleDepth::U8, [SampleDepth::U8].as_slice()));
+        assert_eq!(webp.recipe.background, ExportBackground::Preserve);
+        assert_eq!(webp.backgrounds, [ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black]);
+        assert_eq!(webp.dithers, [layer_core::color::OutputDither::None, layer_core::color::OutputDither::Stochastic8]);
+        assert_eq!(webp.formats, [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg, ExportFormat::Webp]);
+        assert_eq!(webp.recipe.interpretation().channels, SourceChannels::Rgba);
+        webp.recipe.validate().unwrap();
+        assert_eq!((ExportFormat::Webp.extension(), ExportFormat::Webp.name()), ("webp", "WebP · lossless"));
+        assert_eq!(webp.recipe.filename("Sunset.capy"), "Sunset.webp");
+        let json = serde_json::to_value(&webp.recipe).unwrap();
+        assert_eq!(json["format"], "Webp");
+        assert_eq!(serde_json::from_value::<ExportRecipe>(json).unwrap(), webp.recipe);
+        let deep = ExportRecipe { depth: SampleDepth::U16, encoding: Default::default(), ..webp.recipe.clone() };
+        assert_eq!(deep.validate().unwrap_err(), "Unsupported export combination");
+        for (channels, format, formats) in [
+            (ProfileChannels::Gray, ExportFormat::Png, vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg]),
+            (ProfileChannels::Cmyk, ExportFormat::Tiff, vec![ExportFormat::Tiff, ExportFormat::Jpeg]),
+        ] {
+            let profile = ExportProfile { profile: ColorProfile::Icc(vec![1].into()), channels, name: "Print".into() };
+            let other = webp.recipe.clone().draft(ExportDraftAction::Profile(profile.clone()));
+            assert_eq!((other.recipe.format, &other.formats), (format, &formats), "{channels:?} cannot be WebP");
+            let refused = ExportRecipe { profile, ..webp.recipe.clone() }.draft(ExportDraftAction::Format(ExportFormat::Webp));
+            assert_eq!(refused.recipe.format, format);
+            for depth in [SampleDepth::U8, SampleDepth::F32] {
+                let color = DocumentColor { space: RgbSpace::Srgb, depth };
+                assert!(!refused.recipe.clone().draft_for_color(color, ExportDraftAction::Refresh).formats.contains(&ExportFormat::Webp));
+            }
+        }
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16] {
+            let color = DocumentColor { space: RgbSpace::DisplayP3, depth };
+            let choices = ExportRecipe::web_share().draft_for_color(color, ExportDraftAction::Format(ExportFormat::Webp));
+            assert!(choices.formats.contains(&ExportFormat::Webp));
+            assert_eq!(choices.recipe.format, ExportFormat::Webp);
+        }
+    }
+
+    #[test]
+    fn webp_output_is_refused_beyond_the_encoder_dimension_limit() {
+        let webp = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Webp)).recipe;
+        assert_eq!(webp.output_extent([16384, 16384]).unwrap(), [16384, 16384]);
+        for source in [[16385, 1], [1, 16385], [32768, 32768]] {
+            let error = webp.output_extent(source).unwrap_err();
+            assert!(error.starts_with("WebP export is limited to 16,384 pixels per side."), "{error}");
+            assert_eq!(ExportRecipe { format: ExportFormat::Png, ..webp.clone() }.output_extent(source).unwrap(), source);
+        }
+        let fitted = ExportRecipe { size: ExportSize::Fit { bounds: [4096, 4096], enlarge: false }, ..webp.clone() };
+        assert_eq!(fitted.output_extent([32768, 16384]).unwrap(), [4096, 2048]);
+        let enlarged = ExportRecipe { size: ExportSize::Fit { bounds: [20000, 20000], enlarge: true }, ..webp.clone() };
+        assert!(enlarged.output_extent([100, 50]).is_err());
+        let mut document = layer_core::Document::new("Panorama", 16385, 2);
+        assert!(webp.validate_for_document(&document).is_err());
+        assert!(fitted.validate_for_document(&document).is_ok());
+        document.resolution = Some(layer_core::ImageResolution::ppi(300));
+        document.width = 16384;
+        webp.validate_for_document(&document).unwrap();
     }
 
     #[test]

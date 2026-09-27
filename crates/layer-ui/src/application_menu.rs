@@ -177,4 +177,27 @@ impl<R: CanvasRenderer> UiSession<R> {
         model.title = menu.label().into();
         model.with_shortcuts(&self.state.settings, self.state.platform)
     }
+
+    /// The zoom readout's menu: the view commands, then fixed percentages.
+    pub fn zoom_menu(&self) -> ContextMenu {
+        let idle = self.require_idle().is_ok();
+        let command = |id: CommandId| {
+            let state = self.command(id);
+            ContextMenuItem { enabled: state.enabled, ..ContextMenuItem::command(state.label, UiAction::Invoke { command: id }) }
+        };
+        let level = |zoom: f32| ContextMenuItem {
+            enabled: idle,
+            ..ContextMenuItem::command(format!("{}%", zoom * 100.), UiAction::SetZoom { zoom })
+        };
+        ContextMenu {
+            title: "Zoom".into(),
+            sections: vec![
+                [CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas, CommandId::ActualPixels].map(command).into(),
+                ZOOM_LEVELS.map(level).into(),
+            ],
+        }
+        .with_shortcuts(&self.state.settings, self.state.platform)
+    }
 }
+
+const ZOOM_LEVELS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];

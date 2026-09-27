@@ -101,6 +101,17 @@ impl NumericControl {
             ..Self::percent()
         }
     }
+    /// View zoom in percent; the slider travels evenly through each doubling.
+    pub fn zoom() -> Self {
+        Self {
+            kind: NumericKind::Slider,
+            mapping: NumericMapping::Log,
+            scale: 100.0,
+            unit: "%".into(),
+            resolution: 0.0001,
+            ..Self::number(f64::from(crate::MIN_ZOOM), f64::from(crate::MAX_ZOOM), 0.1, 0)
+        }
+    }
     pub fn pressure() -> Self {
         Self::number(0.25, 4.0, 0.05, 2).unit("×")
     }

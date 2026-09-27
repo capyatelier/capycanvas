@@ -698,7 +698,7 @@ fn native_color_picker_preview_pacing() {
     assert!(d.w.hdr_status.is_visible());
     d.click(checkbox.upcast_ref());
     assert!(!d.w.hdr_status.is_visible());
-    assert!(!d.w.view_info.is_visible());
+    assert!(!d.w.view_info.root.is_visible());
     crate::snapshot(&d.w)
         .save_to_png(d.input.dir.join("color-picker-footer-hidden.png"))
         .unwrap();

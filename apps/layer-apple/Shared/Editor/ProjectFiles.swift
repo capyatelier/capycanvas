@@ -538,11 +538,13 @@ import UIKit
         if format.hasPrefix("Jpeg") { return .jpeg }
         if format.hasPrefix("Avif") { return UTType(filenameExtension: "avif") ?? UTType("public.avif") ?? .data }
         if format == "Exr" { return UTType(filenameExtension: "exr") ?? UTType(exportedAs: "art.capycanvas.openexr", conformingTo: .image) }
+        if format == "Webp" { return .webP }
         return format == "Tiff" ? .tiff : .png
     }
     static func exportExtension(_ format: String) -> String {
         if format.hasPrefix("Jpeg") { return "jpg" }
         if format.hasPrefix("Avif") { return "avif" }
+        if format == "Webp" { return "webp" }
         return format == "Exr" ? "exr" : format == "Tiff" ? "tiff" : "png"
     }
     private func chooseSave(name: String, type: UTType, _ completion: @escaping (URL?) -> Void) {

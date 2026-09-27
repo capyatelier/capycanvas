@@ -377,7 +377,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                     }
                 }
                 Surface(Modifier.glass(TileShape), color = colors.headerSurface, shape = TileShape) {
-                    CameraStatus(host)
+                    ZoomReadout(host)
                 }
             }
         }
@@ -429,14 +429,6 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     }
     if(open) AlertDialog(onDismissRequest={open=false},title={Text("Display Details")},
         text={Text(host.hdr.details)},confirmButton={TextButton({open=false}){Text("Close")}})
-}
-
-/** Read camera state here so navigation never invalidates the workspace tree. */
-@Composable private fun CameraStatus(host: CanvasHost) {
-    val camera = host.cameraReadout
-    Text("${camera.zoomPercent}% · ${camera.rotationDegrees}°",
-        Modifier.testTag("camera-readout").clickable { host.invoke("fit_canvas") }
-            .padding(horizontal = 10.dp, vertical = 3.dp))
 }
 
 /** One outline/shadow for both columns, with the drawer below the tab strip. */

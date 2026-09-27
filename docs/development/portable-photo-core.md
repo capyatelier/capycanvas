@@ -29,6 +29,27 @@ Windows host integration remains separate future work. Large AVIF output still
 has substantial latency, especially on Android; measured results follow.
 Earlier milestone entries describe the state at their respective commits.
 
+## Lossless WebP export — 2026-09-27
+
+`ExportFormat::Webp` ("WebP · lossless") writes 8-bit RGB or RGBA with the
+vendored `image-webp` VP8L encoder, plus an ICC chunk and the resolution in an
+EXIF chunk. That chunk holds bare TIFF data, without the `Exif\0\0` identifier
+that JPEG's APP1 segment uses. The shared draft offers WebP only for RGB
+delivery profiles, fixes 8-bit depth and keeps transparency.
+`ExportRecipe::output_extent` refuses outputs over 16,384 pixels per side, the
+encoder's limit, before any rendering.
+
+`write_webp_rows` admits about 12 bytes per pixel (gathered rows, the encoder's
+RGBA copy and its buffered frame) against `PhotoMemoryBudget.encode_bytes`.
+Rows arrive through the capture provider, so `CaptureControl` cancels between
+rows, but the final encode call cannot be cancelled; see the
+[vendored code audit](vendored-code-audit.md). Hosts refuse to publish after a
+cancellation, so no partial file appears. GTK, Web and Android offer the
+format. Web saves it as `image/webp`, and Android asks the Storage Access
+Framework for `image/webp` with a `.webp` name. Each host validates
+`output_extent` against the document before choosing a file, so the size
+refusal appears in the export dialog.
+
 ## Vendor cleanup without native dependencies — 2026-09-20
 
 The production HEIC adapter now calls the same patched `rust_h265` decoder

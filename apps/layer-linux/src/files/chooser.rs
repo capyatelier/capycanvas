@@ -86,11 +86,26 @@ pub(super) async fn open_multiple(
     Ok(files)
 }
 
+#[cfg(test)]
+thread_local! {
+    static NEXT_SAVE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Native tests answer the next save dialog with this file, without a desktop portal.
+#[cfg(test)]
+pub(crate) fn choose_next_save(path: PathBuf) {
+    NEXT_SAVE.set(Some(path));
+}
+
 pub(super) async fn save(
     dialog: &gtk::FileDialog,
     parent: &impl IsA<gtk::Window>,
     folder: Folder,
 ) -> Result<gio::File, glib::Error> {
+    #[cfg(test)]
+    if let Some(path) = NEXT_SAVE.take() {
+        return Ok(gio::File::for_path(path));
+    }
     restore(dialog, folder).await;
     let file = dialog.save_future(Some(parent)).await?;
     remember(&file, folder).await;

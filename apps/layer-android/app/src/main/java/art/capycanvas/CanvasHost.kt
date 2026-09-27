@@ -11,6 +11,7 @@ import android.util.Log
 import android.view.Choreographer
 import android.view.Surface
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -120,6 +121,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     var surfaceReady by mutableStateOf(false)
         private set
     internal var cameraReadout by mutableStateOf(CameraReadout(100, 0))
+        private set
+    /** Exact camera zoom for the readout's field; only an open zoom menu reads it. */
+    internal var cameraZoom by mutableFloatStateOf(1f)
         private set
     internal val canvasBar: JSONObject? get() = snapshot?.objectOrNull("state")?.objectOrNull("canvas_bar")
     internal var canvasBarVisible by mutableStateOf(true)
@@ -860,7 +864,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         return result
     }
     private fun updateCameraReadout(camera: JSONObject) {
-        cameraReadout = CameraReadout((camera.number("zoom", 1.0) * 100).roundToInt(),
+        cameraZoom = camera.number("zoom", 1.0)
+        cameraReadout = CameraReadout((cameraZoom * 100).roundToInt(),
             (camera.number("rotation") * 180 / Math.PI).roundToInt())
     }
     override fun onCleared() {

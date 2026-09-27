@@ -220,6 +220,43 @@ the layer below in one undo step, with pen, touch and mouse. It also checks stal
 ids, dismissal by a navigating touch, the timeout, Move on a locked layer, and
 the reason on a disabled bar item. `device.test.mjs --notices` runs it on a tablet.
 
+The footer zoom readout (see [shared UI](../ui/shared-ui.md#actions-and-observation))
+is [`zoom-readout.js`](../../apps/layer-web/zoom-readout.js). `#view-info` is a
+button that opens an auto popover: a zoom field built from `catalog.zoom`, then
+the menu from the `zoom_menu` Wasm export. The button is out of the tab order
+and the popover cancels presses outside its text field, so opening the menu and
+choosing an item keep focus on the canvas. Typing borrows focus, and closing the
+menu hands it back. Escape closes the menu unless the field is being edited.
+Camera updates rewrite the button's text, and touch the field and the menu's
+enabled items only while the menu is open.
+
+Ctrl+1 and Ctrl+Alt+0 (Actual Pixels) reach the page, and the shared shortcut
+handler calls `preventDefault`. In Chrome that stops Ctrl+1 selecting the first
+tab: the journey below activates its tab, sends both chords, and checks that
+the tab stays in front, then shows that an unprevented Ctrl+1 does switch tabs.
+Focus emulation must be off for that check, because it keeps Chrome from
+running browser shortcuts. Firefox on Linux selects tabs with Alt+1 to 8, so
+Ctrl+1 is free there. In headless Firefox 154, both chords reached the page and
+were prevented, although WebGPU was unavailable.
+
+The export dialog lists **WebP · lossless**, and `documents.js` saves it as
+`image/webp`. `export_validate` and `export_image` check `output_extent` against
+the document, so an output over 16,384 pixels per side is refused in the dialog
+before the save picker opens or anything renders.
+
+Run `node --test apps/layer-web/zoom-readout.test.mjs apps/layer-web/export-controls.test.mjs`,
+then `node apps/layer-web/test.mjs --headless --zoom-readout`. The journey opens
+the readout with mouse, touch and pen, chooses 200%, uses Actual Pixels at a
+quarter turn, types 50 and 5000 (Zoom In then disables), and closes with
+Escape. It checks whole-pixel translations and canvas focus throughout, and
+the chords described above. It exports a stroke as WebP and compares the
+decoded pixels with an 8-bit PNG export. It then checks the size refusal
+through a saved preset that enlarges to 20,000 px. It writes light and dark
+menu captures to `artifacts/zoom-readout/web`. `device.test.mjs --zoom-readout`
+runs it on a tablet. With `CAPY_ANDROID_SERIAL` set, it also opens the readout
+and chooses 200% with real OS touch, stylus and mouse taps. It shows the footer
+if the test origin's workspace hides it, and restores the workspace afterwards.
+
 For clipped workspace drags and content-aware release, run
 `bash tools/performance/workspace-motion.sh web --workspace-rendering` on Linux,
 or `node apps/layer-web/test.mjs --headless --workspace-rendering` against the

@@ -48,6 +48,7 @@ mod tooltips;
 mod transparency_choice;
 mod wayland;
 mod workspace;
+mod zoom_readout;
 
 use adw::prelude::*;
 use gtk::glib;

@@ -54,7 +54,8 @@ designer or opening shortcut.
 - **Small / Medium / Large** resizes the bar and its icons together. Items
   have consistent 6px gaps; **Space** adds exactly one tile, never flexible
   space. Native window controls remain toolkit-owned and fixed.
-- **Show footer** toggles the bottom-right canvas readout (zoom and rotation).
+- **Show footer** toggles the bottom-right canvas readout (zoom and rotation),
+  which opens the zoom menu and field.
   Its position is not customizable. Menu labels are added or removed as a
   component, with no separate Show Menu Bar toggle.
 - **Done** commits the preview; **Cancel** restores the arrangement and canvas

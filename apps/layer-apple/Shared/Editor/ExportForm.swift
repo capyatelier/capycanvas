@@ -90,7 +90,7 @@ struct ExportForm: View {
             }
             if !hdr {
                 FormPicker("Format", selection: Binding(get: { format }, set: { editor.change("format", JSON($0)) })) {
-                    options("formats", labels: ["Png": "PNG", "Tiff": "TIFF", "Jpeg": "JPEG"])
+                    options("formats", labels: ["Png": "PNG", "Tiff": "TIFF", "Jpeg": "JPEG", "Webp": "WebP · lossless"])
                 }.accessibilityIdentifier("export-format")
             }
             if hdr {

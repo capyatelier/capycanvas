@@ -101,7 +101,7 @@ class AndroidInteractionTest {
                 if (action == MotionEvent.ACTION_DOWN) {
                     inputWindow = owner.view
                     if (popupInput) android.view.inspector.WindowInspector.getGlobalWindowViews().lastOrNull { view ->
-                        view.descendant<ViewRootForTest>()?.let { root -> listOf("brush-slider-preview", "workspace-menu", "toolbar-number-menu").any { root.find(hasTag(it)) != null } } == true
+                        view.descendant<ViewRootForTest>()?.let { root -> listOf("brush-slider-preview", "workspace-menu", "toolbar-number-menu", "zoom-menu").any { root.find(hasTag(it)) != null } } == true
                     }?.let { view ->
                         val p = IntArray(2); view.getLocationOnScreen(p)
                         if (coords[0].x >= p[0] && coords[0].x < p[0]+view.width && coords[0].y >= p[1] && coords[0].y < p[1]+view.height) inputWindow = view
@@ -1989,6 +1989,95 @@ class AndroidInteractionTest {
             action(obj("type" to "set_theme", "theme" to originalTheme))
         }
         println("PASS canvas notices: Wand reference offer and action, Move on a locked layer, repeat, contact and timeout dismissal, bar clearance, no dialog or focus change")
+    }
+    private fun zoomMenuRoot(): ViewRootForTest? = semanticsRoots().firstOrNull { it.find(hasTag("zoom-menu")) != null }
+    private fun zoomMenuShown(): Boolean { var open = false; onMain { open = zoomMenuRoot() != null }; return open }
+    private fun zoomItem(text: String): Rect? {
+        var result: Rect? = null
+        onMain {
+            zoomMenuRoot()?.let { root ->
+                root.find(hasLabel(text))?.let { node ->
+                    val base = IntArray(2); owner.view.getLocationOnScreen(base)
+                    val origin = IntArray(2); root.view.getLocationOnScreen(origin)
+                    result = node.boundsInRoot.translate(Offset((origin[0] - base[0]).toFloat(), (origin[1] - base[1]).toFloat()))
+                }
+            }
+        }
+        return result
+    }
+    @Test fun zoomReadoutMenuAndFieldAcrossDevices() {
+        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+        fun camera() = state().getJSONObject("camera")
+        fun zoom() = camera().getDouble("zoom")
+        fun whole() = camera().getJSONArray("translation").let { t -> (0 until t.length()).all { t.getDouble(it) % 1.0 == 0.0 } }
+        fun readout(text: String) = host.cameraReadout.let { "${it.zoomPercent}% · ${it.rotationDegrees}°" } == text && textBounds(text) != null
+        fun canvasFocus(label: String) = onMain { assertTrue("$label leaves window focus with the canvas", owner.view.hasWindowFocus()) }
+        fun open(name: String) {
+            tap(bounds("camera-readout").center)
+            waitFor("$name opens the zoom menu", 5_000) { zoomMenuShown() && zoomItem("200%") != null && zoomItem("Actual Pixels") != null }
+            val settled = SystemClock.uptimeMillis() + 3_000
+            var placed = bounds("number-value-Zoom")
+            while (true) {
+                SystemClock.sleep(60)
+                val now = bounds("number-value-Zoom")
+                if (now == placed) break
+                placed = now
+                check(SystemClock.uptimeMillis() < settled) { "$name the zoom menu finishes opening" }
+            }
+            canvasFocus("$name opening the zoom menu")
+        }
+        val footer = JSONObject(fixture.toString()).apply { getJSONObject("layout").put("canvas_info", obj("visible" to true)) }
+        action(obj("type" to "restore_workspace", "workspace" to footer))
+        waitFor("the zoom readout shows", 5_000) { shown("camera-readout") }
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        popupInput = true
+        try {
+            for (device in pointerTools) {
+                val name = listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]
+                tool = device
+                action(obj("type" to "set_zoom", "zoom" to .37))
+                open(name)
+                if (device == MotionEvent.TOOL_TYPE_STYLUS) for (theme in listOf("light", "dark")) {
+                    action(obj("type" to "set_theme", "theme" to theme))
+                    waitFor("$name the menu stays open across themes", 3_000) { zoomMenuShown() }
+                    captureCanvasBar("zoom-menu-$theme", "zoom-readout")
+                }
+                tap(zoomItem("200%")!!.center)
+                waitFor("$name 200% applies and closes the menu", 5_000) { zoom() == 2.0 && !zoomMenuShown() }
+                assertTrue("$name 200% lands on whole device pixels", whole())
+                waitFor("$name the readout follows the camera", 3_000) { readout("200% · 0°") }
+                canvasFocus("$name choosing 200%")
+
+                invoke("rotate_right"); action(obj("type" to "set_zoom", "zoom" to .37))
+                open(name)
+                tap(zoomItem("Actual Pixels")!!.center)
+                waitFor("$name Actual Pixels applies", 5_000) { zoom() == 1.0 && !zoomMenuShown() }
+                assertTrue("$name a quarter-turned 1:1 view lands on whole device pixels", whole())
+                waitFor("$name the readout shows the turned 1:1 view", 3_000) { readout("100% · 90°") }
+                canvasFocus("$name Actual Pixels")
+                invoke("rotate_left")
+
+                open(name)
+                tap(bounds("number-value-Zoom").center)
+                waitFor("$name the typed field takes the keys", 5_000) {
+                    var typing = false; onMain { typing = zoomMenuRoot()?.let { it.view.hasWindowFocus() && it.find(hasTag("number-Zoom")) != null } == true }; typing
+                }
+                instrumentation.sendStringSync("50")
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ENTER)
+                waitFor("$name a typed percentage applies", 5_000) { zoom() == 0.5 }
+                assertTrue("$name a typed zoom lands on whole device pixels", whole())
+                assertTrue("$name typing keeps the menu open", zoomMenuShown())
+                waitFor("$name the readout shows the typed zoom", 3_000) { readout("50% · 0°") }
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                waitFor("$name Back closes the menu and hands focus back", 5_000) { !zoomMenuShown() && owner.view.hasWindowFocus() }
+                assertNull(host.actionError)
+                println("PASS zoom readout device=$name")
+            }
+        } finally {
+            popupInput = false
+            action(obj("type" to "set_theme", "theme" to originalTheme))
+        }
+        println("PASS zoom readout: shared menu levels, Actual Pixels at a quarter turn, typed zoom and Back with mouse, finger and stylus, without taking focus")
     }
     @Test fun canvasActionBarJourneysAcrossDevices() {
         fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))

@@ -352,7 +352,7 @@ export async function checkParity({ call, evaluate, settle }) {
     await evaluate(
       `['#document-title','#size-number .number-entry','#view-info'].map(s=>getComputedStyle(document.querySelector(s)).userSelect)`,
     ),
-    ["text", "text", "text"],
+    ["text", "text", "none"],
   );
   assert.equal(
     await evaluate(

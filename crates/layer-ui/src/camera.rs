@@ -6,6 +6,9 @@ use layer_render::ViewState;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub const MIN_ZOOM: f32 = 0.02;
+pub const MAX_ZOOM: f32 = 16.0;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
     pub revision: u64,
@@ -39,7 +42,7 @@ impl Camera {
         let [_, _, width, height] = self.work_area;
         self.zoom = ((width * 0.9 / document[0].max(1) as f32)
             .min(height * 0.9 / document[1].max(1) as f32))
-        .clamp(0.02, 16.0);
+        .clamp(MIN_ZOOM, MAX_ZOOM);
         self.rotation = 0.0;
         self.center_on([document[0] as f32 * 0.5, document[1] as f32 * 0.5]);
     }
@@ -75,7 +78,7 @@ impl Camera {
         {
             return Err("Invalid camera gesture".into());
         }
-        let zoom = (self.zoom * scale).clamp(0.02, 16.0);
+        let zoom = (self.zoom * scale).clamp(MIN_ZOOM, MAX_ZOOM);
         let scale = zoom / self.zoom;
         let (sin, cos) = rotation.sin_cos();
         let dx = self.translation[0] - from[0];
@@ -146,6 +149,28 @@ impl Camera {
             y - b * point[0] - d * point[1],
         ];
         self.revision += 1;
+    }
+
+    /// Sets the zoom about the work-area centre, within the camera limits. At
+    /// quarter-turn rotations the translation lands on whole device pixels, so
+    /// integer zooms sample image pixels without bilinear blur.
+    pub fn zoom_to(&mut self, zoom: f32) -> Result<(), String> {
+        if !zoom.is_finite() {
+            return Err("Invalid zoom".into());
+        }
+        let [x, y] = self.work_area_center();
+        let center = self.input_transform().map(layer_core::Point { x, y });
+        self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        let quarters = self.rotation / std::f32::consts::FRAC_PI_2;
+        let aligned = (quarters - quarters.round()).abs() < 1e-4;
+        if aligned {
+            self.rotation = quarters.round() * std::f32::consts::FRAC_PI_2;
+        }
+        self.center_on([center.x, center.y]);
+        if aligned {
+            self.translation = self.translation.map(f32::round);
+        }
+        Ok(())
     }
 
     pub fn flip(&mut self, horizontal: bool) {
@@ -338,6 +363,50 @@ mod tests {
             },
             camera.input_transform().map(Point { x, y }),
         );
+    }
+    #[test]
+    fn zoom_to_keeps_the_centre_and_lands_on_whole_pixels_at_quarter_turns() {
+        for quarter in 0..4 {
+            let mut camera = Camera::new([3001, 1999], [1001, 777]);
+            camera.work_area = [13.0, 7.0, 901.0, 655.0];
+            let [x, y] = camera.work_area_center();
+            camera
+                .gesture([x, y], [x + 0.37, y - 0.61], 1.3, quarter as f32 * std::f32::consts::FRAC_PI_2)
+                .unwrap();
+            if quarter == 3 {
+                camera.flip(true);
+            }
+            let before = camera.input_transform().map(Point { x, y });
+            camera.zoom_to(1.0).unwrap();
+            assert_eq!(camera.zoom, 1.0);
+            assert!(camera.translation.iter().all(|v| v.fract() == 0.0), "{quarter}: {:?}", camera.translation);
+            let after = camera.input_transform().map(Point { x, y });
+            assert!((before.x - after.x).hypot(before.y - after.y) <= 0.71, "{quarter}: the centre stays put");
+            let m = camera.document_to_surface();
+            for [px, py] in [[0.5, 0.5], [17.5, 1234.5], [3000.5, 1998.5]] {
+                for surface in [m[0] * px + m[2] * py + m[4], m[1] * px + m[3] * py + m[5]] {
+                    let offset = surface - 0.5;
+                    assert!((offset - offset.round()).abs() < 1e-3, "{quarter}: pixel centre at {surface}");
+                }
+            }
+            camera.zoom_to(2.0).unwrap();
+            assert_eq!(camera.zoom, 2.0);
+            assert!(camera.translation.iter().all(|v| v.fract() == 0.0));
+        }
+        let mut camera = Camera::new([3001, 1999], [1001, 777]);
+        camera.gesture([500.0, 380.0], [500.0, 380.0], 1.0, 0.3).unwrap();
+        let [x, y] = camera.work_area_center();
+        let before = camera.input_transform().map(Point { x, y });
+        camera.zoom_to(1.0).unwrap();
+        near(before, camera.input_transform().map(Point { x, y }));
+        assert!((camera.rotation - 0.3).abs() < 1e-6, "free rotations are kept");
+        camera.zoom_to(100.0).unwrap();
+        assert_eq!(camera.zoom, MAX_ZOOM);
+        camera.zoom_to(0.0).unwrap();
+        assert_eq!(camera.zoom, MIN_ZOOM);
+        let before = camera.clone();
+        assert!(camera.zoom_to(f32::NAN).is_err());
+        assert_eq!(camera, before);
     }
     #[test]
     fn two_fingers_rotate_zoom_and_pan_without_lifecycle_jumps() {

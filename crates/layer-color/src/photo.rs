@@ -34,6 +34,7 @@ mod webp_io;
 pub use jpeg_io::{JpegEncodeOptions, write_jpeg, write_jpeg_rows};
 pub use png_io::{write_png, write_png_rows};
 pub use tiff_io::{write_tiff, write_tiff_rows};
+pub use webp_io::{WEBP_MAX_DIMENSION, WEBP_SIZE_LIMIT, WebpEncodeOptions, write_webp_rows};
 
 /// Decoder capabilities, also used by file pickers, clipboard and file drops.
 /// These describe implemented readers, not formats merely known to a host OS.

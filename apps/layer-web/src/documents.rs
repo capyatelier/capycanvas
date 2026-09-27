@@ -54,7 +54,9 @@ impl WebApp {
     }
     pub fn export_validate(&self, recipe: JsValue) -> Result<JsValue, JsValue> {
         let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
+        let document = self.session.engine().document();
         recipe.validate().map_err(js)?;
+        recipe.output_extent([document.width, document.height]).map_err(js)?;
         serialize(&recipe)
     }
 

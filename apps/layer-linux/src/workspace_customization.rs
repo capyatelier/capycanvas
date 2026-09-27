@@ -1501,6 +1501,16 @@ impl Workspace {
         popover: &gtk::PopoverMenu,
         menu: layer_ui::ContextMenu,
     ) {
+        let root = self.workspace_menu_model(popover, menu);
+        popover.set_menu_model(Some(&root));
+    }
+
+    /// The native model of a shared menu, with its actions installed on `popover`.
+    pub(crate) fn workspace_menu_model(
+        self: &Rc<Self>,
+        popover: &gtk::PopoverMenu,
+        menu: layer_ui::ContextMenu,
+    ) -> gtk::gio::Menu {
         fn model(
             w: &Rc<Workspace>,
             popup: &gtk::PopoverMenu,
@@ -1579,7 +1589,7 @@ impl Workspace {
             section.append_item(&item); root.append_section(None, &section);
         }
         popover.insert_action_group("context", Some(&actions));
-        popover.set_menu_model(Some(&root));
+        root
     }
 }
 

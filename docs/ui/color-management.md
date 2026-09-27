@@ -157,7 +157,7 @@ sheet with a compact primary view and advanced options:
 
 | Preset | Main choices |
 | --- | --- |
-| Web / Share | Tagged sRGB, 8-bit, JPEG or PNG; dimensions, JPEG quality and transparency/background as applicable. |
+| Web / Share | Tagged sRGB, 8-bit, JPEG, PNG or lossless WebP; dimensions, JPEG quality and transparency/background as applicable. |
 | Wide-color image | Tagged Display P3 with supported JPEG/PNG encoding; preview the output rather than requiring conversion of the master. |
 | Further editing | 16-bit SDR TIFF or PNG, with explicit profile; ProPhoto is available for an appropriate photographic handoff. |
 | Custom / lab preset | Explicit format, size, profile, depth and transparency handling; advanced conversion settings and a reusable named preset. |
@@ -342,6 +342,11 @@ Color & transparency and Presets open focused panels with a Back action and
 summaries on the overview. SDR Appearance is reachable for SDR delivery. Native
 preset actions use standard rows and name their target; unavailable controls
 are absent. JPEG offers opaque backgrounds and hides its fixed 8-bit depth.
+**WebP · lossless** is 8-bit RGB that keeps transparency; gray and CMYK
+delivery profiles leave it out. Its encoder writes at most 16,384 pixels per
+side, so a larger output size disables Export with that reason on GTK; the Web
+and Android dialogs show the same reason when Choose File… is pressed, before
+the save picker opens or any pixels render.
 
 HDR exposes its fixed PNG / BT.2020 PQ / 16-bit / retained-transparency contract.
 On a capable display, Export shows the HDR master beside the selected HDR or

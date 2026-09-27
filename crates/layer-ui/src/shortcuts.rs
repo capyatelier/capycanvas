@@ -494,6 +494,9 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.AutoSelect" => key("w", false, false),
         "command.Fill" => key("f", false, false),
         "command.FitCanvas" => key("0", true, false),
+        "command.ActualPixels" => {
+            return vec![key("1", true, false), KeyChord { key: "0".into(), command: true, shift: false, alt: true }];
+        }
         "command.ZoomIn" => key("=", true, false),
         "command.ZoomOut" => key("-", true, false),
         "command.ZenMode" => key("tab", false, false),
@@ -562,7 +565,7 @@ fn command_section(command: CommandId) -> &'static str {
         | C::Deselect | C::InvertSelection | C::RemoveSelectionPoint | C::MaskSelection => "Select",
         C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RepairSourceProfile
         | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer => "Layer",
-        C::FitCanvas | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
+        C::FitCanvas | C::ActualPixels | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
         | C::ZenMode | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
         | C::ToggleTheme => "View",
         C::SdrRendition | C::PreviewSdr | C::SoftProofSetup | C::SoftProof | C::GamutWarning | C::Histogram

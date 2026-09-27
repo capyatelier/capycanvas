@@ -28,6 +28,7 @@ private fun exportFileType(format: String?) = when (format) {
     "Tiff" -> "image/tiff" to listOf("tif", "tiff")
     "Jpeg", "JpegHdr", "JpegHdrMapped" -> "image/jpeg" to listOf("jpg", "jpeg")
     "AvifHdr", "AvifHdrMapped" -> "image/avif" to listOf("avif")
+    "Webp" -> "image/webp" to listOf("webp")
     else -> "image/png" to listOf("png")
 }
 

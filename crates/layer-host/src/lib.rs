@@ -696,6 +696,7 @@ impl NativeHost {
                 context: layer_ui::CanvasBarContext,
                 command: layer_ui::CommandId,
             },
+            ZoomMenu,
             LayerMenu {
                 id: u64,
                 mask: bool,
@@ -818,7 +819,12 @@ impl NativeHost {
             Query::Requests => json!(self.session.state().requests),
             Query::ExportForm => json!(layer_ui::ExportForm::new(self.session.engine().document())),
             Query::ExportDraft { recipe, action } => json!(recipe.draft(action)),
-            Query::ExportValidate { recipe } => { recipe.validate()?; json!(recipe) },
+            Query::ExportValidate { recipe } => {
+                let document = self.session.engine().document();
+                recipe.validate()?;
+                recipe.output_extent([document.width, document.height])?;
+                json!(recipe)
+            }
             Query::RendererStats => json!(self.session.renderer_stats()),
             Query::FilterPreviews {
                 filters,
@@ -843,6 +849,7 @@ impl NativeHost {
             Query::CanvasBarMenu { context, shown } => json!(self.session.canvas_bar_menu(context, shown)),
             Query::CanvasBarChoiceMenu { context, id } => json!(self.session.canvas_bar_choice_menu(context, &id)),
             Query::CanvasBarReason { context, command } => json!(self.canvas_bar_reason(context, command)),
+            Query::ZoomMenu => json!(self.session.zoom_menu()),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::StrokeRecording { action } => {
                 let platform = json!(self.session.state().platform);
@@ -1471,6 +1478,35 @@ mod tests {
         let nearest = choice["sections"][0].as_array().unwrap().iter().find(|item| item["label"] == "Nearest").unwrap();
         app.dispatch(serde_json::from_value(nearest["action"].clone()).unwrap()).unwrap();
         assert!(app.session.state().commands.iter().any(|c| c.id == CommandId::TransformNearest && c.selected));
+    }
+
+    #[test]
+    fn zoom_menu_query_serves_the_readout_menu_and_its_actions() {
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        app.resize(2560, 1600, 2.0).unwrap();
+        let menu = app.query(json!({"type": "zoom_menu"})).unwrap();
+        assert_eq!(menu, json!(app.session.zoom_menu()));
+        let double = menu["sections"][1].as_array().unwrap().iter().find(|item| item["label"] == "200%").unwrap();
+        assert_eq!(double["action"], json!({"type": "set_zoom", "zoom": 2.0}));
+        app.dispatch(serde_json::from_value(double["action"].clone()).unwrap()).unwrap();
+        assert_eq!(app.session.state().camera.zoom, 2.0);
+        let actual = menu["sections"][0].as_array().unwrap().iter().find(|item| item["label"] == "Actual Pixels").unwrap();
+        app.dispatch(serde_json::from_value(actual["action"].clone()).unwrap()).unwrap();
+        assert_eq!(app.session.state().camera.zoom, 1.0);
+        assert_eq!(app.query(json!({"type": "catalog"})).unwrap()["zoom"], json!(layer_ui::NumericControl::zoom()));
+    }
+
+    #[test]
+    fn export_validation_refuses_webp_beyond_its_encoder_limit_before_rendering() {
+        use layer_ui::{ExportDraftAction, ExportFormat, ExportRecipe, ExportSize};
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        let webp = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Webp)).recipe;
+        assert_eq!(app.query(json!({"type": "export_validate", "recipe": webp})).unwrap(), json!(webp));
+        let enlarged = ExportRecipe { size: ExportSize::Fit { bounds: [20000, 20000], enlarge: true }, ..webp.clone() };
+        let error = app.query(json!({"type": "export_validate", "recipe": enlarged})).unwrap_err();
+        assert!(error.starts_with("WebP export is limited to 16,384 pixels per side."), "{error}");
+        let png = ExportRecipe { format: ExportFormat::Png, ..enlarged };
+        assert!(app.query(json!({"type": "export_validate", "recipe": png})).is_ok());
     }
 
     #[test]

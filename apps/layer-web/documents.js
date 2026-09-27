@@ -5,12 +5,13 @@ import {createProof} from './proof.js';
 import {createHistogram} from './histogram.js';
 import {chooseExport,chooseSourceProfile} from './export-controls.js';
 
-const exportFormats={
+export const exportFormats={
   Exr:["exr","image/x-exr","OpenEXR image"],
   PngHdr:["png","image/png","HDR PQ PNG"],PngHdrMapped:["png","image/png","HDR PQ PNG"],
   JpegHdr:["jpg","image/jpeg","HDR gain-map JPEG"],JpegHdrMapped:["jpg","image/jpeg","HDR gain-map JPEG"],
   AvifHdr:["avif","image/avif","HDR gain-map AVIF"],AvifHdrMapped:["avif","image/avif","HDR gain-map AVIF"],
   Png:["png","image/png","PNG image"],Tiff:["tif","image/tiff","TIFF image"],Jpeg:["jpg","image/jpeg","JPEG image"],
+  Webp:["webp","image/webp","WebP image"],
 };
 import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved

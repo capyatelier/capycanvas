@@ -24,6 +24,7 @@ import {checkWorkspaceResize} from "./workspace-resize.test.mjs";
 import {checkDeviceImagePlacement} from "./image-placement-device.test.mjs";
 import {checkCanvasBar} from "./canvas-bar-journey.test.mjs";
 import {checkNotices} from "./notice-journey.test.mjs";
+import {checkZoomReadout} from "./zoom-readout-journey.test.mjs";
 import {checkPenRendering} from "./pen-rendering.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 // Run against an already forwarded Android Chrome endpoint. No profile reset,
@@ -156,6 +157,8 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--notices")) {
     await checkNotices({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--zoom-readout")) {
+    await checkZoomReadout({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--canvas-bar")) {
     await checkCanvasBar({call,evaluate,settle,device:true});
     assert.deepEqual(errors,[]);

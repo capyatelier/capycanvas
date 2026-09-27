@@ -1944,9 +1944,9 @@ fn native_header_editor_controls_input() {
             .as_deref(),
         Some("Show footer")
     );
-    assert!(state(&d.w).workspace.layout.canvas_info.visible && d.w.view_info.is_visible());
+    assert!(state(&d.w).workspace.layout.canvas_info.visible && d.w.view_info.root.is_visible());
     assert!(d.w.resolved().status.y > d.w.surface.height() as f32 / 2.);
-    assert_eq!(d.w.view_info.halign(), gtk::Align::End);
+    assert_eq!(d.w.view_info.root.halign(), gtk::Align::End);
     d.click_name("header-edit-cancel");
     assert_eq!(state(&d.w).workspace.layout.header, HeaderLayout::painter_for_platform(Platform::Gtk));
     d.edit();
