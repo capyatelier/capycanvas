@@ -76,6 +76,8 @@ pub(crate) fn pen_scroller(scroll: gtk::ScrolledWindow) -> gtk::ScrolledWindow {
     scroll
 }
 
+const TOUCH_DEVICES: u64 = 1 << 40;
+
 #[derive(Default)]
 pub struct Input {
     sequence: Cell<u64>,
@@ -83,6 +85,7 @@ pub struct Input {
     pending: RefCell<VecDeque<PenEvent>>,
     deferred_contacts: RefCell<std::collections::BTreeSet<u64>>,
     touches: RefCell<HashMap<gdk::EventSequence, u64>>,
+    touch_points: RefCell<HashMap<u64, [f32; 2]>>,
     next_touch: Cell<u64>,
     clock: Cell<Option<(u32, u64)>>,
     tablets: tablet::TabletDevices,
@@ -220,7 +223,7 @@ pub fn install(workspace: &Rc<Workspace>) {
     workspace.area.add_controller(hover);
 
     // Touch is consumed before mouse emulation; stable native sequences feed
-    // the shared two-touch gesture logic rather than painting with fingers.
+    // the shared touch logic, which decides whether a finger drives the canvas.
     let touch = gtk::EventControllerLegacy::new();
     touch.set_propagation_phase(gtk::PropagationPhase::Capture);
     touch.connect_event(glib::clone!(
@@ -252,11 +255,12 @@ pub fn install(workspace: &Rc<Workspace>) {
                 // from a trailing update or release.
                 _ => return glib::Propagation::Stop,
             };
-            let position = event
+            let located = event
                 .position()
                 .and_then(|(x, y)| widget_point(&workspace.area, x, y))
-                .map(|p| [p.x(), p.y()])
-                .or_else(|| matches!(phase, PenPhase::Up | PenPhase::Cancel).then_some([0.0; 2]));
+                .map(|p| [p.x(), p.y()]);
+            let position =
+                located.or_else(|| matches!(phase, PenPhase::Up | PenPhase::Cancel).then_some([0.0; 2]));
             if let Some(position) = position {
                 if phase == PenPhase::Down && workspace.reveal_chrome_at(position[0], position[1]) {
                     return glib::Propagation::Stop;
@@ -270,14 +274,20 @@ pub fn install(workspace: &Rc<Workspace>) {
                         slop: settings.gtk_dnd_drag_threshold().max(1) as f32 * scale,
                     });
                 }
-                workspace.interact(UiInput::Pointer {
+                let time_ns = input.timestamp(event.time());
+                let reply = workspace.interact(UiInput::Pointer {
                     id,
                     phase: contact_phase(phase),
                     kind: PointerKind::Touch,
                     button: PointerButton::Primary,
                     position: position.map(|v| v * scale),
-                    time_ns: input.timestamp(event.time()),
+                    time_ns,
                 });
+                if reply.paint {
+                    input.touch_pen(&workspace, id, phase, located, time_ns);
+                } else {
+                    input.touch_points.borrow_mut().remove(&id);
+                }
             }
             if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
                 input.touches.borrow_mut().remove(&sequence);
@@ -662,6 +672,36 @@ impl Input {
             }
         }
         self.send(workspace, event);
+    }
+    fn touch_pen(&self, workspace: &Rc<Workspace>, id: u64, phase: PenPhase, position: Option<[f32; 2]>, timestamp_ns: u64) {
+        let mut points = self.touch_points.borrow_mut();
+        let Some(position) = position.or_else(|| points.get(&id).copied()) else {
+            return;
+        };
+        if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
+            points.remove(&id);
+        } else {
+            points.insert(id, position);
+        }
+        drop(points);
+        let Some(view_revision) = workspace.gpu.borrow().as_ref().map(|g| g.session.state().camera.revision) else {
+            return;
+        };
+        let dpi = workspace.area.scale_factor() as f32;
+        self.send(workspace, PenEvent {
+            device_id: TOUCH_DEVICES | id,
+            sequence: 0,
+            timestamp_ns,
+            view_revision,
+            surface_position: Point { x: position[0] * dpi, y: position[1] * dpi },
+            pressure: 1.0,
+            tilt_radians: [0.0; 2],
+            twist_radians: 0.0,
+            distance: 0.0,
+            phase,
+            tool: ToolKind::Finger,
+            flags: SampleFlags::PRIMARY,
+        });
     }
     pub(crate) fn send(&self, workspace: &Rc<Workspace>, mut event: PenEvent) {
         #[cfg(test)]

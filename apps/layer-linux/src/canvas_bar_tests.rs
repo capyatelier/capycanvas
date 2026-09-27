@@ -380,3 +380,36 @@ fn native_canvas_bar_distorts_a_pixel_selection() {
     assert!(pixels(&w), "the selection follows the distortion as pixel coverage");
 }
 
+#[test]
+#[ignore = "isolated compositor, GPU and native touch delivery"]
+fn native_canvas_bar_finger_moves_a_transform() {
+    let app = native_test_app("art.capycanvas.CanvasBarFinger");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+    native_pen_path(&w, &[[650., 500.], [1150., 500.], [1150., 850.], [650., 850.], [650., 500.]]);
+    w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
+    w.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate });
+    until(|| transforming(&w) && shown(&w), "the transform bar appears");
+    let mut native = Native::start();
+    let anchor = anchor_in_window(&w);
+    let inside = [(anchor[0] + anchor[2]) * 0.5, (anchor[1] + anchor[3]) * 0.5];
+    native.events(json!([
+        {"touch": "down", "point": inside}, {"wait_ms": 40},
+        {"touch": "move", "point": [inside[0] + 15., inside[1] + 10.]}, {"wait_ms": 20},
+        {"touch": "move", "point": [inside[0] + 30., inside[1] + 20.]}, {"wait_ms": 20},
+        {"touch": "up"}
+    ]));
+    until(
+        || {
+            let moved = anchor_in_window(&w);
+            (moved[0] - anchor[0] - 30.).abs() < 2. && (moved[1] - anchor[1] - 20.).abs() < 2.
+        },
+        "a finger inside the box moves the transform",
+    );
+    assert!(transforming(&w), "the finger keeps the transform open");
+}
+
