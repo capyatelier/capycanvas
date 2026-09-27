@@ -113,7 +113,7 @@ import ImageIO
                     save: { _, _, _ in preconditionFailure("Startup must not save a blank drawing") }))
                 if published {
                     try await wait("Initial editor state missing") { !cold.state.isNull }
-                    try await wait("Workspace must initialize before Metal in this ordering") { cold.workspaceLibrary?.ready == true }
+                    try await wait("Workspace must initialize before Metal in this ordering") { cold.workspaces?.ready == true }
                 } else { precondition(cold.state.isNull) }
                 precondition(!cold.snapshot["gpu_ready"].bool)
                 cold.projectFiles.openURL(target)
@@ -150,8 +150,8 @@ import ImageIO
                 precondition(cold.state["document_file"]["location"]["name"].string == target.lastPathComponent)
                 precondition(cold.state["layers"].array.contains { $0["label"].string == "Saved layer" })
                 precondition(!cold.state["document_file"]["modified"].bool)
-                precondition(cold.workspaceLibrary?.ready == true)
-                await cold.workspaceLibrary?.detach()
+                precondition(cold.workspaces?.ready == true)
+                await cold.workspaces?.detached()
                 withExtendedLifetime(surface) {}
             }
             print("Startup Open passes for Apple platform \(platform)")

@@ -4,8 +4,8 @@ import Foundation
 @main struct HeaderPersistenceChecks {
     @MainActor static func ready(_ store: EditorStore) async throws {
         let deadline = Date().addingTimeInterval(20)
-        while store.workspaceLibrary?.ready != true || store.workspaceLibrary?.busy == true || store.state.isNull {
-            if let error = store.failure ?? store.workspaceLibrary?.error { throw HostFailure(message: error) }
+        while store.workspaces?.ready != true || store.workspaces?.busy == true || store.state.isNull {
+            if let error = store.failure ?? store.workspaces?.error { throw HostFailure(message: error) }
             guard Date() < deadline else { throw HostFailure(message: "Title-bar workspace startup timed out") }
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -19,10 +19,10 @@ import Foundation
             defer { try? FileManager.default.removeItem(at: root) }
             var store = EditorStore(platform: platform, persistence: EditorPersistence(root: root))
             try await ready(store)
-            let choices = store.workspaceLibrary!.status["default_workspaces"].array
+            let choices = try await store.workspaces!.workspaceRows()
             for workspace in choices {
                 let id = workspace["id"].string
-                try await store.workspaceManager.run(JSON(["type":"switch", "value":id]))
+                try await store.workspaces!.perform(["type":"switch", "id":id])
                 let original = store.state["workspace"]["layout"].stableKey
                 let brush = store.state["brush"].stableKey
                 try await store.apply(["type":"invoke", "command":"customize_workspace_ui"])
@@ -32,10 +32,10 @@ import Foundation
                 let accepted = store.state["workspace"]["layout"].stableKey
                 precondition(accepted != original)
                 try await edit(store, ["type":"edit", "editing":false])
-                try await store.workspaceLibrary!.flush()
+                try await store.workspaces!.flushed()
                 let other = choices.first { $0["id"].string != id }!["id"].string
-                try await store.workspaceManager.run(JSON(["type":"switch", "value":other]))
-                try await store.workspaceManager.run(JSON(["type":"switch", "value":id]))
+                try await store.workspaces!.perform(["type":"switch", "id":other])
+                try await store.workspaces!.perform(["type":"switch", "id":id])
                 precondition(store.state["workspace"]["layout"].stableKey == accepted)
                 precondition(store.state["brush"].stableKey == brush, "Header editing must preserve the working tool")
                 try await store.apply(["type":"invoke", "command":"customize_workspace_ui"])
@@ -43,20 +43,20 @@ import Foundation
                 try await edit(store, ["type":"remove", "id":capy["id"].raw])
                 precondition(store.state["workspace"]["layout"].stableKey != accepted)
                 // Closing must persist the accepted workspace, not live preview.
-                try await store.workspaceLibrary!.flush()
-                try await store.workspaceLibrary!.close()
+                try await store.workspaces!.flushed()
+                try await store.workspaces!.closed()
                 store = EditorStore(platform: platform, persistence: EditorPersistence(root: root))
                 try await ready(store)
-                precondition(store.workspaceLibrary!.status["active_id"].string == id)
+                precondition(store.workspaces!.view["id"].string == id)
                 precondition(!store.snapshot["header"]["editing"].bool)
                 precondition(store.state["workspace"]["layout"].stableKey == accepted, "Restart discards unfinished customization")
                 try await store.apply(["type":"invoke", "command":"undo_workspace"])
                 precondition(store.state["workspace"]["layout"].stableKey == original, "The accepted edit is one persisted history step")
                 try await store.apply(["type":"invoke", "command":"redo_workspace"])
                 precondition(store.state["workspace"]["layout"].stableKey == accepted)
-                print("PASS platform \(platform), \(workspace["name"].string): Done, switch, unfinished-preview close/restart and persisted Undo/Redo")
+                print("PASS platform \(platform), \(workspace["title"].string): Done, switch, unfinished-preview close/restart and persisted Undo/Redo")
             }
-            try await store.workspaceLibrary!.close()
+            try await store.workspaces!.closed()
         }
     }
 }

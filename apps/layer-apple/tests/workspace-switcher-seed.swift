@@ -14,21 +14,14 @@ import Foundation
         }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let editor = EditorStore(platform: 0, persistence: EditorPersistence(root: root))
-        let library = editor.workspaceLibrary!
-        let deadline = Date().addingTimeInterval(20)
-        while !library.ready {
-            if let error = library.error { throw HostFailure(message: error) }
-            guard Date() < deadline else { throw HostFailure(message: "Fixture startup timed out") }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        for index in 0..<24 {
-            _ = try await library.operation(["type": "new", "name": String(format: "Drawing Task %02d", index)])
-        }
-        _ = try await library.operation(["type": "switch", "id": "builtin:workspace:illustrator"])
-        let rows = try await library.read(["type": "view", "page": "workspaces", "query": "", "idle": true])["rows"]
-        precondition(rows.array.count == 27)
-        try rows.encoded().write(to: root.appendingPathComponent("fixture-rows.json"), atomically: true, encoding: .utf8)
-        try await library.close()
+        let workspaces = editor.workspaces!
+        try await workspaces.started("Fixture startup")
+        for index in 0..<24 { try await workspaces.create(String(format: "Drawing Task %02d", index)) }
+        try await workspaces.perform(["type": "switch", "id": "builtin:workspace:illustrator"])
+        let rows = try await workspaces.workspaceRows()
+        precondition(rows.count == 27)
+        try JSON(rows.map(\.raw)).encoded().write(to: root.appendingPathComponent("fixture-rows.json"), atomically: true, encoding: .utf8)
+        try await workspaces.closed()
         print("PASS: prepared 27 workspaces through real creation operations; all owners released")
     }
 }

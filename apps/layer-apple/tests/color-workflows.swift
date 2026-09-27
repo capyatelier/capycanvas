@@ -10,7 +10,7 @@ import QuartzCore
             defer { try? FileManager.default.removeItem(at: root) }
             let scene = UUID().uuidString
             let store = EditorStore(platform: platform, scene: scene, persistence: EditorPersistence(root: root))
-            try await wait("Workspace startup") { store.workspaceLibrary?.ready == true || store.failure != nil }
+            try await wait("Workspace startup") { store.workspaces?.ready == true || store.failure != nil }
             try require(store.failure == nil, store.failure ?? "")
             _ = attachSurface(store, CGSize(width: 128, height: 128))
             try await wait("Metal startup", failure: { store.failure }, step: {
@@ -74,9 +74,9 @@ import QuartzCore
             let settings = store.state["settings"]["new_document"].stableKey
             let flushed = await withCheckedContinuation { done in store.flushPersistence { done.resume(returning: $0) } }
             try require(flushed, "Settings and palettes must flush durably")
-            try await store.workspaceLibrary!.close()
+            try await store.workspaces!.closed()
             let restored = EditorStore(platform: platform, scene: scene, persistence: EditorPersistence(root: root))
-            try await wait("Fresh owner restoration") { restored.workspaceLibrary?.ready == true || restored.failure != nil }
+            try await wait("Fresh owner restoration") { restored.workspaces?.ready == true || restored.failure != nil }
             try require(restored.state["colors"]["library"].stableKey == savedLibrary, "Fresh owner must restore palette IDs, names, tags and samples")
             try require(restored.state["settings"]["new_document"].stableKey == settings, "Fresh owner must restore creation presets and defaults")
             let removal = saved(restored)["swatches"][0]["id"].uint
@@ -84,7 +84,7 @@ import QuartzCore
                 try await restored.apply(["type": "color", "action": ["op": "library", "action": action]])
             }
             try require(restored.state["colors"]["library"]["palettes"].array.count == starting, "Swatch and palette removal must preserve the remaining palettes")
-            try await restored.workspaceLibrary!.close()
+            try await restored.workspaces!.closed()
             print("PASS: platform \(platform), creation defaults/preset validation/retry/Cancel, all tagged palette spaces, document adoption and fresh-owner durable restoration")
             withExtendedLifetime(surface) {}
         }

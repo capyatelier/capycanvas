@@ -29,14 +29,12 @@ private struct IPadEditorScene: View {
             .onChange(of: phase) { _, next in
                 if next != .active {
                     store.input(["type": "blur"])
-                    store.workspaceLibrary?.suspend()
+                    store.workspaces?.suspend()
                     PersistenceBackground.flush(store)
                 }
                 else {
                     store.native?.redraw()
-                    if let library = store.workspaceLibrary {
-                        Task { do { try await library.resume() } catch { library.error = error.localizedDescription } }
-                    }
+                    store.workspaces?.resume()
                     store.wake?()
                 }
             }

@@ -40,7 +40,7 @@ import SwiftUI
             switch kind {
             case "document_title": width = max(180, min(600, Double(store.snapshot["document_tabs"]["tabs"].array.count) * 180)); compact = 80
             case "workspaces":
-                width = max(144, WorkspaceSwitcher.naturalWidth(store.workspaceLibrary?.status["switcher_display"].array ?? [], textSize: 44.0 / 3))
+                width = max(144, WorkspaceSwitcher.naturalWidth(store.workspaces?.view["switcher_display"].array ?? [], textSize: 44.0 / 3))
                 compact = 144
             case "menu_labels":
                 let textSize = store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44.0 / 3
@@ -231,7 +231,7 @@ import SwiftUI
                 switch entry["item"]["kind"].string {
                 case "menu", "menu_labels": row["sections"] = editorApplicationMenu(store)["sections"].raw
                 case "workspaces":
-                    if let library = store.workspaceLibrary { row["sections"] = WorkspaceSwitcher.menu(library)["sections"].raw }
+                    if let workspaces = store.workspaces { row["sections"] = WorkspaceSwitcher.menu(workspaces)["sections"].raw }
                     else { row["enabled"] = false }
                 case "tool": row["enabled"] = metadata(entry)["enabled"].bool
                 case "document_title", "clock", "battery", "space": row["enabled"] = false
@@ -245,7 +245,7 @@ import SwiftUI
             case "apple_header_item":
                 if editing { header.selected = action["id"].uint; focused = true }
                 else { activateHeaderItem(store, entry: entries.first { $0["id"].uint == action["id"].uint } ?? JSON()) }
-            case "apple_workspace_switch": store.workspaceManager.activate(JSON(["type":"switch", "value":action["id"].raw]))
+            case "apple_workspace_switch": store.workspaces?.switchTo(action["id"].string)
             case "apple_recovery": store.recovery.refresh(); store.recovery.presented = true
             default: store.dispatch(action)
             }
@@ -283,8 +283,8 @@ private struct HeaderItemControl: View {
             case "settings": tile("settings") { store.invoke("settings") }.accessibilityIdentifier("settings-button")
                     .modifier(HeaderControlMeasurement(id: "settings-button"))
             case "workspaces":
-                if let library = store.workspaceLibrary {
-                    WorkspaceSwitcher(library: library, manager: store.workspaceManager, palette: palette, maximumWidth: width, tile: size["tile"].number)
+                if let workspaces = store.workspaces {
+                    WorkspaceSwitcher(workspaces: workspaces, palette: palette, maximumWidth: width, tile: size["tile"].number)
                 } else { Text("Workspaces").lineLimit(1) }
             case "document_title":
                 DrawingTabsHeader(store: store, tabs: store.drawingTabs, width: width, tile: size["tile"].number, gap: size["gap"].number)

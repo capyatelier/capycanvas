@@ -154,7 +154,7 @@
   ],
   "workspace_commands": {
     "commands": ["manage", "new", "reset_brushes", "reset_layout", "layout_history", "switch", "manage_toolbars", "save_toolbar", "new_toolbar"],
-    "handler": "Shared/Editor/WorkspaceManager.swift",
+    "handler": "Shared/Editor/WorkspaceController.swift",
     "checks": ["tests/workspace-manager.swift", "tests/workspace-menu-actions.swift", "Shared/Tests/WorkspaceLibraryChecks.swift"],
     "ios": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; complete local manager checks pass for forms/validation, preview/history, live-window copying, toolbar actions, permanent deletion, external toolbar imports and scene teardown; native Workspace Switcher and Layout History workflows pass; complete native UI and physical lifecycle validation remains",
     "mac": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; complete local manager checks pass for forms/validation, preview/history, live-window copying, toolbar actions, permanent deletion, external toolbar imports and scene teardown; native Workspace Switcher and Layout History workflows pass; complete native UI and display/lifecycle validation remains"

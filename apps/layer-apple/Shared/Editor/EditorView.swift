@@ -133,7 +133,7 @@ struct EditorView<Canvas: View>: View {
         .environment(\.colorScheme, store.state.isNull ? colorScheme : store.state["theme"].string == "dark" ? .dark : .light)
         .background(NativeEditorAppearance(store: store, preferred: store.state["settings"]["theme"].string))
         .onOpenURL { url in
-            if store.workspaceLibrary != nil, let kind = WorkspacePackageKind.forURL(url) { store.workspaceManager.openURL(url, kind: kind) }
+            if let workspaces = store.workspaces, let kind = WorkspacePackageKind.forURL(url) { workspaces.openURL(url, kind: kind) }
             else { store.projectFiles.openURL(url) }
         }
         .onChange(of: windowRequest, initial: true) { _, id in
@@ -198,8 +198,8 @@ private struct PhotoPlacementControls: View {
 private struct OptionalWorkspaceManager: ViewModifier {
     @ObservedObject var store: EditorStore
     func body(content: Content) -> some View {
-        if let library = store.workspaceLibrary {
-            content.modifier(WorkspaceManagerPresentation(manager: store.workspaceManager, library: library))
+        if let workspaces = store.workspaces {
+            content.modifier(WorkspaceManagerPresentation(workspaces: workspaces))
         } else { content }
     }
 }
@@ -265,7 +265,7 @@ struct MenuItems: View {
 private struct PersistenceProbe: View {
     @ObservedObject var store: EditorStore
     var body: some View {
-        if let library = store.workspaceLibrary { ManagedPersistenceProbe(store: store, library: library) }
+        if let workspaces = store.workspaces { ManagedPersistenceProbe(store: store, workspaces: workspaces) }
         else { Self.label(store, saving: false, failed: false) }
     }
     static func label(_ store: EditorStore, saving: Bool, failed: Bool) -> some View {
@@ -276,7 +276,7 @@ private struct PersistenceProbe: View {
 }
 private struct ManagedPersistenceProbe: View {
     @ObservedObject var store: EditorStore
-    @ObservedObject var library: WorkspaceLibrary
-    var body: some View { PersistenceProbe.label(store, saving: library.hasUnsavedChanges, failed: library.error != nil) }
+    @ObservedObject var workspaces: WorkspaceController
+    var body: some View { PersistenceProbe.label(store, saving: workspaces.hasUnsavedChanges, failed: workspaces.error != nil) }
 }
 #endif

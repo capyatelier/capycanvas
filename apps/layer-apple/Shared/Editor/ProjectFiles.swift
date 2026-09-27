@@ -161,7 +161,7 @@ import UIKit
         // attachment, so wait for full startup before submitting the request.
         // Publications resume this one pending request.
         guard externalOpen?.submitted == false, let store,
-            store.workspaceLibrary?.ready != false, store.snapshot["shaders_ready"].bool,
+            store.workspaces?.ready != false, store.snapshot["shaders_ready"].bool,
             store.command("open_document")["enabled"].bool else { return }
         externalOpen?.submitted = true
         // Admission and command dispatch share the serial owner. A New/Open

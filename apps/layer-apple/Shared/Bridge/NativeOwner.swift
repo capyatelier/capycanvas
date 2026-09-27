@@ -166,9 +166,9 @@ final class NativeOwner: @unchecked Sendable {
             receive(nil, nil)
         }
     }
-    /// Capture/transition/adoption alone run on the drawing owner. Storage and
-    /// manager policy use NativeWorkspaceLibrary's independent serial queue.
-    func workspaceSession(_ value: JSON, completion: @escaping @Sendable (JSON?, String?) -> Void) {
+    /// The shared workspace controller runs on the drawing owner; its SQLite
+    /// requests run on the Rust storage worker.
+    func workspace(_ value: JSON, completion: @escaping @Sendable (JSON?, String?) -> Void) {
         queue.async { [self] in
             do {
                 let reply = try request(6, value)
@@ -185,7 +185,6 @@ final class NativeOwner: @unchecked Sendable {
             } catch { storageError = "Could not restore settings: \(error.localizedDescription)" }
         }
         do {
-            if managedWorkspaces { _ = try request(6, JSON(["type": "read_only", "value": true])) }
             try publish()
         } catch { receive(nil, error.localizedDescription) }
         reportStorage()
@@ -579,7 +578,7 @@ final class NativeOwner: @unchecked Sendable {
             // Workspace fixture commands have the same idle requirement as
             // their UI entries. Bundled filter preparation can outlive launch.
             guard canvasReady && shadersReady && bundledFiltersLoaded,
-                try request(6, JSON(["type": "capture", "generation": 0]))?["idle"].bool == true else { return }
+                try request(6, JSON(["type": "tick"]))?["view"]["busy"].bool == false else { return }
         }
         // Fixture actions can collapse or resize columns. Apply them once,
         // after restoration and the first real surface size, not at 1×1 startup.

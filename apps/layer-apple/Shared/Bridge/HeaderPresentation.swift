@@ -31,7 +31,7 @@ import SwiftUI
     var enabled: Bool {
         guard let store else { return false }
         return store.snapshot["header"]["editing"].bool && store.failure == nil
-            && !store.workspaceManager.presented && !store.workspace.hasPopover(excluding: popup)
+            && store.workspaces?.presented != true && !store.workspace.hasPopover(excluding: popup)
             && ["picker", "toolbar_prompt", "toolbar_manager", "preferences"].allSatisfy { store.snapshot[$0].isNull }
     }
     func reconcile(_ specification: JSON) {

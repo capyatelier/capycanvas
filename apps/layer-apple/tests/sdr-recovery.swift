@@ -19,7 +19,7 @@ import UniformTypeIdentifiers
     }
     @MainActor static func attach(_ store: EditorStore) async throws -> CAMetalLayer {
         let layer = attachSurface(store, CGSize(width: 1024, height: 768))
-        try await wait("Native startup", store) { store.snapshot["shaders_ready"].bool && store.workspaceLibrary?.ready == true }
+        try await wait("Native startup", store) { store.snapshot["shaders_ready"].bool && store.workspaces?.ready == true }
         return layer
     }
     @MainActor static func flush(_ store: EditorStore) async throws {
@@ -79,7 +79,7 @@ import UniformTypeIdentifiers
         let paint = store!.state["colors"]["foreground"].stableKey
         // The scene boundary blurs input and suspends workspace ownership.
         // No drawable/frame follows these edits; recovery must prepare them.
-        store!.input(["type": "blur"]); store!.workspaceLibrary!.suspend()
+        store!.input(["type": "blur"]); store!.workspaces!.suspend()
         try await flush(store!)
         try require(store!.state["document_file"]["modified"].bool, "Recovery must not mark the document saved")
         let record = try await io { try files.list().records.first! }
@@ -92,7 +92,8 @@ import UniformTypeIdentifiers
             try photo.write(to: directory.appendingPathComponent("Original-16bit-P3.png"), options: .atomic)
         }
         try require(baseline.0["document"]["color"]["space"].string == space && baseline.0["document"]["color"]["depth"].string == depth, "Retain document space/depth")
-        try await store!.workspaceLibrary!.resume()
+        store!.workspaces!.resume()
+        try await store!.workspaces!.settle()
         weak let released = store
         store = nil
         let deadline = Date().addingTimeInterval(10)

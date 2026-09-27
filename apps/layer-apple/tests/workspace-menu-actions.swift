@@ -8,16 +8,6 @@ import Foundation
             store.query(request) { continuation.resume(returning: $0) }
         }
     }
-    @MainActor static func capture(_ store: EditorStore) async throws -> JSON {
-        try await withCheckedThrowingContinuation { continuation in
-            store.native!.workspaceSession(JSON(["type": "capture"])) { value, error in
-                DispatchQueue.main.async {
-                    if let error { continuation.resume(throwing: HostFailure(message: error)) }
-                    else { continuation.resume(returning: value ?? JSON()) }
-                }
-            }
-        }
-    }
     static func objects(_ value: JSON) -> [JSON] {
         if !value.object.isEmpty { return [value] + value.object.values.flatMap { objects(JSON($0)) } }
         return value.array.flatMap(objects)
@@ -47,7 +37,7 @@ import Foundation
         return result
     }
     @MainActor static func acknowledged(_ store: EditorStore) -> Bool {
-        !store.workspaceManager.processing && !store.state["requests"].array.contains {
+        store.workspaces?.busy == false && !store.state["requests"].array.contains {
             $0["kind"]["type"].string == "workspace"
         }
     }
@@ -60,16 +50,15 @@ import Foundation
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-menu-actions-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
             let editor = EditorStore(platform: platform, persistence: EditorPersistence(root: root))
-            try await wait("workspace startup") { editor.workspaceLibrary?.ready == true || editor.workspaceLibrary?.error != nil }
-            let library = editor.workspaceLibrary!, manager = editor.workspaceManager
-            precondition(library.ready, library.error ?? "Startup failed")
+            let workspaces = editor.workspaces!
+            try await workspaces.started()
             // Give reset/history something to operate on and retain across
             // cancellation. This changes the workspace, not the document.
             try await editor.apply(["type": "set_brush_size", "value": 31])
             try await editor.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "sizes", "visible": false]])
-            let initial = try await capture(editor)
+            let initial = try await workspaces.capture()
             let document = editor.state["layers"].stableKey
-            let originalID = library.status["active_id"].string
+            let originalID = workspaces.view["id"].string
             let actions = await menuActions(editor)
             precondition(Set(actions.keys) == Set(routes), "Workspace menu service coverage drift: \(actions.keys.sorted())")
             for key in routes {
@@ -78,56 +67,52 @@ import Foundation
                 }!
                 try await editor.apply(action.object)
                 if let title = promptTitles[key] {
-                    try await wait("\(key) prompt") { manager.prompt != nil || manager.error != nil }
-                    precondition(manager.prompt?["title"].string == title, "Wrong form for \(key): \(manager.prompt?.stableKey ?? manager.error ?? "nil")")
-                    manager.answer(confirm: false)
+                    try await wait("\(key) prompt") { !workspaces.view["prompt"].isNull || workspaces.error != nil }
+                    precondition(workspaces.view["prompt"]["title"].string == title,
+                        "Wrong form for \(key): \(workspaces.view["prompt"].stableKey) \(workspaces.error ?? "")")
+                    workspaces.cancelPrompt()
                 } else if key == "switch" {
-                    try await wait("switch applied") { library.status["active_id"].string == action["command"]["id"].string || manager.error != nil }
-                    precondition(!manager.presented && library.status["active_id"].string != originalID)
+                    try await wait("switch applied") { workspaces.view["id"].string == action["command"]["id"].string || workspaces.error != nil }
+                    precondition(!workspaces.presented && workspaces.view["id"].string != originalID)
                 } else {
                     try await wait("\(key) view") {
-                        manager.presented && (key == "layout_history" ? !manager.history.isNull : !manager.view.isNull) || manager.error != nil
+                        !workspaces.busy && !workspaces.view["page"].isNull && !workspaces.view["rows"].array.isEmpty || workspaces.error != nil
                     }
-                    if key == "layout_history" {
-                        precondition(library.previewingLayout && !manager.history["rows"].array.isEmpty)
-                    } else {
-                        precondition(manager.page == (key == "manage" ? "workspaces" : "this_workspace"))
-                        precondition(!manager.view["rows"].array.isEmpty)
-                    }
+                    precondition(workspaces.page == (key == "layout_history" ? "history" : key == "manage" ? "workspaces" : "this_workspace"))
                 }
                 try await wait("\(key) acknowledged") { acknowledged(editor) }
-                precondition(manager.error == nil && editor.failure == nil, manager.error ?? editor.failure ?? "")
-                manager.presented = false; manager.dismissed()
-                try await wait("\(key) preview cleanup") { !library.previewingLayout && !library.busy }
-                let after = try await capture(editor)
+                precondition(workspaces.error == nil && editor.failure == nil, workspaces.error ?? editor.failure ?? "")
+                try await workspaces.perform(["type": "dismiss"])
+                try await wait("\(key) preview cleanup") { !workspaces.presented && !workspaces.busy }
+                let after = try await workspaces.capture()
                 precondition(editor.state["layers"].stableKey == document, "\(key) changed document layers")
                 if key != "switch" {
-                    precondition(library.status["active_id"].string == originalID)
-                    precondition(after["capture"].stableKey == initial["capture"].stableKey, "\(key) changed the workspace on cancellation/dismissal")
+                    precondition(workspaces.view["id"].string == originalID)
+                    precondition(after.stableKey == initial.stableKey, "\(key) changed the workspace on cancellation/dismissal")
                 }
             }
             // Return using the newly projected menu and verify the original
             // working tools/history survived switching away and back.
             let returning = await menuActions(editor)["switch"]!.first { $0["command"]["id"].string == originalID }!
             try await editor.apply(returning.object)
-            try await wait("switch back") { library.status["active_id"].string == originalID && acknowledged(editor) }
-            let restored = try await capture(editor)
+            try await wait("switch back") { workspaces.view["id"].string == originalID && acknowledged(editor) }
+            let restored = try await workspaces.capture()
             // Storage timestamps newly committed revisions on their first
             // save. All existing timestamps and every other field must survive.
-            let history = initial["capture"]["history"]
+            let history = initial["history"]
             var revisions = history["revisions"].object
             for (id, raw) in revisions {
                 let revision = JSON(raw)
                 if revision["timestamp_ms"].string == "0" {
-                    let saved = restored["capture"]["history"]["revisions"][id]["timestamp_ms"]
+                    let saved = restored["history"]["revisions"][id]["timestamp_ms"]
                     precondition((UInt64(saved.string) ?? 0) > 0, "New history revision was not timestamped")
                     revisions[id] = revision.replacing("timestamp_ms", with: saved).raw
                 }
             }
-            let expected = initial["capture"].replacing("history", with: history.replacing("revisions", with: JSON(revisions)))
-            precondition(restored["capture"].stableKey == expected.stableKey, "Switch/return changed stored tools or layout history")
-            precondition(editor.state["layers"].stableKey == document && manager.error == nil && editor.failure == nil)
-            try await library.close()
+            let expected = initial.replacing("history", with: history.replacing("revisions", with: JSON(revisions)))
+            precondition(restored.stableKey == expected.stableKey, "Switch/return changed stored tools or layout history")
+            precondition(editor.state["layers"].stableKey == document && workspaces.error == nil && editor.failure == nil)
+            try await workspaces.closed()
             print("PASS: platform \(platform), all nine shared workspace menu routes, form cancellation, view/history dismissal, request acknowledgement, switch/return and document preservation")
         }
     }

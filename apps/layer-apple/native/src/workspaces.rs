@@ -1,119 +1,53 @@
-//! Workspace storage has its own serial owner. No database call is made through
-//! CapyApple, the UI thread, or the render/input queue.
+//! Runs the shared workspace controller on the drawing owner. SQLite stays on
+//! the Rust storage worker; this owner only polls its replies.
 use super::*;
-use layer_ui::{ManagedWorkspace, Panel, PanelConfig, PreparedWorkspace, WorkspaceCapture};
-use serde::Deserialize;
+use layer_workspace::{StoreWorker, WorkspaceController, WorkspaceInput};
 use serde_json::{Value, json};
-#[path = "workspace_library.rs"]
-mod library;
-pub use library::*;
 
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum SessionRequest {
-    Capture {
-        generation: Option<u64>,
-    },
-    Begin,
-    End,
-    PreviewBegin,
-    PreviewLayout {
-        layout: layer_ui::DockLayout,
-    },
-    PreviewCancel,
-    ResetBrushes,
-    Adopt {
-        #[serde(deserialize_with = "json_field")]
-        capture: WorkspaceCapture,
-    },
-    Configure {
-        binding: ManagedWorkspace,
-    },
-    ReadOnly {
-        value: bool,
-    },
-    InstallToolbar {
-        config: PanelConfig,
-        replace: Option<Panel>,
-        group: Option<u32>,
-        #[serde(default)]
-        exact_name: bool,
-    },
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
-
-// Internally tagged enum buffering loses JSON's integer-map-key decoder.
-// Re-enter the JSON value deserializer for workspace aggregates, whose sparse
-// brush overrides use stable integer IDs as object keys.
-fn json_field<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned>(
-    decoder: D,
-) -> std::result::Result<T, D::Error> {
-    serde_json::from_value(Value::deserialize(decoder)?).map_err(serde::de::Error::custom)
-}
-
-pub(crate) fn session_request(host: &mut NativeHost, value: Value) -> Result<Value, String> {
-    let previous = host.session.state().revision;
-    let change = match serde_json::from_value::<SessionRequest>(value).map_err(|e| e.to_string())? {
-        SessionRequest::Capture { generation } => {
-            let current = host.session.workspace_layout_generation();
-            // A gesture can have transient topology and the same generation.
-            // Never turn it into a persistent history capture.
-            let capture = if generation.is_none() || current != generation {
-                host.session.capture_workspace().ok()
-            } else {
-                None
-            };
-            return Ok(
-                json!({"generation":host.session.workspace_layout_generation(),"capture":capture,
-                "working":host.session.workspace_working_state(),
-                "idle":host.session.require_workspace_idle().is_ok()}),
+impl CapyApple {
+    pub(crate) fn workspace(&mut self, request: Value) -> Result<Value, String> {
+        let time = now();
+        if request["type"] == "start" && self.workspaces.is_none() {
+            let directory = request["directory"]
+                .as_str()
+                .ok_or("Workspace storage directory is missing")?;
+            let scene = request["scene"].as_str().unwrap_or("default");
+            let store =
+                StoreWorker::shared(std::path::Path::new(directory)).map_err(|e| e.to_string())?;
+            self.host.session.set_workspace_read_only(true);
+            let platform = self.host.session.state().platform;
+            self.workspaces = Some(
+                WorkspaceController::new(store, platform, time)
+                    .with_resume_key(format!("apple:scene:{scene}"), time),
             );
         }
-        SessionRequest::Begin => {
-            host.session.begin_workspace_transition()?;
-            match host.session.capture_workspace() {
-                Ok(capture) => return Ok(json!({"capture":capture})),
-                Err(error) => {
-                    host.session.end_workspace_transition();
-                    return Err(error);
-                }
+        let Some(c) = &mut self.workspaces else {
+            return Ok(Value::Null);
+        };
+        let changes = self.host.take_service_changes();
+        c.observe_regions(&mut self.host.session, changes, time);
+        if request["type"] == "capture" {
+            return serde_json::to_value(self.host.session.capture_workspace()?)
+                .map_err(|e| e.to_string());
+        }
+        if !matches!(request["type"].as_str(), Some("start" | "tick")) {
+            let input: WorkspaceInput =
+                serde_json::from_value(request).map_err(|e| e.to_string())?;
+            let before = self.host.session.state().revision;
+            match c.input(&mut self.host.session, input, time) {
+                Ok(change) => self.host.apply_change(before, change),
+                Err(error) => c.view.error = Some(error.to_string()),
             }
         }
-        SessionRequest::End => {
-            host.session.end_workspace_transition();
-            return Ok(Value::Null);
-        }
-        SessionRequest::PreviewBegin => {
-            host.session.begin_workspace_layout_preview()?;
-            return Ok(Value::Null);
-        }
-        SessionRequest::PreviewLayout { layout } => {
-            host.session.preview_workspace_layout(&layout)?
-        }
-        SessionRequest::PreviewCancel => host.session.cancel_workspace_layout_preview(),
-        SessionRequest::ResetBrushes => host.session.reset_workspace_brushes()?,
-        SessionRequest::Adopt { capture } => host
-            .session
-            .adopt_workspace(PreparedWorkspace::new(capture)?)?,
-        SessionRequest::Configure { binding } => {
-            host.session.configure_workspace_manager(binding)?
-        }
-        SessionRequest::ReadOnly { value } => {
-            host.session.set_workspace_read_only(value);
-            return Ok(Value::Null);
-        }
-        SessionRequest::InstallToolbar {
-            config,
-            replace,
-            group,
-            exact_name,
-        } => {
-            let (panel, change) = host
-                .session
-                .install_workspace_toolbar(config, replace, group, exact_name)?;
-            host.apply_change(previous, change);
-            return Ok(json!({"panel":panel}));
-        }
-    };
-    host.apply_change(previous, change);
-    Ok(Value::Null)
+        let before = self.host.session.state().revision;
+        let change = c.tick(&mut self.host.session, time);
+        self.host.apply_change(before, change);
+        Ok(json!({"view": c.view, "wake": change.canvas_wake, "refresh": change.regions != 0}))
+    }
 }

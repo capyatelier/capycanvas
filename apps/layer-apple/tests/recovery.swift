@@ -21,7 +21,7 @@ import QuartzCore
         try await wait("Native startup", failure: { store.failure }, step: {
             try await prepare(store.native!, "Native startup")
             await frame(store.native!)
-        }) { store.snapshot["shaders_ready"].bool && store.workspaceLibrary?.ready == true }
+        }) { store.snapshot["shaders_ready"].bool && store.workspaces?.ready == true }
         try require(store.failure == nil, store.failure ?? "")
         return layer
     }

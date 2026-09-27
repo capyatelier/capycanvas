@@ -14,14 +14,6 @@ CapyApple *capy_apple_create(uint32_t platform); /* 0 iPadOS, 1 macOS */
 void capy_apple_destroy(CapyApple *app);
 const char *capy_apple_error(const CapyApple *app); /* borrowed until next call */
 void capy_apple_string_free(char *text);
-typedef struct CapyWorkspaceLibrary CapyWorkspaceLibrary;
-/* A separate serial workspace owner, never the UI or input/render queue.
-   SQLite I/O is shared across windows by the Rust storage worker.
-   Replies are owned JSON envelopes {value,status} or {error,status}.
-   Flush/close explicitly before destroy; destroy alone cannot confirm saving. */
-CapyWorkspaceLibrary *capy_workspace_library_create(uint32_t platform, const char *directory, const char *resume_key);
-char *capy_workspace_library_request(CapyWorkspaceLibrary *library, const char *json);
-void capy_workspace_library_destroy(CapyWorkspaceLibrary *library);
 typedef struct CapyDocumentTask CapyDocumentTask;
 CapyDocumentTask *capy_apple_document_switch(CapyApple *app, uint64_t id, bool closing);
 int32_t capy_apple_document_prepare_switch(CapyApple *app, uint64_t now);
@@ -101,7 +93,7 @@ bool capy_apple_proof_texture(uint32_t edge, uint8_t *bytes, size_t count);
 int32_t capy_apple_color_field(uint32_t side, float hue, uint32_t shape, const char *rgb_space, bool guide, uint8_t *rgba, size_t count);
 /* request: 0 action, 1 UI input, 2 query, 3 compatibility snapshot, 4 numeric control,
  * 5 incremental update (full models or workspace/camera presentation),
- * 6 workspace session capture/transition/adoption (no database I/O),
+ * 6 workspace controller start/input/tick replying {view,wake,refresh}, or capture (SQLite stays on its worker),
  * 7 layout-aware incremental update (retains controls across live resizing).
    Returned JSON is owned; release using capy_apple_string_free. NULL is either
    no changed snapshot or failure (consult capy_apple_error). */

@@ -43,17 +43,17 @@ on the file queue and shared Rust import validation. The compact workspace
 screens follow the shared design without storage administration, package
 pickers/exporters, trash or metadata/version-management controls.
 
-`NativeWorkspaceLibrary` has a separate serial Dispatch queue; SQLite runs on
-the shared Rust storage worker. The drawing owner only captures or adopts
-validated workspace state. `WorkspaceLibrary` serializes explicit transitions,
-coalesces autosave, renews leases, revalidates suspended owners, and includes its
-writes in the editor persistence barrier. Startup blocks new editor input until
-restoration completes. Ownership recovery blocks new pen contacts and shortcuts
-while allowing existing contacts and property corrections to finish. It retains the outgoing workspace
-until storage and adoption acknowledge the transition. Failed ownership retains
-in-memory changes for Save as New Workspace.
+The shared Rust `WorkspaceController` runs on the drawing owner through
+request 6; SQLite runs on the shared Rust storage worker and the owner only polls
+its replies. `WorkspaceController.swift` sends inputs, ticks it every 100 ms and
+renders its view. The controller serializes explicit transitions, autosaves
+after 250 ms of quiet (at most 2 s apart), renews leases, revalidates suspended
+owners and saves before releasing a closing or suspended window. Startup blocks
+new editor input until restoration completes. Ownership recovery keeps the
+editor read-only and retains in-memory changes for Save as New Workspace.
 
-Workspace startup uses the SQLite scene binding and shared default catalog.
+Workspace startup prefers the SQLite `apple:scene:<uuid>` binding, then the
+last used workspace, and uses the shared default catalog.
 SQLite errors surface without replacing the stored data.
 
 The direct checks use temporary storage and both Apple platform configurations:

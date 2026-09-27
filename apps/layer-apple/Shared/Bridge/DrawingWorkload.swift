@@ -100,7 +100,7 @@ import Foundation
         if started == 0 {
             if now - created > 120_000_000_000 { finish(failed: true); return }
             if !preparing && store.canvasSubmitted && store.snapshot["shaders_ready"].bool
-                && (store.workspaceLibrary == nil || store.workspaceLibrary?.ready == true) {
+                && (store.workspaces == nil || store.workspaces?.ready == true) {
                 preparing = true
                 Task { [weak self] in
                     do { try await self?.prepare() }

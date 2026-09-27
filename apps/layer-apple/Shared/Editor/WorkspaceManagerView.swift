@@ -1,21 +1,21 @@
 import SwiftUI
 
 struct WorkspaceManagerPresentation: ViewModifier {
-    @ObservedObject var manager: WorkspaceManager
-    @ObservedObject var library: WorkspaceLibrary
+    @ObservedObject var workspaces: WorkspaceController
     func body(content: Content) -> some View {
-        content.allowsHitTesting(library.ready && !library.busy && !library.readOnly)
+        content.allowsHitTesting(workspaces.ready && !workspaces.busy && !workspaces.readOnly)
             .overlay(alignment: .bottom) {
-                if !manager.presented && (library.error != nil || library.readOnly || !library.ready) {
+                if !workspaces.presented && (workspaces.error != nil || workspaces.readOnly || !workspaces.ready) {
                     VStack(alignment: .leading, spacing: 8) {
-                        if let error = library.error { Text(error).textSelection(.enabled) }
-                        else if library.readOnly { Text("Workspace ownership needs recovery.") }
+                        if let error = workspaces.error { Text(error).textSelection(.enabled) }
+                        else if workspaces.view["owner_lost"].bool { Text("Workspace ownership needs recovery.") }
+                        else if workspaces.readOnly { Text("Saving workspace…") }
                         else { HStack { ProgressView().controlSize(.small); Text("Opening workspace…") } }
-                        if library.error != nil || library.readOnly {
+                        if workspaces.error != nil || workspaces.view["owner_lost"].bool {
                             HStack {
-                                Button("Retry") { manager.activate(JSON(["type": "retry_storage"])) }
-                                if library.ready {
-                                    Button("Save as New Workspace…") { manager.activate(JSON(["type": "save_as_new"])) }
+                                Button("Retry") { workspaces.send(["type": "retry"]) }
+                                if workspaces.ready {
+                                    Button("Save as New Workspace…") { workspaces.form(["type": "save_as_new"]) }
                                 }
                             }
                         }
@@ -23,103 +23,104 @@ struct WorkspaceManagerPresentation: ViewModifier {
                         .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 12))).padding(12)
                 }
             }
-            .sheet(isPresented: $manager.presented, onDismiss: { manager.dismissed() }) {
-                WorkspaceManagerView(manager: manager, library: library)
+            .sheet(isPresented: Binding(get: { workspaces.presented }, set: { if !$0 { workspaces.dismiss() } })) {
+                WorkspaceManagerView(workspaces: workspaces)
                     .modifier(EditorPopupPresentation())
             }
     }
 }
 
 struct WorkspaceManagerView: View {
-    @ObservedObject var manager: WorkspaceManager
-    @ObservedObject var library: WorkspaceLibrary
+    @ObservedObject var workspaces: WorkspaceController
+    @State private var query = ""
+    private var view: JSON { workspaces.view }
+    private var toolbarMode: Bool { ["this_workspace", "toolbar_library"].contains(workspaces.page) }
+    private var message: String? {
+        if !view["error"].isNull { return view["error"].string }
+        return view["switcher_error"].isNull ? nil : view["switcher_error"].string
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
-                Text(manager.prompt?["title"].string ?? (manager.history.isNull ? manager.title : manager.history["title"].string))
+                Text(view["prompt"]["title"].isNull ? view["title"].string : view["prompt"]["title"].string)
                     .font(.title2).fontWeight(.semibold)
                 Spacer()
-                if manager.prompt == nil && manager.history.isNull && !manager.toolbarMode {
+                if view["prompt"].isNull && workspaces.page == "workspaces" {
                     Button {
-                        manager.activate(JSON(["type": "new"]))
+                        workspaces.form(["type": "new"])
                     } label: { SharedIcon(name: "plus").frame(width: 24, height: 24) }
                         .accessibilityLabel("New Workspace")
                         .accessibilityIdentifier("workspace-action-new")
-                        .disabled(manager.processing)
-                } else if manager.prompt == nil && manager.history.isNull {
-                    Button("Close", role: .cancel) { manager.presented = false }.keyboardShortcut(.cancelAction)
-                        .disabled(manager.processing).accessibilityIdentifier("workspace-manager-close")
+                        .disabled(workspaces.busy)
+                } else if view["prompt"].isNull && toolbarMode {
+                    Button("Close", role: .cancel) { workspaces.dismiss() }.keyboardShortcut(.cancelAction)
+                        .disabled(workspaces.busy).accessibilityIdentifier("workspace-manager-close")
                 }
             }
-            if let prompt = manager.prompt { WorkspaceManagerForm(manager: manager, spec: prompt) }
+            if !view["prompt"].isNull { WorkspaceManagerForm(workspaces: workspaces, spec: view["prompt"]) }
             else {
-                if let error = manager.error ?? library.error {
+                if let error = message {
                     Text(error).foregroundStyle(.red).textSelection(.enabled).accessibilityIdentifier("workspace-manager-error")
                 }
-                if manager.history.isNull { browser }
-                else { history }
+                if workspaces.page == "history" { history } else { browser }
             }
-        }.padding(20).frame(minWidth: 340, idealWidth: manager.history.isNull ? 620 : 480, maxWidth: 800,
+        }.padding(20).frame(minWidth: 340, idealWidth: workspaces.page == "history" ? 480 : 620, maxWidth: 800,
             minHeight: 360, idealHeight: 600, maxHeight: 900)
-            .interactiveDismissDisabled(manager.processing || library.busy)
+            .interactiveDismissDisabled(workspaces.busy)
             .accessibilityElement(children: .contain).accessibilityIdentifier("workspace-library-manager")
+            .onChange(of: workspaces.page) { _, _ in query = "" }
     }
     private var browser: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if manager.toolbarMode {
+            if toolbarMode {
                 HStack {
-                    ForEach(manager.catalog["pages"].array.filter { ["this_workspace", "toolbar_library"].contains($0["id"].string) }, id: \.managerID) { page in
-                        Button(page["label"].string) {
-                            Task { do { try await manager.show(page["id"].string) } catch { manager.error = error.localizedDescription } }
-                        }.tint(manager.page == page["id"].string ? .accentColor : .secondary)
+                    ForEach([("this_workspace", "This Workspace"), ("toolbar_library", "Saved Toolbars")], id: \.0) { page in
+                        Button(page.1) { workspaces.open(page.0) }
+                            .tint(workspaces.page == page.0 ? .accentColor : .secondary)
                     }
                 }
-            } else {
-                Text(manager.catalog["description"].string)
+            } else if !view["intro"].string.isEmpty {
+                Text(view["intro"].string)
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            if manager.toolbarMode { HStack {
-                TextField("Search", text: $manager.query).editorSearchInput().textFieldStyle(.roundedBorder)
-                    .onChange(of: manager.query) { _, _ in manager.search() }.accessibilityIdentifier("workspace-manager-search")
-                if manager.page == "this_workspace" {
-                    Button("New Toolbar…") { manager.activate(JSON(["type": "new_toolbar"])) }.accessibilityIdentifier("workspace-action-new_toolbar")
+            if toolbarMode { HStack {
+                TextField("Search", text: $query).editorSearchInput().textFieldStyle(.roundedBorder)
+                    .onChange(of: query) { _, value in workspaces.search(value) }.accessibilityIdentifier("workspace-manager-search")
+                if workspaces.page == "this_workspace" {
+                    Button("New Toolbar…") { workspaces.form(["type": "new_toolbar", "value": NSNull()]) }
+                        .accessibilityIdentifier("workspace-action-new_toolbar")
                 }
             } }
-            if manager.page == "workspaces" {
-                WorkspaceSwitcherRows(manager: manager, library: library)
+            if workspaces.page == "workspaces" {
+                WorkspaceSwitcherRows(workspaces: workspaces)
             } else { EditorScrollView {
                 LazyVStack(spacing: 8) {
-                    if manager.view["rows"].array.isEmpty { Text("No items found.").foregroundStyle(.secondary).padding(20) }
-                    ForEach(manager.view["rows"].array, id: \.managerID) { row in
+                    if view["rows"].array.isEmpty { Text("No items found.").foregroundStyle(.secondary).padding(20) }
+                    ForEach(view["rows"].array, id: \.managerID) { row in
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: 14) { selectableRow(row); rowActions(row) }
                             VStack(alignment: .leading, spacing: 10) { selectableRow(row); rowActions(row) }
-                        }.padding(12).background(manager.selection == row["id"].string ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
+                        }.padding(12).background(view["selected"].string == row["id"].string ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
                             .accessibilityElement(children: .contain).accessibilityIdentifier("workspace-item-" + row["id"].string)
                     }
                 }
             } }
-            if !manager.toolbarMode {
+            if !toolbarMode {
                 HStack(spacing: 8) {
-                    Button("Cancel", role: .cancel) { manager.presented = false }.keyboardShortcut(.cancelAction)
+                    Button("Cancel", role: .cancel) { workspaces.dismiss() }.keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("workspace-manager-close")
                         .buttonStyle(WorkspaceManagerButtonStyle())
-                    if manager.view["details"].isNull {
-                        Button(manager.catalog["switch_label"].string) { }
-                            .buttonStyle(WorkspaceManagerButtonStyle(primary: true))
-                            .disabled(true)
-                    }
-                    ForEach(manager.view["details"]["actions"].array.filter { $0["primary"].bool }, id: \.managerActionID) { button in
-                        action(button).buttonStyle(WorkspaceManagerButtonStyle(primary: true))
-                    }
-                        .disabled(manager.selecting)
+                    Button(view["primary"].string) { workspaces.send(["type": "confirm"]) }
+                        .buttonStyle(WorkspaceManagerButtonStyle(primary: true))
+                        .disabled(!view["enabled"].bool || workspaces.busy)
+                        .accessibilityIdentifier("workspace-manager-apply")
                 }
             }
-            if manager.processing { ProgressView().controlSize(.small) }
-        }.disabled(manager.processing)
+            if workspaces.busy || view["loading"].bool { ProgressView().controlSize(.small) }
+        }.disabled(workspaces.busy)
     }
     private func selectableRow(_ row: JSON) -> some View {
-        Button { manager.select(row["id"].string) } label: { rowLabel(row).contentShape(Rectangle()) }
+        Button { workspaces.select(row["id"].string) } label: { rowLabel(row).contentShape(Rectangle()) }
             .buttonStyle(.plain).accessibilityIdentifier("workspace-select-" + row["id"].string)
     }
     private func rowLabel(_ row: JSON) -> some View {
@@ -130,11 +131,11 @@ struct WorkspaceManagerView: View {
     }
     private func rowActions(_ row: JSON) -> some View {
         HStack {
-            ForEach(row["actions"].array.filter { manager.toolbarMode && $0["primary"].bool }, id: \.managerActionID) { button in action(button) }
+            ForEach(row["actions"].array.filter { $0["primary"].bool }, id: \.managerActionID) { button in action(button) }
             let secondary = row["actions"].array.filter { !$0["primary"].bool }
             if !secondary.isEmpty {
                 EditorMenuButton(menu: {
-                    AppleContextMenu(JSON(["sections": [secondary.map(\.raw)]])) { manager.activate($0) }
+                    AppleContextMenu(JSON(["sections": [secondary.map(\.raw)]])) { workspaces.activate($0) }
                 }) { SharedIcon(name: "more").frame(width: 20) }
                     .accessibilityLabel("Actions for " + row["title"].string)
             }
@@ -142,28 +143,28 @@ struct WorkspaceManagerView: View {
     }
     private func action(_ button: JSON) -> some View {
         Button(button["label"].string, role: button["action"]["type"].string.hasPrefix("delete") ? .destructive : nil) {
-            manager.activate(button["action"])
+            workspaces.activate(button["action"])
         }.disabled(!button["enabled"].bool).accessibilityIdentifier("workspace-action-" + button["action"]["type"].string)
     }
     private var history: some View {
         VStack(alignment: .leading, spacing: 14) {
             EditorScrollView {
                 LazyVStack(spacing: 6) {
-                    ForEach(manager.history["rows"].array, id: \.managerID) { row in
-                        Button { manager.selectHistory(row["id"].string) } label: {
+                    ForEach(view["rows"].array, id: \.managerID) { row in
+                        Button { workspaces.select(row["id"].string) } label: {
                             rowLabel(row).padding(12).contentShape(Rectangle())
-                        }.buttonStyle(EditorControlButtonStyle(selected: manager.history["selected"].string == row["id"].string))
-                            .accessibilityAddTraits(manager.history["selected"].string == row["id"].string ? .isSelected : [])
+                        }.buttonStyle(EditorControlButtonStyle(selected: view["selected"].string == row["id"].string))
+                            .accessibilityAddTraits(view["selected"].string == row["id"].string ? .isSelected : [])
                             .accessibilityIdentifier("workspace-history-" + row["id"].string)
                     }
                 }
-            }.disabled(manager.processing)
+            }.disabled(workspaces.busy)
             HStack {
-                Button("Cancel", role: .cancel) { manager.presented = false }.keyboardShortcut(.cancelAction)
+                Button("Cancel", role: .cancel) { workspaces.dismiss() }.keyboardShortcut(.cancelAction)
                     .buttonStyle(WorkspaceManagerButtonStyle())
-                Button("Restore This Version") { manager.historyAction() }
+                Button(view["primary"].string) { workspaces.send(["type": "confirm"]) }
                     .buttonStyle(WorkspaceManagerButtonStyle(primary: true))
-                    .disabled(manager.processing || !library.previewingLayout || manager.history["restore"].isNull)
+                    .disabled(workspaces.busy || !view["enabled"].bool)
                     .accessibilityIdentifier("workspace-history-restore")
             }
         }
@@ -194,32 +195,33 @@ private struct WorkspaceManagerButtonStyle: ButtonStyle {
 }
 
 private struct WorkspaceManagerForm: View {
-    @ObservedObject var manager: WorkspaceManager
+    @ObservedObject var workspaces: WorkspaceController
     let spec: JSON
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(spec["message"].string).fixedSize(horizontal: false, vertical: true)
             if !spec["name"].isNull {
-                TextField("Name", text: $manager.formName).textFieldStyle(.roundedBorder)
+                TextField("Name", text: $workspaces.formName).textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("workspace-form-name")
             }
             if !spec["description"].isNull {
-                TextField("Description (optional)", text: $manager.formDescription, axis: .vertical)
+                TextField("Description (optional)", text: $workspaces.formDescription, axis: .vertical)
                     .textFieldStyle(.roundedBorder).lineLimit(3...6).accessibilityIdentifier("workspace-form-description")
             }
             if !spec["choices"].array.isEmpty {
-                Picker(spec["choice_label"].string, selection: $manager.formChoice) {
+                Picker(spec["choice_label"].string, selection: $workspaces.formChoice) {
                     ForEach(spec["choices"].array, id: \.managerID) { choice in Text(choice["label"].string).tag(choice["id"].string) }
                 }.accessibilityIdentifier("workspace-form-choice")
             }
-            if let error = manager.formError { Text(error).foregroundStyle(.red).accessibilityIdentifier("workspace-form-error") }
+            if let error = workspaces.error { Text(error).foregroundStyle(.red).accessibilityIdentifier("workspace-form-error") }
             Spacer(minLength: 16)
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { manager.answer(confirm: false) }.keyboardShortcut(.cancelAction)
+                Button("Cancel", role: .cancel) { workspaces.cancelPrompt() }.keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("workspace-form-cancel")
-                Button(spec["confirm"].string, role: spec["destructive"].bool ? .destructive : nil) { manager.answer(confirm: true) }
-                    .keyboardShortcut(.defaultAction).disabled(!spec["name"].isNull && manager.formName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button(spec["confirm"].string, role: spec["destructive"].bool ? .destructive : nil) { workspaces.submit() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(workspaces.busy || !spec["name"].isNull && workspaces.formName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("workspace-form-confirm")
             }
         }.accessibilityIdentifier("workspace-library-form")

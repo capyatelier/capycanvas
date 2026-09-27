@@ -4,14 +4,14 @@ struct WorkspaceSwitcherRows: View {
     // Match the web manager's 55-point content plus divider and Android's
     // 56dp row minimum. Keep the actual controls tall, not just their spacing.
     private let rowHeight: CGFloat = 56
-    @ObservedObject var manager: WorkspaceManager
-    @ObservedObject var library: WorkspaceLibrary
+    @ObservedObject var workspaces: WorkspaceController
     @StateObject private var interaction = WorkspaceRowInteraction()
     @FocusState private var focus: String?
-    private var rows: [JSON] { manager.view["rows"].array }
+    private var rows: [JSON] { workspaces.view["rows"].array }
+    private var pinned: Set<String> { Set(workspaces.view["switcher"].array.map { $0["id"].string }) }
     private var available: Bool {
-        library.ready && !library.readOnly && (!library.busy || library.previewingLayout)
-            && !library.switcherBusy && !manager.processing && manager.prompt == nil
+        workspaces.ready && !workspaces.readOnly && !workspaces.busy
+            && !workspaces.switcherBusy && workspaces.view["prompt"].isNull
     }
     var body: some View {
         EditorScrollView { content }
@@ -32,23 +32,23 @@ struct WorkspaceSwitcherRows: View {
                         .accessibilityIdentifier("workspace-grip-" + id)
                         .modifier(WorkspaceRowMeasurement(id: id, part: \.grip))
                     Button {
-                        if !interaction.contact.consumeClick() { manager.select(id) }
+                        if !interaction.contact.consumeClick() { workspaces.select(id) }
                     } label: {
                         Text(row["title"].string).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 8).frame(minHeight: rowHeight).contentShape(Rectangle())
                     }.buttonStyle(.plain).help(row["title"].string)
                         .accessibilityIdentifier("workspace-select-" + id).focusable().focused($focus, equals: "row-" + id)
-                        .accessibilityAddTraits(manager.selection == id ? .isSelected : [])
+                        .accessibilityAddTraits(workspaces.view["selected"].string == id ? .isSelected : [])
                         .onKeyPress { key in
                             if key.key == KeyEquivalent("\u{F70D}") && key.modifiers.contains(.shift) {
                                 interaction.showMenu(id); return .handled
                             }
                             return .ignored
                         }
-                    if row["pinned"].bool {
+                    if pinned.contains(id) {
                         SharedIcon(name: "pin").accessibilityHidden(false).accessibilityLabel("Shown in top bar")
                     }
-                    if library.status["active_id"].string == id {
+                    if row["current"].bool {
                         SharedIcon(name: "check").accessibilityHidden(false).accessibilityLabel("Current workspace")
                     }
                     Button {
@@ -58,7 +58,7 @@ struct WorkspaceSwitcherRows: View {
                         .accessibilityIdentifier("workspace-options-" + id).focusable().focused($focus, equals: "options-" + id)
                         .modifier(WorkspaceRowMeasurement(id: id, part: \.options))
                 }.padding(.horizontal, 6)
-                    .background(manager.selection == id ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6))
+                    .background(workspaces.view["selected"].string == id ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6))
                     .opacity(interaction.drag?.id == id ? 0.35 : 1)
                     .modifier(WorkspaceRowMeasurement(id: id))
                     .accessibilityElement(children: .contain).accessibilityIdentifier("workspace-item-" + id)
@@ -71,7 +71,7 @@ struct WorkspaceSwitcherRows: View {
             .onPreferenceChange(WorkspaceRowFrames.self) { interaction.frames = $0 }
             .overlay(alignment: .topLeading) { overlays }
             .onAppear { update() }
-            .onChange(of: manager.view.stableKey) { _, _ in update() }
+            .onChange(of: workspaces.view["rows"].stableKey) { _, _ in update() }
             .onChange(of: available) { _, _ in update() }
             .onDisappear { interaction.cancel() }
             .onKeyPress(.escape) {
@@ -82,8 +82,8 @@ struct WorkspaceSwitcherRows: View {
     }
     private func update() {
         interaction.update(items: rows, enabled: available)
-        interaction.commit = { [weak manager] id, before in
-            manager?.activate(JSON(["type": "edit_switcher", "edit": ["type": "move", "id": id, "before": before as Any? ?? NSNull()]]))
+        interaction.commit = { [weak workspaces] id, before in
+            workspaces?.send(["type": "edit_switcher", "edit": ["type": "move", "id": id, "before": before as Any? ?? NSNull()]])
         }
     }
     @ViewBuilder private var overlays: some View {
@@ -101,12 +101,21 @@ struct WorkspaceSwitcherRows: View {
         }
     }
     private func menu(_ row: JSON) -> some View {
-        let sections = [row["switcher_actions"].array, row["actions"].array.filter { !$0["primary"].bool }]
-            .map { $0.map { item in
-                ["label": item["label"].raw, "enabled": item["enabled"].bool && available,
-                 "selected": item["checked"].raw, "action": item["action"].raw]
-            } }
-        return EditorActionMenu(model: AppleContextMenu(JSON(["sections": sections])) { manager.activate($0) },
+        let id = row["id"].string, order = workspaces.view["order"].array.map(\.string)
+        let index = order.firstIndex(of: id)
+        let edit = { (value: [String: Any]) -> [String: Any] in ["type": "edit_switcher", "edit": value] }
+        let preferences: [[String: Any]] = [
+            ["label": "Show in top bar", "enabled": available, "selected": pinned.contains(id),
+             "action": edit(["type": "show", "id": id, "visible": !pinned.contains(id)])],
+            ["label": "Move Up", "enabled": available && (index ?? 0) > 0,
+             "action": edit(["type": "move", "id": id, "before": index.flatMap { $0 > 0 ? order[$0 - 1] : nil } as Any? ?? NSNull()])],
+            ["label": "Move Down", "enabled": available && index.map { $0 + 1 < order.count } == true,
+             "action": edit(["type": "move", "id": id, "before": index.flatMap { $0 + 2 < order.count ? order[$0 + 2] : nil } as Any? ?? NSNull()])],
+        ]
+        let actions = row["actions"].array.filter { !$0["primary"].bool && $0["enabled"].bool }.map { item -> [String: Any] in
+            ["label": item["label"].raw, "enabled": available, "action": item["action"].raw]
+        }
+        return EditorActionMenu(model: AppleContextMenu(JSON(["sections": [preferences, actions]])) { workspaces.activate($0) },
             width: 260, identifier: "workspace-row-menu") { interaction.closeMenu() }
     }
 }

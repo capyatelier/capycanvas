@@ -98,7 +98,7 @@ import AppKit
                     DispatchQueue.main.async { sender?.performClose(nil) }
                 } else {
                     store.cancelPreparedClose()
-                    if store.workspaceLibrary?.error == nil && store.storageFailure == nil {
+                    if store.workspaces?.error == nil && store.storageFailure == nil {
                         store.projectFiles.error = "Some changes could not be saved. Retry before closing this window."
                     }
                 }
@@ -113,9 +113,7 @@ import AppKit
     }
     func windowDidBecomeKey(_ notification: Notification) {
         downstream?.windowDidBecomeKey?(notification)
-        if let library = store?.workspaceLibrary {
-            Task { do { try await library.resume() } catch { library.error = error.localizedDescription } }
-        }
+        store?.workspaces?.refreshSwitcher()
     }
     override func responds(to selector: Selector!) -> Bool {
         super.responds(to: selector) || (downstream?.responds(to: selector) ?? false)

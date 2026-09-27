@@ -169,8 +169,13 @@ pub enum WorkspaceInput {
     Close,
     Resume,
     DiscardClose,
+    Detach,
     FocusFailed {
         error: String,
+    },
+    Import {
+        text: String,
+        kind: PackageKind,
     },
 }
 struct Install {
@@ -186,6 +191,7 @@ enum Outcome {
     Closed,
     Focus(FocusTarget),
     Install(Box<Install>),
+    Show(ManagerPage, String),
 }
 impl Outcome {
     fn adopt(entity: StoredEntity) -> Self {
@@ -207,6 +213,8 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     install: Option<Box<Install>>,
     queued: Option<WorkspaceInput>,
     terminating: bool,
+    discard: bool,
+    resume_key: Option<String>,
     renew: Option<Task<Vec<(String, String)>>>,
     preview: Option<(u64, Task<Selection>)>,
     interrupted: Vec<(String, String)>,
@@ -246,6 +254,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             install: None,
             queued: None,
             terminating: false,
+            discard: false,
+            resume_key: None,
             renew: None,
             preview: None,
             interrupted: Vec::new(),
@@ -267,6 +277,13 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         c.view.owner = c.manager.owner.id.clone();
         c.initialize(now);
         c
+    }
+    /// Scene restoration identity: startup prefers the workspace bound to
+    /// `key` over this window's binding, and every adoption rebinds it.
+    pub fn with_resume_key(mut self, key: String, now: u64) -> Self {
+        self.resume_key = Some(key);
+        self.initialize(now);
+        self
     }
     /// Storage replies call `wake` from any thread; the host then schedules
     /// `tick` on its editor owner.
@@ -295,21 +312,35 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     }
     fn initialize(&mut self, now: u64) {
         let m = self.manager.clone();
+        let keys: Vec<String> = self
+            .resume_key
+            .iter()
+            .cloned()
+            .chain([format!("window:{}", m.owner.id)])
+            .collect();
         self.run(async move {
             m.store.execute(StoreRequest::Reopen).await?;
             m.refresh_switcher().await?;
-            let resume = m
-                .store
-                .execute(StoreRequest::Binding {
-                    key: format!("window:{}", m.owner.id),
-                })
-                .await?;
+            let mut bound = Vec::new();
+            for key in keys {
+                if let StoreResponse::Binding(Some(id)) =
+                    m.store.execute(StoreRequest::Binding { key }).await?
+                {
+                    bound.push(id);
+                }
+            }
+            if bound.is_empty() {
+                return Ok(Outcome::adopt(m.initialize(now).await?));
+            }
+            m.initialize_catalog(now).await?;
+            let items = m.items();
             Ok(Outcome::adopt(
-                if let StoreResponse::Binding(Some(id)) = resume {
-                    m.initialize_catalog(now).await?;
-                    m.resume_startup(&id, now).await?
-                } else {
-                    m.initialize(now).await?
+                match bound
+                    .iter()
+                    .find(|id| items.iter().any(|item| &item.id == *id))
+                {
+                    Some(id) => m.resume_startup(id, now).await?,
+                    None => m.initialize(now).await?,
                 },
             ))
         });
@@ -685,11 +716,12 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     }
                 }
             }
-            WorkspaceInput::Suspend | WorkspaceInput::Close => {
+            WorkspaceInput::Suspend | WorkspaceInput::Close | WorkspaceInput::Detach => {
                 if self.view.closed {
                     return Ok(change);
                 }
-                self.terminating |= matches!(input, WorkspaceInput::Close);
+                self.terminating |= !matches!(input, WorkspaceInput::Suspend);
+                self.discard |= matches!(input, WorkspaceInput::Detach);
                 self.queued = None;
                 self.observe(session, now);
                 change = self.dismiss(session);
@@ -703,6 +735,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 }
                 if self.terminating {
                     self.terminating = false;
+                    self.discard = false;
                     session.reset_document_close();
                 }
                 self.suspended = false;
@@ -715,21 +748,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 if !self.terminating || self.view.closed {
                     return Err(StoreError::invalid("Close the window first."));
                 }
-                if self.task.is_some() {
-                    return Err(StoreError::invalid(
-                        "Wait for the current workspace operation to finish.",
-                    ));
-                }
-                self.close_after_task = false;
-                let incoming = self.incoming.take();
-                let current = self.manager.current_record();
-                let m = self.manager.clone();
-                self.run(async move {
-                    for claimed in incoming.iter().chain(&current) {
-                        m.release(claimed).await;
-                    }
-                    Ok(Outcome::Closed)
-                });
+                self.discard = true;
+                self.close_after_task = true;
             }
             WorkspaceInput::Select { id } => {
                 if self.view.page.is_some() && self.view.prompt.is_none() {
@@ -753,6 +773,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                             | WorkspaceInput::Form { .. }
                             | WorkspaceInput::Action { .. }
                             | WorkspaceInput::Switch { .. }
+                            | WorkspaceInput::Import { .. }
                             | WorkspaceInput::Retry
                     ) {
                         self.queued = Some(input);
@@ -776,6 +797,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     WorkspaceInput::Switch { id } => self.switch(session, id, now)?,
                     WorkspaceInput::Confirm => self.confirm(session, now)?,
                     WorkspaceInput::Retry => self.retry(session, now)?,
+                    WorkspaceInput::Import { text, kind } => {
+                        self.import(session, text, kind, now)?
+                    }
                     _ => unreachable!(),
                 };
             }
@@ -1082,6 +1106,31 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         });
         Ok(change)
     }
+    fn import<R: CanvasRenderer>(
+        &mut self,
+        session: &mut UiSession<R>,
+        text: String,
+        kind: PackageKind,
+        now: u64,
+    ) -> Result<UiChange> {
+        let change = self.stop_preview(session);
+        self.close_prompt();
+        self.start_transition(session)?;
+        let m = self.manager.clone();
+        self.run(async move {
+            let bytes = text.as_bytes();
+            Ok(match kind {
+                PackageKind::WorkspaceBackup => {
+                    Outcome::adopt(m.import_workspace_package(bytes, now).await?)
+                }
+                PackageKind::Toolbar => Outcome::Show(
+                    ManagerPage::ToolbarLibrary,
+                    m.import_reusable_package(bytes, kind, now).await?,
+                ),
+            })
+        });
+        Ok(change)
+    }
     fn confirm<R: CanvasRenderer>(
         &mut self,
         session: &mut UiSession<R>,
@@ -1134,6 +1183,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         }
         self.close_after_task |= self.terminating;
         let m = self.manager.clone();
+        let key = self.resume_key.clone();
         self.start_transition(session)?;
         self.run(async move {
             m.store.execute(StoreRequest::Reopen).await?;
@@ -1141,7 +1191,12 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             m.flush().await?;
             Ok(match m.retry_failed_operation().await? {
                 Some(s) => Outcome::adopt(s),
-                None => Outcome::Done,
+                None => {
+                    if let Some(key) = key {
+                        m.bind_resume_key(&key).await?;
+                    }
+                    Outcome::Done
+                }
             })
         });
         Ok(UiChange::default())
@@ -1323,6 +1378,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                             }
                         }
                         Outcome::Install(install) => self.install = Some(install),
+                        Outcome::Show(page, id) => {
+                            self.view.page = Some(page);
+                            self.view.query.clear();
+                            self.view.selected = Some(id);
+                        }
                         Outcome::Done => {}
                     }
                     if !keep_prompt {
@@ -1345,7 +1405,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     if self.view.page.is_none() && self.view.prompt.is_none() {
                         self.end_transition(session);
                     }
-                    self.close_after_task = false;
+                    self.close_after_task &= self.discard;
                 }
             }
         }
@@ -1380,10 +1440,16 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             && self.incoming_renew.is_none()
         {
             let incoming = self.incoming.take().unwrap();
+            let current = self.manager.current_record().filter(|_| self.discard);
+            let discard = self.discard;
             let m = self.manager.clone();
             self.run(async move {
-                m.release(&incoming).await;
-                m.close().await?;
+                for claimed in [incoming].iter().chain(&current) {
+                    m.release(claimed).await;
+                }
+                if !discard {
+                    m.close().await?;
+                }
                 Ok(Outcome::Closed)
             });
         }
@@ -1423,12 +1489,20 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Ok(c) => {
                     merge(&mut change, c);
                     let id = incoming.entity.id.clone();
-                    if let Some(outgoing) = self.manager.activate(incoming)
-                        && outgoing.entity.id != id
-                    {
+                    let outgoing = self
+                        .manager
+                        .activate(incoming)
+                        .filter(|outgoing| outgoing.entity.id != id);
+                    let key = self.resume_key.clone();
+                    if outgoing.is_some() || key.is_some() {
                         let m = self.manager.clone();
                         self.run_quietly(async move {
-                            m.release(&outgoing).await;
+                            if let Some(outgoing) = outgoing {
+                                m.release(&outgoing).await;
+                            }
+                            if let Some(key) = key {
+                                m.bind_resume_key(&key).await?;
+                            }
                             Ok(Outcome::Done)
                         });
                     }
@@ -1523,14 +1597,21 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Ok(m.interrupted_changes(now).await.unwrap_or_default())
             });
         }
-        if self.view.ready && self.task.is_none() && self.incoming.is_none() {
+        if (self.view.ready || self.discard) && self.task.is_none() && self.incoming.is_none() {
             if self.close_after_task && self.renew.is_none() {
+                let current = self.manager.current_record().filter(|_| self.discard);
+                let discard = self.discard;
                 let m = self.manager.clone();
                 self.run(async move {
-                    m.close().await?;
+                    if let Some(current) = current {
+                        m.release(&current).await;
+                    } else if !discard {
+                        m.close().await?;
+                    }
                     Ok(Outcome::Closed)
                 });
-            } else if !self.transition
+            } else if self.view.ready
+                && !self.transition
                 && !self.suspended
                 && self.manager.dirty()
                 && self.view.error.is_none()

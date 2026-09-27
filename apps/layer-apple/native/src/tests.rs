@@ -38,8 +38,6 @@ mod selection;
 mod renderer;
 #[path = "workspace_tests.rs"]
 mod workspace;
-#[path = "workspace_library_tests.rs"]
-mod workspace_library;
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
 #[path = "toolbar_component_tests.rs"]
@@ -168,6 +166,54 @@ fn assert_project_document(actual: &layer_core::Document, expected: &layer_core:
             );
         }
     }
+}
+
+#[test]
+fn workspace_request_starts_resumes_scene_and_closes() {
+    struct Directory(std::path::PathBuf);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let directory = Directory(
+        std::env::temp_dir().join(format!("capy-apple-workspaces-{}", layer_workspace::new_id())),
+    );
+    let start = json!({"type":"start","directory":directory.0.to_str().unwrap(),"scene":"first"});
+    let until = |app: &App, ready: &dyn Fn(&Value) -> bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let view = app.request(6, json!({"type":"tick"})).unwrap()["view"].clone();
+            if ready(&view) {
+                return view;
+            }
+            assert!(std::time::Instant::now() < deadline, "{view}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    let settled = |view: &Value| view["ready"] == true && view["busy"] == false;
+    let app = App::new(1);
+    app.request(6, start.clone()).unwrap();
+    let view = until(&app, &settled);
+    let first = view["id"].as_str().unwrap().to_owned();
+    let other = view["switcher"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["id"].as_str())
+        .find(|id| *id != first)
+        .unwrap()
+        .to_owned();
+    app.request(6, json!({"type":"switch","id":other})).unwrap();
+    until(&app, &|view| settled(view) && view["id"] == other.as_str());
+    app.request(6, json!({"type":"close"})).unwrap();
+    until(&app, &|view| view["closed"] == true);
+    drop(app);
+    let app = App::new(1);
+    app.request(6, start).unwrap();
+    assert_eq!(until(&app, &settled)["id"], other.as_str());
+    app.request(6, json!({"type":"close"})).unwrap();
+    until(&app, &|view| view["closed"] == true);
 }
 
 #[test]

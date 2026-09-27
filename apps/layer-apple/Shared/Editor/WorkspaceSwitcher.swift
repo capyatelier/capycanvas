@@ -3,19 +3,18 @@ import SwiftUI
 /// Stable shared workspace identities; selecting a segment uses ordinary save,
 /// switch and window-ownership policy rather than reapplying a shipped preset.
 struct WorkspaceSwitcher: View {
-    @ObservedObject var library: WorkspaceLibrary
-    @ObservedObject var manager: WorkspaceManager
+    @ObservedObject var workspaces: WorkspaceController
     let palette: EditorPalette
     var textSize: Double = 44.0 / 3
     var maximumWidth: CGFloat = 420
     var tile: CGFloat = 36
-    private var choices: [JSON] { library.status["switcher_display"].array }
+    private var choices: [JSON] { workspaces.view["switcher_display"].array }
     private var naturalWidth: CGFloat {
         Self.naturalWidth(choices, textSize: textSize)
     }
     static func naturalWidth(_ choices: [JSON], textSize: Double) -> CGFloat {
         10 + CGFloat(max(0, choices.count - 1)) * 2 + choices.reduce(0) { width, workspace in
-            width + min(110, EditorTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium))
+            width + min(110, EditorTextMetrics.width(workspace["title"].string, size: textSize, weight: .medium))
                 + 16
         }
     }
@@ -23,10 +22,10 @@ struct WorkspaceSwitcher: View {
         Group {
             if maximumWidth + 0.5 < naturalWidth {
                 EditorMenuButton(menu: {
-                    AppleContextMenu(Self.menu(library)) { manager.activate(JSON(["type":"switch", "value":$0["id"].raw])) }
+                    AppleContextMenu(Self.menu(workspaces)) { workspaces.switchTo($0["id"].string) }
                 }, identifier: "workspace-switcher-menu") {
                     HStack(spacing: 8) {
-                        Text(choices.first(where: { $0["id"].string == library.status["active_id"].string })?["name"].string ?? "Workspaces")
+                        Text(choices.first(where: { $0["current"].bool })?["title"].string ?? "Workspaces")
                             .lineLimit(1)
                         Image(systemName: "chevron.down").font(.system(size: 11))
                     }.padding(.horizontal, 12).frame(width: maximumWidth, height: tile)
@@ -35,14 +34,14 @@ struct WorkspaceSwitcher: View {
                 segments.glassSurface(SquircleShape.tile, fill: palette.glassSwitcher)
             }
         }
-        .disabled(!library.ready || library.busy || library.readOnly || library.switcherBusy || manager.processing || manager.presented)
+        .disabled(!workspaces.ready || workspaces.busy || workspaces.readOnly || workspaces.switcherBusy || workspaces.presented)
         .accessibilityElement(children: .contain).accessibilityLabel("Workspaces").accessibilityIdentifier("workspace-switcher")
         .modifier(HeaderControlMeasurement(id: "workspace-switcher"))
     }
-    @MainActor static func menu(_ library: WorkspaceLibrary) -> JSON {
-        JSON(["sections":[library.status["switcher_display"].array.map { workspace in
-            ["label":workspace["name"].raw, "enabled":library.ready && !library.busy && !library.readOnly && !library.switcherBusy,
-                "selected":workspace["id"].string == library.status["active_id"].string,
+    @MainActor static func menu(_ workspaces: WorkspaceController) -> JSON {
+        JSON(["sections":[workspaces.view["switcher_display"].array.map { workspace in
+            ["label":workspace["title"].raw, "enabled":workspaces.ready && !workspaces.busy && !workspaces.readOnly && !workspaces.switcherBusy,
+                "selected":workspace["current"].bool,
                 "action":["type":"apple_workspace_switch", "id":workspace["id"].raw]]
         }]])
     }
@@ -57,21 +56,21 @@ struct WorkspaceSwitcher: View {
                     }.padding(5)
                 }.frame(height: 36)
                     .onChange(of: choices.first?["id"].string) { _, first in
-                        if let first, first == library.status["active_id"].string { scroll.scrollTo(first, anchor: .leading) }
+                        if let first, first == workspaces.view["id"].string { scroll.scrollTo(first, anchor: .leading) }
                     }
             }
         }
     }
     private func choice(_ workspace: JSON) -> some View {
-        let selected = workspace["id"].string == library.status["active_id"].string
-        return Button { manager.activate(JSON(["type": "switch", "value": workspace["id"].raw])) } label: {
-            WorkspaceNameWidth(natural: EditorTextMetrics.width(workspace["name"].string, size: textSize, weight: .medium),
+        let selected = workspace["current"].bool
+        return Button { workspaces.switchTo(workspace["id"].string) } label: {
+            WorkspaceNameWidth(natural: EditorTextMetrics.width(workspace["title"].string, size: textSize, weight: .medium),
                 maximum: 110) {
-                Text(workspace["name"].string).font(EditorTextMetrics.font(size: textSize, weight: .medium)).lineLimit(1)
+                Text(workspace["title"].string).font(EditorTextMetrics.font(size: textSize, weight: .medium)).lineLimit(1)
             }.padding(.horizontal, 8).frame(height: 26)
                 .foregroundStyle(palette["text"])
         }.buttonStyle(SwitcherChoiceStyle(selected: selected, palette: palette)).fixedSize(horizontal: true, vertical: false)
-            .help("Switch to \(workspace["name"].string) workspace")
+            .help("Switch to \(workspace["title"].string) workspace")
             .accessibilityIdentifier("workspace-switch-" + workspace["id"].string)
             .accessibilityAddTraits(selected ? .isSelected : [])
             .modifier(HeaderControlMeasurement(id: "workspace-switch-" + workspace["id"].string))

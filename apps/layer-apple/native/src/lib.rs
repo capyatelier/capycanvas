@@ -12,7 +12,6 @@ pub use project::*;
 mod previews;
 pub use previews::*;
 mod workspaces;
-pub use workspaces::*;
 mod stroke_recording;
 pub use stroke_recording::*;
 #[cfg(test)]
@@ -28,6 +27,7 @@ pub struct CapyApple {
     error: Option<CString>,
     chrome_facts: layer_ui::ChromeFacts,
     dismissed_contacts: std::collections::BTreeSet<u64>,
+    workspaces: Option<layer_workspace::WorkspaceController<layer_workspace::StoreWorker>>,
 }
 impl CapyApple {
     fn perform<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, String>) -> Option<T> {
@@ -81,6 +81,7 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
             error: None,
             chrome_facts: Default::default(),
             dismissed_contacts: Default::default(),
+            workspaces: None,
         })))
     })
     .ok()
@@ -305,7 +306,7 @@ pub unsafe extern "C" fn capy_apple_request(
                 Some("document_tabs") => a.tabs_request(value)?,
                 _ => a.host.query(value)?,
             }),
-            6 => Some(workspaces::session_request(&mut a.host, value)?),
+            6 => Some(a.workspace(value)?),
             _ => return Err("Unknown Apple host request".into()),
         };
         result

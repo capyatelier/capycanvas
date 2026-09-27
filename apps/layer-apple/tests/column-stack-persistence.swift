@@ -4,8 +4,8 @@ import Foundation
 @main struct ColumnStackPersistenceChecks {
     @MainActor static func ready(_ store: EditorStore) async throws {
         let deadline = Date().addingTimeInterval(20)
-        while store.workspaceLibrary?.ready != true || store.workspaceLibrary?.busy == true || store.state.isNull {
-            if let error = store.failure ?? store.workspaceLibrary?.error { throw HostFailure(message: error) }
+        while store.workspaces?.ready != true || store.workspaces?.busy == true || store.state.isNull {
+            if let error = store.failure ?? store.workspaces?.error { throw HostFailure(message: error) }
             guard Date() < deadline else { throw HostFailure(message: "Column-stack workspace startup timed out") }
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -18,7 +18,7 @@ import Foundation
             try await ready(store)
             store.native?.resize(width: 1200, height: 900, scale: 1)
             let paint = "builtin:workspace:illustrator"
-            try await store.workspaceManager.run(JSON(["type":"switch", "value":paint]))
+            try await store.workspaces!.perform(["type":"switch", "id":paint])
             func layout() -> String { store.state["workspace"]["layout"].stableKey }
             func member(_ id: UInt64) -> JSON { store.snapshot["layout"]["collapsed"].array.first { $0["id"].uint == id } ?? JSON() }
             func customize(_ value: [String: Any]) async throws { try await store.apply(["type":"customize", "action":value]) }
@@ -46,19 +46,19 @@ import Foundation
             precondition(resized != preferred)
             try await store.apply(["type":"set_brush_size", "value":73])
             let brush = store.state["brush"].stableKey
-            try await store.workspaceLibrary!.flush()
-            let other = store.workspaceLibrary!.status["default_workspaces"].array.first { $0["id"].string != paint }!["id"].string
-            try await store.workspaceManager.run(JSON(["type":"switch", "value":other]))
-            try await store.workspaceManager.run(JSON(["type":"switch", "value":paint]))
+            try await store.workspaces!.flushed()
+            let other = store.workspaces!.view["order"].array.first { $0.string != paint }!.string
+            try await store.workspaces!.perform(["type":"switch", "id":other])
+            try await store.workspaces!.perform(["type":"switch", "id":paint])
             precondition(layout() == resized && store.state["brush"].stableKey == brush)
             precondition(member(12)["open"].isNull, "Saved custom stacks start closed")
             try await customize(["type":"toggle_column_drawer", "group":16, "panel":"layers"])
             precondition(!member(12)["open"].isNull)
-            try await store.workspaceLibrary!.flush()
-            try await store.workspaceLibrary!.close()
+            try await store.workspaces!.flushed()
+            try await store.workspaces!.closed()
             store = EditorStore(platform: platform, persistence: EditorPersistence(root: root))
             try await ready(store)
-            precondition(store.workspaceLibrary!.status["active_id"].string == paint)
+            precondition(store.workspaces!.view["id"].string == paint)
             precondition(layout() == resized && store.state["brush"].stableKey == brush)
             precondition(member(12)["open"].isNull, "Restart does not restore transient opening")
             for expected in [preferred, stacked, beforeStack] {
@@ -70,7 +70,7 @@ import Foundation
                 precondition(layout() == expected)
             }
             precondition(store.state["brush"].stableKey == brush, "Workspace history preserves working brush settings")
-            try await store.workspaceLibrary!.close()
+            try await store.workspaces!.closed()
             print("PASS platform \(platform): fresh Paint, stack/preference/width persistence, switching, relaunch, transient opening and persisted Undo/Redo")
         }
     }

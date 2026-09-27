@@ -1078,3 +1078,94 @@ fn focus_target_carries_owner_and_failed_focus_sets_error() {
     assert!(f.controller.view.page.is_none());
     assert_eq!(f.controller.view.id, original);
 }
+
+fn binding(f: &Fixture, key: &str) -> Option<String> {
+    match pollster::block_on(
+        Store(f.backend.clone()).execute(StoreRequest::Binding { key: key.into() }),
+    )
+    .unwrap()
+    {
+        StoreResponse::Binding(id) => id,
+        _ => None,
+    }
+}
+#[test]
+fn resume_key_restores_the_scene_workspace_before_last_used() {
+    let mut f = Fixture::new();
+    let first = f.controller.view.id.clone().unwrap();
+    let key = "apple:scene:one".to_string();
+    let mut host = layer_host::NativeHost::new(Platform::Web).unwrap();
+    let now = f.backend.now.get();
+    let mut run = |c: &mut WorkspaceController<Store>, input: Option<serde_json::Value>| {
+        if let Some(input) = input {
+            c.input(&mut host.session, serde_json::from_value(input).unwrap(), now)
+                .unwrap();
+        }
+        for _ in 0..20 {
+            c.tick(&mut host.session, now);
+        }
+    };
+    let start = |f: &Fixture| {
+        WorkspaceController::new(Store(f.backend.clone()), Platform::Web, now)
+            .with_resume_key(key.clone(), now)
+    };
+    let mut scene = start(&f);
+    run(&mut scene, None);
+    assert!(scene.view.ready, "{:?}", scene.view.error);
+    let restored = scene.view.id.clone().unwrap();
+    assert_ne!(restored, first);
+    assert_eq!(binding(&f, &key).as_deref(), Some(restored.as_str()));
+    run(&mut scene, Some(serde_json::json!({"type":"close"})));
+    assert!(scene.view.closed);
+    let other = DEFAULT_WORKSPACES
+        .iter()
+        .map(|w| w.0)
+        .find(|id| *id != first && *id != restored)
+        .unwrap();
+    f.input(serde_json::json!({"type":"switch","id":other}));
+    assert_eq!(f.controller.view.id.as_deref(), Some(other));
+    f.input(serde_json::json!({"type":"close"}));
+    assert!(f.controller.view.closed);
+    assert_eq!(binding(&f, "last_workspace").as_deref(), Some(other));
+    let mut scene = start(&f);
+    run(&mut scene, None);
+    assert_eq!(scene.view.id.as_deref(), Some(restored.as_str()));
+    run(&mut scene, Some(serde_json::json!({"type":"detach"})));
+    assert!(scene.view.closed);
+    let stored = pollster::block_on(f.controller.manager.load(&restored)).unwrap();
+    assert!(stored.claim.is_none());
+}
+#[test]
+fn import_toolbar_package_selects_it_and_backup_adopts() {
+    let mut f = Fixture::new();
+    let current = f.controller.manager.current().unwrap();
+    let panel = current
+        .capture()
+        .unwrap()
+        .history
+        .layout()
+        .panels
+        .iter()
+        .find(|p| p.id.kind() == layer_ui::PanelKind::Tiles)
+        .unwrap()
+        .id;
+    let m = f.controller.manager.clone();
+    let saved = pollster::block_on(m.save_toolbar(panel, "Shared Ink", 1000)).unwrap();
+    let package = export_package(&pollster::block_on(m.load(&saved)).unwrap().entity).unwrap();
+    f.input(serde_json::json!({
+        "type":"import","kind":"toolbar","text":String::from_utf8(package).unwrap()
+    }));
+    assert_eq!(f.controller.view.page, Some(ManagerPage::ToolbarLibrary));
+    let selected = f.controller.view.selected.clone().unwrap();
+    assert_ne!(selected, saved);
+    assert!(f.controller.view.rows.iter().any(|row| row.id == selected));
+    assert!(f.controller.view.details.is_some());
+    f.input(serde_json::json!({"type":"dismiss"}));
+    let before = f.controller.view.id.clone();
+    let backup = String::from_utf8(export_package(&current).unwrap()).unwrap();
+    f.input(serde_json::json!({"type":"import","kind":"workspace_backup","text":backup}));
+    assert!(f.controller.view.error.is_none(), "{:?}", f.controller.view.error);
+    assert_ne!(f.controller.view.id, before);
+    assert!(f.controller.view.name.starts_with("My Workspace"));
+    assert!(!f.controller.view.busy && f.controller.view.page.is_none());
+}

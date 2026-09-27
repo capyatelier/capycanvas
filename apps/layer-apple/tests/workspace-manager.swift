@@ -3,318 +3,256 @@ import AppKit
 import SwiftUI
 
 @main struct WorkspaceManagerChecks {
-    @MainActor static func form(_ manager: WorkspaceManager, _ action: [String: Any], name: String? = nil,
-        choice: String? = nil, retryName: String? = nil, cancel: Bool = false) async throws {
-        var finished = false
-        let task = Task { @MainActor in defer { finished = true }; try await manager.run(JSON(action)) }
-        defer { if !finished { manager.answer(confirm: false); task.cancel() } }
-        try await wait("workspace form") { manager.prompt != nil || finished }
-        if finished { try await task.value; throw HostFailure(message: "Expected a workspace form") }
-        precondition(!(manager.prompt?["message"].string ?? "").isEmpty)
-        if let name { manager.formName = name }; if let choice { manager.formChoice = choice }
-        manager.answer(confirm: !cancel)
-        if let retryName {
-            try await wait("inline validation") { manager.prompt != nil && manager.formError != nil || finished }
-            precondition(!finished && manager.formName == name, "Validation must retain the entered name")
-            manager.formName = retryName; manager.answer(confirm: true)
-        }
-        try await wait("completion of workspace action \(action["type"] ?? "")") { finished || manager.prompt != nil }
-        if !finished {
-            let failure = manager.formError ?? "Unexpected workspace form"
-            manager.answer(confirm: false)
-            try await task.value
-            throw HostFailure(message: "Workspace action \(action["type"] ?? "") failed: \(failure)")
-        }
-        try await task.value
-    }
     @MainActor static func main() async throws {
         for platform: UInt32 in [0, 1] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-manager-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
             let storage = EditorPersistence(root: root)
             let editor = EditorStore(platform: platform, persistence: storage)
-            try await wait("workspace startup") { editor.workspaceLibrary?.ready == true || editor.workspaceLibrary?.error != nil }
-            let library = editor.workspaceLibrary!, manager = editor.workspaceManager
-            precondition(library.ready, library.error ?? "Startup failed")
-            let original = library.status["active_id"].string
-            let defaults = library.status["default_workspaces"].array
-            precondition(defaults.map { $0["name"].string } == ["Sketch", "Paint", "Photo"])
+            let workspaces = editor.workspaces!
+            try await workspaces.started()
+            let original = workspaces.view["id"].string
+            let defaults = try await workspaces.workspaceRows()
+            precondition(defaults.map { $0["title"].string } == ["Sketch", "Paint", "Photo"])
             precondition(original == defaults[1]["id"].string)
-            // Exercise the actual host request, rather than assuming the menu's
-            // visible label means the editor/service action is connected.
             try await editor.apply(["type": "workspace_manager", "command": ["type": "manage"]])
             try await wait("manager request acknowledgement") {
-                manager.presented && !manager.view.isNull && !editor.state["requests"].array.contains { $0["kind"]["type"].string == "workspace" }
+                workspaces.page == "workspaces" && !workspaces.busy
+                    && !editor.state["requests"].array.contains { $0["kind"]["type"].string == "workspace" }
             }
-            precondition(manager.selection == original)
-            try await capture(manager, platform: platform, phase: "browser")
-            let currentButton = manager.view["details"]["actions"].array.first { $0["action"]["type"].string == "switch" }!
-            precondition(!currentButton["enabled"].bool)
-            precondition(!manager.view["details"]["actions"].array.contains {
-                $0["action"]["type"].string == "rename"
-                    || ($0["action"]["type"].string == "delete" && $0["enabled"].bool)
+            precondition(workspaces.view["selected"].string == original)
+            try await capture(workspaces, platform: platform, phase: "browser")
+            precondition(!workspaces.view["rows"].array.contains { row in
+                row["actions"].array.contains { ["rename", "delete"].contains($0["action"]["type"].string) && $0["enabled"].bool }
             }, "Included workspaces keep their names and cannot be deleted")
-            try await form(manager, ["type": "new"], name: "Cancelled", cancel: true)
-            precondition(library.status["active_id"].string == original)
-            let newPrompt = try await library.read(["type": "prompt", "action": ["type": "new"]])
-            precondition(newPrompt["prompt"]["choices"].array.isEmpty)
-            try await form(manager, ["type": "new"], name: "Inking")
-            let inking = library.status["active_id"].string
-            precondition(inking != original && !manager.presented)
+            try await workspaces.perform(["type": "form", "action": ["type": "new"]])
+            precondition(workspaces.view["prompt"]["choices"].array.isEmpty && !workspaces.view["prompt"]["message"].string.isEmpty)
+            workspaces.formName = "Cancelled"; workspaces.cancelPrompt()
+            try await workspaces.settle()
+            precondition(workspaces.view["id"].string == original && workspaces.view["prompt"].isNull)
+            try await workspaces.create("Inking")
+            let inking = workspaces.view["id"].string
+            precondition(inking != original && !workspaces.presented)
             try await editor.apply(["type": "set_brush_size", "value": 31])
             try await editor.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "sizes", "visible": false]])
-            let source = try await captureSession(editor)
-            try await form(manager, ["type": "new"], name: "Inking", retryName: "Sketching")
-            let sketching = library.status["active_id"].string
-            let created = try await captureSession(editor)
-            precondition(SnapshotProjection.equal(created["capture"]["working"].raw, source["capture"]["working"].raw))
-            let sourceRevision = source["capture"]["history"]["current"].string
-            let createdRevision = created["capture"]["history"]["current"].string
-            precondition(SnapshotProjection.equal(created["capture"]["history"]["revisions"][createdRevision]["layout"].raw,
-                source["capture"]["history"]["revisions"][sourceRevision]["layout"].raw))
-            precondition(created["capture"]["history"]["undo"].array.isEmpty, "A new workspace starts independent history")
-            try await manager.run(JSON(["type": "switch", "value": original]))
+            let source = try await workspaces.capture()
+            try await workspaces.perform(["type": "form", "action": ["type": "new"]])
+            workspaces.formName = "Inking"; workspaces.submit()
+            try await wait("inline validation") { workspaces.error != nil && !workspaces.busy }
+            precondition(!workspaces.view["prompt"].isNull && workspaces.formName == "Inking", "Validation must retain the entered name")
+            workspaces.formName = "Sketching"; workspaces.submit()
+            try await workspaces.settle()
+            let sketching = workspaces.view["id"].string
+            precondition(sketching != inking && workspaces.view["prompt"].isNull)
+            let created = try await workspaces.capture()
+            precondition(SnapshotProjection.equal(created["working"].raw, source["working"].raw))
+            let sourceRevision = source["history"]["current"].string, createdRevision = created["history"]["current"].string
+            precondition(SnapshotProjection.equal(created["history"]["revisions"][createdRevision]["layout"].raw,
+                source["history"]["revisions"][sourceRevision]["layout"].raw))
+            precondition(created["history"]["undo"].array.isEmpty, "A new workspace starts independent history")
+            try await workspaces.perform(["type": "switch", "id": original])
             try await editor.apply(["type": "set_brush_size", "value": 67])
             try await editor.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
-            try await selectionPreview(editor, page: "workspaces", target: inking, cancel: true)
-            try await manager.show("workspaces")
-            // Editing library metadata must remain available while a canvas
-            // contact is held, and must not cancel that interaction.
+            try await selectionPreview(editor, target: inking)
             editor.input(["type": "pointer", "id": 900, "phase": "down", "kind": "pen", "button": "primary", "position": [500, 400]])
-            let held = try await captureSession(editor)
-            precondition(!held["idle"].bool)
-            try await form(manager, ["type": "rename", "value": inking], name: "Inking v2")
-            let afterRename = try await captureSession(editor)
-            precondition(!afterRename["idle"].bool)
-            do { _ = try await library.operation(["type": "new", "name": "During Contact"]); preconditionFailure("Switching must require an idle canvas") }
-            catch { }
+            try await workspaces.answer(["type": "rename", "value": inking], name: "Inking v2")
+            precondition(try await workspaces.workspaceRows().contains { $0["title"].string == "Inking v2" })
             editor.input(["type": "pointer", "id": 900, "phase": "up", "kind": "pen", "button": "primary", "position": [500, 400]])
-            let ended = try await captureSession(editor)
-            precondition(ended["idle"].bool)
             try await startingLayoutPreview(editor)
             precondition(editor.state["brush"]["diameter"].number == 67)
             try await liveHistory(editor, platform: platform)
-            let beforeReset = try await captureSession(editor)
+            let beforeReset = try await workspaces.capture()
             let layersBeforeReset = editor.state["layers"].stableKey
-            precondition(!beforeReset["capture"]["working"]["tools"]["overrides"].object.isEmpty)
-            try await form(manager, ["type": "reset_brushes"], cancel: true)
-            let canceledReset = try await captureSession(editor)
-            precondition(SnapshotProjection.equal(canceledReset["capture"].raw, beforeReset["capture"].raw))
-            try await form(manager, ["type": "reset_brushes"])
-            let afterReset = try await captureSession(editor)
-            precondition(afterReset["capture"]["working"]["tools"]["overrides"].object.isEmpty)
-            precondition(SnapshotProjection.equal(afterReset["capture"]["history"].raw, beforeReset["capture"]["history"].raw))
+            precondition(!beforeReset["working"]["tools"]["overrides"].object.isEmpty)
+            try await workspaces.perform(["type": "form", "action": ["type": "reset_brushes"]])
+            workspaces.cancelPrompt(); try await workspaces.settle()
+            precondition(SnapshotProjection.equal(try await workspaces.capture().raw, beforeReset.raw))
+            try await workspaces.answer(["type": "reset_brushes"])
+            let afterReset = try await workspaces.capture()
+            precondition(afterReset["working"]["tools"]["overrides"].object.isEmpty)
+            precondition(SnapshotProjection.equal(afterReset["history"].raw, beforeReset["history"].raw))
             precondition(editor.state["layers"].stableKey == layersBeforeReset)
-            let storedReset = try await library.read(["type": "load", "id": original])
-            precondition(storedReset["entity"]["working"]["tools"]["overrides"].object.isEmpty)
-            let untouched = try await library.read(["type": "load", "id": inking])["entity"]["working"]
-            precondition(untouched["tools"]["overrides"][String(untouched["preset"].uint)]["size"].number == 31)
+            try await workspaces.flushed()
             let other = EditorStore(platform: platform, persistence: storage, managedWorkspaces: true)
-            try await wait("other window") { other.workspaceLibrary!.ready }
-            _ = try await other.workspaceLibrary!.operation(["type": "switch", "id": defaults[0]["id"].raw])
-            let otherID = other.workspaceLibrary!.status["active_id"].string
+            try await other.workspaces!.started("other window")
+            try await other.workspaces!.perform(["type": "switch", "id": defaults[0]["id"].string])
+            let otherID = other.workspaces!.view["id"].string
             var focused = false
             other.focusWindow = { focused = true }
-            try await manager.run(JSON(["type": "switch_to_window", "value": otherID]))
-            precondition(focused)
+            try await workspaces.perform(["type": "action", "action": ["type": "switch_to_window", "value": otherID]])
+            try await wait("focus other window") { focused }
             focused = false
-            try await manager.run(JSON(["type": "switch", "value": otherID]))
-            precondition(focused && library.status["active_id"].string == original,
-                "The header switch action must focus a claimed default workspace without taking it over")
-            try await form(manager, ["type": "new_toolbar"], name: "Ink Tools")
-            try await manager.show("this_workspace")
-            let toolbar = manager.view["rows"].array.first { $0["title"].string == "Ink Tools" }!
-            let panel = try JSON.decode(toolbar["id"].string)
-            try await form(manager, ["type": "save_toolbar", "value": panel.raw], name: "Saved Ink")
-            let savedToolbar = manager.selection!
-            precondition(manager.page == "toolbar_library")
-            try await manager.run(JSON(["type": "add_toolbar", "value": savedToolbar]))
-            try await form(manager, ["type": "replace_toolbar", "value": panel.raw], choice: savedToolbar)
-            try await form(manager, ["type": "update_toolbar", "value": savedToolbar], choice: panel.stableKey)
-            // The manager hands local toolbar edits to the existing shared
-            // prompt after dismissing its sheet; the resulting actions matter.
-            for action in ["rename_toolbar", "duplicate_toolbar", "delete_toolbar"] {
-                try await manager.show("this_workspace")
-                try await manager.run(JSON(["type": action, "value": panel.raw]))
-                precondition(!manager.presented)
-                manager.dismissed()
-                try await wait("shared toolbar prompt") { !editor.snapshot["toolbar_prompt"].isNull }
-                if action == "delete_toolbar" {
-                    precondition(editor.snapshot["toolbar_prompt"]["message"].string.contains(library.status["name"].string))
-                } else {
-                    try await editor.apply(["type": "customize", "action": ["type": "toolbar_name", "name": action == "rename_toolbar" ? "Renamed Ink" : "Copied Ink"]])
-                }
-                try await editor.apply(["type": "customize", "action": ["type": "confirm_toolbar"]])
-                precondition(editor.snapshot["toolbar_prompt"].isNull)
-                try await library.flush()
-                try await manager.show("this_workspace")
-                let titles = manager.view["rows"].array.map { $0["title"].string }
-                precondition(action == "rename_toolbar" ? titles.contains("Renamed Ink")
-                    : action == "duplicate_toolbar" ? titles.contains("Copied Ink") : !titles.contains("Renamed Ink"))
-            }
-            try await manager.run(JSON(["type": "switch", "value": sketching]))
-            let deletion = try await library.read(["type": "prompt", "action": ["type": "delete", "value": sketching]])["prompt"]
+            try await workspaces.perform(["type": "switch", "id": otherID])
+            try await wait("focus claimed workspace") { focused }
+            precondition(workspaces.view["id"].string == original,
+                "The header switch action must focus a claimed workspace without taking it over")
+            try await toolbarActions(editor)
+            try await workspaces.perform(["type": "switch", "id": sketching])
+            try await workspaces.perform(["type": "form", "action": ["type": "delete", "value": sketching]])
+            let deletion = workspaces.view["prompt"]
             precondition(deletion["choices"].array.isEmpty && deletion["message"].string.contains("permanent"))
-            let orderBeforeDelete = library.status["order"].array.map { $0.string }
-            try await form(manager, ["type": "delete", "value": sketching])
-            precondition(library.status["active_id"].string == "builtin:workspace:illustrator")
-            precondition(library.status["order"].array.map { $0.string } == orderBeforeDelete.filter { $0 != sketching },
+            let orderBeforeDelete = workspaces.view["order"].array.map(\.string)
+            workspaces.submit(); try await workspaces.settle()
+            precondition(workspaces.view["id"].string == "builtin:workspace:illustrator")
+            precondition(workspaces.view["order"].array.map(\.string) == orderBeforeDelete.filter { $0 != sketching },
                 "Deleting the active workspace must not create an extra replacement")
-            try await packageDelivery(editor: editor, root: root, toolbar: savedToolbar)
+            try await invalidPackage(workspaces, root: root)
             let allowed: Bool = await withCheckedContinuation { continuation in editor.projectFiles.confirmClose { continuation.resume(returning: $0) } }
             precondition(allowed)
             let prepared: Bool = await withCheckedContinuation { continuation in editor.prepareClose { continuation.resume(returning: $0) } }
-            precondition(prepared && !library.ready)
+            precondition(prepared && workspaces.view["closed"].bool, "A prepared close releases the workspace")
             await withCheckedContinuation { continuation in editor.cancelPreparedClose { continuation.resume() } }
-            precondition(library.ready && !library.readOnly)
-            try await editor.apply(["type": "set_brush_size", "value": 89])
-            try await library.flush()
-            precondition(!library.hasUnsavedChanges)
-            // UIKit's discard callback releases only its matching scene. The
-            // other window keeps its claim and remains editable.
             other.systemSceneID = UUID().uuidString
             EditorStore.discardSceneSessions([other.systemSceneID!])
-            try await wait("discarded scene release") { !other.workspaceLibrary!.ready }
-            let released = try await library.read(["type": "load", "id": otherID])
-            precondition(released["claim"].isNull && library.ready)
-            try await editor.apply(["type": "set_brush_size", "value": 95])
-            await library.detach()
-            let saved = try await other.workspaceLibrary!.read(["type": "load", "id": library.status["active_id"].raw])
-            precondition(saved["claim"].isNull)
-            let working = saved["entity"]["working"]
-            precondition(working["tools"]["overrides"][String(working["preset"].uint)]["size"].number == 89,
-                "Explicit teardown must preserve the last saved copy after discarding unsaved changes")
-            print("PASS: platform \(platform), manager host commands, forms, inline validation, workspace previews/history, live-window copying, toolbar actions, deletion replacement and native package delivery")
+            try await wait("discarded scene release") { other.workspaces!.view["closed"].bool }
+            let successor = EditorStore(platform: platform, persistence: storage, managedWorkspaces: true)
+            try await successor.workspaces!.started("successor window")
+            try await successor.workspaces!.perform(["type": "switch", "id": otherID])
+            precondition(successor.workspaces!.view["id"].string == otherID, "A discarded scene must release its claim")
+            try await successor.workspaces!.closed()
+            print("PASS: platform \(platform), manager host commands, forms, inline validation, workspace previews/history, window focus, toolbar actions, deletion and scene release")
         }
     }
-    @MainActor static func selectionPreview(_ editor: EditorStore, page: String, target: String, cancel: Bool) async throws {
-        let library = editor.workspaceLibrary!, manager = editor.workspaceManager
-        let before = try await captureSession(editor), layout = editor.state["workspace"]["layout"]
-        let active = library.status["active_id"].string
-        try await manager.show(page)
-        precondition(page == "workspaces" ? manager.selection == active : manager.selection == nil)
-        manager.select(target)
-        try await wait("selected layout preview") {
-            library.previewingLayout && !SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, layout.raw)
-        }
-        let previewed = try await captureSession(editor)
-        precondition(library.status["active_id"].string == active)
-        precondition(SnapshotProjection.equal(previewed["capture"].raw, before["capture"].raw), "Selecting a row must not apply or persist its layout")
-        if cancel {
-            manager.query = "no matching workspace"; manager.search()
-            try await wait("filtered preview cancellation") { !manager.selecting && !library.previewingLayout && !library.busy }
-            precondition(manager.selection == nil && manager.view["details"].isNull && manager.view["rows"].array.isEmpty)
-            precondition(SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, layout.raw))
-            manager.query = ""; manager.search()
-            try await wait("cleared search") { !manager.selecting && !manager.view["rows"].array.isEmpty }
-            precondition(manager.selection == nil && manager.view["details"].isNull)
-            manager.select(target); manager.select(active)
-            try await wait("rapid selection") { !manager.selecting }
-            precondition(manager.selection == active)
-            precondition(SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, layout.raw))
-            manager.select(target)
-            manager.presented = false; manager.dismissed()
-            try await wait("selection preview cancellation") { !manager.selecting && !library.previewingLayout && !library.busy }
-            precondition(SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, layout.raw))
-        }
+    @MainActor static func selectionPreview(_ editor: EditorStore, target: String) async throws {
+        let workspaces = editor.workspaces!
+        let before = try await workspaces.capture(), layout = editor.state["workspace"]["layout"]
+        let active = workspaces.view["id"].string
+        try await workspaces.perform(["type": "open", "page": "workspaces"])
+        precondition(workspaces.view["selected"].string == active)
+        try await workspaces.perform(["type": "select", "id": target])
+        precondition(!SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, layout.raw), "Selecting a row previews its layout")
+        precondition(workspaces.view["id"].string == active)
+        precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw), "Selecting a row must not apply or persist its layout")
+        try await workspaces.perform(["type": "search", "query": "no matching workspace"])
+        precondition(workspaces.view["selected"].isNull && workspaces.view["details"].isNull && workspaces.view["rows"].array.isEmpty)
+        precondition(SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, layout.raw))
+        try await workspaces.perform(["type": "search", "query": ""])
+        precondition(workspaces.view["selected"].isNull && !workspaces.view["rows"].array.isEmpty)
+        workspaces.select(target); workspaces.select(active)
+        try await workspaces.settle("rapid selection")
+        precondition(workspaces.view["selected"].string == active)
+        workspaces.select(target)
+        try await workspaces.perform(["type": "dismiss"])
+        precondition(SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, layout.raw))
     }
     @MainActor static func liveHistory(_ editor: EditorStore, platform: UInt32) async throws {
-        let manager = editor.workspaceManager, library = editor.workspaceLibrary!
-        let id = library.status["active_id"].string
-        let before = try await captureSession(editor)
+        let workspaces = editor.workspaces!
+        let id = workspaces.view["id"].string
+        let before = try await workspaces.capture()
         let document = editor.state["layers"].stableKey
-        let current = before["capture"]["history"]["current"].string
-        let revisions = before["capture"]["history"]["revisions"].object
+        let current = before["history"]["current"].string
+        let revisions = before["history"]["revisions"].object
         let earlier = revisions.keys.first { key in
             key != current && !SnapshotProjection.equal(JSON(revisions[key]!)["layout"].raw, JSON(revisions[current]!)["layout"].raw)
         }!
-        try await manager.run(JSON(["type": "history", "value": id]))
-        precondition(library.previewingLayout && library.busy && manager.history["selected"].string == current)
-        try await manager.refreshHistory(earlier)
-        let preview = try await captureSession(editor)
-        precondition(SnapshotProjection.equal(preview["capture"].raw, before["capture"].raw), "Preview must never enter the durable capture")
+        func browse() async throws {
+            try await workspaces.perform(["type": "action", "action": ["type": "history", "value": id]])
+            precondition(workspaces.page == "history" && workspaces.view["selected"].string == current)
+            try await workspaces.perform(["type": "select", "id": earlier])
+        }
+        try await browse()
+        precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw), "Preview must never enter the durable capture")
         precondition(!SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, JSON(revisions[current]!)["layout"].raw))
         precondition(editor.state["layers"].stableKey == document)
-        try await capture(manager, platform: platform, phase: "history")
-        manager.presented = false; manager.dismissed()
-        try await wait("history cancellation") { !library.previewingLayout && !library.busy }
-        let canceled = try await captureSession(editor)
-        precondition(SnapshotProjection.equal(canceled["capture"].raw, before["capture"].raw))
-        try await manager.run(JSON(["type": "history", "value": id]))
-        try await manager.refreshHistory(earlier)
-        library.suspend()
-        precondition(!manager.presented && library.readOnly)
-        try await wait("suspended history cancellation") { !library.previewingLayout && !library.busy }
-        try await library.resume()
-        let resumed = try await captureSession(editor)
-        precondition(SnapshotProjection.equal(resumed["capture"].raw, before["capture"].raw))
-        try await manager.run(JSON(["type": "history", "value": id]))
-        try await manager.refreshHistory(earlier)
-        manager.historyAction()
-        try await wait("history restoration") { !manager.presented && !library.busy && !manager.processing }
-        let restored = try await captureSession(editor)
-        precondition(restored["capture"]["history"]["undo"].array.count == before["capture"]["history"]["undo"].array.count + 1)
-        precondition(SnapshotProjection.equal(restored["capture"]["working"].raw, before["capture"]["working"].raw))
-        precondition(library.status["active_id"].string == id && editor.state["layers"].stableKey == document)
+        try await capture(workspaces, platform: platform, phase: "history")
+        try await workspaces.perform(["type": "dismiss"])
+        precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw))
+        try await browse()
+        workspaces.suspend()
+        try await wait("suspended history cancellation") { !workspaces.presented && !workspaces.busy }
+        workspaces.resume()
+        try await workspaces.settle()
+        precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw))
+        try await browse()
+        try await workspaces.perform(["type": "confirm"])
+        precondition(!workspaces.presented)
+        let restored = try await workspaces.capture()
+        precondition(restored["history"]["undo"].array.count == before["history"]["undo"].array.count + 1)
+        precondition(SnapshotProjection.equal(restored["working"].raw, before["working"].raw))
+        precondition(workspaces.view["id"].string == id && editor.state["layers"].stableKey == document)
         try await editor.apply(["type": "invoke", "command": "undo_workspace"])
-        let undone = try await captureSession(editor)
-        precondition(undone["capture"]["history"]["current"].string == current)
-        try await manager.show("workspaces")
+        precondition(try await workspaces.capture()["history"]["current"].string == current)
     }
     @MainActor static func startingLayoutPreview(_ editor: EditorStore) async throws {
-        let library = editor.workspaceLibrary!, manager = editor.workspaceManager
-        let id = library.status["active_id"].string
-        let before = try await captureSession(editor)
+        let workspaces = editor.workspaces!
+        let id = workspaces.view["id"].string
+        let before = try await workspaces.capture()
         let original = editor.state["workspace"]["layout"].stableKey
         let layers = editor.state["layers"].stableKey
-        let item = try await library.read(["type": "load", "id": id])
-        let baseline = item["entity"]["content"]["baseline"]
-        precondition(!baseline.isNull && baseline.stableKey != original)
+        var baseline = ""
         for response in ["cancel", "dismiss", "restore"] {
-            manager.presented = false
-            let task = Task { @MainActor in try await manager.run(JSON(["type": "reset", "value": id])) }
-            try await wait("starting layout confirmation") { manager.prompt != nil }
-            precondition(library.previewingLayout && library.busy)
-            precondition(manager.prompt?["confirm"].string == "Restore")
-            precondition(editor.state["workspace"]["layout"].stableKey == baseline.stableKey,
-                "The starting layout must be visible before its confirmation")
-            let preview = try await captureSession(editor)
-            precondition(SnapshotProjection.equal(preview["capture"].raw, before["capture"].raw),
+            try await workspaces.perform(["type": "form", "action": ["type": "reset", "value": id]])
+            precondition(workspaces.view["prompt"]["confirm"].string == "Restore")
+            baseline = editor.state["workspace"]["layout"].stableKey
+            precondition(baseline != original, "The starting layout must be visible before its confirmation")
+            precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw),
                 "Starting-layout preview must not enter persistence or history")
             precondition(editor.state["layers"].stableKey == layers)
-            if response == "dismiss" { manager.presented = false; manager.dismissed() }
-            else { manager.answer(confirm: response == "restore") }
-            try await task.value
-            precondition(!library.previewingLayout && !library.busy && !manager.presented)
+            if response == "cancel" { workspaces.cancelPrompt() }
+            else if response == "dismiss" { workspaces.dismiss() }
+            else { workspaces.submit() }
+            try await workspaces.settle()
+            precondition(!workspaces.presented)
             if response != "restore" {
                 precondition(editor.state["workspace"]["layout"].stableKey == original)
-                let canceled = try await captureSession(editor)
-                precondition(SnapshotProjection.equal(canceled["capture"].raw, before["capture"].raw))
+                precondition(SnapshotProjection.equal(try await workspaces.capture().raw, before.raw))
             }
         }
-        let restored = try await captureSession(editor)
-        precondition(editor.state["workspace"]["layout"].stableKey == baseline.stableKey)
-        precondition(restored["capture"]["history"]["undo"].array.count == before["capture"]["history"]["undo"].array.count + 1)
-        precondition(SnapshotProjection.equal(restored["capture"]["working"].raw, before["capture"]["working"].raw))
+        let restored = try await workspaces.capture()
+        precondition(editor.state["workspace"]["layout"].stableKey == baseline)
+        precondition(restored["history"]["undo"].array.count == before["history"]["undo"].array.count + 1)
+        precondition(SnapshotProjection.equal(restored["working"].raw, before["working"].raw))
         try await editor.apply(["type": "invoke", "command": "undo_workspace"])
         precondition(editor.state["workspace"]["layout"].stableKey == original)
         try await editor.apply(["type": "invoke", "command": "redo_workspace"])
-        precondition(editor.state["workspace"]["layout"].stableKey == baseline.stableKey)
+        precondition(editor.state["workspace"]["layout"].stableKey == baseline)
         precondition(editor.state["layers"].stableKey == layers)
     }
-
-    @MainActor static func captureSession(_ store: EditorStore) async throws -> JSON {
-        try await withCheckedThrowingContinuation { continuation in
-            store.native!.workspaceSession(JSON(["type": "capture"])) { value, error in
-                DispatchQueue.main.async {
-                    if let error { continuation.resume(throwing: HostFailure(message: error)) }
-                    else { continuation.resume(returning: value ?? JSON()) }
-                }
+    @MainActor static func toolbarActions(_ editor: EditorStore) async throws {
+        let workspaces = editor.workspaces!
+        try await workspaces.answer(["type": "new_toolbar", "value": NSNull()], name: "Ink Tools")
+        try await workspaces.perform(["type": "open", "page": "this_workspace"])
+        let toolbar = workspaces.view["rows"].array.first { $0["title"].string == "Ink Tools" }!
+        let panel = try JSON.decode(toolbar["id"].string)
+        try await workspaces.answer(["type": "save_toolbar", "value": panel.raw], name: "Saved Ink")
+        try await workspaces.perform(["type": "open", "page": "toolbar_library"])
+        let savedToolbar = workspaces.view["rows"].array.first { $0["title"].string == "Saved Ink" }!["id"].string
+        try await workspaces.perform(["type": "action", "action": ["type": "add_toolbar", "value": savedToolbar]])
+        try await workspaces.answer(["type": "replace_toolbar", "value": panel.raw], choice: savedToolbar)
+        try await workspaces.answer(["type": "update_toolbar", "value": savedToolbar], choice: panel.stableKey)
+        for action in ["rename_toolbar", "duplicate_toolbar", "delete_toolbar"] {
+            try await workspaces.perform(["type": "open", "page": "this_workspace"])
+            try await workspaces.perform(["type": "action", "action": ["type": action, "value": panel.raw]])
+            precondition(!workspaces.presented)
+            try await wait("shared toolbar prompt") { !editor.snapshot["toolbar_prompt"].isNull }
+            if action == "delete_toolbar" {
+                precondition(editor.snapshot["toolbar_prompt"]["message"].string.contains(workspaces.view["name"].string))
+            } else {
+                try await editor.apply(["type": "customize", "action": ["type": "toolbar_name", "name": action == "rename_toolbar" ? "Renamed Ink" : "Copied Ink"]])
             }
+            try await editor.apply(["type": "customize", "action": ["type": "confirm_toolbar"]])
+            precondition(editor.snapshot["toolbar_prompt"].isNull)
+            try await workspaces.flushed()
+            try await workspaces.perform(["type": "open", "page": "this_workspace"])
+            let titles = workspaces.view["rows"].array.map { $0["title"].string }
+            precondition(action == "rename_toolbar" ? titles.contains("Renamed Ink")
+                : action == "duplicate_toolbar" ? titles.contains("Copied Ink") : !titles.contains("Renamed Ink"))
         }
+        try await workspaces.perform(["type": "dismiss"])
     }
-    @MainActor static func capture(_ manager: WorkspaceManager, platform: UInt32, phase: String) async throws {
-        guard let path = ProcessInfo.processInfo.environment["CAPY_WORKSPACE_CAPTURES"], let library = manager.library else { return }
+    @MainActor static func invalidPackage(_ workspaces: WorkspaceController, root: URL) async throws {
+        let destination = root.appendingPathComponent("broken.capytoolbar")
+        let bytes = Data("broken package".utf8)
+        try bytes.write(to: destination)
+        workspaces.openURL(destination, kind: .toolbar)
+        try await wait("invalid external toolbar import") { workspaces.error != nil && !workspaces.busy }
+        precondition(try Data(contentsOf: destination) == bytes, "Import must not modify the opened package")
+        workspaces.dismiss()
+        workspaces.send(["type": "cancel"])
+        try await workspaces.settle()
+    }
+    @MainActor static func capture(_ workspaces: WorkspaceController, platform: UInt32, phase: String) async throws {
+        guard let path = ProcessInfo.processInfo.environment["CAPY_WORKSPACE_CAPTURES"] else { return }
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         _ = NSApplication.shared
@@ -325,7 +263,7 @@ import SwiftUI
                 window.isReleasedWhenClosed = false
                 window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                 defer { window.close() }
-                let host = NSHostingView(rootView: WorkspaceManagerView(manager: manager, library: library)
+                let host = NSHostingView(rootView: WorkspaceManagerView(workspaces: workspaces)
                     .environment(\.colorScheme, dark ? .dark : .light)
                     .frame(width: size.width, height: size.height).background(Color(nsColor: .windowBackgroundColor)))
                 window.contentView = host
@@ -337,23 +275,5 @@ import SwiftUI
                 try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent(name))
             }
         }
-    }
-    @MainActor static func packageDelivery(editor: EditorStore, root: URL, toolbar: String) async throws {
-        let destination = root.appendingPathComponent("shared.capytoolbar")
-        let package = try await editor.workspaceLibrary!.read(["type": "export", "id": toolbar])
-        let bytes = Data(package["text"].string.utf8)
-        try bytes.write(to: destination)
-        let manager = WorkspaceManager(store: editor)
-        manager.openURL(destination, kind: .toolbar)
-        try await wait("external toolbar import") { manager.selection != nil && !manager.processing || manager.error != nil }
-        precondition(manager.error == nil, manager.error ?? "")
-        precondition(manager.selection != toolbar && manager.page == "toolbar_library")
-        let count = manager.view["rows"].array.count
-        let unchanged = try Data(contentsOf: destination)
-        precondition(unchanged == bytes)
-        try Data("broken package".utf8).write(to: destination)
-        manager.openURL(destination, kind: .toolbar)
-        try await wait("invalid external toolbar import") { manager.error != nil && !manager.processing }
-        precondition(manager.view["rows"].array.count == count)
     }
 }

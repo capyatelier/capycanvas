@@ -23,15 +23,15 @@ import SwiftUI
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-header-controls-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root))
-            let library = store.workspaceLibrary!
+            let workspaces = store.workspaces!
             let status = SystemStatus(source: HeaderBattery(), now: { Date(timeIntervalSince1970: 1_700_000_000) })
             // Invisible AppKit windows do not activate scene subscriptions.
             // Feed the real status view through its ordinary observable model.
             let subscription = status.acquire()
             defer { status.release(subscription) }
             let deadline = Date().addingTimeInterval(20)
-            while store.state.isNull || store.catalog.isNull || !library.ready {
-                if let error = library.error { throw HostFailure(message: error) }
+            while store.state.isNull || store.catalog.isNull || !workspaces.ready {
+                if let error = workspaces.error { throw HostFailure(message: error) }
                 guard Date() < deadline else { throw HostFailure(message: "Header owner startup timed out") }
                 try await Task.sleep(for: .milliseconds(5))
             }
@@ -43,8 +43,8 @@ import SwiftUI
                     }
                 }
             }
-            for workspace in library.status["default_workspaces"].array {
-                try await store.workspaceManager.run(JSON(["type": "switch", "value": workspace["id"].raw]))
+            for workspace in try await workspaces.workspaceRows() {
+                try await workspaces.perform(["type": "switch", "id": workspace["id"].string])
                 for width: CGFloat in [744, 1200] {
                     store.native?.resize(width: UInt32(width), height: 870, scale: 1)
                     for theme in ["light", "dark"] {
@@ -81,7 +81,7 @@ import SwiftUI
                                 precondition(status.battery?.percent == 85)
                                 guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { throw HostFailure(message: "No header bitmap") }
                                 window.appearance?.performAsCurrentDrawingAppearance { host.cacheDisplay(in: host.bounds, to: bitmap) }
-                                let name = "\(platform)-\(workspace["name"].string.lowercased())-\(Int(width))-\(theme)-\(size)-\(paper ? "paper" : "surround")"
+                                let name = "\(platform)-\(workspace["title"].string.lowercased())-\(Int(width))-\(theme)-\(size)-\(paper ? "paper" : "surround")"
                                 try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent("native-\(name).png"))
                                 let elements = geometry.frames.mapValues { JSON($0).raw }
                                 let expected = store.header.geometry["items"].array

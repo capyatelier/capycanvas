@@ -1,5 +1,5 @@
-// Exercise the real Swift lifecycle coordinator with temporary native SQLite
-// storage. No visible window or system-menu automation is needed.
+// Exercise the shared workspace controller through the Apple editor lifecycle
+// with temporary native SQLite storage. No visible window or menu automation.
 import Foundation
 import SQLite3
 
@@ -11,196 +11,156 @@ import SQLite3
             let scene = UUID().uuidString, otherScene = UUID().uuidString
             let storage = EditorPersistence(root: root)
             let first = EditorStore(platform: platform, scene: scene, persistence: storage, managedWorkspaces: true)
-            let manager = first.workspaceLibrary!
-            // Scene activation can arrive before asynchronous startup finishes.
-            manager.suspend()
-            try await manager.resume()
-            try await wait("managed startup: \(manager.error ?? "")") { manager.ready || manager.error != nil }
-            precondition(manager.ready, manager.error ?? "Startup failed")
-            precondition(!manager.readOnly, "Startup must honor the latest active scene state")
-            let original = manager.status["active_id"].string
+            let workspaces = first.workspaces!
+            workspaces.suspend()
+            workspaces.resume()
+            try await workspaces.started()
+            try await editable(first, 31)
+            let original = workspaces.view["id"].string
             precondition(!original.isEmpty)
             try await first.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
             try await first.apply(["type": "invoke", "command": "zen_mode"])
             precondition(first.state["workspace"]["zen_mode"].bool)
-            let initial = try await manager.read(["type": "view", "page": "workspaces", "query": "", "idle": true])
-            precondition(initial["rows"].array.count == 3, "Initialize only the shared default workspaces")
+            precondition(try await workspaces.workspaceRows().count == 3, "Initialize only the shared default workspaces")
             try await first.apply(["type": "set_brush_size", "value": 73])
             try await first.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": true]])
-            try await manager.flush()
-            // Switching immediately after accepted edits must capture them,
-            // without waiting for the autosave timer or restoring stale tools.
+            try await workspaces.flushed()
             try await first.apply(["type": "set_brush_size", "value": 87])
-            _ = try await manager.operation(["type": "new", "name": "Clean"])
-            let clean = manager.status["active_id"].string
+            try await workspaces.create("Clean")
+            let clean = workspaces.view["id"].string
             precondition(clean != original && first.state["brush"]["diameter"].number == 87)
             try await first.apply(["type": "set_brush_size", "value": 44])
-            _ = try await manager.operation(["type": "switch", "id": original])
+            try await workspaces.perform(["type": "switch", "id": original])
             precondition(first.state["brush"]["diameter"].number == 87)
+            try await workspaces.perform(["type": "form", "action": ["type": "new"]])
+            workspaces.formName = "Clean"; workspaces.submit()
+            try await wait("conflicting name") { workspaces.error != nil }
+            workspaces.cancelPrompt()
+            try await wait("failure unlock") { !workspaces.busy && workspaces.view["prompt"].isNull }
+            precondition(workspaces.view["id"].string == original)
+            try await first.apply(["type": "set_brush_size", "value": 91])
+            try await workspaces.flushed()
+            workspaces.suspend()
+            try await wait("suspension") { !workspaces.busy }
             do {
-                _ = try await manager.operation(["type": "new", "name": "Clean"])
-                preconditionFailure("A conflicting workspace name must fail")
-            } catch { precondition(manager.status["active_id"].string == original && !manager.busy) }
-            try await first.apply(["type": "set_brush_size", "value": 91]) // Failure released the interaction lock.
-            let autosaveDeadline = Date().addingTimeInterval(10)
-            while true {
-                let saved = try await manager.read(["type": "load", "id": original])
-                let working = saved["entity"]["working"]
-                let preset = String(working["preset"].uint)
-                if working["tools"]["overrides"][preset]["size"].number == 91 { break }
-                guard Date() < autosaveDeadline else { throw HostFailure(message: "Autosave did not persist the latest brush setting") }
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            // Flush serializes with any already scheduled autosave.
-            try await manager.flush()
-            manager.suspend()
-            precondition(manager.readOnly)
-            try await manager.resume()
-            precondition(!manager.readOnly && first.state["brush"]["diameter"].number == 91)
-            // Drain storage work queued by suspension, then verify the Rust
-            // editor is writable too; the Swift readOnly flag is not enough.
-            try await manager.flush()
-            do { try await first.apply(["type": "set_brush_size", "value": 91]) }
-            catch { throw HostFailure(message: "A resumed workspace must remain editable: \(error.localizedDescription)") }
-            try await libraryActions(manager, editor: first)
-            try await ownershipAndStorage(manager, editor: first, root: root, scene: scene, platform: platform)
+                try await first.apply(["type": "set_brush_size", "value": 92])
+                preconditionFailure("A suspended workspace must reject editor changes")
+            } catch { precondition(first.state["brush"]["diameter"].number == 91) }
+            workspaces.resume()
+            try await editable(first, 91)
+            try await libraryActions(workspaces, editor: first)
+            try await ownershipAndStorage(workspaces, editor: first, root: root, scene: scene, platform: platform)
             let second = EditorStore(platform: platform, scene: otherScene, persistence: storage, managedWorkspaces: true)
-            try await wait("second scene") { second.workspaceLibrary!.ready || second.workspaceLibrary!.error != nil }
-            precondition(second.workspaceLibrary!.ready, second.workspaceLibrary!.error ?? "Second scene failed")
-            precondition(second.workspaceLibrary!.status["active_id"].string != original)
-            try await manager.close()
-            // Reopening restores the SQLite scene binding.
+            try await second.workspaces!.started("second scene")
+            precondition(second.workspaces!.view["id"].string != original)
+            try await workspaces.closed()
             let reopened = EditorStore(platform: platform, scene: scene, persistence: storage, managedWorkspaces: true)
-            try await wait("reopened scene") { reopened.workspaceLibrary!.ready || reopened.workspaceLibrary!.error != nil }
-            let restored = reopened.workspaceLibrary!
-            precondition(restored.ready, restored.error ?? "Reopen failed")
-            precondition(restored.status["active_id"].string == original && reopened.state["brush"]["diameter"].number == 91)
-            let rows = try await restored.read(["type": "view", "page": "workspaces", "query": "", "idle": true])
-            precondition(rows["rows"].array.count == 4, "Scene restoration must not create an unused workspace beside another live window")
-            try await restored.close(); try await second.workspaceLibrary!.close()
-            // Corruption of the current database must still surface an error
-            // without replacing the artist's file with a fresh library.
+            let restored = reopened.workspaces!
+            try await restored.started("reopened scene")
+            precondition(restored.view["id"].string == original && reopened.state["brush"]["diameter"].number == 91)
+            precondition(try await restored.workspaceRows().count == 4,
+                "Scene restoration must not create an unused workspace beside another live window")
+            try await restored.closed(); try await second.workspaces!.closed()
             let badRoot = root.appendingPathComponent("corrupt-library")
             try FileManager.default.createDirectory(at: badRoot, withIntermediateDirectories: false)
             let badFile = badRoot.appendingPathComponent("workspaces.sqlite3")
             let badData = Data("invalid SQLite data".utf8)
             try badData.write(to: badFile)
             let blocked = EditorStore(platform: platform, persistence: EditorPersistence(root: badRoot))
-            try await wait("corrupt database error") {
-                blocked.failure != nil || blocked.workspaceLibrary?.error != nil
-            }
-            precondition(blocked.workspaceLibrary?.ready != true)
-            let preserved = try Data(contentsOf: badFile)
-            precondition(preserved == badData)
-            print("PASS: platform \(platform), SQLite startup, scene ownership, latest-edit switching, failure unlock, resume and restart")
+            try await wait("corrupt database error") { blocked.failure != nil || blocked.workspaces?.error != nil }
+            precondition(blocked.workspaces?.ready != true)
+            precondition(try Data(contentsOf: badFile) == badData, "A corrupt library must not be replaced")
+            print("PASS: platform \(platform), SQLite startup, scene restoration, latest-edit switching, failure unlock, suspension, ownership recovery and restart")
         }
     }
-    @MainActor static func ownershipAndStorage(_ manager: WorkspaceLibrary, editor: EditorStore,
+    @MainActor static func editable(_ editor: EditorStore, _ size: Double) async throws {
+        var accepted = false
+        try await wait("editable workspace", step: {
+            accepted = (try? await editor.apply(["type": "set_brush_size", "value": size])) != nil
+        }) { accepted }
+    }
+    @MainActor static func ownershipAndStorage(_ workspaces: WorkspaceController, editor: EditorStore,
         root: URL, scene: String, platform: UInt32) async throws {
-        try await manager.flush()
-        let original = manager.status["active_id"].string
+        try await workspaces.flushed()
+        let original = workspaces.view["id"].string
         let database = try TestWorkspaceDatabase(root: root)
         try database.execute("BEGIN IMMEDIATE")
-        // This lock belongs to the fixture, not the app's storage connection.
-        // Keep it until the editor has served another edit/query and the save
-        // is observably still pending, with an emergency deadline for failures.
         let emergency = Task { @MainActor in
             try await Task.sleep(for: .seconds(3))
             try database.execute("ROLLBACK")
         }
         try await editor.apply(["type": "set_brush_size", "value": 93])
-        var completed = false
-        let saving = Task { @MainActor in try await manager.flush(); completed = true }
-        try await wait("save waiting for storage") { manager.status["dirty"].bool }
+        try await wait("save waiting for storage") { workspaces.view["saving"].bool }
         let started = ContinuousClock.now
         try await editor.apply(["type": "set_brush_size", "value": 94])
         let queried: JSON = await withCheckedContinuation { continuation in
             editor.query(["type": "catalog"]) { continuation.resume(returning: $0) }
         }
-        precondition(!queried.isNull && !completed && started.duration(to: .now) < .seconds(1),
+        precondition(!queried.isNull && workspaces.view["saving"].bool && started.duration(to: .now) < .seconds(1),
             "Blocked SQLite storage must leave MainActor and the drawing owner responsive")
-        // Activation can queue behind a save, then become obsolete when the
-        // scene suspends again. Completing that save must not reopen editing.
-        let resuming = Task { @MainActor in try await manager.resume() }
-        try await wait("activation waiting for storage") { manager.readOnly }
-        manager.suspend()
         emergency.cancel()
         try database.execute("ROLLBACK")
-        try await saving.value
-        try await resuming.value
-        try await manager.flush()
-        precondition(manager.readOnly, "A newer suspension must supersede queued activation")
-        do {
-            try await editor.apply(["type": "set_brush_size", "value": 94])
-            preconditionFailure("A suspended workspace must reject editor changes")
-        } catch { precondition(editor.state["brush"]["diameter"].number == 94) }
-        try await manager.resume()
-        try await editor.apply(["type": "set_brush_size", "value": 94])
-        let latest = try await manager.read(["type": "load", "id": original])["entity"]["working"]
-        precondition(latest["tools"]["overrides"][String(latest["preset"].uint)]["size"].number == 94,
-            "A save acknowledgement must not clear edits accepted while storage was blocked")
-        // Retire the native claim without saving the dirty edit, then let
-        // another owner claim it. A suspended owner keeps its kernel lock;
-        // changing a lease timestamp alone cannot simulate ownership loss.
+        try await workspaces.flushed()
         try await editor.apply(["type": "set_brush_size", "value": 95])
-        await manager.detach()
+        workspaces.suspend()
+        try await wait("released claim") { !workspaces.busy && !workspaces.view["dirty"].bool }
         let successor = EditorStore(platform: platform, scene: scene,
             persistence: EditorPersistence(root: root), managedWorkspaces: true)
-        try await wait("successor ownership") { successor.workspaceLibrary!.ready || successor.workspaceLibrary!.error != nil }
-        precondition(successor.workspaceLibrary!.ready, successor.workspaceLibrary!.error ?? "Successor failed")
-        precondition(successor.workspaceLibrary!.status["active_id"].string == original)
-        do { try await manager.reopenAfterCancelledClose(); preconditionFailure("A stale owner must not resume editing") }
-        catch { precondition(manager.readOnly && editor.state["brush"]["diameter"].number == 95) }
-        _ = try await manager.operation(["type": "save_as_new", "name": "Ownership Recovery"])
-        let recovered = manager.status["active_id"].string
-        precondition(recovered != original && editor.state["brush"]["diameter"].number == 95)
-        // Resume the recovered independent owner, then return after the other
-        // window closes; its durable workspace must retain its own value.
-        try await manager.resume()
-        try await successor.workspaceLibrary!.close()
-        _ = try await manager.operation(["type": "switch", "id": original])
-        precondition(editor.state["brush"]["diameter"].number == 94)
-        _ = try await manager.operation(["type": "delete", "id": recovered])
+        try await successor.workspaces!.started("successor ownership")
+        precondition(successor.workspaces!.view["id"].string == original)
+        precondition(successor.state["brush"]["diameter"].number == 95, "Suspension must save before releasing the claim")
+        try await successor.apply(["type": "set_brush_size", "value": 96])
+        workspaces.resume()
+        try await wait("stale owner") { workspaces.view["owner_lost"].bool }
+        precondition(workspaces.readOnly && editor.state["brush"]["diameter"].number == 95)
+        try await workspaces.answer(["type": "save_as_new"], name: "Ownership Recovery")
+        let recovered = workspaces.view["id"].string
+        precondition(recovered != original && !workspaces.readOnly && editor.state["brush"]["diameter"].number == 95)
+        try await successor.workspaces!.closed()
+        try await workspaces.perform(["type": "switch", "id": original])
+        precondition(editor.state["brush"]["diameter"].number == 96, "The other window's durable workspace must be adopted")
+        try await workspaces.answer(["type": "delete", "value": recovered])
         try await editor.apply(["type": "set_brush_size", "value": 91])
         let flushed: Bool = await withCheckedContinuation { continuation in
             editor.flushPersistence { continuation.resume(returning: $0) }
         }
-        precondition(flushed, "The editor lifecycle barrier must include workspace storage")
+        precondition(flushed && !workspaces.view["dirty"].bool, "The editor lifecycle barrier must include workspace storage")
     }
-    @MainActor static func libraryActions(_ manager: WorkspaceLibrary, editor: EditorStore) async throws {
-        let original = manager.status["active_id"].string
-        let saved = try await manager.operation(["type": "save_toolbar", "panel": "toolbar", "name": "Studio"])
-        let reusable = saved["selected"].string
-        precondition(!reusable.isEmpty)
-        let before = try await manager.read(["type": "load", "id": reusable])
-        precondition(before["entity"]["working"].isNull)
-        _ = try await manager.operation(["type": "rename", "id": reusable, "name": "Studio Tools", "description": "Independent toolbar"])
-        let renamed = try await manager.read(["type": "load", "id": reusable])
-        precondition(renamed["entity"]["metadata"]["name"].string == "Studio Tools")
-        _ = try await manager.operation(["type": "reset", "id": original])
+    @MainActor static func libraryActions(_ workspaces: WorkspaceController, editor: EditorStore) async throws {
+        let original = workspaces.view["id"].string
+        func saved(_ name: String) async throws -> String {
+            try await workspaces.perform(["type": "open", "page": "toolbar_library"])
+            let id = workspaces.view["rows"].array.first { $0["title"].string == name }?["id"].string
+            try await workspaces.perform(["type": "dismiss"])
+            guard let id else { throw HostFailure(message: "Missing saved toolbar \(name)") }
+            return id
+        }
+        func toolbars() -> [JSON] {
+            editor.state["workspace"]["layout"]["panels"].array.filter { $0["content"]["kind"].string == "toolbar" }
+        }
+        try await workspaces.answer(["type": "save_toolbar", "value": "toolbar"], name: "Studio")
+        let reusable = try await saved("Studio")
+        try await workspaces.answer(["type": "rename", "value": reusable], name: "Studio Tools", description: "Independent toolbar")
+        precondition(try await saved("Studio Tools") == reusable)
+        try await workspaces.answer(["type": "reset", "value": original])
         precondition(editor.state["brush"]["diameter"].number == 91, "Layout reset must preserve current working values")
-        _ = try await manager.operation(["type": "update_toolbar", "id": reusable, "panel": "toolbar"])
-        // Explicit toolbar names reject collisions; ordinary library copies
-        // allocate independent local identities and an available name.
-        let panel = try await manager.installToolbar(name: "Pencil Tools")
-        do {
-            _ = try await manager.installToolbar(name: "Pencil Tools")
-            preconditionFailure("Explicit toolbar name collisions must fail")
-        } catch { precondition(!manager.busy) }
-        let toolbar = try await manager.operation(["type": "save_toolbar", "panel": panel.raw, "name": "Pencil Library"])
-        let toolbarID = toolbar["selected"].string
-        let copy = try await manager.installToolbar(id: toolbarID)
-        precondition(!SnapshotProjection.equal(panel.raw, copy.raw))
-        _ = try await manager.operation(["type": "update_toolbar", "id": toolbarID, "panel": copy.raw])
-        _ = try await manager.installToolbar(id: toolbarID, name: "Replaced Tools", replace: copy)
-        let local = try await manager.read(["type": "view", "page": "this_workspace", "query": "", "selected": panel.stableKey, "idle": true])
-        precondition(local["details"]["title"].string == "Pencil Tools")
-        _ = try await manager.operation(["type": "save_as_new", "name": "Recovered Copy"])
-        let created = manager.status["active_id"].string
+        try await workspaces.answer(["type": "update_toolbar", "value": reusable])
+        try await workspaces.answer(["type": "new_toolbar", "value": NSNull()], name: "Pencil Tools")
+        let count = toolbars().count
+        try await workspaces.perform(["type": "form", "action": ["type": "new_toolbar", "value": NSNull()]])
+        workspaces.formName = "Pencil Tools"; workspaces.submit()
+        try await wait("toolbar name collision") { workspaces.error != nil }
+        workspaces.cancelPrompt()
+        try await wait("collision unlock") { !workspaces.busy && workspaces.view["prompt"].isNull }
+        precondition(toolbars().count == count, "Explicit toolbar name collisions must fail")
+        try await workspaces.perform(["type": "action", "action": ["type": "add_toolbar", "value": reusable]])
+        precondition(toolbars().count == count + 1, "Adding a saved toolbar installs an independent copy")
+        try await workspaces.answer(["type": "save_as_new"], name: "Recovered Copy")
+        let created = workspaces.view["id"].string
         precondition(created != original)
-        _ = try await manager.operation(["type": "switch", "id": original])
+        try await workspaces.perform(["type": "switch", "id": original])
         precondition(editor.state["brush"]["diameter"].number == 91)
-        _ = try await manager.operation(["type": "delete", "id": created])
+        try await workspaces.answer(["type": "delete", "value": created])
     }
 }
 

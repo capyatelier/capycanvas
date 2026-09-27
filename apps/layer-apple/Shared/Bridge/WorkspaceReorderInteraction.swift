@@ -18,7 +18,7 @@ import SwiftUI
     }
     var enabled: Bool {
         guard let store else { return false }
-        return store.failure == nil && !store.workspaceManager.presented
+        return store.failure == nil && store.workspaces?.presented != true
             && workspace?.hasPopover(excluding: popup) != true
             && ["picker", "toolbar_prompt", "toolbar_manager", "preferences"].allSatisfy { store.snapshot[$0].isNull }
             && store.state["customization"]["control"].isNull
