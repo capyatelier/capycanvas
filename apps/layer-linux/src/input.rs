@@ -12,6 +12,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},
     rc::Rc,
+    time::Instant,
 };
 #[path = "tablet_input.rs"]
 mod tablet;
@@ -83,7 +84,7 @@ pub struct Input {
     sequence: Cell<u64>,
     last: Cell<Option<PenEvent>>,
     pending: RefCell<VecDeque<PenEvent>>,
-    deferred_contacts: RefCell<std::collections::BTreeSet<u64>>,
+    deferred_contacts: RefCell<layer_host::contacts::DeferredContacts>,
     touches: RefCell<HashMap<gdk::EventSequence, u64>>,
     touch_points: RefCell<HashMap<u64, [f32; 2]>>,
     next_touch: Cell<u64>,
@@ -703,40 +704,44 @@ impl Input {
             flags: SampleFlags::PRIMARY,
         });
     }
-    pub(crate) fn send(&self, workspace: &Rc<Workspace>, mut event: PenEvent) {
-        #[cfg(test)]
-        let delivered_ns = glib::monotonic_time() as u64 * 1000;
+    pub(crate) fn send(&self, workspace: &Rc<Workspace>, event: PenEvent) {
         if !workspace.workspaces.accepts_input(workspace)
             && !matches!(event.phase, PenPhase::Up | PenPhase::Cancel)
         {
             return;
         }
-        // A contact begun during compilation must not start midway when its
-        // shader becomes ready. Navigation and native controls remain active.
-        let ready = workspace.gpu.borrow().as_ref().is_some_and(|g| {
+        // A contact begun during compilation is held whole until its shaders
+        // are ready. Navigation and native controls remain active.
+        let ready = Self::paint_ready(workspace);
+        let events = self.deferred_contacts.borrow_mut().admit(event, ready, Instant::now());
+        #[cfg(test)]
+        if events.is_empty()
+            && let Some(gpu) = workspace.gpu.borrow().as_ref()
+        {
+            gpu.session.engine().backend().stats.lock().unwrap().pen_routes.push((
+                event.timestamp_ns, format!("{:?}", event.phase), "deferred"));
+        }
+        for event in events {
+            self.deliver(workspace, event);
+        }
+    }
+    fn paint_ready(workspace: &Rc<Workspace>) -> bool {
+        workspace.gpu.borrow().as_ref().is_some_and(|g| {
             let engine = g.session.engine();
             engine.backend().paint_ready(
                 engine.document(),
                 engine.brush(),
                 engine.transform_preview().is_some(),
             )
-        });
-        let mut deferred = self.deferred_contacts.borrow_mut();
-        if event.phase == PenPhase::Down && !ready {
-            deferred.insert(event.device_id);
-        }
-        let blocked = deferred.contains(&event.device_id);
-        if matches!(event.phase, PenPhase::Up | PenPhase::Cancel) {
-            deferred.remove(&event.device_id);
-        }
-        drop(deferred);
+        })
+    }
+    fn deliver(&self, workspace: &Rc<Workspace>, mut event: PenEvent) {
+        #[cfg(test)]
+        let delivered_ns = glib::monotonic_time() as u64 * 1000;
         #[cfg(test)]
         if let Some(gpu) = workspace.gpu.borrow().as_ref() {
             gpu.session.engine().backend().stats.lock().unwrap().pen_routes.push((
-                event.timestamp_ns, format!("{:?}", event.phase), if blocked { "deferred" } else { "send" }));
-        }
-        if blocked {
-            return;
+                event.timestamp_ns, format!("{:?}", event.phase), "send"));
         }
         event.sequence = self.sequence.get() + 1;
         self.sequence.set(event.sequence);
@@ -779,7 +784,7 @@ impl Input {
         }
     }
     pub fn has_pending(&self) -> bool {
-        !self.pending.borrow().is_empty()
+        !self.pending.borrow().is_empty() || !self.deferred_contacts.borrow().is_empty()
     }
     pub fn discard(&self) {
         self.pending.borrow_mut().clear();
@@ -787,6 +792,11 @@ impl Input {
         self.last.set(None);
     }
     pub fn flush(&self, workspace: &Rc<Workspace>) {
+        let ready = Self::paint_ready(workspace);
+        let released = self.deferred_contacts.borrow_mut().release(ready, Instant::now());
+        for event in released {
+            self.deliver(workspace, event);
+        }
         let mut gpu = workspace.gpu.borrow_mut();
         if let Some(gpu) = gpu.as_mut() {
             let mut pending = self.pending.borrow_mut();

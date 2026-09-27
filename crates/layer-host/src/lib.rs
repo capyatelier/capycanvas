@@ -1,5 +1,6 @@
 //! Shared transport facade for native hosts. No UI toolkit or surface ownership.
 //! Call from one engine/render owner; platform callbacks enqueue owned batches.
+pub mod contacts;
 pub mod export;
 pub mod gpu;
 mod header;
@@ -60,7 +61,7 @@ pub struct NativeHost {
     pub sequence: u64,
     pub startup: layer_render_wgpu::StartupProgress,
     pub proof: layer_ui::proof_workflow::ProofView,
-    deferred_contacts: std::collections::BTreeSet<u64>,
+    deferred_contacts: contacts::DeferredContacts,
     last_pen: Option<PenEvent>,
     paint_start_sequence: u64,
     last_snapshot: Option<SnapshotKey>,
@@ -210,6 +211,10 @@ impl NativeHost {
                 .unwrap()
                 .poll_startup()
                 .map_err(|e| e.to_string())?;
+            let ready = self.paint_ready();
+            for event in self.deferred_contacts.release(ready, std::time::Instant::now()) {
+                self.deliver(event)?;
+            }
             if self.startup.canvas_ready {
                 let previous = self.session.state().revision;
                 let change = self.session.frame(now, presentation)?;
@@ -219,7 +224,7 @@ impl NativeHost {
         } else {
             self.session.submit_paper_frame()?;
         }
-        self.dirty |= !self.startup.complete;
+        self.dirty |= !self.startup.complete || !self.deferred_contacts.is_empty();
         Ok(())
     }
     pub fn dispatch(&mut self, action: UiAction) -> Result<(), String> {
@@ -502,7 +507,7 @@ impl NativeHost {
                 // Corrections refer to previously admitted sample tokens and never
                 // enter UI pointer ownership or replace the current cursor.
                 self.sequence += 1;
-                self.enqueue(event)?;
+                self.admit(event)?;
                 continue;
             }
             self.pointer_event_inner(
@@ -584,31 +589,34 @@ impl NativeHost {
             });
             self.dirty = true;
         }
-        if !predicted && phase == PenPhase::Down {
-            if self.paint_ready() {
-                self.deferred_contacts.remove(&id);
-            } else {
-                self.deferred_contacts.insert(id);
-            }
-        }
-        let preparing = self.deferred_contacts.contains(&id);
-        if !predicted && matches!(phase, PenPhase::Up | PenPhase::Cancel) {
-            self.deferred_contacts.remove(&id);
-        }
-        if paint && !preparing && self.session.engine().backend().0.is_some() {
+        if paint && self.session.engine().backend().0.is_some() {
             self.sequence += 1;
-            self.enqueue(event)?;
-            if !predicted && phase == PenPhase::Down {
-                self.paint_start_sequence = self.sequence;
-            }
-            if !predicted {
-                self.last_pen = if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
-                    None
-                } else {
-                    Some(event)
-                };
-            }
+            self.admit(event)?;
         }
+        Ok(())
+    }
+    /// Deliver a paint sample to the engine, or hold its contact until
+    /// painting is ready and then deliver every sample it held.
+    fn admit(&mut self, event: PenEvent) -> Result<(), String> {
+        let ready = self.paint_ready();
+        for event in self.deferred_contacts.admit(event, ready, std::time::Instant::now()) {
+            self.deliver(event)?;
+        }
+        Ok(())
+    }
+    fn deliver(&mut self, event: PenEvent) -> Result<(), String> {
+        self.enqueue(event)?;
+        if event.flags.contains(SampleFlags::PREDICTED) || event.flags.contains(SampleFlags::CORRECTION) {
+            return Ok(());
+        }
+        if event.phase == PenPhase::Down {
+            self.paint_start_sequence = event.sequence;
+        }
+        self.last_pen = if matches!(event.phase, PenPhase::Up | PenPhase::Cancel) {
+            None
+        } else {
+            Some(event)
+        };
         Ok(())
     }
     fn paint_ready(&self) -> bool {
@@ -1713,37 +1721,75 @@ mod tests {
     }
 
     #[test]
-    fn predicted_boundaries_cannot_end_a_deferred_real_contact() {
-        let mut app = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-        app.resize(1600, 1000, 2.0).unwrap();
-        let mut event = PenEvent {
-            device_id: 1,
-            sequence: 99,
-            timestamp_ns: (1u64 << 54) + 1,
-            view_revision: app.session.state().camera.revision,
-            surface_position: Point { x: 400., y: 300. },
-            pressure: 0.5,
-            tilt_radians: [0.1, 0.2],
-            twist_radians: 0.3,
-            distance: 0.,
-            phase: PenPhase::Down,
-            tool: ToolKind::Pen,
-            flags: SampleFlags::PRIMARY,
+    fn a_contact_begun_as_a_transform_opens_is_replayed_whole_once_it_is_prepared() {
+        let reference = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
+        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        host.session = UiSession::from_project(
+            Renderer(Some(gpu.into())),
+            layer_ui::new_drawing(256, 192).unwrap(),
+            None,
+            [640, 480],
+            layer_ui::Platform::Android,
+        )
+        .unwrap();
+        host.startup = Default::default();
+        host.resize(640, 480, 1.).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let clock = std::cell::Cell::new(0);
+        let frame = |host: &mut NativeHost| {
+            clock.set(clock.get() + 8_000_000);
+            host.prepare_canvas_frame(clock.get(), clock.get(), true).unwrap();
+            assert!(std::time::Instant::now() < deadline, "startup timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
         };
-        app.pointer_event(event, PointerButton::Primary).unwrap();
-        assert!(app.deferred_contacts.contains(&1));
-        assert_eq!(app.paint_start_sequence(), 0);
-        event.phase = PenPhase::Up;
-        event.flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::PREDICTED.0);
-        app.pointer_event(event, PointerButton::Primary).unwrap();
-        assert!(app.deferred_contacts.contains(&1));
-        assert_eq!(
-            app.sequence, 0,
-            "Unavailable brushes must not create partial strokes"
+        while !host.startup.complete {
+            frame(&mut host);
+        }
+        for command in [layer_ui::CommandId::SelectAll, layer_ui::CommandId::FillSelection] {
+            host.dispatch(UiAction::Invoke { command }).unwrap();
+            frame(&mut host);
+        }
+        for command in [layer_ui::CommandId::ScaleRotate, layer_ui::CommandId::TransformDistort] {
+            host.dispatch(UiAction::Invoke { command }).unwrap();
+        }
+        let surface = layer_core::Affine(host.session.state().camera.document_to_surface());
+        let view_revision = host.session.state().camera.revision;
+        let [corner, target] = [Point { x: 256., y: 0. }, Point { x: 216., y: 30. }].map(|p| surface.map(p));
+        assert!(!host.paint_ready(), "the transform is not prepared before its first frame");
+        for (step, (phase, at)) in
+            [(PenPhase::Down, corner), (PenPhase::Move, target), (PenPhase::Up, target)].into_iter().enumerate()
+        {
+            let event = PenEvent {
+                device_id: 1,
+                sequence: 0,
+                timestamp_ns: clock.get() + step as u64 * 1_000_000,
+                view_revision,
+                surface_position: at,
+                pressure: 0.5,
+                tilt_radians: [0.; 2],
+                twist_radians: 0.,
+                distance: 0.,
+                phase,
+                tool: ToolKind::Pen,
+                flags: SampleFlags::PRIMARY,
+            };
+            host.pointer_event(event, PointerButton::Primary).unwrap();
+        }
+        assert!(host.deferred_contacts.holds(1), "the contact waits instead of being dropped");
+        while !host.deferred_contacts.is_empty() {
+            frame(&mut host);
+        }
+        frame(&mut host);
+        let map = host.session.engine().transform_preview().unwrap().transform.map.clone();
+        let layer_core::TransformMap::Projective(projective) = map else {
+            panic!("the corner drag distorts: {map:?}");
+        };
+        let moved = projective.map(Point { x: 256., y: 0. }).unwrap();
+        assert!(
+            (moved.x - 216.).abs() < 0.5 && (moved.y - 30.).abs() < 0.5,
+            "the replayed drag moves the corner it grabbed once: {moved:?}"
         );
-        event.flags = SampleFlags::PRIMARY;
-        app.pointer_event(event, PointerButton::Primary).unwrap();
-        assert!(!app.deferred_contacts.contains(&1));
     }
 
     #[test]
