@@ -289,10 +289,45 @@ struct GestureTriggerSections: View {
             Section(section.title) {
                 ForEach(section.rows, id: \.shortcutID) { row in
                     ShortcutNavigationRow(label: row["label"].string, detail: row["detail"].string, value: row["action"].string) {
-                        store.dispatch(["type": "preferences", "action": ["type": "open_action_picker", "trigger": row["id"].string]])
+                        let pen = row["section"].string == "Pen buttons"
+                        store.dispatch(["type": "preferences", "action": pen ? ["type": "edit_pen_button", "trigger": row["id"].string]
+                            : ["type": "open_action_picker", "trigger": row["id"].string]])
                     }.accessibilityIdentifier("trigger-" + row["id"].string)
                 }
             }
+        }
+    }
+}
+
+struct PenButtonPane: View {
+    @ObservedObject var store: EditorStore
+    private var editor: JSON { store.snapshot["preferences"]["pen_button_editor"] }
+    private func action(_ value: [String: Any]) { store.dispatch(["type": "preferences", "action": value]) }
+    var body: some View {
+        VStack(spacing: 0) {
+            PaneHeader(title: editor["label"].string) { action(["type": "close_pen_button"]) }
+            Form {
+                Section {
+                    Toggle("Same for every tool", isOn: Binding(get: { !editor["per_tool"].bool },
+                        set: { action(["type": "pen_button_per_tool", "trigger": editor["trigger"].raw, "per_tool": !$0]) }))
+                        .accessibilityIdentifier("pen-button-same")
+                    ForEach(editor["actions"].array, id: \.categoryKey) { row in
+                        ShortcutNavigationRow(label: row["label"].string, value: row["action"].string) {
+                            action(["type": "open_pen_button_picker", "trigger": editor["trigger"].raw, "category": row["category"].raw])
+                        }.accessibilityIdentifier("pen-button-action-" + (row["category"].isNull ? "all" : row["category"].string))
+                    }
+                } header: {
+                    HStack {
+                        Spacer()
+                        if editor["modified"].bool {
+                            Button("Reset to Default") { action(["type": "reset_trigger", "trigger": editor["trigger"].raw]) }
+                                .accessibilityIdentifier("pen-button-reset")
+                        }
+                    }
+                } footer: {
+                    Text("Tools, brushes and modes last while the button is held. Other actions run once.")
+                }
+            }.formStyle(.grouped)
         }
     }
 }

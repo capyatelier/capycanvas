@@ -114,7 +114,12 @@ private final class TabletEvent: NSEvent {
         }
         func pixels() async throws -> Data {
             try? FileManager.default.removeItem(at: png)
-            try await invoke("export_document")
+            for attempt in 1... {
+                do { try await invoke("export_document"); break } catch let failure as HostFailure
+                    where failure.message == "Finish the canvas interaction first" && attempt < 100 {
+                    store.failure = nil; try await drain(0.02)
+                }
+            }
             try await wait("Committed PNG export") {
                 FileManager.default.fileExists(atPath: png.path) && !store.projectFiles.busy
             }
@@ -343,6 +348,31 @@ private final class TabletEvent: NSEvent {
                 == camera["translation"].array.map(\.number), "A held side button cannot pan the canvas")
             try await invoke("undo")
             let undone = try await pixels(); try require(undone == paper, "One Undo removes the chorded line")
+        }
+        for (button, trigger) in [(1, "pen.button.primary"), (2, "pen.button.secondary")] where platform == 1 {
+            try await invoke("settings")
+            for step: [String: Any] in [["type": "edit_pen_button", "trigger": trigger],
+                ["type": "open_pen_button_picker", "trigger": trigger, "category": NSNull()],
+                ["type": "choose_action", "id": "command.Hand"]] {
+                try await action(["type": "preferences", "action": step])
+            }
+            try await action(["type": "close_settings"])
+            window.setFrame(originalWindow, display: true)
+            let before = store.state["layer_tools"]["tool"].string
+            let tablet = TabletEvent()
+            tablet.nativeButton = button; tablet.force = 0
+            tablet.point = canvas.convert(CGPoint(x: canvas.bounds.midX, y: canvas.bounds.midY), to: nil)
+            tablet.nativeType = button == 1 ? .rightMouseDown : .otherMouseDown
+            if button == 1 { canvas.rightMouseDown(with: tablet) } else { canvas.otherMouseDown(with: tablet) }
+            try await wait("Held \(trigger)") { store.panCursor }
+            tablet.nativeType = button == 1 ? .rightMouseUp : .otherMouseUp
+            if button == 1 { canvas.rightMouseUp(with: tablet) } else { canvas.otherMouseUp(with: tablet) }
+            try await wait("Released \(trigger)") { !store.panCursor }
+            try require(store.state["layer_tools"]["tool"].string == before, "Panning with \(trigger) keeps the tool")
+            try await invoke("settings")
+            try await action(["type": "preferences", "action": ["type": "reset_trigger", "trigger": trigger]])
+            try await action(["type": "close_settings"])
+            window.setFrame(originalWindow, display: true)
         }
         func moveOverCanvas() async throws {
             let point = canvas.convert(CGPoint(x: canvas.bounds.midX, y: canvas.bounds.midY), to: nil)

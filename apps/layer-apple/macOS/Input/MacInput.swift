@@ -48,6 +48,9 @@ import QuartzCore
         // Tablet side buttons arrive as right/other mouse events. They must
         // neither start navigation nor disturb the tip's captured contact.
         if tablet(event), event.buttonNumber != 0 {
+            if phase != 2 {
+                store.input(["type": "pen_button", "button": event.buttonNumber == 1 ? "primary" : "secondary", "pressed": phase == 1])
+            }
             if contact == nil || contact?.chorded == true { tabletPoint(event, chorded: true) }
             return
         }

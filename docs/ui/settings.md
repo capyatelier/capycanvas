@@ -209,10 +209,12 @@ a stroke changes the tool only after the stroke ends, and blur releases it. GTK
 reports Wayland stylus buttons 2, 3 and 8, and tablet pad buttons as
 `pad_button_N` keys when the compositor leaves them to the app. Android reports
 tablet buttons `KEYCODE_BUTTON_1`–`16` as the same `pad_button_N` keys. Web
-reports pointer `buttons` bits 2 and 4. Android reports the stylus primary and secondary buttons. Windows, macOS and
-iPadOS do not show the pen button rows until their hosts deliver the same input.
+reports pointer `buttons` bits 2 and 4. Android reports the stylus primary and secondary buttons. macOS reports a
+tablet pen's right and other mouse buttons as the lower and upper buttons, and
+its eraser end. Windows and iPadOS do not show the pen button or eraser end rows
+until their hosts deliver the same input.
 iPadOS delivers finger taps with native touch timestamps and lists the tap
-rows; macOS and Windows receive no finger contacts and list neither.
+rows; macOS and Windows receive no finger contacts and list no taps.
 
 ## Saving and loading
 

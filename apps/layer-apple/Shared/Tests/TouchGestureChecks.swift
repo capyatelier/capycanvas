@@ -59,9 +59,29 @@ extension XCTestCase {
         expectPixels(paper, in: app)
         #else
         openInputSettings()
-        XCTAssertTrue(app.descendants(matching: .any)["preference-pressure_curve"].firstMatch.waitForExistence(timeout: 10)
-            || app.staticTexts["settings-page-input"].exists)
+        let lower = app.buttons["trigger-pen.button.primary"]
+        let list = app.scrollViews.containing(.any, identifier: "preference-cursor").firstMatch
+        for _ in 0..<12 where !lower.isHittable { list.scroll(byDeltaX: 0, deltaY: -200) }
+        XCTAssertTrue(lower.waitForExistence(timeout: 10), "Pen & Input lists tablet side buttons on macOS")
         XCTAssertFalse(trigger.exists, "macOS delivers no finger taps")
+        workspaceActivate(lower)
+        let all = app.buttons["pen-button-action-all"]
+        XCTAssertTrue(all.waitForExistence(timeout: 10), "A side button opens its per-tool page")
+        attachEditor(in: app, name: "pen-button-page")
+        workspaceActivate(all)
+        let search = app.textFields["action-picker-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        workspaceActivate(search); search.typeText("Pan")
+        let hand = app.buttons["action-command.Hand"]
+        XCTAssertTrue(hand.waitForExistence(timeout: 10))
+        workspaceActivate(hand)
+        XCTAssertTrue(hand.waitForNonExistence(timeout: 10))
+        let reset = app.buttons["pen-button-reset"]
+        XCTAssertTrue(reset.waitForExistence(timeout: 10), "A bound side button offers Reset")
+        workspaceActivate(reset)
+        XCTAssertTrue(reset.waitForNonExistence(timeout: 10))
+        workspaceActivate(app.buttons["settings-back"])
+        XCTAssertTrue(lower.waitForExistence(timeout: 10))
         closeSettings()
         #endif
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

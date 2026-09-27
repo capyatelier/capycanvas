@@ -182,7 +182,7 @@ fn tap_bindings_are_configurable_and_validated() {
     assert_eq!(serde_json::from_value::<Settings>(saved).unwrap(), settings);
     assert!(serde_json::to_value(Settings::default()).unwrap().get("gestures").is_none());
     let triggers = |platform| crate::shortcut_page::triggers(platform).map(|t| t.id).collect::<Vec<_>>();
-    assert!(triggers(Platform::Mac).is_empty());
+    assert_eq!(triggers(Platform::Mac), ["pen.button.primary", "pen.button.secondary"], "macOS reports tablet side buttons, not finger taps");
     assert_eq!(triggers(Platform::Ios), ["touch.tap.2", "touch.tap.3", "touch.tap.4"], "iPadOS reports finger taps, not pen buttons");
     assert_eq!(triggers(Platform::Android).len(), 5, "only Linux reports a third side button");
     assert_eq!(triggers(Platform::Gtk).len(), 6);

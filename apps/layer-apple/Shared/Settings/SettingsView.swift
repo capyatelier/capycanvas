@@ -68,6 +68,8 @@ struct SettingsView: View {
             }
         } else if model["page"].string == "shortcuts" {
             ShortcutSettingsView(store: store)
+        } else if model["page"].string == "input" && !model["pen_button_editor"].isNull {
+            PenButtonPane(store: store)
         } else {
             ScrollViewReader { scroll in
                 Form {

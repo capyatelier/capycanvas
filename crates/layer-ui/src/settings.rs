@@ -30,7 +30,7 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Ios)
     }
     pub fn pen_buttons(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android)
+        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Mac)
     }
     pub fn system_accent(self) -> bool {
         matches!(self, Self::Gtk | Self::Android | Self::Windows | Self::Mac)
