@@ -1,32 +1,12 @@
 //! Canvas action bar journeys with real Mutter mouse and touch delivery.
 use super::*;
-use serde_json::{Value, json};
-use std::path::PathBuf;
+use serde_json::json;
 
-struct Native {
-    dir: PathBuf,
-    step: usize,
-}
-impl Native {
-    fn start() -> Self {
-        let dir = PathBuf::from(std::env::var_os("LAYER_NATIVE_INPUT_DIR").unwrap());
-        std::fs::write(dir.join("ready"), b"ready").unwrap();
-        pump(300);
-        Self { dir, step: 0 }
-    }
-    fn events(&mut self, events: Value) {
-        std::fs::write(
-            self.dir.join(format!("step-{}.json", self.step)),
-            serde_json::to_vec(&events).unwrap(),
-        )
-        .unwrap();
-        until(
-            || self.dir.join(format!("done-{}", self.step)).exists(),
-            "native input acknowledgement",
-        );
-        self.step += 1;
-        pump(150);
-    }
+fn remote_input() -> RemoteInput {
+    let input = RemoteInput::new().settle_ms(150).timeout_secs(30);
+    input.ready();
+    pump(300);
+    input
 }
 
 fn until_some<T>(mut find: impl FnMut() -> Option<T>, message: &str) -> T {
@@ -141,9 +121,9 @@ fn native_canvas_bar_input() {
         || kind(&w) == Some(layer_ui::CanvasBarKind::Selection) && shown(&w),
         "the selection bar appears beside the new selection",
     );
-    let mut native = Native::start();
+    let mut native = remote_input();
     let transform = bar_widget(&w, "canvas-bar-ScaleRotate");
-    native.events(json!([{"point": center(&w, &transform)}, {"down": true}, {"down": false}]));
+    native.click(center(&w, &transform));
     until(
         || kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && shown(&w),
         "Transform on the selection bar opens the transform bar",
@@ -178,20 +158,20 @@ fn native_canvas_bar_input() {
         child.expect("mode segment")
     };
     assert!(!aspect(&w));
-    native.events(json!([{"point": center(&w, &segment(1))}, {"down": true}, {"down": false}]));
+    native.click(center(&w, &segment(1)));
     until(|| aspect(&w), "a mouse click on Uniform keeps proportions");
     let point = center(&w, &segment(0));
-    native.events(json!([
+    native.perform(json!([
         {"touch": "down", "point": point}, {"wait_ms": 40}, {"touch": "up"}
     ]));
     until(|| !aspect(&w), "a finger tap on Free releases them");
     assert!(transforming(&w));
     assert_eq!(revision(), before, "bar taps never paint or commit");
     let perspective = |w: &Workspace| find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-TransformPerspective").is_some();
-    native.events(json!([{"point": center(&w, &segment(2))}, {"down": true}, {"down": false}]));
+    native.click(center(&w, &segment(2)));
     until(|| perspective(&w), "Distort offers Perspective");
     let corner = [anchor[2], anchor[3]];
-    native.events(json!([
+    native.perform(json!([
         {"point": corner}, {"down": true}, {"wait_ms": 40},
         {"point": [corner[0] + 30., corner[1] + 15.]}, {"wait_ms": 20},
         {"point": [corner[0] + 60., corner[1] + 30.]}, {"wait_ms": 20}, {"down": false}
@@ -206,10 +186,10 @@ fn native_canvas_bar_input() {
     capture_reference(&w, &format!("{dir}/distort.png"), 1.);
     let selected = |w: &Workspace, id: CommandId| state(w).commands.iter().any(|c| c.id == id && c.selected);
     assert!(selected(&w, CommandId::TransformBicubic), "Distort resamples with Bicubic");
-    let press = |native: &mut Native, widget: &gtk::Widget| {
-        native.events(json!([{"point": center(&w, widget)}, {"down": true}, {"down": false}]));
+    let press = |native: &mut RemoteInput, widget: &gtk::Widget| {
+        native.click(center(&w, widget));
     };
-    let from_more = |native: &mut Native, labels: &[&str]| {
+    let from_more = |native: &mut RemoteInput, labels: &[&str]| {
         press(native, &bar_widget(&w, "canvas-bar-more"));
         for label in labels {
             let item = until_some(|| mapped_label(w.canvas_bar.root.upcast_ref(), label), label);
@@ -237,12 +217,12 @@ fn native_canvas_bar_input() {
     );
     assert_eq!(revision(), before, "distorting and resetting never commit");
     let inside = [(anchor[0] + anchor[2]) * 0.5, (anchor[1] + anchor[3]) * 0.5];
-    native.events(json!([
+    native.perform(json!([
         {"point": inside}, {"down": true}, {"wait_ms": 40},
         {"point": [inside[0] + 40., inside[1] + 20.]}
     ]));
     assert!(w.canvas_bar.visible_bounds().is_none(), "the bar hides during a canvas drag");
-    native.events(json!([{"down": false}]));
+    native.perform(json!([{"down": false}]));
     until(|| w.canvas_bar.visible_bounds().is_some(), "the bar returns after the drag");
     let moved = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
     let shift = moved.x() - bar.x();
@@ -251,9 +231,9 @@ fn native_canvas_bar_input() {
         "the bar follows the moved box, clamped to the work area: {bar:?} -> {moved:?}"
     );
     let more = bar_widget(&w, "canvas-bar-more");
-    native.events(json!([{"point": center(&w, &more)}, {"down": true}, {"down": false}]));
+    native.click(center(&w, &more));
     until(|| w.canvas_bar.menu_open(), "More opens its menu");
-    native.events(json!([{"key": 0xff1b, "down": true}, {"key": 0xff1b, "down": false}]));
+    native.key(0xff1b);
     until(|| !w.canvas_bar.menu_open(), "Escape closes the menu first");
     assert!(transforming(&w), "opening and closing More keeps the transform");
     w.interact(UiInput::Blur);
@@ -275,7 +255,7 @@ fn native_canvas_bar_input() {
         capture_reference(&w, &format!("{dir}/transform-{theme:?}.png"), 1.);
     }
     let apply = bar_widget(&w, "canvas-bar-ApplyTransform");
-    native.events(json!([{"point": center(&w, &apply)}, {"down": true}, {"down": false}]));
+    native.click(center(&w, &apply));
     until(
         || state(&w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Selection),
         "Apply hands the bar to the moved selection",
@@ -293,7 +273,7 @@ fn native_canvas_bar_input() {
     until(|| shown(&w), "completion stays available while the bar is off");
     assert!(find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-choice-transform-mode").is_none());
     let cancel = bar_widget(&w, "canvas-bar-CancelTransform");
-    native.events(json!([{"point": center(&w, &cancel)}, {"down": true}, {"down": false}]));
+    native.click(center(&w, &cancel));
     until(|| !transforming(&w), "Cancel from the completion-only bar");
 }
 
@@ -323,9 +303,9 @@ fn native_canvas_bar_polygon_input() {
         command: CommandId::PolygonSelect,
     });
     pump(200);
-    let mut native = Native::start();
-    let click = |native: &mut Native, point: [f32; 2]| {
-        native.events(json!([{"point": point}, {"down": true}, {"wait_ms": 30}, {"down": false}]));
+    let mut native = remote_input();
+    let click = |native: &mut RemoteInput, point: [f32; 2]| {
+        native.perform(json!([{"point": point}, {"down": true}, {"wait_ms": 30}, {"down": false}]));
     };
     for p in [[600., 400.], [1200., 400.], [1200., 900.]] {
         click(&mut native, canvas_point(&w, p));
@@ -338,14 +318,14 @@ fn native_canvas_bar_polygon_input() {
         "the polygon bar sits at the bottom edge"
     );
     let remove = bar_widget(&w, "canvas-bar-RemoveSelectionPoint");
-    native.events(json!([{"point": center(&w, &remove)}, {"down": true}, {"down": false}]));
+    native.click(center(&w, &remove));
     until(|| w.gpu.borrow().as_ref().unwrap().session.state().canvas_bar.as_ref().is_some_and(|b| {
         b.completion.iter().any(|i| matches!(&i.option, ToolOption::Action { state, .. } if state.id == CommandId::CompleteSelection && !state.enabled))
     }), "removing a point disables Finish");
     click(&mut native, canvas_point(&w, [700., 950.]));
     let finish = bar_widget(&w, "canvas-bar-CompleteSelection");
     until(|| finish.is_sensitive(), "Finish is available with three points");
-    native.events(json!([{"point": center(&w, &finish)}, {"down": true}, {"down": false}]));
+    native.click(center(&w, &finish));
     until(
         || w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.is_some(),
         "Finish creates the selection",
@@ -376,8 +356,8 @@ fn native_canvas_bar_distorts_a_pixel_selection() {
         w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.as_ref()
             .is_some_and(|s| matches!(s.shape, layer_core::SelectionShape::Pixels(_)))
     };
-    let mut native = Native::start();
-    native.events(json!([{"point": [900., 675.]}, {"down": true}, {"wait_ms": 30}, {"down": false}]));
+    let mut native = remote_input();
+    native.perform(json!([{"point": [900., 675.]}, {"down": true}, {"wait_ms": 30}, {"down": false}]));
     until(|| pixels(&w), "Color Select makes a pixel selection");
     w.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate });
     w.dispatch(UiAction::Invoke { command: CommandId::TransformDistort });
@@ -385,14 +365,14 @@ fn native_canvas_bar_distorts_a_pixel_selection() {
     let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
     let anchor = anchor_in_window(&w);
     let corner = [anchor[2], anchor[1]];
-    native.events(json!([
+    native.perform(json!([
         {"point": corner}, {"down": true}, {"wait_ms": 40},
         {"point": [corner[0] + 40., corner[1] - 20.]}, {"wait_ms": 20},
         {"point": [corner[0] + 80., corner[1] - 40.]}, {"wait_ms": 20}, {"down": false}
     ]));
     until(|| shown(&w), "the bar returns after the corner drag");
     let apply = bar_widget(&w, "canvas-bar-ApplyTransform");
-    native.events(json!([{"point": center(&w, &apply)}, {"down": true}, {"down": false}]));
+    native.click(center(&w, &apply));
     until(|| !transforming(&w), "Apply finishes once the resampled coverage returns");
     let document = w.gpu.borrow().as_ref().unwrap().session.engine().document().clone();
     assert!(document.revision > revision, "Apply commits the distorted pixels");
@@ -414,9 +394,9 @@ fn native_canvas_bar_warps_a_selection() {
     w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
     let kind = |w: &Workspace| state(w).canvas_bar.map(|b| b.context.kind);
     until(|| kind(&w) == Some(layer_ui::CanvasBarKind::Selection) && shown(&w), "the selection bar appears");
-    let mut native = Native::start();
-    let click = |native: &mut Native, widget: &gtk::Widget| {
-        native.events(json!([{"point": center(&w, widget)}, {"down": true}, {"down": false}]));
+    let mut native = remote_input();
+    let click = |native: &mut RemoteInput, widget: &gtk::Widget| {
+        native.click(center(&w, widget));
     };
     click(&mut native, &bar_widget(&w, "canvas-bar-ScaleRotate"));
     until(|| kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && shown(&w), "Transform opens the transform bar");
@@ -464,7 +444,7 @@ fn native_canvas_bar_warps_a_selection() {
                 {"pen": "move", "point": to}, {"wait_ms": 20}, {"pen": "up"}, {"pen": "leave"}
             ]),
         };
-        native.events(events);
+        native.perform(events);
         until(
             || {
                 let now = node(&w, index);
@@ -499,10 +479,10 @@ fn native_canvas_bar_finger_moves_a_transform() {
     w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
     w.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate });
     until(|| transforming(&w) && shown(&w), "the transform bar appears");
-    let mut native = Native::start();
+    let mut native = remote_input();
     let anchor = anchor_in_window(&w);
     let inside = [(anchor[0] + anchor[2]) * 0.5, (anchor[1] + anchor[3]) * 0.5];
-    native.events(json!([
+    native.perform(json!([
         {"touch": "down", "point": inside}, {"wait_ms": 40},
         {"touch": "move", "point": [inside[0] + 15., inside[1] + 10.]}, {"wait_ms": 20},
         {"touch": "move", "point": [inside[0] + 30., inside[1] + 20.]}, {"wait_ms": 20},

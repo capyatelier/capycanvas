@@ -379,12 +379,121 @@ struct BrushPreview {
     selected: Cell<Option<bool>>,
 }
 
-enum Field {
+pub(crate) enum Field {
     Numeric(NumberControl),
     Range(Rc<RangeControl>),
     Choice(gtk::DropDown),
+    Menu(gtk::Image, gtk::Label),
     Segments(Vec<gtk::ToggleButton>),
     Action(gtk::Button),
+}
+impl Field {
+    pub(crate) fn update(&self, option: &ToolOption) {
+        match (self, option) {
+            (Field::Numeric(number), ToolOption::Numeric(f)) => number.set_value(f.value as f64),
+            (Field::Range(range), ToolOption::Range { bounds, .. }) => {
+                range.set_values(bounds.each_ref().map(|f| f.value as f64));
+            }
+            (Field::Choice(d), ToolOption::Choice { items, .. }) => d.set_selected(
+                items
+                    .iter()
+                    .position(|i| i.selected)
+                    .map_or(gtk::INVALID_LIST_POSITION, |i| i as u32),
+            ),
+            (Field::Menu(image, text), ToolOption::Choice { items, .. }) => {
+                if let Some(selected) = items.iter().find(|i| i.selected)
+                    && text.text() != selected.label
+                {
+                    crate::icons::set(image, Some(&format!("layer-{}-symbolic", selected.icon)));
+                    text.set_text(selected.label);
+                }
+            }
+            (Field::Segments(buttons), ToolOption::Choice { items, .. }) => {
+                for (button, item) in buttons.iter().zip(items) {
+                    button.set_active(item.selected);
+                }
+            }
+            (Field::Action(b), ToolOption::Action { state, .. }) => {
+                b.set_sensitive(state.enabled);
+                if let Some(b) = b.downcast_ref::<gtk::ToggleButton>() {
+                    b.set_active(state.selected);
+                }
+            }
+            _ => (),
+        }
+    }
+}
+
+fn captioned(icon: Option<gtk::Image>, caption: &str) -> gtk::Box {
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    if let Some(icon) = icon {
+        content.append(&icon);
+    }
+    if !caption.is_empty() {
+        content.append(&gtk::Label::new(Some(caption)));
+    }
+    content
+}
+
+pub(crate) fn action_button(
+    state: &CommandState,
+    checkable: bool,
+    caption: Option<&str>,
+    send: impl Fn(UiAction) + 'static,
+) -> gtk::Button {
+    let button: gtk::Button = if checkable {
+        gtk::ToggleButton::new().upcast()
+    } else {
+        gtk::Button::new()
+    };
+    let icon = state.icon.map(|icon| crate::icons::image(&format!("layer-{icon}-symbolic")));
+    match (caption, icon) {
+        (Some(caption), icon) => button.set_child(Some(&captioned(icon, caption))),
+        (None, Some(icon)) => button.set_child(Some(&icon)),
+        (None, None) => button.set_label(state.label),
+    }
+    button.update_property(&[gtk::accessible::Property::Label(state.label)]);
+    button.set_tooltip_text(Some(&state.tooltip));
+    let command = state.id;
+    button.connect_clicked(move |button| {
+        if button.is_sensitive() {
+            send(UiAction::Invoke { command });
+        }
+    });
+    button
+}
+
+pub(crate) fn segment_buttons(
+    row: &gtk::Box,
+    label: &str,
+    items: &[ToolSetItem],
+    captions: bool,
+    send: impl Fn(UiAction) + Clone + 'static,
+) -> Vec<gtk::ToggleButton> {
+    row.add_css_class("linked");
+    row.update_property(&[gtk::accessible::Property::Label(label)]);
+    let mut buttons: Vec<gtk::ToggleButton> = Vec::new();
+    for item in items {
+        let button = gtk::ToggleButton::new();
+        let icon = crate::icons::image(&format!("layer-{}-symbolic", item.icon));
+        if captions {
+            button.set_child(Some(&captioned(Some(icon), item.label)));
+        } else {
+            button.set_child(Some(&icon));
+        }
+        button.set_tooltip_text(Some(item.label));
+        button.update_property(&[gtk::accessible::Property::Label(item.label)]);
+        button.set_group(buttons.first());
+        let (action, send) = (item.action.clone(), send.clone());
+        button.connect_toggled(move |button| {
+            if button.is_active() {
+                send(action.clone());
+            }
+        });
+        row.append(&button);
+        buttons.push(button);
+    }
+    buttons
 }
 pub(super) struct Component {
     pub root: ComponentBody,
@@ -629,32 +738,7 @@ impl Component {
                 self.root.queue_allocate();
             }
             for (field, option) in self.fields.borrow().iter().zip(options) {
-                match (field, option) {
-                    (Field::Numeric(number), ToolOption::Numeric(f)) => {
-                        number.set_value(f.value as f64)
-                    }
-                    (Field::Range(range), ToolOption::Range { bounds, .. }) => {
-                        range.set_values(bounds.each_ref().map(|f| f.value as f64));
-                    }
-                    (Field::Choice(d), ToolOption::Choice { items, .. }) => d.set_selected(
-                        items
-                            .iter()
-                            .position(|i| i.selected)
-                            .map_or(gtk::INVALID_LIST_POSITION, |i| i as u32),
-                    ),
-                    (Field::Segments(buttons), ToolOption::Choice { items, .. }) => {
-                        for (button, item) in buttons.iter().zip(items) {
-                            button.set_active(item.selected);
-                        }
-                    }
-                    (Field::Action(b), ToolOption::Action { state, .. }) => {
-                        b.set_sensitive(state.enabled);
-                        if let Some(b) = b.downcast_ref::<gtk::ToggleButton>() {
-                            b.set_active(state.selected);
-                        }
-                    }
-                    _ => (),
-                }
+                field.update(option);
             }
             self.schema.borrow_mut().clone_from(options);
         }
@@ -1059,21 +1143,24 @@ impl Component {
         row.add_css_class("panel-control-row");
         row.add_css_class("customizable-target");
         row.set_valign(gtk::Align::Center);
+        let send = glib::clone!(
+            #[weak(rename_to=component)]
+            self,
+            #[weak]
+            w,
+            move |action: UiAction| {
+                if !component.updating.get() {
+                    w.dispatch(UiAction::ToolbarEdit { context, action: Box::new(action) });
+                }
+            }
+        );
         let field = match option {
             ToolOption::Range { id, label, bounds } => {
                 let ids = bounds.each_ref().map(|f| f.id);
-                let range = RangeControl::new(&format!("toolbar-{id}"), label, bounds.each_ref(), glib::clone!(
-                    #[weak(rename_to=component)] self,
-                    #[weak] w,
-                    move |index, value| {
-                        if !component.updating.get() {
-                            w.dispatch(UiAction::ToolbarEdit {
-                                context,
-                                action: Box::new(UiAction::SetToolSetting { id: ids[index].into(), value: value as f32 }),
-                            });
-                        }
-                    }
-                ));
+                let send = send.clone();
+                let range = RangeControl::new(&format!("toolbar-{id}"), label, bounds.each_ref(), move |index, value| {
+                    send(UiAction::SetToolSetting { id: ids[index].into(), value: value as f32 })
+                });
                 row.add_css_class("option-range");
                 let sliders = self.root.imp().options.get().sliders;
                 range.set_slider_visible(sliders);
@@ -1105,38 +1192,19 @@ impl Component {
                     target.set_tooltip_text(Some(&format!("{} — double-click to reset", f.tooltip())));
                     let reset = gtk::GestureClick::new();
                     reset.set_button(1);
-                    reset.connect_pressed(glib::clone!(
-                        #[weak]
-                        w,
-                        move |gesture, count, _, _| {
-                            if count == 2 {
-                                gesture.set_state(gtk::EventSequenceState::Claimed);
-                                w.dispatch(UiAction::ToolbarEdit {
-                                    context,
-                                    action: Box::new(UiAction::ResetToolSetting { id: id.into() }),
-                                });
-                            }
+                    let send = send.clone();
+                    reset.connect_pressed(move |gesture, count, _, _| {
+                        if count == 2 {
+                            gesture.set_state(gtk::EventSequenceState::Claimed);
+                            send(UiAction::ResetToolSetting { id: id.into() });
                         }
-                    ));
+                    });
                     target.add_controller(reset);
                 }
-                number.connect_value_changed(glib::clone!(
-                    #[weak(rename_to=component)]
-                    self,
-                    #[weak]
-                    w,
-                    move |number| {
-                        if !component.updating.get() {
-                            w.dispatch(UiAction::ToolbarEdit {
-                                context,
-                                action: Box::new(UiAction::SetToolSetting {
-                                    id: id.into(),
-                                    value: number.value() as f32,
-                                }),
-                            });
-                        }
-                    }
-                ));
+                let send = send.clone();
+                number.connect_value_changed(move |number| {
+                    send(UiAction::SetToolSetting { id: id.into(), value: number.value() as f32 })
+                });
                 row.append(&number);
                 Field::Numeric(number)
             }
@@ -1146,46 +1214,17 @@ impl Component {
                 segmented: true,
                 items,
             } => {
-                row.add_css_class("linked");
                 row.add_css_class("selection-modes");
                 row.add_css_class("option-segments");
                 row.set_spacing(0);
                 row.set_homogeneous(true);
                 row.set_widget_name(&format!("toolbar-segments-{id}"));
-                row.update_property(&[gtk::accessible::Property::Label(label)]);
-                let mut buttons = Vec::new();
-                for (index, item) in items.iter().enumerate() {
-                    let button = gtk::ToggleButton::new();
-                    button.set_child(Some(&crate::icons::image(&format!(
-                        "layer-{}-symbolic",
-                        item.icon
-                    ))));
+                let buttons = segment_buttons(&row, label, items, false, send.clone());
+                for (index, button) in buttons.iter().enumerate() {
                     button.add_css_class("tile-button");
                     button.set_hexpand(true);
                     button.set_vexpand(true);
-                    button.set_tooltip_text(Some(item.label));
                     button.set_widget_name(&format!("toolbar-segment-{id}-{index}"));
-                    button.update_property(&[gtk::accessible::Property::Label(item.label)]);
-                    if let Some(first) = buttons.first() {
-                        button.set_group(Some(first));
-                    }
-                    let action = item.action.clone();
-                    button.connect_toggled(glib::clone!(
-                        #[weak(rename_to=component)]
-                        self,
-                        #[weak]
-                        w,
-                        move |button| {
-                            if !component.updating.get() && button.is_active() {
-                                w.dispatch(UiAction::ToolbarEdit {
-                                    context,
-                                    action: Box::new(action.clone()),
-                                });
-                            }
-                        }
-                    ));
-                    row.append(&button);
-                    buttons.push(button);
                 }
                 Field::Segments(buttons)
             }
@@ -1213,59 +1252,23 @@ impl Component {
                 choice.set_widget_name(&format!("toolbar-choice-{id}"));
                 choice.update_property(&[gtk::accessible::Property::Label(label)]);
                 let actions: Vec<_> = items.iter().map(|i| i.action.clone()).collect();
-                choice.connect_selected_notify(glib::clone!(
-                    #[weak(rename_to=component)]
-                    self,
-                    #[weak]
-                    w,
-                    move |choice| {
-                        if !component.updating.get()
-                            && let Some(action) = actions.get(choice.selected() as usize)
-                        {
-                            w.dispatch(UiAction::ToolbarEdit {
-                                context,
-                                action: Box::new(action.clone()),
-                            });
-                        }
+                let send = send.clone();
+                choice.connect_selected_notify(move |choice| {
+                    if let Some(action) = actions.get(choice.selected() as usize) {
+                        send(action.clone());
                     }
-                ));
+                });
                 row.append(&choice);
                 Field::Choice(choice)
             }
             ToolOption::Action { state, checkable } => {
                 row.add_css_class("option-action");
-                let button: gtk::Button = if *checkable {
-                    gtk::ToggleButton::with_label(state.label).upcast()
-                } else {
-                    gtk::Button::with_label(state.label)
-                };
-                if let Some(icon) = state.icon {
-                    button.set_child(Some(&crate::icons::image(&format!(
-                        "layer-{icon}-symbolic"
-                    ))));
-                }
-                button.update_property(&[gtk::accessible::Property::Label(state.label)]);
+                let button = action_button(state, *checkable, None, send);
                 button.add_css_class("flat");
                 button.add_css_class("tile-button");
                 button.set_hexpand(true);
                 button.set_vexpand(true);
-                button.set_tooltip_text(Some(&state.tooltip));
                 button.set_widget_name(&format!("toolbar-action-{:?}", state.id));
-                let command = state.id;
-                button.connect_clicked(glib::clone!(
-                    #[weak(rename_to=component)]
-                    self,
-                    #[weak]
-                    w,
-                    move |_| {
-                        if !component.updating.get() {
-                            w.dispatch(UiAction::ToolbarEdit {
-                                context,
-                                action: Box::new(UiAction::Invoke { command }),
-                            });
-                        }
-                    }
-                ));
                 row.append(&button);
                 Field::Action(button)
             }

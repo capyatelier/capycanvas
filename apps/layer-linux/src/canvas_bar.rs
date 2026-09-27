@@ -1,7 +1,10 @@
 //! Native projection of the shared canvas action bar: a glass panel beside the
 //! selection, transform box or placed image. Contents, placement and edit
 //! validation come from shared Rust; this widget only measures and presents.
-use crate::workspace::Workspace;
+use crate::workspace::{
+    Workspace,
+    toolbar_components::{Field, action_button, segment_buttons},
+};
 use gtk::{glib, prelude::*};
 use layer_ui::{
     Bounds, CANVAS_BAR_REAPPEAR_MS, CanvasBarItem, CanvasBarLayout, CanvasBarMeasure,
@@ -23,24 +26,18 @@ pub struct CanvasBar {
     completion: gtk::Box,
     menu: gtk::PopoverMenu,
     view: RefCell<Option<CanvasBarView>>,
-    fields: RefCell<Vec<gtk::Widget>>,
+    fields: RefCell<Vec<(gtk::Widget, Option<Field>)>>,
+    updating: Cell<bool>,
     layout: Cell<Option<CanvasBarLayout>>,
     suppressed: Cell<bool>,
     reappear: RefCell<Option<glib::SourceId>>,
 }
 
 fn same_schema(a: &CanvasBarView, b: &CanvasBarView) -> bool {
-    let schema = |items: &[CanvasBarItem]| {
-        items
-            .iter()
-            .map(|item| (item.label, std::mem::discriminant(&item.option)))
-            .collect::<Vec<_>>()
+    let same = |x: &[CanvasBarItem], y: &[CanvasBarItem]| {
+        x.len() == y.len() && x.iter().zip(y).all(|(x, y)| x.label == y.label && x.option.same_schema(&y.option))
     };
-    a.context == b.context
-        && a.label == b.label
-        && schema(&a.items) == schema(&b.items)
-        && schema(&a.completion) == schema(&b.completion)
-        && a.items.iter().chain(&a.completion).zip(b.items.iter().chain(&b.completion)).all(|(x, y)| x.option.same_schema(&y.option))
+    a.context == b.context && a.label == b.label && same(&a.items, &b.items) && same(&a.completion, &b.completion)
 }
 
 impl CanvasBar {
@@ -79,6 +76,7 @@ impl CanvasBar {
             menu,
             view: RefCell::new(None),
             fields: RefCell::new(Vec::new()),
+            updating: Cell::new(false),
             layout: Cell::new(None),
             suppressed: Cell::new(false),
             reappear: RefCell::new(None),
@@ -136,13 +134,18 @@ impl CanvasBar {
             (None, None) => false,
             _ => true,
         };
+        self.updating.set(true);
         if rebuild {
             self.rebuild(workspace, view);
-        } else if let Some(view) = view {
-            for (field, item) in self.fields.borrow().iter().zip(view.items.iter().chain(&view.completion)) {
-                update(field, &item.option);
+        }
+        if let Some(view) = view {
+            for ((_, field), item) in self.fields.borrow().iter().zip(view.items.iter().chain(&view.completion)) {
+                if let Some(field) = field {
+                    field.update(&item.option);
+                }
             }
         }
+        self.updating.set(false);
         *self.view.borrow_mut() = view.cloned();
         self.place(workspace);
     }
@@ -166,13 +169,12 @@ impl CanvasBar {
         ] {
             for item in items {
                 let field = build(workspace, view.context, item, completion);
-                container.append(&field);
+                container.append(&field.0);
                 self.fields.borrow_mut().push(field);
             }
         }
     }
 
-    /// Measure the controls and ask the session where the bar belongs.
     pub fn place(&self, workspace: &Rc<Workspace>) {
         let Some(view) = self.view.borrow().clone() else {
             self.layout.set(None);
@@ -182,12 +184,13 @@ impl CanvasBar {
         };
         let width = |w: &gtk::Widget| w.measure(gtk::Orientation::Horizontal, -1).1 as f32;
         let fields = self.fields.borrow();
-        for field in fields.iter() {
+        for (field, _) in fields.iter() {
             field.set_visible(true);
         }
         let (items, completion) = fields.split_at(view.items.len());
         let height = fields
             .iter()
+            .map(|(w, _)| w)
             .chain([self.more.upcast_ref::<gtk::Widget>()])
             .map(|w| w.measure(gtk::Orientation::Vertical, -1).1)
             .max()
@@ -195,8 +198,8 @@ impl CanvasBar {
         let measure = CanvasBarMeasure {
             context: view.context,
             label: if view.label.is_some() { width(self.label.upcast_ref()) } else { 0. },
-            items: items.iter().map(width).collect(),
-            completion: completion.iter().map(width).collect(),
+            items: items.iter().map(|(w, _)| width(w)).collect(),
+            completion: completion.iter().map(|(w, _)| width(w)).collect(),
             more: width(self.more.upcast_ref()),
             height: height + 2. * PADDING as f32,
             gap: GAP as f32,
@@ -208,7 +211,7 @@ impl CanvasBar {
             .as_ref()
             .and_then(|g| g.session.canvas_bar_layout(&measure));
         if let Some(layout) = layout {
-            for (index, field) in items.iter().enumerate() {
+            for (index, (field, _)) in items.iter().enumerate() {
                 field.set_visible(index < layout.items);
             }
         }
@@ -219,7 +222,6 @@ impl CanvasBar {
         workspace.queue_surface_allocate();
     }
 
-    /// Hide during canvas contacts and navigation; return once input settles.
     pub fn suppress(&self, workspace: &Rc<Workspace>, hidden: bool) {
         if let Some(source) = self.reappear.borrow_mut().take() {
             source.remove();
@@ -244,7 +246,6 @@ impl CanvasBar {
                     bar.reappear.borrow_mut().take();
                     bar.suppressed.set(false);
                     bar.place(&workspace);
-                    bar.present();
                 }
             ),
         );
@@ -270,62 +271,49 @@ fn build(
     context: layer_ui::CanvasBarContext,
     item: &CanvasBarItem,
     completion: bool,
-) -> gtk::Widget {
-    let edit = move |action: UiAction| UiAction::CanvasBarEdit {
-        context,
-        action: Box::new(action),
+) -> (gtk::Widget, Option<Field>) {
+    let send = glib::clone!(
+        #[weak]
+        workspace,
+        move |action: UiAction| {
+            if !workspace.canvas_bar.updating.get() {
+                workspace.dispatch(UiAction::CanvasBarEdit { context, action: Box::new(action) });
+            }
+        }
+    );
+    let unfocused = |widget: &gtk::Widget| {
+        widget.set_focus_on_click(false);
+        widget.set_can_focus(false);
     };
     match &item.option {
         ToolOption::Action { state, checkable } => {
-            let button: gtk::Button = if *checkable {
-                gtk::ToggleButton::new().upcast()
-            } else {
-                gtk::Button::new()
-            };
-            let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            if let Some(icon) = state.icon {
-                content.append(&crate::icons::image(&format!("layer-{icon}-symbolic")));
-            }
-            if !item.label.is_empty() {
-                content.append(&gtk::Label::new(Some(item.label)));
-            }
-            button.set_child(Some(&content));
-            button.update_property(&[gtk::accessible::Property::Label(state.label)]);
+            let button = action_button(state, *checkable, Some(item.label), send);
             button.set_widget_name(&format!("canvas-bar-{:?}", state.id));
-            button.set_focus_on_click(false);
-            button.set_can_focus(false);
-            if completion
-                && matches!(state.id, layer_ui::CommandId::ApplyTransform | layer_ui::CommandId::CompleteSelection)
-            {
-                button.add_css_class("suggested-action");
-            } else {
-                button.add_css_class("flat");
-            }
-            let action = edit(UiAction::Invoke { command: state.id });
-            button.connect_clicked(glib::clone!(
-                #[weak]
-                workspace,
-                move |button| {
-                    if button.is_sensitive() {
-                        workspace.dispatch(action.clone());
-                    }
-                }
-            ));
-            update(button.upcast_ref(), &item.option);
-            button.upcast()
+            unfocused(button.upcast_ref());
+            let accent = completion
+                && matches!(state.id, layer_ui::CommandId::ApplyTransform | layer_ui::CommandId::CompleteSelection);
+            button.add_css_class(if accent { "suggested-action" } else { "flat" });
+            (button.clone().upcast(), Some(Field::Action(button)))
         }
-        ToolOption::Choice { id, label, segmented: false, .. } => {
+        ToolOption::Choice { id, label, segmented: true, items } => {
+            let segments = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            segments.set_widget_name(&format!("canvas-bar-choice-{id}"));
+            let buttons = segment_buttons(&segments, label, items, true, send);
+            buttons.iter().for_each(|button| unfocused(button.upcast_ref()));
+            (segments.upcast(), Some(Field::Segments(buttons)))
+        }
+        ToolOption::Choice { id, label, .. } => {
             let button = gtk::MenuButton::new();
             button.set_widget_name(&format!("canvas-bar-choice-{id}"));
             button.update_property(&[gtk::accessible::Property::Label(label)]);
             button.set_tooltip_text(Some(label));
             button.set_always_show_arrow(true);
             button.add_css_class("flat");
-            button.set_focus_on_click(false);
-            button.set_can_focus(false);
+            unfocused(button.upcast_ref());
+            let (image, text) = (gtk::Image::new(), gtk::Label::new(None));
             let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            content.append(&gtk::Image::new());
-            content.append(&gtk::Label::new(None));
+            content.append(&image);
+            content.append(&text);
             button.set_child(Some(&content));
             let popover = gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>);
             button.set_popover(Some(&popover));
@@ -336,77 +324,8 @@ fn build(
                 workspace,
                 move |popover| workspace.populate_canvas_bar_choice(popover, context, choice)
             ));
-            update(button.upcast_ref(), &item.option);
-            button.upcast()
+            (button.upcast(), Some(Field::Menu(image, text)))
         }
-        ToolOption::Choice { id, label, items, .. } => {
-            let segments = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            segments.add_css_class("linked");
-            segments.set_widget_name(&format!("canvas-bar-choice-{id}"));
-            segments.update_property(&[gtk::accessible::Property::Label(label)]);
-            for choice in items {
-                let button = gtk::ToggleButton::new();
-                let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                content.append(&crate::icons::image(&format!("layer-{}-symbolic", choice.icon)));
-                content.append(&gtk::Label::new(Some(choice.label)));
-                button.set_child(Some(&content));
-                button.set_tooltip_text(Some(choice.label));
-                button.set_focus_on_click(false);
-                button.set_can_focus(false);
-                button.set_active(choice.selected);
-                let action = edit(choice.action.clone());
-                button.connect_clicked(glib::clone!(
-                    #[weak]
-                    workspace,
-                    move |_| workspace.dispatch(action.clone())
-                ));
-                segments.append(&button);
-            }
-            segments.upcast()
-        }
-        ToolOption::Numeric(_) | ToolOption::Range { .. } => gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast(),
-    }
-}
-
-fn update(field: &gtk::Widget, option: &ToolOption) {
-    match option {
-        ToolOption::Action { state, .. } => {
-            field.set_sensitive(state.enabled);
-            field.set_tooltip_text(Some(state.disabled_reason.as_deref().unwrap_or(&state.tooltip)));
-            if let Some(toggle) = field.downcast_ref::<gtk::ToggleButton>()
-                && toggle.is_active() != state.selected
-            {
-                toggle.set_active(state.selected);
-            }
-        }
-        ToolOption::Choice { items, segmented: false, .. } => {
-            let Some(selected) = items.iter().find(|i| i.selected) else {
-                return;
-            };
-            let content = field.downcast_ref::<gtk::MenuButton>().and_then(|b| b.child());
-            let image = content.as_ref().and_then(|c| c.first_child()).and_downcast::<gtk::Image>();
-            let text = content.as_ref().and_then(|c| c.last_child()).and_downcast::<gtk::Label>();
-            if let (Some(image), Some(text)) = (image, text)
-                && text.text() != selected.label
-            {
-                crate::icons::set(&image, Some(&format!("layer-{}-symbolic", selected.icon)));
-                text.set_text(selected.label);
-            }
-        }
-        ToolOption::Choice { items, .. } => {
-            let mut child = field.first_child();
-            for item in items {
-                let Some(button) = child else {
-                    break;
-                };
-                if let Some(toggle) = button.downcast_ref::<gtk::ToggleButton>()
-                    && toggle.is_active() != item.selected
-                {
-                    toggle.set_active(item.selected);
-                }
-                child = button.next_sibling();
-            }
-        }
-        ToolOption::Numeric(_) | ToolOption::Range { .. } => {}
+        ToolOption::Numeric(_) | ToolOption::Range { .. } => (gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast(), None),
     }
 }
