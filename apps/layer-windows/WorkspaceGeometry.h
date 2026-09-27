@@ -4,8 +4,8 @@
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 namespace CapyUi {
-using Windows::Foundation::Point;
-using Windows::Foundation::Rect;
+using winrt::Windows::Foundation::Point;
+using winrt::Windows::Foundation::Rect;
 inline Rect rectangle(J const& value){
     return {float(num(value,L"x")),float(num(value,L"y")),float(num(value,L"width")),float(num(value,L"height"))};
 }
