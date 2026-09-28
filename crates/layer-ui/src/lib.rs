@@ -129,7 +129,7 @@ pub use numeric::{
 pub use session::{Notice, NoticeAction};
 pub use session::{ScreenChip, ScreenDetails, ScreenState};
 pub use session::{CanvasAnchor, CanvasAnchorChoice, CanvasSizeAction, CanvasSizeUnit, CanvasSizeView, CanvasUnitChoice};
-pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionMenu, SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
+pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionMenu, SelectionAction, RefineKind, SelectionRefineView, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
     ChoicePresentation, HostRequest, HostRequestKind, Platform,
     PreferenceAction,
@@ -482,6 +482,12 @@ command_ids! {
     LassoFill,
     CanvasSize,
     CropCanvasToSelection,
+    GrowSelection,
+    ShrinkSelection,
+    FeatherSelection,
+    BorderSelection,
+    SmoothSelection,
+    TransformSelectionOutline,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -653,6 +659,12 @@ impl CommandId {
             Self::LassoFill => "lasso-fill",
             Self::CanvasSize => "canvas-size",
             Self::CropCanvasToSelection => "crop",
+            Self::GrowSelection => "selection-grow",
+            Self::ShrinkSelection => "selection-shrink",
+            Self::FeatherSelection => "feather",
+            Self::BorderSelection => "selection-border",
+            Self::SmoothSelection => "edge-smooth",
+            Self::TransformSelectionOutline => "transform-outline",
         })
     }
     pub const TOOLS: [Self; 26] = [
@@ -844,6 +856,12 @@ impl CommandId {
             Self::LassoFill => "Lasso fill",
             Self::CanvasSize => "Canvas Size…",
             Self::CropCanvasToSelection => "Crop Canvas to Selection",
+            Self::GrowSelection => "Grow Selection…",
+            Self::ShrinkSelection => "Shrink Selection…",
+            Self::FeatherSelection => "Feather Selection…",
+            Self::BorderSelection => "Border Selection…",
+            Self::SmoothSelection => "Smooth Selection…",
+            Self::TransformSelectionOutline => "Transform Selection Outline",
         }
     }
 }
@@ -1349,7 +1367,8 @@ mod icon_tests {
                 CommandId::Deselect,
                 CommandId::InvertSelection,
             ],
-            &[CommandId::FitCanvas, CommandId::ScaleRotate],
+            &[CommandId::FitCanvas, CommandId::ScaleRotate, CommandId::TransformSelectionOutline],
+            &[CommandId::GrowSelection, CommandId::ShrinkSelection, CommandId::FeatherSelection, CommandId::BorderSelection, CommandId::SmoothSelection],
             &[CommandId::Fill, CommandId::FillSelection],
             &[CommandId::Undo, CommandId::CancelTransform],
         ] {

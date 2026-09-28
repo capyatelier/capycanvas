@@ -43,8 +43,10 @@ impl SelectionDisplayOptions {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum SelectionAction {
-    BeginResize {
-        grow: bool,
+    /// Open the Refine dialog for Quick Mask (`layer` 0), a Selection Layer,
+    /// or the current selection (`None`).
+    BeginRefine {
+        kind: super::selection_refine::RefineKind,
         layer: Option<u64>,
     },
     ResizeRadius {
@@ -88,21 +90,6 @@ pub enum SelectionAction {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct SelectionResizeView {
-    pub title: &'static str,
-    pub radius: f32,
-    pub numeric: NumericControl,
-}
-struct ResizeDraft {
-    view: SelectionResizeView,
-    grow: bool,
-    target: SelectionTarget,
-    coverage: Selection,
-    revision: u64,
-    active: LayerId,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct MaskEditingView {
     pub layer: Option<u64>,
     pub label: String,
@@ -120,7 +107,12 @@ struct Editing {
 }
 pub(super) struct SelectionMasks {
     editing: Option<Editing>,
-    resize: Option<ResizeDraft>,
+    pub(super) refine: Option<super::selection_refine::RefineDraft>,
+    pub(super) refine_changed: bool,
+    /// Refine values received, and results drawn on the canvas before the
+    /// document held them.
+    pub(super) refine_values: u64,
+    pub(super) refine_previews: u64,
     pub reselect: Option<Selection>,
     pub(super) colors: ColorState,
     pub quick_properties: SelectionMaskProperties,
@@ -139,7 +131,10 @@ impl Default for SelectionMasks {
             .expect("scalar mask color depth");
         Self {
             editing: None,
-            resize: None,
+            refine: None,
+            refine_changed: false,
+            refine_values: 0,
+            refine_previews: 0,
             reselect: None,
             colors,
             quick_properties: Default::default(),
@@ -196,8 +191,8 @@ impl SelectionMasks {
             }
         }
     }
-    pub fn resize_view(&self) -> Option<SelectionResizeView> {
-        self.resize.as_ref().map(|d| d.view.clone())
+    pub fn refine_view(&self) -> Option<super::selection_refine::SelectionRefineView> {
+        self.refine.as_ref().and_then(|d| d.view())
     }
     pub fn target(&self) -> Option<SelectionTarget> {
         self.editing.as_ref().map(|e| e.target)
@@ -242,35 +237,32 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
-    pub(super) fn selection_resize_items(&self, layer: Option<u64>) -> Vec<ContextMenuItem> {
-        [("Grow…", true), ("Shrink…", false)]
-            .into_iter()
-            .map(|(label, grow)| {
-                let mut item = ContextMenuItem::command(
-                    label,
-                    UiAction::Selection {
-                        action: SelectionAction::BeginResize { grow, layer },
-                    },
-                );
-                item.enabled = self.require_document_idle().is_ok()
-                    && match layer {
-                        Some(0) => self.selection_masks.quick(),
-                        Some(id) => self.engine.document().layer(LayerId(id)).is_some_and(|l| {
-                            l.kind == LayerKind::Selection
-                                && !self.engine.document().is_locked(l.id)
-                        }),
-                        None => self.current_selection().is_some(),
-                    };
-                item
-            })
-            .collect()
-    }
     fn selection_command_item(&self, command: CommandId) -> ContextMenuItem {
         let state = self.command(command);
         let mut item = ContextMenuItem::command(state.label, UiAction::Invoke { command });
         item.enabled = state.enabled;
         item.selected = command.is_toggle().then_some(state.selected);
         item
+    }
+    /// Grow… to Smooth… with their short labels, as commands or for one Selection Layer.
+    pub(super) fn refine_items(&self, layer: Option<LayerId>) -> Vec<ContextMenuItem> {
+        use super::selection_refine::RefineKind;
+        RefineKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let label = canvas_bar::short_label(kind.command());
+                match layer {
+                    None => ContextMenuItem { label: label.into(), ..self.selection_command_item(kind.command()) },
+                    Some(id) => ContextMenuItem {
+                        enabled: self.require_document_idle().is_ok() && !self.engine.document().is_locked(id),
+                        ..ContextMenuItem::command(
+                            label,
+                            UiAction::Selection { action: SelectionAction::BeginRefine { kind, layer: Some(id.0) } },
+                        )
+                    },
+                }
+            })
+            .collect()
     }
     pub fn quick_mask_menu(&self) -> ContextMenu {
         ContextMenu {
@@ -291,7 +283,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         ]
                         .map(|c| self.selection_command_item(c))
                         .into(),
-                        self.selection_resize_items(Some(0)),
+                        self.refine_items(None),
                     ],
                 )],
             ],
@@ -471,7 +463,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                             ),
                             action("Fill", SelectionAction::FillLayer { id: id.0 }, unlocked),
                         ],
-                        self.selection_resize_items(Some(id.0)),
+                        self.refine_items(Some(id)),
                     ],
                 )],
                 vec![ContextMenuItem::submenu(
@@ -817,98 +809,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         }
         match action {
-            SelectionAction::BeginResize { grow, layer } => {
-                self.require_document_idle()?;
-                if layer.is_none()
-                    && matches!(
-                        self.selection_masks.target(),
-                        Some(SelectionTarget::Saved(_))
-                    )
-                {
-                    self.return_to_artwork()?;
-                }
-                let target = match layer {
-                    Some(0) if self.selection_masks.quick() => SelectionTarget::Current,
-                    Some(id) => SelectionTarget::Saved(LayerId(id)),
-                    None => SelectionTarget::Current,
-                };
-                if target == SelectionTarget::Current && self.current_selection().is_none() {
-                    return Err("Make a selection first".into());
-                }
-                let coverage = self.mask_coverage(target)?;
-                self.engine
-                    .document()
-                    .selection_edit(target, coverage.clone())
-                    .map_err(error)?;
-                self.selection_masks.resize = Some(ResizeDraft {
-                    view: SelectionResizeView {
-                        title: if grow {
-                            "Grow Selection"
-                        } else {
-                            "Shrink Selection"
-                        },
-                        radius: 5.,
-                        numeric: NumericControl::number(
-                            1.,
-                            layer_render::SelectionRefinement::MAX_RESIZE as f64,
-                            1.,
-                            0,
-                        )
-                        .unit("px"),
-                    },
-                    grow,
-                    target,
-                    coverage,
-                    revision: self.engine.document().revision,
-                    active: self.engine.document().active_layer,
-                });
-            }
-            SelectionAction::ResizeRadius { radius } => {
-                let draft = self
-                    .selection_masks
-                    .resize
-                    .as_mut()
-                    .ok_or("No selection adjustment is open")?;
-                draft.view.numeric.validate(radius, "Distance")?;
-                if radius.fract() != 0. {
-                    return Err("Use whole pixels".into());
-                }
-                draft.view.radius = radius;
-            }
-            SelectionAction::CancelResize => self.selection_masks.resize = None,
-            SelectionAction::ApplyResize => {
-                let draft = self
-                    .selection_masks
-                    .resize
-                    .take()
-                    .ok_or("No selection adjustment is open")?;
-                let doc = self.engine.document();
-                if draft.revision != doc.revision || draft.active != doc.active_layer {
-                    return Err("The selection changed; open the adjustment again".into());
-                }
-                self.queue_mask_region(
-                    draft.target,
-                    layer_render::RegionRequest {
-                        request_id: 0,
-                        contiguous: false,
-                        source: layer_render::RegionSource::Selection(Arc::new(draft.coverage)),
-                        position: [0, 0],
-                        tolerance: 0.,
-                        refinement: Default::default(),
-                        limit: None,
-                        selection: Some(layer_render::SelectionRefinement {
-                            resize: draft.view.radius as i32 * if draft.grow { 1 } else { -1 },
-                            mode: SelectionMode::New,
-                            antialias: true,
-                            feather: 0.,
-                            previous: None,
-                            source_to_document: layer_core::Affine::IDENTITY,
-                        }),
-                    },
-                    layer_core::Affine::IDENTITY,
-                    false,
-                )?;
-            }
+            SelectionAction::BeginRefine { kind, layer } => self.begin_refine(kind, layer)?,
+            SelectionAction::ResizeRadius { radius } => return self.set_refine_radius(radius),
+            SelectionAction::ApplyResize => self.apply_refine()?,
+            SelectionAction::CancelResize => self.cancel_refine()?,
             SelectionAction::NewLayer {
                 parent,
                 save_current,
@@ -990,6 +894,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     antialias: true,
                     feather: 0.,
                     source_to_document: basis,
+                    keep_canvas_edges: false,
                 };
                 self.queue_mask_region(
                     SelectionTarget::Current,
@@ -1025,6 +930,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         antialias: true,
                         feather: 0.,
                         source_to_document: layer_core::Affine::IDENTITY,
+                        keep_canvas_edges: false,
                     };
                     self.queue_mask_region(
                         SelectionTarget::Current,

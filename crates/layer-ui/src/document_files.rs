@@ -503,7 +503,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.painted_selections.busy() { return Err("Wait for selection capture to finish".into()); }
         if self.sdr_gesture.is_some()
             || self.operation.active()
-            || self.region_tools.busy()
+            || (self.region_tools.busy() && !self.refine_previewing())
             || !self.layer_interaction.path.is_empty()
             || self
                 .pending_filters
@@ -518,7 +518,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn require_document_interaction_idle(&self) -> Result<(), String> {
         self.require_idle()?;
-        if self.operation.active() || self.region_tools.busy() {
+        if self.operation.active() || (self.region_tools.busy() && !self.refine_previewing()) {
             Err("Finish the current canvas operation first".into())
         } else {
             Ok(())

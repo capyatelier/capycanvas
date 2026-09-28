@@ -99,3 +99,22 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
   root.update(value);
   return root;
 }
+
+// Chromium's native range drag does not consistently consume tablet contacts.
+// Keep the native keyboard control and capture pointer input on the track,
+// mapping positions to the thumb's centre as the native control does.
+export function captureSliderContacts(number) {
+  const { slider } = number;
+  let contact = null;
+  const pick = e => {
+    const b = slider.getBoundingClientRect(), thumb = parseFloat(getComputedStyle(slider).getPropertyValue("--thumb-size")) || 0;
+    number.cancelEditing(); number.apply({ type: "position", position: (e.clientX - b.x - thumb / 2) / Math.max(1, b.width - thumb) });
+  };
+  slider.addEventListener("pointerdown", e => {
+    if (e.button || slider.disabled) return;
+    e.preventDefault(); e.stopPropagation(); contact = e.pointerId;
+    slider.setPointerCapture(e.pointerId); pick(e);
+  });
+  slider.addEventListener("pointermove", e => { if (contact === e.pointerId) { e.preventDefault(); pick(e); } });
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) slider.addEventListener(type, () => { contact = null; });
+}

@@ -115,16 +115,21 @@ fn native_quick_mask_input() {
     d.input.key(0xff1b);
     assert_eq!(state(&d.w).layer_tools.mask_editing.unwrap().layer,Some(id));
     d.click_name(&layers); pump(100);
-    let saved = || d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
+    let w = d.w.clone();
+    let saved = || w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
     let before = saved();
-    d.w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::BeginResize {grow:true,layer:Some(id)}}); pump(100);
-    d.number(&d.named("selection-resize-distance"), "8");
+    d.w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::BeginRefine {kind:layer_ui::RefineKind::Grow,layer:Some(id)}});
+    let field = d.named("selection-refine-value");
+    until(|| {
+        let bounds = field.compute_bounds(&d.w.window);
+        pump(120);
+        bounds.is_some() && field.compute_bounds(&d.w.window) == bounds
+    }, "the Refine dialog settles");
+    d.number(&field, "8");
+    until(|| state(&w).layer_tools.selection_resize.is_some_and(|v| v.radius == 8.), "the typed distance previews");
     d.click_label("Apply");
-    let deadline = Instant::now()+Duration::from_secs(30);
-    while d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap()==before {
-        assert!(Instant::now()<deadline,"Grow completed");pump(20);
-    }
-    assert!(state(&d.w).layer_tools.selection_resize.is_none());
+    let grow_idle = || state(&w).commands.iter().any(|c| c.id == CommandId::GrowSelection && c.enabled);
+    until(|| state(&w).layer_tools.selection_resize.is_none() && grow_idle() && saved() != before, "Grow completed");
     d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);
     assert_eq!(d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap(),before);
 

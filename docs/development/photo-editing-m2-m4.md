@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1, M2.2, M2.4, M2.5, M2.6 and M3.1. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2 and M3.1. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -101,7 +101,7 @@ The user asked for these to be settled by research into other editors, without n
 | 10 | Raising "Later" items | None, except Paste Into (decision 6). | Refine Edge, Select Subject and Select Similar stay in M7 and M8. |
 | 11 | T-16, the Photo workspace | Edit the Photo preset only. Crop joins in M3, and Clone, Heal and Spot Heal in M4. | Current policy since `8842fdfd`: Restore Starting Layout adopts a new preset. |
 | 12 | Bar dropdowns (Copy to Layer ▾, Clear ▾, Refine ▾, Adjust ▾, Copy ▾) | A bar item is a primary command plus an optional menu. Updated hosts open the menu; a host that does not know the field yet runs the primary command. | One item type serves every dropdown. Apple and Windows keep working until they are ported. |
-| 13 | SEL-5 controls | Generalize the modal Grow/Shrink dialog into Refine, with a live preview that amends one undo step, as tonal selection does. Refine ▾ on the bar opens it. Existing renderer limits stay: Grow and Shrink up to 128 px, Feather up to 100 px. | The bar cannot hold numeric fields yet, and a slider popover would be new host UI on three platforms. Photoshop's Modify dialogs are modal too. |
+| 13 | SEL-5 controls | Generalize the modal Grow/Shrink dialog into a non-modal Refine panel. Refine ▾ on the bar opens it. While the value moves, previews are computed at reduced resolution over the selection's bounds in short GPU chunks, and change no document state. When the value rests, or on Apply, the exact result runs and becomes one undo step. Grow and Shrink go up to 128 px, and Feather up to 100 px. | The bar cannot hold numeric fields. Reduced-resolution previews while a control moves are a valid approximation under the performance targets. |
 | 14 | Clear Selected rules | Under alpha lock, disabled with a reason. On a placed photo, it clears the raster over the source, and Revert to Original brings it back. In Quick Mask, Selection Layer editing and mask editing, disabled with a reason (the Quick Mask bar has its own Clear). **Clear Outside Selection** has no default chord. | Refusals are visible (T-15). Unlike CSP and Affinity, Delete never removes a whole photo layer. CSP's own documentation gives two different chords for Delete Outside. |
 | 15 | Delete and Backspace precedence | In order: text fields and headers; the polygon's last point; a selected guide (Ruler or Move tool); Clear Selected. Bindings get scopes, and dispatch runs the first **enabled** match in order of specificity. | This is a minimal stage C that keeps all precedence in shared Rust. |
 | 16 | Healing algorithm | Poisson-style seamless cloning: a pull-push membrane plus fixed Jacobi sweeps, computed in the pen-up frame. The live preview is the plain clone. Spot Healing ships Proximity only: it tries 16 candidate offsets, scores them on the GPU, then applies the same blend. | Deterministic, with no readback. One undo step comes free because the raster is already pending at pen-up. Photoshop's healing brush also previews as a clone. |
@@ -706,6 +706,10 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - one canvas geometry plan (`canvas_geometry.rs`, `Edit::SetCanvasSize`), with limits checked before commit;
   - Canvas Size… with a 3×3 anchor, and Crop Canvas to Selection (Crop on the selection bar);
   - the Edit ▸ Image submenu.
+- **M2.3** on GTK, Web and Android:
+  - a non-modal Refine panel for Grow, Shrink, Feather, Border and Smooth, with a live preview;
+  - Transform Outline (Free and Uniform only);
+  - Refine ▾ with Feather as its primary command.
 
 **Follow-ups**
 - **Erase right after a stroke:** an Erase on a raster that is still pending, or that holds watercolor or wet state, damages the whole layer so the layer settles. Clearing right after a stroke therefore rewrites every page. It is a still-frame cost.
@@ -722,6 +726,9 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **Hidden pixels** can still be written by brush dabs past the canvas edge and by a fill through an inverted selection.
 - **Reselect** keeps the selection's position on undo of a canvas change.
 - **Eyedropper:** choosing another tool while the Eyedropper is active returns to the previous tool (also on `origin/main`).
+- **Web frame rate on tablets:** the Web host redraws the whole WebGPU canvas every animation frame, which limits motion on the Huion even without other work. Skip unchanged presents.
+- **Canvas size changes:** the first frame after one recomposes the whole display. Recompose visible tiles first, and show the shifted old display meanwhile. Keeping layer pages across the change (local branch `canvas-resize-textures`) did not shorten it.
+- **Flaky test:** `live_display::tests::moving_transforms_drawn_into_the_display_match_recomposition_and_release_exactly` fails intermittently under heavy parallel GPU load, also on `origin/main`.
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
 - **Apple and Windows:**
@@ -735,4 +742,4 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M2.3, M3.2 to M3.7, and M4. Record milestone completion in the research record's section 7.
+**Remaining:** M3.2 to M3.7, and M4. M2 is complete. Record milestone completion in the research record's section 7.

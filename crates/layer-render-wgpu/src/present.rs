@@ -822,15 +822,15 @@ impl ViewportPresenter {
         let selection = renderer.display_selection.as_ref();
         let coverage = selection.map_or(&renderer.unclipped, |(_, buffer)| buffer);
         let saved = renderer.selection_previews.texture.as_ref().unwrap_or(&self.empty_saved_selection);
+        let selection_changed = self.selection_buffer.as_ref() != Some(coverage);
         let bindings_changed = self.bind_group.is_none()
             || self.saved_selection_buffer.as_ref() != Some(saved)
             || self.document_extent != renderer.document_extent
-            || self.selection_buffer.as_ref() != Some(coverage)
             || self.composite_view.as_ref() != Some(composite)
             || self.coarse_view.as_ref() != Some(coarse)
             || self.next_view.as_ref() != Some(next)
             || self.display_geometry.as_ref() != Some(geometry);
-        if bindings_changed {
+        if bindings_changed || selection_changed {
             self.bind_group = Some(crate::bindings::group(device, "viewport composite", &self.layout, [
                 wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &self.uniform,
@@ -904,8 +904,13 @@ impl ViewportPresenter {
         let bytes = unsafe {
             std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(&data))
         };
-        let camera_changed = self.camera_data != Some(data);
-        if camera_changed {
+        let placement = 16..24;
+        let camera_changed = self.camera_data.is_none_or(|old| {
+            old[..placement.start] != data[..placement.start] || old[placement.end..] != data[placement.end..]
+        });
+        let selection_changed = selection_changed
+            || self.camera_data.is_some_and(|old| old[placement.clone()] != data[placement]);
+        if camera_changed || selection_changed {
             self.uploads
                 .write(encoder, &self.uniform, bytes)?;
             self.camera_data = Some(data);
@@ -961,6 +966,11 @@ impl ViewportPresenter {
         let preserve_target = !overview_only && self.retained && self.history.valid;
         let (mut regions, full, content_damage, moved) = if !overview_only {
             let previous = &self.history;
+            // A displayed selection replaced once since the last present
+            // repaints where either one has coverage or an outline.
+            let outline = (previous.outline_revision != renderer.display_selection_revision)
+                .then_some(renderer.display_selection_damage)
+                .filter(|_| previous.outline_revision.wrapping_add(1) == renderer.display_selection_revision);
             let content = !previous.valid
                 || previous.hdr != self.hdr_options
                 || previous.proof != self.proof_options
@@ -969,7 +979,7 @@ impl ViewportPresenter {
                     && previous.selection_revision.wrapping_add(1) != renderer.selection_paint_revision)
                 || (previous.revision != renderer.composite_revision
                     && previous.revision.wrapping_add(1) != renderer.composite_revision);
-            let full = content || bindings_changed || camera_changed;
+            let full = content || bindings_changed || camera_changed || (selection_changed && outline.is_none());
             let cursor =
                 crate::present_damage::cursor_bounds(&self.cursor_vertices, view, self.quarter_turns);
             let repaint = if full {
@@ -988,12 +998,16 @@ impl ViewportPresenter {
                 crate::present_damage::add_region(&mut regions,
                     crate::present_damage::damage(renderer.selection_paint_damage, view, self.quarter_turns));
             }
+            let outline = outline.filter(|_| !full).map(|area| crate::present_damage::damage(area, view, self.quarter_turns));
+            if let Some(area) = outline {
+                crate::present_damage::add_region(&mut regions, area);
+            }
             crate::present_damage::add_region(&mut regions, previous.cursor);
             crate::present_damage::add_region(&mut regions, cursor);
             let content_damage = (!full).then(|| {
                 let selection = (previous.selection_revision != renderer.selection_paint_revision)
                     .then(|| crate::present_damage::damage(renderer.selection_paint_damage, view, self.quarter_turns));
-                [repaint].into_iter().chain(selection).filter(|r| !r.is_empty()).collect::<Vec<_>>()
+                [repaint].into_iter().chain(selection).chain(outline).filter(|r| !r.is_empty()).collect::<Vec<_>>()
             });
             // A distant Navigator must not turn a short stroke into a nearly
             // full-screen render area. Only merge intersecting damage regions.
@@ -1042,6 +1056,7 @@ impl ViewportPresenter {
             previous.valid = true;
             previous.revision = renderer.composite_revision;
             previous.selection_revision = renderer.selection_paint_revision;
+            previous.outline_revision = renderer.display_selection_revision;
             previous.hdr = self.hdr_options;
             previous.proof = self.proof_options;
             previous.screen = self.screen_options;

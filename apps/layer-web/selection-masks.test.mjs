@@ -106,15 +106,19 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   // BigInt IDs follow the same native serialization used by real layer buttons.
   await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(id)})})`);await settle();
   assert.equal(String((await evaluate('String(layerApp.state().layer_tools.mask_editing.layer)'))),id);
-  await send({type:'selection',action:{op:'begin_resize',grow:true,layer:Number(id)}});
-  assert.ok(await evaluate('document.querySelector("#selection-resize-dialog").open'));
-  await evaluate('[...document.querySelectorAll("#selection-resize-dialog button")].find(b=>b.textContent==="Apply").click()');await settle();
-  assert.equal(await evaluate('!!document.querySelector("#selection-resize-dialog")'),false);
+  const refine='#selection-refine-panel',refineButton=label=>`[...document.querySelectorAll("${refine} button")].find(b=>b.textContent==="${label}").click()`;
+  await send({type:'selection',action:{op:'begin_refine',kind:'grow',layer:Number(id)}});
+  assert.equal(await evaluate(`document.querySelector("${refine} .number-title").textContent`),'Grow by');
+  await evaluate(refineButton('Apply'));await settle();
+  assert.equal(await evaluate(`!!document.querySelector("${refine}")`),false);
   await invoke('undo');await invoke('redo');
-  await send({type:'selection',action:{op:'begin_resize',grow:false,layer:Number(id)}});
-  assert.equal(await evaluate('document.querySelector("#selection-resize-dialog h2").textContent'),'Shrink Selection');
-  await evaluate('[...document.querySelectorAll("#selection-resize-dialog button")].find(b=>b.textContent==="Cancel").click()');await settle();
-  assert.equal(await evaluate('!!document.querySelector("#selection-resize-dialog")'),false);
+  await send({type:'selection',action:{op:'begin_refine',kind:'shrink',layer:Number(id)}});
+  assert.equal(await evaluate(`document.querySelector("${refine} h2").textContent`),'Shrink Selection');
+  await send({type:'selection',action:{op:'begin_refine',kind:'smooth',layer:Number(id)}});
+  assert.deepEqual(await evaluate(`(n=>[n.querySelector(".number-title").textContent,n.dataset.refineKind,!!n.querySelector(".number-slider"),layerApp.state().layer_tools.selection_resize.numeric.max])(document.querySelector("${refine} #selection-refine-value"))`),
+    ['Smooth radius','smooth',false,64],'Another refinement rebuilds the value field');
+  await evaluate(refineButton('Cancel'));await settle();
+  assert.equal(await evaluate(`!!document.querySelector("${refine}")`),false);
   await invoke('clear_selection_mask');
   await invoke('return_to_artwork');
   await evaluate(`layerApp.dispatch({type:'selection',action:{op:'load_layer',id:BigInt(${JSON.stringify(id)}),mode:'new',inverted:false}})`);await settle();
@@ -130,5 +134,5 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
     await call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode,modifiers:0});await settle();
     assert.ok(await evaluate('layerApp.state().commands.find(c=>c.id==="selection_new").selected'));
   }
-  console.log('PASS Quick Mask normal row and properties, pen coverage, light/dark overlay, compact load icon, mouse/touch rename, Grow/Shrink, saved selection edit/load, reselect');
+  console.log('PASS Quick Mask normal row and properties, pen coverage, light/dark overlay, compact load icon, mouse/touch rename, Grow/Shrink/Smooth refinement, saved selection edit/load, reselect');
 }

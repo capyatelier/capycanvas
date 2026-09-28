@@ -377,6 +377,8 @@ pub enum RegionSource {
         selection: std::sync::Arc<layer_core::Selection>,
         map: layer_core::TransformMap,
     },
+    /// Select › Modify of a document selection, in document pixels.
+    Modify(std::sync::Arc<SelectionModify>),
 }
 impl RegionSource {
     pub fn raw_source(&self) -> &Self {
@@ -429,6 +431,9 @@ pub struct SelectionRefinement {
     pub previous: Option<std::sync::Arc<layer_core::Selection>>,
     /// Maps the sampled layer's mask into document coordinates before feathering.
     pub source_to_document: layer_core::Affine,
+    /// Erosion treats pixels beyond the canvas as selected, so the selection
+    /// keeps the canvas edges it touches.
+    pub keep_canvas_edges: bool,
 }
 impl SelectionRefinement {
     pub const MAX_FEATHER: f32 = 100.;
@@ -437,6 +442,48 @@ impl SelectionRefinement {
         self.resize.unsigned_abs() <= Self::MAX_RESIZE && (self.resize == 0 || self.feather == 0.)
             && self.feather.is_finite() && (0.0..=Self::MAX_FEATHER).contains(&self.feather)
             && self.source_to_document.inverse().is_some()
+    }
+}
+/// Select › Modify as one GPU job: circular grows and shrinks and Gaussian
+/// feathers of one selection, in order. Each step refines the selection or,
+/// when chained, the previous step's result; a subtracting step removes itself
+/// from the previous step's result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectionModify {
+    pub selection: std::sync::Arc<layer_core::Selection>,
+    pub steps: Vec<ModifyStep>,
+    /// For a preview, the document pixels per display pixel. The renderer
+    /// may then compute only around the selection, on cells up to that wide
+    /// or as wide as half of each step's radius, to finish within a fraction
+    /// of a frame; the result's placement puts its pixels on the document.
+    /// None computes the exact result over the whole document.
+    pub preview: Option<f32>,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ModifyStep {
+    pub chained: bool,
+    /// Circular dilation (positive) or erosion (negative), in document pixels.
+    pub resize: i32,
+    /// Gaussian radius, in document pixels.
+    pub feather: f32,
+    /// Erosion treats pixels beyond the canvas as selected.
+    pub keep_canvas_edges: bool,
+    pub subtract: bool,
+}
+impl SelectionModify {
+    pub const MAX_STEPS: usize = 4;
+    pub fn is_valid(&self) -> bool {
+        (1..=Self::MAX_STEPS).contains(&self.steps.len())
+            && !self.steps[0].chained
+            && !self.steps[0].subtract
+            && self.steps.iter().all(|s| {
+                s.resize.unsigned_abs() <= SelectionRefinement::MAX_RESIZE
+                    && s.feather.is_finite()
+                    && (0.0..=SelectionRefinement::MAX_FEATHER).contains(&s.feather)
+                    && (s.resize == 0 || s.feather == 0.)
+            })
+            && self.selection.affine.inverse().is_some()
+            && self.preview.is_none_or(|detail| detail.is_finite() && detail >= 0.)
     }
 }
 #[derive(Clone, Debug)]
@@ -479,6 +526,9 @@ pub struct RegionResult {
     pub tonal_sample: Option<TonalSample>,
     /// Immutable, GPU-generated mask in the source's coordinates.
     pub pixels: std::sync::Arc<layer_core::SelectionPixels>,
+    /// Maps a coarse preview's pixels onto the source's; identity for every
+    /// exact result.
+    pub placement: layer_core::Affine,
 }
 
 /// Absolute, disposable transform of one immutable layer-local source. Keep the
@@ -692,6 +742,9 @@ pub trait CanvasRenderer {
     fn take_region(&mut self) -> Option<Result<RegionResult, Self::Error>> {
         None
     }
+    /// Abandon the requested region: no result follows, and the next request
+    /// may start at once.
+    fn cancel_region(&mut self) {}
     fn request_filter_previews(
         &mut self,
         _request: FilterPreviewRequest,

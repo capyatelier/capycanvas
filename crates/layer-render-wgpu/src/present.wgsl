@@ -137,20 +137,55 @@ fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>) -> vec4<f32> {
     return color / max(weight, .0000001);
 }
 
+fn selection_at(q: vec2<i32>) -> f32 {
+    if any(q < vec2<i32>(0)) || any(q >= vec2<i32>(selection.rect.zw)) { return 0.; }
+    let bytes = selection.info.y == 2u;
+    let count = select(8u,4u,bytes);
+    let word = u32(q.y) * ((selection.rect.z+count-1u)/count) + u32(q.x)/count;
+    return f32((selection.values[word] >> ((u32(q.x)%count)*(32u/count))) & select(15u,255u,bytes))/select(4.,255.,bytes);
+}
+// Clipping resamples coverage placed with a scale or rotation bilinearly, so
+// the outline does too; translated pixels keep their exact edges.
+fn resampled_selection() -> bool {
+    return any(camera.selection_inverse != vec4<f32>(1., 0., 0., 1.));
+}
+// Bilinear coverage at document point p and its document-space gradient.
+fn selection_sample(p: vec2<f32>) -> vec3<f32> {
+    let local = vec2<f32>(dot(camera.selection_inverse.xz, p), dot(camera.selection_inverse.yw, p)) + camera.selection.xy;
+    let q = local - .5 - vec2<f32>(selection.rect.xy);
+    let base = vec2<i32>(floor(q));
+    let f = fract(q);
+    let a = selection_at(base);
+    let b = selection_at(base + vec2<i32>(1, 0));
+    let c = selection_at(base + vec2<i32>(0, 1));
+    let d = selection_at(base + vec2<i32>(1, 1));
+    let cell = vec2<f32>(mix(b - a, d - c, f.y), mix(c - a, d - b, f.x));
+    let gradient = vec2<f32>(dot(cell, camera.selection_inverse.xy), dot(cell, camera.selection_inverse.zw));
+    return vec3<f32>(mix(mix(a, b, f.x), mix(c, d, f.x), f.y), gradient);
+}
 fn selection_coverage(p: vec2<f32>) -> f32 {
     if any(p < vec2<f32>(0.)) || any(p >= camera.offset_document.zw) { return 0.; }
-    let local = vec2<f32>(dot(camera.selection_inverse.xz, p), dot(camera.selection_inverse.yw, p)) + camera.selection.xy;
-    let q = vec2<i32>(floor(local)) - vec2<i32>(selection.rect.xy);
     var covered = 0.;
-    if all(q >= vec2<i32>(0)) && all(q < vec2<i32>(selection.rect.zw)) {
-        let bytes = selection.info.y == 2u;
-        let count = select(8u,4u,bytes);
-        let word = u32(q.y) * ((selection.rect.z+count-1u)/count) + u32(q.x)/count;
-        covered = f32((selection.values[word] >> ((u32(q.x)%count)*(32u/count))) & select(15u,255u,bytes))/select(4.,255.,bytes);
+    if resampled_selection() {
+        covered = selection_sample(p).x;
+    } else {
+        let local = vec2<f32>(dot(camera.selection_inverse.xz, p), dot(camera.selection_inverse.yw, p)) + camera.selection.xy;
+        covered = selection_at(vec2<i32>(floor(local)) - vec2<i32>(selection.rect.xy));
     }
     return select(covered,1.-covered,camera.selection.w > .5);
 }
 fn selected(p: vec2<f32>) -> bool { return selection_coverage(p) >= .5; }
+// The outline crosses a pixel where half coverage lies within dx or dy of p.
+// Resampled coverage is linear enough within a pixel to find that crossing
+// from one sample and its gradient, away from the document's edges.
+fn outlined(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> bool {
+    let reach = abs(dx) + abs(dy);
+    if resampled_selection() && all(p - reach >= vec2<f32>(0.)) && all(p + reach < camera.offset_document.zw) {
+        let sample = selection_sample(p);
+        return abs(sample.x - .5) < max(abs(dot(sample.yz, dx)), abs(dot(sample.yz, dy)));
+    }
+    return selected(p-dx) != selected(p+dx) || selected(p-dy) != selected(p+dy);
+}
 
 struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
 @vertex fn vs_main(@builtin(vertex_index) index: u32) -> Vertex {
@@ -227,7 +262,7 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     if camera.selection.z > .5 && camera.rotation.y < .5 {
         let dx = camera.inverse.xy * .6;
         let dy = camera.inverse.zw * .6;
-        if selected(p-dx) != selected(p+dx) || selected(p-dy) != selected(p+dy) {
+        if outlined(p, dx, dy) {
             rgb = vec3<f32>(select(0., 1., (surface.x+surface.y) % 6. < 3.));
         }
     }

@@ -888,3 +888,150 @@ fn native_crop_on_the_selection_bar_then_canvas_size_shows_the_hidden_pixels() {
     w.window.close();
     pump(50);
 }
+
+fn drag(native: &mut RemoteInput, device: Device, from: [f32; 2], to: [f32; 2]) {
+    let middle = [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5];
+    native.perform(match device {
+        Device::Mouse => json!([
+            {"point": from}, {"down": true}, {"wait_ms": 40},
+            {"point": middle}, {"wait_ms": 20}, {"point": to}, {"wait_ms": 20}, {"down": false}
+        ]),
+        Device::Touch => json!([
+            {"touch": "down", "point": from}, {"wait_ms": 40},
+            {"touch": "move", "point": middle}, {"wait_ms": 20},
+            {"touch": "move", "point": to}, {"wait_ms": 20}, {"touch": "up"}
+        ]),
+        Device::Pen => json!([
+            {"pen": "down", "point": from}, {"wait_ms": 40},
+            {"pen": "move", "point": middle}, {"wait_ms": 20},
+            {"pen": "move", "point": to}, {"wait_ms": 20}, {"pen": "up"}, {"pen": "leave"}
+        ]),
+    });
+}
+
+fn find_type<T: IsA<gtk::Widget>>(root: &gtk::Widget) -> Option<T> {
+    if let Some(found) = root.downcast_ref::<T>() {
+        return Some(found.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if let Some(found) = find_type(&widget) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn soft_edged(selection: &layer_core::Selection) -> bool {
+    matches!(&selection.shape, layer_core::SelectionShape::Pixels(p) if p.coverage_format() == 2
+        && p.words().iter().any(|w| (0..4).any(|i| !matches!((w >> (8 * i)) & 255, 0 | 255))))
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_canvas_bar_refine --tablet"]
+fn native_canvas_bar_refine() {
+    use layer_ui::CanvasBarMenu;
+    let app = native_test_app("art.capycanvas.CanvasBarRefine");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
+    let paint = layer_core::LayerId(document(&w).active_layer.0);
+    let selection = |w: &Workspace| document(w).selection;
+    let dir = "../../artifacts/canvas-action-bar";
+    std::fs::create_dir_all(dir).unwrap();
+    let mut native = remote_input();
+    for device in [Device::Mouse, Device::Touch, Device::Pen] {
+        filled_selection(&w, paint.0);
+        let hard = selection(&w).unwrap();
+        choose_from_bar_menu(&w, &mut native, device, CanvasBarMenu::Refine, &["Feather…"]);
+        let field = until_some(
+            || find_named(w.window.upcast_ref(), "selection-refine-value").filter(|f| f.is_mapped()),
+            &format!("{device:?}: Feather… opens the Refine dialog"),
+        );
+        assert!(mapped_label(&field, "Feather radius").is_some(), "the dialog names the value");
+        assert!(w.window.has_css_class(crate::selection_masks::RefineDialog::PREVIEW_CLASS), "the canvas stays undimmed");
+        until(|| selection(&w).is_some_and(|s| soft_edged(&s)), "the default radius previews live");
+        let previewed = selection(&w);
+        let slider = find_css(&field, "number-track").and_then(|t| find_type::<gtk::Scale>(&t)).expect("the value slider");
+        let track = until_some(
+            || {
+                let before = slider.compute_bounds(&w.window)?;
+                pump(120);
+                slider.compute_bounds(&w.window).filter(|after| after == &before)
+            },
+            "the dialog finishes sliding in",
+        );
+        let along = |f: f32| [track.x() + track.width() * f, track.y() + track.height() * 0.5];
+        drag(&mut native, device, along(0.2), along(0.15));
+        until(
+            || state(&w).layer_tools.selection_resize.is_some_and(|v| v.radius > 8.),
+            &format!("{device:?}: dragging the slider changes the radius"),
+        );
+        until(
+            || {
+                let now = selection(&w);
+                now != previewed && now.is_some_and(|s| soft_edged(&s))
+            },
+            "the new radius previews without Apply",
+        );
+        if let Device::Mouse = device {
+            pump(300);
+            capture_reference(&w, &format!("{dir}/refine-feather.png"), 1.);
+        }
+        let apply = until_some(|| mapped_label(w.window.upcast_ref(), "Apply"), "the dialog's Apply");
+        tap(&mut native, device, center(&w, &apply));
+        until(
+            || state(&w).layer_tools.selection_resize.is_none() && find_named(w.window.upcast_ref(), "selection-refine-value").is_none_or(|f| !f.is_mapped()),
+            &format!("{device:?}: Apply closes the dialog"),
+        );
+        assert!(!w.window.has_css_class(crate::selection_masks::RefineDialog::PREVIEW_CLASS));
+        let feathered = selection(&w).unwrap();
+        assert!(soft_edged(&feathered));
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        until(|| selection(&w).as_ref() == Some(&hard), &format!("{device:?}: one Undo restores the hard edge"));
+        w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+        until(|| selection(&w).as_ref() == Some(&feathered), "Redo feathers it again");
+
+        filled_selection(&w, paint.0);
+        let (outline, pixels) = {
+            let doc = document(&w);
+            (doc.selection.clone().unwrap(), doc.layer(paint).unwrap().raster.identity())
+        };
+        choose_from_bar_menu(&w, &mut native, device, CanvasBarMenu::Refine, &["Transform Outline"]);
+        until(
+            || {
+                state(&w).canvas_bar.is_some_and(|b| {
+                    b.context.kind == layer_ui::CanvasBarKind::Transform && b.label.as_deref() == Some("Transform Outline")
+                }) && shown(&w)
+            },
+            &format!("{device:?}: Transform Outline opens its bar"),
+        );
+        assert!(find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-choice-transform-interpolation").is_none());
+        let anchor = anchor_in_window(&w);
+        let handle = [anchor[2], (anchor[1] + anchor[3]) * 0.5];
+        drag(&mut native, device, handle, [handle[0] + 80., handle[1]]);
+        until(
+            || (anchor_in_window(&w)[2] - anchor[2] - 80.).abs() < 3.,
+            &format!("{device:?}: dragging the edge handle scales the outline"),
+        );
+        assert_eq!(selection(&w).as_ref(), Some(&outline), "only Apply edits the selection");
+        until(|| shown(&w), "the bar returns after the drag");
+        if let Device::Mouse = device {
+            pump(300);
+            capture_reference(&w, &format!("{dir}/transform-outline.png"), 1.);
+        }
+        tap(&mut native, device, center(&w, &bar_widget(&w, "canvas-bar-ApplyTransform")));
+        until(|| !transforming(&w) && selection(&w).as_ref() != Some(&outline), "Apply moves the outline");
+        let doc = document(&w);
+        let applied = doc.selection.clone().unwrap();
+        assert_eq!(applied.shape, outline.shape, "the outline keeps its shape");
+        assert!(applied.bounds().max.x > outline.bounds().max.x);
+        assert_eq!(doc.layer(paint).unwrap().raster.identity(), pixels, "{device:?}: the pixels stay where they are");
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        until(|| selection(&w).as_ref() == Some(&outline), "one Undo restores the outline");
+    }
+}

@@ -354,6 +354,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             CanvasBar(host, dock, layout)
             NoticeBubble(host, dock, layout.getJSONObject("status"))
             CanvasSizePanel(host, dock, layout.getJSONObject("work_area"), state)
+            SelectionRefinePanel(host, dock, layout.getJSONObject("status"), state)
             if (!hidden) layout.array("dividers").objects().filterNot { it.optBoolean("fixed") }.forEach { divider ->
                 val rect = divider.getJSONObject("bounds")
                 val horizontal = divider.getString("axis") == "horizontal"
@@ -386,7 +387,6 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 }
             }
         }
-        state?.let { SelectionResizeDialog(host, it) }
         WorkspaceDropHint(dock)
         PaletteDragOverlay(host, dock.origin)
         dock.contextMenu?.let { menu ->

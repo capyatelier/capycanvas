@@ -57,6 +57,7 @@ pub(super) fn capture_selection<T: Send + 'static>(
                     request_id,
                     tonal_sample: None,
                     pixels: std::sync::Arc::new(pixels),
+                    placement: layer_core::Affine::IDENTITY,
                 },
                 read(coverage_size as usize + 20) != 0,
                 &bytes[coverage_size as usize + 32..],

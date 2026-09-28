@@ -375,6 +375,24 @@ fn entry(
         UiAction::Invoke {
             command: CommandId::ToggleTheme,
         } => "appearance theme light dark",
+        UiAction::Invoke {
+            command: CommandId::GrowSelection,
+        } => "expand modify selection",
+        UiAction::Invoke {
+            command: CommandId::ShrinkSelection,
+        } => "contract modify selection",
+        UiAction::Invoke {
+            command: CommandId::FeatherSelection,
+        } => "soften blur edge modify selection",
+        UiAction::Invoke {
+            command: CommandId::BorderSelection,
+        } => "frame ring edge modify selection",
+        UiAction::Invoke {
+            command: CommandId::SmoothSelection,
+        } => "clean jagged modify selection",
+        UiAction::Invoke {
+            command: CommandId::TransformSelectionOutline,
+        } => "transform selection marquee scale rotate",
         _ => "",
     };
     Entry {
@@ -456,6 +474,12 @@ fn action_description(action: &UiAction) -> &'static str {
             LassoFill => "Draw a freehand shape filled with the drawing color.",
             CanvasSize => "Set the canvas size from an anchor, in pixels or percent. Layers keep pixels outside the canvas, so a smaller canvas can grow back.",
             CropCanvasToSelection => "Shrink the canvas to the selection's bounds. Pixels outside stay on their layers, hidden until the canvas grows again.",
+            GrowSelection => "Expand the selection, Quick Mask or edited Selection Layer by a distance, keeping soft values.",
+            ShrinkSelection => "Contract the selection, Quick Mask or edited Selection Layer by a distance, keeping soft values.",
+            FeatherSelection => "Soften the edges of the selection, Quick Mask or edited Selection Layer with a Gaussian blur.",
+            BorderSelection => "Replace the selection with a band of the chosen width along its edge.",
+            SmoothSelection => "Fill notches and remove spikes narrower than twice the radius, keeping the canvas edges.",
+            TransformSelectionOutline => "Move, scale, rotate or flip the selection outline; the pixels stay where they are.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -1011,7 +1035,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::LayerMaskEnabled
             | C::ApplyLayerMask
             | C::CanvasSize
-            | C::CropCanvasToSelection => self.require_document_idle(),
+            | C::CropCanvasToSelection
+            | C::GrowSelection
+            | C::ShrinkSelection
+            | C::FeatherSelection
+            | C::BorderSelection
+            | C::SmoothSelection
+            | C::TransformSelectionOutline => self.require_document_idle(),
             C::SaveDocument | C::SaveDocumentAs => self.require_raster_snapshot(),
             C::CloseDocument => self.require_document_snapshot_idle(),
             C::ResetLayout if self.managed_workspace.is_some() => self.require_workspace_idle(),
@@ -1116,6 +1146,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::TransformFree
             | C::TransformUniform
             | C::TransformPerspective => "Start a transform first",
+            C::TransformDistort | C::TransformWarp if self.operation.outline() => crate::session::operation::OUTLINE_AFFINE,
+            C::TransformNearest | C::TransformBilinear | C::TransformBicubic if self.operation.outline() => {
+                crate::session::operation::OUTLINE_PIXELS
+            }
             C::TransformDistort | C::TransformWarp if self.operation.placing() => crate::session::operation::DISTORT_PLACEMENT,
             C::TransformWarp => "Start a transform first",
             C::WarpGridThree | C::WarpGridFour | C::WarpGridFive => "Choose Warp first",
@@ -1143,6 +1177,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or(UNAVAILABLE),
             C::CanvasSize => self.canvas_geometry_refusal().unwrap_or(UNAVAILABLE),
             C::CropCanvasToSelection => self.crop_to_selection_refusal().unwrap_or(UNAVAILABLE),
+            C::GrowSelection | C::ShrinkSelection | C::FeatherSelection | C::BorderSelection | C::SmoothSelection => {
+                self.refine_refusal().unwrap_or(UNAVAILABLE)
+            }
+            C::TransformSelectionOutline => self.outline_refusal().unwrap_or(UNAVAILABLE),
             C::MaskSelection if self.engine.document().selection.is_none() => "Make a selection first",
             C::ApplyLayerMask if apply_refusal.is_some() => apply_refusal.unwrap_or(UNAVAILABLE),
             C::ApplyLayerMask if active.and_then(|l| l.mask.as_ref()).is_some_and(|m| !m.enabled) => {

@@ -944,7 +944,7 @@ pub struct Workspace {
     pub(crate) color_editors: RefCell<Vec<std::rc::Weak<crate::color_editor::Form>>>,
     tool_settings: crate::tool_panels::ToolSettings,
     pub(crate) canvas_bar: crate::canvas_bar::CanvasBar,
-    selection_resize: crate::selection_masks::ResizeDialog,
+    selection_refine: crate::selection_masks::RefineDialog,
     pub(crate) canvas_size: Rc<crate::canvas_size::CanvasSizeDialog>,
     color_panel: crate::tool_panels::ColorPanel,
     palette_panel: Rc<crate::color_library::PalettePanel>,
@@ -1205,7 +1205,7 @@ impl Workspace {
             color_editors: RefCell::default(),
             tool_settings,
             canvas_bar,
-            selection_resize: crate::selection_masks::ResizeDialog::new(),
+            selection_refine: crate::selection_masks::RefineDialog::new(),
             canvas_size: Rc::new(crate::canvas_size::CanvasSizeDialog::new()),
             color_panel,
             palette_panel,
@@ -1246,7 +1246,7 @@ impl Workspace {
         this.canvas_bar.bind(&this);
         this.notice.bind(&this);
         this.view_info.bind(&this);
-        this.selection_resize.bind(&this);
+        this.selection_refine.bind(&this);
         this.canvas_size.bind(&this);
         this.color_panel.bind(&this);
         this.palette_panel.bind(&this);
@@ -2608,7 +2608,7 @@ impl Workspace {
         }
         if regions & (regions::BRUSH | regions::DOCUMENT | regions::COMMANDS) != 0 {
             self.tool_settings.refresh(self, &state);
-            self.selection_resize.refresh(self, &state);
+            self.selection_refine.refresh(self, &state);
             self.canvas_size.refresh(self, &state);
         }
         if regions & (regions::COLOR_PREVIEW | regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {

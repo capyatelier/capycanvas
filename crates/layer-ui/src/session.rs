@@ -53,6 +53,9 @@ mod canvas_bar;
 mod notices;
 #[path = "selection_pixels.rs"]
 mod selection_pixels;
+#[path = "selection_refine.rs"]
+mod selection_refine;
+pub use selection_refine::{RefineKind, SelectionRefineView};
 pub use notices::{Notice, NoticeAction};
 pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
@@ -1944,7 +1947,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn renderer_stats(&self) -> crate::StatsView {
-        crate::stats::view(self.engine.backend().telemetry())
+        crate::StatsView {
+            selection_values: self.selection_masks.refine_values,
+            selection_previews: self.selection_masks.refine_previews,
+            ..crate::stats::view(self.engine.backend().telemetry())
+        }
     }
     /// Live execution availability, including temporary canvas locks. Retained
     /// controls use `state.commands`; dispatch always rechecks this live state.
@@ -2104,7 +2111,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::TransformWarp
             | CommandId::TransformNearest
             | CommandId::TransformBilinear
-            | CommandId::TransformBicubic => idle && self.operation.active() && !self.operation.placing(),
+            | CommandId::TransformBicubic => {
+                idle && self.operation.active() && !self.operation.placing() && !self.operation.outline()
+            }
             CommandId::TransformPerspective => {
                 idle && self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
             }
@@ -2158,6 +2167,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::CanvasSize => self.require_document_idle().is_ok() && self.canvas_geometry_refusal().is_none(),
             CommandId::CropCanvasToSelection => {
                 self.require_document_idle().is_ok() && self.crop_to_selection_refusal().is_none()
+            }
+            CommandId::GrowSelection
+            | CommandId::ShrinkSelection
+            | CommandId::FeatherSelection
+            | CommandId::BorderSelection
+            | CommandId::SmoothSelection => self.require_document_idle().is_ok() && self.refine_refusal().is_none(),
+            CommandId::TransformSelectionOutline => {
+                self.require_document_idle().is_ok() && self.outline_refusal().is_none()
             }
             CommandId::ClearLayer | CommandId::FillSelection => {
                 self.require_document_idle().is_ok()
@@ -2555,9 +2572,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (DOCUMENT | LAYOUT, true)
             }
             UiAction::Selection { action } => {
-                self.require_document_idle()?;
+                if matches!(
+                    action,
+                    SelectionAction::ResizeRadius { .. } | SelectionAction::ApplyResize | SelectionAction::CancelResize
+                ) {
+                    self.require_idle()?;
+                } else {
+                    self.require_document_idle()?;
+                }
+                let value = matches!(action, SelectionAction::ResizeRadius { .. });
                 self.selection_action(action)?;
-                (DOCUMENT | BRUSH | COMMANDS, true)
+                if value { (0, true) } else { (DOCUMENT | BRUSH | COMMANDS, true) }
             }
             UiAction::CanvasSize { action } => {
                 if action != CanvasSizeAction::Cancel {
@@ -3893,6 +3918,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.pending_filters.is_some()
             || self.eyedropper.busy()
             || self.region_tools.busy()
+            || self.selection_masks.refine.as_ref().is_some_and(|d| d.unsettled())
             || self.painted_selections.busy()
             || self.notices.publishing()
     }
@@ -3919,6 +3945,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         changed |= self.poll_document_close();
         if self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision!=self.engine.document().revision) {self.cancel_tonal();}
+        self.advance_refine(now_ns)?;
         changed |= self.poll_region_tool()?;
         if std::mem::take(&mut self.operation.changed) {
             changed |= regions::BRUSH;
@@ -3962,7 +3989,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         changed |= std::mem::take(&mut self.interaction.hold_regions);
         changed |= self.advance_axes(now_ns)?;
-        let tonal_changed=std::mem::take(&mut self.tonal_tools.changed);
+        let tonal_changed = std::mem::take(&mut self.tonal_tools.changed)
+            | std::mem::take(&mut self.selection_masks.refine_changed);
         if tonal_changed {self.refresh_tools();changed |= regions::DOCUMENT | regions::BRUSH | regions::COMMANDS;}
         if self.refresh_commands() {
             changed |= regions::COMMANDS;
@@ -4080,6 +4108,20 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ScaleRotate => {
                 self.begin_transform()?;
                 Ok((BRUSH | DOCUMENT, true))
+            }
+            CommandId::TransformSelectionOutline => {
+                self.begin_outline_transform()?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
+            CommandId::GrowSelection
+            | CommandId::ShrinkSelection
+            | CommandId::FeatherSelection
+            | CommandId::BorderSelection
+            | CommandId::SmoothSelection => {
+                let kind = RefineKind::of_command(command).expect("refine command");
+                self.begin_refine(kind, self.refine_layer())?;
+                self.refresh_document();
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
             CommandId::ApplyTransform | CommandId::CancelTransform => {
                 self.finish_transform(command == CommandId::ApplyTransform)?;
@@ -4688,9 +4730,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             ]
             .into_iter()
             .filter(|c| match (c, transform_choice(*c)) {
-                (_, Some(TransformChoice::Interpolation(_))) => !self.operation.placing(),
+                (_, Some(TransformChoice::Interpolation(_))) => !self.operation.placing() && !self.operation.outline(),
                 (_, Some(TransformChoice::Cells(_))) => self.warp_cells().is_some(),
                 (CommandId::PlacementOriginalSize, _) => self.operation.placing(),
+                (CommandId::TransformDistort | CommandId::TransformWarp, _) => !self.operation.outline(),
                 (CommandId::TransformPerspective, _) => {
                     self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
                 }
@@ -4806,7 +4849,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.state.tool_extra=self.tonal_extra();
         self.state.layer_tools.mask_editing = self.mask_editing_view();
-        self.state.layer_tools.selection_resize = self.selection_masks.resize_view();
+        self.state.layer_tools.selection_resize = self.selection_masks.refine_view();
         self.state.layer_tools.canvas_size = self.canvas_size_view();
     }
 
@@ -5208,6 +5251,7 @@ mod tests {
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
     include!("selection_pixel_tests.rs");
+    include!("selection_refine_tests.rs");
     include!("tonal_tests.rs");
     include!("painted_selection_tests.rs");
     include!("toolbar_component_tests.rs");
@@ -6825,6 +6869,7 @@ mod tests {
         assert!(request.limit.is_none());
         s.renderer_mut().region_reply = Some(RegionResult {
             tonal_sample: None,
+            placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
             pixels: coverage.clone(),
         });
@@ -6872,6 +6917,7 @@ mod tests {
         );
         s.renderer_mut().region_reply = Some(RegionResult {
             tonal_sample: None,
+            placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
             pixels: coverage.clone(),
         });
@@ -6909,6 +6955,7 @@ mod tests {
         invoke(&mut s, CommandId::Hand);
         s.renderer_mut().region_reply = Some(RegionResult {
             tonal_sample: None,
+            placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
             pixels: coverage.clone(),
         });
@@ -6945,6 +6992,7 @@ mod tests {
         );
         s.renderer_mut().region_reply = Some(RegionResult {
             tonal_sample: None,
+            placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
             pixels: coverage.clone(),
         });
@@ -6972,6 +7020,7 @@ mod tests {
         .unwrap();
         s.renderer_mut().region_reply = Some(RegionResult {
             tonal_sample: None,
+            placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
             pixels: coverage.clone(),
         });

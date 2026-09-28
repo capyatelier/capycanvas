@@ -335,18 +335,18 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .number-track { display: flex; align-items: center; gap: 6px; }
 .number-control .number-step { display: grid; place-items: center; flex: none; min-width: 32px; min-height: 32px; width: 32px; height: 32px; padding: 0; }
 .number-step svg { width: 16px; height: 16px; }
-.number-control .number-slider { appearance: none; flex: 1; width: 0; min-width: 0; height: 32px; padding: 0; margin: 0; border: 0; background: transparent; touch-action: pan-y; }
+.number-control .number-slider { --thumb-size: 16px; appearance: none; flex: 1; width: 0; min-width: 0; height: 32px; padding: 0; margin: 0; border: 0; background: transparent; touch-action: pan-y; }
 .number-slider::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--number-fill, var(--accent)) var(--fill), var(--number-track, var(--input)) var(--fill)); }
 .number-slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--number-track, var(--input)); }
 .number-slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--number-fill, var(--accent)); }
 .panel .number-control { --number-fill: color-mix(in srgb, var(--panel), var(--text)); }
-.number-slider::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; margin-top: -6px; border: 0; border-radius: 50%; background: var(--thumb); box-shadow: 0 1px 3px #0005; }
-.number-slider::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--thumb); box-shadow: 0 1px 3px #0005; }
+.number-slider::-webkit-slider-thumb { appearance: none; width: var(--thumb-size, 16px); height: var(--thumb-size, 16px); margin-top: -6px; border: 0; border-radius: 50%; background: var(--thumb); box-shadow: 0 1px 3px #0005; }
+.number-slider::-moz-range-thumb { width: var(--thumb-size, 16px); height: var(--thumb-size, 16px); border: 0; border-radius: 50%; background: var(--thumb); box-shadow: 0 1px 3px #0005; }
 .panel .number-track { gap: 6px; }
 .panel .number-track .number-step { min-width: 24px; min-height: 24px; width: 24px; height: 24px; }
-.panel .number-control .number-slider { height: 24px; }
-.panel .number-slider::-webkit-slider-thumb { width: 0; height: 0; margin-top: 2px; box-shadow: none; }
-.panel .number-slider::-moz-range-thumb { width: 0; height: 0; box-shadow: none; }
+.panel .number-control .number-slider { --thumb-size: 0px; height: 24px; }
+.panel .number-slider::-webkit-slider-thumb { margin-top: 2px; box-shadow: none; }
+.panel .number-slider::-moz-range-thumb { box-shadow: none; }
 .number-spin { background: var(--input); border-radius: var(--control-radius); overflow: hidden; }
 .number-spin .number-entry { width: 60px; height: 32px; }
 .panel select { background: var(--input); }
@@ -478,6 +478,12 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .canvas-notice { position: absolute; left: 0; top: 0; z-index: 900; display: flex; align-items: center; gap: 12px; box-sizing: border-box; width: max-content; padding: 8px 14px; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 2px 8px #0004; pointer-events: none; user-select: none; -webkit-user-select: none; }
 .canvas-notice[hidden], .canvas-notice [hidden] { display: none; }
 .canvas-notice-action { flex: none; margin: -6px -8px -6px 0; padding: 5px 12px; white-space: nowrap; pointer-events: auto; -webkit-tap-highlight-color: transparent; }
+.refine-panel { position: absolute; left: 0; top: 0; z-index: 900; display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; padding: 14px 16px 12px; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 2px 8px #0004; outline: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.refine-title { margin: 0; font-size: inherit; font-weight: 700; }
+.refine-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.refine-actions .suggested-action { background: var(--accent); color: var(--accent-foreground); }
+:where(:root:not([data-touch])) .refine-actions button:not(.suggested-action):hover { background: color-mix(in srgb, var(--text) 12%, transparent); }
+:where(:root:not([data-touch])) .refine-actions .suggested-action:hover { background: color-mix(in srgb, white 10%, var(--accent)); }
 dialog { border: 0; border-radius: calc(16px * var(--squircle-scale)); background: var(--settings); color: var(--text); padding: 0; width: 800px; height: 620px; max-width: calc(100vw - 60px); max-height: calc(100dvh - 40px); box-shadow: 0 2px 8px #0004, 0 0 0 1px #0001; }
 #settings { width: 1000px; height: 744px; }
 dialog::backdrop { background: #0008; }

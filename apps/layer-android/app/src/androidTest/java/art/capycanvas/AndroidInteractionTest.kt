@@ -1847,6 +1847,9 @@ class AndroidInteractionTest {
     private fun nativeGlassRegions() = kotlinx.coroutines.runBlocking {
         host.withNative { JSONObject(Native.displayStatus(it)).optInt("glass_regions", -1) }
     }
+    private fun selectionPreviews() = kotlinx.coroutines.runBlocking {
+        host.withNative { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())).optLong("selection_previews") }
+    }
     private fun onMain(block: () -> Unit) = if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) block() else instrumentation.runOnMainSync(block)
     private fun glassBoxes(): Int { var count = 0; onMain { count = host.glassBoxesForTest.size }; return count }
     private fun textBounds(text: String): Rect? {
@@ -2465,6 +2468,7 @@ class AndroidInteractionTest {
 
     @Test fun modeBarsLeaveFromTheirExitsAcrossDevices() {
         val keep = layerStates().map { it.getLong("id") }.toSet()
+        fixture.getJSONObject("layout").put("bands", JSONArray(fixture.getJSONObject("layout").array("bands").objects().filter { it.getInt("id") == 44 }))
         var paint = 0L
         fun row(id: Long) = layerStates().first { it.getLong("id") == id }
         fun artwork() = editingLayer() == paint && !row(paint).getBoolean("mask_selected")
@@ -2589,6 +2593,108 @@ class AndroidInteractionTest {
             }
         } finally { popupInput = false }
         println("PASS guide bar: a selected guide's bar deletes it with mouse, finger and stylus")
+    }
+
+    @Test fun canvasBarRefineAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val wide = JSONObject(fixture.toString()).apply {
+            getJSONObject("layout").put("bands", JSONArray(getJSONObject("layout").array("bands").objects().filter { it.getInt("id") == 44 }))
+        }
+        fun refine() = state().getJSONObject("layer_tools").objectOrNull("selection_resize")
+        fun anchor() = canvasBar()?.optJSONArray("anchor")?.toString()
+        fun edges() = canvasBar()!!.getJSONArray("anchor").let { a -> (0 until 4).map(a::getDouble) }
+        fun close(a: Int, b: Int) = listOf(16, 8, 0).all { kotlin.math.abs((a shr it and 255) - (b shr it and 255)) <= 6 }
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        popupInput = true
+        try {
+            for (device in pointerTools) {
+                val name = listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]
+                action(obj("type" to "restore_workspace", "workspace" to wide)); command("fit_canvas")
+                SystemClock.sleep(300)
+                tool = device
+
+                var selection = blueSelection(keep)
+                var pixels = paintRevision(selection.layer)
+                val hard = anchor()
+                val undimmed = screenPixels(listOf(selection.outside)).single()
+                chooseFromBarMenu("refine", listOf("Feather…"))
+                waitFor("$name: Feather… opens the Refine panel", 5_000) {
+                    refine()?.getString("kind") == "feather" && shown("selection-refine-panel")
+                }
+                assertEquals("Feather Selection", refine()!!.getString("title"))
+                assertNotNull("$name: the panel names the value", textBounds("Feather radius"))
+                onMain {
+                    assertNotNull("$name: the panel is part of the workspace window", owner.find(hasTag("selection-refine-panel")))
+                    assertTrue("$name: the panel leaves window focus with the canvas", owner.view.hasWindowFocus())
+                }
+                waitFor("$name: the default radius previews live", 10_000) { anchor() != hard }
+                assertTrue("$name: the canvas behind the panel is not dimmed", close(undimmed, screenPixels(listOf(selection.outside)).single()))
+                val previewed = anchor()
+                val panel = bounds("selection-refine-panel")
+                assertTrue("$name: the panel stays clear of the selection", panel.top > selection.inside.y)
+                val slider = bounds("setting-slider-selection-refine")
+                fun along(f: Float) = Offset(slider.left + slider.width * f, slider.center.y)
+                val drawn = selectionPreviews()
+                val anchors = mutableSetOf<String?>()
+                event(MotionEvent.ACTION_DOWN, along(.2f))
+                for (i in 1..90) {
+                    SystemClock.sleep(16)
+                    event(MotionEvent.ACTION_MOVE, along(.2f + .2f * i / 90))
+                    anchors += anchor()
+                }
+                val previews = selectionPreviews() - drawn
+                assertTrue("$name: a continuously dragged value keeps updating the preview ($previews previews)", previews >= 2)
+                assertTrue("$name: previews leave the bar in place ($anchors)", anchors.size < previews)
+                event(MotionEvent.ACTION_UP)
+                waitFor("$name: the released value previews", 10_000) {
+                    (refine()?.number("radius") ?: 0f) > 8f && anchor() != previewed
+                }
+                for (theme in if (device == pointerTools.first()) listOf("light", "dark") else listOf(null)) {
+                    theme?.let { action(obj("type" to "set_theme", "theme" to it)) }
+                    captureCanvasBar(listOfNotNull("refine-feather", name, theme).joinToString("-"))
+                }
+                val radius = refine()!!.number("radius")
+                assertTrue("$name: one decimal for Feather ($radius)", kotlin.math.abs(radius * 10 - kotlin.math.round(radius * 10)) < 1e-3)
+                tap(bounds("selection-refine-apply").center)
+                waitFor("$name: Apply closes the panel", 10_000) { refine() == null && !exists("selection-refine-panel") }
+                waitFor("$name: the feathered selection is kept", 5_000) { anchor() != null && anchor() != hard }
+                val feathered = anchor()
+                assertEquals("$name: Feather edits no pixels", pixels, paintRevision(selection.layer))
+                command("undo")
+                waitFor("$name: one Undo restores the hard edge", 5_000) { anchor() == hard }
+                command("redo")
+                waitFor("$name: Redo feathers it again", 5_000) { anchor() == feathered }
+
+                selection = blueSelection(keep)
+                pixels = paintRevision(selection.layer)
+                val outline = edges()
+                chooseFromBarMenu("refine", listOf("Transform Outline"))
+                waitFor("$name: Transform Outline opens its bar", 5_000) {
+                    barKind() == "transform" && canvasBar()?.optString("label") == "Transform Outline" && shown("canvas-action-bar")
+                }
+                assertFalse("$name: an outline has no interpolation", exists("canvas-bar-choice-transform-interpolation"))
+                val frame = edges()
+                val handle = documentPoint(frame[2], (frame[1] + frame[3]) / 2)
+                drag(handle, handle + Offset(48 * density, 0f))
+                waitFor("$name: dragging the edge handle widens the outline", 5_000) {
+                    edges().let { it[2] > frame[2] + 10 && kotlin.math.abs(it[0] - frame[0]) < 1 }
+                }
+                waitFor("$name: the bar returns after the drag", 3_000) { shown("canvas-action-bar") }
+                captureCanvasBar("transform-outline-$name")
+                tap(bounds("canvas-bar-action-apply_transform").center)
+                waitFor("$name: Apply keeps the wider outline", 5_000) {
+                    barKind() == "selection" && edges()[2] > outline[2] + 10
+                }
+                assertEquals("$name: Transform Outline moves no pixels", pixels, paintRevision(selection.layer))
+                awaitPixels("$name: the layer keeps its pixels", listOf(selection.inside, selection.outside)) { (inside, outside) ->
+                    blue(inside) && blue(outside)
+                }
+                command("undo")
+                waitFor("$name: one Undo restores the outline", 5_000) { edges() == outline }
+                println("PASS canvas bar refine $name")
+            }
+        } finally { popupInput = false; action(obj("type" to "set_theme", "theme" to originalTheme)) }
+        println("PASS canvas bar refine: Refine ▾ › Feather… keeps previewing while the value is dragged and undoes in one step, and Transform Outline moves only the selection, with mouse, finger and stylus")
     }
 
     @Test fun selectionBarOverflowsIntoMoreInBothOrientations() {

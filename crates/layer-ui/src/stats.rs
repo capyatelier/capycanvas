@@ -14,6 +14,10 @@ pub struct StatsView {
     /// Raw execution timings for host qualification; keep presentation separate.
     pub gpu_samples: Vec<f32>,
     pub resident_bytes: u64,
+    /// Select › Modify values received and previews drawn since the session
+    /// began, for host qualification.
+    pub selection_values: u64,
+    pub selection_previews: u64,
     pub budget_ms: f32,
     pub chart_label: &'static str,
     /// Insert the chart after this many metric rows on every frontend.
@@ -76,6 +80,8 @@ pub(super) fn view(t: RendererTelemetry) -> StatsView {
         samples,
         gpu_samples: if t.gpu_timestamps { t.gpu.ordered() } else { Vec::new() },
         resident_bytes: t.resident_bytes,
+        selection_values: 0,
+        selection_previews: 0,
         budget_ms: 1000. / 120.,
         chart_label: "CPU render · last 120 updates",
         chart_after_rows: 2,

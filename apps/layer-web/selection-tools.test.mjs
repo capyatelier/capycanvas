@@ -52,7 +52,8 @@ export async function checkSelectionTools({call, evaluate, settle}) {
       const row=menuRows.find(r=>r.label===label);
       assert.ok(row?.disabled && !row.arrow,`${label} cannot open an empty submenu`);
     }
-    assert.ok(menuRows.some(r=>r.label==='Grow…') && menuRows.some(r=>r.label==='Shrink…'));
+    for(const label of ['Grow Selection…','Shrink Selection…','Feather Selection…','Border Selection…','Smooth Selection…','Transform Selection Outline'])
+      assert.ok(menuRows.some(r=>r.label===label),`Select offers ${label}`);
     assert.ok(!menuRows.some(r=>r.label==='Modify'));
     await evaluate(`document.querySelector('.panel-context-menu:popover-open').hidePopover()`);await settle();
     const choices = await evaluate('layerApp.state().tool_set.subtools');

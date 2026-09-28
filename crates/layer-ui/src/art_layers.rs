@@ -73,7 +73,7 @@ pub struct LayersView {
     pub has_selection: bool,
     pub quick_mask: bool,
     pub mask_editing: Option<MaskEditingView>,
-    pub selection_resize: Option<super::selection_masks::SelectionResizeView>,
+    pub selection_resize: Option<super::selection_refine::SelectionRefineView>,
     pub canvas_size: Option<super::canvas_size::CanvasSizeView>,
     pub can_reference: bool,
     pub can_delete: bool,
@@ -2010,7 +2010,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 distance += (to[0] - from[0]).hypot(to[1] - from[1]);
             }
         };
-        if !self.selection_brush_active() && self.selection_masks.target().is_none() && self.selection_tools.options.display.outline && let Some(selection) = self.engine.display_selection() {
+        if !self.selection_brush_active() && self.selection_masks.target().is_none()
+            && (self.selection_tools.options.display.outline || self.operation.outline())
+            && let Some(selection) = self.engine.display_selection() {
             for contour in selection.contours() {
                 path(contour, true, selection.affine);
             }

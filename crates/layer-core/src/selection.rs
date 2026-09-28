@@ -746,4 +746,26 @@ mod refinement_tests {
         assert!(editor.refine_selection(SelectionTarget::Current,mask(0xff00),editor.document().revision).is_err());
         assert!(editor.can_redo());
     }
+    #[test]
+    fn withdrawn_refinements_leave_no_history() {
+        for target in [SelectionTarget::Current,SelectionTarget::Saved(LayerId(3))] {
+            let mut doc=Document::new("refine",4,1);
+            doc.layers.push(Layer::selection(LayerId(3),"Mask",mask(0xff)));
+            doc.selection=Some(mask(0xff00));
+            let mut editor=Editor::new(doc);
+            editor.perform(Edit::SetRulers(Vec::new())).unwrap();
+            let (original,checkpoint)=(editor.document().clone(),editor.checkpoint());
+            editor.perform(editor.document().selection_edit(target,mask(0xff000000)).unwrap()).unwrap();
+            editor.refine_selection(target,mask(0xff800000),editor.document().revision).unwrap();
+            assert!(editor.withdraw_selection(target,editor.document().revision-1).is_err());
+            editor.withdraw_selection(target,editor.document().revision).unwrap();
+            assert_eq!(editor.document().selection,original.selection);
+            assert_eq!(editor.document().saved_selection(LayerId(3)),original.saved_selection(LayerId(3)));
+            assert_eq!(editor.checkpoint(),checkpoint);
+            assert!(!editor.can_redo());
+            editor.undo().unwrap();
+            assert!(!editor.can_undo(),"only the unrelated step remains");
+            assert!(editor.withdraw_selection(target,editor.document().revision).is_err());
+        }
+    }
 }

@@ -576,9 +576,10 @@ class AndroidRasterTest {
         val thumb=compose.onNodeWithTag("layer-thumbnail-$id-false",useUnmergedTree=true).fetchSemanticsNode().boundsInRoot
         val load=compose.onNodeWithTag("selection-load-$id").fetchSemanticsNode().boundsInRoot
         assertTrue("Thumbnail $thumb and Load $load align",kotlin.math.abs(thumb.width-load.width)<=thumb.width*.1f && load.left>=thumb.right && load.left-thumb.right<20f)
-        send(obj("type" to "selection", "action" to obj("op" to "begin_resize", "grow" to true, "layer" to id)))
+        send(obj("type" to "selection", "action" to obj("op" to "begin_refine", "kind" to "grow", "layer" to id)))
         compose.onNodeWithText("Grow Selection").assertIsDisplayed()
-        compose.onNodeWithText("Apply").performClick()
+        compose.onNodeWithText("Grow by").assertIsDisplayed()
+        compose.onNodeWithTag("selection-refine-apply").performClick()
         compose.waitUntil(30_000) { !tick() }
         invoke("undo");invoke("redo")
         invoke("clear_selection_mask"); invoke("return_to_artwork")

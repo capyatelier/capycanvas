@@ -1917,14 +1917,7 @@ impl Editor {
     /// navigation, and Undo/Redo. Retain the original inverse and admit both
     /// directions before publishing the replacement.
     pub fn refine_selection(&mut self, target: SelectionTarget, coverage: Selection, revision: u64) -> Result<(), DocumentError> {
-        let previous = self.undo.last().filter(|entry| match (&entry.edit, target) {
-            (Edit::SetSelection(_), SelectionTarget::Current) => true,
-            (Edit::SetSavedSelection { id, .. }, SelectionTarget::Saved(target)) => *id == target,
-            _ => false,
-        }).ok_or(DocumentError::InvalidLayerOperation("The selection operation has changed"))?;
-        if self.document.revision != revision || !self.redo.is_empty() {
-            return Err(DocumentError::InvalidLayerOperation("The selection operation has changed"));
-        }
+        let previous = self.last_selection_operation(target, revision)?;
         let edit = self.document.selection_edit(target, coverage)?;
         let (candidate, _) = self.prepare_history_edit(edit, history_budget::BYTE_BUDGET)?;
         if history_budget::Accounting::new(&candidate).charge(previous) > history_budget::BYTE_BUDGET {
@@ -1937,6 +1930,29 @@ impl Editor {
         }
         self.trim_history(history_budget::BYTE_BUDGET);
         Ok(())
+    }
+
+    /// Withdraw the last selection operation under the guard of
+    /// `refine_selection`: the document returns to its state before that
+    /// operation, and neither Undo nor Redo keeps it.
+    pub fn withdraw_selection(&mut self, target: SelectionTarget, revision: u64) -> Result<(), DocumentError> {
+        let edit = self.last_selection_operation(target, revision)?.edit.clone();
+        self.document.apply(edit)?;
+        self.checkpoint = self.undo.pop().expect("guarded selection operation").checkpoint;
+        Ok(())
+    }
+
+    fn last_selection_operation(&self, target: SelectionTarget, revision: u64) -> Result<&HistoryEntry, DocumentError> {
+        let changed = DocumentError::InvalidLayerOperation("The selection operation has changed");
+        let entry = self.undo.last().filter(|entry| match (&entry.edit, target) {
+            (Edit::SetSelection(_), SelectionTarget::Current) => true,
+            (Edit::SetSavedSelection { id, .. }, SelectionTarget::Saved(target)) => *id == target,
+            _ => false,
+        }).ok_or(changed.clone())?;
+        if self.document.revision != revision || !self.redo.is_empty() {
+            return Err(changed);
+        }
+        Ok(entry)
     }
 
     fn prepare_history_edit(&self, edit: Edit, budget: usize) -> Result<(Document, HistoryEntry), DocumentError> {

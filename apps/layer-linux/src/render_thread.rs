@@ -102,7 +102,8 @@ enum Command {
     CancelSelectionPaint(u64),
     SelectionOverlay(Option<layer_render::SelectionOverlay>),
     QuickMaskThumbnail(Option<layer_core::Selection>),
-    Region(layer_render::RegionRequest),
+    Region(u64, layer_render::RegionRequest),
+    CancelRegion(u64),
     EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
@@ -127,7 +128,7 @@ enum Reply {
         layer_render_wgpu::StartupProgress,
         HashMap<AssetId, BrushSource>,
     ),
-    Region(Result<layer_render::RegionResult, String>),
+    Region(u64, Result<layer_render::RegionResult, String>),
     SelectionPaintAck(u64, Result<bool, String>),
     SelectionPaint(u64, Result<layer_render::SelectionPaintResult, String>),
     EffectValidation(layer_render::EffectValidationResult),
@@ -178,6 +179,7 @@ pub struct RenderWorker {
     selection: Option<layer_core::Selection>,
     region: Option<Result<layer_render::RegionResult, String>>,
     region_pending: bool,
+    region_generation: u64,
     selection_generation: u64,
     selection_update_pending: bool,
     selection_ack: Option<Result<bool, String>>,
@@ -368,6 +370,7 @@ impl RenderWorker {
             selection: None,
             region: None,
             region_pending: false,
+            region_generation: 0,
             selection_generation: 0,
             selection_update_pending: false,
             selection_ack: None,
@@ -500,9 +503,11 @@ impl RenderWorker {
                 Reply::SelectionPaint(generation, result) => {
                     if generation == self.selection_generation { self.selection_paint = Some(result); }
                 }
-                Reply::Region(result) => {
-                    self.region_pending = false;
-                    self.region = Some(result);
+                Reply::Region(generation, result) => {
+                    if generation == self.region_generation {
+                        self.region_pending = false;
+                        self.region = Some(result);
+                    }
                 }
                 Reply::EffectValidation(result) => {
                     self.effect_validation_pending = false;
@@ -646,9 +651,15 @@ impl CanvasRenderer for RenderWorker {
         if self.region_pending {
             return Ok(false);
         }
-        self.send(Command::Region(request))?;
+        self.send(Command::Region(self.region_generation, request))?;
         self.region_pending = true;
         Ok(true)
+    }
+    fn cancel_region(&mut self) {
+        self.region_generation = self.region_generation.wrapping_add(1);
+        self.region_pending = false;
+        self.region = None;
+        let _ = self.send(Command::CancelRegion(self.region_generation));
     }
     fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
         self.ready().ok()?;
@@ -920,6 +931,7 @@ impl Worker {
         let mut pending_frames: VecDeque<Box<Frame>> = VecDeque::new();
         let mut deferred = VecDeque::new();
         let mut selection_generation = 0;
+        let mut region_generation = 0;
         let mut pending_thumbnails = VecDeque::new();
         let mut last_canvas_frame = std::time::Instant::now();
         let mut filter_preview_generation = 0;
@@ -1015,7 +1027,7 @@ impl Worker {
             }
             if let Some(region) = self.renderer.take_region() {
                 reply
-                    .send(Reply::Region(region.map_err(error)))
+                    .send(Reply::Region(region_generation, region.map_err(error)))
                     .map_err(error)?;
             }
             // The worker can advance a chunk independently of GTK's UI poll.
@@ -1049,7 +1061,7 @@ impl Worker {
                 || self.child.feedback_pending()
                 || self.presenter.screen_check_busy()
             {
-                receiver.recv_timeout(Duration::from_millis(if thumbnail_ready { 1 } else { 8 }))
+                receiver.recv_timeout(Duration::from_millis(if thumbnail_ready || self.renderer.region_pending() { 1 } else { 8 }))
             } else if self.hdr_encoding.is_some() {
                 // Display changes arrive on Wayland even when artwork is idle.
                 receiver.recv_timeout(Duration::from_millis(100))
@@ -1098,7 +1110,7 @@ impl Worker {
             if !document_drawn
                 && matches!(
                     command,
-                    Command::Region(_)
+                    Command::Region(..)
                         | Command::SelectionPaint(..)
                         | Command::Thumbnail(..)
                         | Command::ColorSample(_)
@@ -1177,11 +1189,17 @@ impl Worker {
                 }
                 Command::QuickMaskThumbnail(selection) => self.renderer.set_quick_mask_thumbnail(selection.as_ref()),
                 Command::SelectionOverlay(overlay) => self.renderer.set_selection_overlay(overlay),
-                Command::Region(request) => {
+                Command::CancelRegion(generation) => {
+                    region_generation = generation;
+                    deferred.retain(|c| !matches!(c, Command::Region(..)));
+                    self.renderer.cancel_region();
+                }
+                Command::Region(generation, request) => {
+                    region_generation = generation;
                     let result = self.renderer.request_region(request);
                     if !matches!(result, Ok(true)) {
                         reply
-                            .send(Reply::Region(Err(result
+                            .send(Reply::Region(generation, Err(result
                                 .err()
                                 .map(error)
                                 .unwrap_or_else(|| "Region detector is busy".into()))))

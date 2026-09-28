@@ -145,7 +145,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 [CommandId::SelectAll, CommandId::Deselect, CommandId::Reselect, CommandId::InvertSelection].into_iter().map(command).collect(),
                 [CommandId::QuickMask, CommandId::NewSelectionLayer, CommandId::SaveSelectionLayer].into_iter().map(command).collect(),
                 [CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer, CommandId::ClearSelected, CommandId::ClearOutside].into_iter().map(command).collect(),
-                self.selection_resize_items(None),
+                [
+                    CommandId::GrowSelection,
+                    CommandId::ShrinkSelection,
+                    CommandId::FeatherSelection,
+                    CommandId::BorderSelection,
+                    CommandId::SmoothSelection,
+                    CommandId::TransformSelectionOutline,
+                ]
+                .into_iter()
+                .map(command)
+                .collect(),
                 self.selection_source_menu_items(),
                 vec![ContextMenuItem::submenu("Load Selection", vec![self.saved_selection_menu_items()]), ContextMenuItem::submenu("Replace Selection Layer from Current Selection",vec![self.replace_selection_menu_items()])],
                 vec![command(CommandId::SelectionOutline)],

@@ -28,6 +28,7 @@ enum Purpose {
     },
     Tonal,
     Transform,
+    Refine,
 }
 impl Default for RegionTools {
     fn default() -> Self {
@@ -115,6 +116,11 @@ impl RegionTools {
         self.queued = None;
         self.target = None;
     }
+    /// Cancel, and report whether the renderer was working on a request.
+    pub fn abandon(&mut self) -> bool {
+        self.cancel();
+        std::mem::take(&mut self.pending)
+    }
     pub fn renderer_replaced(&mut self) {
         self.cancel();
         self.pending = false;
@@ -124,6 +130,9 @@ impl RegionTools {
     }
     pub fn applying_transform(&self) -> bool {
         self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform))
+    }
+    pub fn refining(&self) -> bool {
+        self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Refine))
     }
     pub fn cancellable(&self) -> bool {
         self.contact.is_some() || self.target.is_some()
@@ -250,6 +259,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn queue_tonal_region(&mut self, request: RegionRequest) {
         self.queue_region(request, Purpose::Tonal);
     }
+    /// A selection refinement job, superseding any other pending result.
+    pub(super) fn queue_refine_region(&mut self, request: RegionRequest) {
+        self.queue_region(request, Purpose::Refine);
+    }
     pub(super) fn poll_region_tool(&mut self) -> Result<u32, String> {
         if self.region_tools.pending
             && let Some(result) = self.engine.backend_mut().take_region()
@@ -265,6 +278,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 match target.purpose {
                     Purpose::Tonal => {
                         self.tonal_result(result)?;
+                        return Ok(0);
+                    }
+                    Purpose::Refine => {
+                        self.refine_result(result)?;
                         return Ok(0);
                     }
                     Purpose::Transform => {

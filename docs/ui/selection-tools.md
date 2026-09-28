@@ -47,7 +47,8 @@ callers explicitly request contiguous behavior. Disabling anti-aliasing removes
 the smoothing control and produces hard edges before any requested feathering.
 
 Selection combination and feathering run once on the GPU at gesture completion,
-using the existing asynchronous region queue and stale-result checks. Unfeathered
+using the existing asynchronous region queue and stale-result checks, in the
+same bounded chunks as Refine. Unfeathered
 modes skip the floating-point image intermediate. Refined masks retain 8-bit
 coverage; legacy four-sample masks remain readable. Painting, fills, layer masks,
 and affine transforms consume the same cached mask. Pooled coverage uses alpha
@@ -169,18 +170,46 @@ ordinary brush's distance simplifier. Masks have no disposable artwork tail
 preview. Completed end-taper replay uses the same endpoint sampling so live and
 finished geometry agree. Stamp-brush spacing is unchanged.
 
-Select exposes Grow/Shrink directly; mask rows keep them under Modify. The
-saved-selection menus stay disabled without saved layers, with no empty submenu
-to open. Grow/Shrink use an integer
-1–128 image-pixel distance. Apply queues one asynchronous GPU circular
-maximum/minimum operation; Cancel leaves coverage untouched. Soft coverage is
-preserved, values beyond the canvas are zero, and the result is one undo step.
+Select exposes Grow, Shrink, Feather, Border and Smooth directly; Quick Mask
+and Selection Layer menus keep them under Modify. The saved-selection menus stay
+disabled without saved layers, with no empty submenu to open. All five open one
+Refine dialog (`crates/layer-ui/src/selection_refine.rs`) whose value previews
+live. Each value runs one `RegionSource::Modify` job that chains the operation's
+steps on the GPU. While the value changes, the job is a preview: the renderer
+computes it only around the selection (its bounds plus every step's reach) and,
+when the exact result would not fit a small per-frame budget, on coarser cells,
+never wider than half of a step's radius or than one display pixel at the
+current zoom. The canvas draws the preview bilinearly through the result's
+placement, with an outline repainted only where the old or new selection
+reaches; the document, history, canvas bar, thumbnails and published state do
+not change. Values that change while a preview runs wait for it to show; then
+only the latest value runs. Once a value has rested for 200 ms, or on Apply, an
+exact job replaces the preview: the first exact result becomes one undo step,
+later ones amend it (`Editor::refine_selection`) and Cancel withdraws it
+(`Editor::withdraw_selection`). A new value stops a running exact job, and Apply
+waits for the exact result of the last value, so a coarse preview is never
+committed. Exact jobs advance in chunks of bounded GPU work, one submission per
+frame, so a refinement of any size never holds the GPU queue for a whole frame;
+outside the selection's reach they only clear coverage, and their results equal
+the step-by-step refinements pixel for pixel. A dragged value publishes nothing:
+hosts show their own control's value until the exact result publishes it with
+the selection. While only a preview runs, commands stay available, so their
+states hold still during a drag; another edit simply ends the draft.
+Hosts publish `title`, the value's `label` and its `numeric` range from the
+`kind`, and rebuild the field when the kind changes. The dialog never dims the
+canvas: GTK shows a bottom sheet with a transparent scrim, while Web and Android
+show a non-modal panel at the bottom of the work area that never takes window
+focus.
+Grow and Shrink are circular maximum/minimum over 1–128 image pixels; Feather is
+a Gaussian of 0.1–100 pixels; Border subtracts the shrunk selection from the
+grown one; Smooth grows r, shrinks 2r and grows r again (at most 64 pixels), with
+its shrink treating pixels beyond the canvas as selected. Soft coverage is
+preserved and, for Grow, Shrink and Border, values beyond the canvas are zero.
 Packed horizontal range extrema reduce circular refinement to O(radius) per
-pixel, including soft masks. Pipelines compile only when their operation needs
-them.
-The dialog captures its target and revision; stale or locked destinations fail
-without modifying artwork. Feathering an existing result, border, smooth, and
-selection-only transforms remain separate work.
+pixel, including soft masks; a job keeps only the rows its next chunk reads. Pipelines compile only when their operation needs
+them. The draft captures its target and revision; another edit closes it with a
+notice, and locked destinations are refused. Transform Selection Outline moves
+only the selection's placement (see the [canvas action bar](canvas-action-bar.md#transform-outline)).
 
 Layer menus group creation, organization, settings, and selection operations.
 Overlay settings live in Properties. Loading is also available through menus
@@ -198,7 +227,7 @@ Additional reproducible checks:
   previews, thumbnails and export isolation (requires a GPU).
 - Web `--selection-tools` also exercises Paint selection Add/Subtract controls,
   Quick Mask rows/properties, independent colors, compact Load icons, mouse/touch inline rename,
-  Grow/Shrink dialogs, saved-mask edit/load and reselect. It also checks G-Pen
+  Grow, Shrink and Smooth in the Refine panel (its label and rebuilt field), saved-mask edit/load and reselect. It also checks G-Pen
   coverage during sub-spacing moves, the color bucket, Quick Mask save/activation,
   and automatic hiding.
   Its light/dark screenshot assertions inspect the painted canvas area. Tested

@@ -59,7 +59,7 @@ fn apple_grow_and_shrink_apply_once_and_cancel_without_changes() {
         app.invoke("rectangle_select");
         drag(&app, 1, 1, [16., 16.], [40., 40.]);
         assert_bounds(&app, [16., 16., 40., 40.]);
-        app.action(json!({"type":"selection","action":{"op":"begin_resize","grow":true,"layer":null}}));
+        app.action(json!({"type":"selection","action":{"op":"begin_refine","kind":"grow","layer":null}}));
         assert!(!app.state()["layer_tools"]["selection_resize"].is_null());
         app.action(json!({"type":"selection","action":{"op":"resize_radius","radius":4}}));
         app.action(json!({"type":"selection","action":{"op":"apply_resize"}}));
@@ -74,7 +74,7 @@ fn apple_grow_and_shrink_apply_once_and_cancel_without_changes() {
         app.invoke("undo");
         app.draw_until_idle();
         assert_bounds(&app, [16., 16., 40., 40.]);
-        app.action(json!({"type":"selection","action":{"op":"begin_resize","grow":false,"layer":null}}));
+        app.action(json!({"type":"selection","action":{"op":"begin_refine","kind":"shrink","layer":null}}));
         app.action(json!({"type":"selection","action":{"op":"resize_radius","radius":6}}));
         app.action(json!({"type":"selection","action":{"op":"cancel_resize"}}));
         app.draw_until_idle();

@@ -814,7 +814,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         main.post {
             colorPreview = next.objectOrNull("color_preview")
             commandSearch = state.objectOrNull("command_search")
-            (snapshot as? ObservedModel ?: ObservedModel(listOf("state", "state.document_file")).also { snapshot = it }).assign(next)
+            (snapshot as? ObservedModel ?: ObservedModel(listOf("state", "state.document_file", "state.layer_tools")).also { snapshot = it }).assign(next)
             publishNotice(state.optJSONObject("notice"))
             publishHostError(state.optString("host_error").takeUnless { state.isNull("host_error") })
             drawingTabs.refresh()

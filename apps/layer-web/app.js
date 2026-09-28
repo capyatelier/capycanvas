@@ -637,6 +637,7 @@ function arrange(nextLayout, layoutOnly = false) {
     updateZen();
   }
   canvasBar?.place();
+  selectionUi?.place();
   notice?.place();
   queuePanelMeasurements();
 }
@@ -1742,7 +1743,7 @@ try {
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
   workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message });
-  selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch});
+  selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
   canvasSizeUi = createCanvasSizeUi({state:()=>state,element,button,icon,numberField,resolve:request=>app.number_input(request),dispatch});
   editor = createEditorPanels({selectionUi,app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged});
   palettes = createPalettes({ app, state: () => state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker,
@@ -1762,8 +1763,8 @@ try {
   customization.target(capy, {kind:"zen_mode"});
   workspace.append(capy);
   canvasBar = createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, reappearMs: catalog.canvas_bar_reappear_ms,
-    openMenu: node => customization.openMenu(node), presented: () => notice?.place() });
-  notice = createNotice({ workspace, element, button, answer: answerNotice, layout: () => layout, bar: () => canvasBar.bounds() });
+    openMenu: node => customization.openMenu(node), presented: () => { selectionUi.place(); notice?.place(); } });
+  notice = createNotice({ workspace, element, button, answer: answerNotice, layout: () => layout, bar: () => selectionUi.bounds() ?? canvasBar.bounds() });
   zoomReadout = createZoomReadout({ root: $("view-info"), workspace, canvas, element, numberField, control: catalog.zoom,
     menu: () => app.zoom_menu(), renderMenu: customization.renderMenu, refreshMenu: customization.refreshMenu,
     dispatch, camera: () => state.camera, toggled: updateZen });

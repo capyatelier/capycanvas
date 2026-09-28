@@ -852,6 +852,10 @@ pub struct WgpuRasterizer {
     layer_masks: layer_masks::MaskRenderer,
     selection_clip: selection_clip::SelectionClip,
     display_selection: Option<(layer_core::Selection, wgpu::Buffer)>,
+    /// Counts replacements of the displayed selection; the latest one
+    /// repaints `display_selection_damage`, in document pixels.
+    display_selection_revision: u64,
+    display_selection_damage: PixelRect,
     selection_painter: Option<selection_paint::SelectionPainter>,
     selection_overlay: Option<layer_render::SelectionOverlay>,
     selection_previews: selection_previews::SelectionPreviews,
@@ -1188,6 +1192,8 @@ impl WgpuRasterizer {
             layer_masks,
             selection_clip,
             display_selection: None,
+            display_selection_revision: 0,
+            display_selection_damage: PixelRect::EMPTY,
             selection_painter: None,
             selection_overlay: None,
             selection_previews: Default::default(),
@@ -3273,6 +3279,74 @@ impl WgpuRasterizer {
     }
 }
 
+impl WgpuRasterizer {
+    fn replace_display_selection(
+        &mut self,
+        selection: Option<&layer_core::Selection>,
+    ) -> Result<(), GpuRasterError> {
+        if let Some(selection) = selection
+            && let layer_core::SelectionShape::Pixels(pixels) = &selection.shape
+        {
+            if selection.affine.inverse().is_none() {
+                return Err(GpuRasterError::InvalidTransform(
+                    "Invalid selection transform",
+                ));
+            }
+            if let Some((old, _)) = self.display_selection.as_mut().filter(|(old, _)| old.shape == selection.shape) {
+                old.clone_from(selection);
+            } else {
+                if 32 + pixels.words().len() as u64 * 4
+                    > self.device.limits().max_storage_buffer_binding_size
+                {
+                    return Err(GpuRasterError::SizeOverflow);
+                }
+                let buffer = self.selection_clip.pixel_buffer(&self.device, pixels);
+                self.display_selection = Some((selection.clone(), buffer));
+            }
+        } else if let Some(selection) = selection.filter(|_| self.selection_overlay.is_some_and(|o|o.active)) {
+            if self.display_selection.as_ref().is_none_or(|(old,_)| old != selection) {
+                if let Some(startup) = &self.startup {
+                    startup.compiler.check()?;
+                    if !startup.compiler.require(self.selection_clip.pipelines().into_iter().take(2), startup::BRUSH) { return Ok(()); }
+                }
+                let mut encoder = crate::submission::CommandEncoder::new(&self.device,
+                    &wgpu::CommandEncoderDescriptor { label: Some("selection overlay") });
+                self.selection_clip.prepare(&self.device, &mut encoder, self.document_extent, &Arc::new(selection.clone()))?;
+                let input = self.selection_clip.buffer.as_ref().unwrap();
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("retained selection overlay"), size: input.size(),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                });
+                encoder.copy_buffer_to_buffer(input,0,&buffer,0,input.size());
+                encoder.submit(&self.queue);
+                self.display_selection = Some((selection.clone(),buffer));
+            }
+        } else {
+            self.display_selection = None;
+        }
+        Ok(())
+    }
+}
+/// Document pixels whose display a change of selection affects: wherever
+/// either selection has coverage, or the whole document when only one of them
+/// is inverted. Resampled coverage reaches one cell beyond its pixels.
+fn outline_damage(a: Option<&layer_core::Selection>, b: Option<&layer_core::Selection>, extent: [u32; 2]) -> PixelRect {
+    if a.is_some_and(|s| s.inverted) != b.is_some_and(|s| s.inverted) {
+        return PixelRect::full(extent);
+    }
+    a.into_iter().chain(b).fold(PixelRect::EMPTY, |damage, selection| {
+        let mut bounds = selection.bounds();
+        if bounds.is_empty() {
+            return damage;
+        }
+        let cell = selection.affine.0[..4].iter().fold(0f32, |m, v| m.max(v.abs())).ceil() + 1.;
+        bounds.min.x -= cell;
+        bounds.min.y -= cell;
+        bounds.max.x += cell;
+        bounds.max.y += cell;
+        damage.union(pixel_rect(bounds, extent))
+    })
+}
 impl CanvasRenderer for WgpuRasterizer {
     fn shader_input(&mut self) { WgpuRasterizer::shader_input(self); }
     fn shader_idle(&mut self, idle: bool) { WgpuRasterizer::shader_idle(self, idle); }
@@ -3332,54 +3406,22 @@ impl CanvasRenderer for WgpuRasterizer {
     fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
         self.poll_region()
     }
+    fn cancel_region(&mut self) {
+        WgpuRasterizer::cancel_region(self);
+    }
     fn set_selection_outline(
         &mut self,
         selection: Option<&layer_core::Selection>,
     ) -> Result<(), Self::Error> {
         if self.selection_painter.as_ref().is_some_and(|p| p.active.is_some()) { return Ok(()); }
-        if let Some(selection) = selection
-            && let layer_core::SelectionShape::Pixels(pixels) = &selection.shape
-        {
-            if selection.affine.inverse().is_none() {
-                return Err(GpuRasterError::InvalidTransform(
-                    "Invalid selection transform",
-                ));
-            }
-            if self
-                .display_selection
-                .as_ref()
-                .is_none_or(|(old, _)| old != selection)
-            {
-                if 32 + pixels.words().len() as u64 * 4
-                    > self.device.limits().max_storage_buffer_binding_size
-                {
-                    return Err(GpuRasterError::SizeOverflow);
-                }
-                let buffer = self.selection_clip.pixel_buffer(&self.device, pixels);
-                self.display_selection = Some((selection.clone(), buffer));
-            }
-        } else if let Some(selection) = selection.filter(|_| self.selection_overlay.is_some_and(|o|o.active)) {
-            if self.display_selection.as_ref().is_none_or(|(old,_)| old != selection) {
-                if let Some(startup) = &self.startup {
-                    startup.compiler.check()?;
-                    if !startup.compiler.require(self.selection_clip.pipelines().into_iter().take(2), startup::BRUSH) { return Ok(()); }
-                }
-                let mut encoder = crate::submission::CommandEncoder::new(&self.device,
-                    &wgpu::CommandEncoderDescriptor { label: Some("selection overlay") });
-                self.selection_clip.prepare(&self.device, &mut encoder, self.document_extent, &Arc::new(selection.clone()))?;
-                let input = self.selection_clip.buffer.as_ref().unwrap();
-                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("retained selection overlay"), size: input.size(),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-                });
-                encoder.copy_buffer_to_buffer(input,0,&buffer,0,input.size());
-                encoder.submit(&self.queue);
-                self.display_selection = Some((selection.clone(),buffer));
-            }
-        } else {
-            self.display_selection = None;
+        let before = self.display_selection.as_ref().map(|(s, _)| s.clone());
+        let result = self.replace_display_selection(selection);
+        let after = self.display_selection.as_ref().map(|(s, _)| s);
+        if before.as_ref() != after {
+            self.display_selection_damage = outline_damage(before.as_ref(), after, self.document_extent);
+            self.display_selection_revision = self.display_selection_revision.wrapping_add(1);
         }
-        Ok(())
+        result
     }
     fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> { self.update_selection_paint(update) }
     fn take_selection_paint(&mut self) -> Option<Result<layer_render::SelectionPaintResult,Self::Error>> { self.poll_selection_paint() }

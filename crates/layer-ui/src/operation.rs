@@ -64,6 +64,9 @@ impl Pose {
     }
 }
 pub(super) const DISTORT_PLACEMENT: &str = "Select All, then Transform, to distort this photo's pixels";
+pub(super) const OUTLINE_AFFINE: &str =
+    "A selection outline can be moved, scaled, rotated and skewed; use Transform to distort or warp the pixels";
+pub(super) const OUTLINE_PIXELS: &str = "Transform Outline moves no pixels";
 /// Skew is presented as an angle; its tangent is the pose shear.
 const MAX_SKEW: f32 = 85. * std::f32::consts::PI / 180.;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,7 +103,8 @@ struct Drag {
     current: Point,
     start: Geometry,
 }
-/// `bounds` is the source rectangle.
+/// `bounds` is the source rectangle. An `outline` transaction moves only that
+/// document selection's placement, never pixels.
 struct Transaction {
     placement: Option<Placement>,
     request: TransformPreview,
@@ -114,6 +118,7 @@ struct Transaction {
     perspective: bool,
     start: Pose,
     drag: Option<Drag>,
+    outline: Option<Selection>,
 }
 #[derive(Default)]
 pub(super) struct Operation {
@@ -129,6 +134,14 @@ impl Operation {
     }
     pub fn placing(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.placement.is_some())
+    }
+    pub fn outline(&self) -> bool {
+        self.current.as_ref().is_some_and(|t| t.outline.is_some())
+    }
+    /// The outline being transformed, placed as it is now.
+    pub fn outline_selection(&self) -> Option<Selection> {
+        let t = self.current.as_ref()?;
+        t.outline.as_ref()?.transformed(t.pose_affine()).ok()
     }
     pub fn serial(&self) -> u64 {
         self.serial
@@ -366,10 +379,62 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.update_transform()?;
         Ok(())
     }
+    pub(super) fn outline_refusal(&self) -> Option<&'static str> {
+        if self.selection_masks.target().is_some() {
+            return Some("Return to the artwork first");
+        }
+        let empty = |s: &Selection| {
+            !s.inverted
+                && match &s.shape {
+                    layer_core::SelectionShape::Contours(paths) => paths.is_empty(),
+                    layer_core::SelectionShape::Pixels(pixels) => {
+                        let [x0, y0, x1, y1] = pixels.bounds();
+                        x0 >= x1 || y0 >= y1
+                    }
+                }
+        };
+        match &self.engine.document().selection {
+            None => Some("Make a selection first"),
+            Some(s) if empty(s) => Some("The selection is empty"),
+            Some(_) => None,
+        }
+    }
+    /// Transform the selection's placement only, in document space, as the
+    /// selection display previews it.
+    pub(super) fn begin_outline_transform(&mut self) -> Result<(), String> {
+        self.require_document_idle()?;
+        if let Some(reason) = self.outline_refusal() {
+            return Err(reason.into());
+        }
+        self.cancel_layer_gesture()?;
+        let doc = self.engine.document();
+        let selection = doc.selection.clone().ok_or("Make a selection first")?;
+        let mut bounds = outline_bounds(&selection, [doc.width, doc.height]);
+        bounds.max.x = bounds.max.x.max(bounds.min.x + 1.);
+        bounds.max.y = bounds.max.y.max(bounds.min.y + 1.);
+        let serial = self.operation.serial.wrapping_add(1);
+        let t = Transaction::new(serial, doc.active_layer, None, doc.revision, Affine::IDENTITY, bounds, Pose::identity());
+        self.operation.serial = serial;
+        self.operation.current = Some(Transaction { outline: Some(selection), ..t });
+        self.layer_interaction.tool = LayerCanvasTool::Transform;
+        self.state.layer_tools.tool = LayerCanvasTool::Transform;
+        self.layer_interaction.changed = true;
+        self.update_transform()
+    }
     pub(super) fn finish_transform(&mut self, apply: bool) -> Result<(), String> {
         self.require_idle()?;
         if self.operation.placing() {
             return self.finish_layer_placement(apply);
+        }
+        if self.operation.outline() {
+            if apply
+                && let Some(selection) = self.operation.outline_selection()
+                && self.engine.document().selection.as_ref() != Some(&selection)
+            {
+                self.layer_edit(layer_core::Edit::SetSelection(Some(selection)))?;
+            }
+            self.cancel_transform()?;
+            return Ok(());
         }
         if apply {
             if self.queue_transform_selection() {
@@ -396,11 +461,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.region_tools.applying_transform() {
             self.region_tools.cancel();
         }
-        if self.operation.current.take().is_none() {
+        let Some(transaction) = self.operation.current.take() else {
             return Ok(false);
+        };
+        if transaction.outline.is_some() {
+            self.sync_selection_overlay();
+        } else {
+            self.engine.backend_mut().prepare_moving_layer(None);
+            self.engine.set_transform_preview(None).map_err(error)?;
         }
-        self.engine.backend_mut().prepare_moving_layer(None);
-        self.engine.set_transform_preview(None).map_err(error)?;
         self.layer_interaction.path.clear();
         self.layer_interaction.tool = LayerCanvasTool::Move;
         self.state.layer_tools.tool = LayerCanvasTool::Move;
@@ -436,7 +505,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         t.request.moving = moving;
         let placing = t.placement.is_some();
         let affine = t.pose_affine();
-        if let Some(placement) = &t.placement {
+        if t.outline.is_some() {
+            self.sync_selection_overlay();
+        } else if let Some(placement) = &t.placement {
             let mut edits = Vec::new();
             for layer in placement.preview_layers(self.engine.document(), affine)? {
                 if self.engine.document().is_locked(layer.id) {
@@ -687,6 +758,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn set_transform_mode(&mut self, mode: TransformMode, uniform: bool) -> Result<(), String> {
         self.require_idle()?;
         let t = self.operation.current.as_mut().ok_or("Start a transform first")?;
+        if mode != TransformMode::Free && t.outline.is_some() {
+            return Err(OUTLINE_AFFINE.into());
+        }
         if mode != TransformMode::Free && t.placement.is_some() {
             return Err(DISTORT_PLACEMENT.into());
         }
@@ -727,6 +801,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn set_transform_interpolation(&mut self, interpolation: Interpolation) -> Result<(), String> {
         self.require_idle()?;
         let t = self.operation.current.as_ref().ok_or("Start a transform first")?;
+        if t.outline.is_some() {
+            return Err(OUTLINE_PIXELS.into());
+        }
         if t.placement.is_some() {
             return Err("Placed photos keep their original pixels".into());
         }
@@ -841,6 +918,34 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 }
 
+/// The box a selection outline transforms: its shape's exact bounds, or the
+/// canvas for an inverted selection, which covers everything outside them.
+fn outline_bounds(selection: &Selection, extent: [u32; 2]) -> Rect {
+    if selection.inverted {
+        return Rect {
+            min: Point::default(),
+            max: Point { x: extent[0] as f32, y: extent[1] as f32 },
+        };
+    }
+    let mut local = Rect::EMPTY;
+    match &selection.shape {
+        layer_core::SelectionShape::Contours(paths) => {
+            for p in paths.iter().flat_map(|c| c.iter()) {
+                local.include_circle(*p, 0.);
+            }
+        }
+        layer_core::SelectionShape::Pixels(pixels) => {
+            let [x0, y0, x1, y1] = pixels.bounds();
+            if x0 < x1 && y0 < y1 {
+                local = Rect {
+                    min: Point { x: x0 as f32, y: y0 as f32 },
+                    max: Point { x: x1 as f32, y: y1 as f32 },
+                };
+            }
+        }
+    }
+    selection.affine.bounds(local)
+}
 fn quad_of(bounds: Rect, inner: Option<Projective>, outer: Affine) -> [Point; 4] {
     [0, 2, 4, 6].map(|i| {
         let corner = local_handle(bounds, HANDLES[i]);
@@ -881,6 +986,7 @@ impl Transaction {
             perspective: false,
             start: pose,
             drag: None,
+            outline: None,
         }
     }
     fn pose_affine(&self) -> Affine {

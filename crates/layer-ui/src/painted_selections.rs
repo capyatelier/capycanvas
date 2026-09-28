@@ -261,16 +261,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             protected: target.is_some() && self.grayscale_masks(),
             saved_protected: self.grayscale_masks(),
         });
+        let refined = self.selection_masks.refine.as_ref().and_then(|d| d.preview(target)).cloned();
         let selection = if let Some(target) = target {
             Some(if display.overlay && active {
-                self.mask_coverage(target).ok()
+                refined.or_else(|| self.mask_coverage(target).ok())
             } else {
                 None
             })
+        } else if let Some(outline) = self.operation.outline_selection() {
+            Some(Some(outline))
         } else if !display.outline && !self.selection_brush_active() {
             Some(None)
         } else {
-            None
+            refined.map(Some)
         };
         let quick = self.selection_masks.quick().then(|| self.current_selection().unwrap_or_else(Selection::empty));
         self.engine.backend_mut().set_quick_mask_thumbnail(quick.as_ref());

@@ -38,6 +38,9 @@ class AndroidCanvasBarBenchmarkTest {
         val height = args.getString("height", "4000")!!.toInt()
         val transparency = listOf("off", "low", "medium", "high").indexOf(args.getString("transparency", "low"))
         val only = args.getString("scenarios")?.split(',')
+        val refine = args.getString("refine", "feather")!!
+        val refineSpan = args.getString("refineSpan", ".5")!!.toDouble()
+        val refineBar = args.getString("refineBar", "on") == "on"
         if (args.getString("composeTrace") == "true") @OptIn(androidx.compose.runtime.InternalComposeTracingApi::class)
             androidx.compose.runtime.Composer.setTracer(object : androidx.compose.runtime.CompositionTracer {
                 override fun isTraceInProgress() = android.os.Trace.isEnabled()
@@ -135,7 +138,7 @@ class AndroidCanvasBarBenchmarkTest {
                 }
             }
             data class UiFrame(val total: Long, val layout: Long, val draw: Long, val animation: Long, val delay: Long,
-                val sync: Long, val issue: Long, val swap: Long, val gpu: Long)
+                val sync: Long, val issue: Long, val swap: Long, val gpu: Long, val vsync: Long)
             val uiFrames = mutableListOf<UiFrame>()
             var measuring = false
             val metricsThread = HandlerThread("canvas-bar-frame-metrics").apply { start() }
@@ -144,7 +147,8 @@ class AndroidCanvasBarBenchmarkTest {
                     metrics.getMetric(FrameMetrics.LAYOUT_MEASURE_DURATION), metrics.getMetric(FrameMetrics.DRAW_DURATION),
                     metrics.getMetric(FrameMetrics.ANIMATION_DURATION), metrics.getMetric(FrameMetrics.UNKNOWN_DELAY_DURATION),
                     metrics.getMetric(FrameMetrics.SYNC_DURATION), metrics.getMetric(FrameMetrics.COMMAND_ISSUE_DURATION),
-                    metrics.getMetric(FrameMetrics.SWAP_BUFFERS_DURATION), metrics.getMetric(FrameMetrics.GPU_DURATION))) }
+                    metrics.getMetric(FrameMetrics.SWAP_BUFFERS_DURATION), metrics.getMetric(FrameMetrics.GPU_DURATION),
+                    metrics.getMetric(FrameMetrics.INTENDED_VSYNC_TIMESTAMP))) }
             }
             activity.window.addOnFrameMetricsAvailableListener(listener, Handler(metricsThread.looper))
             val output = File(activity.getExternalFilesDir(null), "canvas-bar-benchmark").apply { mkdirs() }
@@ -171,6 +175,7 @@ class AndroidCanvasBarBenchmarkTest {
                 }.apply { start() }
                 android.os.Trace.beginAsyncSection("canvas-bar-$label", 1)
                 try { operation() } finally { android.os.Trace.endAsyncSection("canvas-bar-$label", 1) }
+                val operated = System.nanoTime()
                 SystemClock.sleep(400)
                 measuring = false; sampler.join()
                 val ended = System.nanoTime()
@@ -183,6 +188,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val rows = (0 until completions.length()).map { completions.getJSONArray(it) }.filter { it.getLong(1) in began..ended }
                 val completedAt = rows.map { it.getLong(2) }.sorted()
                 val ui = synchronized(uiFrames) { uiFrames.toList() }
+                val vsyncs = ui.map { it.vsync }.filter { it <= operated }.distinct().sorted()
                 val seconds = (ended - began) / 1e9
                 val result = obj("label" to label, "display_hz" to refreshRate, "seconds" to seconds, "transparency" to transparency,
                     "canvas" to documentExtent, "debuggable" to BuildConfig.DEBUG,
@@ -194,6 +200,8 @@ class AndroidCanvasBarBenchmarkTest {
                     "gpu_submit_to_complete_ms" to quantiles(rows.map { (it.getLong(2) - it.getLong(1)) / 1e6 }),
                     "gpu_completion_interval_ms" to quantiles(completedAt.zipWithNext { a, b -> (b - a) / 1e6 }),
                     "ui_frames" to ui.size,
+                    "ui_hz" to if (vsyncs.size < 2) 0.0 else (vsyncs.size - 1) * 1e9 / (vsyncs.last() - vsyncs.first()),
+                    "ui_interval_ms" to quantiles(vsyncs.zipWithNext { a, b -> (b - a) / 1e6 }),
                     "ui_frame_ms" to quantiles(ui.map { it.total / 1e6 }),
                     "ui_layout_ms" to quantiles(ui.map { it.layout / 1e6 }),
                     "ui_draw_ms" to quantiles(ui.map { it.draw / 1e6 }),
@@ -387,6 +395,52 @@ class AndroidCanvasBarBenchmarkTest {
                 measure("pan") { drag(center, duration, pan) }
                 measure("canvas-size-grow-then-pan") { resize(width + 512 to height + 512); drag(center, duration, pan) }
                 measure("canvas-size-crop-then-pan") { resize(width to height); drag(center, duration, pan) }
+            }
+            if (wanted("refine")) for (extent in listOf(2048 to 1536, width to height).distinct()) {
+                newDocument(extent)
+                invoke("select_all"); invoke("fill_selection"); invoke("deselect"); invoke("rectangle_select")
+                val area = state().getJSONObject("camera").getJSONArray("work_area")
+                val center = area.getDouble(0) + area.getDouble(2) / 2 to area.getDouble(1) + area.getDouble(3) / 2
+                val span = minOf(area.getDouble(2), area.getDouble(3)) * .25
+                drag(center.first - span to center.second - span, 300) { t -> 2 * span * t / .3 to 1.5 * span * t / .3 }
+                waitFor("selection bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "selection" }
+                if (!refineBar) invoke("show_canvas_action_bar")
+                invoke("${refine}_selection")
+                waitFor("Refine panel") { findTag("setting-slider-selection-refine") != null }
+                SystemClock.sleep(1500)
+                var track = android.graphics.RectF()
+                instrumentation.runOnMainSync {
+                    val (root, node) = findTag("setting-slider-selection-refine")!!
+                    val origin = IntArray(2); root.view.getLocationOnScreen(origin)
+                    node.boundsInRoot.let { track = android.graphics.RectF(it.left + origin[0], it.top + origin[1], it.right + origin[0], it.bottom + origin[1]) }
+                }
+                val radii = java.util.Collections.synchronizedSet(mutableSetOf<Float>())
+                fun stats() = native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) }
+                var previewCount = 0L
+                var valueCount = 0L
+                val anchors = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+                measure("refine-$refine-drag-${extent.first}x${extent.second}") {
+                    val before = stats()
+                    val sampler = Thread {
+                        val until = SystemClock.uptimeMillis() + duration
+                        while (SystemClock.uptimeMillis() < until) {
+                            val shown = host.snapshot?.getJSONObject("state")
+                            shown?.getJSONObject("layer_tools")?.objectOrNull("selection_resize")?.let { radii += it.number("radius") }
+                            shown?.optJSONObject("canvas_bar")?.optJSONArray("anchor")?.let { anchors += it.toString() }
+                            SystemClock.sleep(8)
+                        }
+                    }.apply { start() }
+                    val start = track.left + track.width() * .1 - host.surfaceOrigin.x to track.centerY() - host.surfaceOrigin.y.toDouble()
+                    drag(start, duration) { t -> track.width() * refineSpan / 2 * (1 - kotlin.math.cos(2 * PI * t / 2)) to 0.0 }
+                    sampler.join()
+                    val after = stats()
+                    previewCount = after.optLong("selection_previews") - before.optLong("selection_previews")
+                    valueCount = after.optLong("selection_values") - before.optLong("selection_values")
+                }
+                println("CANVAS BAR refine values ${extent.first}x${extent.second}: $valueCount values sent, $previewCount previews drawn, ${radii.size} distinct published radii and ${anchors.size} bar positions, ${synchronized(radii) { radii.minOrNull() }}–${synchronized(radii) { radii.maxOrNull() }} px")
+                action(obj("type" to "selection", "action" to obj("op" to "cancel_resize")))
+                if (!refineBar) invoke("show_canvas_action_bar")
+                invoke("deselect")
             }
             activity.window.removeOnFrameMetricsAvailableListener(listener)
             metricsThread.quitSafely()

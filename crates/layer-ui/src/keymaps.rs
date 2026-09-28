@@ -76,7 +76,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "photoshop",
-        revision: 4,
+        revision: 5,
         title: "Photoshop Style",
         app: "Photoshop",
         source: "Adobe Photoshop default keyboard shortcuts, US layout, modern undo; checked 2026-09-25",
@@ -99,6 +99,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("command.CutSelectionToLayer", &["primary+shift+j"]),
             ("command.ActualPixels", &["primary+1"]),
             ("command.CanvasSize", &["primary+alt+c"]),
+            ("command.FeatherSelection", &["shift+f6"]),
             ("layer.group", &["primary+g"]),
             ("color.swap", &["x"]),
         ],

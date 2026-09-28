@@ -393,3 +393,26 @@ fn selection_to_layer_and_clear_keys_follow_each_preset() {
         assert!(chord.available(Platform::Web), "{chord:?}");
     }
 }
+
+#[test]
+fn feather_selection_is_bound_only_in_the_photoshop_preset() {
+    let feather = chord("f6", false, true, false);
+    for preset in crate::keymaps::KEYMAP_PRESETS {
+        let mut settings = Settings::default();
+        crate::keymaps::select(&mut settings, preset.id).unwrap();
+        let expected = (preset.id == "photoshop").then_some("command.FeatherSelection");
+        assert_eq!(bound(&settings, &feather).as_deref(), expected, "{}", preset.id);
+    }
+    let photoshop = crate::keymaps::KEYMAP_PRESETS.iter().find(|p| p.id == "photoshop").unwrap();
+    assert_eq!(photoshop.revision, 5);
+    assert!(feather.available(Platform::Web));
+    for command in [
+        CommandId::GrowSelection,
+        CommandId::ShrinkSelection,
+        CommandId::BorderSelection,
+        CommandId::SmoothSelection,
+        CommandId::TransformSelectionOutline,
+    ] {
+        assert!(Settings::default().keys(&command.shortcut_id()).is_empty(), "{command:?}");
+    }
+}

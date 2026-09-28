@@ -74,6 +74,11 @@ impl CanvasRenderer for AttachedRenderer {
     fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
         self.0.as_mut()?.take_region()
     }
+    fn cancel_region(&mut self) {
+        if let Some(gpu) = self.0.as_mut() {
+            gpu.cancel_region();
+        }
+    }
     fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> {
         self.gpu()?.paint_selection(update)
     }

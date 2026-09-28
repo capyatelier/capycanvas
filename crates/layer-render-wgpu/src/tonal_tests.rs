@@ -47,6 +47,7 @@ fn receive(
                 feather: 0.,
                 previous: previous.map(Arc::new),
                 source_to_document: Affine::IDENTITY,
+                keep_canvas_edges: false,
             }),
         },
     )
@@ -365,6 +366,7 @@ fn tonal_61mp_performance() {
                 feather: 12.,
                 previous: None,
                 source_to_document: Affine::IDENTITY,
+                keep_canvas_edges: false,
             }),
         },
     );

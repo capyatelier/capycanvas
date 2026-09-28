@@ -350,7 +350,8 @@ class AndroidTitleBarTest {
                         }
                         for (label in listOf("Load Selection", "Replace Selection Layer from Current Selection"))
                             assertTrue("$label is unavailable without saved layers", checkNotNull(row(label)).config.contains(SemanticsProperties.Disabled))
-                        assertNotNull(row("Grow…")); assertNotNull(row("Shrink…")); assertNull(row("Modify"))
+                        for (label in listOf("Grow Selection…", "Shrink Selection…", "Feather Selection…", "Border Selection…", "Smooth Selection…", "Transform Selection Outline")) assertNotNull(label, row(label))
+                        assertNull(row("Modify"))
                     }
                     shot("anchored-${menu.getString("id")}")
                     key(KeyEvent.KEYCODE_BACK)

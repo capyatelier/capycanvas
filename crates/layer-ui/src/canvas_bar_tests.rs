@@ -420,6 +420,7 @@ fn selection_bar_follows_selection_tools_commands_and_history() {
             CommandId::InvertSelection,
             CommandId::CopySelectionToLayer,
             CommandId::ScaleRotate,
+            CommandId::FeatherSelection,
             CommandId::MaskSelection,
             CommandId::FillSelection,
             CommandId::ClearSelected,
@@ -712,6 +713,7 @@ fn resampled_reply(s: &mut UiSession<Recorder>) -> layer_render::RegionResult {
     let words = vec![u32::MAX; extent[0].div_ceil(4) as usize * extent[1] as usize];
     layer_render::RegionResult {
         tonal_sample: None,
+        placement: layer_core::Affine::IDENTITY,
         request_id: request.request_id,
         pixels: std::sync::Arc::new(layer_core::SelectionPixels::bytes(extent, [0, 0, extent[0], extent[1]], words).unwrap()),
     }
@@ -921,7 +923,18 @@ fn selection_bar_menus_list_their_commands_and_refuse_stale_edits() {
     assert_eq!(menu_labels(&clear), [["Clear Selected Pixels", "Clear Outside Selection"]]);
     assert_eq!(clear.sections[0][1].action, wrapped(CommandId::ClearOutside));
     let refine = s.canvas_bar_choice_menu(bar.context, "refine").unwrap();
-    assert_eq!(menu_labels(&refine), [["Grow…", "Shrink…"]]);
+    assert_eq!(
+        menu_labels(&refine),
+        [vec!["Grow…", "Shrink…", "Feather…", "Border…", "Smooth…"], vec!["Transform Outline"]]
+    );
+    assert_eq!(refine.sections[0][2].action, wrapped(CommandId::FeatherSelection));
+    assert_eq!(refine.sections[1][0].action, wrapped(CommandId::TransformSelectionOutline));
+    assert!(refine.sections.concat().iter().all(|i| i.enabled));
+    let primary = bar.items.iter().find(|i| i.menu == Some(CanvasBarMenu::Refine)).unwrap();
+    assert!(
+        matches!(&primary.option, ToolOption::Action { state, .. } if state.id == CommandId::FeatherSelection),
+        "a host that cannot open the menu runs Feather"
+    );
     let adjust = s.canvas_bar_choice_menu(bar.context, "adjust").unwrap();
     assert_eq!(
         adjust.sections[0].iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
@@ -1030,7 +1043,7 @@ fn quick_mask_bar_offers_its_actions_and_exit_under_painting_tools() {
             (CommandId::InvertSelection, "Invert", false),
             (CommandId::FillSelectionMask, "Fill", false),
             (CommandId::ClearSelectionMask, "Clear", false),
-            (CommandId::SearchCommands, "Refine", false),
+            (CommandId::FeatherSelection, "Refine", false),
             (CommandId::SaveSelectionLayer, "Save", false),
         ]
     );

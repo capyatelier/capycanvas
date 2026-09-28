@@ -372,6 +372,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .map(std::sync::Arc::new)
                 },
                 source_to_document: basis,
+                keep_canvas_edges: false,
             })
     }
     pub(super) fn selection_pen(

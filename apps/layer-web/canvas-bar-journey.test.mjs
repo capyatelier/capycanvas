@@ -299,6 +299,26 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
         await osTap(`${bar} [data-command="${kind==='touch'?'cancel_transform':'apply_transform'}"]`,kind);
         await wait(`layerApp.state().layer_tools.tool!=='transform'`);
       }
+      if(await evaluate('layerApp.state().layer_tools.has_selection'))await invoke('deselect');
+      await invoke('lasso');await settle();
+      await drag([at(-140,-100),at(140,-100),at(140,90),at(-140,90),at(-140,-100)],'pen');
+      await wait(`layerApp.state().canvas_bar?.context.kind==='selection' && ${visible}`);
+      const hard=(await state()).canvas_bar.anchor;
+      await invoke('feather_selection');
+      const slider='#selection-refine-value .number-slider';
+      await wait(`!!document.querySelector('${slider}')&&layerApp.state().canvas_bar.anchor[0]<${hard[0]}`);
+      const previewed=(await state()).canvas_bar.anchor,track=await rect(slider);
+      const along=f=>physical({x:track.x+8+(track.width-16)*f,y:track.y+track.height/2});
+      await shell('input','stylus','motionevent','DOWN',...along(.05));
+      for(const f of [.15,.25,.35])await shell('input','stylus','motionevent','MOVE',...along(f));
+      await wait(`layerApp.state().layer_tools.selection_resize?.radius>20&&layerApp.state().canvas_bar.anchor[0]<${previewed[0]}-.5`);
+      await shell('input','stylus','motionevent','UP',...along(.35));
+      await osTap('#selection-refine-panel .suggested-action','pen');
+      await wait(`!document.querySelector('#selection-refine-panel')&&!layerApp.state().layer_tools.selection_resize`);
+      await invoke('undo');
+      await wait(`JSON.stringify(layerApp.state().canvas_bar?.anchor)===${JSON.stringify(JSON.stringify(hard))}`);
+      await invoke('deselect');
+      console.log('A real stylus drags the Refine value with a live preview and taps Apply; one undo restores the hard edge');
       for(const kind of ['pen','touch','mouse']) {
         if(await evaluate('layerApp.state().layer_tools.has_selection'))await invoke('deselect');
         await invoke('lasso');await settle();
@@ -419,8 +439,75 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       await wait(`layerApp.state().layers.length===${ids.length}&&layerApp.state().layer_tools.has_selection`);
       assert.deepEqual(await layerIds(),ids,`${device}: one undo step removes the Curves layer and restores the selection`);
       await invoke('deselect');
+
+      const refine='#selection-refine-panel',field=`${refine} #selection-refine-value`;
+      const selectionBox=async()=>(await state()).canvas_bar.anchor;
+      const boxIs=box=>`JSON.stringify(layerApp.state().canvas_bar?.anchor)===${JSON.stringify(JSON.stringify(box))}`;
+      const beyond=box=>`(a=>!!a&&a[0]<${box[0]}-.5&&a[1]<${box[1]}-.5&&a[2]>${box[2]}+.5&&a[3]>${box[3]}+.5)(layerApp.state().canvas_bar?.anchor)`;
+      await selectRegion(device,origin);
+      const hard=await selectionBox(),contacts=await evaluate('barProbe.pointers');
+      routes.push(await openBarMenu('refine',device));
+      for(const label of ['Grow…','Shrink…','Feather…','Border…','Smooth…','Transform Outline'])
+        assert.ok(await evaluate(hasRow(label)),`${device}: Refine offers ${label}: ${await menuLabels()}`);
+      await chooseRow('Feather…',device);
+      await wait(`!!document.querySelector('${field}')&&layerApp.state().layer_tools.selection_resize?.kind==='feather'`);
+      assert.equal(await evaluate(`document.querySelector('${refine} h2').textContent`),'Feather Selection');
+      assert.equal(await evaluate(`document.querySelector('${field} .number-title').textContent`),'Feather radius',`${device}: the panel names the value`);
+      assert.ok(await evaluate(`!document.querySelector('dialog[open], :modal')`),`${device}: the panel is not modal, so nothing dims the canvas`);
+      assert.ok(await evaluate('document.hasFocus()'),`${device}: the panel keeps window focus`);
+      const panel=await rect(refine),outlined=await anchor();
+      assert.ok(panel.y>=outlined.bottom||panel.bottom<=outlined.y||panel.x>=outlined.right||panel.right<=outlined.x,
+        `${device}: the panel leaves the selection visible ${JSON.stringify({panel,outlined})}`);
+      await wait(beyond(hard));
+      const previewed=await selectionBox(),track=await rect(`${field} .number-slider`);
+      const along=f=>({x:track.x+8+(track.width-16)*f,y:track.y+track.height/2});
+      touchId++;
+      await pointer('mousePressed',along(.05),device);
+      for(const f of [.15,.25,.35]){await pointer('mouseMoved',along(f),device);await settle();}
+      await wait(`layerApp.state().layer_tools.selection_resize.radius>20&&${beyond(previewed)}`);
+      await pointer('mouseReleased',along(.35),device);await settle();
+      assert.equal(await evaluate('barProbe.pointers'),contacts,`${device}: panel contacts never reach the canvas`);
+      if(device==='pen'&&!tablet)for(const name of ['light','dark']){
+        await send({type:'set_theme',theme:name});await settle();await pause(200);
+        assert.ok(await evaluate(`!!document.querySelector('${field}')`),`the Refine panel stays open in the ${name} theme`);
+        const shot=await call('Page.captureScreenshot',{format:'png'});
+        await writeFile(`${directory}/refine-feather-${name}.png`,Buffer.from(shot.data,'base64'));
+      }
+      await tap(await middle(`${refine} .suggested-action`),device);
+      await wait(`!document.querySelector('${refine}')&&!layerApp.state().layer_tools.selection_resize`);
+      const feathered=await selectionBox();
+      await invoke('undo');
+      await wait(boxIs(hard));
+      await invoke('redo');
+      await wait(boxIs(feathered));
+      await invoke('deselect');
+
+      await selectRegion(device,origin);
+      const outline=await selectionBox(),untouched=await revision(source);
+      routes.push(await openBarMenu('refine',device));
+      await chooseRow('Transform Outline',device);
+      await wait(`layerApp.state().canvas_bar?.context.kind==='transform'&&layerApp.state().canvas_bar.label==='Transform Outline'&&${visible}`);
+      assert.equal(await evaluate(`!!document.querySelector('${bar} [data-toolbar-choice="transform-interpolation"]')`),false,`${device}: an outline has no interpolation`);
+      const hull=await anchor(),handle={x:hull.right,y:(hull.y+hull.bottom)/2};
+      await wait('layerApp.app.brush_ready()');
+      touchId++;
+      await pointer('mousePressed',handle,device);
+      for(const dx of [20,50,80]){await pointer('mouseMoved',{x:handle.x+dx,y:handle.y},device);await settle();}
+      await pointer('mouseReleased',{x:handle.x+80,y:handle.y},device);await settle();
+      await wait(visible);
+      const stretched=await anchor();
+      assert.ok(Math.abs(stretched.right-hull.right-80)<3&&Math.abs(stretched.x-hull.x)<1,`${device}: dragging the edge handle stretches the outline ${JSON.stringify({hull,stretched})}`);
+      await press('apply_transform',device);
+      await wait(`layerApp.state().layer_tools.tool!=='transform'&&layerApp.state().canvas_bar?.context.kind==='selection'`);
+      const applied=await selectionBox();
+      assert.ok(applied[2]>outline[2]+10&&Math.abs(applied[0]-outline[0])<1,`${device}: Apply moves the outline ${JSON.stringify({outline,applied})}`);
+      assert.equal(await revision(source),untouched,`${device}: the pixels stay where they are`);
+      assert.ok(holdsOnly(await thumbnail(source),[0,0,page.width,page.height]).ok,`${device}: the layer keeps every pixel`);
+      await invoke('undo');
+      await wait(boxIs(outline));
+      await invoke('deselect');
       if(wide) {
-        assert.deepEqual(routes,['bar','bar','bar'],'A wide work area shows every menu on the bar');
+        assert.deepEqual(routes,['bar','bar','bar','bar','bar'],'A wide work area shows every menu on the bar');
         await viewport(1440);await settle();await invoke('fit_canvas');await settle();
       }
       console.log(`${device}: bar menus opened from ${routes.join(', ')}`);
@@ -595,7 +682,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       console.log(`${device}: the guide bar deletes the selected guide`);
     }
     await invoke('lasso');
-    console.log(`PASS canvas action bar (${device?'tablet':'desktop'}): selection bar beside new selections, Transform, taps never paint, hide during drags, More, Apply/Cancel, completion-only, Zen, glass, Copy to Layer, Clear Outside and Adjust › Curves from bar menus, Delete clearing a selection but not from a focused drawing tab, Quick Mask, Selection Layer and layer-mask bars with their exits and Escape, a notice above a mode bar, the guide bar's Delete, and screenshots in ${directory}`);
+    console.log(`PASS canvas action bar (${device?'tablet':'desktop'}): selection bar beside new selections, Transform, taps never paint, hide during drags, More, Apply/Cancel, completion-only, Zen, glass, Copy to Layer, Clear Outside and Adjust › Curves from bar menus, Refine ▾ › Feather with a live preview undone in one step, Transform Outline moving only the outline, Delete clearing a selection but not from a focused drawing tab, Quick Mask, Selection Layer and layer-mask bars with their exits and Escape, a notice above a mode bar, the guide bar's Delete, and screenshots in ${directory}`);
   } catch(error) {
     const shot=await call('Page.captureScreenshot',{format:'png'});
     await writeFile(`${directory}/failure.png`,Buffer.from(shot.data,'base64'));

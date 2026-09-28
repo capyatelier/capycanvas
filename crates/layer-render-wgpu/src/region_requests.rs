@@ -1,8 +1,11 @@
 //! Single-flight region queries. Keep the GPU result for rendering and capture
 //! one packed history copy asynchronously, with no CPU flood/raster algorithm.
+//! Refinements run across frames, one bounded chunk per poll.
 use super::*;
 use flood::{Flood, Region};
 use layer_render::{RegionRequest, RegionResult};
+use selection_refine::{Downsample, Job, ModifyPlan, SelectionRefiner, Stage};
+use std::sync::{Arc, Weak};
 
 pub(super) struct RegionRequests {
     pub(super) flood: Flood,
@@ -11,10 +14,29 @@ pub(super) struct RegionRequests {
     readback: Option<wgpu::Buffer>,
     pending: Option<Region>,
     waiting: Option<RegionRequest>,
+    running: Option<Running>,
     /// Rasterizes a warp mesh for selections resampled through it.
     positions: Option<paint_transform::mesh::Positions>,
-    tx: mpsc::Sender<Result<RegionResult, GpuRasterError>>,
-    rx: mpsc::Receiver<Result<RegionResult, GpuRasterError>>,
+    rx: Option<mpsc::Receiver<Result<RegionResult, GpuRasterError>>>,
+    modify_source: Option<ModifySource>,
+}
+/// The selection Select › Modify refines, prepared at document resolution,
+/// and the levels of its preview pyramid built so far, each halving the last
+/// over `region`.
+struct ModifySource {
+    selection: Weak<layer_core::Selection>,
+    extent: [u32; 2],
+    document: wgpu::Buffer,
+    region: [u32; 4],
+    levels: Vec<wgpu::Buffer>,
+}
+struct Running {
+    job: Job,
+    request_id: u64,
+    probe: Option<layer_render::TonalProbe>,
+    placement: layer_core::Affine,
+    /// Pyramid levels this job builds, for later previews.
+    levels: Vec<wgpu::Buffer>,
 }
 impl RegionRequests {
     pub fn storage_bytes(&self) -> u64 {
@@ -22,9 +44,10 @@ impl RegionRequests {
             + self.raw.storage_bytes()
             + self.readback.as_ref().map_or(0, |b| b.size())
             + self.pending.as_ref().map_or(0, |r| r.coverage.size())
+            + self.running.as_ref().map_or(0, |r| r.job.storage_bytes())
+            + self.modify_source.as_ref().map_or(0, |s| s.document.size() + s.levels.iter().map(wgpu::Buffer::size).sum::<u64>())
     }
     pub(super) fn new(device: &PipelineDevice) -> Self {
-        let (tx, rx) = mpsc::channel();
         Self {
             flood: Flood::new(device),
             raw: region_sources::RawRegions::new(device),
@@ -32,10 +55,23 @@ impl RegionRequests {
             readback: None,
             pending: None,
             waiting: None,
+            running: None,
             positions: None,
-            tx,
-            rx,
+            rx: None,
+            modify_source: None,
         }
+    }
+    /// Drop the request in progress; a readback already in flight is ignored.
+    pub(super) fn cancel(&mut self) {
+        self.waiting = None;
+        self.running = None;
+        if self.pending.take().is_some() {
+            self.rx = None;
+            self.readback = None;
+        }
+    }
+    fn refiner(&mut self, r: &WgpuRasterizer) -> &mut selection_refine::SelectionRefiner {
+        self.refiner.get_or_insert_with(|| selection_refine::SelectionRefiner::new(&r.device, &r.queue))
     }
     fn positions(&mut self, r: &WgpuRasterizer) -> &mut paint_transform::mesh::Positions {
         self.positions.get_or_insert_with(|| {
@@ -105,8 +141,12 @@ impl RegionRequests {
         r: &mut WgpuRasterizer,
         request: RegionRequest,
     ) -> Result<bool, GpuRasterError> {
-        if self.pending.is_some() || self.waiting.is_some() {
+        if self.pending.is_some() || self.waiting.is_some() || self.running.is_some() {
             return Ok(false);
+        }
+        if let layer_render::RegionSource::Modify(modify) = &request.source {
+            let modify = modify.clone();
+            return self.start_modify(r, request, &modify);
         }
         let extent = match request.source.raw_source() {
             layer_render::RegionSource::Layer(id)
@@ -143,8 +183,8 @@ impl RegionRequests {
         {
             return Err(GpuRasterError::InvalidExtent);
         }
-        if (mapped || request.selection.is_some()) && self.refiner.is_none() {
-            self.refiner = Some(selection_refine::SelectionRefiner::new(&r.device));
+        if mapped || request.selection.is_some() {
+            self.refiner(r);
         }
         if let Some(startup) = &r.startup {
             startup.compiler.check()?;
@@ -168,7 +208,7 @@ impl RegionRequests {
                     .refiner
                     .as_ref()
                     .unwrap()
-                    .prepare(&startup.compiler, options);
+                    .prepare(&startup.compiler, [&Stage::refinement(options)], false);
             }
             if request.limit.is_some() || request.selection.is_some() {
                 ready &= startup
@@ -269,31 +309,187 @@ impl RegionRequests {
             )
         } else if let Some(options) = &request.selection {
             let extent = r.document_extent;
-            if let Some(previous) = &options.previous {
-                r.selection_clip
-                    .prepare(&r.device, &mut encoder, extent, previous)?;
-            }
-            let previous = options
-                .previous
-                .as_ref()
-                .and(r.selection_clip.buffer.as_ref());
-            (
-                self.refiner.as_ref().unwrap().encode(
-                    &r.device,
-                    &mut encoder,
-                    extent,
-                    &input.coverage,
-                    previous,
-                    options,
-                )?,
+            let external = match &options.previous {
+                Some(previous) => {
+                    r.selection_clip.prepare(&r.device, &mut encoder, extent, previous)?;
+                    Some(Self::copy(&r.device, &mut encoder, r.selection_clip.buffer.as_ref().unwrap(), "previous selection"))
+                }
+                None => None,
+            };
+            let [w, h] = extent;
+            let job = self.refiner.as_ref().unwrap().job(
+                &r.device,
+                &mut encoder,
                 extent,
-                true,
-            )
+                [0, 0, w, h],
+                vec![Stage::refinement(options)],
+                input.coverage,
+                external,
+                Vec::new(),
+            )?;
+            let probe = tone.and_then(|t| t.probe);
+            let running = Running { job, request_id: request.request_id, probe, placement: layer_core::Affine::IDENTITY, levels: Vec::new() };
+            self.advance(r, encoder, running)?;
+            return Ok(true);
         } else {
             (input, extent, false)
         };
-        let coverage_size = region.bounds_offset;
         let probe = tone.and_then(|t| t.probe);
+        self.finish(r, encoder, region, extent, byte_coverage, request.request_id, probe, layer_core::Affine::IDENTITY);
+        Ok(true)
+    }
+    fn copy(device: &wgpu::Device, encoder: &mut crate::submission::CommandEncoder, buffer: &wgpu::Buffer, label: &'static str) -> wgpu::Buffer {
+        let copy = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: buffer.size(),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(buffer, 0, &copy, 0, buffer.size());
+        copy
+    }
+    fn start_modify(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        request: RegionRequest,
+        modify: &Arc<layer_render::SelectionModify>,
+    ) -> Result<bool, GpuRasterError> {
+        let extent = r.document_extent;
+        if !modify.is_valid() || extent.contains(&0) {
+            return Err(GpuRasterError::InvalidExtent);
+        }
+        let selection = &modify.selection;
+        if self
+            .modify_source
+            .as_ref()
+            .is_some_and(|s| s.extent != extent || s.selection.upgrade().is_none_or(|s| !Arc::ptr_eq(&s, selection)))
+        {
+            self.modify_source = None;
+        }
+        let built = self.modify_source.as_ref().map_or(0, |s| s.levels.len() as u32);
+        let preview = self.refiner(r).preview();
+        let plan = ModifyPlan::new(modify, extent, preview, built);
+        if let Some(startup) = &r.startup {
+            startup.compiler.check()?;
+            let ready = self.refiner.as_ref().unwrap().prepare(&startup.compiler, &plan.stages, plan.level > built)
+                & startup.compiler.require(r.selection_clip.pipelines(), startup::BRUSH);
+            if !ready {
+                self.waiting = Some(request);
+                return Ok(true);
+            }
+        }
+        let mut encoder = crate::submission::CommandEncoder::new(
+            &r.device,
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("modify selection"),
+            },
+        );
+        if self.modify_source.is_none() {
+            r.selection_clip.prepare(&r.device, &mut encoder, extent, selection)?;
+            self.modify_source = Some(ModifySource {
+                selection: Arc::downgrade(selection),
+                extent,
+                document: Self::copy(&r.device, &mut encoder, r.selection_clip.buffer.as_ref().unwrap(), "selection to modify"),
+                region: selection_refine::pyramid_region(modify, extent),
+                levels: Vec::new(),
+            });
+        }
+        let source = self.modify_source.as_ref().unwrap();
+        let [x0, y0, x1, y1] = source.region;
+        let mut downsamples: Vec<Downsample> = Vec::new();
+        for level in built + 1..=plan.level {
+            let scale = 1 << level;
+            let origin = [x0 / scale, y0 / scale];
+            let cells = [x1.div_ceil(scale) - origin[0], y1.div_ceil(scale) - origin[1]];
+            let (input, bounds, from) = match level {
+                1 => (source.document.clone(), extent, [x0, y0]),
+                _ => (
+                    downsamples.last().map_or_else(|| source.levels[level as usize - 2].clone(), |d| d.output.clone()),
+                    extent.map(|v| v.div_ceil(scale / 2)),
+                    origin.map(|v| v * 2),
+                ),
+            };
+            downsamples.push(Downsample {
+                input,
+                bounds,
+                origin: from,
+                output: SelectionRefiner::coverage_buffer(&r.device, &mut encoder, origin, cells, false, "selection pyramid level"),
+                extent: cells,
+                row: 0,
+            });
+        }
+        let levels: Vec<_> = downsamples.iter().map(|d| d.output.clone()).collect();
+        let input = match plan.level {
+            0 => source.document.clone(),
+            level => levels.last().cloned().unwrap_or_else(|| source.levels[level as usize - 1].clone()),
+        };
+        let job = self.refiner.as_ref().unwrap().job(
+            &r.device,
+            &mut encoder,
+            plan.grid,
+            plan.active,
+            plan.stages.clone(),
+            input,
+            None,
+            downsamples,
+        )?;
+        let running = Running {
+            job,
+            request_id: request.request_id,
+            probe: None,
+            placement: plan.placement(),
+            levels,
+        };
+        self.advance(r, encoder, running)?;
+        Ok(true)
+    }
+    /// Encode and submit the next chunk of `running`, or its readback once
+    /// the job is complete.
+    fn advance(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        mut encoder: crate::submission::CommandEncoder,
+        mut running: Running,
+    ) -> Result<(), GpuRasterError> {
+        let refiner = self.refiner.as_mut().unwrap();
+        let timing = refiner.begin_timing(&mut encoder);
+        let region = match refiner.advance(&r.device, &mut encoder, &mut running.job) {
+            Ok(region) => region,
+            Err(error) => {
+                refiner.timed(&r.queue, timing);
+                return Err(error);
+            }
+        };
+        refiner.end_timing(&mut encoder, timing, running.job.taps());
+        let Some(region) = region else {
+            running.job.track(&encoder);
+            r.uploads.finish(&encoder);
+            encoder.submit(&r.queue);
+            self.refiner.as_mut().unwrap().timed(&r.queue, timing);
+            self.running = Some(running);
+            return Ok(());
+        };
+        if let Some(source) = &mut self.modify_source {
+            source.levels.extend(running.levels);
+        }
+        let extent = running.job.extent();
+        self.finish(r, encoder, region, extent, true, running.request_id, running.probe, running.placement);
+        self.refiner.as_mut().unwrap().timed(&r.queue, timing);
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn finish(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        mut encoder: crate::submission::CommandEncoder,
+        region: Region,
+        extent: [u32; 2],
+        byte_coverage: bool,
+        request_id: u64,
+        probe: Option<layer_render::TonalProbe>,
+        placement: layer_core::Affine,
+    ) {
+        let coverage_size = region.bounds_offset;
         let mask_size = coverage_size + 32;
         let size = mask_size
             + if probe.is_some() {
@@ -323,27 +519,48 @@ impl RegionRequests {
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
         self.pending = Some(region);
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
         selection_readback::capture_selection(
             readback,
             size,
             coverage_size,
             extent,
             byte_coverage,
-            request.request_id,
-            self.tx.clone(),
+            request_id,
+            tx,
             move |mut result, _, extra| {
                 result.tonal_sample = probe.and_then(|p| tonal::sample(extra, p));
+                result.placement = placement;
                 result
             },
         );
-        Ok(true)
     }
 }
 impl WgpuRasterizer {
     pub fn region_pending(&self) -> bool {
         self.regions
             .as_ref()
-            .is_some_and(|r| r.pending.is_some() || r.waiting.is_some())
+            .is_some_and(|r| r.pending.is_some() || r.waiting.is_some() || r.running.is_some())
+    }
+    /// Limit refinement chunks and previews to `taps`, or with None restore
+    /// this GPU's budgets.
+    #[cfg(test)]
+    pub(super) fn set_refine_chunk(&mut self, taps: Option<f64>) {
+        let mut regions = self.regions.take().unwrap_or_else(|| RegionRequests::new(&self.device));
+        regions.refiner(self).budget = taps;
+        self.regions = Some(regions);
+    }
+    /// The pixel taps a refinement chunk takes on this GPU, once timed.
+    #[cfg(test)]
+    pub(super) fn refine_chunk(&self) -> Option<(f64, bool)> {
+        self.regions.as_ref()?.refiner.as_ref().map(|r| (r.chunk(), r.times_chunks()))
+    }
+    pub(super) fn cancel_region(&mut self) {
+        if let Some(regions) = &mut self.regions {
+            regions.cancel();
+        }
+        self.refresh_storage_metrics();
     }
     pub(super) fn start_region(&mut self, request: RegionRequest) -> Result<bool, GpuRasterError> {
         let mut regions = self
@@ -365,10 +582,31 @@ impl WgpuRasterizer {
                 return Some(Err(error));
             }
         }
+        if let Some(refiner) = self.regions.as_mut()?.refiner.as_mut() {
+            refiner.poll_timing(&self.device, &self.queue);
+        }
+        if self.regions.as_ref()?.running.as_ref().is_some_and(|r| r.job.idle()) {
+            let mut requests = self.regions.take().unwrap();
+            let running = requests.running.take().unwrap();
+            let encoder = crate::submission::CommandEncoder::new(
+                &self.device,
+                &wgpu::CommandEncoderDescriptor { label: Some("refine selection") },
+            );
+            let result = requests.advance(self, encoder, running);
+            self.regions = Some(requests);
+            self.refresh_storage_metrics();
+            if let Err(error) = result {
+                return Some(Err(error));
+            }
+        }
         let requests = self.regions.as_mut()?;
+        if requests.running.is_some() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            return None;
+        }
         requests.pending.as_ref()?;
         let _ = self.device.poll(wgpu::PollType::Poll);
-        let result = requests.rx.try_recv().ok()?;
+        let result = requests.rx.as_ref()?.try_recv().ok()?;
         let region = requests.pending.take().unwrap();
         if let Ok(result) = &result {
             self.selection_clip

@@ -241,6 +241,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 feather: self.selection_tools.options.feather,
                 previous: draft.baseline.clone().map(Arc::new),
                 source_to_document: Affine::IDENTITY,
+                keep_canvas_edges: false,
             }),
         };
         self.tonal_tools.probe = probe;

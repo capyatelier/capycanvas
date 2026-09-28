@@ -81,14 +81,23 @@ impl CanvasBarMenu {
         match self {
             Self::CopyToLayer => Some(CommandId::CopySelectionToLayer),
             Self::Clear => Some(CommandId::ClearSelected),
-            Self::Refine | Self::Adjust | Self::Copy => None,
+            Self::Refine => Some(CommandId::FeatherSelection),
+            Self::Adjust | Self::Copy => None,
         }
     }
     fn commands(self) -> &'static [CommandId] {
         match self {
             Self::CopyToLayer => &[CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer],
             Self::Clear => &[CommandId::ClearSelected, CommandId::ClearOutside],
-            Self::Refine | Self::Adjust | Self::Copy => &[],
+            Self::Refine => &[
+                CommandId::GrowSelection,
+                CommandId::ShrinkSelection,
+                CommandId::FeatherSelection,
+                CommandId::BorderSelection,
+                CommandId::SmoothSelection,
+                CommandId::TransformSelectionOutline,
+            ],
+            Self::Adjust | Self::Copy => &[],
         }
     }
 }
@@ -134,7 +143,7 @@ impl CanvasBarView {
 }
 
 /// Short labels for commands that appear on the bar; empty shows the icon alone.
-fn short_label(command: CommandId) -> &'static str {
+pub(crate) fn short_label(command: CommandId) -> &'static str {
     match command {
         CommandId::ApplyTransform => "Apply",
         CommandId::CancelTransform | CommandId::CancelSelection => "Cancel",
@@ -166,6 +175,12 @@ fn short_label(command: CommandId) -> &'static str {
         CommandId::SnapRulers => "Snap",
         CommandId::ShowRulers => "Guides",
         CommandId::CropCanvasToSelection => "Crop",
+        CommandId::GrowSelection => "Grow…",
+        CommandId::ShrinkSelection => "Shrink…",
+        CommandId::FeatherSelection => "Feather…",
+        CommandId::BorderSelection => "Border…",
+        CommandId::SmoothSelection => "Smooth…",
+        CommandId::TransformSelectionOutline => "Transform Outline",
         _ => command.label(),
     }
 }
@@ -371,9 +386,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let completion = [CommandId::CancelTransform, CommandId::ApplyTransform];
         let count = self.operation.placement_count();
+        let label = if self.operation.outline() {
+            Some(short_label(CommandId::TransformSelectionOutline).into())
+        } else {
+            (count > 1).then(|| format!("{count} images"))
+        };
         Some(Plan {
             kind: if self.operation.placing() { CanvasBarKind::Placement } else { CanvasBarKind::Transform },
-            label: (count > 1).then(|| format!("{count} images")),
+            label,
             items: self
                 .state
                 .tool_actions
@@ -588,7 +608,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             CanvasBarMenu::CopyToLayer | CanvasBarMenu::Clear => {
                 vec![menu.commands().iter().map(|&id| command(id)).collect()]
             }
-            CanvasBarMenu::Refine => vec![self.selection_resize_items(None)],
+            CanvasBarMenu::Refine => vec![
+                self.refine_items(None),
+                vec![ContextMenuItem {
+                    label: short_label(CommandId::TransformSelectionOutline).into(),
+                    ..command(CommandId::TransformSelectionOutline)
+                }],
+            ],
             CanvasBarMenu::Adjust => vec![self.filter_category_items()],
             CanvasBarMenu::Copy => Vec::new(),
         };

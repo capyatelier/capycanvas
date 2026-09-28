@@ -9409,6 +9409,13 @@ fn native_backdrop_blur_capture() {
     pump(100);
 }
 
+fn refine_busy(w: &Workspace) -> bool {
+    w.gpu.borrow().as_ref().unwrap().session.wants_continuous_frames()
+}
+fn refine_preview_count(w: &Workspace) -> u64 {
+    w.gpu.borrow().as_ref().unwrap().session.renderer_stats().selection_previews
+}
+
 #[test]
 #[ignore = "hardware Wayland benchmark: run separately in release with --ignored --test-threads=1"]
 fn native_frame_pacing() {
@@ -9432,6 +9439,7 @@ fn native_frame_pacing() {
     };
     let photo = std::env::var("LAYER_PACING_WORKSPACE").as_deref() == Ok("photo24");
     let distort = std::env::var("LAYER_PACING_TRANSFORM_MODE").as_deref() == Ok("distort");
+    let outline = std::env::var("LAYER_PACING_TRANSFORM_MODE").as_deref() == Ok("outline");
     let interpolation = std::env::var("LAYER_PACING_INTERPOLATION").unwrap_or_default();
     w.window.present();
     pump(1500);
@@ -9552,8 +9560,10 @@ fn native_frame_pacing() {
         ("Pan", None),
         ("Hand", None),
         ("Transform", None),
+        ("Refine", None),
     ] {
-        if std::env::var("LAYER_PACING_BRUSH").is_ok_and(|s| s != name) {
+        let chosen = std::env::var("LAYER_PACING_BRUSH");
+        if chosen.as_ref().is_ok_and(|s| s != name) || (name == "Refine" && chosen.is_err()) {
             continue;
         }
         if let Some(preset) = preset {
@@ -9632,7 +9642,7 @@ fn native_frame_pacing() {
                 });
             }
             w.dispatch(UiAction::Invoke {
-                command: CommandId::ScaleRotate,
+                command: if outline { CommandId::TransformSelectionOutline } else { CommandId::ScaleRotate },
             });
             assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Transform);
             if distort {
@@ -9650,6 +9660,23 @@ fn native_frame_pacing() {
             {
                 w.dispatch(UiAction::Invoke { command });
             }
+        } else if name == "Refine" {
+            w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+            let (width, height) = {
+                let gpu = w.gpu.borrow();
+                let doc = gpu.as_ref().unwrap().session.engine().document();
+                (doc.width as f32, doc.height as f32)
+            };
+            let [x0, y0, x1, y1] = [width * 0.25, height * 0.25, width * 0.75, height * 0.75];
+            w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+            native_pen_path(&w, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]);
+            w.dispatch(UiAction::Invoke { command: CommandId::FeatherSelection });
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while state(&w).layer_tools.selection_resize.is_none() || refine_busy(&w) {
+                assert!(Instant::now() < deadline, "the Refine panel opens and previews");
+                pump(20);
+            }
+            pump(500);
         }
         pump(300);
         // A cold material shader/texture may not be ready after a fixed sleep.
@@ -9752,7 +9779,34 @@ fn native_frame_pacing() {
             ),
         );
         let context = glib::MainContext::default();
+        let mut refine_values = 0;
+        let mut refine_revisions = 0;
+        let mut refine_radius = f32::NAN;
+        let mut refine_revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+        let refine_previews = refine_preview_count(&w);
         while start.elapsed() < Duration::from_secs(6) {
+            if name == "Refine" {
+                let t = start.elapsed().as_secs_f32();
+                let radius = ((2. + 28. * (1. - (std::f32::consts::PI * t).cos())) * 10.).round() / 10.;
+                if radius != refine_radius {
+                    refine_radius = radius;
+                    refine_values += 1;
+                    w.dispatch(UiAction::Selection { action: SelectionAction::ResizeRadius { radius } });
+                }
+                let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+                if revision != refine_revision {
+                    refine_revision = revision;
+                    refine_revisions += 1;
+                }
+                let due = start.elapsed() + Duration::from_micros(8333);
+                while start.elapsed() < due {
+                    let dispatch_start = crate::timing::thread_cpu_ms();
+                    context.iteration(true);
+                    dispatch_thread_cpu.push(crate::timing::thread_cpu_ms() - dispatch_start);
+                }
+                sequence += 1;
+                continue;
+            }
             let t = start.elapsed().as_secs_f32() * 5.0;
             let mut event = PenEvent {
                 device_id: 1,
@@ -9831,7 +9885,9 @@ fn native_frame_pacing() {
                 "benchmark must keep the overview live"
             );
         }
-        if preset.is_some() || name == "Transform" {
+        if name == "Refine" {
+            w.dispatch(UiAction::Selection { action: SelectionAction::CancelResize });
+        } else if preset.is_some() || name == "Transform" {
             w.input.send(
                 &w,
                 PenEvent {
@@ -9873,7 +9929,7 @@ fn native_frame_pacing() {
         }
         let stats = worker_stats.lock().unwrap();
         assert!(
-            stats.cpu.len() > 100,
+            name == "Refine" || stats.cpu.len() > 100,
             "canvas must schedule independently of GTK painting; worker frames = {}, GPU = {}, presented = {}",
             stats.cpu.len(),
             stats.gpu.len(),
@@ -9882,7 +9938,7 @@ fn native_frame_pacing() {
         let gpu_timestamps = std::env::var("LAYER_PACING_GPU_TIMESTAMPS").as_deref() != Ok("0");
         if gpu_timestamps {
             assert!(
-                stats.gpu.len() > 100,
+                name == "Refine" || stats.gpu.len() > 100,
                 "hardware timestamps must cover GPU rendering"
             );
         } else {
@@ -9900,7 +9956,7 @@ fn native_frame_pacing() {
                 .all(|v| v.is_finite() && *v >= 0.)
         );
         assert!(
-            stats.presented.iter().filter(|p| p[3] == 1).count() > 100,
+            name == "Refine" || stats.presented.iter().filter(|p| p[3] == 1).count() > 100,
             "measure real child-surface presentation"
         );
         let report = serde_json::json!({
@@ -9914,7 +9970,7 @@ fn native_frame_pacing() {
             "navigator_updates": preview_updates,
             "navigator_frames": stats.overview_frames,
             "transform_mask": std::env::var("LAYER_PACING_TRANSFORM_MASK").unwrap_or_default(),
-            "transform_mode": if distort { "distort" } else { "free" },
+            "transform_mode": if distort { "distort" } else if outline { "outline" } else { "free" },
             "interpolation": interpolation,
             "input_cpu": stats.input_cpu,
             "input_handler_cpu": stats.input_handler_cpu,
@@ -9930,6 +9986,20 @@ fn native_frame_pacing() {
             "transparency": format!("{:?}", state(&w).settings.transparency),
             "backdrop_frames": stats.backdrop_frames,
         });
+        let extent = {
+            let gpu = w.gpu.borrow();
+            let doc = gpu.as_ref().unwrap().session.engine().document();
+            [doc.width, doc.height]
+        };
+        let mut report = report;
+        report["document"] = serde_json::json!(extent);
+        if name == "Refine" {
+            report["refine"] = serde_json::json!({
+                "values": refine_values,
+                "document_revisions": refine_revisions,
+                "previews": refine_preview_count(&w) - refine_previews,
+            });
+        }
         eprintln!(
             "{name}: {} canvas frames, {} GPU timings, {} presentation feedbacks",
             stats.cpu.len(),

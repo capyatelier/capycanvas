@@ -535,31 +535,4 @@ mod painted_selection_checks {
         }
         assert_eq!(s.mask_properties(), original);
     }
-
-    #[test]
-    fn selection_resize_is_async_cancelable_and_one_undo_step() {
-        let mut s = session(Platform::Gtk);
-        invoke(&mut s, CommandId::SelectAll);
-        let before = s.engine.document().selection.clone();
-        let resize = |action| UiAction::Selection { action };
-        s.dispatch(resize(SelectionAction::BeginResize { grow: false, layer: None })).unwrap();
-        s.dispatch(resize(SelectionAction::ResizeRadius { radius: 7. })).unwrap();
-        s.dispatch(resize(SelectionAction::CancelResize)).unwrap();
-        assert_eq!(s.engine.document().selection, before);
-        assert!(s.renderer_mut().region_requests.is_empty());
-        s.dispatch(resize(SelectionAction::BeginResize { grow: false, layer: None })).unwrap();
-        s.dispatch(resize(SelectionAction::ResizeRadius { radius: 7. })).unwrap();
-        s.dispatch(resize(SelectionAction::ApplyResize)).unwrap();
-        s.frame(1, 1).unwrap();
-        let request = s.renderer_mut().region_requests.last().unwrap().clone();
-        assert_eq!(request.selection.unwrap().resize, -7);
-        assert_eq!(s.engine.document().selection, before);
-        s.renderer_mut().region_reply = Some(layer_render::RegionResult { tonal_sample: None, request_id: request.request_id, pixels: std::sync::Arc::new(layer_core::SelectionPixels::bytes([4,1], [1,0,2,1], vec![0x00808000]).unwrap()) });
-        s.frame(2,2).unwrap();
-        let result = s.engine.document().selection.clone();
-        assert_ne!(result, before);
-        invoke(&mut s, CommandId::Undo); assert_eq!(s.engine.document().selection, before);
-        invoke(&mut s, CommandId::Redo); assert_eq!(s.engine.document().selection, result);
-    }
-
 }

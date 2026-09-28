@@ -18,6 +18,7 @@ mod tonal_checks {
         s.renderer_mut().region_reply = Some(RegionResult {
             request_id: id,
             tonal_sample: sample,
+            placement: layer_core::Affine::IDENTITY,
             pixels: Arc::new(
                 layer_core::SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![word]).unwrap(),
             ),
