@@ -249,7 +249,7 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | Inside-photo path: 38.0 updates/s (37.6–38.0); gap p99 37.1 ms | **Not met** |
+| G-Pen (1) | Simple | 1024 px | Inside-photo path: 37.5 updates/s (36.9–37.7); gap p99 37.6 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -288,33 +288,42 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 | Liquify Expand (38) | Very complex | 512 px | 7.1 updates/s (7.0–7.2); gap p99 239.8 ms | **Not met** |
 | Liquify Crystals (39) | Very complex | 512 px | 1.1 updates/s (1.1–1.1); gap p99 1725.1 ms | **Not met** |
 
-The G-Pen row uses the spatial graph build above, measured 2026-09-28 with three
-five-second strokes, 240 × 140 surface-pixel radii, 16 ms prediction and thermal
-status 0 before and after. Renderer-owned storage is 580.2 MiB. Raw data and the
-trace are under `artifacts/display-production/spatial-hardware-brush`. This
-remeasurement preserves painting throughput; it does not close the target gap.
+The G-Pen row uses production `7a554597`, rebased onto main's retouch changes,
+measured 2026-09-28 with three five-second strokes, 240 × 140 surface-pixel radii,
+16 ms prediction and thermal status 0 before and after. Renderer-owned storage
+is 580.2 MiB. Raw data and the trace are under
+`artifacts/display-production/spatial-rebased-gpen`. APK SHA-256 is
+`1b410def35d6010cc992d81a9df85f334c8b8c696bcf6d4c6db784d69574050e`.
+The preceding spatial build measured 38.0 updates/s (37.6–38.0); these are
+successive runs, not alternating pairs. Neither meets the target.
 
 At the 2048 px goal, the earlier G-Pen build completes 12.3 updates/s (12.3–12.4), with a gap p99 of 114.1 ms.
 
-Retouch brushes measured on 2026-09-28, production `9f364292` plus shared
-stroke-finalization invalidation, on the 12 MP photo at Fit. Each tool uses three
-five-second inside-photo strokes, 512 px diameter and 16 ms prediction. Thermal
-status is zero before and after each tool. These are current-path measurements;
-there is no matched old-renderer comparison.
+Retouch brushes measured on 2026-09-28 at production `7a554597`, after integrating
+main `9deeafba`'s Clone, Healing and Spot Healing optimization. Each tool uses
+three five-second inside-photo strokes, 512 px diameter and 16 ms prediction.
+Thermal status is zero before and after each tool. These are current-path
+measurements; there is no matched old-renderer comparison.
 
-| Brush | Completed updates/s (range) | Update-start gap p99 | Last completion after input ends, median (range) | Status |
+| Tool | Completed updates/s | Update-start gap p99 | Last completion after input ends | Drawing target |
 | --- | --- | --- | --- | --- |
-| Clone Stamp | 19.56 (19.55–19.73) | 92.0 ms | 148 ms (142–212) | **Not met** |
-| Healing Brush | 19.35 (19.30–19.73) | 91.8 ms | 1661 ms (256–1727) | **Not met** |
-| Spot Healing Brush | 29.26 (24.71–29.28) | 65.8 ms | 3879 ms (3851–3881) | **Not met** |
+| Clone Stamp | 63.58 (62.49–63.95) | 24.0 ms | 88 ms (84–95) | Met |
+| Healing Brush | 62.71 (61.59–62.73) | 23.8 ms | 1669 ms (1616–1670) | Met |
+| Spot Healing Brush | 66.78 (66.03–68.53) | 23.9 ms | 2330 ms (2322–2336) | Met |
 
-Completion rates exclude work after the input window. The final column of timings
-includes queued input, release processing and GPU observation; it does not isolate
-the healing solver. All submitted frames finish before the harness records its
-drained snapshot. Renderer-owned storage is 709, 726 and 726 MiB respectively,
-not process RSS. The build's APK SHA-256 is
-`d1f62e558bd7a313a6355edb7be7a540b0afd683f605c14eb15604a5923fdc57`.
-Raw results are in `artifacts/display-production/healing-finish-retouch-12mp-fit`.
+Drawing meets the rate and gap criteria; the long Healing and Spot Healing
+release delays remain unresolved. Completion rates exclude work after the input
+window. Release timings include queued input, processing and GPU observation;
+they do not isolate the healing solver. Every submitted frame finishes before
+the drained snapshot. Renderer-owned storage is 536, 767 and 767 MiB respectively,
+not process RSS. This is the same APK as the G-Pen row above. Raw results are in
+`artifacts/display-production/spatial-rebased-retouch`.
+
+The preceding production build measured 19.56, 19.35 and 29.26 updates/s for these
+tools, with release tails of 148, 1661 and 3879 ms. Its results are preserved in
+`artifacts/display-production/healing-finish-retouch-12mp-fit`. The new throughput
+reflects integration of main's retouch changes; it does not isolate a composition
+algorithm speedup.
 
 G-Pen was remeasured on 2026-09-28 after integrating Clone and color mixing,
 with cached composition branches and the validated benchmark harness.
