@@ -997,6 +997,12 @@ impl ViewportPresenter {
             } else {
                 crate::pixel_rect::PixelRect::EMPTY
             };
+            if crate::performance_trace::enabled() {
+                crate::performance_trace::counter(c"Capy viewport full redraw", u64::from(full));
+                crate::performance_trace::counter(c"Capy viewport bindings changed", u64::from(bindings_changed));
+                crate::performance_trace::counter(c"Capy viewport artwork pixels", repaint.area());
+                crate::performance_trace::counter(c"Capy viewport cursor pixels", cursor.area());
+            }
             let mut regions = Vec::with_capacity(5 + 2 * self.overviews.len());
             for bounds in previous.picker.into_iter().chain(self.picker.bounds()) {
                 crate::present_damage::add_region(&mut regions, crate::present_damage::surface_bounds(bounds, view, self.quarter_turns));
@@ -1007,6 +1013,7 @@ impl ViewportPresenter {
                     crate::present_damage::damage(renderer.selection_paint_damage, view, self.quarter_turns));
             }
             let outline = outline.filter(|_| !full).map(|area| crate::present_damage::damage(area, view, self.quarter_turns));
+            crate::performance_trace::counter(c"Capy viewport outline pixels", outline.map_or(0, |r| r.area()));
             if let Some(area) = outline {
                 crate::present_damage::add_region(&mut regions, area);
             }
@@ -1103,6 +1110,7 @@ impl ViewportPresenter {
                 timestamp_writes.as_ref().map(|t| wgpu::RenderPassTimestampWrites { end_of_pass_write_index: None, ..t.clone() }),
                 &mut glass,
             );
+            crate::performance_trace::counter(c"Capy viewport glass pixels", glass.iter().map(|r| r.area()).sum());
             if !full {
                 for area in glass {
                     crate::present_damage::add_region(&mut regions, area);
@@ -1118,6 +1126,7 @@ impl ViewportPresenter {
         let bounds = crate::pixel_rect::PixelRect::full([size.width, size.height]);
         let regions: Vec<_> = regions.into_iter().map(|r| r.intersect(bounds)).filter(|r| !r.is_empty()).collect();
         self.presented_area = regions.iter().map(|r| r.area()).sum();
+        crate::performance_trace::counter(c"Capy viewport regions", regions.len() as u64);
         for (index, repaint) in regions.iter().enumerate() {
             // Each pass needs its own view: wgpu can defer encoding until
             // finish(), so mutating one view would reuse the last area.

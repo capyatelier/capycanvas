@@ -99,6 +99,11 @@ requested dependency window, retiring tiles from the previous window. Display
 motion has no full-layer preview or post-release settling queue. Scalar-mask
 transactions currently provide native coverage to the same graph.
 
+Transform motion invalidates the previous and next destination bounds. The
+stationary cut also changes when a transaction starts, its source changes, Leave
+Copy toggles, the transform returns to identity, or native preview ownership
+changes. Subsequent poses reuse the unchanged cut.
+
 Eligible temporary dry-brush tails use compact prediction pages. They share the
 existing dry material evaluator, reading averaged exact destination color and
 stroke coverage. The combined layer placement and camera use a half-surface-pixel

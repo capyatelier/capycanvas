@@ -548,6 +548,7 @@ impl BackdropBlur {
         valid.dedup();
         self.valid = valid;
         let work: Vec<PixelRect> = whole.into_iter().chain(self.work_for(&affected, reach)).collect();
+        crate::performance_trace::counter(c"Capy backdrop work pixels", work.iter().map(|r| r.area()).sum());
         if work.is_empty() {
             self.frames[1] += 1;
             return false;

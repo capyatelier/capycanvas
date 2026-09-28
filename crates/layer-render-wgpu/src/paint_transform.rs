@@ -1274,12 +1274,10 @@ impl ImageTransformState {
             .transform
             .affected_regions(self.cut)
             .map(|b| pixel_rect(b, extent));
-        let affected = [
-            self.preview_regions[0],
-            self.preview_regions[1],
-            regions[0],
-            regions[1],
-        ];
+        let cut = if !same_source || self.native_preview != native || self.preview_regions[0] != regions[0] {
+            self.preview_regions[0].union(regions[0])
+        } else { PixelRect::EMPTY };
+        let affected = [cut, self.preview_regions[1], regions[1]];
         if native {
             self.render_source(r, encoder, next.layer, &next.drawn(), preview_taps(next), &affected)?;
             self.retain_pages(r, next.layer, &regions, Some(&next.transform));

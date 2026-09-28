@@ -339,3 +339,41 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     assert_eq!(r.test.source_captures.get(),captures+1);
     assert!(r.test.reduced_pages.get()>reduced);
 }
+
+#[test]
+fn moving_pixels_invalidate_the_cut_only_when_its_coverage_changes() {
+    let doc = document_at([769,257]);
+    let extent = [doc.width,doc.height];
+    let selection = Selection::polygon([[64.,64.],[192.,64.],[192.,192.],[64.,192.]]
+        .map(|[x,y]| Point {x,y}).to_vec()).unwrap();
+    let cut = PixelRect::new(64,64,192,192);
+    for scale in [1.,0.25] {
+        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        exact.test.reference = true;
+        let mut frame = packet(&doc.layers,extent);
+        frame.composite_all = false;
+        frame.view.document_to_surface = [scale,0.,0.,scale,0.,0.];
+        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        for (step,(offset,keep_source)) in [(384.,false),(416.,false),(416.,true),
+            (448.,true),(448.,false),(0.,false)].into_iter().enumerate() {
+            let preview = layer_render::TransformPreview {transaction:1,layer:doc.layers[0].id,
+                moving:true,selection:Some(selection.clone()),transform:ImageTransform {
+                    map:TransformMap::Affine(Affine::translation(Point {x:offset,y:0.})),
+                    keep_source,..Default::default()}};
+            for renderer in [&mut r,&mut exact] {
+                renderer.set_transform_preview(Some(&preview)).unwrap();renderer.submit(frame).unwrap();
+            }
+            if step == 1 || step == 3 {
+                assert!(r.composite_damage.intersect(cut).is_empty(),
+                    "unchanged cut scale={scale} step={step} damage={:?}",r.composite_damage);
+            } else {
+                assert_eq!(r.composite_damage.intersect(cut),cut,
+                    "changed cut scale={scale} step={step}");
+            }
+            let error = quality(&display_pixels(&r), &pixels(&exact,exact.composite_texture.as_ref().unwrap()),r.scale_display.as_ref().unwrap().plan);
+            assert!(error[0] < 0.004 && error[1] < 0.06, "scale={scale} step={step} {error:?}");
+            assert_eq!(r.readback_srgb_rgba8().unwrap(),exact.readback_srgb_rgba8().unwrap());
+        }
+    }
+}

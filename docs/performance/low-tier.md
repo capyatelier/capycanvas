@@ -18,18 +18,21 @@ is 4248 × 2832.
 | Two-finger rotate | 60 | | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
-| Placed-photo translation | 60 | Screen 59.4 presents/s, p99 16.7 ms; renderer 93.8 completed updates/s | Geometry build below, `photo-translate-drag` |
-| Placed-photo corner resize | 60 | Screen 59.4 presents/s, p99 16.8 ms; renderer 81.9 completed updates/s | Geometry build below, `photo-handle-drag-bar-hidden` |
-| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.7 ms; renderer 69.3 completed updates/s | Geometry build below, `photo-pixels-handle-drag` |
+| Placed-photo translation | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 93.8 completed updates/s | Transform damage build below, `photo-translate-drag` |
+| Placed-photo corner resize | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 86.3 completed updates/s | Transform damage build below, `photo-handle-drag-bar-hidden` |
+| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 77.7 completed updates/s | Transform damage build below, `photo-pixels-handle-drag` |
 | Pixel transform: Uniform, Skew or Rotate | 60 | | |
-| Pixel transform translation | 60 | Screen 59.5 presents/s, p99 16.8 ms; renderer 80.4 completed updates/s | Geometry build below, `photo-pixels-translate-drag` |
-| Pixel transform: Distort | 60 | **Not met.** Screen 55.6 presents/s, p99 16.9 ms; renderer 61.9 completed updates/s | Geometry build below, `photo-pixels-distort-drag` |
+| Pixel transform translation | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 84.1 completed updates/s | Transform damage build below, `photo-pixels-translate-drag` |
+| Pixel transform: Distort | 60 | **Not met.** Screen 55.8 presents/s, p99 16.9 ms; renderer 62.0 completed updates/s | Transform damage build below, `photo-pixels-distort-drag` |
 | Pixel transform: Perspective | 60 | | |
-| Pixel transform: Warp | 60 | **Not met.** Screen 46.7 presents/s, p99 33.4 ms; renderer 46.5 completed updates/s | Geometry build below, `photo-pixels-warp-drag` |
+| Pixel transform: Warp | 60 | **Not met.** Screen 45.9 presents/s, p99 33.4 ms; renderer 45.9 completed updates/s | Transform damage build below, `photo-pixels-warp-drag` |
 | Crop corner drag | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 113.1 completed updates/s | Geometry build below, `crop-handle-drag` |
 | Pixel resize after placing the photo at 45% size | 60 | Screen 59.6 presents/s, p99 16.9 ms; renderer 115.3 completed updates/s | Geometry build below, `scaled-photo-pixels-handle-drag` |
 | Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
 | Move tool layer drag | 60 | | |
+| Move selected pixels: whole image | 60 | Screen 59.1 presents/s, p99 16.8 ms; renderer 86.6 completed updates/s | Transform damage build below, `move-all-drag` |
+| Move selected pixels: partial selection | 60 | Screen 59.5 presents/s, p99 16.7 ms; renderer 101.3 completed updates/s | Transform damage build below, `move-part-drag` |
+| Move selected pixels: Leave Copy | 60 | Screen 59.2 presents/s, p99 16.9 ms; renderer 73.3 completed updates/s | Transform damage build below, `move-part-leave-copy-drag` |
 | Marquee, Lasso or Polygon drag | 60 | | |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
@@ -54,7 +57,8 @@ is 4248 × 2832.
 | List scrolling: layers, brushes, filters | 60 | | |
 | Menu open and close | 60 | | |
 
-Geometry build: 2026-09-28, graph transform migration based on `af177ede`,
+Earlier geometry build (crop and scaled-photo rows): 2026-09-28, graph transform
+migration based on `af177ede`,
 APK SHA-256 `c872c55b455d292c4444f7c2ca42303e421fe17e1e90a4b62e1b11b9510f8554`.
 Release Rust with an unminified Android benchmark harness, default glass, thermal
 status 0, three warmed five-second gestures per row. Values are medians across
@@ -64,7 +68,7 @@ canvas presentation rates. Renderer counts exclude empty updates and terminal
 polling. Setup commands wait for shared command availability outside timing.
 Raw results are in `artifacts/display-production/transform-final-geometry-tcl`.
 
-The paired old renderer at `29a564eb` completes 96.3 placement translations/s,
+In that earlier comparison, the old renderer at `29a564eb` completes 96.3 placement translations/s,
 94.6 placement resizes/s, 92.7 pixel translations/s, 91.2 pixel resizes/s,
 91.7 distortions/s, 51.4 warps/s, 123.8 crops/s and 112.0 scaled-photo resizes/s.
 Placement resize, crop and the pixel-transform journeys regress in renderer
@@ -77,6 +81,24 @@ viewport work, rising to 12.6 ms for Warp. The matching old viewport costs
 about 3.1 ms, or 9.0 ms for Warp. Both costs remain optimization work. Earlier canvas-bar handle-labelled measurements
 started inside the handle and measured translation; they do not qualify resizing
 or distortion.
+
+Transform damage build: 2026-09-28, `2e04caa8` plus incremental cut
+invalidation, APK SHA-256
+`b614cd5942d2165ac6054497f96873c215ed6b09863659453a4b337dd00a248b`.
+Three runs alternate before/after order, with the same private harness, 12 MP
+photo, Fit camera, release profile and default glass. Thermal status is zero
+before and after all six runs. The presentation-accounting limits above apply.
+Raw results and the source patch are under
+`artifacts/display-production/transform-cut-paired-*` and
+`transform-cut-damage-whitebox-source.patch`.
+
+Avoiding repeated invalidation of the stationary cut improves pixel translation
+76.64 to 84.07 completed updates/s, resize 71.13 to 77.68, whole-image Move 78.60
+to 86.63, and partial-selection Move 76.98 to 101.28. Leave Copy, which already
+keeps the original, changes 72.18 to 73.32. Distort and Warp remain essentially
+unchanged at 62.01 and 45.87. Viewport GPU medians fall from 5.60 to 5.03 ms for
+translation and 5.61 to 4.96 ms for resize. Old-main transform throughput still
+exceeds this build; these gains do not close the geometry regressions.
 
 ## Brushes
 
