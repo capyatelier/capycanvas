@@ -48,7 +48,7 @@ struct WorkspacePanels: View {
                 }
             }
             CanvasBarLayer(store: store, presence: store.canvasBar).zIndex(180)
-            CanvasNoticeLayer(store: store, presence: store.notice, bar: store.canvasBar).zIndex(181)
+            CanvasFloorLayer(store: store, presence: store.notice, bar: store.canvasBar).zIndex(181)
             WorkspaceDropIndicator(workspace: workspace, palette: EditorPalette(source: store.state["palette"])).zIndex(300)
             if !store.snapshot["chrome_hidden"].bool { WorkspaceCollapsedColumns(store: store) }
             WorkspaceContentDrawers(store: store, drawers: store.contentDrawers)

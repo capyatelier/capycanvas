@@ -21,21 +21,21 @@ Order: M5 to M8 as listed. Gradient interpolation in Oklab (T-14, in M6) is a pe
 
 ## Apple and Windows
 
-M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_PORTING_GUIDE.md) and [Windows](../WINDOWS_PORTING_GUIDE.md) porting guides. Shared Rust already provides the behaviour; the hosts need to present it:
+M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_PORTING_GUIDE.md) and [Windows](../WINDOWS_PORTING_GUIDE.md) porting guides. Shared Rust already provides the behaviour; the hosts need to present it. Apple presents the shared UI state, M2 and Canvas Size already; the items marked *Windows* are left only there:
 
-- **Shared UI state:**
-  - present `UiState.notice` and answer `UiAction::Notice` (Apple also does not show errors raised during a gesture; the notice fixes that);
+- **Shared UI state** (*Windows*):
+  - present `UiState.notice` and answer `UiAction::Notice`;
   - read `CommandState.disabled_reason`, then retire `canvas_bar_reason`;
   - open bar menu items (`CanvasBarItem.menu` and `icon`, through `canvas_bar_choice_menu`);
   - draw a `checkable: false` action unpressed even when its command is selected.
-- **M2:**
+- **M2** (*Windows*):
   - mode and guide bar labels;
   - the Refine dialog;
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`);
   - WebP in the export lists and file types (the edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested);
   - the labelled Color row with a "use current colour" bucket (`color_action`).
 - **M3:**
-  - the Canvas Size and Image Size dialogs, with the anchor picker (`layer_tools.canvas_size`);
+  - the Canvas Size (*Windows*) and Image Size dialogs, with the anchor picker (`layer_tools.canvas_size`);
   - the Edit ▸ Image submenu;
   - the crop tool icon (the overlay is shared renderer code);
   - clipboard image writers;
@@ -49,8 +49,7 @@ M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_POR
   - the Frequency Separation dialog (`frequency_separation`, shaped like Refine) and the Dodge & Burn and Frequency Separation icons.
 - **Tests:**
   - Apple's `command-coverage.json` lacks the M2–M4 commands;
-  - `CanvasToolChecks.swift` must expect the new preset count and Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
-  - Apple's Selection Mask checks may wait for a Grow flow that the Refine panel replaced;
+  - `CanvasToolChecks.swift` must expect the new preset count;
   - the Swift ruler fixtures now check the `CAPYRASTER` signature and have not run on a Mac.
 
 ## Open items from M2–M4

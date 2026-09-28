@@ -66,6 +66,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     let swipeOwner = UUID()
     private var swipeOrigin = CGPoint.zero
     private var swipeStart: CGFloat = 0
+    private var swipeMinimum: CGFloat = 0
     private var contactLayer: UInt64?
     var frames: [UInt64: LayerRowFrame] = [:]
     var viewport: CGRect = .zero
@@ -117,13 +118,15 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     var swiping: Bool { store?.layerSwipe.owner == swipeOwner && store?.layerSwipe.tracking == true }
     func beginSwipe(at point: CGPoint) -> Bool {
         guard let store, contact.device != .mouse, contact.target?.surface == .row, !contact.held,
-              let id = contactLayer, let row = layers.first(where: { $0["id"].uint == id }), row["can_delete"].bool,
+              let id = contactLayer, let row = layers.first(where: { $0["id"].uint == id }),
               let frame = frames[id] else { return false }
         let delta = CGPoint(x: point.x - contact.origin.x, y: point.y - contact.origin.y)
         let swipe = store.layerSwipe
         let start = swipe.owner == swipeOwner && swipe.layer == id ? swipe.offset : 0
-        guard abs(delta.x) > abs(delta.y), delta.x < 0 || start > 0 else { return false }
+        let allowed = delta.x < 0 ? row["can_delete"].bool : start > 0 || row["can_alpha_lock"].bool
+        guard abs(delta.x) > abs(delta.y), allowed else { return false }
         swipeOrigin = contact.origin; swipeStart = start
+        swipeMinimum = start == 0 && row["can_alpha_lock"].bool ? -72 : 0
         contact.suppressActivation(); closeMenu()
         swipe.owner = swipeOwner; swipe.layer = id; swipe.bounds = frame.root; swipe.tracking = true
         moveSwipe(to: point)
@@ -131,13 +134,15 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     }
     func moveSwipe(to point: CGPoint) {
         guard swiping, let swipe = store?.layerSwipe else { return }
-        swipe.offset = min(72, max(0, swipeStart - (point.x - swipeOrigin.x)))
+        swipe.offset = min(72, max(swipeMinimum, swipeStart - (point.x - swipeOrigin.x)))
     }
     func finishSwipe(cancelled: Bool) {
-        guard swiping, let swipe = store?.layerSwipe else { return }
+        guard swiping, let store, let id = store.layerSwipe.layer else { return }
+        let swipe = store.layerSwipe, toggle = !cancelled && swipe.offset <= -72 * 0.4
         swipe.tracking = false
         if cancelled || swipe.offset < 72 * 0.4 { swipe.close() }
         else { swipe.offset = 72 }
+        if toggle { store.layer(["op": "toggle_alpha_lock", "id": id]) }
     }
     private func move(_ point: CGPoint) {
         guard var drag else { return }
@@ -174,7 +179,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         // Retire it on publication, without waiting for a native move or release.
         if contact.target != nil, !contact.validate() { cancel() }
         if let swipe = store?.layerSwipe, swipe.owner == swipeOwner,
-           !layers.contains(where: { $0["id"].uint == swipe.layer && $0["can_delete"].bool }) { swipe.close() }
+           !layers.contains(where: { $0["id"].uint == swipe.layer && ($0["can_delete"].bool || $0["can_alpha_lock"].bool) }) { swipe.close() }
     }
     func cancel() {
         contact.cancel(); if drag != nil { drag = nil }; closeMenu()

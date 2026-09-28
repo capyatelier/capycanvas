@@ -82,6 +82,15 @@ extension XCTestCase {
         XCTAssertTrue(paper.waitForNonExistence(timeout: 10))
         workspaceActivate(app.buttons["Undo"])
         XCTAssertTrue(paper.waitForExistence(timeout: 10))
+        let ink = app.descendants(matching: .any)["layer-row-1"].firstMatch, alphaLock = app.buttons["layer-Alpha lock"]
+        workspaceActivate(app.buttons["layer-thumbnail-1-content"])
+        expectation(for: NSPredicate(format: "selected == NO"), evaluatedWith: alphaLock); waitForExpectations(timeout: 10)
+        let inkStart = ink.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
+        inkStart.press(forDuration: 0.01, thenDragTo: inkStart.withOffset(CGVector(dx: 90, dy: 0)))
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: alphaLock); waitForExpectations(timeout: 10)
+        XCTAssertTrue(paper.exists, "A right swipe never deletes")
+        workspaceActivate(app.buttons["Undo"])
+        expectation(for: NSPredicate(format: "selected == NO"), evaluatedWith: alphaLock); waitForExpectations(timeout: 10)
         #endif
         #if os(macOS)
         let capture = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())

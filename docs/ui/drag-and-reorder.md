@@ -62,8 +62,8 @@ change the immediate pickup rule for handles and title/tab bars.
 - Pen drags scroll lists like touch on every host (GTK's shared pen scroller,
   Web `pen-scroll.js`, Android Compose); mouse drags never pan lists.
 - A touch or pen swipe left across a layer row reveals Delete; a reverse swipe
-  or an outside click closes it. On GTK, Web and Android, swiping right on a
-  closed paint-layer row toggles alpha lock. Locked layers cannot toggle alpha
+  or an outside click closes it. On GTK, Web, Android and iPadOS, swiping right
+  on a closed paint-layer row toggles alpha lock. Locked layers cannot toggle alpha
   lock. Release commits one undo step; a short or cancelled swipe changes nothing.
   Swiping right to close Delete does not also toggle alpha lock.
 - Before a touch/pen list-row hold wins, motion remains available to normal list

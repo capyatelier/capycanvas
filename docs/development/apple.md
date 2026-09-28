@@ -204,7 +204,10 @@ xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
   bundle during `app.launch()`.
 - Resolve any device-trust or automation and capture permission prompt before
   retrying a failed run. A physical iPad runner that times out while enabling
-  automation is a runner failure, not a product result.
+  automation is a runner failure, not a product result; it usually means the
+  screen went to sleep. Launching your own test build with
+  `xcrun devicectl device process launch --device DEVICE_ID <bundle id>` wakes
+  it; terminate that process before the next run.
 
 Known failures on iPad: `testCompactMenuShortcutAcrossPages` (Command-Z) and
 `testSettingsTextSelectionShortcut` (Command-A) fail because XCTest key events

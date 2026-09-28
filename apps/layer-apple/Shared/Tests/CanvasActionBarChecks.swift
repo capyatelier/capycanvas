@@ -133,6 +133,26 @@ extension XCTestCase {
                 XCTAssertTrue(menu.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "menu-action-")).count > 0)
             }
         }
+        let refine = app.buttons["canvas-bar-menu-refine"]
+        if refine.exists {
+            func choose(_ label: String) {
+                workspaceActivate(refine)
+                let items = app.descendants(matching: .any)["canvas-bar-menu-items-refine"]
+                expect(items, "exists == YES")
+                workspaceActivate(items.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch)
+            }
+            choose("Feather")
+            let panel = app.descendants(matching: .any)["selection-refine-panel"].firstMatch
+            expect(panel, "exists == YES", "Feather opens the Refine panel")
+            workspaceActivate(app.buttons["number-increase-selection-refine-value"])
+            attachEditor(in: app, name: "canvas-bar-refine")
+            workspaceActivate(app.buttons["selection-refine-apply"])
+            expect(panel, "exists == NO", "Apply closes the Refine panel")
+            choose("Transform Outline")
+            expect(action("apply_transform"), "exists == YES", "Transform Outline shows the transform bar")
+            workspaceActivate(action("apply_transform"))
+            expect(action("deselect"), "exists == YES", "Applying the outline returns to the selection bar")
+        }
 
         let paper = bluePaperBounds(in: app)
         let sides = [CGPoint(x: paper.minX + paper.width * 0.05, y: paper.midY), CGPoint(x: paper.midX, y: paper.midY),

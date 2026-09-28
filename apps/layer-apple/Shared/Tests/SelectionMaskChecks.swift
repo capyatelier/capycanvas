@@ -41,9 +41,12 @@ extension XCTestCase {
         workspaceActivate(app.buttons["selection-menu-selection"])
         let grow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Grow")).firstMatch
         workspaceActivate(grow)
-        let apply = app.buttons["selection-resize-apply"]
-        XCTAssertTrue(apply.waitForExistence(timeout: 10), "Grow opens the distance dialog")
-        attachEditor(in: app, name: "selection-grow-dialog")
+        let apply = app.buttons["selection-refine-apply"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 10), "Grow opens the Refine panel")
+        let title = app.staticTexts["selection-refine-title"]
+        XCTAssertEqual((title.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? title.label, "Grow Selection")
+        XCTAssertTrue(app.buttons["number-value-selection-refine-value"].exists || app.textFields["number-entry-selection-refine-value"].exists)
+        attachEditor(in: app, name: "selection-grow-panel")
         workspaceActivate(apply)
         expectation(for: NSPredicate(format: "exists == NO"), evaluatedWith: apply)
         waitForExpectations(timeout: 10)

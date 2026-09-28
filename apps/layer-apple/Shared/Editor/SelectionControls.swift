@@ -77,30 +77,31 @@ struct SelectionMenuButton: View {
     }
 }
 
-struct SelectionResizeDialog: ViewModifier {
+struct SelectionRefinePanel: View {
     @ObservedObject var store: EditorStore
-    private var view: JSON { store.state["layer_tools"]["selection_resize"] }
+    let view: JSON
+    let palette: EditorPalette
     private func send(_ action: [String: Any]) { store.dispatch(["type": "selection", "action": action]) }
-    func body(content: Content) -> some View {
-        content.sheet(isPresented: Binding(get: { !view.isNull }, set: { if !$0 && !view.isNull { send(["op": "cancel_resize"]) } })) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(view["title"].string).font(.headline)
-                NumberControl(store: store, label: "Distance", value: view["radius"].number,
-                    control: view["numeric"], identifier: "selection-resize-distance") { value, completion in
-                    send(["op": "resize_radius", "radius": value]); completion(nil)
-                }
-                HStack {
-                    Spacer()
-                    Button("Cancel", role: .cancel) { send(["op": "cancel_resize"]) }
-                        .keyboardShortcut(.cancelAction).accessibilityIdentifier("selection-resize-cancel")
-                    Button("Apply") { send(["op": "apply_resize"]) }
-                        .keyboardShortcut(.defaultAction).accessibilityIdentifier("selection-resize-apply")
-                }
-            }.padding(24).frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
-                .buttonStyle(.bordered).presentationSizing(.fitted)
-                .interactiveDismissDisabled()
-                .modifier(EditorPopupPresentation())
-        }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(view["title"].string).fontWeight(.bold).accessibilityIdentifier("selection-refine-title")
+            NumberControl(store: store, label: view["label"].string, value: view["radius"].number,
+                control: view["numeric"], identifier: "selection-refine-value") { value, completion in
+                send(["op": "resize_radius", "radius": value]); completion(nil)
+            }.id(view["kind"].string)
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { send(["op": "cancel_resize"]) }.buttonStyle(.bordered)
+                    .accessibilityIdentifier("selection-refine-cancel")
+                Button("Apply") { send(["op": "apply_resize"]) }.buttonStyle(.borderedProminent).tint(palette.accent)
+                    .accessibilityIdentifier("selection-refine-apply")
+            }.focusable(false)
+        }.padding(.top, 14).padding(.horizontal, 16).padding(.bottom, 12)
+            .foregroundStyle(palette["text"])
+            .background {
+                SquircleShape.surface.fill(palette["panel"]).shadow(color: .black.opacity(0.27), radius: 4, y: 2)
+            }
+            .accessibilityElement(children: .contain).accessibilityIdentifier("selection-refine-panel")
     }
 }
 

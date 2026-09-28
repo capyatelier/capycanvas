@@ -9,6 +9,7 @@ struct NumberControl: View {
     var identifier = ""
     var valueOnly = false
     var inline = false
+    var entryWidth: CGFloat = 48
     var toolbar: Toolbar? = nil
     var gestureChange: ((String, Double, @escaping @MainActor (String?) -> Void) -> Void)? = nil
     let change: (Double, @escaping @MainActor (String?) -> Void) -> Void
@@ -151,7 +152,7 @@ struct NumberControl: View {
             color: palette["text"], identifier: "number-entry-" + key,
             submit: finish, cancel: cancel, step: step)
             .focusedValue(\.editorTextCommit, { _ = commit() })
-            .frame(width: valueOnly || inline || toolbar != nil ? nil : slider ? 80 : 48)
+            .frame(width: valueOnly || inline || toolbar != nil ? nil : slider ? 80 : entryWidth)
             .padding(.horizontal, 6).frame(height: valueOnly || slider ? 24 : 32)
             .background(palette["input"], in: SquircleShape.control)
             .modifier(NumberControlMeasurement(id: key + ":entry"))

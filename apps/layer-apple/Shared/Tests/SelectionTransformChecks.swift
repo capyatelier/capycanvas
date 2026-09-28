@@ -17,6 +17,7 @@ extension XCTestCase {
         // Keep artwork checks below the simulator's reserved window-control edge.
         button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
         XCTAssertEqual(button.value as? String, "Expanded", "Open the requested \(menu) menu")
+        if let submenu { workspaceActivate(app.buttons[submenu].firstMatch) }
         let item = app.buttons["command-" + id]
         workspaceActivate(item)
         XCTAssertTrue(item.waitForNonExistence(timeout: 5))
