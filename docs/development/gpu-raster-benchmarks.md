@@ -2,6 +2,9 @@
 
 [Technical documentation](../README.md)
 
+The frame-rate targets these workloads are measured against, and the reference
+hardware for each tier, are in [Performance targets](../PERFORMANCE_TARGETS.md).
+
 Paths under `artifacts/` refer to ignored local outputs, not files shipped in
 this repository. See [publication notes](publication.md#publication-checks).
 

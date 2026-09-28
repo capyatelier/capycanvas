@@ -113,6 +113,10 @@ but do not validate the OS driver or hardware delivery path.
 
 ## Performance
 
+[Performance targets](../PERFORMANCE_TARGETS.md) defines the three hardware
+tiers, the frame-rate targets for each tool and brush, and what counts as a
+sustained rate. Compare measurements against it and record new results there.
+
 Keep three measurements separate:
 
 - CPU submission measures how long the engine and renderer take to enqueue work.

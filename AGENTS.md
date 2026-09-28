@@ -11,6 +11,17 @@ agent attribution from all commits being introduced, including merged history.
 Follow the final checks in [the commit guide](docs/COMMIT_GUIDE.md) before
 merging to the default branch (`main`).
 
+# Performance targets
+
+[Performance targets](docs/PERFORMANCE_TARGETS.md) sets the goals. Every motion
+must hold 60, 90 or 120 fps on 12, 24 or 61 MP canvases on the low, mid and top
+tier tablets. Brushes are guaranteed to 2048, 1024 or 512 px by class.
+
+- Check changes that can affect frame generation against it.
+- Measure the affected rows by its rules, and record the results in the tier
+  tables under `docs/performance/`.
+- Report a target as met only when it passes on the tier's reference hardware.
+
 # UI interaction rules
 
 When adding, changing, or reviewing draggable UI, follow the application-wide

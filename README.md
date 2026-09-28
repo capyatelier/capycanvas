@@ -81,8 +81,10 @@ To keep a long draw from blocking controls or pen input, we keep GPU waits off t
 native UI threads. We batch new brush marks and update only the regions an edit
 affects, reusing the rest of the image between frames.
 
-Painting requires a hardware GPU. The [performance guide](docs/development/testing.md#performance)
-explains how we measure frame time and input-to-display latency. The
+Painting requires a hardware GPU. [Performance targets](docs/PERFORMANCE_TARGETS.md)
+sets the frame rates we guarantee on low-, mid- and top-tier tablets. The
+[performance guide](docs/development/testing.md#performance) explains how we
+measure frame time and input-to-display latency. The
 [architecture guide](docs/architecture.md) follows a pen event through the shared
 core to the displayed stroke.
 

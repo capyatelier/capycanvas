@@ -18,8 +18,9 @@ the Swift editor in `apps/layer-apple/Shared` and the Rust bridge in
    port newly landed commits as part of the same effort, and add them to the
    inventory, so the Apple clients reach parity with the current main rather
    than the revision the audit started from.
-4. **Do not regress performance.** Measure affected brush, frame and UI paths
-   against the previous Apple baseline (see
+4. **Do not regress performance.** Hold the
+   [performance targets](PERFORMANCE_TARGETS.md). Measure affected brush, frame
+   and UI paths against the previous Apple baseline (see
    [apps/layer-apple/PERFORMANCE.md](../apps/layer-apple/PERFORMANCE.md)).
 
 ## Parity targets

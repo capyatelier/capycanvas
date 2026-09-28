@@ -47,7 +47,8 @@ python3 -m unittest discover -s tools/git -p 'test_*.py'
 - **Protect responsiveness.** Review changes for unintended work on the UI
   thread, blocking calls, allocations, copies, synchronization, and repeated
   computation. Check affected brush and frame generation paths for regressions;
-  measure relevant timings when performance could change.
+  measure relevant timings when performance could change, against the
+  [performance targets](PERFORMANCE_TARGETS.md).
 - **Keep durable documentation.** Commit documentation and work logs only when
   they will help future contributors. Prefer concise explanations of behavior,
   decisions, and reproducible checks. Exclude transient logs, massive text or

@@ -3,6 +3,7 @@
 
 Build/install the benchmark variant with application id art.capycanvas.brushbench
 and push the 9504x6336 Sony photo to /data/local/tmp/capy-brush-photo.jpg first.
+--photo selects another JPEG under /data/local/tmp; the canvas takes its size.
 """
 import argparse
 import json
@@ -14,12 +15,17 @@ from android_brush_metrics import completion_window
 
 PRESETS = {
     1: "gpen", 2: "pencil", 3: "eraser", 4: "paintbrush", 5: "airbrush",
-    6: "chalk", 7: "marker", 8: "spray", 9: "dual-texture", 15: "textured-flat",
-    16: "dry-scumble", 17: "pastel-block", 18: "transparent-glaze",
+    6: "chalk", 7: "marker", 8: "spray", 9: "dual-texture", 10: "smudge",
+    11: "wet-round", 12: "liquify-push", 13: "liquify-twirl-ccw", 14: "multiply-glaze",
+    15: "textured-flat", 16: "dry-scumble", 17: "pastel-block", 18: "transparent-glaze",
+    19: "opaque-gouache", 20: "watercolor-wash", 21: "wet-watercolor", 22: "loaded-oil",
+    23: "palette-knife", 24: "natural-blender",
     25: "pointy-pencil", 26: "shading-pencil", 27: "charcoal", 28: "rough-gpen",
     29: "calligraphy-pen", 30: "antique-pen", 31: "realistic-pen", 32: "wet-ink",
-    33: "blotty-ink", 34: "brushed-ink",
+    33: "blotty-ink", 34: "brushed-ink", 36: "liquify-twirl-cw", 37: "liquify-pinch",
+    38: "liquify-expand", 39: "liquify-crystals",
 }
+DRY_PRESETS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 18, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
 
 
 def main():
@@ -28,13 +34,15 @@ def main():
     p.add_argument("--adb", default="adb")
     p.add_argument("--serial", required=True, help="Target adb device serial")
     p.add_argument("--package", default="art.capycanvas.brushbench")
-    p.add_argument("--presets", default=",".join(map(str, PRESETS)))
+    p.add_argument("--presets", default=",".join(map(str, DRY_PRESETS)))
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--duration", type=int, default=10000)
     p.add_argument("--size", type=int, default=1000)
     p.add_argument("--mode", default="constant")
     p.add_argument("--speed", type=float, default=1)
     p.add_argument("--prediction", choices=["true", "false"], default="true")
+    p.add_argument("--photo", default="/data/local/tmp/capy-brush-photo.jpg",
+                   help="Device path of the JPEG that sets the canvas size")
     tracing = p.add_mutually_exclusive_group()
     tracing.add_argument("--trace", action="store_true", help="Full CPU/GPU phase attribution")
     tracing.add_argument("--presentation-trace", action="store_true",
@@ -63,7 +71,7 @@ def main():
         cmd = adb + ["shell", "am", "instrument", "-w", "-r", "-e", "brushBenchmark", "true"]
         for key, value in dict(label=label, preset=preset, brushSize=args.size,
                                durationMs=args.duration, repeats=args.repeats, mode=args.mode,
-                               speed=args.speed, prediction=args.prediction,
+                               speed=args.speed, prediction=args.prediction, photo=args.photo,
                                waitForTrace="true").items():
             cmd += ["-e", key, str(value)]
         cmd += [f"{args.package}/art.capycanvas.BrushBenchmarkInstrumentation"]

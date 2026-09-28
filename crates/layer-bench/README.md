@@ -29,6 +29,8 @@ display presentation. Those require host and physical-device checks.
 - [previews.rs](src/previews.rs) generates the application's brush-preview assets.
 - The [GPU benchmark guide](../../docs/development/gpu-raster-benchmarks.md) lists
   workloads and run commands.
+- [Performance targets](../../docs/PERFORMANCE_TARGETS.md) sets the per-tier
+  frame-rate targets and guaranteed brush sizes these results are judged against.
 - [Testing and performance](../../docs/development/testing.md#performance) explains
   how these measurements relate to the engine benchmark and native input latency.
 

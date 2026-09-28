@@ -1,5 +1,9 @@
 # Apple performance observations
 
+The application-wide frame-rate targets and hardware tiers are in
+[Performance targets](../../docs/PERFORMANCE_TARGETS.md). Apple silicon iPads and
+Macs exceed the top tier's hardware, so they must meet its targets.
+
 The iPad and Mac use the same optional recorder, serial render owner and Rust
 GPU timer. Ordinary launches leave trace recording disabled. Visible Diagnostics
 collects renderer timings independently of that optional recorder.

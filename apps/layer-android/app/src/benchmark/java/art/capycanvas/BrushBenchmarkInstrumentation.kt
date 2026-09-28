@@ -3,6 +3,7 @@ package art.capycanvas
 import android.app.Activity
 import android.app.Instrumentation
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -56,12 +57,16 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             RecoveryController.directoryForTest = File(root, "recovery")
             ColorPreferencesStore.directoryForTest = File(root, "color")
             DocumentController.nativeFileJobsForTest = true
+            val source = arguments.getString("photo", "/data/local/tmp/capy-brush-photo.jpg")!!
+            check(source.matches(Regex("/data/local/tmp/[a-zA-Z0-9_.-]+\\.jpg")))
             val photo = (if (mode == "pinch") File(targetContext.getExternalFilesDir(null), "photo.capy").takeIf { it.isFile } else null)
-                ?: File(targetContext.filesDir, "brush-benchmark.jpg")
+                ?: File(targetContext.filesDir, "brush-benchmark-${File(source).name}")
             if (!photo.isFile) ParcelFileDescriptor.AutoCloseInputStream(
-                uiAutomation.executeShellCommand("cat /data/local/tmp/capy-brush-photo.jpg")
+                uiAutomation.executeShellCommand("cat $source")
             ).use { input -> photo.outputStream().use { input.copyTo(it) } }
             check(photo.length() > 1_000_000)
+            val photoWidth = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                .also { BitmapFactory.decodeFile(photo.path, it) }.outWidth.takeIf { it > 0 } ?: 9504
             stage("photo-staged")
             activity = startActivitySync(Intent(targetContext, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)) as MainActivity
@@ -122,7 +127,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             stage("photo-adopted")
             runOnMainSync { host.documentChanged() }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true &&
-                host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any { it.optInt("width") == 9504 } == true }
+                host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any { it.optInt("width") == photoWidth } == true }
             stage("photo-ready")
             action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
             val group = snapshot().getJSONObject("layout")
@@ -147,8 +152,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val area = camera.getJSONArray("work_area")
             val cx = area.getDouble(0) + area.getDouble(2) / 2
             val cy = area.getDouble(1) + area.getDouble(3) / 2
-            val rx = 520.0
-            val ry = 299.0
+            val rx = min(520.0, area.getDouble(2) * .45)
+            val ry = min(299.0, area.getDouble(3) * .45)
             val sampleInterval = 5_000_000L
             if (mode == "pinch") {
                 runPinchBenchmark(this, arguments, host, output, label, cx, cy)
@@ -215,8 +220,10 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
                 "state" to state(), "display" to displayInfo, "resources" to resources(),
                 "center" to JSONArray(listOf(cx, cy)), "radii" to JSONArray(listOf(rx, ry))).toString(2))
+            val unprimed = state().getJSONObject("document_file").getLong("revision")
             stroke(1500, "constant")
             SystemClock.sleep(1500)
+            waitFor { state().getJSONObject("document_file").getLong("revision") > unprimed }
             invoke("undo")
             SystemClock.sleep(1500)
             File(output, "$label-ready").writeText("ready")
@@ -246,10 +253,10 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 val present = native { JSONArray(Native.presentationTimings(it, false)) }
                 val completions = native { JSONArray(Native.completionTimings(it, false)) }
                 check(completions.length() < 32768) { "Completion observation capacity exceeded" }
+                waitFor { state().getJSONObject("document_file").getLong("revision") > beforeRevision }
                 val after = state()
                 check(host.failure == null) { host.failure!! }
                 check(host.actionError == null) { host.actionError!! }
-                check(after.getJSONObject("document_file").getLong("revision") > beforeRevision) { "No committed paint" }
                 check(data.getJSONArray("frames").length() > 0)
                 data.put("motion", motion).put("presentation", present).put("renderer_before", before)
                     .put("completions", completions)

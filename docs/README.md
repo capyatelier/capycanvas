@@ -4,6 +4,10 @@ These guides explain how Capy Canvas works and how to develop it. Start with the
 [root README](../README.md) for an introduction to the project. Instructions for
 artists belong in the [website documentation](https://capycanvas.art/docs/).
 
+[Performance targets](PERFORMANCE_TARGETS.md) sets the minimum frame rate for
+every tool, brush and movement. It covers three hardware tiers and records the
+newest measurements. Check changes that affect frame generation against it.
+
 ## Understand the code
 
 Read [Architecture](architecture.md) first. It introduces the shared editor and
@@ -46,7 +50,7 @@ These documents assume familiarity with the concept guides above.
 | Input | [Stroke feedback and platform mapping](reference/instant-stroke-feedback.md). |
 | UI | [Shared UI contract](ui/shared-ui.md), [panel customization](ui/panel-customization.md), [numeric controls](ui/numeric-controls.md), [theme colors](ui/theme-colors.md). |
 | Extensions | [Runtime filters](reference/runtime-filters.md). |
-| Distribution and performance | [Web/PWA packaging](development/web-packaging.md), [GPU benchmark workloads](development/gpu-raster-benchmarks.md). |
+| Distribution and performance | [Performance targets](PERFORMANCE_TARGETS.md), [Web/PWA packaging](development/web-packaging.md), [GPU benchmark workloads](development/gpu-raster-benchmarks.md). |
 
 ## Design and validation history
 

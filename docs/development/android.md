@@ -396,12 +396,17 @@ storage must not be cleared to prepare these tests.
 
 ## Brush workload benchmark
 
-`BrushBenchmarkInstrumentation` draws with OS-injected stylus input on the
-9504×6336 photo in release code. Build `:app:assembleBenchmark -PcapyAbi=arm64-v8a
+`BrushBenchmarkInstrumentation` draws with OS-injected stylus input on a photo in
+release code. Build `:app:assembleBenchmark -PcapyAbi=arm64-v8a
 -PcapyOptimize -PcapyApplicationId=art.capycanvas.brushbench`, install it, and push
-the photo to `/data/local/tmp/capy-brush-photo.jpg`. Then
+the 9504×6336 photo to `/data/local/tmp/capy-brush-photo.jpg`. `--photo` selects
+another JPEG under `/data/local/tmp`, such as a
+[performance tier](../PERFORMANCE_TARGETS.md) canvas; the canvas takes the photo's
+size. Then
 `python3 tools/performance/android-brush-benchmark.py OUT --serial "$CAPY_ANDROID_SERIAL" --presets 1 --size 1000`
 passes `-e preset`, `-e brushSize` and `-e mode` (`constant`, `pressure`, `tilt`,
 `stationary`, `lifts`, `visual` or `pinch`); `--trace` and `--profile` add
-Perfetto and simpleperf captures. `python3 tools/performance/android-brush-report.py OUT`
-summarizes completed canvas updates per second.
+Perfetto and simpleperf captures. The default preset list is the dry brushes;
+`--presets` accepts every built-in preset, including wet, smudge and Liquify.
+`python3 tools/performance/android-brush-report.py OUT` summarizes completed
+canvas updates per second, the rate the performance targets use for brushes.

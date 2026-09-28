@@ -69,7 +69,8 @@ separates those shifts from regressions caused by the port.
   `exercise-*.ps1` fixtures for the affected areas.
 - Guard performance: no new UI-thread work, blocking calls or per-frame
   allocations in pointer, brush or presentation paths. Repeat the baseline
-  measurements on the ported build, isolated from compiles and other GPU work.
+  measurements on the ported build, isolated from compiles and other GPU work,
+  and compare them with the [performance targets](PERFORMANCE_TARGETS.md).
   A regression blocks the port.
 - Commit and push to `origin/main` after each significant milestone (a complete
   feature area that builds and passes its checks), not after each small change.
