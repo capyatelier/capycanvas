@@ -65,8 +65,11 @@ impl NativeHost {
             .map(|()| bytes))
     }
 
+    /// Painting is reported ready only once a contact would paint: the brush
+    /// is prepared and the workspace accepts canvas input, as a loading one
+    /// does not.
     fn shader_progress(&self) -> layer_render_wgpu::StartupProgress {
-        let brush_ready = self.paint_ready();
+        let brush_ready = self.paint_ready() && !self.session.workspace_read_only();
         layer_render_wgpu::StartupProgress {
             brush_ready,
             complete: self.startup.complete && brush_ready,

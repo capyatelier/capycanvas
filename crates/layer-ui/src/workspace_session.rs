@@ -164,6 +164,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn set_workspace_read_only(&mut self, read_only: bool) {
         self.workspace_read_only = read_only;
     }
+    /// Whether canvas contacts are refused, as while a stored workspace loads.
+    pub fn workspace_read_only(&self) -> bool {
+        self.workspace_read_only
+    }
     pub fn end_workspace_transition(&mut self) {
         self.workspace_transition = false;
     }

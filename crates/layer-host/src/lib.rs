@@ -1720,6 +1720,68 @@ mod tests {
     }
 
     #[test]
+    fn a_stroke_once_painting_is_reported_ready_paints_while_background_shaders_compile() {
+        let reference = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.session = UiSession::from_project(
+            Renderer(Some(gpu.into())),
+            layer_ui::new_drawing(256, 192).unwrap(),
+            None,
+            [640, 480],
+            layer_ui::Platform::Windows,
+        )
+        .unwrap();
+        host.startup = Default::default();
+        host.resize(640, 480, 1.).unwrap();
+        host.session.set_workspace_read_only(true);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let clock = std::cell::Cell::new(0);
+        let frame = |host: &mut NativeHost, busy: bool| {
+            if busy {
+                host.session.renderer_mut().0.as_mut().unwrap().shader_input();
+            }
+            clock.set(clock.get() + 8_000_000);
+            host.prepare_canvas_frame(clock.get(), clock.get(), true).unwrap();
+            assert!(std::time::Instant::now() < deadline, "startup timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let published = |host: &mut NativeHost| {
+            host.invalidate_snapshot();
+            let model = host.take_value().unwrap();
+            (model["brush_ready"] == true, model["shaders_ready"] == true)
+        };
+        let mut brush_frames = 0;
+        while !published(&mut host).0 {
+            frame(&mut host, true);
+            brush_frames += usize::from(host.paint_ready());
+            if brush_frames == 3 {
+                host.session.set_workspace_read_only(false);
+            }
+        }
+        assert!(!published(&mut host).1, "background compiles are still pending");
+        let view_revision = host.session.state().camera.revision;
+        let records: Vec<f64> = (0..42u32)
+            .flat_map(|i| {
+                let phase = match i { 0 => 1., 41 => 3., _ => 2. };
+                [250. + f64::from(i) * 3., 240. + 20. * (f64::from(i) / 6.).sin(), 1., 0., 0., 0., 0.,
+                    (clock.get() + u64::from(i) * 1_000_000) as f64, phase]
+            })
+            .collect();
+        host.pointer_batch(PointerBatch { id: 77, tool: 1, button: 0, records: &records, predicted: false, view_revision })
+            .unwrap();
+        for _ in 0..8 {
+            frame(&mut host, true);
+        }
+        assert!(!published(&mut host).1, "the stroke waits for no background compilation");
+        assert_eq!(host.session.engine().metrics().committed_strokes, 1, "the stroke paints");
+        assert!(host.session.state().document_file.modified);
+        while !published(&mut host).1 {
+            frame(&mut host, false);
+        }
+    }
+
+    #[test]
     fn typed_touch_uses_the_same_shared_navigation_as_packed_input() {
         let mut typed = NativeHost::new(layer_ui::Platform::Windows).unwrap();
         let mut packed = NativeHost::new(layer_ui::Platform::Windows).unwrap();

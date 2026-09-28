@@ -1117,10 +1117,9 @@ fn native_startup_latency() {
             }
         }
         if progress.brush_ready && !painted {
-            // A contact started before readiness cannot turn into half a stroke.
+            // A contact that began before readiness replays as one whole stroke.
             send(PenPhase::Move, 450.);
             send(PenPhase::Up, 500.);
-            assert_eq!(strokes(), 0);
             // A new contact works without waiting for the unused catalog.
             send(PenPhase::Down, 400.);
             send(PenPhase::Move, 450.);
@@ -1137,7 +1136,7 @@ fn native_startup_latency() {
     );
     eprintln!("GTK startup document/brush/all ready: {stages:.3?}ms");
     pump(100);
-    assert_eq!(strokes(), 1);
+    assert_eq!(strokes(), 2);
     assert!(white_pixels(&w) > 100_000);
     w.window.destroy();
     pump(20);
