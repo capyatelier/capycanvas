@@ -109,7 +109,8 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
         val density = LocalDensity.current.density
         SideEffect {onHeight(naturalHeight,(layout.number("height")*density).roundToInt()/density)}
         CompositionLocalProvider(LocalViewConfiguration provides compactConfig) {
-            Box(Modifier.width(side).height(layout.number("height").dp).testTag("color-panel")) {
+            Box(Modifier.width(side).height(layout.number("height").dp).testTag("color-panel")
+                .then(if(hdr) Modifier.hdrIntensityInput(view, ::color) else Modifier)) {
                 if(hdr)ColorIntensityArc(view,layout,Modifier.matchParentSize(),::color)
                 ColorWheel(host,view, Modifier.place(layout.array("wheel")), ::color)
                 for (white in listOf(true, false)) {
@@ -457,15 +458,15 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
     }
 }
 
-@Composable private fun ColorIntensityArc(view:JSONObject,layout:JSONObject,modifier:Modifier,color:(JSONObject)->Unit) {
+@Composable private fun Modifier.hdrIntensityInput(view:JSONObject,color:(JSONObject)->Unit):Modifier {
     val current by rememberUpdatedState(view)
     val action by rememberUpdatedState(color)
     val density=LocalDensity.current.density
-    Canvas(modifier.testTag("color-hdr-intensity").semantics {contentDescription="Color intensity";stateDescription="${view.number("intensity")} EV";progressBarRangeInfo=ProgressBarRangeInfo(view.number("intensity").coerceIn(-2f,6f),-2f..6f);setProgress{action(obj("op" to "hdr_intensity","stops" to it.coerceIn(-2f,6f)));true}}.pointerInput(density) {
+    return pointerInput(density) {
         var lastTap=0L
         var lastPoint=Offset.Zero
         awaitEachGesture {
-            val down=awaitFirstDown(requireUnconsumed=false)
+            val down=awaitFirstDown(requireUnconsumed=true)
             fun query(point:Offset)=JSONObject(Native.colorUi(obj("type" to "arc","size" to size.width/density,"point" to JSONArray(listOf(point.x/density,point.y/density))).toString()))
             if(!query(down.position).getBoolean("hit"))return@awaitEachGesture
             val original=current.number("intensity");var complete=false
@@ -475,7 +476,13 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
             try{down.consume();pick(down.position);while(true){val c=awaitPointerEvent().changes.firstOrNull{it.id==down.id}?:break;if(c.isConsumed)break;c.consume();if((c.position-down.position).getDistance()>viewConfiguration.touchSlop)moved=true;pick(c.position);if(!c.pressed){complete=true;if(!moved&&doubleTap){action(obj("op" to "hdr_intensity","stops" to 0f));lastTap=0L}else if(!moved){lastTap=c.uptimeMillis;lastPoint=c.position}else lastTap=0L;break}}}
             finally{if(!complete)action(obj("op" to "hdr_intensity","stops" to original))}
         }
-    }) {
+    }
+}
+
+@Composable private fun ColorIntensityArc(view:JSONObject,layout:JSONObject,modifier:Modifier,color:(JSONObject)->Unit) {
+    val action by rememberUpdatedState(color)
+    val density=LocalDensity.current.density
+    Canvas(modifier.testTag("color-hdr-intensity").semantics {contentDescription="Color intensity";stateDescription="${view.number("intensity")} EV";progressBarRangeInfo=ProgressBarRangeInfo(view.number("intensity").coerceIn(-2f,6f),-2f..6f);setProgress{action(obj("op" to "hdr_intensity","stops" to it.coerceIn(-2f,6f)));true}}) {
         // The surrounding layout uses dp. Query and paint in that same space;
         // shared geometry has fixed-size margins and cannot be queried in pixels.
         val side=size.width/density

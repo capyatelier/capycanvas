@@ -159,10 +159,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("A workspace change is already in progress".into());
         }
         self.workspace_transition = true;
+        self.refresh_commands();
+        self.changed(regions::COMMANDS, false);
         Ok(())
     }
     pub fn set_workspace_read_only(&mut self, read_only: bool) {
-        self.workspace_read_only = read_only;
+        if self.workspace_read_only != read_only {
+            self.workspace_read_only = read_only;
+            self.refresh_commands();
+            self.changed(regions::COMMANDS, false);
+        }
     }
     /// Whether canvas contacts are refused, as while a stored workspace loads.
     pub fn workspace_read_only(&self) -> bool {
@@ -170,6 +176,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn end_workspace_transition(&mut self) {
         self.workspace_transition = false;
+        self.refresh_commands();
+        self.changed(regions::COMMANDS, false);
     }
     pub fn require_workspace_idle(&self) -> Result<(), String> {
         self.require_document_snapshot_idle()?;

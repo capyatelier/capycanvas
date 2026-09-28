@@ -235,6 +235,24 @@ mod tests {
     }
 
     #[test]
+    fn workspace_read_only_republishes_open_command_availability() {
+        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        let mut retained: Value = serde_json::from_slice(
+            &host.take_model_update_bytes().unwrap().unwrap(),
+        ).unwrap();
+        for (read_only, enabled) in [(true, false), (false, true)] {
+            host.session.set_workspace_read_only(read_only);
+            let patch: Value = serde_json::from_slice(
+                &host.take_model_update_bytes().unwrap().unwrap(),
+            ).unwrap();
+            apply(&mut retained, patch);
+            let command = retained["state"]["commands"].as_array().unwrap().iter()
+                .find(|command| command["id"] == "open_document").unwrap();
+            assert_eq!(command["enabled"], enabled);
+        }
+    }
+
+    #[test]
     fn camera_messages_between_models_keep_the_update_baseline() {
         use layer_ui::{CommandId, Platform, UiAction};
         let mut host = NativeHost::new(Platform::Android).unwrap();

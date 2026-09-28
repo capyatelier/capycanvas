@@ -70,14 +70,27 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     private val queuedOpen = java.util.ArrayDeque<Uri>()
     private var batchRelease:(()->Unit)?=null
     fun openUris(uris:List<Uri>,flags:Int=0,release:(()->Unit)?=null):Boolean {
-        if(uris.isEmpty()||working||picker!=null||!queuedOpen.isEmpty()||host.drawingTabs.switching){release?.invoke();return false}
-        queuedOpen.addAll(uris);batchRelease=release
+        if(uris.isEmpty()||picker!=null){release?.invoke();return false}
+        val pending=working||!queuedOpen.isEmpty()
+        queuedOpen.addAll(uris)
+        val previous=batchRelease
+        batchRelease=when { previous==null->release;release==null->previous;else->{ {previous();release()} } }
         for(uri in uris)if(flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION!=0)try{application.contentResolver.takePersistableUriPermission(uri,flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))}catch(_:SecurityException){}
-        host.viewModelScope.launch {
-            try { withTimeout(120_000){while(host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.any{it.getString("id")=="open_document"&&it.getBoolean("enabled")}!=true)delay(50)};host.invoke("open_document") }
-            catch(e:Exception){queuedOpen.clear();batchRelease?.invoke();batchRelease=null;host.reportActionError(e.message?:"Cannot open the drawing")}
-        }
+        if(!pending)host.viewModelScope.launch { requestQueuedOpen() }
         return true
+    }
+    private suspend fun requestQueuedOpen() {
+        try {
+            withTimeout(120_000) {
+                while (host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") && !it.optBoolean("owner_lost") } != true ||
+                    host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.any { it.getString("id") == "open_document" && it.getBoolean("enabled") } != true) delay(50)
+            }
+            host.withNative { Native.dispatch(it, obj("type" to "invoke", "command" to "open_document").toString()) }
+            host.documentChanged()
+        } catch (e: Exception) {
+            queuedOpen.clear(); batchRelease?.invoke(); batchRelease = null
+            host.reportActionError(e.message ?: "Cannot open the drawing")
+        }
     }
     fun acceptsDrop(event:android.view.DragEvent)=event.localState==null&&!working&&picker==null&&!host.drawingTabs.switching&&event.clipDescription?.let{it.hasMimeType("image/*")||it.hasMimeType("application/octet-stream")||it.hasMimeType("application/x-capy")||it.hasMimeType("text/uri-list")}==true
     fun drop(activity:Activity,event:android.view.DragEvent):Boolean {
@@ -249,7 +262,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 if(transitioning)host.drawingTabs.afterAdopt()
                 working = false
                 if(exportCancelled)queuedOpen.clear()
-                if(!queuedOpen.isEmpty())host.invoke("open_document") else {batchRelease?.invoke();batchRelease=null}
+                if(!queuedOpen.isEmpty())requestQueuedOpen() else {batchRelease?.invoke();batchRelease=null}
             }
         }
     }

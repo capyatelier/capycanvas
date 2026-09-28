@@ -55,6 +55,12 @@ updates/s for a 2000 px G-Pen.
 That run's wider work area set Fit zoom to 18.0%, so each stroke crossed about 8%
 less canvas at the same screen speed.
 
+A separate 2026-09-27 release run changed the quick color before each of three
+5 s, 2048 px G-Pen strokes on the same 61 MP photo. Brush readiness stayed true.
+The strokes completed 92.9–95.3 updates/s, with update-start gap p99 of
+28.0–31.7 ms. This does not meet the 120 updates/s target; its shorter strokes
+are kept separate from the 10 s comparison table below.
+
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
 | G-Pen (1) | Simple | 2048 px | 87.8 updates/s (86.9–88.4); gap p99 27.0 ms | **Not met** |

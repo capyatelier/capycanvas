@@ -818,6 +818,46 @@ class AndroidRasterTest {
         assertEquals("Cancelled EV drag restores its value",3.6,host.snapshot!!.getJSONObject("color_panel").getDouble("intensity"),.06)
     }
 
+    @Test fun hdrArcCapsAcceptTouchPenAndMouseWithoutBrushPreparation() {
+        val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile") ?: throw AssumptionViolatedException("Supply -e hdrFile")
+        val input=File(files,"hdr-arc.png").apply { writeBytes(ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("cat $sourcePath")).use { it.readBytes() }) }
+        open(input);refresh()
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true && host.snapshot?.objectOrNull("color_panel")?.optBoolean("hdr") == true }
+        for(theme in listOf("light","dark")) {
+            send(obj("type" to "set_theme","theme" to theme));refresh()
+            val arc=compose.onNodeWithTag("color-hdr-intensity").fetchSemanticsNode()
+            val density=activity.resources.displayMetrics.density
+            val side=arc.boundsInRoot.width/density
+            lateinit var root: androidx.compose.ui.platform.ViewRootForTest
+            instrumentation.runOnMainSync { root=findTag("color-hdr-intensity")!!.first }
+            fun input(tool:Int,action:Int,fraction:Double,down:Long) {
+                val p=JSONObject(Native.colorUi(obj("type" to "arc","size" to side,"fraction" to fraction).toString())).getJSONArray("point")
+                val local=arc.boundsInRoot.topLeft+androidx.compose.ui.geometry.Offset((p.getDouble(0)*density).toFloat(),(p.getDouble(1)*density).toFloat())
+                val event=motion(tool,action,local,down)
+                try { instrumentation.runOnMainSync { assertTrue("$theme $tool $fraction reaches the color panel",root.view.dispatchTouchEvent(event)) } }
+                finally { event.recycle() }
+            }
+            for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_FINGER,android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_MOUSE)) {
+                for((fraction,expected) in listOf(0.0 to -2.0,1.0 to 6.0)) {
+                    val down=SystemClock.uptimeMillis()
+                    input(tool,android.view.MotionEvent.ACTION_DOWN,fraction,down)
+                    compose.waitForIdle()
+                    input(tool,android.view.MotionEvent.ACTION_UP,fraction,down)
+                    compose.waitUntil(10_000) { kotlin.math.abs(host.snapshot?.objectOrNull("color_panel")?.optDouble("intensity")?.minus(expected) ?: 100.0)<.05 }
+                    assertTrue("$theme $tool $fraction keeps the brush ready",host.snapshot!!.optBoolean("brush_ready"))
+                }
+                val down=SystemClock.uptimeMillis()
+                for(step in 0..24) {
+                    val fraction=step/24.0
+                    val action=when(step) {0->android.view.MotionEvent.ACTION_DOWN;24->android.view.MotionEvent.ACTION_UP;else->android.view.MotionEvent.ACTION_MOVE}
+                    input(tool,action,fraction,down)
+                    compose.waitForIdle()
+                    assertTrue("$theme $tool EV drag keeps the brush ready at $step",host.snapshot!!.optBoolean("brush_ready"))
+                }
+            }
+        }
+    }
+
     @Test fun hdrEditingProofDeliveryAndRecovery() {
         val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
         Assume.assumeTrue("Supply an independently encoded PQ PNG with -e hdrFile",sourcePath!=null)

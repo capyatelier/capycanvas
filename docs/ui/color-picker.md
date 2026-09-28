@@ -23,6 +23,11 @@ are kept per paint, so neutral colors keep their hue. Hit testing, conversions,
 component values and the selected swatch live in Rust
 ([`color.rs`](../../crates/layer-ui/src/color.rs)).
 
+The HDR intensity arc uses the shared round-cap geometry at both ends. Android
+receives its pointer contact through the color panel so an empty corner of the
+wheel's rectangular view does not hide either cap; occupied wheel and swatch
+regions keep their own contacts.
+
 ## Picker
 
 One tool family has two presentations: **Color Picker** (default glass loupe)

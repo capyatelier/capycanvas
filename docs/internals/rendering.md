@@ -315,6 +315,8 @@ eraser; unused brushes and filters compile on first use
 dependencies are ready before drawing uses them, so pipeline creation never lands
 in a small stroke update. A contact that begins before its brush is ready stays
 suppressed until release.
+Changing paint color or HDR intensity leaves brush readiness intact when the
+tip, texture assets and shader pass requirements stay the same.
 
 On Web, GPU initialization waits for the workspace (at most 1 s), and pipelines
 are created through the asynchronous WebGPU APIs, a few at a time: synchronous

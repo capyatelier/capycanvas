@@ -2005,6 +2005,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .any(|b| self.binding_enabled(&b.action))
     }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
+        if self.workspace_transition || (self.workspace_read_only
+            && !matches!(id, CommandId::ApplyTransform | CommandId::CancelTransform))
+        {
+            return (false, false);
+        }
         if self.rendering_suspended && !Self::command_without_renderer(id) {
             return (false, false);
         }
@@ -2331,10 +2336,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
             )
         {
-            return Err(
+            return Err(if self.managed_workspace.is_none() {
+                "The workspace is still loading. Try again when it is ready."
+            } else {
                 "Workspace ownership needs recovery. Use Save as New Workspace or export a backup."
-                    .into(),
-            );
+            }.into());
         }
         if self.workspace_transition && !continuing_effect_gesture && !action.is_host_report() {
             return Err("A workspace change is in progress".into());
@@ -5902,6 +5908,23 @@ mod tests {
         s.set_workspace_read_only(false);
         invoke(&mut s, CommandId::Undo);
         assert_eq!(s.engine.document().layers, before.layers);
+    }
+
+    #[test]
+    fn read_only_workspace_disables_commands_until_it_is_ready() {
+        let mut s = session(Platform::Android);
+        assert!(s.command_flags(CommandId::OpenDocument).0);
+        s.set_workspace_read_only(true);
+        assert!(!s.command_flags(CommandId::OpenDocument).0);
+        assert!(!s.state.commands.iter().find(|c| c.id == CommandId::OpenDocument).unwrap().enabled);
+        assert_eq!(s.disabled_reason_unchecked(CommandId::OpenDocument), "The workspace is still loading");
+        assert_eq!(
+            s.dispatch(UiAction::Invoke { command: CommandId::OpenDocument }).unwrap_err(),
+            "The workspace is still loading. Try again when it is ready."
+        );
+        s.set_workspace_read_only(false);
+        assert!(s.command_flags(CommandId::OpenDocument).0);
+        assert!(s.state.commands.iter().find(|c| c.id == CommandId::OpenDocument).unwrap().enabled);
     }
 
     #[test]

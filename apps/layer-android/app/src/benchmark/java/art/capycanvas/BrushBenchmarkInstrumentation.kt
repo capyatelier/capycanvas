@@ -48,6 +48,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val repeats = arguments.getString("repeats", "3")!!.toInt()
             val mode = arguments.getString("mode", "constant")!!
             val prediction = arguments.getString("prediction", "true") == "true"
+            val colorBeforeStrokes = arguments.getString("colorBeforeStrokes", "false") == "true"
             val speed = arguments.getString("speed", "1")!!.toDouble()
             check(duration in 1000..60000 && repeats in 1..10)
             check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "visual", "pinch"))
@@ -217,6 +218,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             check(displayInfo.getString("present_mode") in listOf("SharedDemandRefresh", "Fifo"))
             File(output, "$label-info.json").writeText(obj("label" to label, "preset" to preset,
                 "brush_size" to size, "mode" to mode, "prediction" to prediction, "speed" to speed,
+                "color_before_strokes" to colorBeforeStrokes,
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
                 "state" to state(), "display" to displayInfo, "resources" to resources(),
                 "center" to JSONArray(listOf(cx, cy)), "radii" to JSONArray(listOf(rx, ry))).toString(2))
@@ -230,6 +232,10 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             sendStatus(0, Bundle().apply { putString("stream", "BRUSH_READY $label\n") })
             if (arguments.getString("waitForTrace") == "true") waitFor { File(output, "$label-go").isFile }
             repeat(repeats) { run ->
+                if (colorBeforeStrokes) {
+                    action(obj("type" to "color", "action" to obj("op" to "quick_color", "white" to (run % 2 == 0))))
+                    check(host.snapshot?.optBoolean("brush_ready") == true) { "Changing paint color delayed the prepared brush" }
+                }
                 if (arguments.getString("navigationBetweenStrokes") == "true") {
                     invoke("zoom_in")
                     SystemClock.sleep(250)

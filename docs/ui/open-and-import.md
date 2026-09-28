@@ -35,3 +35,9 @@ recognized and add no hold. Readers are chosen by the file's signature, not its
 extension: `.capy` masters open as projects, and photos go through the decoders
 in [`crates/layer-color/src/photo`](../../crates/layer-color/src/photo). The
 [color-management journeys](color-management.md) cover profiles, depth and HDR.
+
+An external file launch can arrive before a saved workspace finishes loading.
+The shared Open command stays disabled while that workspace is read only. Hosts
+keep the file request until the workspace is ready, then submit it on the
+session owner; a failed submission must release the queued request so a later
+launch can open normally.

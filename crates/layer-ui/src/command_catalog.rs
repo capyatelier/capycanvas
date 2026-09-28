@@ -965,6 +965,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.state.document_file.close_ready {
             return "This drawing is closing".into();
         }
+        if self.workspace_read_only && !matches!(command, C::ApplyTransform | C::CancelTransform) {
+            return if self.managed_workspace.is_none() {
+                "The workspace is still loading"
+            } else {
+                "Workspace ownership needs recovery"
+            }.into();
+        }
+        if self.workspace_transition {
+            return "A workspace change is in progress".into();
+        }
         if self.rendering_suspended && !Self::command_without_renderer(command) {
             return "Painting is unavailable. Save the drawing and reopen it.".into();
         }

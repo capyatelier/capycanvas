@@ -8,7 +8,7 @@ otherwise.
 
 | Interaction | Limit | Low | Mid | Top |
 | --- | --- | --- | --- | --- |
-| Pen down → first submitted canvas update | 2 frames: 33 / 22 / 17 ms | Input queueing 5–13 ms (debug build; `68820ad8`, 2026-09-26) | | Navigation → first pen submission 6.7–11.0 ms (2026-09-22) |
+| Pen down → first submitted canvas update | 2 frames: 33 / 22 / 17 ms | Input queueing 5–13 ms (debug build; `68820ad8`, 2026-09-26) | | **Not met.** 29.4–40.7 ms across three 5 s G-Pen strokes after quick color changes on the 61 MP photo; 2048 px, release build (2026-09-27). Navigation → first pen submission 6.7–11.0 ms (2026-09-22) |
 | Tap or press → visible response: buttons, tools, menus | 100 ms | | | |
 | Transform or placement press → first moving frame | 100 ms | | 22 ms for a selection Distort, 47 ms for a photo handle (`debff77d`, `fe605aa3`, 2026-09-27) | |
 | Undo or redo of one 1024 px stroke | 250 ms | | | |

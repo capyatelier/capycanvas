@@ -176,7 +176,7 @@ pub(super) struct Startup {
     pub compiler: Compiler,
     masks: builtin_masks::Masks,
     document_key: Option<ShaderDocument>,
-    brush: Option<BrushSnapshot>,
+    brush: Option<ShaderBrushKey>,
     transform: bool,
     document: Requirements,
     current: Requirements,
@@ -184,6 +184,32 @@ pub(super) struct Startup {
     effects_ready: bool,
     pub(super) host_catalog_pending: bool,
     pub(super) finished: bool,
+}
+#[derive(PartialEq, Eq)]
+struct ShaderBrushKey {
+    textures: TextureSetKey,
+    mask_tip: bool,
+    execution: BrushExecution,
+    paint: BrushPassPlan,
+    erase: BrushPassPlan,
+    dry_material: u32,
+}
+impl ShaderBrushKey {
+    fn new(brush: &BrushSnapshot) -> Self {
+        let mut style = layer_render::DabStyle::for_brush(brush, StrokeTool::Brush);
+        let paint = BrushPassPlan::for_style(&style);
+        style.mode = DabMode::Erase;
+        let erase = BrushPassPlan::for_style(&style);
+        Self {
+            textures: WgpuRasterizer::texture_set_key(&style),
+            mask_tip: matches!(style.tip, BrushTip::Mask(_)),
+            execution: style.execution,
+            paint,
+            erase,
+            dry_material: dry_material::contact_flags(style.contact)
+                | if style.rendering.accumulation == BrushAccumulation::Uniform { 128 } else { 0 },
+        }
+    }
 }
 impl Startup {
     pub fn new(device: &PipelineDevice) -> Result<Self, GpuRasterError> {
@@ -269,7 +295,7 @@ impl WgpuRasterizer {
     ) -> bool {
         self.startup.as_ref().is_some_and(|s| {
             s.document_key.as_ref().is_none_or(|key| !key.matches(document))
-                || s.brush.as_ref() != Some(brush)
+                || s.brush.as_ref() != Some(&ShaderBrushKey::new(brush))
                 || s.transform != transform
         })
     }
@@ -409,7 +435,7 @@ impl WgpuRasterizer {
         startup.compiler.require(transforms.display_pipelines(), OTHER);
         startup.compiler.require(transforms.mesh_pipelines(), OTHER);
         startup.current = current;
-        startup.brush = Some(brush.clone());
+        startup.brush = Some(ShaderBrushKey::new(brush));
         startup.transform = transform;
         startup.compiler.start();
         self.startup = Some(startup);
@@ -479,6 +505,20 @@ impl WgpuRasterizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn brush_shader_key_ignores_color_and_size_but_tracks_pipeline_changes() {
+        let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        let key = ShaderBrushKey::new(&brush);
+        brush.color_rgba_linear = [8., 0.25, 0.5, 1.];
+        brush.diameter *= 2.;
+        assert!(key == ShaderBrushKey::new(&brush));
+        brush.rendering.accumulation = if brush.rendering.accumulation == BrushAccumulation::Uniform {
+            BrushAccumulation::Flow
+        } else {
+            BrushAccumulation::Uniform
+        };
+        assert!(key != ShaderBrushKey::new(&brush));
+    }
     #[test]
     fn shader_document_reuses_raster_and_parameter_edits_but_tracks_new_dependencies() {
         let mut doc = Document::new("readiness", 128, 128);
@@ -581,6 +621,10 @@ mod gpu_tests {
             );
             std::thread::sleep(Duration::from_millis(1));
         }
+        let mut recolored = brush.clone();
+        recolored.color_rgba_linear = [8., 0.25, 0.5, 1.];
+        assert!(!renderer.startup_needs_update(&document, &recolored, false));
+        assert!(renderer.poll_startup().unwrap().brush_ready);
         assert!(
             renderer
                 .scene_pipelines

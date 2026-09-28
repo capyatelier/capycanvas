@@ -108,4 +108,21 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn arc_caps_accept_contacts_at_docked_panel_sizes() {
+        for size in [128., 144., 176., 226., 264., 400.] {
+            let arc = HdrIntensityArc::new(size).unwrap();
+            let layout = ColorPanelLayout::with_hdr(size).unwrap();
+            for fraction in [0., 1.] {
+                let point = arc.point(fraction);
+                assert!(arc.contains(point), "size={size} fraction={fraction}");
+                assert!((arc.fraction(point) - fraction).abs() < 1e-5);
+                assert!(point[0] >= 0. && point[0] <= size);
+                assert!(point[1] >= 0. && point[1] <= layout.height());
+                assert!(point[0] >= layout.wheel[0] && point[0] <= layout.wheel[0] + layout.wheel[2]);
+                assert!(point[1] >= layout.wheel[1] && point[1] <= layout.wheel[1] + layout.wheel[3]);
+            }
+        }
+    }
 }

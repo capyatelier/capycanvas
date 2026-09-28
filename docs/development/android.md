@@ -247,6 +247,8 @@ Perfetto and simpleperf captures. The default preset list is the dry brushes;
 canvas updates per second, the rate the performance targets use for brushes.
 Run directly, the instrumentation also accepts `-e navigationBetweenStrokes true`
 and `-e navigationSettleMs` to measure the handoff from navigation back to ink.
+`-e colorBeforeStrokes true` changes the quick paint color before each stroke
+and checks that the prepared brush remains ready.
 [Measuring performance](../performance/measuring.md) has the tier rules.
 
 ## Debugging
