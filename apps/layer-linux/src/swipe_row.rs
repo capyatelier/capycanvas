@@ -13,6 +13,7 @@ mod imp {
         pub offset: Cell<f64>,
         pub origin: Cell<f64>,
         pub admitted: Cell<bool>,
+        pub can_alpha_lock: Cell<bool>,
         pub animation: RefCell<Option<adw::TimedAnimation>>,
     }
     #[glib::object_subclass]
@@ -40,8 +41,9 @@ mod imp {
             let obj = self.obj();
             // Only the revealed area paints red; transparent row backgrounds
             // must not expose the action under an unopened row.
-            snapshot.push_clip(&gtk::graphene::Rect::new(obj.width() as f32 - self.offset.get() as f32,
-                0., self.offset.get() as f32, obj.height() as f32));
+            let reveal = self.offset.get().max(0.) as f32;
+            snapshot.push_clip(&gtk::graphene::Rect::new(obj.width() as f32 - reveal,
+                0., reveal, obj.height() as f32));
             obj.snapshot_child(self.delete.get().unwrap(), snapshot);
             snapshot.pop();
             obj.snapshot_child(self.content.get().unwrap(), snapshot);
@@ -53,7 +55,7 @@ glib::wrapper! {
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl SwipeRow {
-    pub fn new(content: &impl IsA<gtk::Widget>, remove: impl Fn() + 'static, opening: impl Fn(&Self) + 'static) -> Self {
+    pub fn new(content: &impl IsA<gtk::Widget>, remove: impl Fn() + 'static, toggle_alpha_lock: impl Fn() + 'static, opening: impl Fn(&Self) + 'static) -> Self {
         let row: Self = glib::Object::new();
         row.set_overflow(gtk::Overflow::Hidden);
         let delete = gtk::Button::with_label("Delete");
@@ -78,26 +80,34 @@ impl SwipeRow {
                     || w == *row.imp().delete.get().unwrap();
                 picked = w.parent();
             }
-            if !crate::input::touch_or_pen(g) || direct || !row.imp().delete.get().unwrap().is_sensitive() {
+            if !crate::input::touch_or_pen(g) || direct {
                 g.set_state(gtk::EventSequenceState::Denied); return;
             }
             if let Some(a) = row.imp().animation.take() { a.pause(); }
-            row.imp().origin.set(row.imp().offset.get());
+            row.imp().origin.set(row.imp().offset.get().max(0.));
         }));
         drag.connect_drag_update(glib::clone!(#[weak] row, move |g, dx, dy| {
             if !row.imp().admitted.get() {
                 if !row.drag_check_threshold(0, 0, dx as i32, dy as i32) { return; }
-                if dy.abs() >= dx.abs() || (dx > 0. && row.imp().origin.get() == 0.) {
+                let allowed = if dx < 0. { row.imp().delete.get().unwrap().is_sensitive() }
+                    else { row.imp().origin.get() > 0. || row.imp().can_alpha_lock.get() };
+                if dy.abs() >= dx.abs() || !allowed {
                     g.set_state(gtk::EventSequenceState::Denied); return;
                 }
                 row.imp().admitted.set(true);
                 g.set_state(gtk::EventSequenceState::Claimed);
                 opening(&row);
             }
-            row.position((row.imp().origin.get() - dx).clamp(0., REVEAL));
+            let minimum = if row.imp().origin.get() == 0. && row.imp().can_alpha_lock.get() { -REVEAL } else { 0. };
+            row.position((row.imp().origin.get() - dx).clamp(minimum, REVEAL));
         }));
-        drag.connect_drag_end(glib::clone!(#[weak] row, move |_, _, _| {
-            if row.imp().admitted.replace(false) { row.reveal(row.imp().offset.get() >= REVEAL * 0.4); }
+        drag.connect_drag_end(glib::clone!(#[weak] row, move |g, _, _| {
+            if row.imp().admitted.replace(false) {
+                let released = g.current_event().is_some_and(|e| matches!(e.event_type(), gtk::gdk::EventType::ButtonRelease | gtk::gdk::EventType::TouchEnd));
+                let toggle = released && row.imp().offset.get() <= -REVEAL * 0.4;
+                row.reveal(released && row.imp().offset.get() >= REVEAL * 0.4);
+                if toggle { toggle_alpha_lock(); }
+            }
         }));
         drag.connect_cancel(glib::clone!(#[weak] row, move |_, _| {
             row.imp().admitted.set(false);
@@ -116,9 +126,10 @@ impl SwipeRow {
         if let Some(a) = self.imp().animation.take() { a.pause(); }
         self.position(0.);
     }
-    pub fn set_can_delete(&self, enabled: bool) {
-        self.imp().delete.get().unwrap().set_sensitive(enabled);
-        if !enabled { self.reset(); }
+    pub fn set_actions(&self, can_delete: bool, can_alpha_lock: bool) {
+        self.imp().delete.get().unwrap().set_sensitive(can_delete);
+        self.imp().can_alpha_lock.set(can_alpha_lock);
+        if (!can_delete && self.is_open()) || (!can_alpha_lock && self.imp().offset.get() < 0.) { self.reset(); }
     }
     pub fn reveal(&self, open: bool) {
         if let Some(a) = self.imp().animation.take() { a.pause(); }

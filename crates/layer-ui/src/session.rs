@@ -5035,6 +5035,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 parts.join(" · ")
             },
             can_delete: doc.can_delete_layers(&[l.id]),
+            can_alpha_lock: art_layers::LayerControls::for_layer(doc, l).alpha_lock,
             editable: l.kind == LayerKind::Paint,
             visible: l.visible,
             opacity: l.opacity,

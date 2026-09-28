@@ -2942,3 +2942,67 @@ fn native_header_window_actions_input() {
 mod selection_tools;
 #[path = "toolbar_component_tests.rs"]
 mod toolbar_components;
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_layer_swipe_alpha_lock"]
+fn native_layer_swipe_alpha_lock() { layer_swipes(&["touch", "pen"]); }
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_layer_swipe_mouse"]
+fn native_layer_swipe_mouse() { layer_swipes(&["mouse"]); }
+
+fn layer_swipes(devices: &[&str]) {
+    let mut d = Driver::new("art.capycanvas.LayerSwipeAlphaLock");
+    d.w.dispatch(UiAction::Invoke { command: CommandId::ResetLayout });
+    pump(300);
+    let alpha = || state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().alpha_locked;
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(200);
+        for &device in devices {
+            for (distance, cancel, expected) in [(18., false, false), (60., true, false), (60., false, device != "mouse")] {
+                let row = d.named("art-layer-1");
+                let p = d.point(&row);
+                let end = [p[0]+distance, p[1]];
+                d.input.perform(serde_json::json!([
+                    contact(device, "down", p), contact(device, "move", [p[0]+12.,p[1]]),
+                    contact(device, "move", end)
+                ]));
+                if cancel {
+                    let controllers = row.parent().unwrap().observe_controllers();
+                    for i in 0..controllers.n_items() {
+                        if let Some(gesture) = controllers.item(i).and_downcast::<gtk::GestureDrag>() {
+                            gesture.set_state(gtk::EventSequenceState::Denied);
+                        }
+                    }
+                }
+                d.input.perform(serde_json::json!([contact(device, "up", end)]));
+                assert_eq!(alpha(), expected, "{device}, {distance}, cancelled={cancel}");
+                if expected {
+                    d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+                    assert!(!alpha());
+                    d.w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+                    assert!(alpha());
+                    let row = d.named("art-layer-1");
+                    let p = d.point(&row);
+                    d.input.perform(serde_json::json!([contact(device,"down",p),
+                        contact(device,"move",[p[0]+18.,p[1]]), contact(device,"move",[p[0]+60.,p[1]]),
+                        contact(device,"up",[p[0]+60.,p[1]])]));
+                    assert!(!alpha());
+                }
+            }
+            if device == "mouse" { continue; }
+            for distance in [-60., 90.] {
+                let row = d.named("art-layer-1");
+                let swipe = row.parent().unwrap().downcast::<crate::swipe_row::SwipeRow>().unwrap();
+                let p = d.point(&row);
+                d.input.perform(serde_json::json!([contact(device,"down",p),
+                    contact(device,"move",[p[0]+distance/3.,p[1]]), contact(device,"move",[p[0]+distance,p[1]]),
+                    contact(device,"up",[p[0]+distance,p[1]])]));
+                assert_eq!(swipe.is_open(), distance < 0.);
+                assert!(!alpha(), "closing Delete does not toggle alpha lock");
+            }
+        }
+    }
+    d.w.window.close();
+}

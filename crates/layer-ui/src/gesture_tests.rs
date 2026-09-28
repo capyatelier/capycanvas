@@ -509,3 +509,33 @@ fn notices_reject_stale_answers_and_clear_at_the_next_contact() {
     assert_ne!(change.regions & regions::HOST, 0);
     assert_eq!(s.state.notice, None, "a document switch clears the notice");
 }
+
+#[test]
+fn row_alpha_lock_toggle_preserves_target_and_has_one_undo_step() {
+    let mut s = session(Platform::Android);
+    layer(&mut s, LayerAction::New { group: false, clipped: false });
+    let target = s.engine.document().active_layer;
+    let selected = s.layer_interaction.selected.clone();
+    assert!(s.state.layers.iter().find(|l| l.id == 1).unwrap().can_alpha_lock);
+    layer(&mut s, LayerAction::ToggleAlphaLock { id: 1 });
+    assert!(s.engine.document().layer(LayerId(1)).unwrap().properties.alpha_locked);
+    assert_eq!(s.engine.document().active_layer, target);
+    assert_eq!(s.layer_interaction.selected, selected);
+    s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+    assert!(!s.engine.document().layer(LayerId(1)).unwrap().properties.alpha_locked);
+    s.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
+    assert!(s.engine.document().layer(LayerId(1)).unwrap().properties.alpha_locked);
+    layer(&mut s, LayerAction::ToggleAlphaLock { id: 1 });
+    assert!(!s.engine.document().layer(LayerId(1)).unwrap().properties.alpha_locked);
+    layer(&mut s, LayerAction::Lock { id: 1, value: true });
+    for id in [1, 2, u64::MAX] {
+        let before = s.engine.document().clone();
+        assert!(s.dispatch(UiAction::Layer { action: LayerAction::ToggleAlphaLock { id } }).is_err());
+        assert_eq!(s.engine.document(), &before);
+    }
+    assert!(!s.state.layers.iter().find(|l| l.id == 1).unwrap().can_alpha_lock);
+    layer(&mut s, LayerAction::New { group: true, clipped: false });
+    let id = s.engine.document().active_layer.0;
+    assert!(!s.state.layers.iter().find(|l| l.id == id).unwrap().can_alpha_lock);
+    assert!(s.dispatch(UiAction::Layer { action: LayerAction::ToggleAlphaLock { id } }).is_err());
+}

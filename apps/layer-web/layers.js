@@ -97,13 +97,13 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     const position = (value, animate = false) => {
       offset = value; root.classList.toggle("swipe-animating", animate);
       root.style.setProperty("--swipe", `${offset}px`);
-      remove.hidden = offset === 0; remove.disabled = !get().can_delete;
+      remove.hidden = offset <= 0; remove.disabled = !get().can_delete;
     };
     record.closeSwipe = () => position(0, true);
     position(0);
     row.addEventListener("pointerdown", e => {
       if (suppressClick) { row.removeEventListener("click", suppressClick, true); suppressClick = null; }
-      if (e.button || !e.isPrimary || e.target.closest("input") || (!get().can_drop_below && !get().can_delete)) return;
+      if (e.button || !e.isPrimary || e.target.closest("input") || (!get().can_drop_below && !get().can_delete && !get().can_alpha_lock)) return;
       drag = { x: e.clientX, y: e.clientY, top: row.getBoundingClientRect().top, pointer: e.pointerId,
         waitForHold: e.pointerType !== "mouse" && !grip.contains(e.target), held: false, origin: offset };
       // Follow fast mouse exits before pickup without retargeting ordinary
@@ -126,12 +126,14 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       const dx = e.clientX-drag.x, dy = e.clientY-drag.y;
       if (drag.waitForHold && !drag.held) {
         if (!drag.swiping && Math.hypot(dx,dy) > 8) {
-          if (get().can_delete && Math.abs(dx) > Math.abs(dy) && (dx < 0 || drag.origin > 0)) {
+          const allowed = dx < 0 ? get().can_delete : drag.origin > 0 || get().can_alpha_lock;
+          if (allowed && Math.abs(dx) > Math.abs(dy)) {
             drag.swiping = true; dismissContext(); row.setPointerCapture(e.pointerId);
           } else { finish({type:"pointercancel",pointerId:e.pointerId}); return; }
         }
         if (drag.swiping) {
-          e.preventDefault(); position(Math.max(0,Math.min(72,drag.origin-dx)));
+          const minimum = drag.origin === 0 && get().can_alpha_lock ? -72 : 0;
+          e.preventDefault(); position(Math.max(minimum,Math.min(72,drag.origin-dx)));
         }
         return;
       }
@@ -167,7 +169,11 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
         row.addEventListener("click", suppress, { once: true, capture: true });
         setTimeout(() => row.removeEventListener("click", suppress, true), 400);
       }
-      if (previous.swiping) position(e.type === "pointerup" && offset >= 72*.4 ? 72 : 0, true);
+      if (previous.swiping) {
+        const toggle = e.type === "pointerup" && offset <= -72*.4;
+        position(e.type === "pointerup" && offset >= 72*.4 ? 72 : 0, true);
+        if (toggle) send({ op: "toggle_alpha_lock", id: get().id });
+      }
       if (e.type !== "pointerup" && previous.held) dismissContext();
       if (previous.ghost) {
         previous.ghost.remove(); rows.querySelectorAll(".layer-row").forEach(n => n.classList.remove("layer-drop-before","layer-drop-after","layer-drop-into"));
@@ -222,7 +228,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       if(r.presentation===key)return;
       r.presentation=key;
       r.row.classList.toggle("selected", layer.selected);r.load.hidden=!layer.selection_layer;r.load.title=layer.load_selection_tooltip;r.load.setAttribute("aria-label",r.load.title);
-      if (!layer.can_delete) r.closeSwipe();
+      if (!layer.can_delete && !layer.can_alpha_lock) r.closeSwipe();
       r.eye.replaceChildren(icon(layer.visible ? "eye" : "eye-hidden")); r.eye.title = r.eye.ariaLabel = layer.selection_layer?(layer.visible?"Hide selection overlay":"Show selection overlay"):(layer.visible?"Hide layer":"Show layer");
       r.check.replaceChildren(icon(nameIcon(layer.selection_icon)));
       r.thumbnails.style.marginLeft = `${Math.min(layer.depth*8,24)}px`; r.clipping.style.opacity = layer.clipped ? 1 : 0;

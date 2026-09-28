@@ -306,14 +306,16 @@ internal class LayerSwipe {
                     if (!directDrag && !longPressed && moved && holdEligible) {
                         holdEligible=false
                         val delta=change.position-down.position
-                        if(row.getBoolean("can_delete") && kotlin.math.abs(delta.x)>kotlin.math.abs(delta.y) && (delta.x<0 || swipeStart>0)) {
+                        val allowed=if(delta.x<0)row.getBoolean("can_delete") else swipeStart>0 || row.getBoolean("can_alpha_lock")
+                        if(allowed && kotlin.math.abs(delta.x)>kotlin.math.abs(delta.y)) {
                             swiping=true; swipe.owner=swipeOwner; swipe.bounds=rowBounds; swipe.tracking=true
                             cancelContext()
                         }
                     }
                     if(swiping) {
                         change.consume()
-                        swipe.offset=(swipeStart-(change.position.x-down.position.x)).coerceIn(0f,72*density)
+                        val minimum=if(swipeStart==0f && row.getBoolean("can_alpha_lock"))-72*density else 0f
+                        swipe.offset=(swipeStart-(change.position.x-down.position.x)).coerceIn(minimum,72*density)
                         if(!change.pressed) { released=true; break }
                         continue
                     }
@@ -324,8 +326,10 @@ internal class LayerSwipe {
                     if (!change.pressed) { released=true; break }
                 } while(true) } finally {
                     if(swiping) {
+                        val toggle=released && swipe.offset<=-72*density*.4f
                         swipe.tracking=false
                         if(released && swipe.offset>=72*density*.4f)swipe.offset=72*density else swipe.close()
+                        if(toggle)host.layer(obj("op" to "toggle_alpha_lock","id" to id))
                     }
                     if(dragging)drag(origin+down.position,true,true)
                     if(!released)cancelContext()

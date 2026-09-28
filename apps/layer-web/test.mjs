@@ -37,7 +37,7 @@ import {checkMenuLabels} from "./menu-labels.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
 import {checkWorkspaceStore,checkStaleWorkspaceStartup} from "./workspace-store.test.mjs";
-import {checkLayerHolding} from "./layer-hold.test.mjs";
+import {checkLayerHolding,checkLayerSwipes} from "./layer-hold.test.mjs";
 import {checkLongPressDragging} from "./long-press-drag.test.mjs";
 import {checkPalettes} from "./palettes.test.mjs";
 // Real Chrome + Wasm + WebGPU smoke/conformance test. No browser framework.
@@ -277,6 +277,9 @@ try {
   } else if (process.argv.includes("--palettes")) {
     await checkPalettes({call,evaluate,settle,reload});
     assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--layer-swipes")) {
+    await checkLayerSwipes({call,evaluate,settle});
+    assert.deepEqual(errors, []);
   } else if (process.argv.includes("--layer-hold")) {
     await checkLayerHolding({call,evaluate,settle});
     assert.deepEqual(errors, []);

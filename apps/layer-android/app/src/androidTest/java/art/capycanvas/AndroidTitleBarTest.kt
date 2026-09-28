@@ -822,6 +822,108 @@ class AndroidTitleBarTest {
         tap(brush); checkColumns("brush_sets")
     }
 
+    private fun showSwipeLayers() {
+        val defaults=Native.create(false)
+        val workspace=try { JSONObject(Native.snapshot(defaults)!!).getJSONObject("state").getJSONObject("workspace") }
+            finally { Native.destroy(defaults) }
+        action(obj("type" to "restore_workspace","workspace" to workspace))
+        idle()
+    }
+
+    @Test fun layerSwipeFrameTiming() {
+        val args=androidx.test.platform.app.InstrumentationRegistry.getArguments()
+        org.junit.Assume.assumeTrue(args.getString("layerSwipeBenchmark")=="true")
+        host.newDocument(6000,4000)
+        host.importImage(java.io.File(checkNotNull(args.getString("photo"))))
+        action(obj("type" to "invoke","command" to "apply_transform"))
+        for(id in listOf(1,2))action(obj("type" to "layer","action" to obj("op" to "delete","id" to id)))
+        action(obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
+        action(obj("type" to "invoke","command" to "fit_canvas"))
+        showSwipeLayers()
+        val id=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+        val frames=java.util.Collections.synchronizedList(mutableListOf<LongArray>())
+        val thread=android.os.HandlerThread("layer-swipe-frames").apply { start() }
+        lateinit var window: android.view.Window
+        scenario.onActivity { window=it.window }
+        val listener=android.view.Window.OnFrameMetricsAvailableListener { _,metrics,_ ->
+            frames.add(longArrayOf(metrics.getMetric(android.view.FrameMetrics.VSYNC_TIMESTAMP),
+                metrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION)))
+        }
+        instrumentation.runOnMainSync { window.addOnFrameMetricsAvailableListener(listener,android.os.Handler(thread.looper)) }
+        tool=MotionEvent.TOOL_TYPE_FINGER
+        try {
+            for(run in 0..3) {
+                down("layer-row-$id");val start=point
+                event(MotionEvent.ACTION_MOVE,start+Offset(24*density,0f))
+                val done=java.util.concurrent.CountDownLatch(1)
+                val duration=if(run==0)1000L else 5000L
+                val begin=SystemClock.uptimeMillis()
+                frames.clear()
+                lateinit var callback: android.view.Choreographer.FrameCallback
+                instrumentation.runOnMainSync {
+                    val clock=android.view.Choreographer.getInstance()
+                    callback=android.view.Choreographer.FrameCallback {
+                        val elapsed=SystemClock.uptimeMillis()-begin
+                        if(elapsed>=duration)done.countDown()
+                        else {
+                            val cycle=(elapsed%1000)/500f
+                            val dx=(24+40*(if(cycle<=1)cycle else 2-cycle))*density
+                            val move=motion(tool,MotionEvent.ACTION_MOVE,start+Offset(dx,0f),downAt,button)
+                            try { checkNotNull(pressed).view.dispatchTouchEvent(move) } finally { move.recycle() }
+                            clock.postFrameCallback(callback)
+                        }
+                    }
+                    clock.postFrameCallback(callback)
+                }
+                try { assertTrue(done.await(15,java.util.concurrent.TimeUnit.SECONDS)) }
+                finally { instrumentation.runOnMainSync { android.view.Choreographer.getInstance().removeFrameCallback(callback) } }
+                val rows=synchronized(frames) { frames.toList() }
+                event(MotionEvent.ACTION_CANCEL);idle()
+                if(run>0) {
+                    val result=obj("run" to run,"duration_ms" to duration,"frames" to JSONArray(rows.map { JSONArray(it.toList()) }))
+                    java.io.File(instrumentation.targetContext.getExternalFilesDir(null),"layer-swipe-$run.json").writeText(result.toString())
+                    android.util.Log.i("LayerSwipePerf","Run $run: ${rows.size} moving frames in $duration ms")
+                }
+            }
+        } finally {
+            instrumentation.runOnMainSync { window.removeOnFrameMetricsAvailableListener(listener) }
+            thread.quitSafely()
+        }
+    }
+
+    @Test fun layerSwipeAlphaLock() {
+        showSwipeLayers()
+        fun row()=state().array("layers").objects().first { it.getLong("id")==1L }
+        fun swipe(dx: Float, cancel: Boolean=false, reverse: Boolean=false) {
+            down("layer-row-1"); val start=point
+            for(i in 1..4)event(MotionEvent.ACTION_MOVE,start+Offset(dx*density*i/4,0f))
+            if(reverse)event(MotionEvent.ACTION_MOVE,start)
+            event(if(cancel)MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP);idle()
+        }
+        for(theme in listOf("light","dark")) {
+            action(obj("type" to "set_theme","theme" to theme))
+            for(device in listOf(MotionEvent.TOOL_TYPE_FINGER,MotionEvent.TOOL_TYPE_STYLUS,MotionEvent.TOOL_TYPE_MOUSE)) {
+                tool=device
+                swipe(18f);assertFalse("Short swipe",row().getBoolean("alpha_locked"))
+                swipe(60f,cancel=true);assertFalse("Cancelled swipe",row().getBoolean("alpha_locked"))
+                swipe(60f,reverse=true);assertFalse("Returned to start",row().getBoolean("alpha_locked"))
+                swipe(60f)
+                assertEquals("Swipe right $theme/$device",device!=MotionEvent.TOOL_TYPE_MOUSE,row().getBoolean("alpha_locked"))
+                if(device==MotionEvent.TOOL_TYPE_MOUSE)continue
+                shot("layer-alpha-lock-$theme-$device")
+                action(obj("type" to "invoke","command" to "undo"));assertFalse(row().getBoolean("alpha_locked"))
+                action(obj("type" to "invoke","command" to "redo"));assertTrue(row().getBoolean("alpha_locked"))
+                swipe(60f);assertFalse("Second swipe unlocks",row().getBoolean("alpha_locked"))
+                swipe(-60f);assertNotNull("Left reveals Delete",node("layer-delete-1"))
+                swipe(90f);assertNull("Reverse closes Delete",node("layer-delete-1"))
+                assertFalse("Closing Delete does not toggle alpha lock",row().getBoolean("alpha_locked"))
+                action(obj("type" to "layer","action" to obj("op" to "lock","id" to 1,"value" to true)))
+                swipe(60f);assertFalse("Locked layer",row().getBoolean("alpha_locked"))
+                action(obj("type" to "layer","action" to obj("op" to "lock","id" to 1,"value" to false)))
+            }
+        }
+    }
+
     @Test fun filterDrawerLayersAndPenScrolling() {
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
         fun header(panel: String) = "header-control-" + entries().first {

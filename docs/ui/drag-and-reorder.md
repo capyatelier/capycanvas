@@ -61,8 +61,11 @@ change the immediate pickup rule for handles and title/tab bars.
 
 - Pen drags scroll lists like touch on every host (GTK's shared pen scroller,
   Web `pen-scroll.js`, Android Compose); mouse drags never pan lists.
-- A touch or pen swipe across a layer row reveals Delete; a reverse swipe or an
-  outside click closes it. Deletion is the shared action and one undo step.
+- A touch or pen swipe left across a layer row reveals Delete; a reverse swipe
+  or an outside click closes it. On GTK, Web and Android, swiping right on a
+  closed paint-layer row toggles alpha lock. Locked layers cannot toggle alpha
+  lock. Release commits one undo step; a short or cancelled swipe changes nothing.
+  Swiping right to close Delete does not also toggle alpha lock.
 - Before a touch/pen list-row hold wins, motion remains available to normal list
   scrolling and cancels the pending reorder hold. Lifting, cancellation, capture
   loss, focus loss, or invalidating the source also retires pending holds.
@@ -162,6 +165,14 @@ scrolling early, mouse holds must not open menus, and a handle/tab must not wait
 for the hold timeout. Measure
 steady motion separately from the intentional pickup delay and preserve retained
 controls and display-paced rendering.
+
+Layer swipe checks: `workspace-motion.sh gtk --native-test=native_layer_swipe_alpha_lock --tablet`
+and `--native-test=native_layer_swipe_mouse` (without `--tablet`), Web
+`test.mjs --layer-swipes` or `device.test.mjs --layer-swipes`, and Android
+`AndroidTitleBarTest#layerSwipeAlphaLock`. The Android motion measurement is
+`AndroidTitleBarTest#layerSwipeFrameTiming` with `-e layerSwipeBenchmark true`
+and `-e photo <device-path>` pointing to the mid-tier photo; it writes
+`layer-swipe-1.json` through `layer-swipe-3.json` in the test app's external files.
 
 ## Known gaps
 

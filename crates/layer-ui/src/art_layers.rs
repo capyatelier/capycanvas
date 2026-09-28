@@ -190,6 +190,9 @@ pub enum LayerAction {
     Delete {
         id: u64,
     },
+    ToggleAlphaLock {
+        id: u64,
+    },
     AlphaLock {
         id: u64,
         value: bool,
@@ -1134,6 +1137,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     LayerAction::Rename { id, .. }
                     | LayerAction::Clear { id }
                     | LayerAction::AlphaLock { id, .. }
+                    | LayerAction::ToggleAlphaLock { id }
                     | LayerAction::Clip { id, .. }
                     | LayerAction::Blend { id, .. }
                     | LayerAction::AddMask { id, .. }
@@ -1172,11 +1176,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                         layer.pending_operations.clear();
                         layer.source = None;
                     }
-                    LayerAction::AlphaLock { value, .. } => {
+                    lock @ (LayerAction::AlphaLock { .. } | LayerAction::ToggleAlphaLock { .. }) => {
                         if layer.kind != LayerKind::Paint {
                             return Err("Alpha lock needs a paint layer".into());
                         }
-                        layer.properties.alpha_locked = value;
+                        layer.properties.alpha_locked = if let LayerAction::AlphaLock { value, .. } = lock { value }
+                            else { !layer.properties.alpha_locked };
                     }
                     LayerAction::Clip { value, .. } => {
                         if value {

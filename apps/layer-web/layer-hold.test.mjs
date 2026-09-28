@@ -83,3 +83,45 @@ export async function checkLayerHolding({call, evaluate, settle}) {
     await send({type:"restore_workspace",workspace:saved});
   }
 }
+
+export async function checkLayerSwipes({call, evaluate, settle}) {
+  const wait=async()=>{await settle();await evaluate("new Promise(r=>setTimeout(r,200))");};
+  const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await wait();};
+  const layer=()=>evaluate("({alpha_locked:layerApp.state().layers.find(l=>String(l.id)==='1').alpha_locked})");
+  const rect=()=>evaluate(`(()=>{const r=document.querySelector('#layer-rows .layer-row[data-layer="1"]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+  const revealed=()=>evaluate(`!document.querySelector('#layer-rows .layer-row[data-layer="1"]').parentElement.querySelector('.layer-swipe-delete').hidden`);
+  const swipe=async(device,dx,{cancel=false,returnToStart=false}={})=>{
+    const start=await rect();
+    const input=async(type,x)=>{
+      if(device==='touch')await call('Input.dispatchTouchEvent',{type,touchPoints:['touchEnd','touchCancel'].includes(type)?[]:[{id:1,x,y:start.y}]});
+      else await call('Input.dispatchMouseEvent',{type:{touchStart:'mousePressed',touchMove:'mouseMoved',touchEnd:'mouseReleased'}[type],x,y:start.y,button:'left',buttons:type==='touchEnd'?0:1,clickCount:1,pointerType:device});
+    };
+    await input('touchStart',start.x);
+    await input('touchMove',start.x+dx/3);await input('touchMove',start.x+dx);
+    if(returnToStart)await input('touchMove',start.x);
+    if(cancel && device!=='touch')await evaluate("window.dispatchEvent(new Event('blur'))");
+    await input(cancel && device==='touch'?'touchCancel':'touchEnd',start.x+(returnToStart?0:dx));await wait();
+  };
+  await send({type:'invoke',command:'reset_layout'});
+  await send({type:'layer',action:{op:'alpha_lock',id:1,value:false}});
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    for(const device of ['touch','pen','mouse']) {
+      for(const options of [{dx:18},{dx:60,cancel:true},{dx:60,returnToStart:true}]) {
+        await swipe(device,options.dx,options);assert.equal((await layer()).alpha_locked,false,`${device}: unfinished swipe`);
+      }
+      await swipe(device,60);assert.equal((await layer()).alpha_locked,device!=='mouse',`${theme}/${device}: swipe right`);
+      if(device==='mouse')continue;
+      await send({type:'invoke',command:'undo'});assert.equal((await layer()).alpha_locked,false);
+      await send({type:'invoke',command:'redo'});assert.equal((await layer()).alpha_locked,true);
+      await swipe(device,60);assert.equal((await layer()).alpha_locked,false,'second swipe unlocks');
+      await swipe(device,-60);assert.equal(await revealed(),true,'left swipe reveals Delete');
+      await swipe(device,90);assert.equal(await revealed(),false,'reverse swipe closes Delete');
+      assert.equal((await layer()).alpha_locked,false,'closing Delete does not toggle alpha lock');
+      await send({type:'layer',action:{op:'lock',id:1,value:true}});
+      await swipe(device,60);assert.equal((await layer()).alpha_locked,false,'locked layer refuses alpha lock');
+      await send({type:'layer',action:{op:'lock',id:1,value:false}});
+    }
+  }
+  console.log('PASS: layer swipe alpha lock, both themes, touch/pen/mouse, undo/redo, short/reversed/cancelled swipes, Delete dismissal, locked layer');
+}

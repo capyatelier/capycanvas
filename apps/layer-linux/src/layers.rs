@@ -827,6 +827,11 @@ impl LayerPanel {
                             action(&w, A::Delete { id: row.id });
                         }
                     }),
+                    glib::clone!(#[weak] item, #[strong] owner, move || {
+                        if let (Some(row), Some(w)) = (row_state(&item), owner.borrow().upgrade()) {
+                            action(&w, A::ToggleAlphaLock { id: row.id });
+                        }
+                    }),
                     move |opened| {
                         if let Some(rows) = other_rows.upgrade() {
                             for row in rows.borrow().values() {
@@ -1428,7 +1433,7 @@ impl Row {
             self.mask_image.set_paintable(None::<&gdk::Paintable>);
         }
         self.root.set_widget_name(&format!("art-layer-{}", s.id));
-        self.swipe.set_can_delete(s.can_delete);
+        self.swipe.set_actions(s.can_delete, s.can_alpha_lock);
         self.effect_icon.set_visible(s.content_icon.is_some() && !s.selection_layer);
         self.content_image.set_visible(s.selection_layer || s.content_icon.is_none() || s.content_icon_color.is_some());
         crate::icons::set_colored(&self.effect_icon, s.content_icon.as_deref(), s.content_icon_color);
