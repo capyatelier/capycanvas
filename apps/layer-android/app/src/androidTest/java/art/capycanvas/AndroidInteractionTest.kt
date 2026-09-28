@@ -2437,6 +2437,160 @@ class AndroidInteractionTest {
         println("PASS canvas bar menus: Copy to Layer, Clear ▾ › Clear Outside and Adjust ▾ › Curves on the bar and through More, with mouse, finger and stylus")
     }
 
+    private fun barLabel(): String? {
+        var text: String? = null
+        onMain { text = find("canvas-bar-label")?.config?.getOrNull(SemanticsProperties.Text)?.joinToString("") { it.text } }
+        return text
+    }
+    private fun barCaption(command: String, text: String): Boolean {
+        var found = false
+        onMain { found = find("canvas-bar-action-$command")?.find(hasLabel(text)) != null }
+        return found
+    }
+    private fun tapBar(command: String) {
+        waitFor("$command on the bar", 5_000) { shown("canvas-bar-action-$command") }
+        settle()
+        tap(bounds("canvas-bar-action-$command").center)
+    }
+    private fun paintRevisionText(row: JSONObject) = row.get("paint_revision").toString()
+    /** A mode bar reads [label] along the bottom edge and ends with its accented exit. */
+    private fun awaitModeBar(name: String, kind: String, label: String) {
+        waitFor("$name: the $kind bar reads $label", 5_000) { barKind() == kind && shown("canvas-action-bar") && barLabel() == label }
+        settle()
+        val bar = bounds("canvas-action-bar"); val work = bounds("workspace")
+        assertEquals("$name: the $kind bar uses the bottom edge", "bottom_edge", canvasBar()!!.getString("placement"))
+        assertTrue("$name: the $kind bar sits on the bottom edge: $bar in $work", bar.bottom > work.bottom - 80 * density)
+        assertTrue("$name: the $kind exit uses the accent", canvasBar()!!.array("completion").getJSONObject(0).getBoolean("accent"))
+    }
+
+    @Test fun modeBarsLeaveFromTheirExitsAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        var paint = 0L
+        fun row(id: Long) = layerStates().first { it.getLong("id") == id }
+        fun artwork() = editingLayer() == paint && !row(paint).getBoolean("mask_selected")
+            && !state().getJSONObject("layer_tools").getBoolean("quick_mask") && state().getJSONObject("layer_tools").isNull("mask_editing")
+        fun idle(label: String) = waitFor("$label: the canvas interaction finishes", 5_000) {
+            state().array("commands").objects().any { it.getString("id") == "add_layer" && it.getBoolean("enabled") }
+        }
+        popupInput = true
+        try {
+            for (device in pointerTools) {
+                val name = listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]
+                restore(); command("fit_canvas")
+                layerStates().map { it.getLong("id") }.filter { it !in keep }.forEach { layerAction(obj("op" to "delete", "id" to it)) }
+                layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+                paint = editingLayer()
+                val paintName = row(paint).getString("label")
+                tool = device
+
+                command("select_all"); command("quick_mask")
+                awaitModeBar(name, "quick_mask", "Quick Mask")
+                fun quickMask() = layerStates().firstOrNull { it.getBoolean("quick_mask") }?.let(::paintRevisionText)
+                val coverage = quickMask()
+                tapBar("invert_selection")
+                waitFor("$name: Invert inverts the Quick Mask", 5_000) { quickMask().let { it != null && it != coverage } }
+                assertEquals("$name: Invert stays in Quick Mask", "quick_mask", barKind())
+                tapBar("return_to_artwork")
+                waitFor("$name: Exit leaves Quick Mask", 5_000) { artwork() && barKind() != "quick_mask" }
+
+                command("select_all"); command("save_selection_layer"); layerAction(obj("op" to "cancel_rename"))
+                val saved = editingLayer()
+                assertTrue("$name: saving edits the new Selection Layer", row(saved).getBoolean("selection_layer"))
+                awaitModeBar(name, "selection_layer", "Editing ${row(saved).getString("label")}")
+                val stored = paintRevisionText(row(saved))
+                tapBar("invert_selection_layer")
+                waitFor("$name: Invert inverts the stored coverage", 5_000) { paintRevisionText(row(saved)) != stored }
+                assertEquals("$name: Invert stays on the Selection Layer", saved, editingLayer())
+                assertEquals("selection_layer", barKind())
+                tapBar("return_to_artwork")
+                waitFor("$name: Return to Artwork leaves Selection Layer editing", 5_000) { artwork() && barKind() != "selection_layer" }
+                layerAction(obj("op" to "delete", "id" to saved))
+
+                command("select_all"); command("mask_selection")
+                awaitModeBar(name, "layer_mask", "Editing $paintName mask")
+                assertTrue("$name: an enabled mask offers Disable", barCaption("layer_mask_enabled", "Disable"))
+                if (device == MotionEvent.TOOL_TYPE_STYLUS) {
+                    val plain = bounds("canvas-bar-action-invert_layer_mask"); val toggle = bounds("canvas-bar-action-layer_mask_enabled")
+                    captureCanvasBar("mask-mode") { image, origin ->
+                        fun fill(r: Rect) = image.getPixel((r.left + origin.x + 3 * density).toInt(), (r.center.y + origin.y).toInt())
+                        for (shift in listOf(0, 8, 16)) assertEquals("Disable is drawn as a plain button, not a pressed toggle",
+                            (fill(plain) shr shift and 255).toFloat(), (fill(toggle) shr shift and 255).toFloat(), 12f)
+                    }
+                }
+                tapBar("layer_mask_enabled")
+                waitFor("$name: Disable turns the mask off and the button offers Enable", 5_000) {
+                    !row(paint).getBoolean("mask_enabled") && barCaption("layer_mask_enabled", "Enable")
+                }
+                assertEquals("$name: Disable keeps mask editing", "layer_mask", barKind())
+                tapBar("edit_layer_content")
+                waitFor("$name: Edit Content leaves mask editing", 5_000) { artwork() && canvasBar() == null && !shown("canvas-action-bar") }
+                layerAction(obj("op" to "delete_mask", "id" to paint))
+                println("PASS mode bars device=$name")
+            }
+
+            command("select_all"); command("mask_selection")
+            awaitModeBar("Escape", "layer_mask", "Editing ${row(paint).getString("label")} mask")
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE)
+            waitFor("Escape leaves mask editing", 5_000) { artwork() && canvasBar() == null }
+            command("select_all"); command("save_selection_layer"); layerAction(obj("op" to "cancel_rename"))
+            val saved = editingLayer()
+            awaitModeBar("Escape", "selection_layer", "Editing ${row(saved).getString("label")}")
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE)
+            waitFor("Escape leaves Selection Layer editing", 5_000) { artwork() && barKind() != "selection_layer" }
+            layerAction(obj("op" to "delete", "id" to saved))
+
+            tool = MotionEvent.TOOL_TYPE_STYLUS
+            command("mask_selection")
+            awaitModeBar("notice", "layer_mask", "Editing ${row(paint).getString("label")} mask")
+            idle("notice")
+            command("move")
+            layerAction(obj("op" to "lock", "id" to paint, "value" to true))
+            val work = bounds("workspace")
+            val point = Offset(work.left + 720 * density, work.top + 300 * density)
+            drag(point, point + Offset(40 * density, 24 * density))
+            waitFor("Move on the locked mask explains", 5_000) {
+                state().optJSONObject("notice")?.optString("text") == "The active layer is locked" && shown("canvas-notice")
+            }
+            waitFor("the mode bar stays through the refused contact", 3_000) { barKind() == "layer_mask" && shown("canvas-action-bar") }
+            val bar = bounds("canvas-action-bar"); val bubble = bounds("canvas-notice")
+            assertTrue("the notice sits above the bottom-edge mode bar: $bubble vs $bar", bubble.bottom <= bar.top && !bubble.overlaps(bar))
+            captureCanvasBar("mask-mode-notice")
+            idle("unlock")
+            layerAction(obj("op" to "lock", "id" to paint, "value" to false))
+            command("edit_layer_content")
+            layerAction(obj("op" to "delete_mask", "id" to paint))
+        } finally { popupInput = false }
+        println("PASS mode bars: Quick Mask → Invert → Exit, Selection Layer → Invert → Return to Artwork and layer mask → Disable → Edit Content with mouse, finger and stylus; Escape; a notice above the bottom-edge bar")
+    }
+
+    @Test fun guideBarDeletesTheSelectedGuideAcrossDevices() {
+        popupInput = true
+        try {
+            restore(); command("fit_canvas"); command("ruler")
+            for (device in pointerTools) {
+                val name = listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]
+                val work = bounds("workspace")
+                val from = Offset(work.left + 560 * density, work.top + 200 * density)
+                val to = from + Offset(200 * density, 60 * density)
+                tool = if (device == MotionEvent.TOOL_TYPE_FINGER) MotionEvent.TOOL_TYPE_STYLUS else device
+                drag(from, to)
+                tool = device
+                waitFor("$name: the guide bar", 5_000) { barKind() == "guide" && shown("canvas-action-bar") }
+                settle()
+                val bar = bounds("canvas-action-bar")
+                assertNull("$name: the guide bar has no label", barLabel())
+                assertEquals("$name: the guide bar sits beside the guide", "near_object", canvasBar()!!.getString("placement"))
+                assertTrue("$name: the guide bar sits below the guide's handles: $bar vs $from $to", bar.top > maxOf(from.y, to.y) && bar.top - maxOf(from.y, to.y) < 120 * density)
+                tapBar("delete_ruler")
+                waitFor("$name: Delete removes the guide and its bar", 5_000) {
+                    barKind() != "guide" && state().array("commands").objects().none { it.getString("id") == "delete_ruler" && it.getBoolean("enabled") }
+                }
+                println("PASS guide bar device=$name")
+            }
+        } finally { popupInput = false }
+        println("PASS guide bar: a selected guide's bar deletes it with mouse, finger and stylus")
+    }
+
     @Test fun selectionBarOverflowsIntoMoreInBothOrientations() {
         val keep = layerStates().map { it.getLong("id") }.toSet()
         popupInput = true

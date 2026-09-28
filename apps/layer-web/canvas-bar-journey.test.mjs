@@ -299,6 +299,35 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
         await osTap(`${bar} [data-command="${kind==='touch'?'cancel_transform':'apply_transform'}"]`,kind);
         await wait(`layerApp.state().layer_tools.tool!=='transform'`);
       }
+      for(const kind of ['pen','touch','mouse']) {
+        if(await evaluate('layerApp.state().layer_tools.has_selection'))await invoke('deselect');
+        await invoke('lasso');await settle();
+        await drag([at(-140,-100),at(140,-100),at(140,90),at(-140,90),at(-140,-100)],'pen');
+        await wait(`layerApp.state().canvas_bar?.context.kind==='selection' && ${visible}`);
+        const layer=await evaluate('String(layerApp.state().layers.find(l=>l.editing).id)'),pointers=await evaluate('barProbe.pointers');
+        await evaluate('osInput.length=0');
+        const mask=`${bar} [data-command="mask_selection"]`;
+        if(await evaluate(shownItem(mask)))await osTap(mask,kind);
+        else {
+          const label=await evaluate(`layerApp.state().commands.find(c=>c.id==='mask_selection').label`);
+          await osTap(`${bar} .canvas-action-bar-more`,kind);
+          await wait(hasRow(label));
+          await evaluate(`[...document.querySelectorAll('${openMenu} button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(label)}).dataset.osRow=''`);
+          await osTap('[data-os-row]',kind);
+          await evaluate(`document.querySelector('[data-os-row]')?.removeAttribute('data-os-row')`);
+        }
+        await wait(`layerApp.state().canvas_bar?.context.kind==='layer_mask' && ${visible}`);await settle();
+        assert.ok(await atEdge(await rect(bar)),`OS ${kind}: the layer-mask bar sits on the bottom edge`);
+        await osTap(`${bar} [data-command="layer_mask_enabled"]`,kind);
+        await wait(`!layerApp.state().layers.find(l=>String(l.id)==='${layer}').mask_enabled&&document.querySelector('${bar} [data-command="layer_mask_enabled"] .toolbar-action-label')?.textContent==='Enable'`);
+        await osTap(`${bar} [data-command="edit_layer_content"]`,kind);
+        await wait(`!layerApp.state().canvas_bar&&!layerApp.state().layers.find(l=>String(l.id)==='${layer}').mask_selected`);
+        const events=await evaluate('osInput');
+        assert.ok(events.length&&events.every(e=>e.type===kind&&!e.canvas),`OS ${kind} taps reach the bars as ${kind}: ${JSON.stringify(events)}`);
+        assert.equal(await evaluate('barProbe.pointers'),pointers,`OS ${kind} taps on the mode bar never reach the canvas`);
+        await send({type:'layer',action:{op:'delete_mask',id:Number(layer)}});
+        console.log(`OS ${kind} taps open the layer-mask bar with Mask, Disable the mask and leave with Edit Content`);
+      }
     }
     const layerIds=()=>evaluate('layerApp.state().layers.map(l=>String(l.id))');
     const activeLayer=()=>evaluate('String(layerApp.state().layers.find(l=>l.editing).id)');
@@ -397,7 +426,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       console.log(`${device}: bar menus opened from ${routes.join(', ')}`);
     }
     const key=async name=>{
-      const code={Delete:46,Backspace:8}[name];
+      const code={Delete:46,Backspace:8,Escape:27}[name];
       for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:name,code:name,windowsVirtualKeyCode:code,nativeVirtualKeyCode:code});
       await settle();
     };
@@ -459,7 +488,114 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
     assert.equal(await revision(source),kept,'Delete on a focused drawing tab clears no pixels in the active drawing');
     assert.ok(await evaluate('layerApp.state().layer_tools.has_selection'),'Delete on a focused drawing tab keeps the selection');
     await invoke('deselect');await settle();
-    console.log(`PASS canvas action bar (${device?'tablet':'desktop'}): selection bar beside new selections, Transform, taps never paint, hide during drags, More, Apply/Cancel, completion-only, Zen, glass, Copy to Layer, Clear Outside and Adjust › Curves from bar menus, Delete clearing a selection but not from a focused drawing tab, and screenshots in ${directory}`);
+
+    const barLabel=()=>evaluate(`(n=>n&&!n.hidden?n.textContent:null)(document.querySelector('${bar} .canvas-action-bar-label'))`);
+    const itemLabel=command=>`document.querySelector('${bar} [data-command="${command}"] .toolbar-action-label')?.textContent`;
+    const layer=id=>`layerApp.state().layers.find(l=>String(l.id)==='${id}')`;
+    const modeBar=async(name,text,device)=>{
+      await wait(`layerApp.state().canvas_bar?.context.kind==='${name}' && ${visible}`);await settle();
+      assert.equal(await barLabel(),text,`${device}: the ${name} bar reads "${text}"`);
+      const view=(await state()).canvas_bar,exit=view.completion[0].option.Action.state.id;
+      assert.equal(view.placement,'bottom_edge',`${device}: the ${name} bar uses the bottom edge`);
+      assert.ok(await atEdge(await rect(bar)),`${device}: the ${name} bar sits on the bottom edge ${JSON.stringify(await rect(bar))}`);
+      assert.ok(await evaluate(`document.querySelector('${bar} [data-command="${exit}"]').classList.contains('suggested-action')`),`${device}: the ${name} exit uses the accent`);
+    };
+    const paint=await activeLayer(),paintName=await evaluate(`${layer(paint)}.label`);
+    const saveSelectionLayer=async()=>{
+      await invoke('select_all');await invoke('save_selection_layer');
+      await send({type:'layer',action:{op:'cancel_rename'}});
+      const saved=await activeLayer();
+      assert.ok(await evaluate(`${layer(saved)}.selection_layer`),'Save as Selection Layer edits the new Selection Layer');
+      return{saved,name:await evaluate(`${layer(saved)}.label`)};
+    };
+    const artwork=`String(layerApp.state().layers.find(l=>l.editing)?.id)==='${paint}'&&!${layer(paint)}.mask_selected&&!layerApp.state().layer_tools.quick_mask&&!layerApp.state().layer_tools.mask_editing`;
+    for(const device of devices) {
+      await invoke('select_all');await invoke('quick_mask');
+      await modeBar('quick_mask','Quick Mask',device);
+      const coverage=await evaluate('String(layerApp.state().layers.find(l=>l.quick_mask).paint_revision)');
+      await press('invert_selection',device);
+      await wait(`String(layerApp.state().layers.find(l=>l.quick_mask)?.paint_revision)!=='${coverage}'`);
+      assert.equal(await kind(),'quick_mask',`${device}: Invert stays in Quick Mask`);
+      await press('return_to_artwork',device);
+      await wait(`${artwork}&&layerApp.state().canvas_bar?.context.kind!=='quick_mask'`);
+
+      const {saved,name}=await saveSelectionLayer();
+      await modeBar('selection_layer',`Editing ${name}`,device);
+      const stored=await revision(saved);
+      await press('invert_selection_layer',device);
+      await wait(`String(${layer(saved)}.paint_revision)!=='${stored}'`);
+      assert.equal(await activeLayer(),saved,`${device}: Invert stays on the Selection Layer`);
+      assert.equal(await kind(),'selection_layer',`${device}: Invert keeps the Selection Layer bar`);
+      await press('return_to_artwork',device);
+      await wait(`${artwork}&&layerApp.state().canvas_bar?.context.kind!=='selection_layer'`);
+      await send({type:'layer',action:{op:'delete',id:Number(saved)}});
+
+      await invoke('select_all');await invoke('mask_selection');
+      await modeBar('layer_mask',`Editing ${paintName} mask`,device);
+      assert.equal(await evaluate(itemLabel('layer_mask_enabled')),'Disable',`${device}: an enabled mask offers Disable`);
+      await press('layer_mask_enabled',device);
+      await wait(`!${layer(paint)}.mask_enabled&&${itemLabel('layer_mask_enabled')}==='Enable'`);
+      assert.equal(await kind(),'layer_mask',`${device}: Disable keeps mask editing`);
+      await press('edit_layer_content',device);
+      await wait(`${artwork}&&!layerApp.state().canvas_bar`);
+      await send({type:'layer',action:{op:'delete_mask',id:Number(paint)}});
+      console.log(`${device}: Quick Mask, Selection Layer and layer-mask bars left from their exits`);
+    }
+
+    await evaluate(`window.escapeProbe=[];window.addEventListener('keydown',escapeProbe.listener=e=>{if(e.key==='Escape')escapeProbe.push(e.defaultPrevented)})`);
+    const escaped=async name=>{
+      assert.ok(await evaluate('!document.activeElement?.matches("input,select,textarea,[contenteditable=true]")'),`${name}: no text field holds the focus`);
+      await key('Escape');
+      await wait(`${artwork}&&layerApp.state().canvas_bar?.context.kind!=='${name}'`,10000);
+      assert.equal(await evaluate('escapeProbe.pop()'),true,`${name}: the session handles Escape`);
+    };
+    await invoke('select_all');await invoke('mask_selection');
+    await modeBar('layer_mask',`Editing ${paintName} mask`,'keyboard');
+    for(const column of await evaluate('layerApp.app.layout(innerWidth,innerHeight).collapsed.filter(c=>c.open).map(c=>c.open.column)'))
+      await send({type:'customize',action:{type:'close_column',column}});
+    await escaped('layer_mask');
+    await send({type:'layer',action:{op:'delete_mask',id:Number(paint)}});
+    const {saved}=await saveSelectionLayer();
+    await modeBar('selection_layer',`Editing ${await evaluate(`${layer(saved)}.label`)}`,'keyboard');
+    await escaped('selection_layer');
+    await send({type:'layer',action:{op:'delete',id:Number(saved)}});
+    await invoke('select_all');await invoke('quick_mask');
+    await modeBar('quick_mask','Quick Mask','keyboard');
+    await escaped('quick_mask');
+    await evaluate(`window.removeEventListener('keydown',escapeProbe.listener);delete window.escapeProbe`);
+
+    await invoke('select_all');await invoke('mask_selection');
+    await modeBar('layer_mask',`Editing ${paintName} mask`,'notice');
+    await invoke('move');
+    await send({type:'layer',action:{op:'lock',id:Number(paint),value:true}});
+    await wait('layerApp.app.brush_ready()');
+    await tap(center,'pen');
+    await wait(`(n=>!!n&&!n.hidden)(document.querySelector('.canvas-notice'))&&layerApp.state().notice?.text==='The active layer is locked'`,10000);
+    await wait(visible,10000);await settle();
+    const edge=await rect(bar),bubble=await rect('.canvas-notice');
+    assert.equal(await kind(),'layer_mask','The mode bar stays through the refused contact');
+    assert.ok(bubble.bottom<=edge.y-4,`The notice sits above the bottom-edge mode bar ${JSON.stringify({bubble,edge})}`);
+    await screenshot('mask-mode-notice');
+    await send({type:'layer',action:{op:'lock',id:Number(paint),value:false}});
+    await invoke('edit_layer_content');
+    await send({type:'layer',action:{op:'delete_mask',id:Number(paint)}});
+    if(await evaluate('layerApp.state().layer_tools.has_selection'))await invoke('deselect');
+
+    await invoke('ruler');
+    for(const device of devices) {
+      const from=at(-160,-150),to=at(40,-110);
+      await drag([from,at(-60,-130),to],device==='touch'?'pen':device);
+      await wait(`layerApp.state().canvas_bar?.context.kind==='guide' && ${visible}`);await settle();
+      const guide=await anchor(),box=await rect(bar);
+      assert.equal(await barLabel(),null,`${device}: the guide bar has no label`);
+      assert.ok(await beside(box,guide),`${device}: the guide bar sits below the guide's handles ${JSON.stringify({guide,box})}`);
+      assert.ok(box.y>Math.max(from.y,to.y)+12,`${device}: the guide bar clears the lower handle`);
+      await press('delete_ruler',device);
+      await wait(`layerApp.state().canvas_bar?.context.kind!=='guide'&&!layerApp.state().commands.find(c=>c.id==='delete_ruler').enabled`);
+      console.log(`${device}: the guide bar deletes the selected guide`);
+    }
+    await invoke('lasso');
+    console.log(`PASS canvas action bar (${device?'tablet':'desktop'}): selection bar beside new selections, Transform, taps never paint, hide during drags, More, Apply/Cancel, completion-only, Zen, glass, Copy to Layer, Clear Outside and Adjust › Curves from bar menus, Delete clearing a selection but not from a focused drawing tab, Quick Mask, Selection Layer and layer-mask bars with their exits and Escape, a notice above a mode bar, the guide bar's Delete, and screenshots in ${directory}`);
   } catch(error) {
     const shot=await call('Page.captureScreenshot',{format:'png'});
     await writeFile(`${directory}/failure.png`,Buffer.from(shot.data,'base64'));

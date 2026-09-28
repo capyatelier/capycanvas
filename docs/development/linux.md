@@ -507,6 +507,12 @@ With mouse, finger and pen in turn it chooses Copy to Layer, Clear ▾ › Clear
 Outside Selection and Adjust ▾ › Curves, through More when an item does not fit.
 `--native-test=native_delete_clears_pixels_unless_a_guide_is_selected` presses
 the real Delete key over a selection, then over a guide drawn with the Ruler tool.
+`--native-test=native_canvas_bar_modes` (mouse and finger) leaves Quick Mask,
+Selection Layer editing and layer-mask editing from their bars and checks that a
+notice sits above the bottom-edge bar; `--native-test=native_canvas_bar_guide
+--tablet` deletes a guide from its bar with mouse, finger and pen. The tablet
+proxy drops its Wayland connection when Quick Mask or Selection Layer rows
+change, so the mode journeys run without `--tablet`.
 
 For [stacked columns](../ui/stacked-columns.md), run
 `bash tools/performance/workspace-motion.sh gtk --column-stacks`.

@@ -318,6 +318,11 @@ fn entry(
                 | CommandId::CopySelectionToLayer
                 | CommandId::CutSelectionToLayer
                 | CommandId::RevertToOriginal
+                | CommandId::LoadSelectionLayer
+                | CommandId::InvertSelectionLayer
+                | CommandId::InvertLayerMask
+                | CommandId::LayerMaskEnabled
+                | CommandId::ApplyLayerMask
                 | CommandId::SelectAll
                 | CommandId::Deselect
                 | CommandId::InvertSelection,
@@ -440,6 +445,14 @@ fn action_description(action: &UiAction) -> &'static str {
             CopySelectionToLayer => "Copy the selected pixels to a new layer above, in place. Without a selection, duplicate the layer.",
             CutSelectionToLayer => "Move the selected pixels from the active layer to a new layer above, in place.",
             RevertToOriginal => "Discard painting, erasing and applied masks on a placed photo, keeping its placement, mask, opacity and blend mode.",
+            LoadSelectionLayer => "Use the Selection Layer being edited as the current selection and return to the artwork.",
+            InvertSelectionLayer => "Invert the stored coverage of the Selection Layer being edited, staying in the mode.",
+            InvertLayerMask => "Swap what the active layer's mask shows and hides.",
+            LayerMaskEnabled => "Turn the active layer's mask on or off without changing it.",
+            ApplyLayerMask => "Erase the pixels the active layer's mask hides, then remove the mask.",
+            EditLayerMask => "Paint on the active layer's mask instead of its pixels.",
+            EditLayerContent => "Leave mask editing and paint on the active layer's pixels.",
+            LassoFill => "Draw a freehand shape filled with the drawing color.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -978,7 +991,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::ClearOutside
             | C::CopySelectionToLayer
             | C::CutSelectionToLayer
-            | C::RevertToOriginal => self.require_document_idle(),
+            | C::RevertToOriginal
+            | C::LoadSelectionLayer
+            | C::InvertSelectionLayer
+            | C::InvertLayerMask
+            | C::LayerMaskEnabled
+            | C::ApplyLayerMask => self.require_document_idle(),
             C::SaveDocument | C::SaveDocumentAs => self.require_raster_snapshot(),
             C::CloseDocument => self.require_document_snapshot_idle(),
             C::ResetLayout if self.managed_workspace.is_some() => self.require_workspace_idle(),
@@ -994,6 +1012,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let locked = document.is_locked(document.active_layer);
         let mask_target = self.selection_masks.target();
         let selection = self.has_selection();
+        let apply_refusal = active.and_then(|l| art_layers::apply_mask_refusal(l.kind));
         let reason = match command {
             C::Undo => "Nothing to undo",
             C::Redo => "Nothing to redo",
@@ -1015,17 +1034,34 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::MaskOverlayProtected | C::FillSelectionMask | C::ClearSelectionMask => {
                 "This selection layer is locked"
             }
+            C::LoadSelectionLayer | C::InvertSelectionLayer
+                if !matches!(mask_target, Some(layer_core::SelectionTarget::Saved(_))) =>
+            {
+                "Edit a Selection Layer first"
+            }
+            C::InvertSelectionLayer => "This selection layer is locked",
             C::ScaleRotate
             | C::ClearLayer
             | C::Figure
             | C::Move
+            | C::LassoFill
             | C::FillSelection
             | C::RepairSourceProfile
             | C::RasterizeSource
+            | C::InvertLayerMask
+            | C::LayerMaskEnabled
+            | C::ApplyLayerMask
                 if mask_target.is_some() =>
             {
                 "Return to the artwork first"
             }
+            C::InvertLayerMask | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask
+                if active.is_none_or(|l| l.mask.is_none()) =>
+            {
+                "The layer has no mask"
+            }
+            C::EditLayerMask => "Already editing the layer mask",
+            C::EditLayerContent => "Already editing the layer content",
             C::QuickMask | C::NewSelectionLayer | C::PlacementOriginalSize | C::ScaleRotate
                 if self.operation.active() && !self.operation.placing() =>
             {
@@ -1091,6 +1127,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or(UNAVAILABLE),
             C::MaskSelection if self.engine.document().selection.is_none() => "Make a selection first",
+            C::ApplyLayerMask if apply_refusal.is_some() => apply_refusal.unwrap_or(UNAVAILABLE),
+            C::ApplyLayerMask if active.and_then(|l| l.mask.as_ref()).is_some_and(|m| !m.enabled) => {
+                "Enable the mask before applying it"
+            }
             C::MaskSelection => "Select an unlocked artwork layer",
             C::SelectionVisible | C::SelectionEditing | C::SelectionReference => "Choose a selection tool first",
             C::ZoomIn => "Already at the maximum zoom",

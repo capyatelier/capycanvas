@@ -567,12 +567,15 @@ fn apply_mask_explains_group_and_effect_masks() {
     let apply = UiAction::Layer { action: LayerAction::ApplyMask { id: group } };
     let error = s.dispatch(apply.clone()).unwrap_err();
     assert_eq!(error, "A group's mask can't be applied; it stays live on the group");
+    let command = UiAction::Invoke { command: CommandId::ApplyLayerMask };
     let entry = s
         .command_catalog()
         .into_iter()
-        .find(|d| d.id == command_catalog::identity(&apply))
+        .find(|d| d.id == command_catalog::identity(&command))
         .unwrap();
     assert_eq!(entry.disabled_reason.as_deref(), Some(error.as_str()));
+    assert_eq!(entry.label, "Apply mask to layer", "the Layer menu routes the active layer's Apply to the command");
+    assert_eq!(s.dispatch(command).unwrap_err(), error);
     assert_eq!(
         art_layers::apply_mask_refusal(LayerKind::Effect),
         Some("An effect layer's mask sets where the effect shows; it can't be applied")

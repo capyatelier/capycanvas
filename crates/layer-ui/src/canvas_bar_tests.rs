@@ -987,3 +987,367 @@ fn adjust_on_the_selection_bar_masks_the_new_effect_to_the_selection() {
     assert_eq!(s.engine.document().layers, before.layers, "one undo step removes the masked effect");
     assert_eq!(s.engine.document().selection, before.selection, "and restores the selection");
 }
+
+fn bar_edit(s: &mut UiSession<Recorder>, command: CommandId) {
+    let context = s.state.canvas_bar.as_ref().expect("a canvas bar").context;
+    s.dispatch(UiAction::CanvasBarEdit { context, action: Box::new(UiAction::Invoke { command }) }).unwrap();
+    s.frame(9, 9).unwrap();
+}
+
+fn bar_items(items: &[CanvasBarItem]) -> Vec<(CommandId, &'static str, bool)> {
+    items
+        .iter()
+        .map(|item| match &item.option {
+            ToolOption::Action { state, checkable } => (state.id, item.label, *checkable),
+            ToolOption::Choice { .. } => (CommandId::SearchCommands, item.label, false),
+            ToolOption::Numeric(_) | ToolOption::Range { .. } => unreachable!("bars hold no values"),
+        })
+        .collect()
+}
+
+fn mode_session() -> UiSession<Recorder> {
+    let mut s = session(Platform::Gtk);
+    s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();
+    invoke(&mut s, CommandId::FitCanvas);
+    rectangle_selection(&mut s, [100., 100., 300., 250.]);
+    s
+}
+
+#[test]
+fn quick_mask_bar_offers_its_actions_and_exit_under_painting_tools() {
+    let mut s = mode_session();
+    invoke(&mut s, CommandId::QuickMask);
+    assert_eq!(s.layer_interaction.tool, LayerCanvasTool::Paint, "Quick Mask paints");
+    let bar = s.state.canvas_bar.clone().expect("the Quick Mask bar");
+    assert_eq!(bar.context.kind, CanvasBarKind::QuickMask);
+    assert_eq!(bar.label.as_deref(), Some("Quick Mask"));
+    assert_eq!((bar.placement, bar.anchor), (CanvasBarPlacement::BottomEdge, None));
+    assert_eq!(
+        bar_items(&bar.items),
+        [
+            (CommandId::InvertSelection, "Invert", false),
+            (CommandId::FillSelectionMask, "Fill", false),
+            (CommandId::ClearSelectionMask, "Clear", false),
+            (CommandId::SearchCommands, "Refine", false),
+            (CommandId::SaveSelectionLayer, "Save", false),
+        ]
+    );
+    assert_eq!(bar.items[3].menu, Some(CanvasBarMenu::Refine));
+    assert_eq!(bar_items(&bar.completion), [(CommandId::ReturnToArtwork, "Exit", false)]);
+    assert!(bar.completion[0].accent, "the exit finishes the mode");
+    let more = s.canvas_bar_menu(bar.context, bar.items.len()).unwrap();
+    assert!(find_item(&more.sections, "Swap Mask Colors").is_none());
+    assert!(find_item(&more.sections, "Return to Artwork").is_some(), "More lists the Quick Mask menu");
+
+    invoke(&mut s, CommandId::Eraser);
+    assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::QuickMask), "any painting tool");
+    let covered = s.current_selection().unwrap();
+    let context = s.state.canvas_bar.as_ref().unwrap().context;
+    bar_edit(&mut s, CommandId::InvertSelection);
+    assert!(s.selection_masks.quick(), "Invert stays in Quick Mask");
+    assert_eq!(s.current_selection().unwrap().inverted, !covered.inverted);
+    assert_eq!(s.state.canvas_bar.as_ref().unwrap().context, context, "an edit keeps the bar");
+    bar_edit(&mut s, CommandId::ReturnToArtwork);
+    assert!(s.selection_masks.target().is_none());
+    assert_ne!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::QuickMask));
+}
+
+#[test]
+fn mode_bars_hide_when_the_bar_is_turned_off() {
+    let mut s = mode_session();
+    invoke(&mut s, CommandId::ShowCanvasActionBar);
+    invoke(&mut s, CommandId::QuickMask);
+    assert!(s.state.canvas_bar.is_none(), "unlike a transform's Apply and Cancel, a mode's exit hides with the bar");
+    invoke(&mut s, CommandId::ShowCanvasActionBar);
+    assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::QuickMask));
+    invoke(&mut s, CommandId::SaveSelectionLayer);
+    assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::SelectionLayer));
+    invoke(&mut s, CommandId::ShowCanvasActionBar);
+    assert!(s.state.canvas_bar.is_none());
+    invoke(&mut s, CommandId::ShowCanvasActionBar);
+    invoke(&mut s, CommandId::ReturnToArtwork);
+    invoke(&mut s, CommandId::MaskSelection);
+    assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::LayerMask));
+    invoke(&mut s, CommandId::ShowCanvasActionBar);
+    assert!(s.state.canvas_bar.is_none());
+}
+
+#[test]
+fn selection_layer_bar_inverts_loads_and_returns_to_artwork() {
+    let mut s = mode_session();
+    let artwork = s.engine.document().active_layer;
+    invoke(&mut s, CommandId::SaveSelectionLayer);
+    let id = s.engine.document().active_layer;
+    let name = s.engine.document().layer(id).unwrap().name.to_string();
+    assert_eq!(s.layer_interaction.tool, LayerCanvasTool::Paint);
+    let bar = s.state.canvas_bar.clone().expect("the Selection Layer bar");
+    assert_eq!(bar.context.kind, CanvasBarKind::SelectionLayer);
+    assert_eq!(bar.label, Some(format!("Editing {name}")));
+    assert_eq!(bar.placement, CanvasBarPlacement::BottomEdge);
+    assert_eq!(
+        bar_items(&bar.items),
+        [(CommandId::LoadSelectionLayer, "Load", false), (CommandId::InvertSelectionLayer, "Invert", false)]
+    );
+    assert_eq!(bar_items(&bar.completion), [(CommandId::ReturnToArtwork, "Return to Artwork", false)]);
+    let menu = s.layer_menu(id.0, false).unwrap();
+    assert_eq!(
+        find_item(&menu.sections, "Invert").and_then(|i| i.action.clone()),
+        Some(UiAction::Invoke { command: CommandId::InvertSelectionLayer }),
+        "the edited layer's menu routes to the commands"
+    );
+    assert_eq!(
+        find_item(&menu.sections, "Load Selection").and_then(|i| i.sections.first()).map(|l| l[0].action.clone()),
+        Some(Some(UiAction::Invoke { command: CommandId::LoadSelectionLayer }))
+    );
+    let stored = s.engine.document().saved_selection(id).unwrap();
+
+    bar_edit(&mut s, CommandId::InvertSelectionLayer);
+    assert_eq!(s.selection_masks.target(), Some(layer_core::SelectionTarget::Saved(id)), "Invert stays in the mode");
+    assert_eq!(s.engine.document().saved_selection(id).unwrap().inverted, !stored.inverted);
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().saved_selection(id).unwrap(), stored, "one undo step");
+    s.layer_action(LayerAction::Select { id: id.0, mask: false }).unwrap();
+
+    invoke(&mut s, CommandId::Deselect);
+    s.layer_action(LayerAction::Select { id: id.0, mask: false }).unwrap();
+    s.frame(8, 8).unwrap();
+    bar_edit(&mut s, CommandId::LoadSelectionLayer);
+    assert!(s.selection_masks.target().is_none(), "Load returns to the artwork");
+    assert_eq!(s.engine.document().active_layer, artwork);
+    assert_eq!(s.engine.document().selection.as_ref(), Some(&stored));
+    invoke(&mut s, CommandId::Undo);
+    assert!(s.engine.document().selection.is_none(), "one undo step");
+
+    s.layer_action(LayerAction::Select { id: id.0, mask: false }).unwrap();
+    s.frame(8, 8).unwrap();
+    bar_edit(&mut s, CommandId::ReturnToArtwork);
+    assert!(s.selection_masks.target().is_none());
+    assert!(s.state.canvas_bar.is_none());
+    assert!(!s.command(CommandId::LoadSelectionLayer).enabled);
+    assert_eq!(s.command_disabled_reason(CommandId::InvertSelectionLayer).as_deref(), Some("Edit a Selection Layer first"));
+}
+
+#[test]
+fn layer_mask_bar_inverts_disables_applies_and_edits_content() {
+    let mut s = mode_session();
+    let id = s.engine.document().active_layer;
+    invoke(&mut s, CommandId::MaskSelection);
+    let mask = |s: &UiSession<Recorder>| s.engine.document().layer(id).unwrap().mask.clone();
+    assert!(s.engine.document().active_mask);
+    let name = s.engine.document().layer(id).unwrap().name.to_string();
+    let bar = s.state.canvas_bar.clone().expect("the mask bar");
+    assert_eq!(bar.context.kind, CanvasBarKind::LayerMask);
+    assert_eq!(bar.label, Some(format!("Editing {name} mask")));
+    assert_eq!(bar.placement, CanvasBarPlacement::BottomEdge);
+    assert_eq!(
+        bar_items(&bar.items),
+        [
+            (CommandId::InvertLayerMask, "Invert", false),
+            (CommandId::LayerMaskEnabled, "Disable", false),
+            (CommandId::ApplyLayerMask, "Apply Mask", false),
+        ]
+    );
+    assert_eq!(bar_items(&bar.completion), [(CommandId::EditLayerContent, "Edit Content", false)]);
+    assert!(s.command(CommandId::LayerMaskEnabled).checkable && s.command(CommandId::LayerMaskEnabled).selected);
+    let menu = s.layer_menu(id.0, true).unwrap();
+    for (label, command) in [
+        ("Edit layer content", CommandId::EditLayerContent),
+        ("Enable mask", CommandId::LayerMaskEnabled),
+        ("Invert mask", CommandId::InvertLayerMask),
+        ("Apply mask to layer", CommandId::ApplyLayerMask),
+    ] {
+        let item = find_item(&menu.sections, label).unwrap();
+        assert_eq!(item.action, Some(UiAction::Invoke { command }), "{label}");
+    }
+    assert_eq!(find_item(&menu.sections, "Enable mask").unwrap().selected, Some(true));
+
+    let before = mask(&s).unwrap();
+    bar_edit(&mut s, CommandId::InvertLayerMask);
+    assert_eq!(mask(&s).unwrap().inverted, !before.inverted);
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(mask(&s), Some(before.clone()), "Invert is one undo step");
+
+    bar_edit(&mut s, CommandId::LayerMaskEnabled);
+    assert!(!mask(&s).unwrap().enabled);
+    let disabled = s.state.canvas_bar.clone().unwrap();
+    assert_eq!(disabled.context, bar.context);
+    assert_eq!(disabled.items[1].label, "Enable");
+    assert_eq!(s.command_disabled_reason(CommandId::ApplyLayerMask).as_deref(), Some("Enable the mask before applying it"));
+    invoke(&mut s, CommandId::Undo);
+    assert!(mask(&s).unwrap().enabled, "Disable is one undo step");
+
+    let layers = s.engine.document().layers.clone();
+    bar_edit(&mut s, CommandId::ApplyLayerMask);
+    assert!(mask(&s).is_none());
+    assert!(s
+        .engine
+        .backend()
+        .pending_operations
+        .iter()
+        .any(|(layer, o)| *layer == id && matches!(o.kind, layer_core::LayerOperationKind::ApplyMask)));
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().layers, layers, "Apply Mask is one undo step");
+
+    s.layer_action(LayerAction::Select { id: id.0, mask: true }).unwrap();
+    s.frame(8, 8).unwrap();
+    let steps = s.engine.can_undo();
+    bar_edit(&mut s, CommandId::EditLayerContent);
+    assert!(!s.engine.document().active_mask);
+    assert!(s.state.canvas_bar.is_none());
+    assert_eq!(s.command_disabled_reason(CommandId::EditLayerContent).as_deref(), Some("Already editing the layer content"));
+    let content = s.layer_menu(id.0, false).unwrap();
+    let edit = find_item(&content.sections, "Edit mask").unwrap();
+    assert_eq!(edit.action, Some(UiAction::Invoke { command: CommandId::EditLayerMask }));
+    invoke(&mut s, CommandId::EditLayerMask);
+    assert!(s.engine.document().active_mask);
+    assert_eq!(s.engine.can_undo(), steps, "switching the target is navigation, not history");
+    assert_eq!(s.command_disabled_reason(CommandId::EditLayerMask).as_deref(), Some("Already editing the layer mask"));
+}
+
+#[test]
+fn escape_leaves_selection_layers_and_masks_after_cancelling_a_gesture() {
+    let mut s = mode_session();
+    invoke(&mut s, CommandId::SaveSelectionLayer);
+    assert!(s.selection_masks.target().is_some());
+    invoke(&mut s, CommandId::Gradient);
+    s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+    s.pen(event(&s, 2, PenPhase::Move, 1.)).unwrap();
+    assert!(key(&mut s, "Escape", true, false, false).handled);
+    key(&mut s, "Escape", false, false, false);
+    assert!(s.layer_interaction.path.is_empty(), "Escape cancels the gradient");
+    assert!(s.selection_masks.target().is_some(), "and only the gradient");
+    s.pen(event(&s, 3, PenPhase::Up, 1.)).unwrap();
+    s.frame(3, 3).unwrap();
+    assert!(key(&mut s, "Escape", true, false, false).handled);
+    key(&mut s, "Escape", false, false, false);
+    assert!(s.selection_masks.target().is_none(), "a second Escape leaves Selection Layer editing");
+
+    invoke(&mut s, CommandId::MaskSelection);
+    invoke(&mut s, CommandId::ScaleRotate);
+    assert!(s.operation.active());
+    key(&mut s, "Escape", true, false, false);
+    key(&mut s, "Escape", false, false, false);
+    assert!(!s.operation.active(), "Escape cancels the mask transform");
+    assert!(s.engine.document().active_mask, "without leaving the mask");
+    s.state.customization.header_editing = true;
+    key(&mut s, "Escape", true, false, false);
+    key(&mut s, "Escape", false, false, false);
+    assert!(s.engine.document().active_mask, "Escape keeps closing other things first");
+    s.state.customization.header_editing = false;
+    assert!(key(&mut s, "Escape", true, false, true).change.regions & regions::DOCUMENT == 0);
+    key(&mut s, "Escape", false, false, true);
+    assert!(s.engine.document().active_mask, "a focused text field keeps Escape");
+    assert!(key(&mut s, "Escape", true, false, false).handled);
+    key(&mut s, "Escape", false, false, false);
+    assert!(!s.engine.document().active_mask, "Escape returns to the layer content");
+}
+
+fn guide_pen(s: &mut UiSession<Recorder>, sequence: u64, phase: PenPhase, [x, y]: [f32; 2]) {
+    let m = s.state.camera.document_to_surface();
+    let mut e = event(s, sequence, phase, 1.);
+    e.surface_position = Point { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] };
+    s.pen(e).unwrap();
+    s.frame(sequence, sequence).unwrap();
+}
+
+#[test]
+fn guide_bar_anchors_to_the_selected_guide_under_ruler_and_move() {
+    let mut s = mode_session();
+    invoke(&mut s, CommandId::Ruler);
+    guide_pen(&mut s, 1, PenPhase::Down, [200., 400.]);
+    guide_pen(&mut s, 2, PenPhase::Move, [300., 450.]);
+    guide_pen(&mut s, 3, PenPhase::Up, [400., 500.]);
+    let bar = s.state.canvas_bar.clone().expect("the guide bar");
+    assert_eq!(bar.context.kind, CanvasBarKind::Guide);
+    assert_eq!(bar.label, None);
+    assert_eq!(bar.placement, CanvasBarPlacement::NearObject);
+    let [x0, y0, x1, y1] = bar.anchor.unwrap();
+    assert!((x0 - 200.).abs() < 0.01 && (y0 - 400.).abs() < 0.01 && (x1 - 400.).abs() < 0.01 && (y1 - 500.).abs() < 0.01);
+    assert_eq!(
+        bar_items(&bar.items),
+        [(CommandId::DeleteRuler, "Delete", false), (CommandId::SnapRulers, "Snap", true), (CommandId::ShowRulers, "Guides", true)]
+    );
+    assert!(bar.completion.is_empty());
+    let layout = s.canvas_bar_layout(&CanvasBarMeasure { completion: Vec::new(), ..measure(&bar, 80.) }).unwrap();
+    let (a, b) = s.engine.document().rulers[0].geometry.handles();
+    let lowest = [a, b.unwrap()].map(|p| s.document_to_logical()(p)[1]).into_iter().fold(f32::NEG_INFINITY, f32::max);
+    assert_eq!(layout.side, CanvasBarSide::Below);
+    assert!(layout.bounds.y > lowest + crate::session::rulers::HIT_DISTANCE, "clear of the lower handle");
+    let actions = |s: &UiSession<Recorder>| s.state.tool_actions.iter().map(|a| a.command).collect::<Vec<_>>();
+    assert_eq!(actions(&s), [CommandId::ShowRulers, CommandId::SnapRulers, CommandId::DeleteRuler]);
+
+    invoke(&mut s, CommandId::Brush);
+    assert!(s.state.canvas_bar.is_none(), "painting tools leave the guide alone");
+    assert!(actions(&s).is_empty(), "guide actions leave Tool Options under unrelated tools");
+    invoke(&mut s, CommandId::Move);
+    assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::Guide), "above the selection bar");
+    assert_eq!(actions(&s), [CommandId::ShowRulers, CommandId::SnapRulers, CommandId::DeleteRuler]);
+    let overlay = |s: &UiSession<Recorder>| {
+        let mut segments = Vec::new();
+        s.append_ruler_overlay(&mut segments);
+        segments.iter().filter(|segment| segment.marker == 1.).count()
+    };
+    assert!(overlay(&s) > 0, "Move highlights the selected guide");
+
+    guide_pen(&mut s, 4, PenPhase::Down, [700., 150.]);
+    guide_pen(&mut s, 5, PenPhase::Up, [700., 150.]);
+    assert!(s.rulers.selected.is_none(), "a Move click that misses the guide deselects it");
+    assert_eq!(overlay(&s), 0);
+    assert!(actions(&s).is_empty());
+    assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::Selection));
+
+    invoke(&mut s, CommandId::Ruler);
+    guide_pen(&mut s, 6, PenPhase::Down, [400., 500.]);
+    guide_pen(&mut s, 7, PenPhase::Up, [400., 500.]);
+    let reselected = s.state.canvas_bar.clone().unwrap();
+    assert_eq!(reselected.context.kind, CanvasBarKind::Guide);
+    let rulers = s.engine.document().rulers.clone();
+    bar_edit(&mut s, CommandId::DeleteRuler);
+    assert!(s.engine.document().rulers.is_empty());
+    assert_ne!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::Guide));
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().rulers, rulers, "Delete is one undo step");
+    assert!(s
+        .dispatch(UiAction::CanvasBarEdit {
+            context: reselected.context,
+            action: Box::new(UiAction::Invoke { command: CommandId::DeleteRuler }),
+        })
+        .is_err(), "a deleted guide's bar is stale");
+}
+
+#[test]
+fn new_mode_commands_follow_the_command_checklist() {
+    let s = session(Platform::Gtk);
+    let rows = crate::shortcuts::definitions(Platform::Gtk);
+    for (command, section) in [
+        (CommandId::LoadSelectionLayer, "Select"),
+        (CommandId::InvertSelectionLayer, "Select"),
+        (CommandId::InvertLayerMask, "Layer"),
+        (CommandId::LayerMaskEnabled, "Layer"),
+        (CommandId::ApplyLayerMask, "Layer"),
+        (CommandId::EditLayerMask, "Layer"),
+        (CommandId::EditLayerContent, "Layer"),
+        (CommandId::LassoFill, "Tools"),
+    ] {
+        let row = rows.iter().find(|(d, _)| d.id == command.shortcut_id()).unwrap();
+        assert_eq!(row.1, section, "{command:?}");
+        assert!(s.state.settings.command_keys(command).is_empty(), "{command:?} has no default keys");
+        assert!(!crate::customization::tool_choice(ToolbarControl::Command { command }).description.is_empty());
+        let entry = s.command_catalog().into_iter().find(|d| d.id == command_catalog::identity(&UiAction::Invoke { command })).unwrap();
+        assert!(!entry.description.is_empty(), "{command:?}");
+        assert!(entry.disabled_reason.as_deref().is_none_or(|r| r != "Unavailable in the current tool or edit target"), "{command:?}");
+    }
+}
+
+#[test]
+fn lasso_fill_is_a_tool_command() {
+    let mut s = session(Platform::Gtk);
+    assert!(CommandId::TOOLS.contains(&CommandId::LassoFill));
+    invoke(&mut s, CommandId::LassoFill);
+    assert_eq!(s.layer_interaction.tool, LayerCanvasTool::LassoFill);
+    assert!(s.command(CommandId::LassoFill).selected);
+    let action = UiAction::Layer { action: LayerAction::Tool { tool: LayerCanvasTool::LassoFill } };
+    assert_eq!(crate::shortcuts::tool_command(&action), Some(CommandId::LassoFill));
+    invoke(&mut s, CommandId::QuickMask);
+    assert_eq!(s.command_disabled_reason(CommandId::LassoFill).as_deref(), Some("Return to the artwork first"));
+}

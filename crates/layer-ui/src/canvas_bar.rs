@@ -10,6 +10,16 @@ pub enum CanvasBarKind {
     Transform,
     Polygon,
     Selection,
+    QuickMask,
+    SelectionLayer,
+    LayerMask,
+    Guide,
+}
+impl CanvasBarKind {
+    /// Kinds that keep their completion at the bottom edge while the bar is turned off.
+    fn essential(self) -> bool {
+        matches!(self, Self::Placement | Self::Transform | Self::Polygon)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +157,14 @@ fn short_label(command: CommandId) -> &'static str {
         CommandId::FillSelection => "Fill",
         CommandId::SaveSelectionLayer => "Save",
         CommandId::CompleteSelection => "Finish",
+        CommandId::FillSelectionMask => "Fill",
+        CommandId::ClearSelectionMask => "Clear",
+        CommandId::LoadSelectionLayer => "Load",
+        CommandId::InvertSelectionLayer | CommandId::InvertLayerMask => "Invert",
+        CommandId::ApplyLayerMask => "Apply Mask",
+        CommandId::DeleteRuler => "Delete",
+        CommandId::SnapRulers => "Snap",
+        CommandId::ShowRulers => "Guides",
         _ => command.label(),
     }
 }
@@ -157,6 +175,8 @@ pub(super) struct CanvasBarKey {
     kind: CanvasBarKind,
     toolbar: ToolbarContext,
     transaction: u64,
+    guide: Option<u64>,
+    label: Option<String>,
     anchor: Option<[f32; 4]>,
     flags: Vec<(CommandId, bool, bool, Option<std::borrow::Cow<'static, str>>)>,
 }
@@ -190,12 +210,14 @@ fn same_selection(a: &layer_core::Selection, b: &layer_core::Selection) -> bool 
 enum PlanItem {
     Command(CommandId),
     Menu(CanvasBarMenu),
+    /// A command shown as a plain button with its own label.
+    Button(CommandId, &'static str),
 }
 impl PlanItem {
     /// The command whose published state the item shows.
     fn command(self) -> Option<CommandId> {
         match self {
-            Self::Command(id) => Some(id),
+            Self::Command(id) | Self::Button(id, _) => Some(id),
             Self::Menu(menu) => menu.primary(),
         }
     }
@@ -205,7 +227,7 @@ struct Plan {
     kind: CanvasBarKind,
     label: Option<String>,
     items: Vec<PlanItem>,
-    completion: Vec<CommandId>,
+    completion: Vec<PlanItem>,
     placement: Option<CanvasBarPlacement>,
 }
 
@@ -232,11 +254,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn selection_plan(&self) -> Option<Plan> {
-        let doc = self.engine.document();
-        doc.selection.as_ref()?;
-        if doc.active_mask || self.selection_masks.target().is_some() {
-            return None;
-        }
+        self.engine.document().selection.as_ref()?;
         let tool = self.layer_interaction.tool;
         let offered = tool.selection_tool().is_some()
             || tool == LayerCanvasTool::Move
@@ -268,23 +286,88 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
 
+    /// Quick Mask, Selection Layer editing and layer-mask editing: a label,
+    /// the mode's actions and its exit along the bottom edge.
+    fn mode_plan(&self) -> Option<Plan> {
+        let doc = self.engine.document();
+        let command = PlanItem::Command;
+        let (kind, label, items, exit) = match self.selection_masks.target() {
+            Some(layer_core::SelectionTarget::Current) => (
+                CanvasBarKind::QuickMask,
+                "Quick Mask".to_string(),
+                vec![
+                    command(CommandId::InvertSelection),
+                    command(CommandId::FillSelectionMask),
+                    command(CommandId::ClearSelectionMask),
+                    PlanItem::Menu(CanvasBarMenu::Refine),
+                    command(CommandId::SaveSelectionLayer),
+                ],
+                PlanItem::Button(CommandId::ReturnToArtwork, "Exit"),
+            ),
+            Some(layer_core::SelectionTarget::Saved(id)) => (
+                CanvasBarKind::SelectionLayer,
+                format!("Editing {}", doc.layer(id)?.name),
+                vec![command(CommandId::LoadSelectionLayer), command(CommandId::InvertSelectionLayer)],
+                PlanItem::Button(CommandId::ReturnToArtwork, "Return to Artwork"),
+            ),
+            None if doc.active_mask => {
+                let layer = doc.layer(doc.active_layer)?;
+                let enabled = layer.mask.as_ref()?.enabled;
+                (
+                    CanvasBarKind::LayerMask,
+                    format!("Editing {} mask", layer.name),
+                    vec![
+                        command(CommandId::InvertLayerMask),
+                        PlanItem::Button(CommandId::LayerMaskEnabled, if enabled { "Disable" } else { "Enable" }),
+                        command(CommandId::ApplyLayerMask),
+                    ],
+                    PlanItem::Button(CommandId::EditLayerContent, "Edit Content"),
+                )
+            }
+            None => return None,
+        };
+        Some(Plan {
+            kind,
+            label: Some(label),
+            items,
+            completion: vec![exit],
+            placement: Some(CanvasBarPlacement::BottomEdge),
+        })
+    }
+
+    /// A guide selected with the Ruler or Move tool.
+    fn guide_plan(&self) -> Option<Plan> {
+        let tool = self.layer_interaction.tool;
+        if !self.rulers.visible || !matches!(tool, LayerCanvasTool::Ruler { .. } | LayerCanvasTool::Move) {
+            return None;
+        }
+        self.selected_ruler()?;
+        Some(Plan {
+            kind: CanvasBarKind::Guide,
+            label: None,
+            items: [CommandId::DeleteRuler, CommandId::SnapRulers, CommandId::ShowRulers].map(PlanItem::Command).into(),
+            completion: Vec::new(),
+            placement: None,
+        })
+    }
+
     fn canvas_bar_plan(&self) -> Option<Plan> {
         if !self.operation.active() {
             let polygon = self.layer_interaction.tool
                 == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon })
                 && !self.layer_interaction.path.is_empty();
             if !polygon {
-                return self.selection_plan();
+                return self.guide_plan().or_else(|| self.mode_plan()).or_else(|| self.selection_plan());
             }
             return Some(Plan {
                 kind: CanvasBarKind::Polygon,
                 label: None,
                 items: vec![PlanItem::Command(CommandId::RemoveSelectionPoint)],
-                completion: vec![CommandId::CancelSelection, CommandId::CompleteSelection],
+                completion: [CommandId::CancelSelection, CommandId::CompleteSelection].map(PlanItem::Command).into(),
                 placement: Some(CanvasBarPlacement::BottomEdge),
             });
         }
-        let completion = vec![CommandId::CancelTransform, CommandId::ApplyTransform];
+        let completion = [CommandId::CancelTransform, CommandId::ApplyTransform];
         let count = self.operation.placement_count();
         Some(Plan {
             kind: if self.operation.placing() { CanvasBarKind::Placement } else { CanvasBarKind::Transform },
@@ -297,16 +380,29 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .filter(|id| !completion.contains(id))
                 .map(PlanItem::Command)
                 .collect(),
-            completion,
+            completion: completion.map(PlanItem::Command).into(),
             placement: None,
+        })
+    }
+
+    /// Document-space points of the selected guide's handles.
+    fn guide_handles(&self) -> Vec<Point> {
+        self.selected_ruler().map_or_else(Vec::new, |ruler| {
+            let (a, b) = ruler.geometry.handles();
+            [Some(a), b].into_iter().flatten().collect()
         })
     }
 
     fn canvas_bar_anchor(&self, kind: CanvasBarKind) -> Option<[f32; 4]> {
         match kind {
             CanvasBarKind::Placement | CanvasBarKind::Transform => self.transform_document_bounds(),
-            CanvasBarKind::Polygon => None,
+            CanvasBarKind::Polygon | CanvasBarKind::QuickMask | CanvasBarKind::SelectionLayer | CanvasBarKind::LayerMask => None,
             CanvasBarKind::Selection => self.canvas_bar.selection.as_ref().and_then(|s| s.1),
+            CanvasBarKind::Guide => {
+                let handles = self.guide_handles();
+                let b = Rect::around(handles.iter().copied());
+                (!handles.is_empty()).then_some([b.min.x, b.min.y, b.max.x, b.max.y])
+            }
         }
     }
 
@@ -326,7 +422,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let visible = self.state.workspace.layout.canvas_bar;
         let Some(mut plan) = self
             .canvas_bar_plan()
-            .filter(|plan| visible || !plan.completion.is_empty())
+            .filter(|plan| visible || plan.kind.essential())
             .filter(|plan| !plan.items.is_empty() || !plan.completion.is_empty())
         else {
             self.canvas_bar.key = None;
@@ -340,12 +436,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             kind: plan.kind,
             toolbar: ToolbarContext { generation: 0, ..self.state.toolbar_context() },
             transaction: self.operation.serial(),
+            guide: self.rulers.selected.filter(|_| plan.kind == CanvasBarKind::Guide),
+            label: plan.label.clone(),
             anchor: self.canvas_bar_anchor(plan.kind),
             flags: plan
                 .items
                 .iter()
+                .chain(&plan.completion)
                 .filter_map(|item| item.command())
-                .chain(plan.completion.iter().copied())
                 .filter_map(|id| self.state.commands.iter().find(|c| c.id == id))
                 .map(|c| (c.id, c.enabled, c.selected, c.disabled_reason.clone()))
                 .collect(),
@@ -354,17 +452,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             return false;
         }
         let previous = self.canvas_bar.key.replace(key.clone());
-        if previous.is_none_or(|p| p.kind != key.kind || p.toolbar != key.toolbar || p.transaction != key.transaction) {
+        if previous.is_none_or(|p| {
+            p.kind != key.kind || p.toolbar != key.toolbar || p.transaction != key.transaction || p.guide != key.guide
+        }) {
             self.canvas_bar.generation += 1;
         }
         let mut items: Vec<CanvasBarItem> = Vec::new();
         for &entry in &plan.items {
-            let id = match entry {
-                PlanItem::Command(id) => id,
-                PlanItem::Menu(menu) => {
-                    items.push(self.canvas_bar_menu_item(menu));
-                    continue;
-                }
+            let PlanItem::Command(id) = entry else {
+                items.push(self.canvas_bar_item(entry));
+                continue;
             };
             let state = self.published(id);
             let group = ToolSettingAction { command: id, checkable: state.checkable }.group();
@@ -384,7 +481,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     menu: None,
                     icon: None,
                 }),
-                (None, _) => items.push(self.canvas_bar_action(id)),
+                (None, _) => items.push(self.canvas_bar_item(entry)),
             }
         }
         self.state.canvas_bar = Some(CanvasBarView {
@@ -394,7 +491,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             },
             label: plan.label,
             items,
-            completion: plan.completion.iter().map(|&id| self.canvas_bar_action(id)).collect(),
+            completion: plan.completion.iter().map(|&item| self.canvas_bar_item(item)).collect(),
             placement: plan.placement.unwrap_or(if visible {
                 CanvasBarPlacement::NearObject
             } else {
@@ -405,15 +502,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         true
     }
 
-    fn canvas_bar_action(&self, id: CommandId) -> CanvasBarItem {
+    fn canvas_bar_item(&self, item: PlanItem) -> CanvasBarItem {
+        let (id, label) = match item {
+            PlanItem::Menu(menu) => return self.canvas_bar_menu_item(menu),
+            PlanItem::Command(id) => (id, short_label(id)),
+            PlanItem::Button(id, label) => (id, label),
+        };
         let state = self.published(id);
         CanvasBarItem {
             option: ToolOption::Action {
-                checkable: state.checkable,
+                checkable: state.checkable && matches!(item, PlanItem::Command(_)),
                 state,
             },
-            label: short_label(id),
-            accent: matches!(id, CommandId::ApplyTransform | CommandId::CompleteSelection),
+            label,
+            accent: matches!(
+                id,
+                CommandId::ApplyTransform | CommandId::CompleteSelection | CommandId::ReturnToArtwork | CommandId::EditLayerContent
+            ),
             menu: None,
             icon: None,
         }
@@ -422,7 +527,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn canvas_bar_menu_item(&self, menu: CanvasBarMenu) -> CanvasBarItem {
         CanvasBarItem {
             option: match menu.primary() {
-                Some(id) => self.canvas_bar_action(id).option,
+                Some(id) => self.canvas_bar_item(PlanItem::Command(id)).option,
                 None => ToolOption::Choice {
                     id: menu.id(),
                     label: menu.label(),
@@ -619,7 +724,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 points.extend(self.transform_hull()?);
                 points
             }
-            CanvasBarKind::Polygon => return None,
+            CanvasBarKind::Polygon | CanvasBarKind::QuickMask | CanvasBarKind::SelectionLayer | CanvasBarKind::LayerMask => {
+                return None;
+            }
+            CanvasBarKind::Guide => {
+                let to_logical = self.document_to_logical();
+                self.guide_handles().into_iter().map(to_logical).collect()
+            }
             CanvasBarKind::Selection => {
                 let [x0, y0, x1, y1] = self.canvas_bar.selection.as_ref()?.1?;
                 let to_logical = self.document_to_logical();
@@ -703,8 +814,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             )
         };
         let mut sections = vec![overflow.collect::<Vec<_>>()];
-        if bar.context.kind == CanvasBarKind::Selection {
-            sections.extend(self.selection_menu(SelectionMenu::Selection).sections);
+        match bar.context.kind {
+            CanvasBarKind::Selection => sections.extend(self.selection_menu(SelectionMenu::Selection).sections),
+            CanvasBarKind::QuickMask | CanvasBarKind::SelectionLayer | CanvasBarKind::LayerMask => {
+                sections.extend(self.application_menu(ApplicationMenu::Layer).sections)
+            }
+            CanvasBarKind::Placement | CanvasBarKind::Transform | CanvasBarKind::Polygon | CanvasBarKind::Guide => (),
         }
         sections.push(vec![toggle]);
         Some(

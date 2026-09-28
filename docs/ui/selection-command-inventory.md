@@ -181,7 +181,7 @@ target-specific:
 
 | Item | Behavior | Priority |
 | --- | --- | --- |
-| Exit Quick Mask | Keep completed edits, return to artwork, remove temporary row. | Core |
+| Exit Quick Mask | Keep completed edits, return to artwork, remove temporary row. Also Exit on the Quick Mask bar, and Escape. | Core |
 | Save as Selection Layer… | Create named snapshot, exit Quick Mask, activate the saved layer. | Core |
 | Invert Mask | Invert current selection coverage; stay in the mode. | Core; reuse current-selection inversion |
 | Select Entire Canvas | Set mask coverage to 1. | Core; adapt Select All |
@@ -194,6 +194,9 @@ target-specific:
 Do not expose Rename, Duplicate Layer, Delete Layer, merge, blend mode, artwork
 opacity, or group/reorder actions. Saving is the meaningful persistent-copy
 action; Exit is the meaningful temporary-row removal action.
+
+The [canvas action bar](canvas-action-bar.md) shows the mode at the bottom edge:
+"Quick Mask" · Invert, Fill, Clear, Refine ▾, Save as Selection Layer · Exit.
 
 Select All/Invert from the main Select menu affect this working mask and retain
 Quick Mask. Deselect explicitly exits Quick Mask and removes the restriction;
@@ -209,11 +212,11 @@ Its context menu and the Layer menu for this row use the same actions:
 
 | Group | Items | Behavior / priority |
 | --- | --- | --- |
-| Edit | Edit Selection Layer; Return to Artwork when editing | Core. No change to the current selection. |
+| Edit | Edit Selection Layer; Return to Artwork when editing | Core. No change to the current selection. Escape also returns to artwork. |
 | Use | Load Selection; Add to Selection; Subtract from Selection; Intersect with Selection | Core. Update working selection, return to artwork, retain saved mask. |
 | Use | Load Inverted Selection | Core. Invert a copy, not the stored mask. Equivalent to Invert source in Load dialog. |
 | Update | Replace from Current Selection | Core. Explicitly overwrite this ID's coverage. |
-| Mask | Invert Stored Mask; Select Entire Canvas in Mask; Clear Stored Mask; Fill Mask | Core. Durable edits to this saved mask; locks apply. |
+| Mask | Invert Stored Mask; Select Entire Canvas in Mask; Clear Stored Mask; Fill Mask | Core. Durable edits to this saved mask; locks apply. While the row is edited, Invert and Load Selection are the `InvertSelectionLayer` and `LoadSelectionLayer` commands, which stay in the mode and return to artwork respectively. |
 | Mask | Modify → Grow / Shrink | Core. Same scalar operations, explicitly routed to the saved ID. |
 | Mask | Feather / Border / Smooth; Transform Stored Mask… | Next. |
 | Organize | Rename…; Duplicate; Delete; Lock Editing | Core adaptations of ordinary node actions. Rename/duplicate/delete must retain their distinct meanings. |
@@ -232,6 +235,9 @@ The initial mask-load/edit commands target one explicit row; do not silently
 interpret row multiselection as a Boolean union. Multi-mask batch combination is
 Later. Row checkboxes retain organizational multiselection semantics.
 
+While a Selection Layer is edited, the canvas action bar reads "Editing *name*"
+and offers Load, Invert and Return to Artwork at the bottom edge.
+
 Current-selection commands remain explicitly named in Select. Invoking a
 construction tool or a current-selection lifecycle operation from saved-mask
 editing returns to artwork/current-selection work; it does not silently load the
@@ -248,7 +254,7 @@ These bridges prevent Selection Layers from becoming an isolated feature:
 | Artwork row/thumbnail → Pixel Selection | Select Layer Opacity; Add Opacity to Selection; Subtract Opacity from Selection; Intersect with Layer Opacity | Core. Transparent pixels contribute 0; partial alpha gives partial selection. |
 | Artwork-mask thumbnail → Pixel Selection | Load Mask as Selection; Add Mask to Selection; Subtract Mask from Selection; Intersect with Mask | Core. Read the mask's own stored coverage, even when the mask is disabled. |
 | Artwork row → Layer Mask | Reveal Selection; Hide Selection; Replace Mask: Reveal Selection; Replace Mask: Hide Selection | Existing. Creates/replaces artwork visibility coverage; these are not saved-selection commands. |
-| Artwork-mask context | Edit Mask / Edit Layer Content; Show Mask Area; Enable Mask; Link Mask to Layer; Copy / Paste Mask; Invert; Reveal All / Hide All; Apply / Delete Mask | Existing. Preserve these distinct visibility-mask operations. |
+| Artwork-mask context | Edit Mask / Edit Layer Content; Show Mask Area; Enable Mask; Link Mask to Layer; Copy / Paste Mask; Invert; Reveal All / Hide All; Apply / Delete Mask | Existing. Preserve these distinct visibility-mask operations. For the active layer, Edit Mask, Edit Layer Content, Enable Mask, Invert and Apply are the `EditLayerMask`, `EditLayerContent`, `LayerMaskEnabled`, `InvertLayerMask` and `ApplyLayerMask` commands, so search, toolbars and shortcuts reach them. While a mask is edited, the canvas action bar reads "Editing *layer* mask" and offers Invert, Disable, Apply Mask and Edit Content. |
 | Layers + / Layer → New | New Selection Layer…; Save Current Selection as Selection Layer… | Core. Blank creation enters stored editing; saving a snapshot also activates the new layer. |
 | Group context → New | New Selection Layer in Group…; Save Current Selection in Group… | Core. Explicit opt-in to parent geometry/lifetime. |
 | Layer row organization | Select All Layer Rows; Clear Layer Row Selection | Existing behavior with unambiguous labels. Separate from Pixel Selection submenu. |
@@ -314,7 +320,10 @@ Reselect defaults, so do not silently rebind existing users to another scheme.
 
 Quick Mask uses Q; mask color swap uses X; Reset to Black/White is a visible
 command with D as a proposed mask-mode default after conflict checking. Escape
-cancels a contact/preview first, then exits Quick Mask while retaining edits.
+cancels a contact/preview first, then exits Quick Mask or Selection Layer
+editing while retaining edits. In layer-mask editing it returns to the layer's
+content when no popup, drawer or enabled Escape binding claims it. The mode
+commands and Lasso Fill have no default keys.
 Paint selection reuses existing size shortcuts and its specified Alt/Option
 mode swap. Native text fields retain all editing shortcuts. Other selection
 tools use Shift Add, Alt Subtract, Shift+Alt Intersect, and Ctrl/Cmd New when

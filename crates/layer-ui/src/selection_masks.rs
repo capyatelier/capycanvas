@@ -311,6 +311,23 @@ impl<R: CanvasRenderer> UiSession<R> {
             item.enabled = enabled;
             item
         };
+        let editing = self.selection_masks.target() == Some(SelectionTarget::Saved(id));
+        let edited = |label: &str, command: CommandId, item: ContextMenuItem| {
+            if !editing {
+                return item;
+            }
+            ContextMenuItem {
+                enabled: self.command(command).enabled,
+                ..ContextMenuItem::command(label, UiAction::Invoke { command })
+            }
+        };
+        let mut load = load_selection_items(id.0).into_iter();
+        let load: Vec<_> = load
+            .next()
+            .map(|item| edited("Load Selection", CommandId::LoadSelectionLayer, item))
+            .into_iter()
+            .chain(load)
+            .collect();
         let roots = doc.layer_roots(&self.layer_interaction.selected);
         let multiple = roots.len() > 1 && self.layer_interaction.selected.contains(&id);
         let mut organize_items = vec![
@@ -421,7 +438,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(ContextMenu {
             title: layer.name.to_string(),
             sections: vec![
-                vec![ContextMenuItem::submenu("Load Selection", vec![load_selection_items(id.0)])],
+                vec![ContextMenuItem::submenu("Load Selection", vec![load])],
                 vec![ContextMenuItem::submenu(
                     "Modify",
                     vec![
@@ -431,10 +448,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 SelectionAction::ReplaceLayer { id: id.0 },
                                 unlocked && self.current_selection().is_some(),
                             ),
-                            action(
+                            edited(
                                 "Invert",
-                                SelectionAction::InvertLayer { id: id.0 },
-                                unlocked,
+                                CommandId::InvertSelectionLayer,
+                                action("Invert", SelectionAction::InvertLayer { id: id.0 }, unlocked),
                             ),
                             action(
                                 "Select All",
@@ -701,6 +718,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             CommandId::ReturnToArtwork => self.return_to_artwork()?,
+            CommandId::LoadSelectionLayer | CommandId::InvertSelectionLayer => {
+                let Some(SelectionTarget::Saved(id)) = self.selection_masks.target() else {
+                    return Err("Edit a Selection Layer first".into());
+                };
+                self.selection_action(if command == CommandId::LoadSelectionLayer {
+                    SelectionAction::LoadLayer { id: id.0, mode: SelectionMode::New, inverted: false }
+                } else {
+                    SelectionAction::InvertLayer { id: id.0 }
+                })?
+            }
             CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer => {
                 self.selection_action(SelectionAction::NewLayer {
                     parent: None,

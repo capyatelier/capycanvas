@@ -180,6 +180,26 @@ test("state changes update retained controls; schema changes rebuild them", () =
   assert.notEqual(h.find("transform_uniform"), uniform, "A new context rebuilds the controls");
 });
 
+test("a mode bar shows its label and accented exit, and a relabelled item is rebuilt with its new label", () => {
+  const h = harness();
+  const mode = label => view({ kind: "layer_mask", label: "Editing Ink mask", placement: "bottom_edge",
+    items: [action("invert_layer_mask", "Invert"), action("layer_mask_enabled", label)],
+    completion: [action("edit_layer_content", "Edit Content", { accent: true })] });
+  const caption = command => h.find(command).children.find(n => n.className === "toolbar-action-label")?.textContent;
+  h.bar.refresh(mode("Disable"));
+  const title = h.bar.root.children.find(n => n.className === "canvas-action-bar-label");
+  assert.equal(title.hidden, false);
+  assert.equal(title.textContent, "Editing Ink mask");
+  assert.equal(caption("layer_mask_enabled"), "Disable");
+  assert.ok(h.find("edit_layer_content").classList.contains("suggested-action"), "the exit uses the accent");
+  const toggle = h.find("layer_mask_enabled");
+  h.bar.refresh(mode("Enable"));
+  assert.notEqual(h.find("layer_mask_enabled"), toggle, "a new item label rebuilds the controls");
+  assert.equal(caption("layer_mask_enabled"), "Enable");
+  h.find("layer_mask_enabled").click();
+  assert.deepEqual(h.dispatched.at(-1), { type: "canvas_bar_edit", context: mode("Enable").context, action: { type: "invoke", command: "layer_mask_enabled" } });
+});
+
 test("every item dispatches a canvas bar edit for its context; disabled items explain themselves on tap", () => {
   const h = harness(), v = view({ items: [action("transform_flip_vertical", "Flip V", { enabled: false })] });
   h.bar.refresh(v);

@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1, M2.2, M2.5 and M2.6. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1, M2.2, M2.4, M2.5 and M2.6. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -710,6 +710,13 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - "Use current colour" buckets on every effect colour, in labelled rows.
   - Vignette down to −100; Denoise renamed "Edge-Preserving Smooth"; Revert to Original Photo.
   - A stylus Pinch stroke on the MovinkPad 14 completes GPU work every 2.6 ms (p50), 5.0 ms (p99).
+- **M2.4** on GTK, Web and Android:
+  - bottom-edge bars for Quick Mask, Selection Layer editing and layer-mask editing, each with a label and an accented exit;
+  - a guide bar (Delete, Snap, Guides) beside a guide selected with the Ruler or Move tool;
+  - Escape leaves Selection Layer and mask editing;
+  - commands to load and invert Selection Layers, invert, enable and apply layer masks, and move between a layer's mask and its content;
+  - Lasso Fill as a tool command.
+  - Bar precedence is transform, polygon, guide, mode, then selection.
 
 **Follow-ups**
 - **Erase right after a stroke:** an Erase on a raster that is still pending, or that holds watercolor or wet state, damages the whole layer so the layer settles. Clearing right after a stroke therefore rewrites every page. It is a still-frame cost.
@@ -717,6 +724,10 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **Liquify render rate:** a 240 Hz stylus Liquify stroke renders about 400 times a second on Android, more than its input rate. Check whether contacts are rendered more than once.
 - **Stale Web filter copy:** `apps/layer-web/filters` was committed in `3618b3c2`, although nothing reads it (filters load from `assets/filters`). It is out of date; delete it or regenerate it.
 - **Headless Web `--selection-tools`:** it now stops at its first workspace submit on `origin/main` too.
+- **GTK tablet proxy:** GTK `--tablet` runs lose their Wayland connection whenever Quick Mask or Selection Layer rows change (also on `origin/main`), so `native_canvas_bar_modes` runs with mouse and touch only.
+- **Android bar captions** clip their last glyph (for example "Apply", "Disable" and "Edit Content").
+- **Accessible names:** relabelled bar buttons are announced by their command's label ("Enable Layer Mask" for a button reading "Disable").
+- **Headless Web `--layers`** stops at "Delete mask" because `add_mask` is refused right after a Lasso Fill stroke; this also happens on `origin/main`.
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
 - **Apple and Windows:**
@@ -725,7 +736,8 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - retire `canvas_bar_reason` once Apple reads the field;
   - open bar menu items (`CanvasBarItem.menu` and `icon`, through `canvas_bar_choice_menu`);
   - add icons for the new commands to Apple's coverage list;
+  - draw a `checkable: false` action unpressed even when its command is selected (Android did not);
   - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M2.3 and M2.4, M3 and M4. Record milestone completion in the research record's section 7.
+**Remaining:** M2.3, M3 and M4. Record milestone completion in the research record's section 7.

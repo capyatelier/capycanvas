@@ -693,3 +693,152 @@ fn native_delete_clears_pixels_unless_a_guide_is_selected() {
     pump(200);
     assert_eq!(pixels(&w), filled, "and leaves the pixels alone");
 }
+
+fn bar_kind(w: &Workspace) -> Option<layer_ui::CanvasBarKind> {
+    state(w).canvas_bar.map(|b| b.context.kind)
+}
+
+/// Tap a bar button once it is shown and enabled, then wait for `done`.
+fn tap_bar(w: &Workspace, native: &mut RemoteInput, device: Device, command: CommandId, done: impl Fn() -> bool, message: &str) {
+    let name = format!("canvas-bar-{command:?}");
+    let button = until_some(|| find_named(w.canvas_bar.root.upcast_ref(), &name).filter(|b| b.is_mapped() && b.is_sensitive()), &name);
+    tap(native, device, center(w, &button));
+    until(done, &format!("{device:?}: {message}"));
+}
+
+/// The mode bar's label is shown and the bar sits on the bottom edge of the canvas.
+fn assert_mode_bar(w: &Workspace, kind: layer_ui::CanvasBarKind, label: &str) {
+    until(|| bar_kind(w) == Some(kind) && shown(w), &format!("the {kind:?} bar appears"));
+    let text = find_css(w.canvas_bar.root.upcast_ref(), "canvas-action-bar-label")
+        .and_downcast::<gtk::Label>()
+        .expect("the bar label");
+    until(|| text.is_mapped() && text.text() == label, &format!("the bar reads {label}"));
+    let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
+    let area = w.area.compute_bounds(&w.window).unwrap();
+    assert!(
+        bar.y() + bar.height() > area.y() + area.height() - 80.,
+        "{kind:?} sits on the bottom edge: {bar:?} {area:?}"
+    );
+}
+
+/// Mode bars with Mutter's mouse and touch. The tablet proxy loses its
+/// Wayland connection when Quick Mask or Selection Layer rows change, so the
+/// guide journey covers the pen.
+#[test]
+#[ignore = "isolated compositor, GPU and native mouse and touch delivery"]
+fn native_canvas_bar_modes() {
+    let app = native_test_app("art.capycanvas.CanvasBarModes");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    let mut native = remote_input();
+    let paint = document(&w).active_layer;
+    for device in [Device::Mouse, Device::Touch] {
+        w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
+        w.dispatch(UiAction::Invoke { command: CommandId::QuickMask });
+        assert_mode_bar(&w, layer_ui::CanvasBarKind::QuickMask, "Quick Mask");
+        let inverted = || document(&w).selection.as_ref().is_some_and(|s| s.inverted);
+        tap_bar(&w, &mut native, device, CommandId::InvertSelection, inverted, "Invert inverts the Quick Mask");
+        assert_eq!(bar_kind(&w), Some(layer_ui::CanvasBarKind::QuickMask), "Invert stays in Quick Mask");
+        tap_bar(&w, &mut native, device, CommandId::ReturnToArtwork, || !state(&w).layer_tools.quick_mask, "Exit leaves Quick Mask");
+
+        w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
+        w.dispatch(UiAction::Invoke { command: CommandId::SaveSelectionLayer });
+        let saved = document(&w).active_layer;
+        let name = document(&w).layer(saved).unwrap().name.to_string();
+        assert_mode_bar(&w, layer_ui::CanvasBarKind::SelectionLayer, &format!("Editing {name}"));
+        let stored = document(&w).saved_selection(saved).unwrap();
+        tap_bar(
+            &w,
+            &mut native,
+            device,
+            CommandId::InvertSelectionLayer,
+            || document(&w).saved_selection(saved).is_ok_and(|s| s.inverted != stored.inverted),
+            "Invert inverts the stored coverage",
+        );
+        assert_eq!(document(&w).active_layer, saved, "Invert stays on the Selection Layer");
+        tap_bar(
+            &w,
+            &mut native,
+            device,
+            CommandId::ReturnToArtwork,
+            || document(&w).active_layer == paint && bar_kind(&w) != Some(layer_ui::CanvasBarKind::SelectionLayer),
+            "Return to Artwork leaves Selection Layer editing",
+        );
+
+        w.dispatch(UiAction::Invoke { command: CommandId::MaskSelection });
+        let name = document(&w).layer(paint).unwrap().name.to_string();
+        assert_mode_bar(&w, layer_ui::CanvasBarKind::LayerMask, &format!("Editing {name} mask"));
+        let enabled = || document(&w).layer(paint).unwrap().mask.as_ref().is_some_and(|m| m.enabled);
+        tap_bar(&w, &mut native, device, CommandId::LayerMaskEnabled, || !enabled(), "Disable turns the mask off");
+        let offers_enable = || {
+            find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-LayerMaskEnabled")
+                .and_then(|b| mapped_label(&b, "Enable"))
+                .is_some()
+        };
+        until(offers_enable, "the button now offers Enable");
+        tap_bar(
+            &w,
+            &mut native,
+            device,
+            CommandId::EditLayerContent,
+            || !document(&w).active_mask && state(&w).canvas_bar.is_none(),
+            "Edit Content leaves mask editing",
+        );
+        w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::DeleteMask { id: paint.0 } });
+        pump(100);
+    }
+
+    w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
+    w.dispatch(UiAction::Invoke { command: CommandId::MaskSelection });
+    assert_mode_bar(&w, layer_ui::CanvasBarKind::LayerMask, &format!("Editing {} mask", document(&w).layer(paint).unwrap().name));
+    w.dispatch(UiAction::Invoke { command: CommandId::Move });
+    w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Lock { id: paint.0, value: true } });
+    let area = w.area.compute_bounds(&w.window).unwrap();
+    native.click([area.x() + area.width() * 0.5, area.y() + area.height() * 0.4]);
+    until(|| w.notice.root.is_visible() && state(&w).notice.is_some(), "Move on the locked mask shows a notice");
+    until(|| shown(&w), "the mode bar stays through the contact");
+    let notice = w.notice.root.compute_bounds(&w.window).unwrap();
+    let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
+    assert!(notice.y() + notice.height() <= bar.y(), "the notice sits above the bottom-edge bar: {notice:?} {bar:?}");
+    let dir = "../../artifacts/canvas-action-bar";
+    std::fs::create_dir_all(dir).unwrap();
+    capture_reference(&w, &format!("{dir}/mask-mode-notice.png"), 1.);
+    native.finish();
+    w.window.close();
+    pump(50);
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_canvas_bar_guide --tablet"]
+fn native_canvas_bar_guide() {
+    let app = native_test_app("art.capycanvas.CanvasBarGuide");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    w.dispatch(UiAction::Invoke { command: CommandId::Ruler });
+    let mut native = remote_input();
+    for device in [Device::Mouse, Device::Touch, Device::Pen] {
+        let [from, to] = [canvas_point(&w, [300., 300.]), canvas_point(&w, [500., 380.])];
+        native.perform(json!([
+            {"point": from}, {"down": true}, {"wait_ms": 40},
+            {"point": [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5]}, {"wait_ms": 20},
+            {"point": to}, {"wait_ms": 20}, {"down": false}
+        ]));
+        until(|| document(&w).rulers.len() == 1, "the drag draws a guide");
+        until(|| bar_kind(&w) == Some(layer_ui::CanvasBarKind::Guide) && shown(&w), "the guide bar appears");
+        let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
+        let lowest = from[1].max(to[1]);
+        assert!(bar.y() > lowest + 12., "the bar clears the guide's handles: {bar:?} {from:?} {to:?}");
+        tap_bar(&w, &mut native, device, CommandId::DeleteRuler, || document(&w).rulers.is_empty(), "Delete removes the guide");
+        until(|| bar_kind(&w).is_none(), "the bar leaves with the guide");
+    }
+    native.finish();
+    w.window.close();
+    pump(50);
+}
+

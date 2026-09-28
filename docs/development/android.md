@@ -319,6 +319,18 @@ menu. `#hardwareDeleteClearsSelectedPixels` presses the keyboard's Delete and
 Backspace over a selection. A focused text field keeps both keys, and a focused
 drawing tab keeps Delete, which closes that drawing: `MainActivity` does not
 forward that Delete to the core.
+`#modeBarsLeaveFromTheirExitsAcrossDevices` enters Quick Mask, a Selection
+Layer and a layer mask and taps their bottom-edge bars with mouse, finger and
+stylus: Quick Mask's Invert and Exit, the Selection Layer's Invert and Return to
+Artwork, and the mask's Disable, which then reads Enable, and Edit Content. It
+checks each bar's label, placement and accented exit, and that Disable is drawn
+as a plain button rather than a pressed toggle. The keyboard's Escape leaves
+mask and Selection Layer editing, and Move on a locked mask shows its notice
+above the mode bar (`validation/canvas-bar/mask-mode-notice.png`).
+`#guideBarDeletesTheSelectedGuideAcrossDevices` draws a guide with the Ruler
+tool, checks that its bar sits below the guide's handles, and deletes the guide
+from the bar. Fingers navigate the canvas, so its finger pass draws the guide
+with the pen and taps the bar with the finger.
 
 [`Effects.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Effects.kt)
 draws effect properties from the shared `layer_properties` view. Each Color

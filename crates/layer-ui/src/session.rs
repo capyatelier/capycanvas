@@ -1071,8 +1071,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                             reply.cancel_paint = true;
                             reply.change = self.changed(regions::DOCUMENT, true);
                             reply.handled = true;
-                        } else if !editing && self.selection_masks.quick() {
+                        } else if !editing
+                            && self.selection_masks.target().is_some()
+                            && self.command_flags(CommandId::ReturnToArtwork).0
+                        {
                             reply.change = self.dispatch(UiAction::Invoke { command: CommandId::ReturnToArtwork })?;
+                            reply.handled = true;
+                        } else if !editing && self.escape_edits_layer_content(modifiers) {
+                            reply.change = self.dispatch(UiAction::Invoke { command: CommandId::EditLayerContent })?;
                             reply.handled = true;
                         }
                     }
@@ -1979,6 +1985,20 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => id.icon(),
         }
     }
+    /// Escape leaves layer-mask editing only when it has nothing else to close
+    /// and no enabled binding claims it.
+    fn escape_edits_layer_content(&self, modifiers: Modifiers) -> bool {
+        self.command_flags(CommandId::EditLayerContent).0
+            && !self.interaction.facts.popup_open
+            && !self.state.settings_open
+            && !self.state.customization.is_open()
+            && !self.state.customization.header_editing
+            && self.state.workspace.layout.column_stacks.iter().all(|s| s.open_column.is_none())
+            && !self
+                .held_shortcut_matches("escape", modifiers, true)
+                .iter()
+                .any(|b| self.binding_enabled(&b.action))
+    }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
         if self.rendering_suspended && !Self::command_without_renderer(id) {
             return (false, false);
@@ -2008,8 +2028,30 @@ impl<R: CanvasRenderer> UiSession<R> {
                 layer_core::SelectionTarget::Saved(id) => !document.is_locked(id),
             }),
             CommandId::Reselect => idle && !self.has_selection() && self.selection_masks.reselect.is_some(),
-            CommandId::ScaleRotate | CommandId::ClearLayer | CommandId::Figure | CommandId::Move | CommandId::FillSelection | CommandId::RepairSourceProfile | CommandId::RasterizeSource
+            CommandId::LoadSelectionLayer | CommandId::InvertSelectionLayer => {
+                self.require_document_idle().is_ok()
+                    && self.selection_masks.target().is_some_and(|t| match t {
+                        layer_core::SelectionTarget::Current => false,
+                        layer_core::SelectionTarget::Saved(layer) => id == CommandId::LoadSelectionLayer || !document.is_locked(layer),
+                    })
+            }
+            CommandId::ScaleRotate | CommandId::ClearLayer | CommandId::Figure | CommandId::Move | CommandId::LassoFill | CommandId::FillSelection | CommandId::RepairSourceProfile | CommandId::RasterizeSource
+            | CommandId::InvertLayerMask | CommandId::LayerMaskEnabled | CommandId::ApplyLayerMask
                 if self.selection_masks.target().is_some() => false,
+            CommandId::InvertLayerMask | CommandId::LayerMaskEnabled | CommandId::ApplyLayerMask => {
+                self.require_document_idle().is_ok()
+                    && !document.is_locked(document.active_layer)
+                    && document.layer(document.active_layer).is_some_and(|l| {
+                        l.mask.as_ref().is_some_and(|m| {
+                            id != CommandId::ApplyLayerMask || (m.enabled && art_layers::apply_mask_refusal(l.kind).is_none())
+                        })
+                    })
+            }
+            CommandId::EditLayerMask => {
+                idle && !document.active_mask
+                    && document.layer(document.active_layer).is_some_and(|l| l.mask.is_some())
+            }
+            CommandId::EditLayerContent => idle && document.active_mask,
             CommandId::DeleteLayer if self.selection_masks.quick() => false,
             CommandId::SdrRendition => document.color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::PreviewSdr => document.color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.require_document_idle().is_ok() && !self.state.document_file.busy,
@@ -2131,6 +2173,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::FitCanvas
             | CommandId::ActualPixels
+            | CommandId::LassoFill
             | CommandId::Hand
             | CommandId::Eyedropper
             | CommandId::Gradient
@@ -2174,6 +2217,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || matches!(
                 (id, self.layer_interaction.tool),
                 (CommandId::Lasso, LayerCanvasTool::Select)
+                    | (CommandId::LassoFill, LayerCanvasTool::LassoFill)
                     | (
                         CommandId::Move,
                         LayerCanvasTool::Move | LayerCanvasTool::Transform
@@ -2200,6 +2244,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::GamutWarning && self.state.gamut_warning)
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
+            || (id == CommandId::LayerMaskEnabled
+                && document.layer(document.active_layer).and_then(|l| l.mask.as_ref()).is_some_and(|m| m.enabled))
             || (id == CommandId::TransformPerspective && self.transform_mode().is_some_and(|(_, perspective)| perspective))
             || transform_choice(id).is_some_and(|choice| match choice {
                 TransformChoice::Mode(mode, uniform) => self.transform_mode().is_some_and(|(current, _)| {
@@ -3911,7 +3957,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.open_command_search()?;
                 Ok((COMMAND_SEARCH, false))
             }
-            CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => {
+            CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask
+            | CommandId::LoadSelectionLayer | CommandId::InvertSelectionLayer => {
                 self.selection_mask_command(command)?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
@@ -4101,6 +4148,26 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let id = self.engine.document().active_layer.0;
                 self.layer_action(LayerAction::MaskSelection { id, hide: false })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::InvertLayerMask
+            | CommandId::LayerMaskEnabled
+            | CommandId::ApplyLayerMask
+            | CommandId::EditLayerMask
+            | CommandId::EditLayerContent => {
+                let document = self.engine.document();
+                let id = document.active_layer.0;
+                let enabled = document.layer(document.active_layer).and_then(|l| l.mask.as_ref()).is_some_and(|m| m.enabled);
+                self.layer_action(match command {
+                    CommandId::InvertLayerMask => LayerAction::InvertMask { id },
+                    CommandId::LayerMaskEnabled => LayerAction::EnableMask { id, value: !enabled },
+                    CommandId::ApplyLayerMask => LayerAction::ApplyMask { id },
+                    _ => LayerAction::Select { id, mask: command == CommandId::EditLayerMask },
+                })?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::LassoFill => {
+                self.layer_action(LayerAction::Tool { tool: LayerCanvasTool::LassoFill })?;
+                Ok((BRUSH | DOCUMENT, true))
             }
             CommandId::UseReferenceBelow => {
                 self.use_reference_below()?;
@@ -4594,7 +4661,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             })
             .collect()
         } else if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
-            || !self.engine.document().rulers.is_empty()
+            || (self.layer_interaction.tool == LayerCanvasTool::Move && self.selected_ruler().is_some())
         {
             [
                 CommandId::ShowRulers,
@@ -4602,11 +4669,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 CommandId::DeleteRuler,
             ]
             .into_iter()
-            .filter(|c| {
-                *c != CommandId::DeleteRuler
-                    || matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
-                    || self.layer_interaction.tool == LayerCanvasTool::Move
-            })
             .map(|command| ToolSettingAction {
                 command,
                 checkable: command.is_toggle(),
@@ -4895,6 +4957,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && self.layer_interaction.path.is_empty()
         {
             self.rulers.selected = None;
+            self.refresh_tools();
         }
         let doc = self.engine.document();
         self.state.filter_picker.selected = doc.layer(doc.active_layer).and_then(|l| l.effect.as_ref())

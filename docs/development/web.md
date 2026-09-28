@@ -199,9 +199,24 @@ Outside Selection and Adjust ▾ › Tone › Curves (a masked Curves layer). In
 all three from the bar. It then presses
 Delete over a selection, which clears it, and on the focused tab of another
 drawing, which closes that drawing and clears nothing: `keyInput` skips key
-presses that a control has already handled with `preventDefault`. On a tablet,
-`device.test.mjs --canvas-bar` also opens a bar menu with real pen, touch and
-mouse taps and closes it with a second tap.
+presses that a control has already handled with `preventDefault`.
+
+The mode and guide bars need no Web code of their own: the label, the accented
+exit and per-bar item labels such as Disable/Enable come from the shared view,
+and a changed item label rebuilds the bar. With pen, touch and mouse, the
+journey enters Quick Mask, a Selection Layer and a layer mask. It checks each
+bar's label along the bottom edge and its accented exit, inverts the Quick Mask
+and the Selection Layer without leaving them, disables the mask (the button then
+reads Enable), and leaves each mode from its exit. It then presses Escape in each
+mode with no text field focused, and checks that the session handles the key
+and leaves the mode; during mask editing an open column takes the first Escape.
+Move on a locked mask shows its notice above the mode bar. Last, a guide drawn
+with the Ruler tool shows its bar below its handles, and the bar's Delete
+removes it. Fingers never draw, so the touch pass draws the lasso and the guide
+with the pen. On a tablet, `device.test.mjs --canvas-bar` also opens a bar menu
+with real pen, touch and mouse taps and closes it with a second tap, and opens
+the layer-mask bar with a real tap on Mask, then disables the mask and leaves
+with Edit Content.
 
 The shared canvas notice (see [shared UI](../ui/shared-ui.md#actions-and-observation))
 is [`notice.js`](../../apps/layer-web/notice.js): a bubble in `#workspace`,

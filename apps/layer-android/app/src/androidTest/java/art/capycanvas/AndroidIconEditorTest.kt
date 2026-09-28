@@ -171,9 +171,6 @@ class AndroidIconEditorTest {
                     capture("group-$group", "mode-$theme-$command-${choice.getString("icon")}")
                 }
             }
-            dispatch(obj("type" to "layer", "action" to obj("op" to "tool", "tool" to "lasso_fill")))
-            checkChoices()
-            capture("group-$group", "mode-$theme-lasso-fill")
             val filters = show("adjustments")
             for (category in state().array("filter_categories").objects().filter { !it.isNull("id") }) {
                 dispatch(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to category.getString("id"))))

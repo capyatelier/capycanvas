@@ -74,6 +74,11 @@ impl<B: CanvasRenderer> UiSession<B> {
             (self.rulers.visible && self.rulers.snapping).then(|| self.ruler_reach()),
         );
     }
+    /// The selected guide, while it still exists.
+    pub(super) fn selected_ruler(&self) -> Option<Ruler> {
+        let id = self.rulers.selected?;
+        self.engine.document().rulers.iter().find(|r| r.id == id).copied()
+    }
     pub(super) fn ruler_command(&mut self, command: CommandId) -> Result<(), String> {
         self.require_idle()?;
         match command {
@@ -140,6 +145,10 @@ impl<B: CanvasRenderer> UiSession<B> {
                     })
                     .flatten();
                 if existing_only && hit.is_none() {
+                    if self.rulers.selected.take().is_some() {
+                        self.refresh_tools();
+                        self.layer_interaction.changed = true;
+                    }
                     return Ok(false);
                 }
                 self.layer_interaction.path = vec![p];
@@ -289,7 +298,7 @@ impl<B: CanvasRenderer> UiSession<B> {
         {
             let (a, b) = ruler.geometry.handles();
             let selected = self.rulers.selected == Some(ruler.id)
-                && matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. });
+                && matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. } | LayerCanvasTool::Move);
             if let Some(b) = b {
                 let mut axis = RulerConstraint {
                     origin: a,

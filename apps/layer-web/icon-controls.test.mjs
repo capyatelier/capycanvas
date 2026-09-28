@@ -77,8 +77,6 @@ export async function checkIconControls({call,evaluate,settle}, output) {
           await shot(`${theme}-${command}-${group.icon}`,'.dock-group .brushes-control');
         }
       }
-      await dispatch({type:"layer",action:{op:"tool",tool:"lasso_fill"}});
-      await check(`${theme}-lasso-fill`);await shot(`${theme}-lasso-fill`,'.dock-group .brushes-control');
       await show("adjustments");
       const categories=await evaluate("layerApp.state().filter_categories.filter(c=>c.id!=null)");
       for(const category of categories) {

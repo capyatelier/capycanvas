@@ -266,7 +266,7 @@ fn check_tool_set(w: &Rc<Workspace>, records: &mut Vec<serde_json::Value>, theme
 }
 
 fn controls(app: &adw::Application, output: &Path) {
-    use layer_ui::{FilterPickerAction, LayerAction, LayerCanvasTool};
+    use layer_ui::FilterPickerAction;
     let w = fixture_workspace(app);
     w.window.present();
     pump(1200);
@@ -433,16 +433,6 @@ fn controls(app: &adw::Application, output: &Path) {
                     .unwrap();
             }
         }
-        w.dispatch(UiAction::Layer {
-            action: LayerAction::Tool {
-                tool: LayerCanvasTool::LassoFill,
-            },
-        });
-        pump(80);
-        check_tool_set(&w, &mut records, label);
-        capture_widget(&w.window, &w.panel_widget(Panel::Brushes))
-            .save_to_png(output.join(format!("{label}-lasso-fill.png")))
-            .unwrap();
         show(&w, Panel::Adjustments);
         let mut count = 0;
         for category in state(&w)

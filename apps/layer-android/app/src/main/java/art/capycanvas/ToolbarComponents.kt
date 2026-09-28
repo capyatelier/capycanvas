@@ -222,15 +222,17 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
             ToolbarChoice(choice, vertical, labeled, caption == null && width < tileWidth * choice.array("items").length(),
                 iconSize, edit, prefix = prefix, height = if (caption != null) 32f else 24f, captions = caption != null, menu = choiceMenu)
         }
-        else -> ToolOptionAction(option.getJSONObject("Action").getJSONObject("state"), iconSize, caption, accent, prefix) {
-            edit(obj("type" to "invoke", "command" to it))
+        else -> option.getJSONObject("Action").let { action ->
+            ToolOptionAction(action.getJSONObject("state"), action.optBoolean("checkable"), iconSize, caption, accent, prefix) {
+                edit(obj("type" to "invoke", "command" to it))
+            }
         }
     }
 }
 
 /** A disabled captioned action shows its published reason on tap, hold or hover. */
-@Composable private fun ToolOptionAction(command: JSONObject, iconSize: Int, caption: String?, accent: Boolean, prefix: String,
-    invoke: (String) -> Unit) {
+@Composable private fun ToolOptionAction(command: JSONObject, checkable: Boolean, iconSize: Int, caption: String?, accent: Boolean,
+    prefix: String, invoke: (String) -> Unit) {
     val colors = LocalPalette.current
     val id = command.getString("id")
     val enabled = command.getBoolean("enabled")
@@ -239,7 +241,7 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
     val explained = reason != null
     val face = @Composable {
         Row(Modifier.fillMaxSize().testTag("$prefix-action-$id").clip(if (caption == null) TileShape else ControlShape)
-            .background(when { accent && enabled -> colors.accent; command.getBoolean("selected") -> colors.active; else -> Color.Transparent })
+            .background(when { accent && enabled -> colors.accent; checkable && command.getBoolean("selected") -> colors.active; else -> Color.Transparent })
             .alpha(if (enabled || caption == null) 1f else .4f)
             .then(if (caption == null) Modifier else Modifier.focusProperties { canFocus = false })
             .combinedClickable(enabled = enabled || explained, role = Role.Button, onClickLabel = command.getString("label"),

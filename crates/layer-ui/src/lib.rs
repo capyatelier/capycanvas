@@ -483,6 +483,14 @@ command_ids! {
     CutSelectionToLayer,
     ActualPixels,
     RevertToOriginal,
+    LoadSelectionLayer,
+    InvertSelectionLayer,
+    InvertLayerMask,
+    LayerMaskEnabled,
+    ApplyLayerMask,
+    EditLayerMask,
+    EditLayerContent,
+    LassoFill,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -513,6 +521,7 @@ impl CommandId {
                 | Self::FlipVertical
                 | Self::ShowRulers
                 | Self::SnapRulers
+                | Self::LayerMaskEnabled
                 | Self::PreviewSdr
                 | Self::SoftProof
                 | Self::GamutWarning
@@ -645,9 +654,15 @@ impl CommandId {
             Self::CutSelectionToLayer => "cut-to-layer",
             Self::ActualPixels => "actual-pixels",
             Self::RevertToOriginal => "reset",
+            Self::LoadSelectionLayer => "selection-load",
+            Self::InvertSelectionLayer | Self::InvertLayerMask => "invert-selection",
+            Self::LayerMaskEnabled => "eye",
+            Self::ApplyLayerMask | Self::EditLayerMask => "mask",
+            Self::EditLayerContent => "brush",
+            Self::LassoFill => "lasso-fill",
         })
     }
-    pub const TOOLS: [Self; 25] = [
+    pub const TOOLS: [Self; 26] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::Pen,
@@ -659,6 +674,7 @@ impl CommandId {
         Self::Blend,
         Self::Liquify,
         Self::Lasso,
+        Self::LassoFill,
         Self::Select,
         Self::RectangleSelect,
         Self::EllipseSelect,
@@ -825,6 +841,14 @@ impl CommandId {
             Self::CutSelectionToLayer => "Cut Selection to New Layer",
             Self::ActualPixels => "Actual Pixels",
             Self::RevertToOriginal => "Revert to Original Photo",
+            Self::LoadSelectionLayer => "Load Selection Layer",
+            Self::InvertSelectionLayer => "Invert Selection Layer",
+            Self::InvertLayerMask => "Invert Layer Mask",
+            Self::LayerMaskEnabled => "Enable Layer Mask",
+            Self::ApplyLayerMask => "Apply Layer Mask",
+            Self::EditLayerMask => "Edit Layer Mask",
+            Self::EditLayerContent => "Edit Layer Content",
+            Self::LassoFill => "Lasso fill",
         }
     }
 }

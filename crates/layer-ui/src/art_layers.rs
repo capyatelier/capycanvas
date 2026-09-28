@@ -1361,6 +1361,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             item.selected = Some(checked);
             item
         };
+        let routed = |label: &str, command: CommandId, action: A| {
+            if l.id != doc.active_layer {
+                return item(label, action);
+            }
+            let state = self.command(command);
+            ContextMenuItem {
+                enabled: state.enabled,
+                selected: command.is_toggle().then_some(state.selected),
+                ..ContextMenuItem::command(label, UiAction::Invoke { command })
+            }
+        };
         let mask_selection = || {
             vec![
                 item(
@@ -1421,7 +1432,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let m = l.mask.as_ref().ok_or("No mask")?;
             vec![
                 vec![
-                    item("Edit layer content", A::Select { id, mask: false }),
+                    routed("Edit layer content", CommandId::EditLayerContent, A::Select { id, mask: false }),
                     check(
                         "Show mask area",
                         A::ShowMask {
@@ -1430,14 +1441,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                         },
                         m.show_area,
                     ),
-                    check(
-                        "Enable mask",
-                        A::EnableMask {
-                            id,
-                            value: !m.enabled,
-                        },
-                        m.enabled,
-                    ),
+                    ContextMenuItem {
+                        selected: Some(m.enabled),
+                        ..routed(
+                            "Enable mask",
+                            CommandId::LayerMaskEnabled,
+                            A::EnableMask {
+                                id,
+                                value: !m.enabled,
+                            },
+                        )
+                    },
                     check(
                         "Link mask to layer",
                         A::LinkMask {
@@ -1451,12 +1465,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 vec![
                     item("Copy mask", A::CopyMask { id }),
                     item("Replace with copied mask", A::PasteMask { id }),
-                    item("Invert mask", A::InvertMask { id }),
+                    routed("Invert mask", CommandId::InvertLayerMask, A::InvertMask { id }),
                     item("Reveal all", A::ClearMask { id, reveal: true }),
                     item("Hide all", A::ClearMask { id, reveal: false }),
                 ],
                 vec![
-                    item("Apply mask to layer", A::ApplyMask { id }),
+                    routed("Apply mask to layer", CommandId::ApplyLayerMask, A::ApplyMask { id }),
                     item("Delete mask", A::DeleteMask { id }),
                 ],
             ]
@@ -1489,7 +1503,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             let mask_menu = if l.mask.is_some() {
                 let mut sections = self.layer_menu(id, true)?.sections;
-                sections[0][0] = item("Edit mask", A::Select { id, mask: true });
+                sections[0][0] = routed("Edit mask", CommandId::EditLayerMask, A::Select { id, mask: true });
                 sections
             } else {
                 vec![

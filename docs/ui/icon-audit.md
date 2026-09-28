@@ -180,7 +180,7 @@ The Reference column identifies the relevant functional/conventional family. The
 
 ## Control coverage added in the second pass
 
-The authoritative inventory is `ToolGroup::ALL`, the 24 built-in brush presets, `CommandId::TOOLS` plus Lasso Fill, the tool-specific mode projections, and the 42 entries in `assets/filters/manifest.json`. Both production hosts are exercised from these models; an asset existing on disk is insufficient.
+The authoritative inventory is `ToolGroup::ALL`, the 24 built-in brush presets, `CommandId::TOOLS` (including Lasso Fill), the tool-specific mode projections, and the 42 entries in `assets/filters/manifest.json`. Both production hosts are exercised from these models; an asset existing on disk is insufficient.
 
 ### Painting categories
 

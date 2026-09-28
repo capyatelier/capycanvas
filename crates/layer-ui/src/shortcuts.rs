@@ -450,6 +450,7 @@ pub(crate) fn tool_command(action: &UiAction) -> Option<CommandId> {
         LayerCanvasTool::Hand => CommandId::Hand,
         tool if tool.picks_color() => CommandId::Eyedropper,
         LayerCanvasTool::Select => CommandId::Lasso,
+        LayerCanvasTool::LassoFill => CommandId::LassoFill,
         LayerCanvasTool::Move => CommandId::Move,
         _ => return None,
     })
@@ -562,9 +563,11 @@ fn command_section(command: CommandId) -> &'static str {
         | C::SelectionSubtract | C::SelectionIntersect | C::SelectionAntialias | C::SelectionConstrainAngles
         | C::SelectionFixedRatio | C::SelectionFixedSize | C::SelectionFromCenter | C::CompleteSelection
         | C::CancelSelection | C::SelectionVisible | C::SelectionEditing | C::SelectionReference | C::SelectAll
-        | C::Deselect | C::InvertSelection | C::RemoveSelectionPoint | C::MaskSelection => "Select",
+        | C::Deselect | C::InvertSelection | C::RemoveSelectionPoint | C::MaskSelection | C::LoadSelectionLayer
+        | C::InvertSelectionLayer => "Select",
         C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RepairSourceProfile
-        | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer | C::RevertToOriginal => "Layer",
+        | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer | C::RevertToOriginal | C::InvertLayerMask
+        | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask | C::EditLayerContent => "Layer",
         C::FitCanvas | C::ActualPixels | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
         | C::ZenMode | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
         | C::ToggleTheme => "View",

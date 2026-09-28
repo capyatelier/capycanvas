@@ -917,9 +917,15 @@ the resulting GTK appearance remains subject to human review.
   within the open document.
 - Show rulers and Snap to rulers appear in View and in shared Tool Settings.
   Hiding guides disables snapping without forgetting the snap preference. Delete
-  ruler is enabled only for a selected guide. GTK projects generic command rows
-  as native checkboxes/buttons; command labels, state, availability and shortcuts
-  stay in Rust. Rulers are available in the toolbar picker and tool drawers.
+  ruler is enabled only for a selected guide. Tool Settings shows these actions
+  under the Ruler tool, and under Operation (Move) while a guide is selected.
+  GTK projects generic command rows as native checkboxes/buttons; command
+  labels, state, availability and shortcuts stay in Rust. Rulers are available
+  in the toolbar picker and tool drawers.
+- A guide selected with the Ruler or Operation tool shows the
+  [canvas action bar](ui/canvas-action-bar.md) beside its handles: Delete, Snap
+  and Guides. The selected guide is highlighted under both tools, and an
+  Operation click that misses every guide deselects it.
 - Choose a guide once at stroke Down: nearby straight guides take precedence
   within 12 logical pixels; otherwise the closest parallel/radial anchor wins.
   Parallel strokes keep their own starting offset. Radial strokes use the ray
