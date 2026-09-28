@@ -5,6 +5,7 @@ fn screen_report(color: layer_color::screen::ScreenColor) -> layer_color::screen
         color,
         hdr_capable: Some(monitor.pq_signal),
         monitor: Some(monitor),
+        wide_color_off: false,
     }
 }
 
@@ -124,7 +125,10 @@ fn details_explain_the_screen_briefly() {
     assert_eq!(details.show_clipped, None);
 
     s.set_screen_report(screen_report(gnome("default")));
-    assert!(s.screen_details().unwrap().body.unwrap().starts_with("Your operating system is sending colors as if this monitor’s color mode were sRGB."));
+    assert_eq!(chip(&s), None, "sRGB sent unconverted is the convention, even to a wide monitor");
+    assert_eq!(s.screen_details(), None);
+    s.set_screen_report(layer_color::screen::ScreenReport { color: layer_color::screen::ScreenColor::Unmanaged, ..screen_report(gnome("default")) });
+    assert_eq!(chip(&s), None, "an unmanaged screen shows sRGB unconverted too");
 
     s.state.soft_proof = false;
     s.set_screen_report(screen_report(gnome("native")));
@@ -166,4 +170,22 @@ fn a_new_drawing_in_the_window_keeps_the_screen() {
     assert_eq!(next.state.screen.assessment, s.state.screen.assessment);
     assert!(next.state.screen.show_clipped);
     assert_eq!(next.state.screen.clipped, None, "the new drawing is checked again");
+}
+
+#[test]
+fn clipping_explains_a_color_setting_that_limits_apps_to_srgb() {
+    use layer_color::screen::{Chromaticities, ScreenReport};
+    use layer_core::color::{RgbSpace, SampleDepth};
+    let mut s = screen_session(RgbSpace::DisplayP3, SampleDepth::U8);
+    let srgb = Chromaticities::of(RgbSpace::Srgb);
+    s.set_screen_report(ScreenReport { wide_color_off: true, ..ScreenReport::managed(Some("Built-in Screen".into()), srgb, false, None, Some(true)) });
+    assert_eq!(chip(&s), None, "sRGB-range colors follow the sRGB convention");
+    s.state.soft_proof = true;
+    assert_eq!(chip(&s), None);
+    s.set_screen_clipped(Some(true));
+    assert_eq!(chip(&s), Some(("Colors clipped", true)));
+    assert_eq!(
+        s.screen_details().unwrap().body.as_deref(),
+        Some("Your operating system is limiting apps to sRGB colors on this screen, although the screen can show more. Turn off saturated or vivid colors in your operating system’s display settings to show them.")
+    );
 }

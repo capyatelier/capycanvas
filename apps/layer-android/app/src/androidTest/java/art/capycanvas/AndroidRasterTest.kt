@@ -980,12 +980,14 @@ class AndroidRasterTest {
         invoke("fit_canvas")
         compose.waitUntil(10_000){screen().getJSONObject("assessment").getString("basis")=="System"}
         val wideScreen=activity.resources.configuration.isScreenWideColorGamut
+        val saturatedWidePanel=!wideScreen&&activity.getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(android.view.Display.DEFAULT_DISPLAY).isWideColorGamut&&
+            ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("getprop persist.sys.sf.native_mode")).use{it.readBytes()}.decodeToString().trim()=="1"
         compose.waitUntil(10_000){refresh();surface().optBoolean("display_wide")==wideScreen}
         val status=surface()
         val p3Surface=wideScreen&&status.getJSONArray("formats").objects().any{
             it.getString("format")==status.getString("format")&&"DISPLAY_P3" in it.getString("color_spaces")}
         compose.waitUntil(10_000){refresh();surface().getString("color_space")==if(p3Surface)"DisplayP3" else "Srgb"}
-        evidence.put("wide_screen",wideScreen).put("surface",surface())
+        evidence.put("wide_screen",wideScreen).put("saturated_wide_panel",saturatedWidePanel).put("surface",surface())
         fill("ProPhoto",listOf(0.0,1.0,0.0,1.0))
         await("ProPhoto green clips"){chip()=="Colors clipped"}
         val green=shot("clipped")
@@ -1012,6 +1014,8 @@ class AndroidRasterTest {
         } else {
             await("Display P3 green clips on sRGB"){chip()=="Colors clipped"}
             shot("display-p3-green")
+            val body=screen().getJSONObject("details").optString("body")
+            if(saturatedWidePanel)assertTrue("The color setting is named: $body",body.startsWith("Your operating system is limiting apps to sRGB colors on this screen"))
         }
         fill("DisplayP3",listOf(0.5,0.5,0.5,1.0))
         await("Gray fits"){screen().optBoolean("clipped",true)==false&&chip()==null}

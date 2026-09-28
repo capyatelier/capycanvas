@@ -332,7 +332,7 @@ impl ViewportPresenter {
         let counter = self.screen_counter.get_or_insert_with(|| {
             crate::present_screen::ScreenCounter::new(&renderer.device, &self.layout, &self.shader)
         });
-        if counter.busy() || counter.current(&signature) {
+        if counter.busy() || counter.current(&signature) || !renderer.background_pipeline_ready(&counter.pipeline) {
             return false;
         }
         let viewport = [camera[8] as u32, camera[9] as u32];
@@ -465,11 +465,12 @@ impl ViewportPresenter {
             label: Some("viewport shader"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\nconst SCREEN_SAMPLE_STRIDE:u32={}u;\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                     format == wgpu::TextureFormat::Rgba16Float,
                     if color == SdrSurfaceColor::WindowsScrgb { 2.5375 } else { 1. },
                     color == SdrSurfaceColor::Bt2100Pq,
                     color == SdrSurfaceColor::ExtendedSrgb,
+                    crate::present_screen::SAMPLE_STRIDE,
                     crate::view_color::matrix_shader("view_bt2020", layer_core::color::hdr::srgb_to_bt2020()),
                     crate::view_color::shader(device.working_space(), color.primaries()),
                     include_str!("sdr_color.wgsl"),

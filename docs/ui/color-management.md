@@ -255,6 +255,14 @@ is on the canvas, and a chip that only reports the absence of a problem trains
 people to ignore the warnings. The app cannot claim the screen is accurate, only
 that nothing it knows of gets in the way.
 
+sRGB follows the platform convention. Where the system sends sRGB to the panel
+unconverted (GNOME's default mode, desktops without color management, Android's
+Saturated color mode), Capy Canvas does the same, so the canvas matches web pages
+and other apps, and that alone is never flagged. The chip speaks only when an
+intended wider or different space can't be shown truthfully: colors clip, or a
+proof is shown on a screen whose colors Capy Canvas can't tell or whose lightest
+tones merge.
+
 Clicking the chip opens a small popover with the screen's name, a one-line
 headline and, when it helps, one or two plain sentences: what the painter is
 seeing, why, and what they can do about it. It never lists values the app
@@ -269,13 +277,14 @@ Write this text for a painter, not an engineer, and for every platform:
 
 - Say what they can't rely on on this screen, why in their terms, and the one
   thing that fixes it. Say nothing when nothing needs fixing.
-- Name real places: HDR in the operating system's display settings, the screen
-  brightness, the buttons on the monitor. The popover shows the next step once
-  that one is done.
+- Name real places: HDR or color settings in the operating system's display
+  settings, the screen brightness. The popover shows the next step once that one
+  is done.
 - Scope every claim to this screen; never imply that HDR or
   proofing is unreliable in general. Don't state consequences that may not
-  apply, and hedge only facts the app cannot know ("if it isn't already").
-- Use one word per thing (screen; monitor only for its buttons) and only terms
+  apply, and hedge only facts the app cannot know.
+- Use one word per thing (screen; monitor only to contrast the physical monitor
+  with how the system treats it) and only terms
   the app already teaches (sRGB, HDR, ×, EV). Say "your operating system" when
   it is the one doing something, and "Capy Canvas can't tell" when the app lacks
   information, so each sentence is true on every platform, including browsers.
@@ -283,19 +292,23 @@ Write this text for a painter, not an engineer, and for every platform:
   checking elsewhere, and no reassurance nobody asked for, such as "your file
   is unchanged".
 
-"May not match print" means the system's conversion is not known to match the
-panel: the screen reports only its signal format (HDR mode), the system assumes
-sRGB for a monitor that reports a wider gamut, white is at the monitor's peak,
-or colors are unmanaged. The system's own description always wins; a
-monitor's declared values only fill what the system leaves unknown and are never
-used to convert artwork.
+"May not match print" means Capy Canvas can't tell how the screen shows the
+proof: the screen reports only its signal format (HDR mode) or no gamut, or
+white is at the screen's peak so the lightest tones merge. The system's own
+description always wins; a monitor's declared values only fill what the system
+leaves unknown and are never used to convert artwork.
 
 Shared Rust (`layer_color::screen`, `UiSession::screen_chip` and
 `screen_details`) owns the assessment, wording and chip rules. Hosts supply a
 `ScreenReport`: the system description of the window's screen and, where
-available, the monitor's EDID. The presenter counts clipped visible pixels in a
-compute pass once the view has been idle for 250 ms, after proof simulation, and
-never during motion.
+available, the monitor's EDID. Once the view has been idle for 250 ms, the
+presenter checks one pixel in every 4×4 block for clipping, after proof
+simulation, and never during motion. The check's pipeline compiles on the
+background shader compiler, never on the render thread, and each workgroup
+records at most one hit. On the tested tablets a check takes 1.3–2.9 ms of GPU
+time and at most 2 ms on the render thread; the first check used to compile
+there for 187–307 ms and full-resolution checks took 5–25 ms. **Highlight these
+colors** still tests every pixel as it is drawn.
 
 - **GTK** reads the compositor's preferred description for the canvas surface
   (`wp_color_management_surface_feedback_v1`) and the monitor's EDID from
@@ -312,7 +325,9 @@ never during motion.
   display prefers 8-bit Display P3, so the canvas and interface agree. Android's
   Saturated color mode disables wide color for every app and sends colors to the
   panel unconverted; the canvas then stays sRGB like the rest of the interface.
-  The idle count runs from the 200 ms tone-status poll.
+  When the display itself is wide gamut and `persist.sys.sf.native_mode` is 1,
+  the report sets `wide_color_off`, and **Colors clipped** names the setting that
+  limits apps to sRGB. The idle count runs from the 200 ms tone-status poll.
 - **Web** reports the `color-gamut` and `dynamic-range` media queries; peak
   brightness is never known. The canvas is sRGB, or extended sRGB for HDR, and
   the idle count runs from the same 200 ms display poll.

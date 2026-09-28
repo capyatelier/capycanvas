@@ -1570,6 +1570,13 @@ impl WgpuRasterizer {
             & startup.compiler.require([&transforms.resample().pipeline], startup::BRUSH)
     }
 
+    pub(crate) fn background_pipeline_ready(&self, pipeline: &deferred::Deferred<wgpu::ComputePipeline>) -> bool {
+        let Some(startup) = &self.startup else { return true };
+        let ready = startup.compiler.require([pipeline], startup::VALIDATION);
+        startup.compiler.start();
+        ready
+    }
+
     /// Whether placed layers compose without compiling on this thread.
     /// Without a background compiler, a frame compiles what they draw with.
     fn placement_ready(&self) -> bool {

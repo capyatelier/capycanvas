@@ -125,7 +125,7 @@ impl ScreenView {
         let (name, monitor) = self.monitor(w);
         let backend = g.session.engine().backend();
         let hdr_capable = monitor.as_ref().map(|m| m.pq_signal);
-        let report = ScreenReport { name, color: backend.screen_color, monitor, hdr_capable };
+        let report = ScreenReport { name, color: backend.screen_color, monitor, hdr_capable, wide_color_off: false };
         #[cfg(test)]
         let report = self.forced.borrow().clone().unwrap_or(report);
         let hdr_surface = backend.display_encoding.is_some();

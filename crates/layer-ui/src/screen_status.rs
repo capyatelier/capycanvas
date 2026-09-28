@@ -146,7 +146,6 @@ impl<R: CanvasRenderer> UiSession<R> {
 }
 
 const DISPLAY_SETTINGS: &str = "your operating system’s display settings";
-const SRGB_MODE: &str = "Your operating system is sending colors as if this monitor’s color mode were sRGB. Use the buttons on the monitor to set its color mode to sRGB, if it isn’t already.";
 
 fn times(value: f32) -> String {
     let tenths = (value * 10.).round();
@@ -154,7 +153,11 @@ fn times(value: f32) -> String {
 }
 
 fn clipped_reason(assessment: &ScreenAssessment) -> Option<String> {
-    if assessment.srgb_on_wide_monitor {
+    if assessment.wide_color_off {
+        Some(format!(
+            "Your operating system is limiting apps to sRGB colors on this screen, although the screen can show more. Turn off saturated or vivid colors in {DISPLAY_SETTINGS} to show them."
+        ))
+    } else if assessment.srgb_on_wide_monitor {
         Some(format!(
             "Your operating system is treating this monitor as a standard sRGB screen, although the monitor can show more colors. Turn on HDR for this monitor in {DISPLAY_SETTINGS} to show them."
         ))
@@ -167,16 +170,14 @@ fn clipped_reason(assessment: &ScreenAssessment) -> Option<String> {
 
 fn proof_caveat(assessment: &ScreenAssessment) -> Option<String> {
     let caveat = match assessment.basis {
-        Basis::System if assessment.srgb_on_wide_monitor => SRGB_MODE.into(),
         Basis::Monitor | Basis::Unknown if assessment.hdr_signal => format!(
             "With HDR on, Capy Canvas can’t tell how this screen shows colors. Turn off HDR for this screen in {DISPLAY_SETTINGS}."
         ),
         Basis::Unknown => "Capy Canvas can’t tell which colors this screen can show.".into(),
-        Basis::Unmanaged => SRGB_MODE.into(),
         Basis::System if assessment.white_at_peak() => {
             "At your current screen brightness, the lightest tones look the same. Lower the screen brightness to tell them apart.".into()
         }
-        Basis::Monitor | Basis::System | Basis::Pending => return None,
+        Basis::Monitor | Basis::System | Basis::Unmanaged | Basis::Pending => return None,
     };
     Some(caveat)
 }

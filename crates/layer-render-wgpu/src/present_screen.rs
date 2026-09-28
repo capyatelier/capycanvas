@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 pub(crate) const UNIFORM_SIZE: u64 = 64;
 const COUNTS_SIZE: u64 = 64 * 4;
 const WORKGROUP: u32 = 8;
+pub(crate) const SAMPLE_STRIDE: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenCheck {
@@ -60,7 +61,7 @@ const MAPPED: u8 = 2;
 const FAILED: u8 = 3;
 
 pub(crate) struct ScreenCounter {
-    pipeline: wgpu::ComputePipeline,
+    pub(crate) pipeline: crate::deferred::Deferred<wgpu::ComputePipeline>,
     counts: wgpu::Buffer,
     group: wgpu::BindGroup,
     readback: wgpu::Buffer,
@@ -70,7 +71,7 @@ pub(crate) struct ScreenCounter {
 }
 
 impl ScreenCounter {
-    pub(crate) fn new(device: &wgpu::Device, viewport: &wgpu::BindGroupLayout, shader: &wgpu::ShaderModule) -> Self {
+    pub(crate) fn new(device: &crate::PipelineDevice, viewport: &wgpu::BindGroupLayout, shader: &wgpu::ShaderModule) -> Self {
         let layout = crate::bindings::layout(device, "screen gamut counts", &[crate::bindings::buffer(
             0,
             wgpu::ShaderStages::COMPUTE,
@@ -89,14 +90,17 @@ impl ScreenCounter {
             bind_group_layouts: &[Some(viewport), Some(&layout)],
             immediate_size: 0,
         });
+        let (compiler, module) = (device.clone(), shader.clone());
         Self {
-            pipeline: device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("screen gamut count"),
-                layout: Some(&pipeline_layout),
-                module: shader,
-                entry_point: Some("screen_count"),
-                compilation_options: Default::default(),
-                cache: None,
+            pipeline: crate::deferred::Deferred::pipeline(move |mode| {
+                mode.compute(&compiler, &wgpu::ComputePipelineDescriptor {
+                    label: Some("screen gamut count"),
+                    layout: Some(&pipeline_layout),
+                    module: &module,
+                    entry_point: Some("screen_count"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
             }),
             group: crate::bindings::group(device, "screen gamut counts", &layout, [counts.as_entire_binding()]),
             counts,
@@ -140,7 +144,11 @@ impl ScreenCounter {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, viewport, &[0]);
             pass.set_bind_group(1, &self.group, &[]);
-            pass.dispatch_workgroups(extent[0].div_ceil(WORKGROUP), extent[1].div_ceil(WORKGROUP), 1);
+            pass.dispatch_workgroups(
+                extent[0].div_ceil(SAMPLE_STRIDE * WORKGROUP),
+                extent[1].div_ceil(SAMPLE_STRIDE * WORKGROUP),
+                1,
+            );
         }
         encoder.copy_buffer_to_buffer(&self.counts, 0, &self.readback, 0, COUNTS_SIZE);
         queue.submit([encoder.finish()]);

@@ -186,7 +186,7 @@ pub extern "system" fn Java_art_capycanvas_Native_displayInfo(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_screenInfo(
-    mut env: JNIEnv, _: JClass, handle: jlong, name: JString, wide: jboolean, hdr: jboolean, peak: jfloat,
+    mut env: JNIEnv, _: JClass, handle: jlong, name: JString, wide: jboolean, panel_wide: jboolean, hdr: jboolean, peak: jfloat,
 ) {
     use layer_color::screen::{Chromaticities, ScreenReport};
     use layer_core::color::RgbSpace;
@@ -195,11 +195,18 @@ pub extern "system" fn Java_art_capycanvas_Native_screenInfo(
     let wide = wide != 0;
     let gamut = Chromaticities::of(if wide { RgbSpace::DisplayP3 } else { RgbSpace::Srgb });
     let hdr = hdr != 0;
-    let report = ScreenReport::managed(name, gamut, hdr, Some(peak), Some(hdr));
+    let wide_color_off = !wide && panel_wide != 0 && saturated_color_mode();
+    let report = ScreenReport { wide_color_off, ..ScreenReport::managed(name, gamut, hdr, Some(peak), Some(hdr)) };
     let wide_changed = std::mem::replace(&mut a.display_wide, wide) != wide;
     if a.host.session.set_screen_report(report) | wide_changed {
         a.host.dirty = true;
     }
+}
+
+fn saturated_color_mode() -> bool {
+    let mut value = [0 as std::ffi::c_char; libc::PROP_VALUE_MAX as usize];
+    let length = unsafe { libc::__system_property_get(c"persist.sys.sf.native_mode".as_ptr(), value.as_mut_ptr()) };
+    length == 1 && value[0] == b'1' as std::ffi::c_char
 }
 
 #[derive(serde::Deserialize)]

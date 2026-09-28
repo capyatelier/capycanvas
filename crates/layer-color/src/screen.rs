@@ -134,6 +134,7 @@ pub struct ScreenReport {
     pub color: ScreenColor,
     pub monitor: Option<edid::Edid>,
     pub hdr_capable: Option<bool>,
+    pub wide_color_off: bool,
 }
 
 impl ScreenReport {
@@ -159,6 +160,7 @@ impl ScreenReport {
             }),
             monitor: None,
             hdr_capable,
+            wide_color_off: false,
         }
     }
 }
@@ -182,6 +184,7 @@ pub struct ScreenAssessment {
     pub signal_peak: Option<f32>,
     pub hdr_signal: bool,
     pub srgb_on_wide_monitor: bool,
+    pub wide_color_off: bool,
 }
 
 const PQ_SIGNAL_PEAK: f32 = 10_000.;
@@ -239,6 +242,7 @@ pub fn assess(report: &ScreenReport) -> ScreenAssessment {
         hdr_signal: matches!(description.transfer, Transfer::Pq | Transfer::Hlg)
             || description.target_peak.is_some_and(|peak| peak > description.reference_white),
         srgb_on_wide_monitor: basis == Basis::System && description.target.near(srgb, 0.004) && wide_monitor,
+        wide_color_off: report.wide_color_off,
     }
 }
 
@@ -348,6 +352,9 @@ mod tests {
         let hdr = assess(&ScreenReport::managed(None, p3, true, None, Some(true)));
         assert_eq!((hdr.basis, hdr.peak, hdr.hdr_signal), (Basis::System, None, true));
         assert!(!hdr.approximate());
+        let srgb = Chromaticities::of(RgbSpace::Srgb);
+        let limited = assess(&ScreenReport { wide_color_off: true, ..ScreenReport::managed(None, srgb, false, None, Some(true)) });
+        assert_eq!((limited.gamut, limited.wide_color_off), (Some(srgb), true));
         let measured = assess(&ScreenReport::managed(None, p3, true, Some(1000.), Some(true)));
         assert_eq!(measured.peak, Some(1000.));
         assert!((measured.headroom() - 1000. / 203.).abs() < 1e-4);
