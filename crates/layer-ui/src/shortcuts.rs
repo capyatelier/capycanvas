@@ -288,14 +288,6 @@ impl BindingScope {
             Self::Tools { categories } => canvas.is_some_and(|c| categories.contains(&c)),
         }
     }
-    /// Whether a kind of tool this scope applies to is offered, so its
-    /// bindings are listed.
-    pub fn offered(&self) -> bool {
-        match self {
-            Self::Tools { categories } => categories.iter().any(|c| crate::shortcut_page::CONTEXTS.contains(c)),
-            _ => true,
-        }
-    }
     pub fn overlaps(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Tools { categories: a }, Self::Tools { categories: b }) => a.iter().any(|c| b.contains(c)),
@@ -490,6 +482,7 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "tools.ink" => key("p", false, false),
         "tools.paint" => key("b", false, false),
         "tools.blend" => key("j", false, false),
+        "tools.retouch" => key("s", false, false),
         "command.Eraser" => key("e", false, false),
         "command.Lasso" => key("m", false, false),
         "command.Move" => key("o", false, false),
@@ -580,7 +573,9 @@ fn command_section(command: CommandId) -> &'static str {
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
         | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent | C::MoveLeaveCopy => "Transform",
         command if CommandId::TOOLS.contains(&command) => "Tools",
-        C::CloneSourceArm => "Painting",
+        C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical | C::CloneResetOffset => {
+            "Painting"
+        }
         C::TonalSelect | C::QuickMask | C::ReturnToArtwork | C::NewSelectionLayer | C::SaveSelectionLayer | C::Reselect
         | C::SelectionOutline | C::MaskOverlay | C::MaskOverlayProtected | C::ResetMaskColors | C::SwapMaskColors
         | C::FillSelectionMask | C::ClearSelectionMask | C::SelectionBrushPressure | C::SelectionNew | C::SelectionAdd
@@ -607,7 +602,7 @@ fn command_section(command: CommandId) -> &'static str {
 }
 
 /// Where a command's keys apply; a more specific scope wins where it is enabled.
-pub(crate) fn command_scope(command: CommandId) -> BindingScope {
+fn command_scope(command: CommandId) -> BindingScope {
     match command {
         CommandId::DeleteRuler => BindingScope::Tools {
             categories: vec![ToolCategory::ShapesRulers, ToolCategory::MoveTransform],

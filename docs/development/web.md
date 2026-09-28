@@ -85,6 +85,7 @@ Journeys by area; the dispatch in `test.mjs` lists them all:
 | --- | --- |
 | Editor smoke, drawing, pen | `--editor`, `--pen`, `--prediction`, `--raster` |
 | Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-readout`, `--move-selection` |
+| Retouching | `--clone` |
 | Color | `--color-panel`, `--color-picker`, `--palettes` |
 | Layers and filters | `--layers`, `--blend-menu`, `--adjustments`, `--filter-drawer`, `--photo-edit`, `--merges` |
 | Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |

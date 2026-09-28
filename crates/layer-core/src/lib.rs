@@ -26,7 +26,7 @@ pub mod raster_storage;
 pub use effect_catalog::*;
 mod layers;
 mod retouch;
-pub use retouch::{Retouch, RetouchSource};
+pub use retouch::{CloneSource, Retouch, RetouchSource};
 mod selection;
 pub mod tonal;
 pub use selection::*;
@@ -474,6 +474,9 @@ pub enum BrushExecution {
     /// time rather than baked into layer pixels.
     Watercolor,
     Liquify,
+    /// Copies the stroke's retouching source through its offset instead of
+    /// laying down a color.
+    Clone,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

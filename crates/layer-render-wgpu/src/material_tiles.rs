@@ -21,7 +21,7 @@ impl WgpuRasterizer {
                 from_persistent: true,
             });
         let plan = BrushPassPlan::for_device(&batch.style, &self.device);
-        let writes_full_page = batch.style.execution == BrushExecution::Dry || from_persistent;
+        let writes_full_page = pointwise(&batch.style) || from_persistent;
         let layer_index = self
             .paint_layers
             .iter()
@@ -152,14 +152,18 @@ impl WgpuRasterizer {
                 self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
                 compute_jobs.clear();
             }
-            let source_bind_group = self.material_source_binding(
-                batch_index,
-                batch,
-                batch_dabs,
-                job.coordinate,
-                preview && !from_persistent,
-                encoder,
-            )?;
+            let source_bind_group = if batch.style.execution == BrushExecution::Clone {
+                self.clone_source_binding(batch, job.coordinate, job.local, preview && !from_persistent, encoder)?
+            } else {
+                self.material_source_binding(
+                    batch_index,
+                    batch,
+                    batch_dabs,
+                    job.coordinate,
+                    preview && !from_persistent,
+                    encoder,
+                )?
+            };
             let (pages, coverage_pages) = if preview {
                 (&self.preview_pages, &self.preview_coverage_pages)
             } else {
@@ -181,7 +185,7 @@ impl WgpuRasterizer {
                     }
                 });
             let coverage_view = coverage_surface.map(|p| &p.view);
-            let record_offset = if batch.style.execution == BrushExecution::Dry {
+            let record_offset = if pointwise(&batch.style) {
                 self.dry_records.offset(record_index)
             } else {
                 0

@@ -4,11 +4,12 @@ use crate::{CommandId, GESTURE_TRIGGERS, GestureTrigger, ModifierKeyAction, Modi
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) const CONTEXTS: [ToolCategory; 10] = [
+pub(crate) const CONTEXTS: [ToolCategory; 11] = [
     ToolCategory::Drawing,
     ToolCategory::Erasing,
     ToolCategory::Blending,
     ToolCategory::Warping,
+    ToolCategory::Retouching,
     ToolCategory::Selection,
     ToolCategory::FillGradient,
     ToolCategory::ShapesRulers,
@@ -229,8 +230,6 @@ fn target_label(all: &[(ShortcutDefinition, &str)], target: &str) -> String {
 }
 
 fn actions_summary(all: &[(ShortcutDefinition, &str)], actions: &std::collections::BTreeMap<ToolCategory, String>) -> (String, String) {
-    let actions: std::collections::BTreeMap<_, _> =
-        actions.iter().filter(|(c, _)| CONTEXTS.contains(c)).map(|(c, a)| (*c, a.clone())).collect();
     let mut targets: Vec<&String> = actions.values().collect();
     targets.sort();
     targets.dedup();
@@ -348,12 +347,15 @@ pub(crate) fn modifier_rows(settings: &Settings, platform: Platform, state: &Sho
         .hold_keys(platform)
         .into_iter()
         .map(|hold| {
-            let (action, detail) = actions_summary(&all, &hold.actions);
+            let (action, detail) = match state.context.and_then(|category| hold.actions.get(&category)) {
+                Some(target) => (target_label(&all, target), String::new()),
+                None => actions_summary(&all, &hold.actions),
+            };
             let label = hold.key.label(platform);
             let modified = !defaults.contains(&hold);
             let bound = match state.context {
                 Some(category) => hold.actions.contains_key(&category),
-                None => hold.actions.keys().any(|c| CONTEXTS.contains(c)),
+                None => !hold.actions.is_empty(),
             };
             let matched = match &state.key {
                 Some(key) => *key == hold.key,
@@ -417,7 +419,7 @@ pub(crate) fn unify_modifier(settings: &mut Settings, platform: Platform, key: &
 
 pub(crate) fn rows(settings: &Settings, platform: Platform, state: &ShortcutPageState, query: &str) -> Vec<ShortcutRow> {
     let all = definitions(platform);
-    let mut presses: Vec<_> = all.iter().filter(|(d, _)| d.target.is_none() && d.scope.offered()).collect();
+    let mut presses: Vec<_> = all.iter().filter(|(d, _)| d.target.is_none()).collect();
     presses.sort_by_key(|(definition, section)| {
         (SHORTCUT_SECTIONS.iter().position(|s| s == section), !definition.id.starts_with("tools."))
     });

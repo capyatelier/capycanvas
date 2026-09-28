@@ -361,7 +361,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         working.colors.set_rgb_space(space)?;
         working.colors.set_document_depth(self.engine.document().color.depth)?;
         let mut brush = working.tools.brush_in(preset(working.preset)?, space);
-        brush.color_rgba_linear = working.colors.definition().linear_in(space)?;
+        let (color, stroke_tool) = stroke_paint(tools::group(working.preset).tool(), &working.colors, space)?;
+        brush.color_rgba_linear = color;
         // This is the only fallible mutation; CanvasEngine validates before setting.
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.engine.set_paint_color(working.colors.definition());
@@ -397,13 +398,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.tonal_tools = Default::default();
         self.selection_tools = selection_tools::SelectionTools::default();
         self.selection_tools.options = working.selection;
-        self.engine.set_tool(
-            if self.state.brush.tool == Tool::Eraser || self.state.colors.transparent() {
-                StrokeTool::Eraser
-            } else {
-                StrokeTool::Brush
-            },
-        );
+        self.engine.set_tool(stroke_tool);
         self.state.customization = CustomizationState::default();
         self.eyedropper.cancel();
         self.eyedropper.picking = Default::default();

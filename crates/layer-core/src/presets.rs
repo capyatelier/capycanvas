@@ -56,6 +56,7 @@ pub enum DefaultBrushPreset {
     LiquifyPinch = 37,
     LiquifyExpand = 38,
     LiquifyCrystals = 39,
+    CloneStamp = 40,
 }
 
 /// Returns a complete immutable preset snapshot. Callers may override color,
@@ -302,6 +303,19 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
                 pressure: 1.0,
                 momentum: 0.0,
                 distortion: 0.6,
+            },
+            mappings: Arc::from([BrushMapping::pressure_size()]),
+            ..BrushSnapshot::default()
+        },
+        DefaultBrushPreset::CloneStamp => BrushSnapshot {
+            diameter: 160.0,
+            hardness: 0.5,
+            flow: 1.0,
+            spacing: 0.08,
+            execution: BrushExecution::Clone,
+            rendering: BrushRendering {
+                accumulation: BrushAccumulation::Uniform,
+                ..BrushRendering::default()
             },
             mappings: Arc::from([BrushMapping::pressure_size()]),
             ..BrushSnapshot::default()
@@ -720,6 +734,7 @@ mod tests {
             DefaultBrushPreset::LiquifyPinch,
             DefaultBrushPreset::LiquifyExpand,
             DefaultBrushPreset::LiquifyCrystals,
+            DefaultBrushPreset::CloneStamp,
             DefaultBrushPreset::MultiplyGlaze,
             DefaultBrushPreset::TexturedFlat,
             DefaultBrushPreset::DryScumble,

@@ -16,8 +16,8 @@ use crate::input::{
     ViewTransform,
 };
 use layer_core::{
-    BrushError, BrushExecution, BrushSnapshot, Document, DocumentError, DrawingRefusal, Edit,
-    Editor, LayerId, Rect, Retouch, RetouchSource, Stroke, StrokeId, StrokeTool,
+    BrushError, BrushExecution, BrushSnapshot, CloneSource, Document, DocumentError, DrawingRefusal,
+    Edit, Editor, LayerId, Rect, Retouch, RetouchSource, Stroke, StrokeId, StrokeTool,
 };
 use layer_render::{
     CanvasRenderer, Dab, DabBatch, DabBatchKind, DabStyle, FramePacket, RetouchPreparation,
@@ -77,6 +77,11 @@ pub enum StrokeRefusal {
     /// A retouching stroke would copy nothing: its layer is empty and it
     /// samples no reference layer below.
     EmptySource(RetouchSource),
+    /// The Clone tool has no source point yet.
+    NoCloneSource,
+    /// Retouching reads and writes the layer's own pixels, which a rotated or
+    /// scaled layer does not line up with.
+    TransformedLayer,
 }
 
 #[derive(Clone, Copy)]
@@ -105,6 +110,8 @@ struct ActiveStroke {
     /// The renderer could not sample this retouching stroke's whole source
     /// while the pen was down.
     replay_after_contact: bool,
+    /// The Clone source as this stroke found it, before anchoring it.
+    clone_start: Option<CloneSource>,
 }
 
 pub struct CanvasEngine<B: CanvasRenderer> {
@@ -121,6 +128,9 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     brush: BrushSnapshot,
     tool: StrokeTool,
     retouch: Option<RetouchSource>,
+    clone_source: CloneSource,
+    /// The live clone stroke's document offset.
+    clone_stroke: Option<[f32; 2]>,
     retouch_points: Vec<layer_core::Point>,
     prepared_retouch: Option<(Arc<str>, layer_core::Revision, RetouchPreparation)>,
     instant_feedback: InstantFeedbackConfig,
@@ -132,6 +142,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     completed_stroke: Option<Stroke>,
     completed_at: Option<web_time::Instant>,
     completed_before: Option<layer_core::raster::RasterRevision>,
+    completed_clone_start: Option<CloneSource>,
     restore_rasters: Vec<(LayerId, layer_core::raster::RasterRevision)>,
     pending_frame: Option<(bool, f32)>,
     rebuild_completed: bool,
@@ -217,6 +228,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             brush: BrushSnapshot::default(),
             tool: StrokeTool::Brush,
             retouch: None,
+            clone_source: CloneSource::default(),
+            clone_stroke: None,
             retouch_points: Vec::new(),
             prepared_retouch: None,
             instant_feedback: InstantFeedbackConfig::default(),
@@ -228,6 +241,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             completed_stroke: None,
             completed_at: None,
             completed_before: None,
+            completed_clone_start: None,
             restore_rasters: Vec::new(),
             pending_frame: None,
             rebuild_completed: false,
@@ -828,12 +842,31 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     /// Document points a retouching stroke is likely to sample next, such as
-    /// its source and the hovering pen. The renderer may cache around them.
+    /// its source and the hovering pen. The renderer may cache around them,
+    /// so each is kept as the center of its raster tile.
     pub fn set_retouch_points(&mut self, points: &[layer_core::Point]) {
+        let tile = layer_core::raster::TILE_SIZE as f32;
+        let center = |v: f32| (v / tile).floor() * tile + tile / 2.;
+        let points: Vec<_> = points.iter().map(|p| layer_core::Point { x: center(p.x), y: center(p.y) }).collect();
         if self.retouch_points != points {
-            self.retouch_points = points.to_vec();
+            self.retouch_points = points;
             self.refresh_retouch();
         }
+    }
+
+    /// Where the Clone tool copies from. Strokes anchor and move an aligned
+    /// source as they start and end.
+    pub fn clone_source(&self) -> CloneSource {
+        self.clone_source
+    }
+
+    pub fn set_clone_source(&mut self, source: CloneSource) {
+        self.clone_source = source;
+    }
+
+    /// The document offset the Clone stroke in contact copies with.
+    pub fn clone_stroke_offset(&self) -> Option<[f32; 2]> {
+        self.clone_stroke.filter(|_| self.active_stroke.is_some())
     }
 
     /// Tell the renderer what the selected retouching tool will sample, when
@@ -858,10 +891,35 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.prepared_retouch = prepared.map(|p| (document.id.clone(), document.revision, p));
     }
 
+    /// Map the Clone stroke starting at `first`, in brush space shifted by the
+    /// target's `offset`, to its source.
+    fn begin_clone_stroke(&mut self, first: layer_core::Point, offset: layer_core::Point) {
+        let Some(active) = self.active_stroke.as_mut().filter(|a| a.brush.execution == BrushExecution::Clone) else {
+            return;
+        };
+        active.clone_start = Some(self.clone_source);
+        let first = layer_core::Point { x: first.x + offset.x, y: first.y + offset.y };
+        self.clone_stroke = self.clone_source.begin_stroke(first);
+        if let (Some(offset), Some(retouch)) = (self.clone_stroke, active.style.retouch.take()) {
+            active.style.retouch = Some(clone_mapping(self.editor.document(), active.layer_id, retouch, offset, self.clone_source.flip));
+        }
+    }
+
+    /// A corrected first point moves where the live Clone stroke anchors.
+    fn reanchor_clone_stroke(&mut self) {
+        let Some(active) = self.active_stroke.as_ref() else { return };
+        if let Some(start) = active.clone_start {
+            self.clone_source = start;
+            let first = self.builder.real_points()[0].position;
+            self.begin_clone_stroke(first, self.document().layer_offset(active.layer_id));
+        }
+    }
+
     /// The completed stroke can no longer be corrected or replayed.
     fn end_corrections(&mut self) {
         self.completed_stroke = None;
         self.completed_before = None;
+        self.completed_clone_start = None;
         self.completed_at = None;
         self.estimates.clear();
         self.backend.retire_stroke_sources();
@@ -881,8 +939,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     /// Restore the completed stroke's layer and paint the stroke again, as a
-    /// late correction does, amending its history entry.
+    /// late correction does, amending its history entry. A Clone stroke maps
+    /// its possibly corrected first point from the source it found.
     fn replay_completed(&mut self) -> Result<(), DocumentError> {
+        if let (Some(mut start), Some(stroke)) = (self.completed_clone_start, self.completed_stroke.as_mut())
+            && let (Some(retouch), Some(first)) = (stroke.retouch.take(), stroke.points.first())
+        {
+            let shift = self.editor.document().layer_offset(stroke.layer_id);
+            let first = layer_core::Point { x: first.position.x + shift.x, y: first.position.y + shift.y };
+            let offset = start.begin_stroke(first).unwrap_or(retouch.offset);
+            stroke.retouch = Some(clone_mapping(self.editor.document(), stroke.layer_id, retouch, offset, start.flip));
+        }
         let Some((stroke, before)) = self.completed_stroke.as_ref().zip(self.completed_before.as_ref()) else {
             return Ok(());
         };
@@ -894,11 +961,18 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    /// Whether a retouching stroke on `target` would copy nothing.
-    fn empty_retouch_source(&self, target: LayerId) -> Option<StrokeRefusal> {
+    /// Why a retouching stroke on `target` would copy nothing.
+    fn retouch_refusal(&self, target: LayerId) -> Option<StrokeRefusal> {
         let source = self.retouch?;
         let document = self.document();
         let layer = document.layer(target)?;
+        let layer_core::Affine([a, b, c, d, ..]) = document.layer_transform(target);
+        if [a, b, c, d] != [1., 0., 0., 1.] {
+            return Some(StrokeRefusal::TransformedLayer);
+        }
+        if self.brush.execution == BrushExecution::Clone && self.clone_source.point.is_none() {
+            return Some(StrokeRefusal::NoCloneSource);
+        }
         let empty = layer.source.is_none()
             && layer.raster.try_data().is_some_and(|data| data.is_ok_and(|data| data.tiles.is_empty()));
         (empty && Retouch::for_target(document, target, source).references.is_empty())
@@ -915,7 +989,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             {
                 Some(StrokeRefusal::DryMask)
             }
-            Ok(target) => self.empty_retouch_source(target.layer),
+            Ok(target) => self.retouch_refusal(target.layer),
         }
     }
 
@@ -1553,7 +1627,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 else {
                     return Ok(());
                 };
-                if self.empty_retouch_source(layer_id).is_some() {
+                if self.retouch_refusal(layer_id).is_some() {
                     return Ok(());
                 }
                 let id = self.editor.allocate_stroke_id();
@@ -1603,7 +1677,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         && tool == StrokeTool::Brush
                         && !matches!(
                             brush.execution,
-                            BrushExecution::Smudge | BrushExecution::Liquify
+                            BrushExecution::Smudge | BrushExecution::Liquify | BrushExecution::Clone
                         )
                         && brush.opacity > 0.
                         && brush.flow > 0.
@@ -1623,6 +1697,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     material_updates: Vec::new(),
                     ruler,
                     replay_after_contact: false,
+                    clone_start: None,
                 };
                 self.active_stroke = Some(active);
                 self.recording.begin(
@@ -1652,6 +1727,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .real_points()
                     .last()
                     .expect("begin adds a point");
+                self.begin_clone_stroke(point.position, offset);
                 if !self
                     .active_stroke
                     .as_ref()
@@ -1718,6 +1794,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 let active = self.active_stroke.take().expect("checked above");
                 self.recording.end(false);
                 let points = self.builder.finish().unwrap_or_default();
+                if self.clone_stroke.take().is_some()
+                    && let Some(last) = points.last()
+                {
+                    self.clone_source
+                        .end_stroke(layer_core::Point { x: last.position.x + offset.x, y: last.position.y + offset.y });
+                }
                 let replay = active.brush.taper.end_distance_diameters > 0.0 || active.replay_after_contact;
                 let alpha_locked = active.style.alpha_locked;
                 let mut stroke = Stroke::new(
@@ -1735,6 +1817,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.completed_stroke = Some(stroke);
                 self.completed_at = Some(web_time::Instant::now());
                 self.completed_before = Some(active.before);
+                self.completed_clone_start = active.clone_start;
                 self.editor
                     .perform(Edit::SetRaster {
                         target: active.layer_id,
@@ -2218,11 +2301,18 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         self.builder.cancel();
         self.active_stroke = None;
+        self.clone_stroke = None;
         self.pending_smudge_dabs.clear();
         self.finalized_real_points = 0;
         self.dab_generator.reset();
         self.rebuild_all = true;
     }
+}
+
+/// `retouch` copying through the document offset `offset`, in `layer`'s pixels.
+fn clone_mapping(document: &Document, layer: LayerId, retouch: Retouch, offset: [f32; 2], flip: [bool; 2]) -> Retouch {
+    let layer_core::Affine([.., x, y]) = document.layer_transform(layer);
+    retouch.cloning(offset, flip, layer_core::Point { x, y })
 }
 
 fn push_batches(batches: &mut Vec<DabBatch>, dabs: &[Dab], batch: DabBatch) {
@@ -2251,7 +2341,7 @@ fn push_batches(batches: &mut Vec<DabBatch>, dabs: &[Dab], batch: DabBatch) {
         // contacts together avoids repeated full-page color/coverage copies;
         // persistent replay keeps the fixed microbatch boundary below.
         (BrushExecution::Watercolor, DabBatchKind::Preview) => u32::MAX,
-        (BrushExecution::Dry, _) => u32::MAX,
+        (BrushExecution::Dry | BrushExecution::Clone, _) => u32::MAX,
         (BrushExecution::Wet | BrushExecution::Watercolor, _) => MAX_WET_DABS_PER_BATCH,
         (BrushExecution::Liquify, _) => 1,
         (BrushExecution::Smudge, _) => unreachable!("handled above"),
@@ -2286,7 +2376,7 @@ fn push_batches(batches: &mut Vec<DabBatch>, dabs: &[Dab], batch: DabBatch) {
 
 fn push_mergeable_batch(batches: &mut Vec<DabBatch>, dabs: &[Dab], batch: DabBatch) {
     if let Some(last) = batches.last_mut()
-        && (batch.style.execution == BrushExecution::Dry
+        && (matches!(batch.style.execution, BrushExecution::Dry | BrushExecution::Clone)
             || (matches!(
                 batch.style.execution,
                 BrushExecution::Wet | BrushExecution::Watercolor
@@ -2584,7 +2674,7 @@ mod tests {
         let prepared = engine.backend().retouch.last().cloned().flatten().unwrap();
         assert_eq!(prepared.target, target);
         assert_eq!(*prepared.retouch.references, [LayerId(40)].into());
-        assert_eq!(prepared.points, [Point { x: 8., y: 8. }]);
+        assert_eq!(prepared.points, [Point { x: 128., y: 128. }], "a focus point is kept as its tile's center");
         let sent = engine.backend().retouch.len();
         engine.render_frame().unwrap();
         assert_eq!(engine.backend().retouch.len(), sent, "an unchanged tool is prepared once");
@@ -2683,6 +2773,66 @@ mod tests {
         assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::Target(DrawingRefusal::Mask)));
         engine.set_retouch(None);
         assert_eq!(engine.stroke_refusal(&down), None, "ordinary brushes still paint masks");
+    }
+
+    fn clone_stroke(engine: &mut CanvasEngine<RecordingRenderer>, input: &mut InputProducer<PenEvent>, sequence: u64, x: f32) -> Stroke {
+        for (i, phase) in [PenPhase::Down, PenPhase::Move, PenPhase::Up].into_iter().enumerate() {
+            input.push(event(sequence + i as u64, phase, x + 6. * i as f32)).unwrap();
+            engine.render_frame().unwrap();
+        }
+        let stroke = engine.completed_stroke.clone().unwrap();
+        let mapping = stroke.retouch.clone().unwrap();
+        assert!(engine.backend().styles.iter().rev().take(1).all(|s| s.retouch.as_ref() == Some(&mapping)));
+        stroke
+    }
+
+    #[test]
+    fn clone_strokes_copy_through_their_source_and_an_aligned_source_follows_them() {
+        let (mut input, mut engine) =
+            engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
+        engine.apply_edit(Edit::SetReferences([LayerId(40)].into())).unwrap();
+        engine.set_brush(default_brush(DefaultBrushPreset::CloneStamp)).unwrap();
+        engine.set_retouch(Some(RetouchSource::References));
+        let down = event(1, PenPhase::Down, 8.);
+        assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::NoCloneSource));
+        input.push(down).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.active_stroke.is_none(), "a clone without a source paints nothing");
+        let at = |x, y| Point { x, y };
+        engine.set_clone_source(CloneSource { point: Some(at(40., 30.)), ..CloneSource::default() });
+        assert_eq!(engine.stroke_refusal(&down), None);
+
+        let first = clone_stroke(&mut engine, &mut input, 10, 8.);
+        let start = first.points[0].position;
+        let end = first.points.last().unwrap().position;
+        let offset = [40. - start.x, 30. - start.y];
+        assert_eq!(first.retouch.as_ref().unwrap().offset, offset);
+        assert_eq!(engine.clone_source().offset, Some(offset), "an aligned source keeps its first offset");
+        assert_eq!(engine.clone_source().point, Some(at(end.x + offset[0], end.y + offset[1])), "and follows the stroke");
+        assert_eq!(engine.clone_stroke_offset(), None);
+        let second = clone_stroke(&mut engine, &mut input, 20, 30.);
+        assert_eq!(second.retouch.as_ref().unwrap().offset, offset);
+
+        engine.set_clone_source(CloneSource { point: Some(at(40., 30.)), aligned: false, ..CloneSource::default() });
+        let loose = clone_stroke(&mut engine, &mut input, 30, 20.);
+        let start = loose.points[0].position;
+        assert_eq!(loose.retouch.as_ref().unwrap().offset, [40. - start.x, 30. - start.y], "each stroke starts at the source");
+        assert_eq!(engine.clone_source().point, Some(at(40., 30.)));
+
+        let mut moved = engine.document().layer(engine.document().active_layer).unwrap().clone();
+        moved.properties.offset = at(4., 6.);
+        engine.apply_edit(Edit::ReplaceLayer(Box::new(moved.clone()))).unwrap();
+        engine.set_clone_source(CloneSource { point: Some(at(40., 30.)), flip: [true, false], ..CloneSource::default() });
+        let flipped = clone_stroke(&mut engine, &mut input, 40, 20.);
+        let first = flipped.points[0].position;
+        let first = at(first.x + 4., first.y + 6.);
+        let mapping = flipped.retouch.unwrap();
+        assert_eq!(mapping.flip, [true, false]);
+        assert_eq!(mapping.offset, [40. + first.x - 8., 30. - first.y], "layer pixels map through the layer's position");
+
+        moved.properties.placement = layer_core::Affine([2., 0., 0., 2., 0., 0.]);
+        engine.apply_edit(Edit::ReplaceLayer(Box::new(moved))).unwrap();
+        assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::TransformedLayer));
     }
 
     #[test]

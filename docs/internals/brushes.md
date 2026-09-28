@@ -73,8 +73,8 @@ fixes what it copies at pen-down, in the stroke's
 [`Retouch`](../../crates/layer-core/src/retouch.rs): the reference layers below
 the editing layer with the editing layer over them, or the editing layer alone.
 With no reference below, the editing layer alone is the source. A stroke that
-would copy nothing from an empty layer, or that would paint a mask, is refused
-with a notice.
+would copy nothing from an empty layer, that would paint a mask, or whose layer
+is scaled or rotated, is refused with a notice.
 
 The renderer keeps the source apart from the pages the stroke paints
 ([`retouch_sources.rs`](../../crates/layer-render-wgpu/src/retouch_sources.rs)):
@@ -98,6 +98,36 @@ upload or wait for the GPU: a reference page that would need filter images, a
 decode or a wait stays empty, and the stroke is reported as a miss. The engine
 replays it once contact ends, as it replays an end taper, and the replay stays
 one undo step.
+
+## Clone Stamp
+
+The Clone Stamp (`BrushExecution::Clone`) lays the source down with the brush's
+tip, opacity and flow. Each document's engine keeps its
+[`CloneSource`](../../crates/layer-core/src/retouch.rs): the source point, the
+Aligned flag, the flips and, once an aligned stroke has started, its offset.
+
+- **Mapping.** A stroke copies document point `p` from `flip · p + offset`. It
+  takes the offset at pen-down: the kept offset when Aligned has one, otherwise
+  the source point minus the stroke's first point. Aligned keeps that offset for
+  later strokes and moves the source point to where the stroke left off; Reset
+  Offset and setting the source start again at the source point. The stroke
+  records the mapping in the editing layer's pixels, and a corrected first point
+  maps it again, so replays match a direct stroke.
+- **Pass.** Clone runs on the fragment path, one page at a time: it gathers the
+  source for the page's dirty rectangle into the first material sample field,
+  bound in the reservoir slot, then deposits. The deposit is the dry loop with
+  the gathered straight color, its coverage scaling each dab; with stroke-uniform
+  accumulation the dabs compose to exactly the source's coverage times the
+  stroke's. Selection clipping and alpha lock apply as for any dry brush, and
+  tiles, dab ranges and damage stay per page.
+- **Source disc.** The session draws the disc from cursor segments and sets a new
+  document's source in the middle of the view when the tool is first selected.
+  Set Source (held Alt, a bound side button, or its button for one contact) makes
+  the next pen or mouse contact set the source; a finger never does. The disc
+  drags at once with every device, and a tap shows the
+  [clone source bar](../ui/canvas-action-bar.md#contexts).
+
+Only translation is supported: the source is not rotated or scaled.
 
 ## Performance and mobile devices
 

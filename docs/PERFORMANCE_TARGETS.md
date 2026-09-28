@@ -98,7 +98,7 @@ Measured on 2026-09-27 at `be5a7c38`:
 | --- | --- |
 | [Measuring performance](performance/measuring.md) | Frame definitions, pass criteria, the soft-target bandwidth rule and benchmark commands |
 | [Tier hardware](performance/hardware.md) | SoC, CPU, GPU, registers, tile memory, bandwidth, RAM, display and public benchmark scores, with comparable hardware |
-| [Brush classes](performance/brush-classes.md) | Class of each of the 38 presets and the reason for it |
+| [Brush classes](performance/brush-classes.md) | Class of each of the 39 presets and the reason for it |
 | [Low tier](performance/low-tier.md), [Mid tier](performance/mid-tier.md), [Top tier](performance/top-tier.md) | Every operation and brush with its target and newest measurement |
 | [Responsiveness](performance/responsiveness.md) | Latency limits for taps, pen-down, undo, selections, launch and open |
 | [Known gaps](performance/known-gaps.md) | Failures, unmeasured areas and missing harnesses |

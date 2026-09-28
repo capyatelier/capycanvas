@@ -13,12 +13,12 @@ fn command_catalog_covers_live_commands_and_keeps_legacy_bindings() {
         let id = format!("command.{}", wire.as_str().unwrap());
         if s.proof_panel_command(command) {
             assert!(!ids.iter().any(|v| **v == id), "the Proof panel owns {command:?}");
-        } else if command.offered_on(Platform::Gtk) {
+        } else if command.available_on(Platform::Gtk) {
             let d = catalog.iter().find(|d| d.id == id).unwrap();
             assert_eq!(d.enabled, s.command(command).enabled, "{command:?}");
             assert_eq!(d.disabled_reason.is_some(), !d.enabled);
         } else {
-            assert!(!ids.iter().any(|v| **v == id), "unlisted {command:?}");
+            assert!(!ids.iter().any(|v| **v == id), "retired {command:?}");
         }
     }
     assert_eq!(

@@ -22,7 +22,7 @@ fn every_tool_brush_and_mode_can_be_held_by_a_button_or_modifier_key() {
     let modifiers: Vec<_> = view.shortcut_page.modifiers.iter().map(|m| (m.label.as_str(), m.action.as_str(), m.detail.as_str())).collect();
     assert_eq!(modifiers, [
         ("Space", "Pan", ""),
-        ("Alt", "Sample color", "With drawing, blending and fill and gradient tools"),
+        ("Alt", "Depends on the tool", "Set source · Sample color"),
     ]);
 }
 
@@ -94,7 +94,7 @@ fn modifier_keys_choose_an_action_per_kind_of_tool() {
     held_key(&mut s, "Control_L", false, Modifiers { command: true, ..Modifiers::default() });
     preference(&mut s, PreferenceAction::ModifierKeyPerTool { key: control.clone(), per_tool: true });
     let editor = s.preferences().unwrap().modifier_editor.unwrap();
-    assert_eq!(editor.actions.len(), 10, "one row per kind of tool");
+    assert_eq!(editor.actions.len(), 11, "one row per kind of tool");
     preference(&mut s, PreferenceAction::OpenModifierPicker { key: control.clone(), category: Some(ToolCategory::Selection) });
     let picker = s.preferences().unwrap().shortcut_page.picker.unwrap();
     assert_eq!(picker.title, "Ctrl · Selection tools");
@@ -254,7 +254,7 @@ fn pen_buttons_choose_hold_or_one_shot_actions_per_kind_of_tool() {
     let editor = s.preferences().unwrap().pen_button_editor.unwrap();
     assert_eq!((editor.label.as_str(), editor.actions.len()), ("Lower side button", 1));
     preference(&mut s, PreferenceAction::PenButtonPerTool { trigger: "pen.button.primary".into(), per_tool: true });
-    assert_eq!(s.preferences().unwrap().pen_button_editor.unwrap().actions.len(), 10);
+    assert_eq!(s.preferences().unwrap().pen_button_editor.unwrap().actions.len(), 11);
     for (category, action) in [(ToolCategory::Drawing, "command.Eyedropper"), (ToolCategory::Selection, "command.Undo")] {
         preference(&mut s, PreferenceAction::OpenPenButtonPicker { trigger: "pen.button.primary".into(), category: Some(category) });
         let picker = s.preferences().unwrap().shortcut_page.picker.unwrap();
@@ -286,7 +286,7 @@ fn pen_buttons_choose_hold_or_one_shot_actions_per_kind_of_tool() {
 }
 
 #[test]
-fn set_source_holds_with_retouching_tools_and_stays_unlisted_until_one_exists() {
+fn set_source_holds_with_retouching_tools_and_is_listed_with_them() {
     let definitions = crate::shortcuts::definitions(Platform::Gtk);
     let hold = crate::shortcuts::hold_id("command.CloneSourceArm").unwrap();
     let (held, _) = definitions.iter().find(|(d, _)| d.id == hold).unwrap();
@@ -313,15 +313,16 @@ fn set_source_holds_with_retouching_tools_and_stays_unlisted_until_one_exists() 
     assert!(!set_source.enabled && set_source.checkable);
     assert_eq!(s.command_disabled_reason(CommandId::CloneSourceArm).as_deref(), Some("Choose a retouching tool first"));
     assert!(s.dispatch(UiAction::Invoke { command: CommandId::CloneSourceArm }).is_err());
-    assert!(!CommandId::CloneSourceArm.offered_on(Platform::Gtk));
-    assert!(s.command_catalog().iter().all(|d| !d.id.contains("CloneSourceArm")), "search lists no placeholder");
+    invoke(&mut s, CommandId::Clone);
+    assert!(s.command(CommandId::CloneSourceArm).enabled);
+    assert!(s.command_catalog().iter().any(|d| d.id == "command.clone_source_arm"), "search lists Set Source");
     assert!(crate::customization::tool_catalog(Platform::Gtk)
         .iter()
-        .all(|c| c.control != crate::ToolbarControl::Command { command: CommandId::CloneSourceArm }));
+        .any(|c| c.control == crate::ToolbarControl::Command { command: CommandId::CloneSourceArm }));
     s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
     let view = s.preferences().unwrap();
-    assert!(view.shortcuts.iter().all(|r| r.id != "command.CloneSourceArm"));
-    assert!(view.shortcut_page.contexts.iter().all(|c| c.category != Some(ToolCategory::Retouching)));
+    assert!(view.shortcuts.iter().any(|r| r.id == "command.CloneSourceArm"));
+    assert!(view.shortcut_page.contexts.iter().any(|c| c.category == Some(ToolCategory::Retouching)));
     let pen = view.shortcut_page.triggers.iter().find(|t| t.id == "pen.button.primary").unwrap();
-    assert_eq!(pen.action, "Nothing", "a binding for retouching alone is not summarized yet");
+    assert!(pen.action.contains("source"), "{}", pen.action);
 }

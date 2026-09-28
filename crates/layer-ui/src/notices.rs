@@ -59,6 +59,10 @@ fn stroke_refusal_text(refusal: StrokeRefusal) -> &'static str {
         StrokeRefusal::EmptySource(RetouchSource::References) => {
             "This layer is empty, and there's no layer below it to copy from"
         }
+        StrokeRefusal::NoCloneSource => "Choose where to copy from first",
+        StrokeRefusal::TransformedLayer => {
+            "This layer is scaled or rotated, so it can't be retouched directly. Retouch on a new layer above it."
+        }
     }
 }
 
@@ -143,6 +147,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         match refusal {
             Some(StrokeRefusal::EmptySource(RetouchSource::References)) if self.reference_below().is_some() => self
                 .offer_reference_below("This layer is empty, and no reference layer below it is marked"),
+            Some(StrokeRefusal::NoCloneSource) => self.raise_notice(
+                stroke_refusal_text(StrokeRefusal::NoCloneSource).into(),
+                Some((CommandId::CloneSourceArm.label().into(), UiAction::Invoke { command: CommandId::CloneSourceArm })),
+            ),
             Some(refusal) => self.notify(stroke_refusal_text(refusal)),
             None => {}
         }

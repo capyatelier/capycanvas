@@ -427,17 +427,25 @@ enum MaterialOperation {
     Smudge = 3,
     Wet = 4,
     Watercolor = 5,
+    Clone = 6,
 }
 
 impl MaterialOperation {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Deposit,
         Self::Coverage,
         Self::Liquify,
         Self::Smudge,
         Self::Wet,
         Self::Watercolor,
+        Self::Clone,
     ];
+}
+
+/// Brushes whose output pixels read only the same pixel of their destination
+/// and of per-page inputs, so tiles, dab ranges and damage stay per page.
+fn pointwise(style: &layer_render::DabStyle) -> bool {
+    matches!(style.execution, BrushExecution::Dry | BrushExecution::Clone)
 }
 
 #[repr(usize)]
@@ -543,6 +551,7 @@ impl BrushPassPlan {
             BrushExecution::Smudge => MaterialOperation::Smudge,
             BrushExecution::Wet => MaterialOperation::Wet,
             BrushExecution::Watercolor => MaterialOperation::Watercolor,
+            BrushExecution::Clone => MaterialOperation::Clone,
             BrushExecution::Dry if state.coverage => MaterialOperation::Coverage,
             BrushExecution::Dry => MaterialOperation::Deposit,
         };
@@ -2033,7 +2042,7 @@ impl WgpuRasterizer {
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let in_place = self.in_place_dry_material(batch);
         let offsets = std::array::from_fn::<_, 9, _>(|i| {
-            if in_place || ((batch.style.execution == BrushExecution::Dry || gathered.is_some()) && i != 4) {
+            if in_place || ((pointwise(&batch.style) || gathered.is_some()) && i != 4) {
                 // Dry paint reads only its destination pixel. Completed gather
                 // fields already contain nonlocal smudge/liquify samples.
                 // Neither needs to decode or bind surrounding source tiles.
@@ -2088,7 +2097,7 @@ impl WgpuRasterizer {
             &self.dab_buffer,
             coverage,
             gathered.map_or(auxiliary, |g| g.0),
-            if batch.style.execution == BrushExecution::Dry {
+            if pointwise(&batch.style) {
                 wgpu::BindingResource::Buffer(self.dry_records.binding())
             } else { gathered.map_or(&self.material_source_meta, |g| g.1).as_entire_binding() },
         );
@@ -2475,7 +2484,7 @@ impl WgpuRasterizer {
             dry_material::prepare_film(&batch.style, &mut self.dab_upload[range]);
         }
         for (batch, tiles) in packet.dab_batches.iter().zip(batch_tiles) {
-            if batch.dab_count == 0 || batch.style.execution != BrushExecution::Dry
+            if batch.dab_count == 0 || !pointwise(&batch.style)
                 || BrushPassPlan::for_device(&batch.style, &self.device).direct.is_some() { continue; }
             for tile in tiles {
                 if tile.indices.is_empty() || tile.indices.len() == tile.dabs.len() { continue; }
@@ -3789,7 +3798,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     WatercolorLayerStyle::from_dab_style(&batch.style).radius(),
                     packet.document_extent,
                 )
-            } else if batch.style.execution == BrushExecution::Dry && !batch.style.rendering.edge_after_stroke {
+            } else if pointwise(&batch.style) && !batch.style.rendering.edge_after_stroke {
                 // Prediction retirement must use the same bounded footprint as
                 // painting, rather than reintroducing the generic brush halo.
                 tiles.iter().fold(PixelRect::EMPTY, |bounds, tile| {
@@ -3822,7 +3831,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 continue;
             }
             if batch.kind == DabBatchKind::Preview {
-                if batch.style.execution == BrushExecution::Dry
+                if pointwise(&batch.style)
                     && !batch.style.rendering.edge_after_stroke {
                     if let Some(sparse) = &mut new_preview_contact_tiles {
                         sparse.extend(tiles.iter().map(|tile| tile.coordinate));
@@ -4591,7 +4600,7 @@ impl CanvasRenderer for WgpuRasterizer {
             && watercolor_style_dirty.is_empty()
             && original_batches.iter().all(|b| {
                 matches!(b.kind, DabBatchKind::Persistent | DabBatchKind::Preview)
-                    && b.style.execution == BrushExecution::Dry
+                    && pointwise(&b.style)
                     && !b.style.rendering.edge_after_stroke
             });
         let canonical_pages = native_commit.as_ref().map_or(&[][..], |frame| &frame.canonical_pages[..]);

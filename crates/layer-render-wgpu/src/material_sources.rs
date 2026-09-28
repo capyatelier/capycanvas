@@ -225,7 +225,7 @@ impl WgpuRasterizer {
         records: impl Iterator<Item = (PixelRect, std::ops::Range<u32>)> + Clone,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        if batch.style.execution != BrushExecution::Dry { return Ok(()); }
+        if !pointwise(&batch.style) { return Ok(()); }
         let records_buffer = &mut self.dry_records;
         records_buffer.stride = u64::from(self.device.limits().min_uniform_buffer_offset_alignment.max(256));
         let used = (records.clone().count() as u64).checked_mul(records_buffer.stride)
@@ -291,12 +291,8 @@ impl WgpuRasterizer {
             self.metrics.material_cpu_ms[4] += elapsed(started);
             return result;
         }
-        if self.material_gather.is_none() {
-            self.material_gather = Some(Gather::new(&self.device));
-        }
+        self.ensure_material_gather();
         self.metrics.material_sample_jobs += 1;
-        self.metrics.material_sample_storage_bytes =
-            self.material_gather.as_ref().unwrap().storage_bytes();
         let mut current = 0;
         {
             let gather = self.material_gather.as_ref().unwrap();
@@ -387,6 +383,46 @@ impl WgpuRasterizer {
         );
         self.metrics.material_cpu_ms[4] += elapsed(started);
         result
+    }
+
+    fn ensure_material_gather(&mut self) {
+        if self.material_gather.is_none() {
+            let gather = Gather::new(&self.device);
+            self.metrics.material_sample_storage_bytes = gather.storage_bytes();
+            self.material_gather = Some(gather);
+        }
+    }
+
+    /// Gather what the Clone batch copies onto the `local` part of page
+    /// `coordinate` into the first sample field, which the deposit reads from
+    /// its dirty rectangle's corner. A batch without a source copies nothing.
+    pub(super) fn clone_source_binding(
+        &mut self,
+        batch: &DabBatch,
+        coordinate: [u32; 2],
+        local: PixelRect,
+        preview: bool,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<wgpu::BindGroup, GpuRasterError> {
+        self.ensure_material_gather();
+        let gather = self.material_gather.as_ref().unwrap();
+        let (field, meta) = (gather.fields[0].1.clone(), gather.complete.clone());
+        let [x, y] = coordinate.map(|v| v * PAGE_SIZE);
+        let region = PixelRect::new(x + local.min_x(), y + local.min_y(), x + local.max_x(), y + local.max_y());
+        match &batch.style.retouch {
+            Some(retouch) if !region.is_empty() => {
+                let scale = retouch.flip.map(|f| if f { -1. } else { 1. });
+                let source = crate::retouch_sources::Gather {
+                    region,
+                    scale,
+                    offset: retouch.offset,
+                    stroke: Some((batch.stroke_id, batch.layer_id, retouch.clone())),
+                };
+                self.encode_retouch_gather(&field, source, encoder)?;
+            }
+            _ => drop(encoder.color_pass("clone without a source", &field, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT))),
+        }
+        self.material_bind_group(batch, coordinate, preview, Some((&field, &meta)), encoder)
     }
 }
 

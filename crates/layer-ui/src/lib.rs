@@ -531,6 +531,11 @@ command_ids! {
     StampVisible,
     MergeGroup,
     CloneSourceArm,
+    Clone,
+    CloneAligned,
+    CloneFlipHorizontal,
+    CloneFlipVertical,
+    CloneResetOffset,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -540,11 +545,6 @@ impl CommandId {
             Self::Copy | Self::Cut | Self::CopyMerged | Self::PasteInPlace | Self::PasteInto => platform.pixel_clipboard(),
             _ => true,
         }
-    }
-    /// Listed in search, shortcuts and the toolbar bank: available here, and
-    /// for a command limited to some kinds of tool, one of them is offered.
-    pub fn offered_on(self, platform: Platform) -> bool {
-        self.available_on(platform) && shortcuts::command_scope(self).offered()
     }
     /// Polygon construction spans several contacts; these follow it live.
     pub fn follows_construction(self) -> bool {
@@ -577,6 +577,9 @@ impl CommandId {
                 | Self::SoftProof
                 | Self::GamutWarning
                 | Self::CloneSourceArm
+                | Self::CloneAligned
+                | Self::CloneFlipHorizontal
+                | Self::CloneFlipVertical
         )
     }
     pub fn icon(self) -> Option<&'static str> {
@@ -636,6 +639,11 @@ impl CommandId {
             Self::CompleteSelection => "selection-checked",
             Self::CancelSelection => "deselect",
             Self::CloneSourceArm => "cursor-sight",
+            Self::Clone => "clone",
+            Self::CloneAligned => "link",
+            Self::CloneFlipHorizontal => "flip-horizontal",
+            Self::CloneFlipVertical => "flip-vertical",
+            Self::CloneResetOffset => "reset",
             Self::SelectionVisible => "eye",
             Self::SelectionEditing => "layers",
             Self::SelectionReference => "reference",
@@ -760,7 +768,7 @@ impl CommandId {
             Self::MergeGroup => "merge-group",
         })
     }
-    pub const TOOLS: [Self; 27] = [
+    pub const TOOLS: [Self; 28] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::Pen,
@@ -771,6 +779,7 @@ impl CommandId {
         Self::Decoration,
         Self::Blend,
         Self::Liquify,
+        Self::Clone,
         Self::Lasso,
         Self::LassoFill,
         Self::Select,
@@ -862,6 +871,11 @@ impl CommandId {
             Self::CompleteSelection => "Finish selection",
             Self::CancelSelection => "Cancel selection",
             Self::CloneSourceArm => "Set Source",
+            Self::Clone => "Clone Stamp",
+            Self::CloneAligned => "Aligned Source",
+            Self::CloneFlipHorizontal => "Flip Source Horizontally",
+            Self::CloneFlipVertical => "Flip Source Vertically",
+            Self::CloneResetOffset => "Reset Source Offset",
             Self::SelectionVisible => "Visible artwork",
             Self::SelectionEditing => "Editing layer",
             Self::SelectionReference => "Reference layers",

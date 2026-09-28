@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3 and M4.4. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3, M4.1, M4.2 and M4.4. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -731,6 +731,7 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - Flatten confirms through the shared notice when it would discard hidden layers.
   - Merge Down needs a Normal, visible layer below. Merge Visible and Flatten accept any blend mode, with the paper kept separate, so a non-Normal layer can look different where the paper shows through.
 - **M3.7** on GTK, Web and Android: photos opened as documents keep their Exif, XMP and IPTC in `.capy` (version 10); exports keep camera, lens, exposure, dates, copyright and contact, with location removed by default; a Metadata row in each export dialog.
+- **M4.1–M4.2** on GTK, Web and Android: Clone Stamp (preset 40) with a source disc that drags with every device and a bar (Aligned, Source ▾, Flip H/V, Reset Offset, Set Source); Set Source with Alt or a bound pen side button; sources read from stroke-start pages and a cached reference composite, with no upload or wait during contact and a pen-up replay after a miss.
 - **M4.4** on GTK, Web and Android: 17 more blend modes (24 in all) from one shared set of formulas on every composite path and for brushes; a grouped blend menu from shared Rust; modes defined only on 0–1 hidden in float documents.
 
 **Follow-ups**
@@ -765,6 +766,10 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **Metadata:** writing IPTC-IIM, and Extended XMP for packets larger than one JPEG segment.
 - **Soft Light** uses the W3C formula; Photoshop's differs. Decide in M4.5 whether Perceptual documents use Photoshop's.
 - **Properties panel** still offers a flat blend choice in code order, including modes hidden from the menu in float documents.
+- **Clone Stamp on tablets** is GPU-bound: its 0.08 spacing lays about 38 dabs per update against the G-Pen's 6, and each page runs its own gather. Wider spacing and one gather per update are the likely fixes.
+- **Clone source bar on tablets** sits at the bottom of the work area instead of beside the disc.
+- **Web tests on tablets:** after a run leaves an unsaved document, the next `device.test.mjs` load waits on "Recover drawing?".
+- **Preference actions** sent while Settings is closed are refused with no visible error.
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
 - **Apple and Windows:**
@@ -778,4 +783,4 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M4. M2 and M3 are complete. Record milestone completion in the research record's section 7.
+**Remaining:** M4.3 and M4.5–M4.7. M2 and M3 are complete. Record milestone completion in the research record's section 7.

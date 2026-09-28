@@ -99,6 +99,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             if changed {
                 self.metrics.corrected_input_samples += 1;
                 if active {
+                    if estimate.index == 0 {
+                        self.reanchor_clone_stroke();
+                    }
                     let active = self.active_stroke.as_mut().unwrap();
                     // A late sensor update is not fresh pressure/motion. Drop
                     // preview history instead of treating delivery as input.

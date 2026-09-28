@@ -15,6 +15,7 @@ pub enum CanvasBarKind {
     LayerMask,
     Guide,
     Crop,
+    CloneSource,
 }
 impl CanvasBarKind {
     /// Kinds that keep their completion at the bottom edge while the bar is turned off.
@@ -198,6 +199,9 @@ pub(crate) fn short_label(command: CommandId) -> &'static str {
         CommandId::CropDeleteCroppedPixels => "Delete Cropped",
         CommandId::CropFitContent => "Fit Content",
         CommandId::StraightenToGuide => "Straighten",
+        CommandId::CloneAligned => "Aligned",
+        CommandId::CloneFlipHorizontal | CommandId::CloneFlipVertical => "",
+        CommandId::CloneResetOffset => "Reset Offset",
         _ => command.label(),
     }
 }
@@ -376,6 +380,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
 
+    /// The Clone source disc, once tapped.
+    fn clone_source_plan(&self) -> Option<Plan> {
+        (self.retouch.bar && self.clone_disc().is_some()).then(|| Plan {
+            kind: CanvasBarKind::CloneSource,
+            label: None,
+            items: self.clone_actions().into_iter().map(|a| PlanItem::Command(a.command)).collect(),
+            completion: Vec::new(),
+            placement: None,
+        })
+    }
+
     /// A guide selected with the Ruler or Move tool.
     fn guide_plan(&self) -> Option<Plan> {
         let tool = self.layer_interaction.tool;
@@ -420,7 +435,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon })
                 && !self.layer_interaction.path.is_empty();
             if !polygon {
-                return self.guide_plan().or_else(|| self.mode_plan()).or_else(|| self.selection_plan());
+                return self
+                    .clone_source_plan()
+                    .or_else(|| self.guide_plan())
+                    .or_else(|| self.mode_plan())
+                    .or_else(|| self.selection_plan());
             }
             return Some(Plan {
                 kind: CanvasBarKind::Polygon,
@@ -474,6 +493,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let b = Rect::around(handles.iter().copied());
                 (!handles.is_empty()).then_some([b.min.x, b.min.y, b.max.x, b.max.y])
             }
+            CanvasBarKind::CloneSource => self.clone_disc_bounds(),
         }
     }
 
@@ -811,8 +831,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let to_logical = self.document_to_logical();
                 self.guide_handles().into_iter().map(to_logical).collect()
             }
-            CanvasBarKind::Selection => {
-                let [x0, y0, x1, y1] = self.canvas_bar.selection.as_ref()?.1?;
+            CanvasBarKind::Selection | CanvasBarKind::CloneSource => {
+                let [x0, y0, x1, y1] = if kind == CanvasBarKind::Selection {
+                    self.canvas_bar.selection.as_ref()?.1?
+                } else {
+                    self.clone_disc_bounds()?
+                };
                 let to_logical = self.document_to_logical();
                 [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|[x, y]| to_logical(Point { x, y })).to_vec()
             }
@@ -904,7 +928,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CanvasBarKind::Transform
             | CanvasBarKind::Polygon
             | CanvasBarKind::Guide
-            | CanvasBarKind::Crop => (),
+            | CanvasBarKind::Crop
+            | CanvasBarKind::CloneSource => (),
         }
         sections.push(vec![toggle]);
         Some(

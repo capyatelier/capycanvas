@@ -31,6 +31,7 @@ import {checkCanvasSize} from "./canvas-size-journey.test.mjs";
 import {checkCrop} from "./crop-journey.test.mjs";
 import {checkImageCommands} from "./image-commands-journey.test.mjs";
 import {checkMoveSelection} from "./move-selection-journey.test.mjs";
+import {checkClone} from "./clone-journey.test.mjs";
 import {checkPenRendering} from "./pen-rendering.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 // Run against an already forwarded Android Chrome endpoint. No profile reset,
@@ -78,7 +79,7 @@ try {
   await reload();
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
-  if (process.argv.some(flag=>['--selection-tools','--tonal-selection','--color-panel','--color-picker','--paint-columns','--palettes','--zen','--proof-performance','--proof-memory','--crop','--image-commands'].includes(flag))) {
+  if (process.argv.some(flag=>['--selection-tools','--tonal-selection','--color-panel','--color-picker','--paint-columns','--palettes','--zen','--proof-performance','--proof-memory','--crop','--image-commands','--clone'].includes(flag))) {
     // Recovery discovery can finish after startup and workspace switching.
     // Keep drawings available without letting a late prompt swallow test input.
     await evaluate(`(()=>{const keep=()=>[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();window.deviceRecoveryWatcher=new MutationObserver(keep);window.deviceRecoveryWatcher.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['open']});keep();})()`);
@@ -177,6 +178,8 @@ try {
     await checkImageCommands({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--move-selection")) {
     await checkMoveSelection({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--clone")) {
+    await checkClone({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--canvas-bar")) {
     await checkCanvasBar({call,evaluate,settle,device:true});
     assert.deepEqual(errors,[]);

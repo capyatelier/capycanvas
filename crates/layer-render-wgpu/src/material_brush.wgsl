@@ -9,6 +9,7 @@ const OP_LIQUIFY: u32 = 2u;
 const OP_SMUDGE: u32 = 3u;
 const OP_WET: u32 = 4u;
 const OP_WATERCOLOR: u32 = 5u;
+const OP_CLONE: u32 = 6u;
 
 struct Target {
     origin_extent: vec4<f32>,
@@ -649,6 +650,14 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             return MaterialOutput(result, vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0), vec4<f32>(0.0));
         }
     }
+    // A clone lays its gathered source, as straight color, over the
+    // destination, with the source's own coverage scaling each dab.
+    var clone_source = vec4<f32>(0.0);
+    if MATERIAL_OPERATION == OP_CLONE {
+        let texel = vec2<i32>(floor(fragment_position.xy)) - vec2<i32>(material_sources.pages[0].xy);
+        let gathered = textureLoad(reservoir_texture, texel, 0);
+        clone_source = vec4<f32>(working_unassociate(gathered), gathered.a);
+    }
     let field = contact_field_with_paper(world, tooth);
     for (var offset = 0u; offset < range.y; offset += 1u) {
         let dab = dabs[range.x + offset];
@@ -667,16 +676,32 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         var source_alpha = requested_alpha;
         if contact_uniform() {
             let next_coverage = max(stroke_coverage, requested_alpha);
-            source_alpha = clamp(
-                working_ratio(next_coverage - stroke_coverage, 1.0 - stroke_coverage),
-                0.0,
-                1.0,
-            );
+            if MATERIAL_OPERATION == OP_CLONE {
+                // The source's coverage scales the stroke's: the increments
+                // compose to exactly that fraction of the stroke coverage.
+                source_alpha = clamp(
+                    working_ratio(
+                        clone_source.a * (next_coverage - stroke_coverage),
+                        1.0 - clone_source.a * stroke_coverage,
+                    ),
+                    0.0,
+                    1.0,
+                );
+            } else {
+                source_alpha = clamp(
+                    working_ratio(next_coverage - stroke_coverage, 1.0 - stroke_coverage),
+                    0.0,
+                    1.0,
+                );
+            }
             stroke_coverage = next_coverage;
         } else if MATERIAL_OPERATION == OP_COVERAGE {
             stroke_coverage = max(stroke_coverage, requested_alpha);
+        } else if MATERIAL_OPERATION == OP_CLONE {
+            source_alpha *= clone_source.a;
         }
         if style.operation.w != 0u { result *= 1.0 - source_alpha; }
+        else if MATERIAL_OPERATION == OP_CLONE { result = source_over(result, clone_source.rgb, source_alpha); }
         else { result = source_over(result, dab.color.rgb, source_alpha); }
     }
     return MaterialOutput(
@@ -702,7 +727,7 @@ fn gather_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<
 }
 
 fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
-    if MATERIAL_OPERATION == OP_DEPOSIT || MATERIAL_OPERATION == OP_COVERAGE {
+    if MATERIAL_OPERATION == OP_DEPOSIT || MATERIAL_OPERATION == OP_COVERAGE || MATERIAL_OPERATION == OP_CLONE {
         let p = vec2<u32>(fragment_position.xy);
         let bounds = material_sources.pages[0];
         if any(p < bounds.xy) || any(p >= bounds.zw) {
@@ -717,7 +742,7 @@ fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
     if style.color.a > 0.5 {
         let world = layer_to_brush(render_target.origin_extent.xy + fragment_position.xy);
         var original: vec4<f32>;
-        if MATERIAL_OPERATION == OP_DEPOSIT || MATERIAL_OPERATION == OP_COVERAGE {
+        if MATERIAL_OPERATION == OP_DEPOSIT || MATERIAL_OPERATION == OP_COVERAGE || MATERIAL_OPERATION == OP_CLONE {
             original = dry_original(vec2<i32>(floor(fragment_position.xy)));
         } else { original = canvas_load(world); }
         if style.operation.w != 0u { result.color = original; }

@@ -206,9 +206,9 @@ fn pen_buttons_are_opt_in_and_use_the_hold_lifecycle() {
 
     bind(&mut s, "pen.button.secondary", "canvas.pan");
     assert!(press(&mut s, PenButton::Secondary, true).handled);
-    assert!(!s.pointer_contact_paints(PointerButton::Primary), "a held pan button turns contacts into navigation");
+    assert!(!s.pointer_contact_paints(PointerKind::Pen, PointerButton::Primary, [500., 500.]), "a held pan button turns contacts into navigation");
     press(&mut s, PenButton::Secondary, false);
-    assert!(s.pointer_contact_paints(PointerButton::Primary));
+    assert!(s.pointer_contact_paints(PointerKind::Pen, PointerButton::Primary, [500., 500.]));
 
     s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
     press(&mut s, PenButton::Primary, true);
@@ -412,13 +412,13 @@ fn mask_strokes_explain_dry_coverage_once_per_mask_session() {
 
 #[test]
 fn retouch_strokes_refuse_masks_and_offer_a_reference_for_an_empty_layer() {
-    use layer_core::RetouchSource;
     let mut s = session(Platform::Gtk);
-    s.engine.set_retouch(Some(RetouchSource::Editing));
+    invoke(&mut s, CommandId::Clone);
+    invoke(&mut s, CommandId::SelectionEditing);
     let revision = s.engine.document().revision;
     stroke(&mut s, 1);
     assert_eq!(notice_text(&s), Some("This layer is empty, so there's nothing to copy"));
-    s.engine.set_retouch(Some(RetouchSource::References));
+    invoke(&mut s, CommandId::SelectionReference);
     stroke(&mut s, 10);
     assert_eq!(notice_text(&s), Some("This layer is empty, and there's no layer below it to copy from"));
     assert_eq!(s.engine.document().revision, revision, "refused retouch strokes paint nothing");

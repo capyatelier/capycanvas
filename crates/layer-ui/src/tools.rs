@@ -15,9 +15,10 @@ pub enum Tool {
     Decoration,
     Blend,
     Liquify,
+    Clone,
 }
 impl Tool {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -26,6 +27,7 @@ impl Tool {
         Self::Decoration,
         Self::Blend,
         Self::Liquify,
+        Self::Clone,
     ];
     pub fn command(self) -> CommandId {
         match self {
@@ -37,6 +39,7 @@ impl Tool {
             Self::Decoration => CommandId::Decoration,
             Self::Blend => CommandId::Blend,
             Self::Liquify => CommandId::Liquify,
+            Self::Clone => CommandId::Clone,
         }
     }
     pub fn default_preset(self) -> u32 {
@@ -57,14 +60,16 @@ pub enum ToolFamily {
     Ink,
     Paint,
     Blend,
+    Retouch,
 }
 impl ToolFamily {
-    pub const ALL: [Self; 3] = [Self::Ink, Self::Paint, Self::Blend];
+    pub const ALL: [Self; 4] = [Self::Ink, Self::Paint, Self::Blend, Self::Retouch];
     pub fn commands(self) -> &'static [CommandId] {
         match self {
             Self::Ink => &[CommandId::Pen, CommandId::Pencil],
             Self::Paint => &[CommandId::Brush, CommandId::Airbrush, CommandId::Decoration],
             Self::Blend => &[CommandId::Blend, CommandId::Liquify],
+            Self::Retouch => &[CommandId::Clone],
         }
     }
     pub fn shortcut_id(self) -> &'static str {
@@ -72,6 +77,7 @@ impl ToolFamily {
             Self::Ink => "tools.ink",
             Self::Paint => "tools.paint",
             Self::Blend => "tools.blend",
+            Self::Retouch => "tools.retouch",
         }
     }
     pub fn label(self) -> &'static str {
@@ -79,6 +85,7 @@ impl ToolFamily {
             Self::Ink => "Pen / Pencil",
             Self::Paint => "Paint tools",
             Self::Blend => "Blend / Liquify",
+            Self::Retouch => "Retouching tools",
         }
     }
     pub fn for_command(command: CommandId) -> Option<Self> {
@@ -104,9 +111,10 @@ pub enum ToolGroup {
     Decoration,
     Blend,
     Liquify,
+    Clone,
 }
 impl ToolGroup {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Pen,
         Self::Marker,
         Self::Pencil,
@@ -120,6 +128,7 @@ impl ToolGroup {
         Self::Decoration,
         Self::Blend,
         Self::Liquify,
+        Self::Clone,
     ];
     pub fn tool(self) -> Tool {
         match self {
@@ -131,6 +140,7 @@ impl ToolGroup {
             Self::Decoration => Tool::Decoration,
             Self::Blend => Tool::Blend,
             Self::Liquify => Tool::Liquify,
+            Self::Clone => Tool::Clone,
         }
     }
     pub fn label(self) -> &'static str {
@@ -148,6 +158,7 @@ impl ToolGroup {
             Self::Decoration => "Texture",
             Self::Blend => "Blend",
             Self::Liquify => "Liquify",
+            Self::Clone => "Clone",
         }
     }
     /// Identity of the medium, independent of its parent drawing engine.
@@ -166,6 +177,7 @@ impl ToolGroup {
             Self::Decoration => "decoration",
             Self::Blend => "blend",
             Self::Liquify => "liquify",
+            Self::Clone => "clone",
         }
     }
     fn default_preset(self) -> u32 {
@@ -314,6 +326,7 @@ const PRESETS: &[(DefaultBrushPreset, &str, ToolGroup)] = &[
         "Liquify Crystals",
         ToolGroup::Liquify,
     ),
+    (DefaultBrushPreset::CloneStamp, "Clone Stamp", ToolGroup::Clone),
 ];
 
 pub fn brush_catalog() -> impl Iterator<Item = BrushChoice> {
@@ -399,11 +412,11 @@ impl crate::UiState {
     }
 }
 pub(crate) fn is_drawing(tool: Tool) -> bool {
-    !matches!(tool, Tool::Eraser | Tool::Blend | Tool::Liquify)
+    !matches!(tool, Tool::Eraser | Tool::Blend | Tool::Liquify | Tool::Clone)
 }
 
 pub(crate) fn is_sculpt(tool: Tool) -> bool {
-    matches!(tool, Tool::Blend | Tool::Liquify)
+    matches!(tool, Tool::Blend | Tool::Liquify | Tool::Clone)
 }
 
 fn sets(brush: &BrushState, canvas_tool: LayerCanvasTool, includes: fn(Tool) -> bool) -> Vec<ToolSetItem> {
@@ -737,7 +750,7 @@ mod tests {
 
     #[test]
     fn every_brush_has_one_tool_and_group_and_every_group_is_populated() {
-        assert_eq!(PRESETS.len(), 38);
+        assert_eq!(PRESETS.len(), 39);
         let mut ids = std::collections::BTreeSet::new();
         for &(preset, _, group) in PRESETS {
             assert!(ids.insert(preset as u32));

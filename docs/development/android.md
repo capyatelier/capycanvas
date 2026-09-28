@@ -253,7 +253,8 @@ size. Then
 passes `-e preset`, `-e brushSize` and `-e mode` (`constant`, `pressure`, `tilt`,
 `stationary`, `lifts`, `visual` or `pinch`); `--trace` and `--profile` add
 Perfetto and simpleperf captures. The default preset list is the dry brushes;
-`--presets` accepts every built-in preset, including wet, smudge and Liquify.
+`--presets` accepts every built-in preset, including wet, smudge, Liquify and
+Clone Stamp, which copies from the photo as a reference layer.
 `python3 tools/performance/android-brush-report.py OUT` summarizes completed
 canvas updates per second, the rate the performance targets use for brushes.
 Run directly, the instrumentation also accepts `-e navigationBetweenStrokes true`

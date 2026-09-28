@@ -305,7 +305,8 @@ Implemented now:
 - sparse persistent GPU layer pages and sparse prediction pages;
 - stroke-start page copies and a cached reference composite for retouching
   strokes, sampled without uploads or waits during contact
-  ([retouching sources](../internals/brushes.md#retouching-sources));
+  ([retouching sources](../internals/brushes.md#retouching-sources)), and the
+  Clone Stamp pass that gathers them per page ([Clone Stamp](../internals/brushes.md#clone-stamp));
 - GPU memory/page metrics through the C ABI;
 - incremental damage composition;
 - explicit RGBA8 export readback;

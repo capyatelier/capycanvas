@@ -29,6 +29,8 @@ pub(crate) mod figures;
 pub(crate) mod operation;
 #[path = "crop.rs"]
 mod crop;
+#[path = "clone_source.rs"]
+mod clone_source;
 #[path = "tonal_selection.rs"]
 pub(crate) mod tonal_selection;
 #[path = "selection_tools.rs"]
@@ -159,9 +161,7 @@ pub struct UiSession<R: CanvasRenderer> {
     image_size: Option<image_size::ImageSizeDraft>,
     content_bounds: image_geometry::ContentBounds,
     rulers: rulers::RulerInteraction,
-    /// Set Source is held or armed: the next pen or mouse contact of a
-    /// retouching tool sets its source instead of painting.
-    retouch_source_armed: bool,
+    retouch: clone_source::RetouchState,
     operation: operation::Operation,
     system_theme: Theme,
     system_accent: Option<HexColor>,
@@ -266,7 +266,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             image_size: None,
             content_bounds: Default::default(),
             rulers: Default::default(),
-            retouch_source_armed: false,
+            retouch: Default::default(),
             operation: Default::default(),
             system_theme: Theme::Light,
             system_accent: None,
@@ -631,6 +631,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.cursor.hover.reset();
         }
         self.cursor.event = event;
+        if event.is_some_and(|e| e.phase == PenPhase::Hover) {
+            self.sync_retouch_points();
+        }
         if self.eyedropper.picking.previous.is_some() && !self.eyedropper.picking.finishing
             && self.eyedropper.picking.touch.is_none() {
             if let Some(e) = event.filter(|e| e.phase == PenPhase::Hover) {
@@ -1226,14 +1229,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let transform_contact = kind == PointerKind::Touch
                     && (self.interaction.pointer.is_some_and(|contact| contact.id == id && contact.kind == kind)
                         || (phase == ContactPhase::Down && self.interaction.pointer.is_none()
-                            && !self.touch.is_active() && self.transform_touch_hit(position)));
+                            && !self.touch.is_active() && self.object_touch_hit(position)));
                 if kind == PointerKind::Touch && !transform_contact {
                     if self.interaction.pointer.is_none() && !self.state.settings_open {
                         reply.change = self.touch(id, pen_phase(phase), position);
                         reply.handled = true;
                     }
                 } else {
-                    let paint = self.pointer_contact_paints(button);
+                    let paint = self.pointer_contact_paints(kind, button, position);
                     if phase == ContactPhase::Down
                         && self.interaction.pointer.is_none()
                         && !self.state.settings_open
@@ -1247,11 +1250,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                             paint,
                             position,
                         });
+                        if button == PointerButton::Primary && self.clone_source_contact(kind, position) {
+                            self.begin_clone_source_contact(id, kind, position);
+                        }
                     }
                     if let Some(contact) = self.interaction.pointer.filter(|p| p.id == id && p.kind == kind) {
                         reply.handled = true;
                         reply.paint = contact.paint;
-                        if !contact.paint
+                        if let Some(change) = self.clone_source_input(id, phase, position) {
+                            reply.change = change;
+                        } else if !contact.paint
                             && matches!(phase, ContactPhase::Move | ContactPhase::Up)
                             && position != contact.position
                         {
@@ -2205,12 +2213,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                         !matches!(l.kind, LayerKind::Background | LayerKind::Selection)
                     })
             }
-            CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference => {
-                idle && self.layer_interaction.tool.selection_tool().is_some()
+            CommandId::SelectionVisible => idle && self.layer_interaction.tool.selection_tool().is_some(),
+            CommandId::SelectionEditing | CommandId::SelectionReference => {
+                idle && (self.layer_interaction.tool.selection_tool().is_some() || self.retouching())
             }
-            CommandId::CloneSourceArm => {
-                idle && Self::tool_category(self.layer_interaction.tool, self.state.brush.tool) == ToolCategory::Retouching
-            }
+            CommandId::CloneSourceArm
+            | CommandId::CloneAligned
+            | CommandId::CloneFlipHorizontal
+            | CommandId::CloneFlipVertical
+            | CommandId::CloneResetOffset => self.clone_command_enabled(id),
             CommandId::Undo => idle && (self.operation.placing() || self.cropping() || self.engine.can_undo()),
             CommandId::Redo => idle && !self.cropping() && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
@@ -2356,7 +2367,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::GamutWarning && self.state.gamut_warning)
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
-            || (id == CommandId::CloneSourceArm && self.retouch_source_armed)
+            || self.clone_command_selected(id)
             || (id == CommandId::LayerMaskEnabled
                 && document.layer(document.active_layer).and_then(|l| l.mask.as_ref()).is_some_and(|m| m.enabled))
             || (id == CommandId::TransformPerspective && self.transform_mode().is_some_and(|(_, perspective)| perspective))
@@ -4042,9 +4053,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.sync_selection_overlay();
         self.sync_crop_overlay();
         self.sync_moving_pixels();
+        let clone_source = self.engine.clone_source();
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
+        if self.engine.clone_source() != clone_source {
+            self.sync_retouch_points();
+        }
         for color in self.engine.take_used_colors() {
             self.state.colors.library.record_use(color);
             changed |= regions::BRUSH;
@@ -4323,9 +4338,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.ruler_command(command)?;
                 Ok((BRUSH | DOCUMENT, true))
             }
-            CommandId::CloneSourceArm => {
-                self.retouch_source_armed = !self.retouch_source_armed;
-                Ok((BRUSH, true))
+            CommandId::CloneSourceArm
+            | CommandId::CloneAligned
+            | CommandId::CloneFlipHorizontal
+            | CommandId::CloneFlipVertical
+            | CommandId::CloneResetOffset => {
+                self.clone_command(command)?;
+                Ok((BRUSH | COMMANDS, true))
+            }
+            CommandId::SelectionEditing | CommandId::SelectionReference if self.retouching() => {
+                self.clone_command(command)?;
+                Ok((BRUSH | COMMANDS, true))
             }
             CommandId::Figure => {
                 let (shape, paint) = self.layer_interaction.figure;
@@ -4546,7 +4569,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::Airbrush
             | CommandId::Decoration
             | CommandId::Blend
-            | CommandId::Liquify => {
+            | CommandId::Liquify
+            | CommandId::Clone => {
                 self.select_brush(self.tools.tool(command.paint_tool().unwrap()))?;
                 Ok((BRUSH, false))
             }
@@ -4875,19 +4899,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn apply_brush(&mut self) -> Result<(), String> {
         self.cursor.hover.reset();
         let state = &self.state.brush;
+        let (color, tool) = stroke_paint(state.tool, &self.state.colors, self.engine.document().color.space)?;
         let mut brush = self.engine.configured_brush().clone();
         brush.diameter = state.diameter;
         brush.opacity = state.opacity;
-        brush.color_rgba_linear = self.state.colors.definition().linear_in(self.engine.document().color.space)?;
+        brush.color_rgba_linear = color;
         self.engine.set_brush(brush).map_err(error)?;
         self.engine.set_paint_color(self.state.colors.definition());
-        self.engine.set_tool(
-            if state.tool == Tool::Eraser || self.state.colors.transparent() {
-                StrokeTool::Eraser
-            } else {
-                StrokeTool::Brush
-            },
-        );
+        self.engine.set_tool(tool);
         self.tools
             .remember(self.state.brush.preset, self.engine.configured_brush());
         self.refresh_tools();
@@ -4937,6 +4956,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 checkable: command.is_toggle(),
             })
             .collect()
+        } else if self.retouching() {
+            self.clone_actions()
         } else {
             let tool = self.layer_interaction.tool;
             let moving = tool == LayerCanvasTool::Move;
@@ -4951,6 +4972,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
                 .collect()
         };
+        self.sync_retouch();
         self.state.tool_set = if let Some(tool) = self.layer_interaction.tool.selection_tool() {
             selection_tools::tool_set(tool)
         } else { tools::view(&self.state.brush, self.layer_interaction.tool) };
@@ -5046,10 +5068,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.image_size = self.image_size_view();
     }
 
-    pub fn pointer_contact_paints(&self, button: PointerButton) -> bool {
+    /// Whether a contact of `kind` pressed with `button` at surface
+    /// `position` paints, rather than navigating or moving a canvas object.
+    pub fn pointer_contact_paints(&self, kind: PointerKind, button: PointerButton, position: [f32; 2]) -> bool {
         button == PointerButton::Primary
             && self.interaction.pan_key.is_none()
             && self.layer_interaction.tool != LayerCanvasTool::Hand
+            && !self.clone_source_contact(kind, position)
+    }
+
+    /// Whether a finger at `position` lands on a canvas object it drags
+    /// rather than navigating: a transform or crop handle, or the source disc.
+    pub(super) fn object_touch_hit(&self, position: [f32; 2]) -> bool {
+        self.transform_touch_hit(position) || self.clone_disc_hit(position)
     }
     fn require_idle(&self) -> Result<(), String> {
         if self.painted_selections.has_contact()
@@ -5416,6 +5447,16 @@ fn valid_viewport(viewport: [f32; 2]) -> Result<(), String> {
         Err("Invalid logical viewport".into())
     }
 }
+/// The brush color and stroke kind `tool` paints with. A retouching tool
+/// copies pixels, so it has no color of its own and never erases.
+fn stroke_paint(tool: Tool, colors: &ColorState, space: layer_core::color::RgbSpace) -> Result<([f32; 4], StrokeTool), String> {
+    if tool == Tool::Clone {
+        return Ok(([0., 0., 0., 1.], StrokeTool::Brush));
+    }
+    let erases = tool == Tool::Eraser || colors.transparent();
+    Ok((colors.definition().linear_in(space)?, if erases { StrokeTool::Eraser } else { StrokeTool::Brush }))
+}
+
 fn pen_phase(phase: ContactPhase) -> PenPhase {
     match phase {
         ContactPhase::Down => PenPhase::Down,
@@ -5462,6 +5503,7 @@ mod tests {
     include!("image_geometry_tests.rs");
     include!("clipboard_tests.rs");
     include!("blend_menu_tests.rs");
+    include!("clone_source_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -8177,7 +8219,7 @@ mod tests {
             s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
             let drawer = s.state.customization.drawer.clone().unwrap();
             assert_eq!(drawer.columns, [vec![Panel::SculptSets], vec![Panel::Tools], vec![Panel::ToolSettings]]);
-            assert_eq!(s.state.tool_panels.sculpt_sets.groups.iter().map(|s| s.label).collect::<Vec<_>>(), ["Blend", "Liquify"]);
+            assert_eq!(s.state.tool_panels.sculpt_sets.groups.iter().map(|s| s.label).collect::<Vec<_>>(), ["Blend", "Liquify", "Clone"]);
             for set in s.state.tool_panels.sculpt_sets.groups.clone() {
                 s.dispatch(set.action).unwrap();
                 assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
@@ -8192,8 +8234,8 @@ mod tests {
             assert!(!s.command(CommandId::Sculpt).selected);
             assert!(!s.command(CommandId::DrawingBrush).selected);
             assert_eq!(s.command(CommandId::DrawingBrush).icon, Some("pencil"));
-            assert_eq!(s.command(CommandId::Sculpt).icon, Some("liquify"));
-            assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, "liquify");
+            assert_eq!(s.command(CommandId::Sculpt).icon, Some("clone"));
+            assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, "clone");
             let eraser = s.state.workspace.layout.header.entries().find(|e|
                 e.item == HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Eraser } }).unwrap().id;
             s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds {
@@ -8207,7 +8249,7 @@ mod tests {
             let mut restored = session(platform);
             restored.adopt_workspace(PreparedWorkspace::new(serde_json::from_str(&json).unwrap()).unwrap()).unwrap();
             assert_eq!(restored.command(CommandId::DrawingBrush).icon, Some("pencil"));
-            assert_eq!(restored.command(CommandId::Sculpt).icon, Some("liquify"));
+            assert_eq!(restored.command(CommandId::Sculpt).icon, Some("clone"));
             invoke(&mut restored, CommandId::DrawingBrush);
             assert_eq!((restored.state.brush.preset, restored.state.brush.diameter), (drawing, 23.));
             invoke(&mut restored, CommandId::Sculpt);

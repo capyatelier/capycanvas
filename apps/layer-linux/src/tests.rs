@@ -50,6 +50,8 @@ mod merge;
 mod crop;
 #[path = "image_tests.rs"]
 mod image;
+#[path = "clone_tests.rs"]
+mod clone_stamp;
 #[path = "file_launch_tests.rs"]
 mod file_launch;
 #[path = "document_tab_tests.rs"]
@@ -9460,6 +9462,7 @@ fn native_frame_pacing() {
         Ok(_) => panic!("Unknown pacing workspace"),
     };
     let photo = std::env::var("LAYER_PACING_WORKSPACE").as_deref() == Ok("photo24");
+    let brush_size: f32 = std::env::var("LAYER_PACING_BRUSH_SIZE").map_or(384., |v| v.parse().unwrap());
     let distort = std::env::var("LAYER_PACING_TRANSFORM_MODE").as_deref() == Ok("distort");
     let outline = std::env::var("LAYER_PACING_TRANSFORM_MODE").as_deref() == Ok("outline");
     let interpolation = std::env::var("LAYER_PACING_INTERPOLATION").unwrap_or_default();
@@ -9585,14 +9588,19 @@ fn native_frame_pacing() {
         ("Move", None),
         ("Refine", None),
         ("Crop", None),
+        ("Clone", Some(DefaultBrushPreset::CloneStamp)),
     ] {
         let chosen = std::env::var("LAYER_PACING_BRUSH");
-        if chosen.as_ref().is_ok_and(|s| s != name) || (matches!(name, "Refine" | "Move") && chosen.is_err()) {
+        if chosen.as_ref().is_ok_and(|s| s != name) || (matches!(name, "Refine" | "Move" | "Clone") && chosen.is_err()) {
             continue;
+        }
+        if name == "Clone" {
+            w.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } });
+            w.dispatch(UiAction::Invoke { command: CommandId::UseReferenceBelow });
         }
         if let Some(preset) = preset {
             w.dispatch(UiAction::SelectBrush { id: preset as u32 });
-            w.dispatch(UiAction::SetBrushSize { value: 384.0 });
+            w.dispatch(UiAction::SetBrushSize { value: brush_size });
         } else if name == "Hand" {
             w.dispatch(UiAction::Invoke {
                 command: CommandId::Hand,
@@ -10038,7 +10046,7 @@ fn native_frame_pacing() {
             "measure real child-surface presentation"
         );
         let report = serde_json::json!({
-            "brush": name, "viewport": camera.viewport, "brush_size": 384, "stroke_seconds": 6,
+            "brush": name, "viewport": camera.viewport, "brush_size": brush_size, "stroke_seconds": 6,
             "startup_wait_ms": startup_wait_ms,
             "gpu_timestamps": gpu_timestamps,
             "workspace": std::env::var("LAYER_PACING_WORKSPACE").unwrap_or_else(|_| "default".into()),

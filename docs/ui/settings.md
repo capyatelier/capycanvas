@@ -57,9 +57,7 @@ modifiers and reserved OS interactions also need native testing.
 
 Each binding has a scope: Application, Canvas, or specific tool categories.
 Canvas and tool scopes apply only while no chrome control such as a divider owns
-keyboard focus. The shortcuts page, pickers, command search and the toolbar bank
-list only the tool categories that have tools, and leave out bindings scoped to
-none of them. Recording a chord that another action already uses anywhere its
+keyboard focus. Recording a chord that another action already uses anywhere its
 scope overlaps is a conflict; Reassign moves the chord. At runtime a chord runs
 the most specific binding that is enabled, so a disabled one lets the next run:
 Delete and Backspace delete the selected guide with the Ruler and Move tools,
@@ -85,8 +83,10 @@ is which.
 
 Modifier keys are the first shortcut category. Holding one uses an action until
 release, chosen per tool category, so Alt samples color with drawing, blending,
-fill and gradient tools and does nothing with selection tools, which keep their
-own Alt behavior. Space pans. Any key or button can be a modifier key, alone or
+fill and gradient tools, sets the source with retouching tools, and does nothing
+with selection tools, which keep their own Alt behavior. With a tool filter, the
+shortcuts page shows each modifier key's action for that kind of tool. Space
+pans. Any key or button can be a modifier key, alone or
 with Shift, Ctrl or Alt, including letters, F13–F24, gamepad and tablet pad
 buttons. Escape stays free to cancel recording. A key is either a shortcut or a
 modifier key, never both; recording one against the other offers Reassign, and

@@ -448,12 +448,13 @@ fn action_description(action: &UiAction) -> &'static str {
             Pen | Pencil | Brush | Eraser | Airbrush | Decoration | Blend | Liquify => {
                 "Use the last brush selected in this tool family."
             }
+            Clone => "Paint with pixels copied from the source disc; Set Source picks its spot. With Reference layers it copies the marked layers below the editing layer and the editing layer itself, while Wand and Fill sample every marked layer.",
             Select => "Return to the last selection tool.",
             SelectionBrush => "Paint the area that subsequent edits will affect.",
             SelectionIntersect => "Keep only the area shared by the existing and new selections.",
             SelectionVisible => "Find matching colors across the visible artwork.",
-            SelectionEditing => "Find matching colors in the editing layer only.",
-            SelectionReference => "Find matching colors in layers marked as references.",
+            SelectionEditing => "Sample the editing layer only: selection tools find colors in it, and retouching copies from it.",
+            SelectionReference => "Sample layers marked as references; retouching copies the ones below the editing layer with the editing layer over them.",
             SelectionFixedRatio => "Keep the selection's width-to-height ratio fixed.",
             SelectionFixedSize => "Use the configured selection width and height.",
             QuickMask => "Edit the selection as a painted mask.",
@@ -482,6 +483,9 @@ fn action_description(action: &UiAction) -> &'static str {
             WarpGridThree | WarpGridFour | WarpGridFive => "Choose how many patches the warp mesh has, keeping its current shape.",
             UseReferenceBelow => "Mark the nearest visible photo or paint layer below as a reference for Wand and Fill.",
             CloneSourceArm => "Pick where retouching copies from: the next pen or mouse click sets the source.",
+            CloneAligned => "Keep one offset between the source and the brush across strokes; when off, every stroke starts copying at the source disc.",
+            CloneFlipHorizontal | CloneFlipVertical => "Mirror the copied pixels about the source disc.",
+            CloneResetOffset => "Start the next stroke copying at the source disc again.",
             ClearLayer => "Erase everything on the active layer. A placed photo's original is discarded too.",
             ClearSelected => "Erase the selected pixels of the active layer; soft edges erase partially. A placed photo keeps its original.",
             ClearOutside => "Erase the pixels of the active layer outside the selection.",
@@ -588,6 +592,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Tool::Eraser => ToolCategory::Erasing,
                 Tool::Blend => ToolCategory::Blending,
                 Tool::Liquify => ToolCategory::Warping,
+                Tool::Clone => ToolCategory::Retouching,
                 _ => ToolCategory::Drawing,
             },
             T::Hand => ToolCategory::Navigation,
@@ -646,7 +651,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         // share CommandState, including selection submodes and temporary locks.
         for command in CommandId::ALL
             .into_iter()
-            .filter(|c| c.offered_on(platform) && !self.proof_panel_command(*c))
+            .filter(|c| c.available_on(platform) && !self.proof_panel_command(*c))
         {
             let state = self.command(command);
             entries.push(entry(
@@ -903,7 +908,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             !settings.keys(id).is_empty()
                 || crate::GESTURE_TRIGGERS.iter().any(|t| settings.gesture_binding(t.id) == id)
         };
-        for (definition, _) in definitions.iter().filter(|(d, _)| d.scope.offered()).cloned() {
+        for (definition, _) in definitions.clone() {
             let momentary = matches!(definition.action, crate::shortcuts::ShortcutAction::Momentary { .. });
             match definition.action {
                 crate::shortcuts::ShortcutAction::Hold { action } | crate::shortcuts::ShortcutAction::Momentary { action }
@@ -917,7 +922,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         UiAction::Invoke { command } => self.command(command).enabled,
                         _ => true,
                     };
+                    let reason = (!enabled).then(|| self.action_disabled_reason(&action));
                     let mut held = entry(&definition.label, "Canvas", *action, enabled, None, settings, platform);
+                    held.descriptor.disabled_reason = reason;
                     held.descriptor.id = definition.id.clone();
                     held.descriptor.kind = CommandKind::Held;
                     held.descriptor.description = if momentary {
@@ -966,7 +973,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             e.descriptor.disabled_reason = match &e.action {
                 Some(action) if !e.descriptor.enabled => Some(self.action_disabled_reason(action)),
-                _ => None,
+                Some(_) => None,
+                None => e.descriptor.disabled_reason.take(),
             };
         }
         if self.command_search.focus == CommandFocus::Palette {
@@ -1289,8 +1297,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 "Enable the mask before applying it"
             }
             C::MaskSelection => "Select an unlocked artwork layer",
-            C::SelectionVisible | C::SelectionEditing | C::SelectionReference => "Choose a selection tool first",
-            C::CloneSourceArm => "Choose a retouching tool first",
+            C::SelectionVisible => "Choose a selection tool first",
+            C::SelectionEditing | C::SelectionReference => "Choose a selection or retouching tool first",
+            C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical => {
+                "Choose a retouching tool first"
+            }
+            C::CloneResetOffset if self.retouching() => "Clone an aligned stroke first",
+            C::CloneResetOffset => "Choose a retouching tool first",
             C::ZoomIn => "Already at the maximum zoom",
             C::ZoomOut => "Already at the minimum zoom",
             _ if self.operation.active() => self.operation_refusal(),

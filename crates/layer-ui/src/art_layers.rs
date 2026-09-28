@@ -2038,6 +2038,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.append_ruler_overlay(segments);
         self.append_transform_overlay(segments);
         self.append_crop_overlay(segments);
+        self.append_clone_overlay(segments);
         let transform = self.document_to_logical();
         let mut path = |points: &[Point], closed: bool, affine: layer_core::Affine| {
             let mut distance = 0.;

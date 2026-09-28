@@ -14,7 +14,7 @@ pub fn generate(directory: &Path) -> Result<(), Box<dyn Error>> {
             let mut canvas = Canvas::configured([400, 80], [0.0; 4])?;
             // Destination-reading tools need existing color to demonstrate
             // their effect. These seeds are on the same editable paint layer.
-            if choice.category == "Blend" || choice.category == "Liquify" || choice.id == 3 {
+            if matches!(choice.category, "Blend" | "Liquify" | "Clone") || choice.id == 3 {
                 canvas.set_brush(brush(Preset::GPen, 44.0, 0.9, [0.06, 0.3, 0.65, 1.0]))?;
                 stroke(&mut canvas, 0.0)?;
                 canvas.set_brush(brush(Preset::GPen, 20.0, 0.9, [0.85, 0.35, 0.06, 1.0]))?;
@@ -25,6 +25,14 @@ pub fn generate(directory: &Path) -> Result<(), Box<dyn Error>> {
             } else {
                 [0.012, 0.012, 0.014, 1.0]
             };
+            if choice.category == "Clone" {
+                canvas.engine.set_retouch(Some(layer_core::RetouchSource::Editing));
+                canvas.engine.set_clone_source(layer_core::CloneSource {
+                    point: Some(Point { x: 26.0, y: 37.0 }),
+                    flip: [false, true],
+                    ..layer_core::CloneSource::default()
+                });
+            }
             canvas.set_brush(brush(layer_ui::preset(choice.id)?, 42.0, 1.0, color))?;
             stroke(&mut canvas, -3.0)?;
             canvas.write_png(&directory.join(format!("{}-{theme}.png", choice.id)))?;

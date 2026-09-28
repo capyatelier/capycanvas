@@ -142,6 +142,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             invoke("add_layer")
             invoke("fit_canvas")
             action(obj("type" to "select_brush", "id" to preset))
+            if (state().getJSONObject("brush").getString("tool") == "clone") invoke("use_reference_below")
             action(obj("type" to "set_brush_size", "value" to size))
             for ((id, value) in listOf("feedback" to prediction, "platform_prediction" to false, "prediction_horizon" to 16))
                 action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))

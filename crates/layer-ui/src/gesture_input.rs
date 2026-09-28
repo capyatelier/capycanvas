@@ -29,7 +29,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && self.interaction.pointer.is_none()
                     && self.eyedropper.picking.previous.is_none()
                     && self.touch_canvas_idle()
-                    && (phase != ContactPhase::Down || !self.transform_touch_hit(position));
+                    && (phase != ContactPhase::Down || !self.object_touch_hit(position));
                 let policy = self.interaction.touch_policy;
                 self.interaction.taps.contact(id, phase, position, time_ns, policy, eligible)
             }

@@ -1031,6 +1031,11 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::SelectionEditing => "Sample only the editing layer",
                 CommandId::SelectionReference => "Sample layers marked as references",
                 CommandId::CloneSourceArm => "Click to choose where retouching copies from",
+                CommandId::Clone => "Paint with pixels copied from another part of the image",
+                CommandId::CloneAligned => "Keep the source moving with the brush across strokes",
+                CommandId::CloneFlipHorizontal => "Mirror the copied pixels left to right",
+                CommandId::CloneFlipVertical => "Mirror the copied pixels top to bottom",
+                CommandId::CloneResetOffset => "Start the next stroke at the source disc again",
 
                 CommandId::Move => "Move and transform artwork or guides",
                 CommandId::MoveLeaveCopy => "Keep the original in place when Move drags selected pixels; Alt does the opposite",
@@ -1235,7 +1240,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
 pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
     CommandId::ALL
         .into_iter()
-        .filter(|id| id.offered_on(platform))
+        .filter(|id| id.available_on(platform))
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
         .chain([ToolbarControl::ColorPicker, ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS])

@@ -8,6 +8,8 @@ use layer_engine::{
     ViewTransform, input_queue,
 };
 use layer_render::{RetouchPreparation, ViewState};
+#[path = "clone_tests.rs"]
+mod clone;
 
 const SIZE: [u32; 2] = [768, 512];
 const TARGET: LayerId = LayerId(1);
@@ -255,7 +257,7 @@ fn the_reference_cache_follows_its_frame_and_evicts_the_least_recent_page() {
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     r.prepare_retouch(Some(&RetouchPreparation {
         target: TARGET,
-        retouch: Retouch { source: RetouchSource::References, references: Arc::new([PHOTO].into()) },
+        retouch: Retouch { source: RetouchSource::References, references: Arc::new([PHOTO].into()), ..Retouch::default() },
         points: vec![Point { x: 10., y: 10. }],
     }));
     settle(&mut r, &layers);

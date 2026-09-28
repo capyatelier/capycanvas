@@ -232,12 +232,15 @@ fn rings(points: &[layer_core::Point], extent: [u32; 2]) -> Vec<[u32; 2]> {
 }
 
 /// A region of the target to sample, in the target's pixels, and the source
-/// point each destination pixel reads: `scale * destination + offset`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// point each destination pixel reads: `scale * destination + offset`. A
+/// stroke's own gather names it, with its target and source; otherwise the
+/// latest retouching stroke or the prepared tool is sampled.
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Gather {
     pub region: PixelRect,
     pub scale: [f32; 2],
     pub offset: [f32; 2],
+    pub stroke: Option<(StrokeId, LayerId, layer_core::Retouch)>,
 }
 
 pub(super) struct RetouchSources {
@@ -459,7 +462,11 @@ impl RetouchSources {
         let slot = self.cache.claim(r, coordinate);
         let destination = self.cache.slots[slot].page.view.clone();
         match view {
-            Some(view) => self.draw(r, &self.pipelines.copy, &destination, [&view, &r.empty_view, &r.empty_view, &r.empty_view], [&r.empty_view; 4], encoder),
+            Some(view) => {
+                let mut sources = [&r.empty_view; 8];
+                sources[0] = &view;
+                self.draw(r, &self.pipelines.copy, &destination, [PAGE_SIZE; 2], sources, encoder)
+            }
             None => drop(encoder.color_pass("retouch transparent reference", &destination, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT))),
         }
         self.counts.captures += 1;
@@ -471,37 +478,38 @@ impl RetouchSources {
         r: &WgpuRasterizer,
         pipeline: &wgpu::RenderPipeline,
         destination: &wgpu::TextureView,
-        targets: [&wgpu::TextureView; 4],
-        references: [&wgpu::TextureView; 4],
+        size: [u32; 2],
+        sources: [&wgpu::TextureView; 8],
         encoder: &mut crate::submission::CommandEncoder,
     ) {
         let binding = bindings::group(
             &r.device,
             "retouch sources",
             &self.pipelines.layout,
-            targets
+            sources
                 .into_iter()
-                .chain(references)
                 .map(wgpu::BindingResource::TextureView)
                 .chain([self.parameters.as_entire_binding()]),
         );
         let mut pass = encoder.color_pass("retouch sources", destination, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
+        pass.set_scissor_rect(0, 0, size[0], size[1]);
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &binding, &[]);
         pass.draw(0..3, 0..1);
     }
 
-    /// The target page as the stroke found it: its stroke-start copy, or the
+    /// The target page as `stroke` found it: its stroke-start copy, or the
     /// live page when the stroke hasn't written it.
     fn target_page(
         &mut self,
         r: &mut WgpuRasterizer,
         target: LayerId,
+        stroke: Option<StrokeId>,
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Option<wgpu::TextureView>, GpuRasterError> {
-        if let Some(stroke) = self.stroke.as_ref().filter(|s| s.target == target)
-            && let Some(copy) = stroke.pages.get(&coordinate)
+        if let Some(pages) = self.stroke.as_ref().filter(|s| s.target == target && stroke.is_none_or(|id| id == s.id))
+            && let Some(copy) = pages.pages.get(&coordinate)
         {
             return Ok(copy.map(|slot| self.pool[slot].view.clone()));
         }
@@ -559,10 +567,11 @@ impl RetouchSources {
         gather: Gather,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<bool, GpuRasterError> {
-        let (target, retouch) = match (&self.stroke, &self.prepared) {
-            (Some(stroke), _) => (stroke.target, stroke.retouch.clone()),
-            (None, Some(prepared)) => (prepared.target, prepared.retouch.clone()),
-            (None, None) => return Err(GpuRasterError::MissingPaintLayer(LayerId(0))),
+        let (target, retouch, stroke) = match (gather.stroke.clone(), &self.stroke, &self.prepared) {
+            (Some((stroke, target, retouch)), ..) => (target, retouch, Some(stroke)),
+            (None, Some(stroke), _) => (stroke.target, stroke.retouch.clone(), None),
+            (None, None, Some(prepared)) => (prepared.target, prepared.retouch.clone(), None),
+            (None, None, None) => return Err(GpuRasterError::MissingPaintLayer(LayerId(0))),
         };
         let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
         let layer_core::Affine([a, b, c, d, tx, ty]) = layer_core::target_transform(&frame.layers, target);
@@ -594,7 +603,7 @@ impl RetouchSources {
                     .then_some([x as u32, y as u32])
             };
             if let Some(coordinate) = page(target_block) {
-                targets[i] = self.target_page(r, target, coordinate, encoder)?;
+                targets[i] = self.target_page(r, target, stroke, coordinate, encoder)?;
             }
             if references
                 && let Some(coordinate) = page(reference_block)
@@ -635,7 +644,8 @@ impl RetouchSources {
         let view = |view: &Option<wgpu::TextureView>| view.clone().unwrap_or_else(|| empty.clone());
         let targets = targets.each_ref().map(view);
         let below = below.each_ref().map(view);
-        self.draw(r, &self.pipelines.gather, destination, targets.each_ref(), below.each_ref(), encoder);
+        let sources = std::array::from_fn(|i| if i < 4 { &targets[i] } else { &below[i - 4] });
+        self.draw(r, &self.pipelines.gather, destination, [region.width(), region.height()], sources, encoder);
         Ok(self.counts.misses == misses)
     }
 
@@ -825,7 +835,7 @@ impl WgpuRasterizer {
             &self.device,
             &wgpu::CommandEncoderDescriptor { label: Some("retouch source") },
         );
-        let complete = self.encode_retouch_gather(destination, Gather { region, scale, offset }, &mut encoder)?;
+        let complete = self.encode_retouch_gather(destination, Gather { region, scale, offset, stroke: None }, &mut encoder)?;
         self.uploads.finish(&encoder);
         self.last_submission = Some(encoder.submit(&self.queue));
         Ok(complete)
