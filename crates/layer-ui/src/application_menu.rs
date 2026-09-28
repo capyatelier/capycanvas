@@ -55,7 +55,7 @@ impl ApplicationMenu {
     pub fn label(self) -> &'static str {
         match self {
             Self::File => FILE_MENU.label,
-            Self::Edit => EDIT_MENU.label,
+            Self::Edit => "Edit",
             Self::Layer => "Layer",
             Self::Select => "Select",
             Self::Filter => "Filter",
@@ -131,6 +131,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ],
             },
             M::Layer if self.selection_masks.quick() => self.quick_mask_menu(),
+            M::Edit => ContextMenu { title: menu.label().into(), sections: vec![
+                vec![command(CommandId::SearchCommands)],
+                [CommandId::Undo, CommandId::Redo].map(command).into(),
+                vec![command(CommandId::PasteImage)],
+                [CommandId::RasterizeSource, CommandId::RevertToOriginal, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer].map(command).into(),
+                vec![command(CommandId::ScaleRotate)],
+                vec![ContextMenuItem::submenu("Image", vec![[CommandId::CropCanvasToSelection, CommandId::CanvasSize].map(command).into()])],
+                [CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth].map(command).into(),
+                vec![command(CommandId::Settings)],
+            ] },
             M::Select => ContextMenu { title: menu.label().into(), sections: vec![
                 [CommandId::SelectAll, CommandId::Deselect, CommandId::Reselect, CommandId::InvertSelection].into_iter().map(command).collect(),
                 [CommandId::QuickMask, CommandId::NewSelectionLayer, CommandId::SaveSelectionLayer].into_iter().map(command).collect(),
@@ -157,7 +167,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => {
                 let sections: &[&[CommandId]] = match menu {
                     M::File => FILE_MENU.sections,
-                    M::Edit => EDIT_MENU.sections,
                     M::View => VIEW_MENU.sections,
                     M::Help => &[
                         &[CommandId::KeyboardShortcuts],

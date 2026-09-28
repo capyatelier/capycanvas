@@ -165,6 +165,7 @@ fn short_label(command: CommandId) -> &'static str {
         CommandId::DeleteRuler => "Delete",
         CommandId::SnapRulers => "Snap",
         CommandId::ShowRulers => "Guides",
+        CommandId::CropCanvasToSelection => "Crop",
         _ => command.label(),
     }
 }
@@ -278,6 +279,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 PlanItem::Menu(CanvasBarMenu::Adjust),
                 command(CommandId::FillSelection),
                 PlanItem::Menu(CanvasBarMenu::Clear),
+                command(CommandId::CropCanvasToSelection),
                 command(CommandId::QuickMask),
                 command(CommandId::SaveSelectionLayer),
             ],

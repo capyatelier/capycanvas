@@ -700,6 +700,35 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
+    /// The project limits, and the renderer's, that a canvas change must fit.
+    pub fn geometry_limits(&self) -> layer_core::GeometryLimits {
+        layer_core::GeometryLimits {
+            project: layer_core::ProjectLimits::default(),
+            device_dimension: self.backend.max_document_dimension(),
+        }
+    }
+
+    /// Move the canvas to `geometry` in one undo step. Limits are checked
+    /// before anything changes; a crop changes only metadata.
+    pub fn apply_canvas_geometry(
+        &mut self,
+        geometry: &layer_core::CanvasGeometry,
+    ) -> Result<(), layer_core::CanvasGeometryError> {
+        self.flush_pending_edits()?;
+        if self.has_active_stroke() {
+            return Err(DocumentError::InvalidLayerOperation("Finish the stroke first").into());
+        }
+        let edit = self.document().canvas_geometry_edit(geometry, self.geometry_limits())?;
+        self.apply_edit(edit)?;
+        debug_assert!(self.document().extents_cover_canvas());
+        Ok(())
+    }
+
+    /// Where the canvas origin moves if the next undo, or redo, runs.
+    pub fn history_canvas_origin(&self, redo: bool) -> Option<[i32; 2]> {
+        self.editor.next_history_edit(redo).and_then(Edit::canvas_origin)
+    }
+
     pub fn move_layer(&mut self, id: LayerId, to: usize) -> Result<(), DocumentError> {
         self.apply_edit(Edit::MoveLayer { id, to })
     }
@@ -868,8 +897,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let next = self.editor.next_history_edit(redo);
         let image = next.is_some_and(|edit| edit.changes_image());
         let raster_only = self.backend.supports_raster_damage() && next.is_some_and(|edit| edit.only_raster_updates());
+        let resized = next.is_some_and(|edit| edit.canvas_origin().is_some());
         let changed = if redo { self.editor.redo()? } else { self.editor.undo()? };
         self.transform_preview = None;
+        self.rebuild_all |= changed && resized;
         self.composite_all |= changed && image && !raster_only;
         self.raster_dirty |= changed && raster_only;
         Ok(changed)
@@ -963,7 +994,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         prepare(&mut edit, self.document(), &mut operation_batches);
         fn rebuild_needed(document: &Document, edit: &Edit) -> bool {
             match edit {
-                Edit::SetColor { .. } => true,
+                Edit::SetColor { .. } | Edit::SetCanvasSize { .. } => true,
                 Edit::InsertLayer { layer, .. } => layer.source.is_some(),
                 Edit::Batch(edits) => edits.iter().any(|e| rebuild_needed(document, e)),
                 // A batch may replace a layer inserted earlier in that batch;

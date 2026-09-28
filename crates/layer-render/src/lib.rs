@@ -592,6 +592,11 @@ pub trait CanvasRenderer {
     fn supports_raster_damage(&self) -> bool {
         false
     }
+    /// The largest canvas side this renderer can compose. Geometry commands
+    /// check it before they commit; `u32::MAX` means no renderer limit.
+    fn max_document_dimension(&self) -> u32 {
+        u32::MAX
+    }
     /// Host frame-mailbox backpressure before consuming input.
     fn can_submit(&self) -> bool {
         true

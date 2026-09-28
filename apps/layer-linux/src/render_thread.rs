@@ -583,6 +583,9 @@ impl CanvasRenderer for RenderWorker {
     fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> { self.adopt_color(color) }
     fn supports_tiled_sources(&self) -> bool { true }
     fn supports_raster_damage(&self) -> bool { true }
+    fn max_document_dimension(&self) -> u32 {
+        self.snapshot_gpu.as_ref().map_or(u32::MAX, |gpu| gpu.max_document_dimension())
+    }
     fn can_submit(&self) -> bool {
         self.in_flight.load(Ordering::Acquire) < 2
     }

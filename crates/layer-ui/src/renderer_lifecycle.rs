@@ -170,6 +170,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         match action {
             UiAction::Invoke { command } => Self::command_without_renderer(*command),
             UiAction::OpenSettings { .. } | UiAction::Preferences { .. } | UiAction::SetTheme { .. } => true,
+            UiAction::CanvasSize { action } => *action == CanvasSizeAction::Cancel,
             _ => action.is_host_report(),
         }
     }

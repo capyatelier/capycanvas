@@ -74,6 +74,7 @@ pub struct LayersView {
     pub quick_mask: bool,
     pub mask_editing: Option<MaskEditingView>,
     pub selection_resize: Option<super::selection_masks::SelectionResizeView>,
+    pub canvas_size: Option<super::canvas_size::CanvasSizeView>,
     pub can_reference: bool,
     pub can_delete: bool,
     pub references_selected: bool,
@@ -1943,6 +1944,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         let inverse = self.engine.document().layer_transform(id).inverse().ok_or("Invalid layer placement")?;
         let placement = layer_core::Affine::translation(offset).then(inverse);
         let mut coverage = LayerMask::reveal_all(self.engine.allocate_layer_id(), Point::default());
+        let doc = self.engine.document();
+        let [w, h] = [doc.width as f32, doc.height as f32];
+        let hidden = doc.target_extent(id) != [doc.width, doc.height] || doc.layer_transform(id) != layer_core::Affine::IDENTITY;
+        let selection = match selection {
+            None if hidden => Some(
+                Selection::polygon([[0., 0.], [w, 0.], [w, h], [0., h]].map(|[x, y]| Point { x, y }).to_vec())
+                    .map_err(error)?,
+            ),
+            selection => selection,
+        };
         if let Some(selection) = selection {
             coverage.default_coverage = f32::from(selection.inverted);
             coverage.initial = Some(selection.transformed(inverse).map_err(error)?);

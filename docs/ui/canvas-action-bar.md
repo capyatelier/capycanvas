@@ -17,7 +17,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, macOS and
 | Quick Mask | Quick Mask is on | "Quick Mask" · Invert, Fill, Clear, Refine ▾, Save as Selection Layer · Exit | Bottom edge |
 | Selection Layer | A Selection Layer is being edited | "Editing *name*" · Load, Invert · Return to Artwork | Bottom edge |
 | Layer mask | A layer's mask is being edited | "Editing *layer* mask" · Invert, Disable, Apply Mask · Edit Content | Bottom edge |
-| Selection | A selection exists and a selection tool or Move is active, or a command such as Select All just made it | Deselect, Invert, Copy to Layer ▾, Transform, Refine ▾, Mask, Adjust ▾, Fill, Clear ▾, Quick Mask, Save as Selection Layer | Beside the selection |
+| Selection | A selection exists and a selection tool or Move is active, or a command such as Select All just made it | Deselect, Invert, Copy to Layer ▾, Transform, Refine ▾, Mask, Adjust ▾, Fill, Clear ▾, Crop, Quick Mask, Save as Selection Layer | Beside the selection |
 
 - **Precedence:** a transform or placement, then a polygon under construction, then a selected guide, then a mode, then the selection.
 - **Modes** (Quick Mask, Selection Layer and layer-mask editing) have no object to sit beside, so they use the bottom edge with a label, their actions and an accented exit. They show under every tool, including the painting tools these modes choose. Their exits keep every edit; there is no Apply.
@@ -42,7 +42,8 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, macOS and
   - **Clear ▾:** Clear Selected Pixels (the primary command) and Clear Outside Selection.
 - **More:** lists the items that did not fit, then the context's own menu (the full Select menu for selections), then the bar toggle.
 - **Distort on photo placements:** refused with the route that works: select all, then transform the pixels.
-- **Not on the bar:** Layer › New › Solid Color Fill and Gradient Fill (which also take the selection as their mask) and Revert to Original Photo have no bar item; menus and command search reach them.
+- **Crop:** Crop Canvas to Selection crops the canvas to the bounds of the selection's coverage, as metadata: pixels outside stay on their layers and reappear when the canvas grows. It is disabled, with a reason, for an inverted selection.
+- **Not on the bar:** Canvas Size… (Edit › Image) and Layer › New › Solid Color Fill and Gradient Fill (which also take the selection as their mask) and Revert to Original Photo have no bar item; menus and command search reach them.
 
 ## Placement
 

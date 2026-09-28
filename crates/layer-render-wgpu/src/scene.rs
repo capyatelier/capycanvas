@@ -864,9 +864,7 @@ impl Scene {
                             y: origin.y + PAGE_SIZE as f32,
                         },
                     },
-                    layer.source.as_ref().map_or(r.document_extent, |source| {
-                        std::array::from_fn(|i| r.document_extent[i].max(source.extent[i]))
-                    }),
+                    layer.local_extent(r.document_extent),
                 );
                 for c in page_coordinates(region) {
                     let rect = local_rect(c, offset, tile);

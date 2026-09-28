@@ -64,12 +64,14 @@ pub fn target_transform(layers: &[Layer], id: LayerId) -> Affine {
 }
 
 impl Layer {
-    /// Finite editable local extent. A retained photo can be larger than its
-    /// document; placement never changes this extent or crops its backing.
+    /// Finite editable local extent: the canvas, the extent a canvas change
+    /// left behind and a retained photo's size, whichever is larger. Pixels
+    /// beyond the canvas stay hidden until the canvas grows over them again;
+    /// placement never changes this extent or crops its backing.
     pub fn local_extent(&self, canvas: [u32; 2]) -> [u32; 2] {
-        self.source.as_ref().map_or(canvas, |source| {
-            std::array::from_fn(|i| canvas[i].max(source.extent[i]))
-        })
+        let stored = self.properties.extent.unwrap_or_default();
+        let source = self.source.as_ref().map_or([0; 2], |source| source.extent);
+        std::array::from_fn(|i| canvas[i].max(stored[i]).max(source[i]))
     }
     /// Pending Apply mask keeps coverage alive until its submission completes.
     pub fn masks(&self) -> impl Iterator<Item = &LayerMask> {
@@ -428,6 +430,10 @@ pub struct LayerProperties {
     /// Only Selection Layers store these display and painting settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_mask: Option<SelectionMaskProperties>,
+    /// Local extent kept when the canvas shrinks, so cropped pixels survive.
+    /// It never shrinks with the canvas; see `Layer::local_extent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extent: Option<[u32; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1125,6 +1131,9 @@ impl Document {
             || paper.is_some_and(|p| p.id == layer.id && layer.kind != LayerKind::Background)
         {
             return Err(DocumentError::ProtectedLayer(layer.id));
+        }
+        if layer.properties.extent.is_some_and(|e| e.iter().any(|v| *v > crate::MAX_EXTENT)) {
+            return Err(DocumentError::InvalidLayerOperation("Layer extent exceeds the image limit"));
         }
         if !layer.opacity.is_finite()
             || !(0.0..=1.0).contains(&layer.opacity)

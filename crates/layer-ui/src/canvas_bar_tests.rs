@@ -423,6 +423,7 @@ fn selection_bar_follows_selection_tools_commands_and_history() {
             CommandId::MaskSelection,
             CommandId::FillSelection,
             CommandId::ClearSelected,
+            CommandId::CropCanvasToSelection,
             CommandId::QuickMask,
             CommandId::SaveSelectionLayer,
         ]
@@ -439,6 +440,7 @@ fn selection_bar_follows_selection_tools_commands_and_history() {
             ("Adjust", Some(CanvasBarMenu::Adjust)),
             ("Fill", None),
             ("Clear", Some(CanvasBarMenu::Clear)),
+            ("Crop", None),
             ("Quick Mask", None),
             ("Save", None),
         ],

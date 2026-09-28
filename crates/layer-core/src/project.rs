@@ -81,7 +81,7 @@ impl Default for ProjectLimits {
             asset_bytes: 512 * 1024 * 1024,
             raster_bytes: 1024 * 1024 * 1024,
             tiles: 16384,
-            dimension: 32768,
+            dimension: crate::MAX_EXTENT,
             layers: 4096,
         }
     }

@@ -196,6 +196,29 @@ impl SelectionPixels {
     pub fn words(&self) -> &[u32] {
         &self.words
     }
+    /// Exact `[x0, y0, x1, y1]` bounds of the nonzero coverage, scanned
+    /// within the stored bounds, which may be conservative. Empty when none.
+    pub fn coverage_bounds(&self) -> [u32; 4] {
+        let count = self.pixels_per_word();
+        let bits = 32 / count;
+        let stride = self.extent[0].div_ceil(count) as usize;
+        let [x0, y0, x1, y1] = self.bounds;
+        let mut result = [u32::MAX, u32::MAX, 0, 0];
+        for y in y0..y1 {
+            let row = &self.words[y as usize * stride..(y as usize + 1) * stride];
+            for (index, &word) in row.iter().enumerate().take(x1.div_ceil(count) as usize).skip((x0 / count) as usize) {
+                if word == 0 {
+                    continue;
+                }
+                let x = index as u32 * count;
+                result[0] = result[0].min(x + word.trailing_zeros() / bits);
+                result[2] = result[2].max(x + count - word.leading_zeros() / bits);
+                result[1] = result[1].min(y);
+                result[3] = y + 1;
+            }
+        }
+        if result[0] == u32::MAX { [0; 4] } else { result }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -307,6 +330,21 @@ impl Selection {
             }
         }
         self.affine.bounds(bounds)
+    }
+    /// Document bounds of the nonzero coverage, ignoring `inverted` and
+    /// without the sampling margin `bounds` adds.
+    pub fn coverage_bounds(&self) -> Rect {
+        let local = match &self.shape {
+            SelectionShape::Contours(paths) => Rect::around(paths.iter().flat_map(|c| c.iter().copied())),
+            SelectionShape::Pixels(pixels) => match pixels.coverage_bounds() {
+                [x0, y0, x1, y1] if x0 < x1 && y0 < y1 => Rect {
+                    min: Point { x: x0 as f32, y: y0 as f32 },
+                    max: Point { x: x1 as f32, y: y1 as f32 },
+                },
+                _ => Rect::EMPTY,
+            },
+        };
+        self.affine.bounds(local)
     }
     pub fn translated(&self, delta: Point) -> Self {
         Self {

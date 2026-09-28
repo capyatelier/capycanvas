@@ -842,3 +842,49 @@ fn native_canvas_bar_guide() {
     pump(50);
 }
 
+#[test]
+#[ignore = "isolated compositor, GPU and native mouse delivery"]
+fn native_crop_on_the_selection_bar_then_canvas_size_shows_the_hidden_pixels() {
+    use super::photo_edit::{apply_canvas_size, canvas_size_number, shown as pixel};
+    let app = native_test_app("art.capycanvas.CropToSelection");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    w.dispatch(UiAction::SetColor { rgba: [0.1, 0.3, 0.8, 1.] });
+    let before = document(&w);
+    let [width, height] = [before.width as f32, before.height as f32];
+    let paint = before.active_layer;
+    let rectangle = |[x0, y0, x1, y1]: [f32; 4]| [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
+    w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+    native_pen_path(&w, &rectangle([width * 0.2, height * 0.2, width * 0.8, height * 0.8]));
+    w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
+    until(|| !document(&w).layer(paint).unwrap().raster.is_empty(), "the fill paints the selection");
+    let filled = document(&w).layer(paint).unwrap().raster.clone();
+    native_pen_path(&w, &rectangle([width * 0.4, height * 0.4, width * 0.6, height * 0.6]));
+    until(|| state(&w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Selection) && shown(&w), "the selection bar");
+    let mut native = remote_input();
+    press_bar_command(&w, &mut native, "canvas-bar-CropCanvasToSelection", "Crop Canvas to Selection");
+    until(|| document(&w).width < before.width, "Crop on the selection bar crops the canvas");
+    let cropped = document(&w);
+    assert!((cropped.width as f32 - width * 0.2).abs() <= 2. && (cropped.height as f32 - height * 0.2).abs() <= 2.);
+    assert!(cropped.layer(paint).unwrap().raster == filled, "a crop changes only metadata");
+    w.dispatch(UiAction::Invoke { command: CommandId::CanvasSize });
+    until(|| state(&w).layer_tools.canvas_size.is_some(), "Canvas Size opens");
+    for (axis, value) in [("width", before.width), ("height", before.height)] {
+        edit_number(&canvas_size_number(&w, axis), &value.to_string());
+    }
+    apply_canvas_size(&w, &mut native);
+    let grown = document(&w);
+    assert_eq!([grown.width, grown.height], [before.width, before.height]);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    pump(400);
+    let hidden = pixel(&w, [width * 0.3, height * 0.5]);
+    assert!(hidden[2] > 150 && hidden[0] < 100, "the pixels hidden by the crop show again: {hidden:?}");
+    let paper = pixel(&w, [width * 0.1, height * 0.1]);
+    assert!(paper.iter().take(3).all(|v| *v > 200), "outside the fill the paper shows: {paper:?}");
+    native.finish();
+    w.window.close();
+    pump(50);
+}

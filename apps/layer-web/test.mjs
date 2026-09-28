@@ -55,6 +55,7 @@ import { checkZoomReadout } from "./zoom-readout-journey.test.mjs";
 import { checkScreenStatus } from "./screen-status-journey.test.mjs";
 import { checkPipelineTakeover } from "./pipeline-takeover.test.mjs";
 import { checkPhotoEdit } from "./photo-edit-journey.test.mjs";
+import { checkCanvasSize } from "./canvas-size-journey.test.mjs";
 import { checkEditor } from "./editor.test.mjs";
 import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
@@ -208,6 +209,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--photo-edit")) {
     await checkPhotoEdit({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--canvas-size")) {
+    await checkCanvasSize({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--photo-paint")) {
     await checkPhotoPaint({call,evaluate,settle});

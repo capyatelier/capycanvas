@@ -128,6 +128,7 @@ pub use numeric::{
 };
 pub use session::{Notice, NoticeAction};
 pub use session::{ScreenChip, ScreenDetails, ScreenState};
+pub use session::{CanvasAnchor, CanvasAnchorChoice, CanvasSizeAction, CanvasSizeUnit, CanvasSizeView, CanvasUnitChoice};
 pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionMenu, SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
     ChoicePresentation, HostRequest, HostRequestKind, Platform,
@@ -219,18 +220,6 @@ pub struct MenuSpec {
     pub label: &'static str,
     pub sections: &'static [&'static [CommandId]],
 }
-pub const EDIT_MENU: MenuSpec = MenuSpec {
-    label: "Edit",
-    sections: &[
-        &[CommandId::SearchCommands],
-        &[CommandId::Undo, CommandId::Redo],
-        &[CommandId::PasteImage],
-        &[CommandId::RasterizeSource, CommandId::RevertToOriginal, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer],
-        &[CommandId::ScaleRotate],
-        &[CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth],
-        &[CommandId::Settings],
-    ],
-};
 pub const VIEW_MENU: MenuSpec = MenuSpec {
     label: "View",
     sections: &[
@@ -491,6 +480,8 @@ command_ids! {
     EditLayerMask,
     EditLayerContent,
     LassoFill,
+    CanvasSize,
+    CropCanvasToSelection,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -660,6 +651,8 @@ impl CommandId {
             Self::ApplyLayerMask | Self::EditLayerMask => "mask",
             Self::EditLayerContent => "brush",
             Self::LassoFill => "lasso-fill",
+            Self::CanvasSize => "canvas-size",
+            Self::CropCanvasToSelection => "crop",
         })
     }
     pub const TOOLS: [Self; 26] = [
@@ -849,6 +842,8 @@ impl CommandId {
             Self::EditLayerMask => "Edit Layer Mask",
             Self::EditLayerContent => "Edit Layer Content",
             Self::LassoFill => "Lasso fill",
+            Self::CanvasSize => "Canvas Size…",
+            Self::CropCanvasToSelection => "Crop Canvas to Selection",
         }
     }
 }
@@ -990,6 +985,7 @@ pub struct UiState {
 pub enum UiAction {
     CommandSearch { action: CommandSearchAction },
     Selection { action: SelectionAction },
+    CanvasSize { action: CanvasSizeAction },
     Tonal { action: TonalAction },
     ActivateHeaderItem {
         id: u32,

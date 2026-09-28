@@ -53,16 +53,21 @@ parameters and metadata and remain editable after reopening.
 
 The project also retains dimensions, layer/group order and properties, source
 images, masks, selection, rulers, references, allocators and the edit target.
+The canvas is a window over each layer's local extent. A layer may store the
+extent a canvas crop left behind (`properties.extent`), so tiles outside the canvas
+are saved and reappear when the canvas grows; they count toward the tile limit.
 Per-contact reservoirs, prediction, accumulation coverage, UI preferences, GPU
 handles, source filenames and undo history are excluded. Watercolor wetness and
 live edge settings are committed because they affect composition and later paint.
 
 ## Container and validation
 
-The header is the twelve bytes `CAPYRASTER\x08\0`, followed by a little-endian
+The header is the twelve bytes `CAPYRASTER\x09\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
 blobs and image roles/interpretations. Payload offsets are relative to the payload start.
+Readers accept version 8 and every later version, including recovery files.
+Version 9 adds the optional stored layer extent; a version 8 file reads with none.
 Version 8 fixes the tile encoding to one lossless LZ4 block per tile, without a
 frame header or prepended size. The pixel descriptor determines the exact decoded
 size, bounded to 1 MiB; the library's compression bound caps stored bytes. Painted

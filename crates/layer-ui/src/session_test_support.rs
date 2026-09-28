@@ -34,6 +34,7 @@ pub(crate) struct Recorder {
     pub(crate) filter_preview_takes: usize,
     pub(crate) filter_preview_cancels: usize,
     pub(crate) reject_filter_previews: bool,
+    pub(crate) max_dimension: Option<u32>,
 }
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
@@ -46,6 +47,7 @@ impl CanvasRenderer for Recorder {
         Ok(true)
     }
     fn supports_tiled_sources(&self) -> bool { self.tiled_sources }
+    fn max_document_dimension(&self) -> u32 { self.max_dimension.unwrap_or(u32::MAX) }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry_enabled = enabled;
     }

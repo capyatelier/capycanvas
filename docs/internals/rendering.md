@@ -23,6 +23,36 @@ so sparse paint pages do not make total memory independent of document size.
 These pages are software-managed regions of the document, separate from the
 small on-chip tiles used internally by some GPU architectures.
 
+### Layer extents and the canvas window
+
+Each layer's pages live in its own local extent,
+[`Layer::local_extent`](../../crates/layer-core/src/layers.rs): the canvas size, the
+extent a canvas change left behind (`LayerProperties.extent`) and a placed photo's
+size, whichever is larger. The canvas is a window over those extents. Composition,
+presentation and export cover the canvas only; pixels outside it stay on their
+layers, hidden, and count toward the project's tile and byte limits.
+
+Canvas geometry commands build one batch in
+[`canvas_geometry.rs`](../../crates/layer-core/src/canvas_geometry.rs):
+- A crop only moves root offsets and stores the old extent. It never copies pixels,
+  so growing the canvas again shows the hidden pixels.
+- Growing the canvas left or up *rebases* a paint layer without a source by whole
+  tiles: its tile keys shift, still sharing their backing, and its offset, mask
+  offset and mask `initial` coverage move the other way. Tile coordinates stay
+  unsigned. A layer with a source never rebases, so the new strip beside a photo is
+  not paintable, as beside a moved photo.
+- After every geometry edit, each paint layer without a source, and each mask,
+  covers the canvas window in its local coordinates.
+- A fill, gradient or figure with no selection is bounded to the canvas window on
+  a layer with hidden pixels. Brush dabs past the canvas edge may write hidden
+  pixels, as they already do on photo layers.
+
+A canvas size change resets the renderer's paint pages and restores every layer
+from its raster revision, including on undo and redo
+([`tests/canvas_geometry.rs`](../../crates/layer-render-wgpu/tests/canvas_geometry.rs)).
+Limits are checked before the edit commits, including the device's texture limit
+through `CanvasRenderer::max_document_dimension`.
+
 The viewport is the presentation of that document at the current camera position,
 zoom and rotation. The shared
 [`ViewportPresenter`](../../crates/layer-render-wgpu/src/present.rs) samples the

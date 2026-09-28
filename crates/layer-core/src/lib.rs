@@ -42,6 +42,8 @@ pub use projective::{Projective, clip_convex};
 mod warp;
 pub use warp::{MeshMap, Tessellation};
 mod project;
+mod canvas_geometry;
+pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasRect, GeometryLimits};
 mod project_storage;
 pub use project_storage::SelectionIndex as ProjectSelections;
 mod history_budget;
@@ -65,6 +67,9 @@ use std::{
 };
 
 pub type Revision = u64;
+
+/// Largest canvas or layer extent, in pixels per side.
+pub const MAX_EXTENT: u32 = 32768;
 
 #[derive(
     Clone,
@@ -1366,6 +1371,20 @@ impl Document {
                 }
                 Edit::SetProof(std::mem::replace(&mut self.proof, recipe))
             }
+            Edit::SetCanvasSize { size, origin } => {
+                if size.contains(&0)
+                    || size.iter().any(|v| *v > MAX_EXTENT)
+                    || origin.iter().any(|v| v.unsigned_abs() > 2 * MAX_EXTENT)
+                {
+                    return Err(DocumentError::InvalidLayerOperation("Invalid canvas size"));
+                }
+                let previous = [self.width, self.height];
+                [self.width, self.height] = size;
+                Edit::SetCanvasSize {
+                    size: previous,
+                    origin: origin.map(|v| -v),
+                }
+            }
             Edit::SetRaster { target, revision } => {
                 let raster = self
                     .target_raster_mut(target)
@@ -1612,6 +1631,12 @@ pub enum Edit {
         target: LayerId,
         revision: raster::RasterRevision,
     },
+    /// The canvas becomes `size` pixels, and the point `origin` of the old
+    /// canvas becomes the new top-left. Layers move in the same batch.
+    SetCanvasSize {
+        size: [u32; 2],
+        origin: [i32; 2],
+    },
     Batch(Vec<Edit>),
     ReplaceLayer(Box<Layer>),
     SetMaskTarget(bool),
@@ -1676,6 +1701,16 @@ impl Edit {
                 }
             }
             _ => false,
+        }
+    }
+
+    /// Where the new canvas's top-left lies in the old canvas, when this edit
+    /// moves the canvas. Views shift by it so the image stays in place.
+    pub fn canvas_origin(&self) -> Option<[i32; 2]> {
+        match self {
+            Self::SetCanvasSize { origin, .. } => Some(*origin),
+            Self::Batch(edits) => edits.iter().find_map(Self::canvas_origin),
+            _ => None,
         }
     }
 

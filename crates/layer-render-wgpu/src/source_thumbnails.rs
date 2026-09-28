@@ -183,9 +183,9 @@ impl SourceThumbnails {
         tile_limit: usize,
     ) -> Result<bool, GpuRasterError> {
         let source = r.tiled_sources[&layer].clone();
-        // Same finite local backing as Layer::local_extent, including original
-        // pixels beyond the canvas. Placement changes only the display pass.
-        let extent = std::array::from_fn(|i| source.extent[i].max(r.document_extent[i]));
+        // The layer's finite local backing, including original pixels beyond
+        // the canvas. Placement changes only the display pass.
+        let extent = r.target_extent(layer);
         let weak = Arc::downgrade(&source);
         self.cache.retain(|c| {
             c.source.strong_count() > 0 && c.valid.load(std::sync::atomic::Ordering::Acquire)

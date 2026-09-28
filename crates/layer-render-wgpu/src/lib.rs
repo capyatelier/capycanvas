@@ -3277,6 +3277,9 @@ impl CanvasRenderer for WgpuRasterizer {
         self.native_edit.is_some()
     }
     fn supports_raster_damage(&self) -> bool { true }
+    fn max_document_dimension(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
         self.raster_restore_ready(packet)
     }

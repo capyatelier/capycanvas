@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1, M2.2, M2.4, M2.5 and M2.6. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2.1, M2.2, M2.4, M2.5, M2.6 and M3.1. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -615,10 +615,10 @@ Sizes: S ≤ ½ day, M ≈ 1 day, L 2–3 days, XL > 3 days.
   - Web and Android agents then work in parallel, each in its own worktree.
   - No more than three agents run at once.
 - **Verify before pushing:** check each agent's commit yourself (build, suites, and a tree that matches what was measured).
-- **The tablet:** Web and Android tests and measurements run on a reserved top tier tablet ([devices](devices.md)). Its target is 120 fps for every operation that moves on screen: strokes, drags, pan and zoom, and animations.
+- **Tablets:** reserve and run through `tools/devices/devices.py` ([devices](devices.md)). Performance targets count only on each tier's reference tablet ([performance targets](../PERFORMANCE_TARGETS.md)); the Huion Kamvas Pad 12 serves pen-input journeys.
 - **Shared renderer changes:** after any of them (M2.2 `Erase`, M3.1, M3.3, M4.1–M4.6), run the Android journey `AndroidInteractionTest#canvasActionBarJourneysAcrossDevices`, not only GTK.
 - **Cargo:** run `cargo test -p layer-core -p layer-engine -p layer-render-wgpu -p layer-ui -p layer-host`, then Clippy. [Known failures on main](testing.md#known-failures-on-main) are not this work's to chase.
-- **Performance gaps that already exist on main:** GTK `native_frame_pacing` with `photo24` presents the Transform scenario at about 13 ms per frame (GPU p99 17 ms), while GPen, Pan and Hand hold 8.33 ms.
+- **Performance gaps that already exist on main:** GTK `native_frame_pacing` with `photo24` presents the Transform scenario slower than GPen, Pan and Hand.
 
 ## Apple and Windows
 
@@ -678,7 +678,6 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - disabled reasons on `CommandState` and the shared notice;
   - T-15 refusals, and T-23 with `UseReferenceBelow`; a Wand or Fill click with no reference no longer fails the frame;
   - Android shows refusals and dispatch errors as notices instead of modal dialogs;
-  - `refresh_commands` costs 2.2 µs per call before and about 3 µs after, and the Android model grows by 4.5 KB.
 
 - **M2.2** on GTK, Web and Android:
   - bar menu items (Copy to Layer ▾, Refine ▾, Adjust ▾, Clear ▾);
@@ -690,13 +689,11 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - Actual Pixels (Ctrl+1 and Ctrl+Alt+0) at whole-pixel translations;
   - a zoom readout that opens a zoom field and the shared zoom menu;
   - lossless WebP export ("WebP · lossless", 8-bit RGB, refused above 16,384 px before rendering).
-  - The Web and Android readout keeps pan at 118.8 Hz and pinch at 117.7 Hz on the MovinkPad 14, unchanged.
 - **M2.5** on GTK, Web and Android:
   - Liquify Twirl Clockwise, Pinch, Expand and Crystals presets (36–39), with Pinch and Expand now matching Photoshop's Pucker and Bloat. The existing preset 13 measured counterclockwise, so it is now labelled "Liquify Twirl Counterclockwise".
   - Solid Color and Gradient Fill layers in Layer › New, masked by the selection.
   - "Use current colour" buckets on every effect colour, in labelled rows.
   - Vignette down to −100; Denoise renamed "Edge-Preserving Smooth"; Revert to Original Photo.
-  - A stylus Pinch stroke on the MovinkPad 14 completes GPU work every 2.6 ms (p50), 5.0 ms (p99).
 - **M2.4** on GTK, Web and Android:
   - bottom-edge bars for Quick Mask, Selection Layer editing and layer-mask editing, each with a label and an accented exit;
   - a guide bar (Delete, Snap, Guides) beside a guide selected with the Ruler or Move tool;
@@ -704,17 +701,27 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - commands to load and invert Selection Layers, invert, enable and apply layer masks, and move between a layer's mask and its content;
   - Lasso Fill as a tool command.
   - Bar precedence is transform, polygon, guide, mode, then selection.
+- **M3.1** on GTK, Web and Android:
+  - the editable extent: layers keep pixels outside the canvas; `.capy` v9 reads v8;
+  - one canvas geometry plan (`canvas_geometry.rs`, `Edit::SetCanvasSize`), with limits checked before commit;
+  - Canvas Size… with a 3×3 anchor, and Crop Canvas to Selection (Crop on the selection bar);
+  - the Edit ▸ Image submenu.
 
 **Follow-ups**
 - **Erase right after a stroke:** an Erase on a raster that is still pending, or that holds watercolor or wet state, damages the whole layer so the layer settles. Clearing right after a stroke therefore rewrites every page. It is a still-frame cost.
 - **Copy to New Layer** drops the source's mask and clipping, and the copy is unlocked. Copying from a locked layer is allowed; cutting is not.
-- **Liquify render rate:** a 240 Hz stylus Liquify stroke renders about 400 times a second on Android, more than its input rate. Check whether contacts are rendered more than once.
+- **Liquify render rate:** a 240 Hz stylus Liquify stroke renders more often than its input rate on Android. Check whether contacts are rendered more than once.
 - **Stale Web filter copy:** `apps/layer-web/filters` was committed in `3618b3c2`, although nothing reads it (filters load from `assets/filters`). It is out of date; delete it or regenerate it.
 - **Headless Web `--selection-tools`:** it now stops at its first workspace submit on `origin/main` too.
 - **GTK tablet proxy:** GTK `--tablet` runs lose their Wayland connection whenever Quick Mask or Selection Layer rows change (also on `origin/main`), so `native_canvas_bar_modes` runs with mouse and touch only.
 - **Android bar captions** clip their last glyph (for example "Apply", "Disable" and "Edit Content").
 - **Accessible names:** relabelled bar buttons are announced by their command's label ("Enable Layer Mask" for a button reading "Disable").
 - **Headless Web `--layers`** stops at "Delete mask" because `add_mask` is refused right after a Lasso Fill stroke; this also happens on `origin/main`.
+- **Canvas size changes rebuild every layer:** the renderer's resize reset re-uploads every layer after a canvas size change, even when only the canvas window moves. Keep layer textures when their extents are unchanged; scheduled before M3.2 ships.
+- **Undo after a canvas change** is briefly disabled and says "Nothing to undo".
+- **Hidden pixels** can still be written by brush dabs past the canvas edge and by a fill through an inverted selection.
+- **Reselect** keeps the selection's position on undo of a canvas change.
+- **Eyedropper:** choosing another tool while the Eyedropper is active returns to the previous tool (also on `origin/main`).
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
 - **Apple and Windows:**
@@ -724,7 +731,8 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - open bar menu items (`CanvasBarItem.menu` and `icon`, through `canvas_bar_choice_menu`);
   - add icons for the new commands to Apple's coverage list;
   - draw a `checkable: false` action unpressed even when its command is selected (Android did not);
+  - the Canvas Size dialog (`layer_tools.canvas_size`) with its anchor picker;
   - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M2.3, M3 and M4. Record milestone completion in the research record's section 7.
+**Remaining:** M2.3, M3.2 to M3.7, and M4. Record milestone completion in the research record's section 7.

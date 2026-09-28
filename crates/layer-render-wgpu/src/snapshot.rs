@@ -112,6 +112,11 @@ impl SnapshotGpu {
         *self.device == *other.device
     }
 
+    /// The largest canvas side the shared device can compose.
+    pub fn max_document_dimension(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
     /// Run on the file/inspection worker. Cloned handles keep the device alive
     /// through this job even if its canvas closes; loss still fails the job.
     pub fn capture(

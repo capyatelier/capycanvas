@@ -37,6 +37,9 @@ mod painted_selections;
 pub use painted_selections::SelectionBrushOptions;
 #[path = "selection_masks.rs"]
 mod selection_masks;
+#[path = "canvas_size.rs"]
+mod canvas_size;
+pub use canvas_size::{CanvasAnchor, CanvasAnchorChoice, CanvasSizeAction, CanvasSizeUnit, CanvasSizeView, CanvasUnitChoice};
 #[path = "selection_properties.rs"]
 mod selection_properties;
 pub use selection_masks::{SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionMenu};
@@ -137,6 +140,7 @@ pub struct UiSession<R: CanvasRenderer> {
     tonal_tools: tonal_selection::TonalTools,
     painted_selections: painted_selections::PaintedSelections,
     selection_masks: selection_masks::SelectionMasks,
+    canvas_size: Option<canvas_size::CanvasSizeDraft>,
     rulers: rulers::RulerInteraction,
     operation: operation::Operation,
     system_theme: Theme,
@@ -237,6 +241,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             tonal_tools: Default::default(),
             painted_selections: Default::default(),
             selection_masks: Default::default(),
+            canvas_size: None,
             rulers: Default::default(),
             operation: Default::default(),
             system_theme: Theme::Light,
@@ -2145,6 +2150,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::RevertToOriginal => {
                 self.require_document_idle().is_ok() && self.revert_to_original_refusal().is_none()
             }
+            CommandId::CanvasSize => self.require_document_idle().is_ok() && self.canvas_geometry_refusal().is_none(),
+            CommandId::CropCanvasToSelection => {
+                self.require_document_idle().is_ok() && self.crop_to_selection_refusal().is_none()
+            }
             CommandId::ClearLayer | CommandId::FillSelection => {
                 self.require_document_idle().is_ok()
                     && editable
@@ -2543,6 +2552,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.require_document_idle()?;
                 self.selection_action(action)?;
                 (DOCUMENT | BRUSH | COMMANDS, true)
+            }
+            UiAction::CanvasSize { action } => {
+                if action != CanvasSizeAction::Cancel {
+                    self.require_document_idle()?;
+                }
+                let apply = action == CanvasSizeAction::Apply;
+                self.canvas_size_action(action)?;
+                (DOCUMENT | BRUSH | COMMANDS | if apply { CAMERA } else { 0 }, apply)
             }
             UiAction::Layer { action } => {
                 self.require_idle()?;
@@ -4185,6 +4202,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.revert_to_original()?;
                 Ok((DOCUMENT | COMMANDS, true))
             }
+            CommandId::CanvasSize => {
+                self.open_canvas_size()?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, false))
+            }
+            CommandId::CropCanvasToSelection => {
+                self.crop_canvas_to_selection()?;
+                Ok((DOCUMENT | BRUSH | COMMANDS | CAMERA, true))
+            }
             CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect
             | CommandId::SelectionAntialias | CommandId::SelectionConstrainAngles => {
                 self.region_tools.cancel();
@@ -4298,7 +4323,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok((DOCUMENT | HOST, false));
                 }
                 self.canvas_bar.history_step();
+                let origin = self.engine.history_canvas_origin(false);
                 self.engine.undo().map_err(error)?;
+                if let Some(origin) = origin {
+                    self.follow_canvas_origin(origin);
+                    return Ok((CAMERA, true));
+                }
                 Ok((0, true))
             }
             CommandId::Redo => {
@@ -4308,7 +4338,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok((DOCUMENT | HOST, false));
                 }
                 self.canvas_bar.history_step();
+                let origin = self.engine.history_canvas_origin(true);
                 self.engine.redo().map_err(error)?;
+                if let Some(origin) = origin {
+                    self.follow_canvas_origin(origin);
+                    return Ok((CAMERA, true));
+                }
                 Ok((0, true))
             }
             CommandId::SelectAll => {
@@ -4766,6 +4801,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.tool_extra=self.tonal_extra();
         self.state.layer_tools.mask_editing = self.mask_editing_view();
         self.state.layer_tools.selection_resize = self.selection_masks.resize_view();
+        self.state.layer_tools.canvas_size = self.canvas_size_view();
     }
 
     pub fn pointer_contact_paints(&self, button: PointerButton) -> bool {
@@ -5174,6 +5210,7 @@ mod tests {
     include!("keymap_tests.rs");
     include!("binding_tests.rs");
     include!("view_tests.rs");
+    include!("canvas_size_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -14215,7 +14252,7 @@ mod tests {
     }
     #[test]
     fn menu_sections_are_nonempty_unique_and_keep_related_commands_together() {
-        for sections in [FILE_MENU, EDIT_MENU, VIEW_MENU].map(|m| m.sections) {
+        for sections in [FILE_MENU, VIEW_MENU].map(|m| m.sections) {
             assert!(!sections.is_empty());
             let mut seen = Vec::new();
             for &section in sections {

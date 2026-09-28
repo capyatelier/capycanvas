@@ -12,7 +12,9 @@ pub use selections::SelectionIndex;
 #[cfg(test)]
 mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x08\0";
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x09\0";
+/// Version 8 has no stored layer extents; its layers read with none.
+const READABLE: [&[u8; 12]; 2] = [b"CAPYRASTER\x08\0", MAGIC];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -142,7 +144,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
 pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Project, String> {
     let mut magic = [0; 12];
     input.read_exact(&mut magic).map_err(io_error)?;
-    if &magic != MAGIC {
+    if !READABLE.contains(&&magic) {
         return Err("Unsupported Capy Canvas project version".into());
     }
     let mut length = [0; 8];
@@ -208,9 +210,9 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         }
         let owner = manifest.document.target_owner(raster.target).ok_or("Missing raster owner")?;
         let canvas = [manifest.document.width, manifest.document.height];
-        let extent = manifest.tiled_sources.extent(owner.id).map_or(canvas, |source| {
-            std::array::from_fn(|i| canvas[i].max(source[i]))
-        });
+        let source = manifest.tiled_sources.extent(owner.id).unwrap_or_default();
+        let stored = owner.properties.extent.unwrap_or_default();
+        let extent: [u32; 2] = std::array::from_fn(|i| canvas[i].max(source[i]).max(stored[i]));
         let mut keys = BTreeSet::new();
         for tile in &raster.tiles {
             let blob = manifest.blobs.get(tile.blob).ok_or("Missing raster blob")?;
@@ -462,6 +464,43 @@ mod tests {
         assert!(read(&sources).is_err());
         bytes[10] = 7;
         assert!(read(&bytes).is_err());
+        bytes[10] = 10;
+        assert!(read(&bytes).is_err());
+    }
+
+    #[test]
+    fn version_8_reads_without_extents_and_version_9_keeps_hidden_tiles() {
+        let mut project = fixture();
+        let mut bytes = Vec::new();
+        project.write(&mut bytes).unwrap();
+        assert_eq!(&bytes[..12], b"CAPYRASTER\x09\0");
+        let mut version_8 = bytes.clone();
+        version_8[10] = 8;
+        assert!(!String::from_utf8_lossy(&version_8).contains("\"extent\""));
+        let loaded = Project::read(version_8.as_slice(), Default::default()).unwrap();
+        assert!(loaded.document.layers.iter().all(|l| l.properties.extent.is_none()));
+        assert_eq!(loaded.document.layers[0].raster.wait_data().unwrap().tiles.len(), 2);
+
+        let without_extent = rewrite_manifest(&bytes, |m| {
+            m["document"]["width"] = 100.into();
+            m["document"]["height"] = 50.into();
+        });
+        assert!(Project::read(without_extent.as_slice(), Default::default()).unwrap_err().contains("Invalid raster tile"));
+        project.document.width = 100;
+        project.document.height = 50;
+        project.document.layers[0].properties.extent = Some([512, 256]);
+        bytes.clear();
+        project.write(&mut bytes).unwrap();
+        let loaded = Project::read(bytes.as_slice(), Default::default()).unwrap();
+        assert_eq!(loaded.document.layers[0].properties.extent, Some([512, 256]));
+        assert_eq!(loaded.document.target_extent(loaded.document.layers[0].id), [512, 256]);
+        let tiles = loaded.document.layers[0].raster.wait_data().unwrap();
+        assert!(tiles.tiles.keys().any(|k| k.coordinate == [1, 0]), "hidden tiles survive");
+        let mut again = Vec::new();
+        loaded.write(&mut again).unwrap();
+        assert_eq!(bytes, again);
+        let limits = ProjectLimits { tiles: 1, ..Default::default() };
+        assert!(Project::read(bytes.as_slice(), limits).is_err(), "hidden tiles count toward the limit");
     }
 
     #[test]

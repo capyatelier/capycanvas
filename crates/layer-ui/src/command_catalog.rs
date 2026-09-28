@@ -323,6 +323,7 @@ fn entry(
                 | CommandId::InvertLayerMask
                 | CommandId::LayerMaskEnabled
                 | CommandId::ApplyLayerMask
+                | CommandId::CropCanvasToSelection
                 | CommandId::SelectAll
                 | CommandId::Deselect
                 | CommandId::InvertSelection,
@@ -453,6 +454,8 @@ fn action_description(action: &UiAction) -> &'static str {
             EditLayerMask => "Paint on the active layer's mask instead of its pixels.",
             EditLayerContent => "Leave mask editing and paint on the active layer's pixels.",
             LassoFill => "Draw a freehand shape filled with the drawing color.",
+            CanvasSize => "Set the canvas size from an anchor, in pixels or percent. Layers keep pixels outside the canvas, so a smaller canvas can grow back.",
+            CropCanvasToSelection => "Shrink the canvas to the selection's bounds. Pixels outside stay on their layers, hidden until the canvas grows again.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -996,7 +999,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::InvertSelectionLayer
             | C::InvertLayerMask
             | C::LayerMaskEnabled
-            | C::ApplyLayerMask => self.require_document_idle(),
+            | C::ApplyLayerMask
+            | C::CanvasSize
+            | C::CropCanvasToSelection => self.require_document_idle(),
             C::SaveDocument | C::SaveDocumentAs => self.require_raster_snapshot(),
             C::CloseDocument => self.require_document_snapshot_idle(),
             C::ResetLayout if self.managed_workspace.is_some() => self.require_workspace_idle(),
@@ -1126,6 +1131,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_to_layer_refusal(command == C::CutSelectionToLayer).unwrap_or(UNAVAILABLE)
             }
             C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or(UNAVAILABLE),
+            C::CanvasSize => self.canvas_geometry_refusal().unwrap_or(UNAVAILABLE),
+            C::CropCanvasToSelection => self.crop_to_selection_refusal().unwrap_or(UNAVAILABLE),
             C::MaskSelection if self.engine.document().selection.is_none() => "Make a selection first",
             C::ApplyLayerMask if apply_refusal.is_some() => apply_refusal.unwrap_or(UNAVAILABLE),
             C::ApplyLayerMask if active.and_then(|l| l.mask.as_ref()).is_some_and(|m| !m.enabled) => {

@@ -76,7 +76,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "photoshop",
-        revision: 3,
+        revision: 4,
         title: "Photoshop Style",
         app: "Photoshop",
         source: "Adobe Photoshop default keyboard shortcuts, US layout, modern undo; checked 2026-09-25",
@@ -98,6 +98,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("command.CopySelectionToLayer", &["primary+j"]),
             ("command.CutSelectionToLayer", &["primary+shift+j"]),
             ("command.ActualPixels", &["primary+1"]),
+            ("command.CanvasSize", &["primary+alt+c"]),
             ("layer.group", &["primary+g"]),
             ("color.swap", &["x"]),
         ],
@@ -277,7 +278,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "affinity",
-        revision: 3,
+        revision: 4,
         title: "Affinity Style",
         app: "Affinity",
         source: "Affinity Help Center shortcut lists, Pixel Studio, September 2026 release, Windows keys; checked 2026-09-26",
@@ -306,6 +307,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("command.CopySelectionToLayer", &["primary+j"]),
             ("command.CutSelectionToLayer", &["primary+shift+j"]),
             ("command.ActualPixels", &["primary+1"]),
+            ("command.CanvasSize", &["primary+alt+c"]),
             ("layer.group", &["primary+g"]),
             ("color.swap", &["shift+x"]),
         ],

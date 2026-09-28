@@ -93,6 +93,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
   root.format = () => show(resolve({ control, value, operation: { type: "format" } }));
   root.apply = apply;
   root.cancelEditing = () => finish(true);
+  root.commit = () => finish();
   entry.hidden = buttonValue; valueButton.hidden = !buttonValue;
   if (!ranged) { entry.setAttribute("role", "spinbutton"); entry.setAttribute("aria-valuemin", control.min * control.scale); entry.setAttribute("aria-valuemax", control.max * control.scale); }
   root.update(value);

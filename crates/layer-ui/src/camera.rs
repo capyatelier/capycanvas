@@ -151,6 +151,15 @@ impl Camera {
         self.revision += 1;
     }
 
+    /// Keep the image still on screen when the document's origin moves to
+    /// `origin` in its old coordinates, as a canvas crop or growth does.
+    pub fn follow_document_origin(&mut self, origin: [f32; 2]) {
+        let [a, b, c, d, _, _] = self.document_to_surface();
+        self.translation[0] += a * origin[0] + c * origin[1];
+        self.translation[1] += b * origin[0] + d * origin[1];
+        self.revision += 1;
+    }
+
     /// Sets the zoom about the work-area centre, within the camera limits. At
     /// quarter-turn rotations the translation lands on whole device pixels, so
     /// integer zooms sample image pixels without bilinear blur.

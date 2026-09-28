@@ -804,6 +804,12 @@ impl NumberControl {
             self.emit_by_name::<()>("interaction", &[&if cancel { 2u32 } else { 1u32 }]);
         }
     }
+    /// Accept text typed into the field that it has not committed yet.
+    pub fn commit_text(&self) {
+        if let Some(spin) = self.imp().spin.get() {
+            spin.update();
+        }
+    }
     pub fn cancel_edit(&self) {
         if let Some(popover) = self.imp().popover.get() {
             popover.popdown();

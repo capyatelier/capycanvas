@@ -155,7 +155,10 @@ class AndroidCanvasBarBenchmarkTest {
                     "over_8_33" to sorted.count { it > 8.333 })
             }
             var refreshRate = 0f
+            var mark = 0L
+            var dispatched = 0L
             fun measure(label: String, operation: () -> Unit) {
+                mark = 0L
                 SystemClock.sleep(600)
                 host.measurementReport(true)
                 native { Native.completionTimings(it, true) }
@@ -200,7 +203,15 @@ class AndroidCanvasBarBenchmarkTest {
                     "ui_command_issue_ms" to quantiles(ui.map { it.issue / 1e6 }),
                     "ui_swap_ms" to quantiles(ui.map { it.swap / 1e6 }),
                     "ui_gpu_ms" to quantiles(ui.map { it.gpu / 1e6 }),
-                    "glass_regions" to native { JSONObject(Native.displayStatus(it)).optInt("glass_regions", -1) })
+                    "glass_regions" to native { JSONObject(Native.displayStatus(it)).optInt("glass_regions", -1) },
+                    "after_mark" to if (mark == 0L) JSONObject.NULL else obj(
+                        "dispatch_ms" to (dispatched - mark) / 1e6,
+                        "first_frames" to JSONArray(frames.filter { it.getLong(1) >= mark }.take(4).map {
+                            obj("start_ms" to (it.getLong(1) - mark) / 1e6, "cpu_callback_ms" to it.getLong(10) / 1e6,
+                                "owner_cpu_ms" to it.getLong(17) / 1e6, "submitted" to (it.getLong(6) > 0))
+                        }),
+                        "first_completions_ms" to JSONArray(completedAt.filter { it >= mark }.take(3).map { (it - mark) / 1e6 }),
+                        "later_completion_interval_ms" to quantiles(completedAt.filter { it >= mark }.drop(3).zipWithNext { a, b -> (b - a) / 1e6 })))
                 File(output, "$label.json").writeText(JSONObject(result.toString()).put("frame_fields", metrics.getJSONArray("frame_fields")).put("frames", JSONArray(frames)).put("completions", JSONArray(rows)).toString(2))
                 Log.i("CapyBarPerf", result.toString())
                 println("CANVAS BAR $label $result")
@@ -354,6 +365,28 @@ class AndroidCanvasBarBenchmarkTest {
                 SystemClock.sleep(1500)
                 measure("selection-bar-menu-open") { menus("canvas-bar-menu-adjust", duration) }
                 measure("selection-bar-more-open") { menus("canvas-bar-more", duration) }
+            }
+            if (wanted("canvas_size")) {
+                newDocument()
+                invoke("select_all"); invoke("fill_selection"); invoke("deselect"); invoke("hand")
+                SystemClock.sleep(1500)
+                val area = state().getJSONObject("camera").getJSONArray("work_area")
+                val center = area.getDouble(0) + area.getDouble(2) / 2 to area.getDouble(1) + area.getDouble(3) / 2
+                val span = minOf(area.getDouble(2), area.getDouble(3)) * .25
+                fun resize(extent: Pair<Int, Int>) {
+                    fun send(value: JSONObject) = action(obj("type" to "canvas_size", "action" to value))
+                    invoke("canvas_size")
+                    send(obj("op" to "anchor", "anchor" to "bottom_right"))
+                    send(obj("op" to "width", "value" to extent.first)); send(obj("op" to "height", "value" to extent.second))
+                    mark = System.nanoTime()
+                    send(obj("op" to "apply"))
+                    dispatched = System.nanoTime()
+                    check(state().array("tabs").objects().first { it.getBoolean("active") }.getInt("width") == extent.first)
+                }
+                val pan = { t: Double -> span * sin(2 * PI * t / 1.6) to span * .6 * sin(2 * PI * t / 2.3) }
+                measure("pan") { drag(center, duration, pan) }
+                measure("canvas-size-grow-then-pan") { resize(width + 512 to height + 512); drag(center, duration, pan) }
+                measure("canvas-size-crop-then-pan") { resize(width to height); drag(center, duration, pan) }
             }
             activity.window.removeOnFrameMetricsAvailableListener(listener)
             metricsThread.quitSafely()

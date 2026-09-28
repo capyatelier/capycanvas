@@ -551,7 +551,7 @@ fn command_section(command: CommandId) -> &'static str {
     use CommandId as C;
     match command {
         C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::PasteImage | C::ClearLayer | C::FillSelection
-        | C::ClearSelected | C::ClearOutside => "Edit",
+        | C::ClearSelected | C::ClearOutside | C::CanvasSize | C::CropCanvasToSelection => "Edit",
         C::ApplyTransform | C::CancelTransform | C::PlacementOriginalSize | C::ResetTransform
         | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest

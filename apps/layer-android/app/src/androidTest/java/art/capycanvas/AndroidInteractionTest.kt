@@ -2787,6 +2787,129 @@ class AndroidInteractionTest {
         println("PASS Layer › New › Solid Color Fill masks a selection in the current colour in one undo step, with mouse, finger and stylus")
     }
 
+    @Test fun cropAndCanvasSizeRestoreHiddenPixelsAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val corners = listOf("bottom_right", "top_left", "bottom_left")
+        val colors = listOf(listOf(.85, .08, .05, 1.0), listOf(.05, .6, .1, 1.0), listOf(.1, .2, .85, 1.0))
+        fun size() = state().array("tabs").objects().first { it.getBoolean("active") }.let { it.getInt("width") to it.getInt("height") }
+        fun panel() = state().getJSONObject("layer_tools").optJSONObject("canvas_size")
+        fun enabled(id: String) = state().array("commands").objects().first { it.getString("id") == id }.getBoolean("enabled")
+        fun history(id: String) { waitFor("$id is available", 10_000) { enabled(id) }; command(id) }
+        fun type(field: String, text: String) {
+            tap(bounds("setting-number-canvas-size-$field").center)
+            waitFor("$field takes the keys", 5_000) { host.editingText }
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_MOVE_END)
+            repeat(16) { instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DEL) }
+            instrumentation.sendStringSync(text)
+        }
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        var original = 0 to 0
+        popupInput = true
+        try {
+            for ((index, device) in pointerTools.withIndex()) {
+                val name = listOf("mouse", "finger", "stylus")[index]
+                val (width, height) = cleanDocument(keep)
+                original = width.toInt() to height.toInt()
+                command("zoom_out"); SystemClock.sleep(300)
+                val corner = corners[index]; val rgba = colors[index]
+                val right = corner.endsWith("right"); val bottom = corner.startsWith("bottom")
+                val cut = listOf(if (right) Math.round(width * .45).toDouble() else -40.0, if (bottom) Math.round(height * .45).toDouble() else -40.0)
+                val far = listOf(if (right) width + 40 else Math.round(width * .55).toDouble(), if (bottom) height + 40 else Math.round(height * .55).toDouble())
+                val inside = listOf((maxOf(cut[0], 0.0) + minOf(far[0], width)) / 2, (maxOf(cut[1], 0.0) + minOf(far[1], height)) / 2)
+                val hidden = listOf(if (right) width * .2 else width * .8, if (bottom) height * .2 else height * .8)
+                layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+                action(obj("type" to "set_color", "rgba" to JSONArray(rgba)))
+                command("pen"); action(obj("type" to "select_brush", "id" to 1)); action(obj("type" to "set_brush_size", "value" to 90))
+                tool = MotionEvent.TOOL_TYPE_STYLUS
+                for (at in listOf(hidden, inside)) { drag(documentPoint(at[0] - 120, at[1]), documentPoint(at[0] + 120, at[1])); settle() }
+                val hiddenPoint = documentPoint(hidden[0], hidden[1]); val insidePoint = documentPoint(inside[0], inside[1])
+                awaitPixels("$name: both strokes are painted", listOf(hiddenPoint, insidePoint)) { (h, i) -> shows(h, rgba) && shows(i, rgba) }
+
+                command("rectangle_select")
+                drag(documentPoint(cut[0], cut[1]), documentPoint(far[0], far[1]))
+                waitFor("$name: the selection bar", 5_000) { hasSelection() && barKind() == "selection" && shown("canvas-action-bar") }
+                settle()
+                tool = device
+                val crop = "canvas-bar-action-crop_canvas_to_selection"
+                if (shown(crop)) {
+                    assertTrue("$name: the bar item reads Crop", barCaption("crop_canvas_to_selection", "Crop"))
+                    tap(bounds(crop).center)
+                } else {
+                    tap(bounds("canvas-bar-more").center)
+                    waitFor("$name: More opens", 5_000) { popupCount() == 1 }
+                    waitFor("$name: Crop in More", 5_000) { menuText("Crop Canvas to Selection") != null }
+                    settle(); tap(menuText("Crop Canvas to Selection")!!.center)
+                }
+                waitFor("$name: Crop shrinks the canvas to the selection", 5_000) { size().first < width && size().second < height }
+                val cropped = size()
+                awaitPixels("$name: the image stays in place and the cropped stroke is hidden", listOf(hiddenPoint, insidePoint)) { (h, i) -> !shows(h, rgba) && shows(i, rgba) }
+                history("undo")
+                waitFor("$name: one undo step restores the canvas", 5_000) { size() == original }
+                awaitPixels("$name: undo shows the cropped stroke again", listOf(hiddenPoint)) { (h) -> shows(h, rgba) }
+                history("redo")
+                waitFor("$name: redo crops again", 5_000) { size() == cropped }
+                if (hasSelection()) command("deselect")
+
+                chooseFromApplicationMenu("edit", listOf("Image", "Canvas Size…"))
+                waitFor("$name: the Canvas Size panel", 5_000) { panel() != null && shown("canvas-size-panel") }
+                onMain { assertTrue("$name: the panel leaves window focus with the canvas", owner.view.hasWindowFocus()) }
+                assertFalse("$name: no field is edited when the panel opens", host.editingText)
+                assertFalse("$name: Apply is disabled at the current size", panel()!!.getBoolean("can_apply"))
+                var values = listOf(width, height)
+                when (device) {
+                    MotionEvent.TOOL_TYPE_FINGER -> {
+                        tap(bounds("canvas-size-relative").center)
+                        waitFor("$name: Relative", 5_000) { panel()!!.getBoolean("relative") }
+                        values = listOf(width - cropped.first, height - cropped.second)
+                    }
+                    MotionEvent.TOOL_TYPE_STYLUS -> {
+                        tap(bounds("canvas-size-unit-percent").center)
+                        waitFor("$name: Percent", 5_000) { panel()!!.getString("unit") == "percent" }
+                        values = listOf(width / cropped.first * 100, height / cropped.second * 100).map { Math.round(it * 100) / 100.0 }
+                    }
+                }
+                fun text(value: Double) = if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()
+                type("width", text(values[0]))
+                type("height", text(values[1]))
+                tap(bounds("canvas-size-anchor-$corner").center)
+                waitFor("$name: typed values are committed before the anchor changes", 5_000) {
+                    val view = panel()!!
+                    view.getString("anchor") == corner && !host.editingText &&
+                        (0..1).all { kotlin.math.abs(view.getJSONArray("values").getDouble(it) - values[it]) < 1e-6 }
+                }
+                onMain { assertTrue("$name: the anchor picker keeps window focus with the canvas", owner.view.hasWindowFocus()) }
+                assertEquals("New size: ${original.first} × ${original.second} px", panel()!!.getString("message"))
+                assertTrue(panel()!!.getBoolean("can_apply"))
+                if (index == 0) for (theme in listOf("light", "dark")) {
+                    action(obj("type" to "set_theme", "theme" to theme))
+                    captureCanvasBar("canvas-size-$theme", "canvas-size")
+                }
+                tap(bounds("canvas-size-apply").center)
+                waitFor("$name: Apply restores the original size and closes the panel", 5_000) { panel() == null && size() == original && !exists("canvas-size-panel") }
+                awaitPixels("$name: the hidden stroke reappears in place", listOf(hiddenPoint, insidePoint)) { (h, i) -> shows(h, rgba) && shows(i, rgba) }
+                history("undo")
+                waitFor("$name: one undo step returns to the cropped canvas", 5_000) { size() == cropped }
+                awaitPixels("$name: undo hides the stroke again", listOf(hiddenPoint)) { (h) -> !shows(h, rgba) }
+                history("redo")
+                waitFor("$name: redo restores the size", 5_000) { size() == original }
+                awaitPixels("$name: redo shows the stroke again", listOf(hiddenPoint)) { (h) -> shows(h, rgba) }
+                if (device == MotionEvent.TOOL_TYPE_STYLUS) {
+                    chooseFromApplicationMenu("edit", listOf("Image", "Canvas Size…"))
+                    waitFor("$name: the panel reopens", 5_000) { shown("canvas-size-panel") }
+                    instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                    waitFor("$name: Back cancels the panel", 5_000) { panel() == null && !exists("canvas-size-panel") && size() == original }
+                }
+                println("PASS canvas size $name")
+            }
+        } finally {
+            popupInput = false
+            if (panel() != null) action(obj("type" to "canvas_size", "action" to obj("op" to "cancel")))
+            for (attempt in 0 until 12) if (original.first == 0 || size() == original || runCatching { history("undo") }.isFailure) break
+            action(obj("type" to "set_theme", "theme" to originalTheme))
+        }
+        println("PASS Crop on the selection bar and Canvas Size with the matching anchor hide and restore pixels in one undo step each, with mouse, finger and stylus")
+    }
+
     @Test fun blackWhiteTintRowAppliesTheCurrentColorAcrossDevices() {
         val keep = layerStates().map { it.getLong("id") }.toSet()
         val category = filterCategory("Black & White")

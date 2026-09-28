@@ -27,6 +27,7 @@ import {checkNotices} from "./notice-journey.test.mjs";
 import {checkZoomReadout} from "./zoom-readout-journey.test.mjs";
 import {checkPipelineTakeover} from "./pipeline-takeover.test.mjs";
 import {checkPhotoEdit} from "./photo-edit-journey.test.mjs";
+import {checkCanvasSize} from "./canvas-size-journey.test.mjs";
 import {checkPenRendering} from "./pen-rendering.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 // Run against an already forwarded Android Chrome endpoint. No profile reset,
@@ -165,6 +166,8 @@ try {
     await checkPipelineTakeover({evaluate,settle});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--photo-edit")) {
     await checkPhotoEdit({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--canvas-size")) {
+    await checkCanvasSize({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--canvas-bar")) {
     await checkCanvasBar({call,evaluate,settle,device:true});
     assert.deepEqual(errors,[]);

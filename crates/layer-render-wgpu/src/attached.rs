@@ -30,6 +30,9 @@ impl CanvasRenderer for AttachedRenderer {
     fn supports_raster_damage(&self) -> bool {
         self.0.as_deref().is_some_and(CanvasRenderer::supports_raster_damage)
     }
+    fn max_document_dimension(&self) -> u32 {
+        self.0.as_deref().map_or(u32::MAX, CanvasRenderer::max_document_dimension)
+    }
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
         self.0
             .as_ref()

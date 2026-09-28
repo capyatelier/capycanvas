@@ -39,7 +39,7 @@ import org.json.JSONObject
     modifier: Modifier = Modifier, enabled: Boolean = true, description: String = "",
     settings: Boolean = false, id: String = label, inline: Boolean = false,
     toolbar: Boolean = false, showUnits: Boolean = true, showSlider: Boolean = true, valueOnly: Boolean = false,
-    limits: ClosedFloatingPointRange<Float>? = null, onTyping: (Boolean) -> Unit = {},
+    limits: ClosedFloatingPointRange<Float>? = null, onTyping: (Boolean) -> Unit = {}, onText: (String) -> Unit = {},
     onChange: (Float) -> Unit) {
     val host = LocalCanvasHost.current
     val colors = LocalPalette.current
@@ -102,7 +102,7 @@ import org.json.JSONObject
         }
     }
     val field: @Composable () -> Unit = {
-        BasicTextField(text, { text = it }, Modifier.then(if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (control.optString("unit").isEmpty()) 60.dp else 80.dp)).height(height)
+        BasicTextField(text, { text = it; onText(it.text) }, Modifier.then(if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (control.optString("unit").isEmpty()) 60.dp else 80.dp)).height(height)
             .onGloballyPositioned { fieldBounds = it.boundsInRoot(); if (toolbar && focused) host.toolbarEditorBounds = fieldBounds }
             .focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) finish()

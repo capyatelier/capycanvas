@@ -22,7 +22,7 @@ fn document(w: &Workspace) -> Document {
     w.gpu.borrow().as_ref().unwrap().session.engine().document().clone()
 }
 
-fn window_point(w: &Workspace, [x, y]: [f32; 2]) -> [f32; 2] {
+pub(super) fn window_point(w: &Workspace, [x, y]: [f32; 2]) -> [f32; 2] {
     let m = state(w).camera.document_to_surface();
     let scale = w.area.scale_factor() as f32;
     let p = gtk::graphene::Point::new(
@@ -34,7 +34,7 @@ fn window_point(w: &Workspace, [x, y]: [f32; 2]) -> [f32; 2] {
 }
 
 /// RGBA8 of the window pixel over document point `at`.
-fn shown(w: &Workspace, at: [f32; 2]) -> [u8; 4] {
+pub(super) fn shown(w: &Workspace, at: [f32; 2]) -> [u8; 4] {
     let texture = crate::snapshot(w);
     let mut download = gdk::TextureDownloader::new(&texture);
     download.set_format(gdk::MemoryFormat::R8g8b8a8);
@@ -45,7 +45,7 @@ fn shown(w: &Workspace, at: [f32; 2]) -> [u8; 4] {
     bytes[offset..offset + 4].try_into().unwrap()
 }
 
-fn labelled(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
+pub(super) fn labelled(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
     if root.is_mapped() && root.downcast_ref::<gtk::Label>().is_some_and(|l| l.text() == text) {
         return Some(root.clone());
     }
@@ -224,6 +224,66 @@ fn native_revert_to_original_after_painting_on_a_placed_photo() {
     assert_eq!(revert(&w).disabled_reason.as_deref(), Some("This photo has no edits"));
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     until(|| document(&w).layer(id).unwrap().raster == painted.raster, "one undo step brings the edits back");
+    input.finish();
+    w.window.close();
+    pump(50);
+}
+
+/// Commit Canvas Size by clicking Apply in its dialog with the mouse.
+pub(super) fn apply_canvas_size(w: &Workspace, input: &mut RemoteInput) {
+    let dialog = w.canvas_size.dialog.clone();
+    let apply = until_some_widget(|| labelled(dialog.upcast_ref(), "Apply"), "the Apply button");
+    input.click(screen_point(&apply, &w.window, [0.5, 0.5]));
+    until(|| state(w).layer_tools.canvas_size.is_none(), "Apply closes Canvas Size");
+}
+
+fn until_some_widget(mut find: impl FnMut() -> Option<gtk::Widget>, message: &str) -> gtk::Widget {
+    let mut found = None;
+    until(|| {
+        found = find();
+        found.is_some()
+    }, message);
+    found.unwrap()
+}
+
+pub(super) fn canvas_size_number(w: &Workspace, axis: &str) -> crate::number_control::NumberControl {
+    let dialog = w.canvas_size.dialog.clone();
+    let field = until_some_widget(|| find_named(dialog.upcast_ref(), &format!("canvas-size-{axis}")), axis);
+    field.first_child().and_downcast().expect("a number control")
+}
+
+#[test]
+#[ignore = "isolated compositor, GPU and native mouse and keyboard delivery"]
+fn native_canvas_size_from_the_top_left_anchor_then_undo() {
+    let (_app, w, mut input) = start("art.capycanvas.CanvasSize");
+    let before = document(&w);
+    let paint = before.active_layer;
+    choose(&w, &mut input, "Edit", &["Image", "Canvas Size…"]);
+    until(|| state(&w).layer_tools.canvas_size.is_some(), "Edit › Image › Canvas Size… opens the dialog");
+    let width = canvas_size_number(&w, "width");
+    let spin = width.first_child().and_then(|header| header.last_child()).and_downcast::<gtk::SpinButton>().unwrap();
+    spin.set_text("2600");
+    let anchor = until_some_widget(|| find_named(w.canvas_size.dialog.upcast_ref(), "canvas-size-anchor-top_left"), "the top-left anchor");
+    input.click(screen_point(&anchor, &w.window, [0.5, 0.5]));
+    until(|| state(&w).layer_tools.canvas_size.is_some_and(|v| v.anchor == layer_ui::CanvasAnchor::TopLeft), "the anchor picker chooses top left");
+    let view = state(&w).layer_tools.canvas_size.unwrap();
+    assert_eq!(view.values[0], 2600., "choosing an anchor keeps the typed width");
+    assert!(view.can_apply, "{}", view.message);
+    assert!(!anchor.has_focus(), "the anchor picker does not take focus");
+    if let Some(dir) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+        pump(200);
+        crate::snapshot(&w).save_to_png(std::path::Path::new(&dir).join("canvas-size-dialog.png")).unwrap();
+    }
+    apply_canvas_size(&w, &mut input);
+    let grown = document(&w);
+    assert_eq!([grown.width, grown.height], [2600, before.height]);
+    assert_eq!(grown.layer(paint).unwrap().properties.offset, before.layer(paint).unwrap().properties.offset);
+    assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
+    input.perform(json!([
+        {"key": 0xffe3, "down": true}, {"key": 0x7a, "down": true},
+        {"key": 0x7a, "down": false}, {"key": 0xffe3, "down": false}
+    ]));
+    until(|| document(&w).width == before.width, "Ctrl+Z on the canvas undoes the canvas size in one step");
     input.finish();
     w.window.close();
     pump(50);
