@@ -53,9 +53,9 @@ impl CompileMode {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-type Factory<T> = Box<dyn FnOnce(CompileMode) -> Compilation<T> + Send>;
+type Factory<T> = Box<dyn FnMut(CompileMode) -> Compilation<T> + Send>;
 #[cfg(target_arch = "wasm32")]
-type Factory<T> = Box<dyn FnOnce(CompileMode) -> Compilation<T>>;
+type Factory<T> = Box<dyn FnMut(CompileMode) -> Compilation<T>>;
 
 struct Inner<T> {
     value: OnceLock<T>,
@@ -77,18 +77,21 @@ impl<T> Clone for Deferred<T> {
 impl<T> Deferred<T> {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(factory: impl FnOnce() -> T + Send + 'static) -> Self {
-        Self::boxed(Box::new(move |_| Compilation::Ready(factory())), false)
+        let mut factory = Some(factory);
+        Self::boxed(Box::new(move |_| Compilation::Ready(factory.take().expect("recipe runs once")())), false)
     }
     #[cfg(target_arch = "wasm32")]
     pub fn new(factory: impl FnOnce() -> T + 'static) -> Self {
-        Self::boxed(Box::new(move |_| Compilation::Ready(factory())), false)
+        let mut factory = Some(factory);
+        Self::boxed(Box::new(move |_| Compilation::Ready(factory.take().expect("recipe runs once")())), false)
     }
+    /// The recipe can run twice; see [`Deferred::compile`].
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn pipeline(factory: impl FnOnce(CompileMode) -> Compilation<T> + Send + 'static) -> Self {
+    pub fn pipeline(factory: impl Fn(CompileMode) -> Compilation<T> + Send + 'static) -> Self {
         Self::boxed(Box::new(factory), true)
     }
     #[cfg(target_arch = "wasm32")]
-    pub fn pipeline(factory: impl FnOnce(CompileMode) -> Compilation<T> + 'static) -> Self {
+    pub fn pipeline(factory: impl Fn(CompileMode) -> Compilation<T> + 'static) -> Self {
         Self::boxed(Box::new(factory), true)
     }
     fn boxed(factory: Factory<T>, _async_pipeline: bool) -> Self {
@@ -108,16 +111,16 @@ impl<T> Deferred<T> {
     pub fn async_pipeline(&self) -> bool {
         self.0.async_pipeline
     }
+    /// Returns the value, compiling it now if no compilation has published one.
+    /// Natively this waits for a compilation already running on another thread.
+    /// The browser cannot wait for an asynchronous one, so this compiles the
+    /// recipe again and the asynchronous result is dropped when it arrives.
     pub fn compile(&self) -> &T {
         self.0.value.get_or_init(|| {
-            let factory = self
-                .0
-                .factory
-                .lock()
-                .unwrap()
-                .take()
-                .expect("pipeline recipe");
-            factory(CompileMode::Immediate).immediate()
+            let mut factory = self.0.factory.lock().unwrap();
+            let value = factory.as_mut().expect("pipeline recipe")(CompileMode::Immediate).immediate();
+            *factory = None;
+            value
         })
     }
     /// Start inside the caller's error scopes, then await without borrowing the
@@ -135,35 +138,34 @@ impl<T> Deferred<T> {
         if let Some(error) = self.0.failure.get() {
             return Box::pin(std::future::ready(Err(error.clone())));
         }
-        let factory = self
-            .0
-            .factory
-            .lock()
-            .unwrap()
-            .take()
-            .expect("pipeline recipe already compiling");
-        let compilation = factory(CompileMode::Async);
+        let compilation =
+            self.0.factory.lock().unwrap().as_mut().expect("pipeline recipe")(CompileMode::Async);
         let this = self.clone();
-        Box::pin(async move {
-            let value = match compilation {
-                Compilation::Ready(value) => value,
-                Compilation::Pending(future) => match future.await {
-                    Ok(value) => value,
-                    Err(error) => {
-                        let _ = this.0.failure.set(error.clone());
-                        return Err(error);
-                    }
-                },
-            };
+        let publish = move |value| {
             let _ = this.0.value.set(value);
-            Ok(())
-        })
-    }
-    /// Whether an asynchronous compilation holds the recipe, so the value
-    /// can be neither used nor compiled until it completes.
-    #[cfg(target_arch = "wasm32")]
-    pub fn compiling(&self) -> bool {
-        self.0.value.get().is_none() && self.0.factory.lock().unwrap().is_none()
+            this.0.factory.lock().unwrap().take();
+        };
+        match compilation {
+            Compilation::Ready(value) => {
+                publish(value);
+                Box::pin(async { Ok(()) })
+            }
+            Compilation::Pending(future) => {
+                let this = self.clone();
+                Box::pin(async move {
+                    match future.await {
+                        Ok(value) => {
+                            publish(value);
+                            Ok(())
+                        }
+                        Err(error) => {
+                            let _ = this.0.failure.set(error.clone());
+                            Err(error)
+                        }
+                    }
+                })
+            }
+        }
     }
     pub fn ready(&self) -> bool {
         #[cfg(target_arch = "wasm32")]

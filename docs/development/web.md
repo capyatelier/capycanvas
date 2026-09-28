@@ -61,6 +61,10 @@ the scheduling work and its measured limits. The later
 separates workspace input readiness from canvas/brush readiness, records the
 startup-library input-lock fix, and records asynchronous pipeline compilation,
 storage-completion wakeups and the restored first-canvas staging boundary.
+An edit that needs a pipeline while its asynchronous compile is in flight, such
+as Deselect submitting a Fill, creates the pipeline synchronously instead of
+waiting, and the asynchronous result is dropped. Run
+`node apps/layer-web/test.mjs --headless --pipeline-takeover` for that case.
 
 The client also persists its workspace in browser storage and connects shared
 project requests to browser file access and downloads through

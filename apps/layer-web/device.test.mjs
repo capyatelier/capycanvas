@@ -25,6 +25,7 @@ import {checkDeviceImagePlacement} from "./image-placement-device.test.mjs";
 import {checkCanvasBar} from "./canvas-bar-journey.test.mjs";
 import {checkNotices} from "./notice-journey.test.mjs";
 import {checkZoomReadout} from "./zoom-readout-journey.test.mjs";
+import {checkPipelineTakeover} from "./pipeline-takeover.test.mjs";
 import {checkPhotoEdit} from "./photo-edit-journey.test.mjs";
 import {checkPenRendering} from "./pen-rendering.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
@@ -160,6 +161,8 @@ try {
     await checkNotices({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--zoom-readout")) {
     await checkZoomReadout({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--pipeline-takeover")) {
+    await checkPipelineTakeover({evaluate,settle});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--photo-edit")) {
     await checkPhotoEdit({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--canvas-bar")) {

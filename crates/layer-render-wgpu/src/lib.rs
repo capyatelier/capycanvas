@@ -3278,16 +3278,6 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn supports_raster_damage(&self) -> bool { true }
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
-        #[cfg(target_arch = "wasm32")]
-        if self.transforms.as_ref().is_some_and(|t| t.pipelines()[0].compiling())
-            && packet.layers.iter().any(|l| {
-                let identity = layer_core::Affine::IDENTITY;
-                l.properties.placement != identity
-                    || l.mask.iter().chain(l.pending_operations.iter().map(|op| &op.coverage)).any(|m| m.placement != identity)
-            })
-        {
-            return false;
-        }
         self.raster_restore_ready(packet)
     }
     fn can_capture_raster(&self) -> bool {
