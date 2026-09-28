@@ -50,7 +50,11 @@ and untracked files, to `C:\capycanvas`, and runs
 [`test-without-gpu.ps1`](../../apps/layer-windows/scripts/test-without-gpu.ps1):
 the Debug build (`--release` for Release), the native input tests, and the
 shared and Windows Rust unit tests, with the `layer-host` GPU tests and the
-ignored `d3d12_` document tests on WARP. Build outputs persist between syncs. Run other commands from the synced tree, for example strict Clippy:
+ignored `d3d12_` document tests on WARP. Build outputs persist between syncs;
+each sync sends only files that changed since that VM's last sync, stamped with
+the current time, so incremental builds stay correct when a VM switches trees.
+`sync`, `check` and `fixtures` lock their VM, so run parallel work on separate
+VMs. Run other commands from the synced tree, for example strict Clippy:
 
 ```sh
 tools/windows-vm/windows-vm.py ssh 'cd C:\capycanvas; cargo clippy --locked -p layer-windows --all-targets -- -D warnings'

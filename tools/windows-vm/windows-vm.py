@@ -6,6 +6,7 @@ See docs/development/windows-vm.md.
 
 import argparse
 import base64
+import fcntl
 import getpass
 import hashlib
 import json
@@ -66,9 +67,9 @@ PACKAGES = {
 }
 HYPERV = ("hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,hv-vpindex,hv-runtime,hv-synic,hv-stimer,"
           "hv-time,hv-frequencies,hv-tlbflush,hv-ipi")
-SYNC = (f"$repo = '{GUEST_REPO}'; New-Item -ItemType Directory -Force $repo | Out-Null; "
-        "Get-ChildItem -Force $repo | Where-Object Name -NotIn 'target', 'artifacts' | "
-        "Remove-Item -Recurse -Force; tar -xf - -C $repo; exit $LASTEXITCODE")
+CLEAR = (f"New-Item -ItemType Directory -Force {GUEST_REPO} | Out-Null; Get-ChildItem -Force {GUEST_REPO} | "
+         "Where-Object Name -NotIn 'target', 'artifacts' | Remove-Item -Recurse -Force; ")
+EXTRACT = f"tar -xmf - -C {GUEST_REPO}; exit $LASTEXITCODE"
 
 
 class Machine:
@@ -442,29 +443,51 @@ def ssh(args):
     os.execvp("ssh", ssh_command(machine, *args.command))
 
 
+def claim(machine):
+    lock = open(machine.directory / "lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(f"Another command is using the {machine.name} VM; pass --vm to use another one.")
+    return lock
+
+
 def sync_machine(machine):
     require_running(machine)
     listing = run("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard",
                   cwd=ROOT, capture_output=True).stdout
-    files = b"".join(name + b"\0" for name in listing.split(b"\0")
-                     if name and os.path.lexists(ROOT / os.fsdecode(name)))
+    hashes = {}
+    for name in listing.decode().split("\0"):
+        path = ROOT / name
+        if name and os.path.lexists(path):
+            content = os.readlink(path).encode() if path.is_symlink() else path.read_bytes()
+            hashes[name] = hashlib.sha256(content).hexdigest()
+    record = machine.directory / "synced.json"
+    synced = json.loads(record.read_text()) if record.exists() else {}
+    full = not synced.keys() <= hashes.keys()
+    files = "".join(f"{name}\0" for name, digest in hashes.items() if full or synced.get(name) != digest)
+    record.unlink(missing_ok=True)
     archive = subprocess.Popen(["tar", "--null", "--files-from=-", "--create", "--file=-"], cwd=ROOT,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    extract = subprocess.Popen(ssh_command(machine, SYNC), stdin=archive.stdout)
+    extract = subprocess.Popen(ssh_command(machine, (CLEAR if full else "") + EXTRACT), stdin=archive.stdout)
     archive.stdout.close()
-    archive.stdin.write(files)
+    archive.stdin.write(files.encode())
     archive.stdin.close()
     if archive.wait() or extract.wait():
         sys.exit("Copying the working tree to the VM failed.")
+    record.write_text(json.dumps(hashes))
 
 
 def sync(args):
-    sync_machine(selected(args))
+    machine = selected(args)
+    with claim(machine):
+        sync_machine(machine)
 
 
 def check(args):
     machine = selected(args)
     boot(machine, gui=False)
+    lock = claim(machine)
     sync_machine(machine)
     configuration = "Release" if args.release else "Debug"
     guest(machine, f"& '{GUEST_REPO}\\apps\\layer-windows\\scripts\\test-without-gpu.ps1' "
@@ -491,6 +514,7 @@ def desktop_running(machine):
 def fixtures(args):
     machine = selected(args)
     boot(machine, gui=False)
+    lock = claim(machine)
     sync_machine(machine)
     if not args.no_build:
         guest(machine, f"& '{GUEST_REPO}\\apps\\layer-windows\\scripts\\build.ps1' -Configuration Release "

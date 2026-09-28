@@ -611,17 +611,20 @@ pub unsafe extern "C" fn capy_resize(
         if let Some(config) = &mut host.config {
             config.width = width;
             config.height = height;
-            host.surface.configure(
-                host.native
-                    .session
-                    .engine()
-                    .backend()
-                    .0
-                    .as_ref().map(|g| g.device())
-                    .or_else(|| host.documents.as_ref().and_then(|d| d.tab_device()))
-                    .ok_or("GPU is not prepared")?,
-                config,
-            );
+            let device = host.native
+                .session
+                .engine()
+                .backend()
+                .0
+                .as_ref().map(|g| g.device())
+                .or_else(|| host.documents.as_ref().and_then(|d| d.tab_device()))
+                .ok_or("GPU is not prepared")?
+                .clone();
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            host.surface.configure(&device, config);
+            if pollster::block_on(scope.pop()).is_some() {
+                host.surface.configure(&device, config);
+            }
             set_composition_scale(&host.surface, scale)?;
         }
         Ok(0)
