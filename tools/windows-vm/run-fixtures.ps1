@@ -76,10 +76,12 @@ $env:LAYER_TEST_SOFTWARE_GPU = '1'
 $env:CAPY_WAIT_SCALE = '3'
 $env:NO_COLOR = '1'
 $selected = if ($Name) { $Name -split ',' } else { @() }
+$hardware = 'documents:RecoverGpu', 'documents:FailGpu'
 $results = Join-Path $Output 'results.jsonl'
 foreach ($run in $runs.GetEnumerator()) {
     $fixture = ($run.Key -split ':')[0]
     if ($selected -and $run.Key -notin $selected -and $fixture -notin $selected) { continue }
+    if ($run.Key -in $hardware -and $run.Key -notin $selected) { continue }
     Stop-Review
     $log = Join-Path $Output ($run.Key -replace ':', '-')
     $started = Get-Date

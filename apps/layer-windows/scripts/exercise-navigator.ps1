@@ -116,8 +116,7 @@ try {
         Check-Surround $blank
         Invoke 'Test stroke' -Name
         Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not reach the shared document'
-        $paint=Capture 'paint'
-        try {$changed=Different $blank $paint $area;if($changed -lt 20){throw "Live GPU overview did not show the stroke ($changed changed pixels)"}}finally{$paint.Dispose()}
+        Wait-Until {$paint=Capture 'paint';try {(Different $blank $paint $area) -ge 20}finally{$paint.Dispose()}} 'Live GPU overview did not show the stroke'
         Invoke 'Undo' -Name
         Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore the checkpoint'
         $undo=Capture 'undo'

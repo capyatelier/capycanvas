@@ -153,8 +153,7 @@ function Check-Fullscreen {
         Wait-Until {(Model).state.fullscreen -eq $active} 'Native F11 did not report the actual fullscreen state'
         Check-Geometry
         $clock=Entries|Where-Object {$_.item.kind -eq 'clock'}|Select-Object -First 1
-        $visible=@((Presentation).geometry.items|Where-Object id -eq $clock.id).Count -gt 0
-        if($visible -ne $active){throw 'Clock did not follow fullscreen visibility'}
+        Wait-Until {(@((Presentation).geometry.items|Where-Object id -eq $clock.id).Count -gt 0) -eq $active} 'Clock did not follow fullscreen visibility'
         if((Model).header.editing){throw 'Fullscreen opened titlebar editing'}
     }
 }

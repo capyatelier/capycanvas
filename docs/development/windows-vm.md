@@ -94,8 +94,9 @@ exit code, duration and final error. It sets `CAPY_WAIT_SCALE=3`, which
 lengthens every `CapyUia.ps1` wait for the slower adapter. Name fixtures
 (`layers`) or single variants (`header:pen`); with no names it runs `shortcuts`
 and every fixture that launches its own app, once with its defaults and once for
-each switch and each other `ValidateSet` choice. `--no-build` reuses the last
-build. Results, logs and failure screenshots are copied to
+each switch and each other `ValidateSet` choice. It skips `documents -RecoverGpu`
+and `-FailGpu` unless they are named: after their simulated device removal, WARP
+itself crashes in `d3d10warp.dll`. `--no-build` reuses the last build. Results, logs and failure screenshots are copied to
 `artifacts/windows-vm/<vm>/<run>/`.
 
 To use several VMs, give each a share of the names:
