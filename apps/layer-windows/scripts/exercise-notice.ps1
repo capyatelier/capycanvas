@@ -60,9 +60,9 @@ try {
  Wait-Until {$item=Shown 'canvas-bar-scale_rotate';$hint.value=((Model).state.commands|Where-Object id -eq 'scale_rotate').disabled_reason
   $item -and !$item.Current.IsEnabled -and $hint.value -and $item.Current.HelpText -eq $hint.value} 'The disabled Transform item did not carry its published reason'
  foreach($device in @('touch','pen','mouse')){
-  Click $device (Center (Shown 'canvas-bar-scale_rotate'))
+  Click $device (Center (Control 'canvas-bar-scale_rotate' -Arranged))
   Wait-Until {$null -ne (Owned $hint.value ([System.Windows.Automation.ControlType]::ToolTip))} "$device tap on a disabled bar item did not reveal its reason" 5
-  Click 'mouse' (Center (Find 'canvas-fit'))
+  Click 'mouse' (Center (Control 'canvas-fit' -Arranged))
   Wait-Until {$null -eq (Owned $hint.value ([System.Windows.Automation.ControlType]::ToolTip))} "The next $device contact did not hide the revealed reason" 5
  }
  if((Model).state.canvas_bar.context.kind -ne 'selection'){throw 'Tapping a disabled item changed the bar'}

@@ -34,21 +34,21 @@ public static class WindowsPenMotion {
   var timer=CreateWaitableTimerEx(IntPtr.Zero,null,2,0x1F0003);
   if(timer==IntPtr.Zero){DestroySyntheticPointerDevice(device);throw new Win32Exception(Marshal.GetLastWin32Error());}
   var rows=new List<string>(seconds*hz+2);rows.Add("index,qpc_before,qpc_after,x,y");
-  var start=Stopwatch.GetTimestamp();Point last=new Point();bool contact=false;
+  var next=Stopwatch.GetTimestamp();Point last=new Point();bool contact=false;
   try {
    for(int i=0;i<=seconds*hz;i++) {
-    long due=start+(long)i*Stopwatch.Frequency/hz;
-    long remaining=due-Stopwatch.GetTimestamp();
+    long remaining=next-Stopwatch.GetTimestamp();
     if(remaining>0){long delay=-Math.Max(1,remaining*10000000/Stopwatch.Frequency);
      if(!SetWaitableTimer(timer,ref delay,0,IntPtr.Zero,IntPtr.Zero,false)||WaitForSingleObject(timer,1000)!=0)throw new Win32Exception(Marshal.GetLastWin32Error());}
     double angle=2*Math.PI*i/hz;
-    last=new Point{x=cx+(int)(rx*Math.Cos(angle)),y=cy+(int)(ry*Math.Sin(angle))};
+    if(i!=seconds*hz)last=new Point{x=cx+(int)(rx*Math.Cos(angle)),y=cy+(int)(ry*Math.Sin(angle))};
     uint process;GetWindowThreadProcessId(GetForegroundWindow(),out process);if(process!=owner)throw new Exception("Benchmark lost foreground ownership");
     GetWindowThreadProcessId(WindowFromPoint(last),out process);if(process!=owner)throw new Exception("Pen point is outside the owned window");
     uint flags=i==0?0x10006u:i==seconds*hz?0x40000u:0x20006u;
     var before=Stopwatch.GetTimestamp();
     var info=new TypeInfo{type=3,pen=new PenInfo{pointer=new PointerInfo{type=3,id=0,pixel=last,flags=flags},mask=1,pressure=1024}};
     if(!InjectSyntheticPointerInput(device,new[]{info},1))throw new Win32Exception(Marshal.GetLastWin32Error());
+    next=Stopwatch.GetTimestamp()+Stopwatch.Frequency/hz;
     contact=i!=seconds*hz;
     rows.Add(i+","+before+","+Stopwatch.GetTimestamp()+","+last.x+","+last.y);
    }

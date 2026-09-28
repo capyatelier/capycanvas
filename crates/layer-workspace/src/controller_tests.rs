@@ -13,6 +13,8 @@ struct Backend {
     lose_reply: Cell<bool>,
     deliveries: RefCell<Vec<String>>,
     load_gate: RefCell<Option<async_channel::Receiver<()>>>,
+    commit_gate: RefCell<Option<async_channel::Receiver<()>>>,
+    switcher_gate: RefCell<Option<async_channel::Receiver<()>>>,
     fail_renew: RefCell<Option<ErrorKind>>,
 }
 #[derive(Clone)]
@@ -30,7 +32,15 @@ impl WorkspaceStore for Store {
         {
             return Err(StoreError::new(kind, "Renewal failed"));
         }
+        if matches!(request, StoreRequest::Switcher) {
+            let gate = self.0.switcher_gate.borrow_mut().take();
+            if let Some(gate) = gate { let _ = gate.recv().await; }
+        }
         let commit = matches!(request, StoreRequest::Commit { .. });
+        if commit {
+            let gate = self.0.commit_gate.borrow_mut().take();
+            if let Some(gate) = gate { let _ = gate.recv().await; }
+        }
         if let StoreRequest::Commit { batch } = &request {
             self.0
                 .deliveries
@@ -691,6 +701,55 @@ fn switcher_edits_preserve_pending_preview_and_workspace_contents() {
         f.host.session.state().workspace.layout,
         *original.entity.capture().unwrap().history.layout()
     );
+}
+
+#[test]
+fn switcher_edit_during_autosave_is_acknowledged_without_interrupting_the_save() {
+    let mut f = Fixture::new();
+    f.action(serde_json::json!({"type":"move_panel","panel":"layers","viewport":[1200,900],"target":{"kind":"float","position":[480,220]}}));
+    let capture = f.host.session.capture_workspace().unwrap();
+    let revision = f.controller.view.switcher_revision;
+    let (release, gate) = async_channel::bounded(1);
+    *f.backend.commit_gate.borrow_mut() = Some(gate);
+    f.save();
+    assert!(f.controller.manager.saving());
+    assert!(!f.controller.view.busy);
+    let id = f.controller.view.switcher[0].id.clone();
+    f.input(serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":id,"visible":false}}));
+    assert_eq!(f.controller.view.switcher_revision, revision + 1);
+    assert!(!f.controller.view.switcher.iter().any(|row| row.id == id));
+    assert!(f.controller.manager.saving());
+    release.try_send(()).unwrap();
+    f.pump();
+    assert!(!f.controller.manager.saving());
+    assert!(!f.controller.manager.dirty());
+    assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
+    assert!(f.controller.view.error.is_none());
+}
+
+#[test]
+fn switcher_edits_wait_for_refresh_and_close_drains_them_in_order() {
+    let mut f = Fixture::new();
+    let revision = f.controller.view.switcher_revision;
+    let id = f.controller.view.switcher[0].id.clone();
+    let (release, gate) = async_channel::bounded(1);
+    *f.backend.switcher_gate.borrow_mut() = Some(gate);
+    f.input(serde_json::json!({"type":"refresh_switcher"}));
+    assert!(f.controller.view.switcher_busy);
+    for visible in [false, true, false] {
+        f.input(serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":id,"visible":visible}}));
+    }
+    assert_eq!(f.controller.view.switcher_revision, revision);
+    f.input(serde_json::json!({"type":"close"}));
+    assert!(!f.controller.view.closed);
+    release.try_send(()).unwrap();
+    f.pump();
+    assert_eq!(f.controller.view.switcher_revision, revision + 3);
+    assert!(f.controller.view.closed);
+    assert!(!f.controller.view.switcher.iter().any(|row| row.id == id));
+    assert!(!f.controller.view.switcher_busy);
+    assert!(f.controller.view.error.is_none());
+    assert!(f.controller.view.switcher_error.is_none());
 }
 
 #[test]

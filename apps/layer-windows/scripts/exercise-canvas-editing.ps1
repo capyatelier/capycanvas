@@ -13,7 +13,6 @@ public static class CapyEditingCapture {
  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h,out Rect r);
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h,ref Point p);
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
- [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr h,uint message,UIntPtr w,IntPtr l,uint flags,uint timeout,out UIntPtr result);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr h,uint message,UIntPtr w,System.Text.StringBuilder text,uint flags,uint timeout,out UIntPtr result);
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint message,UIntPtr w,IntPtr l);
@@ -46,7 +45,7 @@ function Pixels {
  $bitmap=[Drawing.Bitmap]::new($rect.right,$rect.bottom)
  try{
   $g=[Drawing.Graphics]::FromImage($bitmap)
-  try{$dc=$g.GetHdc();try{if(![CapyEditingCapture]::PrintWindow($handle,$dc,3)){throw 'Canvas capture failed'}}finally{$g.ReleaseHdc($dc)}}finally{$g.Dispose()}
+  try{$g.CopyFromScreen($origin.x,$origin.y,0,0,$bitmap.Size)}finally{$g.Dispose()}
   $stream=[IO.MemoryStream]::new();$hash=[Security.Cryptography.SHA256]::Create();$patches=[Collections.Generic.List[string]]::new()
   try{
    foreach($point in $sampleCenters){
@@ -110,12 +109,12 @@ $checks=[Collections.Generic.List[object]]::new()
 $exports=[Collections.Generic.List[object]]::new()
 function Pass([string]$Name){$checks.Add(@{name="$device $Name";document=(Model).state.document_file});Write-Output "$device $Name passed"}
 function Cancel-Preview([string]$Name){
- Invoke 'tool-action-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
+ Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
  if((Signature) -ne $selected -or (Stable-Pixels) -ne $baseline){throw "Cancel did not restore selection artwork: $Name"};Pass $Name
 }
 function Apply-Preview([string]$Name) {
  if((Signature) -ne $selected){throw "$Name preview committed early"}
- $revision=(Model).state.document_file.revision;Invoke 'tool-action-apply_transform'
+ $revision=(Model).state.document_file.revision;Invoke 'canvas-bar-apply_transform'
  Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} "$Name Apply did not commit"
  $applied=Export-Png ($device+'-'+$Name+'-applied-raster')
  if($applied -eq $baselinePng){throw "$Name Apply left the drawing unchanged"}
@@ -149,9 +148,11 @@ try{
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$c=(Model).state.camera;$b=(Control 'Drawing canvas' -Name).Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close'}
- Invoke 'canvas-fit';Start-Sleep -Milliseconds 250
+ $fitRevision=(Model).state.camera.revision
+ Invoke 'canvas-fit';Wait-Until {(Model).state.camera.revision -gt $fitRevision} 'Fit did not update the camera'
  $camera=(Model).state.camera;$area=$camera.work_area;$bounds=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
  $cx=[int]($bounds.X+$area[0]+$area[2]/2);$cy=[int]($bounds.Y+$area[1]+$area[3]/2)
+ @{camera=$camera;canvas=$bounds}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'camera.json')
  if($area[2] -lt 900 -or $area[3] -lt 600){throw 'Canvas too small for artwork gesture checks'}
  # Sample inside the artwork and away from drag endpoints/cursor overlays.
  $sx=$cx-60;$sampleCenters=@(@($sx,($cy+25)),@(($sx+300),($cy+25)),@(($cx+70),($cy+25)))
@@ -173,7 +174,11 @@ try{
   Select-Tool 'scale_rotate'
   Drag $device @(@($sx,$cy),@(($sx+300),$cy))
   Wait-Until {[Math]::Abs((Value 'transform_x')-300/$camera.zoom) -lt 2 -and [Math]::Abs((Value 'transform_y')) -lt 2} 'Transform body did not move immediately'
-  if((Signature) -ne $selected -or (Stable-Pixels) -eq $baseline){throw 'Move preview did not change pixels without committing'}
+  Wait-Until {(Pixels) -ne $baseline} 'Move preview left the sampled pixels unchanged'
+  $previewSignature=Signature;$previewPixels=Stable-Pixels
+  @{before=$selected;after=$previewSignature;baseline=$baseline;preview=$previewPixels;centers=$sampleCenters}|ConvertTo-Json -Depth 25|Set-Content (Join-Path $run 'move-preview-state.json')
+  if($previewSignature -ne $selected){throw 'Move preview changed the document signature before Apply'}
+  if($previewPixels -eq $baseline){throw 'Move preview left the sampled pixels unchanged'}
   Capture ($device+'-move-preview');Cancel-Preview 'move preview and cancel'
   Select-Tool 'scale_rotate'
   Drag $device @(@(($cx-20),($cy+60)),@(($cx+20),($cy+120)))
@@ -201,7 +206,7 @@ try{
   }
   Select-Tool 'scale_rotate';Drag $device @(@($sx,$cy),@(($sx+300),$cy))
   Wait-Until {[Math]::Abs((Value 'transform_x')-300/$camera.zoom) -lt 2} 'Final move preview did not settle'
-  $revision=(Model).state.document_file.revision;Invoke 'tool-action-apply_transform'
+  $revision=(Model).state.document_file.revision;Invoke 'canvas-bar-apply_transform'
   Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} 'Transform Apply did not commit'
   $moved=Stable-Pixels;$sourcePixels=$baseline.Split(':');$movedPixels=$moved.Split(':');$blankPixels=$empty.Split(':')
   if($movedPixels[0] -ne $blankPixels[0] -or $movedPixels[1] -ne $sourcePixels[0] -or $movedPixels[2] -ne $sourcePixels[2]){throw 'Apply did not move only the selected pixels and preserve the unselected artwork'}

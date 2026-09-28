@@ -7,7 +7,7 @@ import {analyze} from './windows-pen-report.mjs';
 function fixture(t){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'capy-pen-report-'));t.after(()=>{assert.ok(path.resolve(dir).startsWith(path.resolve(os.tmpdir())+path.sep));assert.ok(path.basename(dir).startsWith('capy-pen-report-'));fs.rmSync(dir,{recursive:true,force:true});});
  fs.writeFileSync(path.join(dir,'capture.json'),JSON.stringify({process_id:1,diameter:18,qpc_frequency:1000,surface:{window_id:9,present_mode:'Fifo'}}));
- const prefix=path.join(dir,'latency-9');
+ const prefix=path.join(dir,'latency-1-9');
  fs.writeFileSync(prefix+'-status.json','{"overflow":false}');
  fs.writeFileSync(prefix+'-input.csv','sequence,sample_ns,arrival_ns,phase\n1,95000000,96000000,1\n2,105000000,106000000,2\n');
  fs.writeFileSync(prefix+'-consumed.csv','sequence,frame\n1,1\n2,2\n');

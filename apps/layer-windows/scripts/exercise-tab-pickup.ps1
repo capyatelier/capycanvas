@@ -101,7 +101,7 @@ try {
     [pscustomobject]@{device=$Device;short_click='passed';direct_tearoff='passed';gradual_tearoff='passed';retained_contact='passed';capture_cancel='passed';workspace_undo_redo='passed';zero_exit='passed';scope='OS-injected input; physical digitizers and latency remain separate'}|ConvertTo-Json
 }catch{
     $failure=$_
-    @{case=$script:case;error=$failure.ToString();gesture=(Gesture);presentation=(Presentation)}|ConvertTo-Json -Depth 60|Set-Content (Join-Path $run 'failure.json')
+    @{case=$script:case;injection_gap_ms=[CapyRowPointer]::MaxGapMilliseconds;error=$failure.ToString();gesture=(Gesture);presentation=(Presentation)}|ConvertTo-Json -Depth 60|Set-Content (Join-Path $run 'failure.json')
     if($review -and !$review.HasExited){
         & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-capture.json')
     }

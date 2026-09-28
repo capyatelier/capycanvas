@@ -21,7 +21,13 @@ function Submenu {
     if(!$entry){$entry=Visible-Control ([Globalization.CultureInfo]::InvariantCulture.TextInfo.ToTitleCase($id)) ([System.Windows.Automation.ControlType]::MenuItem) -ByName}
     $entry
 }
-$button=Visible-Control ("application-menu-"+$id) ([System.Windows.Automation.ControlType]::Button)
+$watch=[Diagnostics.Stopwatch]::StartNew()
+do{
+    $button=Visible-Control ("application-menu-"+$id) ([System.Windows.Automation.ControlType]::Button)
+    $overflow=Menu-Button
+    if($button -or $overflow -or (Submenu)){break}
+    Start-Sleep -Milliseconds 50
+}while($watch.Elapsed.TotalSeconds -lt 8*$(if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}))
 if($Inspect){
     if(!$button){$button=Menu-Button}
     if(!$button){throw 'The application menu has no visible entry point'}

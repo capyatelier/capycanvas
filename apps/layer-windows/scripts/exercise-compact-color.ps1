@@ -17,8 +17,20 @@ function Shape([string]$Shape){
     if((Paint) -ne $paint){throw 'Changing picker projection changed the paint'}
 }
 function Point([double]$X,[double]$Y){
-    $bounds=(Control 'color-wheel').Current.BoundingRectangle
+    $bounds=(Control 'color-wheel' -Arranged).Current.BoundingRectangle
     @([int][Math]::Round($bounds.X+$X*$bounds.Width),[int][Math]::Round($bounds.Y+$Y*$bounds.Height))
+}
+function Pick-Field([string]$Device,[double]$X,[double]$Y){
+    $before=Paint;$start=Point .5 .5;$end=Point $X $Y
+    $bounds=(Control 'color-wheel' -Arranged).Current.BoundingRectangle
+    [CapyRowPointer]::Down($Device,$start[0],$start[1]);[CapyRowPointer]::Move($end[0],$end[1]);[CapyRowPointer]::Up()
+    Wait-Until {
+        $marker=(Model).color_panel.wheel_marker
+        [Math]::Abs($bounds.X+$marker[0]*$bounds.Width-$end[0]) -le 1.5 -and
+        [Math]::Abs($bounds.Y+$marker[1]*$bounds.Height-$end[1]) -le 1.5
+    } "$Device did not pick the final field position"
+    Wait-Until {(Control 'color-controls').Current.ItemStatus -eq 'Ready'} "$Device did not release the wheel"
+    if((Paint) -eq $before){throw "$Device did not change the field paint"}
 }
 try{
     Enter-CapyEnvironment
@@ -56,11 +68,7 @@ try{
         Wait-Until {(Model).color_panel.readout -eq $mode} 'Readout did not restore'
         $deviceIndex=0
         foreach($device in @('mouse','pen','touch')){
-            $before=Paint;$start=Point .5 .5;$end=Point (.56+.02*$deviceIndex) (.46-.01*$deviceIndex)
-            [CapyRowPointer]::Down($device,$start[0],$start[1])
-            [CapyRowPointer]::Move($end[0],$end[1])
-            [CapyRowPointer]::Up()
-            Wait-Until {(Paint) -ne $before} "$device did not pick the $shape field"
+            Pick-Field $device (.56+.02*$deviceIndex) (.46-.01*$deviceIndex)
             # This ring point is beneath the readout's bounding box. Its curved
             # native hit area must leave the hue ring available for every device.
             $hue=(Model).color_panel.wheel_components[0];$angle=@(-135,-120,-150)[$deviceIndex]*[Math]::PI/180
@@ -120,10 +128,7 @@ try{
     Shape circle
     $index=0
     foreach($device in @('mouse','pen','touch')){
-        $before=Paint;$start=Point .5 .5;$end=Point (.54+.04*$index) .56
-        [CapyRowPointer]::Down($device,$start[0],$start[1]);[CapyRowPointer]::Move($end[0],$end[1]);[CapyRowPointer]::Up()
-        Wait-Until {(Paint) -ne $before} "$device could not pick in the retained Color drawer"
-        Wait-Until {(Control 'color-controls').Current.ItemStatus -eq 'Ready'} "$device did not release the drawer wheel"
+        Pick-Field $device (.54+.04*$index) .56
         $index++
     }
     Invoke 'color-readout'

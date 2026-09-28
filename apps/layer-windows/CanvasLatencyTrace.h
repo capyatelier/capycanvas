@@ -15,7 +15,9 @@ public:
     }
     bool const enabled;
     void Input(CapyPointer const& p,uint64_t arrival) {
-        if(!enabled || (p.flags&1) || p.tool>0 || p.phase<1 || p.phase>3)return;
+        if(!enabled)return;
+        if(p.flags&1){++predictedPoints;return;}
+        if(p.tool>0 || p.phase<1 || p.phase>3)return;
         if(inputs.size()==Limit){inputOverflow=true;return;}
         inputs.push_back({p.sequence,p.timestamp_ns,arrival,p.phase});
     }
@@ -43,7 +45,7 @@ public:
         for(auto const& p:consumed)consume<<p.sequence<<','<<p.frame<<'\n';
         frame<<"frame,acquire_start_ns,acquired_ns,render_start_ns,render_end_ns,last_present,displayed_present,present_refresh,sync_refresh,sync_qpc,stats_error\n";
         for(auto const& f:frames)frame<<f.number<<','<<f.acquireStart<<','<<f.acquired<<','<<f.renderStart<<','<<f.renderEnd<<','<<f.lastPresent<<','<<f.displayed<<','<<f.presentRefresh<<','<<f.syncRefresh<<','<<f.syncQpc<<','<<f.error<<'\n';
-        std::ofstream(prefix+"-status.json")<<"{\"overflow\":"<<(inputOverflow||consumeOverflow||frameOverflow?"true":"false")<<"}";
+        std::ofstream(prefix+"-status.json")<<"{\"overflow\":"<<(inputOverflow||consumeOverflow||frameOverflow?"true":"false")<<",\"predicted_points\":"<<predictedPoints<<"}";
     }
 private:
     static constexpr size_t Limit=65536;
@@ -53,6 +55,6 @@ private:
     std::vector<InputRecord> inputs; // independent input thread
     std::vector<Consumption> consumed; // render owner
     std::vector<FrameRecord> frames; // render owner
-    uint64_t frameNumber=0;
+    uint64_t frameNumber=0,predictedPoints=0;
     bool inputOverflow=false,consumeOverflow=false,frameOverflow=false;
 };

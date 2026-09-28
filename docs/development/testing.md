@@ -94,9 +94,6 @@ are your task, and remove an entry when you fix it.
   the last assertion of `AndroidHostTest#cameraNavigationPublishesOnlyReadoutUpdates`;
   `AndroidInteractionTest#menuBodyAndExtendedTabDropsAcrossDevices` and
   `#drawerTabsKeepActiveColorsAndPadding`.
-- Windows `exercise-tab-pickup.ps1 -Device touch`: after the Layers group is torn
-  off, the injected contact reaches neither XAML nor the canvas, so the drag never
-  finishes. Mouse passes.
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and
   `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
 - Headless Web `--toolbar-components`, `--tonal-selection`, `--editor` and

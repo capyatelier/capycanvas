@@ -9,6 +9,7 @@ use layer_ui::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::VecDeque,
     future::Future,
     pin::Pin,
     rc::Rc,
@@ -224,6 +225,7 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     quiet: bool,
     preferences: Option<Task<()>>,
     preferences_edited: bool,
+    preference_edits: VecDeque<SwitcherEdit>,
     refresh_preferences: bool,
     incoming: Option<StoredEntity>,
     incoming_renew: Option<Task<StoredEntity>>,
@@ -267,6 +269,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             quiet: false,
             preferences: None,
             preferences_edited: false,
+            preference_edits: VecDeque::new(),
             refresh_preferences: false,
             incoming: None,
             incoming_renew: None,
@@ -726,19 +729,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         let mut change = UiChange::default();
         match input {
             WorkspaceInput::EditSwitcher { edit } => {
-                if !self.view.ready
-                    || self.preferences.is_some()
-                    || self.task.is_some()
-                    || self.incoming.is_some()
-                {
-                    return Err(StoreError::invalid(
-                        "Wait for the current workspace operation to finish.",
-                    ));
+                if !self.view.ready || self.terminating {
+                    return Err(StoreError::invalid("Open a workspace before editing its switcher."));
                 }
                 self.view.switcher_error = None;
-                self.preferences_edited = true;
-                let manager = self.manager.clone();
-                self.preferences = self.spawn(async move { manager.edit_switcher(edit).await });
+                self.preference_edits.push_back(edit);
             }
             WorkspaceInput::RefreshSwitcher => self.refresh_preferences = true,
             WorkspaceInput::FocusFailed { error } => self.view.error = Some(error),
@@ -866,7 +861,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         Ok(change)
     }
     fn publish_flags(&mut self) {
-        self.view.switcher_busy = self.preferences.is_some();
+        self.view.switcher_busy = self.preferences.is_some() || !self.preference_edits.is_empty();
         self.view.busy = (self.task.is_some() && !self.quiet)
             || self.incoming.is_some()
             || self.install.is_some()
@@ -1389,19 +1384,22 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             }
             self.preferences_edited = false;
         }
-        if self.refresh_preferences
-            && self.view.ready
-            && !self.terminating
-            && self.task.is_none()
+        if self.view.ready
+            && (self.task.is_none() || self.quiet)
             && self.incoming.is_none()
             && self.preferences.is_none()
         {
-            self.refresh_preferences = false;
             let manager = self.manager.clone();
-            self.preferences = self.spawn(async move {
-                manager.refresh().await?;
-                manager.refresh_switcher().await
-            });
+            if let Some(edit) = self.preference_edits.pop_front() {
+                self.preferences_edited = true;
+                self.preferences = self.spawn(async move { manager.edit_switcher(edit).await });
+            } else if self.refresh_preferences && !self.terminating {
+                self.refresh_preferences = false;
+                self.preferences = self.spawn(async move {
+                    manager.refresh().await?;
+                    manager.refresh_switcher().await
+                });
+            }
         }
         if let Some(result) = self.task.as_mut().and_then(Task::poll) {
             self.task = None;
@@ -1671,7 +1669,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             });
         }
         if (self.view.ready || self.discard) && self.task.is_none() && self.incoming.is_none() {
-            if self.close_after_task && self.renew.is_none() {
+            if self.close_after_task && self.renew.is_none()
+                && self.preferences.is_none() && self.preference_edits.is_empty()
+            {
                 let current = self.manager.current_record().filter(|_| self.discard);
                 let discard = self.discard;
                 let m = self.manager.clone();

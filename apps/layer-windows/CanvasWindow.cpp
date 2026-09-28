@@ -107,7 +107,7 @@ CanvasWindow::~CanvasWindow() {
     { std::lock_guard lock(mutex); closing=true; paused=false; }
     wake.notify_all();space.notify_all();
     if (renderer.joinable()) renderer.join();
-    latencyTrace.Dump("latency-"+std::to_string(windowId));
+    latencyTrace.Dump("latency-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId));
     if (host) capy_destroy(host);
 }
 void CanvasWindow::Open() {

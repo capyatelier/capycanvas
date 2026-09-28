@@ -16,10 +16,7 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/lifecycle/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 function Button([string]$Name) {
-    $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.AndCondition]::new(
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name),
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
+    Control $Name -Name -Type ([System.Windows.Automation.ControlType]::Button) -Arranged
 }
 function Check-Caption {
     # Caption validation must observe a settled UI; filter discovery can still

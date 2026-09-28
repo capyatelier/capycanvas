@@ -15,7 +15,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -Name SelectionDpi -Namespace Capy -MemberDefinition '[DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);[DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,int[] point);'
 function Dip($element){$element.Current.BoundingRectangle.Height/([Capy.SelectionDpi]::GetDpiForWindow($review.MainWindowHandle)/96.)}
 function Outline([string]$Name,[int]$Left,[int]$Right,[int]$Y){
-    Capture $Name
+    Capture $Name -Composed
     $origin=[int[]]@(0,0);$null=[Capy.SelectionDpi]::ClientToScreen($review.MainWindowHandle,$origin)
     $image=[System.Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')))
     try{
@@ -119,7 +119,7 @@ try {
         if(!@((Model).panels|ForEach-Object {$_.tiles}|Where-Object {$_.control.command -eq $command}).Count){throw "Photo has no $command tool"}
     }
     Switch-Workspace 'Sketch' 'builtin:workspace:painter'
-    if(Find 'canvas-fit'){Invoke 'canvas-fit'};Start-Sleep -Milliseconds 300;Canvas-Points
+    if(Find 'canvas-fit'){$revision=(Model).state.camera.revision;Invoke 'canvas-fit';Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not update the camera'};Canvas-Points
     $select=Header-Id 'select'
     if(!$select -or (Header-Id 'lasso')){throw 'Sketch did not replace Lasso with the Select opener'}
     Tap (Center (Control ('header-item-'+$select)))
@@ -132,9 +132,10 @@ try {
     if($choices.Count -ne 8){throw "Expected eight selection tools, found $($choices.Count)"}
     $devices=@('mouse','touch','pen')
     for($i=0;$i -lt $choices.Count;$i++){
-        $choice=$choices[$i];$row=Control ('tool-subtool-'+$i)
+        $choice=$choices[$i];$row=Control ('tool-subtool-'+$i) -Arranged
         $minimum=if(@((Model).state.tool_extra|Where-Object {$_.Choice.id -eq 'tonal-tones'}).Count){36}else{44}
-        if((Dip $row) -lt $minimum-.5){throw "$($choice.label) row is $([Math]::Round((Dip $row),1)) px, shorter than $minimum px"}
+        $height=Dip $row
+        if($height -lt $minimum-.5){throw "$($choice.label) row is $height DIP, shorter than $minimum DIP"}
         Tap (Center $row) $devices[$i%3]
         Wait-Until {(Model).state.tool_set.subtools[$i].selected} "$($choice.label) did not select"
         Wait-Until {(Header-Icon $select) -eq $choice.icon} "Select opener did not remember $($choice.label)"
@@ -184,7 +185,7 @@ try {
     Wait-Until {!(Model).state.customization.drawer} 'Escape did not close the Select drawer'
 
     Switch-Workspace 'Photo' 'builtin:workspace:photographer'
-    if(Find 'canvas-fit'){Invoke 'canvas-fit'};Start-Sleep -Milliseconds 300;Canvas-Points
+    if(Find 'canvas-fit'){$revision=(Model).state.camera.revision;Invoke 'canvas-fit';Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not update the camera'};Canvas-Points
     Invoke (Tile-Id 'rectangle_select')
     Wait-Until {(Tools).tool.selection.kind -eq 'rectangle' -and (Command 'select_all').enabled} 'Photo Rectangle Select did not activate'
     if((Tools).has_selection){
@@ -194,6 +195,7 @@ try {
         Wait-Until {!(Tools).has_selection} 'Deselect did not clear the tonal selection'
     }
     $a=@{x=$center.x-80;y=$center.y-60};$b=@{x=$center.x+80;y=$center.y+60}
+    @{from=$a;to=$b;model=(Model)}|ConvertTo-Json -Depth 70|Set-Content (Join-Path $run 'rectangle-before.json')
     Drag $a $b
     Wait-Until {(Tools).has_selection} 'Rectangle selection did not complete'
     [CapyRowPointer]::Hover($center.x+160,$center.y+120)

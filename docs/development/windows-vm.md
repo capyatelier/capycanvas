@@ -89,15 +89,26 @@ licence expires 90 days after `create`; stop every VM, then run `destroy` and
 session through a scheduled task, because SSH sessions cannot use UI Automation
 or inject input. The runner works like a contributor at an unlocked desktop: one
 fixture at a time, from a visible console that gives each fixture foreground
-rights. It stops leftover CapyCanvas processes between runs and records each
-exit code, duration and final error. It sets `CAPY_WAIT_SCALE=3`, which
-lengthens every `CapyUia.ps1` wait for the slower adapter. Name fixtures
+rights. It stops only CapyCanvas processes launched during that run from the
+selected executable and records each exit code, duration and final error. It
+sets `CAPY_WAIT_SCALE=3`, which lengthens every `CapyUia.ps1` wait for the slower
+adapter. Name fixtures
 (`layers`) or single variants (`header:pen`); with no names it runs `shortcuts`
 and every fixture that launches its own app, once with its defaults and once for
 each switch and each other `ValidateSet` choice. It skips `documents -RecoverGpu`
 and `-FailGpu` unless they are named: after their simulated device removal, WARP
-itself crashes in `d3d10warp.dll`. `--no-build` reuses the last build. Results, logs and failure screenshots are copied to
-`artifacts/windows-vm/<vm>/<run>/`.
+itself crashes in `d3d10warp.dll`. `--no-build` verifies the synced build inputs
+and executable/DLL hashes before reusing a build. Fixture-only changes can reuse it; changes to Rust, native code
+or build scripts require rebuilding.
+
+Each run writes its expected variants to `plan.json`. Empty selections, missing
+results, a stopped desktop task and startup or fixture deadlines fail the run.
+Results, logs, desktop failure screenshots and per-fixture evidence are copied to
+`artifacts/windows-vm/<vm>/<run>/`. Evidence includes the disposable profile,
+fixture captures and owned process traces. `provenance.json` records the source
+revision, synced file hashes and binary hashes. Preserve both desktop and
+fixture captures when diagnosing a rendering failure; they may use different
+capture APIs.
 
 To use several VMs, give each a share of the names:
 

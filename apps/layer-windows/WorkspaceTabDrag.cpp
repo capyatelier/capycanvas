@@ -74,7 +74,7 @@ struct WorkspaceTabDrag::Impl {
             if(index==source){
                 auto parent=VisualTreeHelper::GetParent(element);
                 while(parent&&parent!=root){
-                    if(auto strip=parent.try_as<ScrollViewer>()){clip=rectangle(visibleBounds(strip,root));break;}
+                    if(auto strip=parent.try_as<ScrollView>()){clip=rectangle(visibleBounds(strip,root));break;}
                     parent=VisualTreeHelper::GetParent(parent);
                 }
             }

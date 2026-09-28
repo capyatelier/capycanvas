@@ -202,6 +202,10 @@ and `edit_switcher(SwitcherEdit::{Show, Move})`
 ([`manager_switcher.rs`](../../crates/layer-workspace/src/manager_switcher.rs)).
 Hosts read preferences at startup, on focus and when refreshing the manager;
 hosts with several windows notify the others after `switcher_revision` changes.
+`WorkspaceController` queues accepted pin and order edits while preferences are
+refreshing. Edits run in order, can complete during background autosave, and
+drain before closing releases the workspace. Hosts wait for the published
+switcher revision or error to acknowledge an edit.
 `StoreRequest::Switcher` returns optional visible IDs: `None` means the three
 defaults and `Some([])` hides the bar. Without a saved order, pins seed it and
 new workspaces follow alphabetically. `UpdateSwitcher` and `UpdateWorkspaceOrder`

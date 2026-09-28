@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyFind='visible'
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')
 $null=[CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))
@@ -9,10 +10,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/color-picker/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-function Control([string]$Value,[switch]$Name,$Within=$root,$Type){
-    $hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name -Within $Within -Type $Type;$null -ne $hit.item -and !$hit.item.Current.IsOffscreen} "Missing native control: $Value";$hit.item
-}
-function Center([string]$Id){$b=(Control $Id).Current.BoundingRectangle;@{x=[int]($b.X+$b.Width/2);y=[int]($b.Y+$b.Height/2)}}
+function Center([string]$Id){$b=(Control $Id -Arranged).Current.BoundingRectangle;@{x=[int]($b.X+$b.Width/2);y=[int]($b.Y+$b.Height/2)}}
 function Presentation{$workspace=Find 'Drawing workspace' -Name;if($workspace){try{$workspace.Current.ItemStatus|ConvertFrom-Json}catch{}}}
 function Preview{(Presentation).color_preview}
 function Tool{(Model).state.layer_tools.tool}

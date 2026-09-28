@@ -5,6 +5,13 @@ param(
     [int]$TimeoutMinutes = 20
 )
 $ErrorActionPreference = 'Stop'
+trap {
+    New-Item -ItemType Directory -Force $Output | Out-Null
+    ($_ | Out-String) + $_.ScriptStackTrace | Set-Content (Join-Path $Output 'runner-error.txt')
+    exit 1
+}
+$runnerStarted = Get-Date
+$Executable = (Resolve-Path -LiteralPath $Executable).Path
 $scripts = (Resolve-Path (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts')).Path
 $runs = [ordered]@{ shortcuts = $null }
 foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
@@ -49,9 +56,33 @@ function Save-Screen([string]$Path) {
     }
 }
 
+function Reviews {
+    Get-Process CapyCanvas -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Executable -and $_.StartTime -ge $runnerStarted }
+}
 function Stop-Review {
-    Get-Process CapyCanvas -ErrorAction SilentlyContinue | Stop-Process -Force
-    Get-Process CapyCanvas -ErrorAction SilentlyContinue | Wait-Process -Timeout 30
+    $owned = @(Reviews)
+    $owned | Stop-Process -Force
+    $owned | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
+}
+function Save-Evidence([string]$Log) {
+    if (!(Test-Path "$Log-context.json")) { return }
+    $context = Get-Content "$Log-context.json" -Raw | ConvertFrom-Json
+    $evidence = "$Log-evidence"
+    New-Item -ItemType Directory -Force $evidence | Out-Null
+    $owners = @($context.process_id) + @(Reviews | ForEach-Object Id)
+    $folders = @($context.trace_directory, $context.run, (Split-Path $Executable)) | Where-Object { $_ } | Select-Object -Unique
+    foreach ($folder in $folders) {
+        foreach ($owner in $owners | Where-Object { $_ } | Select-Object -Unique) {
+            Get-ChildItem -LiteralPath $folder -File | Where-Object {
+                $_.Name -match "^(ui-state|camera-state|windows|prediction|latency)-$owner(-|\.)"
+            } | Copy-Item -Destination $evidence
+        }
+    }
+    Stop-Review
+    if ($context.run -and (Test-Path -LiteralPath $context.run)) {
+        & robocopy.exe $context.run $evidence /E /R:0 /W:0 /NFL /NDL /NJH /NJS | Out-Null
+        if ($LASTEXITCODE -ge 8) { throw "Could not preserve fixture evidence: $($context.run)" }
+    }
 }
 
 function Start-Shortcuts {
@@ -62,6 +93,7 @@ function Start-Shortcuts {
     $env:CAPY_SETTINGS_DIRECTORY = Join-Path $Output 'shortcuts-profile'
     try { $review = Start-Process $Executable -WorkingDirectory (Split-Path $Executable) -PassThru } finally { foreach ($entry in $saved.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value) } }
     $directory = Split-Path $Executable
+    @{process_id=$review.Id;trace_directory=$directory;profile=(Join-Path $Output 'shortcuts-profile')} | ConvertTo-Json | Set-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT
     $deadline = (Get-Date).AddMinutes(2)
     while (!($state = Get-ChildItem (Join-Path $directory "ui-state-$($review.Id)-*.json") -ErrorAction SilentlyContinue | Select-Object -First 1)) {
         if ((Get-Date) -gt $deadline) { throw 'The shortcuts review did not publish its UI state.' }
@@ -77,20 +109,29 @@ $env:CAPY_WAIT_SCALE = '3'
 $env:NO_COLOR = '1'
 $selected = if ($Name) { $Name -split ',' } else { @() }
 $hardware = 'documents:RecoverGpu', 'documents:FailGpu'
+foreach ($requested in $selected) {
+    if (!@($runs.Keys | Where-Object { $_ -eq $requested -or ($_ -split ':')[0] -eq $requested }).Count) { throw "Unknown fixture: $requested" }
+}
+$planned = @($runs.Keys | Where-Object { (!$selected -or $_ -in $selected -or ($_ -split ':')[0] -in $selected) -and ($_ -notin $hardware -or $_ -in $selected) })
+if (!$planned.Count) { throw 'No fixtures selected.' }
+@{runs=$planned;timeout_minutes=$TimeoutMinutes}|ConvertTo-Json|Set-Content (Join-Path $Output 'plan.json')
 $results = Join-Path $Output 'results.jsonl'
 foreach ($run in $runs.GetEnumerator()) {
     $fixture = ($run.Key -split ':')[0]
-    if ($selected -and $run.Key -notin $selected -and $fixture -notin $selected) { continue }
-    if ($run.Key -in $hardware -and $run.Key -notin $selected) { continue }
+    if ($run.Key -notin $planned) { continue }
     Stop-Review
     $log = Join-Path $Output ($run.Key -replace ':', '-')
+    $env:CAPY_FIXTURE_CONTEXT = "$log-context.json"
     $started = Get-Date
     try {
         $arguments = if ($null -eq $run.Value) { Start-Shortcuts } else { @('-File', (Join-Path $scripts "exercise-$fixture.ps1"), '-Executable', $Executable) + $run.Value }
         $process = Start-Process (Get-Process -Id $PID).Path -ArgumentList (@('-NoProfile', '-Sta') + $arguments) -NoNewWindow -PassThru -RedirectStandardOutput "$log.log" -RedirectStandardError "$log.err"
         $null = $process.Handle
         $finished = $process.WaitForExit($TimeoutMinutes * 60000)
-        if (!$finished) { & taskkill.exe /T /F /PID $process.Id | Out-Null }
+        if (!$finished) {
+            Save-Screen "$log.png"
+            & taskkill.exe /T /F /PID $process.Id | Out-Null
+        }
         $exit = if ($finished) { $process.ExitCode } else { 'timeout' }
         $errors = @(Get-Content "$log.err")
         $marker = [array]::FindLastIndex([string[]]$errors, [Predicate[string]]{ param($line) $line -match '^\s*\|\s*~' })
@@ -99,7 +140,10 @@ foreach ($run in $runs.GetEnumerator()) {
         $exit = 'runner'
         $message = $_.Exception.Message
     }
-    if ($exit -ne 0) { Save-Screen "$log.png" }
+    try {
+        if ($exit -ne 0 -and !(Test-Path "$log.png")) { Save-Screen "$log.png" }
+        Save-Evidence $log
+    } catch { $exit = 'evidence'; $message += " $($_.Exception.Message)" }
     [ordered]@{ name = $run.Key; exit = $exit; seconds = [math]::Round(((Get-Date) - $started).TotalSeconds); message = $message } |
         ConvertTo-Json -Compress | Add-Content $results
 }

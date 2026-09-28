@@ -196,16 +196,16 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
                 self->busy=false;
                 if(serial!=self->generation)return;
                 auto preview=object(reply,L"result");
-                if(at!=self->motion){self->dropQuery();return;}
                 auto result=object(preview,L"drop");
                 if(final){
+                    if(at!=self->motion){self->dropQuery();return;}
                     if(!self->ownsFocus()||!self->current()){self->cancel(L"final_invalid");return;}
                     auto next=object(result,L"action");
                     if(next.Size())self->data->dispatch(next);
                     self->clear();return;
                 }
                 self->showHint(result);self->refresh();
-                self->evidence();
+                self->evidence();self->dropQuery();
             }
         }))busy=false;else dirty=false;
     }
@@ -441,7 +441,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
                         {L"source_name",S(source?AutomationProperties::GetAutomationId(source):L"")},
                         {L"root_hit_test_visible",B(self->root.IsHitTestVisible())},{L"external_popup",B(self->data->externalPopup)},
                         {L"source_loaded",B(self->source.get()&&self->source.get().IsLoaded())},
-                        {L"in_contact",B(p.IsInContact())},{L"dragging",B(self->dragging)},
+                        {L"in_contact",B(p.IsInContact())},{L"canceled",B(p.Properties().IsCanceled())},{L"dragging",B(self->dragging)},
                         {L"position",point(p.Position())}});
                 }
                 // A Button releases its capture before the normal routed Up.

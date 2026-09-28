@@ -167,17 +167,34 @@ ignored `artifacts/windows`.
   desktop and foreground input. Run them sequentially.
 - **Wait for layout.** Before injecting input, wait for both the published state
   and the arranged control bounds, then check that the hit belongs to the owned
-  app. A model update alone does not mean the visible rows have moved.
+  app. Use `Control -Arranged` from `CapyUia.ps1` when locating a pointer target.
+  A model update alone does not mean the visible rows have moved.
+- **Wait for the operation you started.** Compare the document revision or the
+  requested state before and after input. An already enabled Undo command does
+  not prove that a new stroke has committed.
+- **Capture composed pixels.** GPU pixel assertions use the owned window's
+  screen rectangle on the private desktop. `PrintWindow` can return an earlier
+  SwapChainPanel image. Wait for the expected visible change before comparing
+  pixels.
+- **Use current menu identifiers.** `NativeMenuItems` uses the shared command ID
+  for routed commands; other layer actions use `layer-menu-<op>`. Check the shared
+  menu definition when an item cannot be found.
 - **One snapshot per assertion.** Read related fields from one state file; check
   its `process_id`, `window_id` and freshness.
 - **Failures keep the app.** A failed fixture leaves its app running for
-  inspection. Close it before rebuilding.
+  inspection. Close it before rebuilding. The VM runner preserves its evidence
+  and closes the processes it owns before continuing.
 - **Injection is not hardware.** UI Automation and injected input do not establish
   physical pen and touch behavior, painting cadence or latency. Compare an
   injected-input failure with physical input before changing native capture.
 
 `exercise-workspace-pickup.ps1 -DebuggerPath <cdb.exe>` attaches CDB before input
 and saves an access-violation stack and dump in the run directory.
+
+Panel tab strips use `ScrollView` with horizontal content and reserve touch and
+pen input for workspace dragging. Wheel scrolling remains native. Run every
+`tab-pickup` device variant and `tab-drag` after changing the strip or its preview
+clipping; they cover direct tear-off, retained contact, cancellation and history.
 
 ### GPU reconstruction
 

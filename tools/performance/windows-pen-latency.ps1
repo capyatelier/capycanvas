@@ -62,7 +62,7 @@ Wait-Until {$discard=Find "Discard Changes" -Name;$discard -or $review.HasExited
 if(!$review.HasExited){$discard=Find "Discard Changes" -Name;$discard.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 $review.WaitForExit(30000)|Out-Null
 if(!$review.HasExited){throw 'Benchmark app did not finish'}
-$prefix='latency-'+$meta.window_id
+$prefix='latency-'+$review.Id+'-'+$meta.window_id
 Get-ChildItem (Join-Path $directory ($prefix+'-*'))|Copy-Item -Destination $OutputDirectory
 Get-ChildItem (Join-Path $directory ('prediction-'+$review.Id+'-*.json'))|Copy-Item -Destination $OutputDirectory
 if($review.ExitCode -ne 0){throw "Benchmark app exited with $($review.ExitCode)"}

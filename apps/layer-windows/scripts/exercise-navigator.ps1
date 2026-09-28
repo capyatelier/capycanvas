@@ -10,7 +10,6 @@ public static class CapyNavigatorCapture {
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
-    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window,IntPtr dc,uint flags);
 }
 '@
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
@@ -29,13 +28,12 @@ function Navigator {
     $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$menuCondition).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
 }
 function Capture([string]$Name){
-    Start-Sleep -Milliseconds 250 # Let the acknowledged native layout reach composition.
     $rect=[CapyNavigatorCapture+Rect]::new()
     if(![CapyNavigatorCapture]::GetWindowRect($review.MainWindowHandle,[ref]$rect)){throw 'Window bounds unavailable'}
     $bitmap=[Drawing.Bitmap]::new($rect.right-$rect.left,$rect.bottom-$rect.top)
-    $graphics=[Drawing.Graphics]::FromImage($bitmap);$dc=$graphics.GetHdc()
-    try {if(![CapyNavigatorCapture]::PrintWindow($review.MainWindowHandle,$dc,2)){throw 'App-only capture failed'}}
-    finally {$graphics.ReleaseHdc($dc);$graphics.Dispose()}
+    $graphics=[Drawing.Graphics]::FromImage($bitmap)
+    try {$graphics.CopyFromScreen($rect.left,$rect.top,0,0,$bitmap.Size)}
+    finally {$graphics.Dispose()}
     try {$bitmap.Save((Join-Path $run ($Name+'.png')),[Drawing.Imaging.ImageFormat]::Png)}catch{$bitmap.Dispose();throw}
     return $bitmap
 }
@@ -119,8 +117,7 @@ try {
         Wait-Until {$paint=Capture 'paint';try {(Different $blank $paint $area) -ge 20}finally{$paint.Dispose()}} 'Live GPU overview did not show the stroke'
         Invoke 'Undo' -Name
         Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore the checkpoint'
-        $undo=Capture 'undo'
-        try {if((Different $blank $undo $area) -ne 0){throw 'Undo did not restore the GPU overview pixels'}}finally{$undo.Dispose()}
+        Wait-Until {$undo=Capture 'undo';try {(Different $blank $undo $area) -eq 0}finally{$undo.Dispose()}} 'Undo did not restore the GPU overview pixels'
     }finally{$blank.Dispose()}
     Wait-Until {((Model).state.commands|Where-Object id -eq 'new_document').enabled} 'New drawing stayed unavailable'
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
@@ -132,13 +129,16 @@ try {
     Wait-Until {(Model).state.tabs[0].width -eq 128 -and (Model).state.tabs[0].height -eq 64 -and !(Model).state.document_file.busy} 'Different-aspect document was not adopted' 45
     Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Document dialog input gate did not clear'
     if(((Control 'navigator-overview').GetRuntimeId() -join ':') -ne $identity){throw 'Document replacement rebuilt the Navigator'}
-    $replacement=Capture 'replacement'
-    try {
-        Check-Surround $replacement
-        $area=Image-Rect
-        $inside=$replacement.GetPixel($area.Left+8,$area.Top+8)
-        if($inside.R -lt 250 -or $inside.G -lt 250 -or $inside.B -lt 250){throw 'New document did not fill the expected overview image'}
-    }finally{$replacement.Dispose()}
+    Wait-Until {
+        $replacement=Capture 'replacement'
+        try {
+            $area=Image-Rect
+            $inside=$replacement.GetPixel($area.Left+8,$area.Top+8)
+            if($inside.R -lt 250 -or $inside.G -lt 250 -or $inside.B -lt 250){return $false}
+            Check-Surround $replacement
+            $true
+        }finally{$replacement.Dispose()}
+    } 'New document did not fill the expected overview image'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1550 -Height 1040
     Wait-Until {(Model).state.camera.viewport[0] -gt 1450} 'Native resize did not reach the renderer'
     if(((Control 'navigator-overview').GetRuntimeId() -join ':') -ne $identity){throw 'Resize replaced the native Navigator'}

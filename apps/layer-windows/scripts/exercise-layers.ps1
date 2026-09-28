@@ -123,10 +123,11 @@ try {
     Invoke "layer-$created-name"
     Wait-Until {!(Model).state.layer_tools.editing_layer.mask_selected} 'Content target not selected'
     foreach($target in @('name','content','mask')){foreach($shift in @($false,$true)){
-        $isMask=$target -eq 'mask';$command=if($isMask){'layer-menu-enable_mask'}else{'menu-organize'}
+        $isMask=$target -eq 'mask';$command=if($isMask){'layer_mask_enabled'}else{'menu-organize'}
         Focus "layer-$created-$target"
         if($shift){[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)}else{[CapyRowPointer]::Key([uint32]$review.Id,0x5D)}
-        Wait-Until {$item=Find $command;$null -ne $item -and !$item.Current.IsOffscreen -and (Model).state.layer_tools.editing_layer.mask_selected -eq $isMask} "Keyboard opened the wrong layer context: $target, Shift=$shift"
+        Wait-Until {$item=Find $command;$null -ne $item -and !$item.Current.IsOffscreen} "Keyboard menu item not visible: $command, target=$target, Shift=$shift"
+        Wait-Until {(Model).state.layer_tools.editing_layer.mask_selected -eq $isMask} "Keyboard context selected the wrong painting target: $target, Shift=$shift"
         if($isMask -and $shift){Capture 'keyboard-mask-menu'}
         [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
         Wait-Until {$item=Find $command;$null -eq $item -or $item.Current.IsOffscreen} 'Escape did not dismiss the layer menu'
@@ -140,10 +141,10 @@ try {
     Invoke "layer-$created-mask"
     Wait-Until {(Model).state.layer_tools.editing_layer.mask_selected} 'Mask target not selected'
     Invoke 'layer-actions'
-    (Control 'layer-menu-enable_mask').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    (Control 'layer_mask_enabled').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {!(Model).state.layer_tools.editing_layer.mask_enabled} 'Mask disable not applied'
     Invoke 'layer-actions'
-    (Control 'layer-menu-enable_mask').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    (Control 'layer_mask_enabled').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Model).state.layer_tools.editing_layer.mask_enabled} 'Mask enable not applied'
     Invoke "layer-$created-link"
     Wait-Until {!(Model).state.layer_tools.editing_layer.mask_linked} 'Mask unlink not applied'

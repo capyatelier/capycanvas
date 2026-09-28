@@ -152,9 +152,11 @@ on a 9504 × 6336 canvas and reports completed generations, not displayed frames
 **Pen latency (Windows).** Against a Release build, run
 `tools/performance/windows-pen-latency.ps1 -Executable <exe> -Project <.capy>
 -OutputDirectory <dir>`, then `node tools/performance/windows-pen-report.mjs <dir>`.
-It injects a 240 Hz pen circle and matches inputs to DXGI frame statistics, so it
-reports software input-to-display time, not input-to-photon. PresentMon needs
-administrator rights.
+It paces a pen circle at up to 240 Hz and records actual injection timestamps;
+a delayed sample never triggers a catch-up burst. The report matches inputs to
+DXGI frame statistics, so it reports software input-to-display time, not
+input-to-photon. Per-window traces use `latency-<pid>-<window>` names. PresentMon
+needs administrator rights.
 
 **Desktop GPUs.**
 

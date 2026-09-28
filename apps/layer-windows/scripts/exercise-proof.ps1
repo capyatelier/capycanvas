@@ -113,7 +113,8 @@ try {
  Wait-Until {!(Model).state.document_file.modified} 'One Undo did not restore the clean drawing'
  Command 'redo' 'Edit';Idle;Command 'soft_proof'
  Wait-Until {(Model).windows_proof.bytes -gt 0 -and (Model).windows_proof.text -eq 'Proof: Display P3'} 'Redo proof view did not recover' 60
- Button 'Test stroke';Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Stroke did not commit'
+ $revision=(Model).state.document_file.revision
+ Button 'Test stroke';Wait-Until {(Model).state.document_file.revision -gt $revision -and ((Model).state.commands|Where-Object id -eq 'export_document').enabled} 'Stroke did not commit'
  $proofHash=Export 'proof-on.png'
  Command 'soft_proof';$plainHash=Export 'proof-off.png'
  if($proofHash -ne $plainHash){throw 'Proof contaminated exported pixels'}

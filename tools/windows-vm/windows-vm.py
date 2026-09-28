@@ -311,10 +311,10 @@ def guest(machine, command, **options):
     return run(*ssh_command(machine, command), **options)
 
 
-def guest_script(machine, script):
+def guest_script(machine, script, **options):
     encoded = base64.b64encode(script.encode("utf-16-le")).decode()
     status = guest(machine, f"powershell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand {encoded}",
-                   check=False).returncode
+                   check=False, **options).returncode
     if status:
         sys.exit(f"A PowerShell script in the {machine.name} VM exited with status {status}.")
 
@@ -476,6 +476,7 @@ def sync_machine(machine):
     if archive.wait() or extract.wait():
         sys.exit("Copying the working tree to the VM failed.")
     record.write_text(json.dumps(hashes))
+    return hashes
 
 
 def sync(args):
@@ -497,55 +498,136 @@ def check(args):
 def desktop(machine, arguments):
     guest_script(machine, f"""$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-while (!(Get-Process explorer -IncludeUserName -ErrorAction SilentlyContinue | Where-Object UserName -Like '*\\{USER}')) {{ Start-Sleep 2 }}
+$deadline = (Get-Date).AddMinutes(2)
+while (!(Get-Process explorer -IncludeUserName -ErrorAction SilentlyContinue | Where-Object UserName -Like '*\\{USER}')) {{
+    if ((Get-Date) -ge $deadline) {{ throw 'The interactive desktop did not start.' }}
+    Start-Sleep 2
+}}
 $action = New-ScheduledTaskAction -Execute conhost.exe -Argument '"{GUEST_PWSH}" -NoProfile -Sta -ExecutionPolicy Bypass {arguments}' -WorkingDirectory '{GUEST_REPO}'
 $principal = New-ScheduledTaskPrincipal -UserId {USER} -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
 Register-ScheduledTask {DESKTOP_TASK} -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 Start-ScheduledTask {DESKTOP_TASK}
-""")
+""", timeout=180)
 
 
 def desktop_running(machine):
-    state = guest(machine, f"(Get-ScheduledTask {DESKTOP_TASK}).State", capture_output=True, text=True, check=False)
-    return state.returncode != 0 or state.stdout.strip() == "Running"
+    state = guest(machine, f"$ErrorActionPreference='Stop'; (Get-ScheduledTask {DESKTOP_TASK}).State",
+                  capture_output=True, text=True, timeout=60)
+    return state.stdout.strip() in ("Running", "Queued")
+
+
+def build_inputs(hashes):
+    scripts = {"apps/layer-windows/scripts/build.ps1", "apps/layer-windows/scripts/stage-assets.ps1"}
+    return {name: digest for name, digest in hashes.items()
+            if name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml") or name in scripts
+            or name.startswith(("crates/", "vendor/", ".cargo/")) and not name.endswith(".md")
+            or name.startswith(("apps/layer-web/icons/", "apps/layer-web/brush-previews/"))
+            or name.startswith("apps/layer-windows/") and not name.endswith(".md")
+            and not name.startswith("apps/layer-windows/scripts/")}
+
+
+def build_files(machine):
+    result = guest(machine, f"$ErrorActionPreference='Stop'; $build='{SOFTWARE_BUILD}'; "
+                   "ConvertTo-Json -Compress -InputObject @(Get-ChildItem $build -Recurse -File | "
+                   "Where-Object { $_.Extension -In '.exe','.dll' -or $_.FullName.StartsWith($build+'\\Assets\\') } | "
+                   "ForEach-Object { @{name=$_.FullName.Substring($build.Length+1);"
+                   "sha256=(Get-FileHash -LiteralPath $_.FullName).Hash} })",
+                   capture_output=True, text=True, timeout=60)
+    return {item["name"]: item["sha256"] for item in json.loads(result.stdout)}
+
+
+def validate_build(record, inputs, files):
+    if not record or record["inputs"] != inputs or record["files"] != files:
+        sys.exit("The software-adapter build does not match the synced source or binaries; rerun without --no-build.")
+
+
+def validate_results(plan, results):
+    expected = plan["runs"]
+    actual = [row["name"] for row in results]
+    if not expected or actual != expected:
+        sys.exit(f"Incomplete fixture coverage: expected {expected}, received {actual}.")
+
+
+def wait_for_fixtures(machine, output):
+    results = []
+    deadline = time.monotonic() + 180
+    plan = None
+    failure = None
+    try:
+        while True:
+            time.sleep(5)
+            running = desktop_running(machine)
+            status = guest(machine, f"@{{plan=$(if(Test-Path '{output}\\plan.json'){{Get-Content '{output}\\plan.json' -Raw|ConvertFrom-Json}});"
+                           f"log=$(if(Test-Path '{output}\\results.jsonl'){{[IO.File]::ReadAllText('{output}\\results.jsonl')}});"
+                           f"error=$(if(Test-Path '{output}\\runner-error.txt'){{[IO.File]::ReadAllText('{output}\\runner-error.txt')}});"
+                           f"complete=(Test-Path '{output}\\complete')}}|ConvertTo-Json -Depth 5 -Compress",
+                           capture_output=True, text=True, timeout=60)
+            progress = json.loads(status.stdout)
+            if plan is None and progress["plan"]:
+                plan = progress["plan"]
+                deadline = time.monotonic() + plan["timeout_minutes"] * 60 + 120
+            for line in (progress["log"] or "").splitlines()[len(results):]:
+                try:
+                    result = json.loads(line)
+                except json.JSONDecodeError:
+                    break
+                results.append(result)
+                deadline = time.monotonic() + plan["timeout_minutes"] * 60 + 120
+                print(f"{'pass' if result['exit'] == 0 else 'FAIL'} {result['seconds']:5.0f}s {result['name']}", flush=True)
+            if progress["complete"]:
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError("The fixture runner exceeded its startup or fixture deadline.")
+            if not running:
+                raise RuntimeError(progress.get("error") or "The desktop task stopped before completing the fixture plan.")
+    except (RuntimeError, TimeoutError, ValueError, TypeError, subprocess.SubprocessError) as error:
+        failure = str(error)
+        guest(machine, f"Stop-ScheduledTask {DESKTOP_TASK}", check=False, timeout=60)
+    return results, plan, failure
 
 
 def fixtures(args):
     machine = selected(args)
     boot(machine, gui=False)
     lock = claim(machine)
-    sync_machine(machine)
-    if not args.no_build:
+    revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    hashes = sync_machine(machine)
+    inputs = build_inputs(hashes)
+    build_record = machine.directory / "software-build.json"
+    if args.no_build:
+        record = json.loads(build_record.read_text()) if build_record.exists() else None
+        validate_build(record, inputs, build_files(machine))
+    else:
+        build_record.unlink(missing_ok=True)
         guest(machine, f"& '{GUEST_REPO}\\apps\\layer-windows\\scripts\\build.ps1' -Configuration Release "
                        f"-SoftwareAdapterTests -OutputDirectory '{SOFTWARE_BUILD}'")
+        record = {"inputs": inputs, "files": build_files(machine)}
+        build_record.write_text(json.dumps(record))
     name = time.strftime("%Y%m%d-%H%M%S")
     output = f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures\\{name}"
+    if any(not re.fullmatch(r"[a-zA-Z0-9:-]+", item) for item in args.names):
+        sys.exit("Fixture names use letters, numbers, hyphens and a variant colon.")
     selection = f" -Name {','.join(args.names)}" if args.names else ""
     desktop(machine, f"-File {GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1 "
                      f"-Executable {SOFTWARE_BUILD}\\CapyCanvas.exe -Output {output}{selection}")
-    results = []
-    finished = False
-    while not finished:
-        time.sleep(15)
-        finished = not desktop_running(machine)
-        lines = guest(machine, f"Get-Content -ErrorAction SilentlyContinue {output}\\results.jsonl",
-                      capture_output=True, text=True, check=False).stdout.splitlines()
-        for line in lines[len(results):]:
-            result = json.loads(line)
-            results.append(result)
-            print(f"{'pass' if result['exit'] == 0 else 'FAIL'} {result['seconds']:5.0f}s {result['name']}",
-                  flush=True)
+    results, plan, failure = wait_for_fixtures(machine, output)
     local = ROOT / "artifacts" / "windows-vm" / machine.name
     local.mkdir(parents=True, exist_ok=True)
     fetch = subprocess.Popen(ssh_command(machine, f"tar -cf - -C {GUEST_REPO}\\artifacts\\windows\\vm-fixtures {name}"),
                              stdout=subprocess.PIPE)
     run("tar", "-xf", "-", "-C", local, stdin=fetch.stdout)
-    fetch.wait()
+    if fetch.wait():
+        sys.exit("Could not retrieve the fixture evidence.")
+    provenance = {"revision": revision, "source": hashes, "build": record}
+    (local / name / "provenance.json").write_text(json.dumps(provenance, indent=2))
     failed = [result["name"] for result in results if result["exit"] != 0]
     print(f"{len(results) - len(failed)} passed, {len(failed)} failed. Logs: {local / name}")
+    if failure:
+        sys.exit(failure)
     if not (local / name / "complete").exists():
         sys.exit("The fixture runner stopped before finishing.")
+    validate_results(plan, results)
     if failed:
         sys.exit(1)
 

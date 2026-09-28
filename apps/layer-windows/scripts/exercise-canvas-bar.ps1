@@ -32,7 +32,7 @@ function AnchorCenter{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;
 function Center($Element){$r=$Element.Current.BoundingRectangle;@([int]($r.X+$r.Width/2),[int]($r.Y+$r.Height/2))}
 function Tap([string]$Id,[string]$Device){
  $item=@{value=$null};Wait-Until {$item.value=Find $Id;$item.value -and !$item.value.Current.IsOffscreen -and $item.value.Current.IsEnabled} "Missing bar control $Id" 10
- $at=Center $item.value;[CapyRowPointer]::Down($Device,$at[0],$at[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
+ $at=Center (Control $Id -Arranged);[CapyRowPointer]::Down($Device,$at[0],$at[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
 }
 function Tool([string]$Command){
  $target=@{id=$null};Wait-Until {foreach($panel in (Model).panels){foreach($tile in $panel.tiles){if($tile.control.command -eq $Command){$target.id="tile-$($panel.id)-$($tile.id)";return $true}}};$false} "No $Command tile"

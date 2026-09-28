@@ -16,7 +16,7 @@ function csv(file) {
 }
 export function analyze(directory) {
   const meta = JSON.parse(fs.readFileSync(path.join(directory, 'capture.json'), 'utf8').replace(/^\uFEFF/, ''));
-  const prefix = path.join(directory, `latency-${meta.surface.window_id}`);
+  const prefix = path.join(directory, `latency-${meta.process_id}-${meta.surface.window_id}`);
   if (JSON.parse(fs.readFileSync(prefix + '-status.json', 'utf8')).overflow) throw Error('Trace overflow; reject this run');
   const inputs = csv(prefix + '-input.csv'), consumed = csv(prefix + '-consumed.csv'), frames = csv(prefix + '-frames.csv');
   if (!inputs.length || !consumed.length) throw Error('No pen input reached the render owner');

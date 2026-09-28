@@ -151,7 +151,7 @@ try{
  Capture 'second-grab'
  [CapyCanvasTouch]::CancelAll()
  Wait-Until {$null -eq (Find-Preview)} 'Cancelled pointer retained the overlay'
- if(((Model).layout|ConvertTo-Json -Depth 80 -Compress) -ne $normal){throw 'Cancellation changed the workspace'}
+ Wait-Until {((Model).layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Cancellation changed the workspace'
  $position=Start-Slide
  $canvas=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
  $x=$canvas.Left+$canvas.Width*.55;$y=$canvas.Top+$canvas.Height*.6

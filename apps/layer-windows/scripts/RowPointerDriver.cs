@@ -48,6 +48,7 @@ public static class CapyRowPointer {
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
+ static long lastInjection;public static double MaxGapMilliseconds {get;private set;}
  static uint owner,kind,penButtons;static bool active;static Point last;static IntPtr pen;
  static readonly object gate=new object();static Timer pulse;static Exception failure;
  public static bool Active {get{lock(gate)return active;}}
@@ -86,7 +87,11 @@ public static class CapyRowPointer {
    if(kind==2)accepted=InjectTouchInput(1,new[]{new TouchInfo{pointer=info,mask=7,
     contact=new Rect{left=point.x-2,top=point.y-2,right=point.x+2,bottom=point.y+2},orientation=90,pressure=512}});
    else accepted=InjectSyntheticPointerInput(pen,new[]{new TypeInfo{type=3,pen=new PenInfo{pointer=info,flags=penButtons,mask=1,pressure=512}}},1);
-   if(accepted)return;
+   if(accepted){
+    long now=System.Diagnostics.Stopwatch.GetTimestamp();
+    if(active)MaxGapMilliseconds=Math.Max(MaxGapMilliseconds,(now-lastInjection)*1000.0/System.Diagnostics.Stopwatch.Frequency);
+    lastInjection=now;return;
+   }
    int error=Marshal.GetLastWin32Error();if(error!=21)throw new Win32Exception(error);Thread.Sleep(1);
   }
   throw new Exception("Windows did not accept the pointer frame.");
@@ -131,7 +136,7 @@ public static class CapyRowPointer {
    Check();if(active)throw new Exception("A review contact is already active.");
    kind=device=="touch"?2u:device=="pen"?3u:device=="mouse"?4u:0;
    if(kind==0)throw new ArgumentException("Unknown pointer device.");
-   var point=new Point{x=x,y=y};Guard(point);
+   var point=new Point{x=x,y=y};Guard(point);MaxGapMilliseconds=0;
    if(kind==4){MouseMove(point);MouseButton(2);}else Send(point,0x10006);
    last=point;active=true;if(kind!=4)pulse.Change(25,25);
   }

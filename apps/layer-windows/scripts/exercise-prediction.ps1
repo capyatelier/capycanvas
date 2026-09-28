@@ -4,6 +4,8 @@ $ErrorActionPreference='Stop'
 $CapyWaitSeconds=45
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
+Add-Type -Path (Join-Path $repo 'tools/performance/WindowsPenMotion.cs')
+$stroke=0
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/prediction/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
@@ -31,9 +33,14 @@ function Draw([string]$Device){
  $canvas=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
  $model=Model;$area=$model.layout.work_area;$density=$canvas.Width/$model.layout.viewport[0]
  $x=[int]($canvas.X+($area.x+$area.width*.4)*$density);$y=[int]($canvas.Y+($area.y+$area.height*.5)*$density)
- [CapyRowPointer]::Down($Device,$x,$y)
- for($i=1;$i -le 60;$i++){[CapyRowPointer]::Move($x+2*$i,$y+[int](12*[Math]::Sin($i*.08)));Start-Sleep -Milliseconds 8}
- [CapyRowPointer]::Up()
+ if($Device -eq 'pen'){
+  $script:stroke++
+  [WindowsPenMotion]::Run([uint32]$review.Id,$x+60,$y,60,12,2,240,(Join-Path $run "pen-$stroke.csv"))
+ }else{
+  [CapyRowPointer]::Down($Device,$x,$y)
+  for($i=1;$i -le 60;$i++){[CapyRowPointer]::Move($x+2*$i,$y+[int](12*[Math]::Sin($i*.08)));Start-Sleep -Milliseconds 8}
+  [CapyRowPointer]::Up()
+ }
  Start-Sleep -Milliseconds 200
 }
 try {

@@ -80,7 +80,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         Grid layout{nullptr},header{nullptr};
         StackPanel tabLabels{nullptr};
         std::vector<AutomaticTab> automatic;
-        ScrollViewer tabScroll{nullptr};
+        ScrollView tabScroll{nullptr};
         Microsoft::UI::Xaml::Shapes::Path background,strip;
         std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         Border footer{nullptr};
@@ -162,8 +162,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         auto frame=group.layout;
         frame.RowDefinitions().GetAt(0).Height({flag(geometry,L"tabs_visible")?36.:0.,GridUnitType::Pixel});
-        // Keep the header ScrollViewer and its manipulation content alive while
-        // a panel changes group; only the body and tab buttons are replaced.
         while(frame.Children().Size()>1)frame.Children().RemoveAtEnd();
         {
             auto tabs=group.tabLabels;tabs.Children().Clear();
@@ -188,8 +186,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 group.tabs.emplace(std::wstring(id),tab);tabs.Children().Append(panelTabShell(tab,active?Brush(data->glass(L"tab")):Brush(nullptr)));
             }
             if(!group.tabScroll){
-                group.tabScroll=ScrollViewer();auto tabScroll=group.tabScroll;tabScroll.Content(tabs);tabScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);
-                tabScroll.HorizontalScrollMode(ScrollMode::Enabled);tabScroll.VerticalScrollMode(ScrollMode::Disabled);
+                group.tabScroll=ScrollView();auto tabScroll=group.tabScroll;tabScroll.Content(tabs);tabScroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+                tabScroll.HorizontalScrollMode(ScrollingScrollMode::Enabled);tabScroll.VerticalScrollMode(ScrollingScrollMode::Disabled);
+                tabScroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+                tabScroll.ContentOrientation(ScrollingContentOrientation::Horizontal);
+                tabScroll.IgnoredInputKinds(ScrollingInputKinds::Touch|ScrollingInputKinds::Pen);
                 tabScroll.Background(clear());
                 gestures->Source(tabScroll,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true);
                 tabScroll.SizeChanged([weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))](auto&&,auto&&){if(auto self=weak.lock())self->fitTabs(id);});

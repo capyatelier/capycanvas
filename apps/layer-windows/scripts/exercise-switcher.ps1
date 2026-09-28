@@ -31,6 +31,10 @@ function Open-Manager {
 function Preference([string]$Id,[string]$Action){
     Settled
     $revision=(Storage).switcher_revision
+    $row=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,('workspace-manager-row-'+$Id)))
+    if($row -and $row.Current.IsOffscreen){$row.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()}
+    $null=Control ('workspace-manager-options-'+$Id) -Arranged
     Invoke ('workspace-manager-options-'+$Id)
     $item=Control ('workspace-manager-'+$Action)
     if($Action -eq 'show'){$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}

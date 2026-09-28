@@ -33,27 +33,37 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$scri
     }while($watch.Elapsed.TotalSeconds -lt $Seconds*$(if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}))
     throw $Message
 }
-function Find([string]$Value,[switch]$Name,$Within=$root,$Type){
+function Find([string]$Value,[switch]$Name,$Within=$root,$Type,[switch]$Visible){
     $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
     $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Value)
     if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
     if(!$Within){$Within=$root}
     $found=$null
-    if('first' -eq $script:CapyFind){$found=$Within.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)}
+    if(!$Visible -and 'first' -eq $script:CapyFind){$found=$Within.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)}
     else{
         $items=$Within.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)
         foreach($item in $items){if(!$item.Current.IsOffscreen){return $item}}
-        if('prefer-visible' -eq $script:CapyFind -and $items.Count){$found=$items[0]}
+        if(!$Visible -and 'prefer-visible' -eq $script:CapyFind -and $items.Count){$found=$items[0]}
     }
     if(!$found -and $script:CapyPopups -and $Within -eq $root){
         $owned=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
-        $found=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$owned)
+        foreach($item in [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$owned)){
+            if(!$item.Current.IsOffscreen){return $item}
+        }
     }
     $found
 }
-function Control([string]$Value,[switch]$Name,$Within=$root,$Type,[int]$Seconds=$script:CapyWaitSeconds){
-    $hit=@{item=$null}
-    Wait-Until {$hit.item=Find $Value -Name:$Name -Within $Within -Type $Type;$null -ne $hit.item} "Missing control: $Value" $Seconds
+function Control([string]$Value,[switch]$Name,$Within=$root,$Type,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Arranged){
+    $hit=@{item=$null;bounds=$null;stable=0}
+    Wait-Until {
+        $hit.item=Find $Value -Name:$Name -Within $Within -Type $Type -Visible:$Arranged
+        if(!$hit.item){return $false}
+        if(!$Arranged){return $true}
+        $bounds=$hit.item.Current.BoundingRectangle
+        if($hit.item.Current.IsOffscreen -or $bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0){return $false}
+        if($bounds -eq $hit.bounds){$hit.stable++}else{$hit.bounds=$bounds;$hit.stable=0}
+        $hit.stable -ge 2
+    } "Missing control: $Value" $Seconds
     $hit.item
 }
 function Invoke([string]$Value,[switch]$Name,$Within=$root){
@@ -102,12 +112,13 @@ function Model{
     if($model){$script:CapyTrace.model=$model}
     if($script:CapyTrace.process -eq $review.Id){$script:CapyTrace.model}
 }
-function Capture([string]$Name,[switch]$WithModel){
+function Capture([string]$Name,[switch]$WithModel,[switch]$Composed){
     if($script:CapyCaptureDelay){Start-Sleep -Milliseconds $script:CapyCaptureDelay}
-    & (Join-Path $script:CapyScripts 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
+    & (Join-Path $script:CapyScripts 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed:$Composed *> (Join-Path $run ($Name+'.json'))
     if($WithModel){(Model)|ConvertTo-Json -Depth 80|Set-Content (Join-Path $run ($Name+'-model.json'))}
 }
 function Enter-CapyEnvironment([string[]]$Names=@()){
+    if($env:CAPY_FIXTURE_CONTEXT -and $run){@{run=$run}|ConvertTo-Json|Set-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT}
     $script:CapyEnvironment=@{}
     foreach($name in @('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')+$Names){
         $script:CapyEnvironment[$name]=[Environment]::GetEnvironmentVariable($name,'Process')
@@ -116,6 +127,10 @@ function Enter-CapyEnvironment([string[]]$Names=@()){
 }
 function Exit-CapyEnvironment{
     if(!$script:CapyEnvironment){return}
+    if($env:CAPY_FIXTURE_CONTEXT -and $run){
+        @{run=$run;process_id=$review.Id;trace_directory=$(if($script:CapyTraceDirectory){$script:CapyTraceDirectory}else{$directory});profile=$env:CAPY_SETTINGS_DIRECTORY}|
+            ConvertTo-Json|Set-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT
+    }
     foreach($entry in $script:CapyEnvironment.GetEnumerator()){
         if($null -eq $entry.Value){Remove-Item -LiteralPath ('Env:'+$entry.Key) -ErrorAction SilentlyContinue}
         else{[Environment]::SetEnvironmentVariable($entry.Key,$entry.Value,'Process')}
