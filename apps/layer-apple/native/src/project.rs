@@ -198,7 +198,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
             }).transpose()?;
             let context = session.image_placement_context(placement.screen, destination)?;
             let request = session.state().requests.iter().find(|r| matches!(r.kind,
-                HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste }))
+                HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste { .. } }))
                 .ok_or("No image import is pending")?.id;
             let device = session.engine().backend().0.as_ref()
                 .ok_or("Wait for the canvas to finish starting")?.device().clone();

@@ -530,7 +530,11 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.NewWindow" => key("n", true, true),
         "command.OpenDocument" => key("o", true, false),
         "command.ImportImage" => key("o", true, true),
+        "command.Copy" => key("c", true, false),
+        "command.Cut" => key("x", true, false),
+        "command.CopyMerged" => key("c", true, true),
         "command.PasteImage" => key("v", true, false),
+        "command.PasteInPlace" => key("v", true, true),
         "command.SaveDocument" => key("s", true, false),
         "command.SaveDocumentAs" => key("s", true, true),
         "command.ExportDocument" => key("e", true, true),
@@ -552,7 +556,8 @@ pub const SHORTCUT_SECTIONS: [&str; 13] = [
 fn command_section(command: CommandId) -> &'static str {
     use CommandId as C;
     match command {
-        C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::PasteImage | C::ClearLayer | C::FillSelection
+        C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::Copy | C::Cut | C::CopyMerged | C::PasteImage
+        | C::PasteInPlace | C::PasteInto | C::ClearLayer | C::FillSelection
         | C::ClearSelected | C::ClearOutside | C::CanvasSize | C::CropCanvasToSelection | C::ImageSize
         | C::RotateImageLeft | C::RotateImageRight | C::RotateImage180 | C::FlipImageHorizontal
         | C::FlipImageVertical | C::Trim | C::RevealAll => "Edit",

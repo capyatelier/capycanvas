@@ -1,7 +1,7 @@
 //! Window-owned drawing membership and inactive resource policy. The active
 //! editor stays in the host's existing canvas slot; every parked owner lives
 //! here. Hosts supply completed capture inventories and schedule I/O/GPU work.
-use crate::{DocumentFileState, DocumentTabs};
+use crate::{DocumentFileState, DocumentTabs, PixelClip};
 use layer_core::{Project, raster_storage::RetainedTiles};
 use serde::Serialize;
 use std::{collections::BTreeMap, ops::Deref};
@@ -32,6 +32,8 @@ pub struct DocumentSessions<T> {
     clock: u64,
     pub budget: DocumentBudget,
     storage_error: Option<String>,
+    /// The window's last copy, pasted at full depth into any of its drawings.
+    pub clip: Option<PixelClip>,
 }
 impl<T> Default for DocumentSessions<T> {
     fn default() -> Self {
@@ -41,6 +43,7 @@ impl<T> Default for DocumentSessions<T> {
             clock: 0,
             budget: Default::default(),
             storage_error: None,
+            clip: None,
         }
     }
 }

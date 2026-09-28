@@ -58,9 +58,61 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
       footer.append(create);form.append(footer);form.onsubmit=e=>{e.preventDefault();create.click();};
     });
   }
-  async function clipboardImage() {
+  // Pixel copies: the window keeps the full-depth clip, and the system
+  // clipboard gets its PNG plus a nonce that marks it as this window's copy.
+  // Without custom formats, the copy stays ours until the page loses focus.
+  const clipMime="web application/x-capycanvas-clip",customClip=!!globalThis.ClipboardItem?.supports?.(clipMime);
+  let ownedClip=null;
+  window.addEventListener("blur",()=>{ownedClip=null;});
+  document.addEventListener("visibilitychange",()=>{if(document.hidden)ownedClip=null;});
+  const clipboardRead=()=>{
     if(!navigator.clipboard?.read)throw new Error("Image paste is unavailable in this browser. Use Import Image as Layer.");
-    const items=await navigator.clipboard.read();
+    return navigator.clipboard.read();
+  };
+  // Called synchronously from the key or click task: browsers accept a
+  // clipboard write only there, so its ClipboardItem waits on the capture.
+  async function copyClip(id) {
+    const task=app.capture_clip(id),nonce=crypto.randomUUID();
+    let deliver,fail;
+    const png=new Promise((resolve,reject)=>{deliver=resolve;fail=reject;});
+    png.catch(()=>{});
+    const items={"image/png":png};
+    if(customClip)items[clipMime]=png.then(()=>new Blob([nonce],{type:clipMime.slice(4)}));
+    let written=null;
+    try{written=navigator.clipboard?.write&&globalThis.ClipboardItem?navigator.clipboard.write([new ClipboardItem(items)]):null;}
+    catch(error){written=Promise.reject(error);}
+    const writeError=written?written.then(()=>null,error=>error):Promise.resolve(new Error("this browser has no clipboard writer"));
+    let control,progress,clip;
+    try {
+      control=app.capture_control();
+      if(task.large()){
+        progress=element("aside","file-progress");progress.setAttribute("role","status");
+        progress.append(element("span","",task.progress()),button("Cancel",()=>{control.cancel();progress.firstChild.textContent="Cancelling…";}));
+        document.body.append(progress);
+      }
+      clip=await gpuOperation(()=>task.run(control,nonce));
+      deliver(new Blob([clip.png()],{type:"image/png"}));
+      const failure=await writeError;
+      app.adopt_clip(clip);clip=null;ownedClip=nonce;
+      if(failure)message(`Other apps can't read this copy: ${failure.message??failure}`);
+      applyChange(app.finish_document(id,true));
+    } catch(error) {
+      fail(error);
+      if(control?.cancelled())throw new DOMException("Copy cancelled","AbortError");
+      throw error;
+    } finally {clip?.free();progress?.remove();control?.free();}
+  }
+  // This window's copy when the system clipboard still holds it.
+  async function ownedClipboard(){
+    const nonce=app.clip_nonce();
+    if(!nonce)return {own:false};
+    if(!customClip)return {own:ownedClip===nonce};
+    const items=await clipboardRead();
+    for(const item of items)if(item.types.includes(clipMime)&&await(await item.getType(clipMime)).text()===nonce)return {own:true};
+    return {own:false,items};
+  }
+  async function clipboardImage(read) {
+    const items=read??await clipboardRead();
     const formats=app.photo_formats(),preferred=formats.flatMap(f=>f.mime_types.flatMap(m=>[`web ${m}`,m]));
     const files=[];
     for(const item of items) {
@@ -153,8 +205,14 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
           finally{progress.remove();}
         } else if(candidate){const prepared=candidate;candidate=null;applyChange(["repair_source_profile","rasterize_source"].includes(r.type)?app.adopt_source(prepared):app.adopt_color(prepared));wake();}
         else applyChange(app.finish_document(id,false));
-      } else if(["place","paste"].includes(r.type)) {
-        await images.run(id,async()=>r.type==="paste"?clipboardImage():(await chooseFile(true))?.map(c=>c.file));
+      } else if(r.type==="copy") {
+        await copyClip(id);
+      } else if(r.type==="paste") {
+        const clipboard=await ownedClipboard();
+        if(clipboard.own){applyChange(app.paste_clip(id));wake();}
+        else await images.run(id,()=>clipboardImage(clipboard.items));
+      } else if(r.type==="place") {
+        await images.run(id,async()=>(await chooseFile(true))?.map(c=>c.file));
       } else if(["new","open"].includes(r.type)) {
         if(r.type==='new'){
           const options=await newDocument();if(!options){applyChange(app.finish_document(id,false));return;}

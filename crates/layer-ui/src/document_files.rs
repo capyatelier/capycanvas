@@ -56,7 +56,10 @@ pub enum DocumentRequest {
     ChangeColor { operation: DocumentColorOperation },
     ColorHistory { redo: bool },
     Place,
-    Paste,
+    Paste { mode: PasteMode },
+    /// Copy the active layer's pixels, or with `merged` the visible image;
+    /// `cut` erases them once the host reports the copy complete.
+    Copy { merged: bool, cut: bool },
     Properties,
     RepairSourceProfile { layer: u64 },
     RasterizeSource { layer: u64 },
@@ -82,7 +85,12 @@ impl DocumentRequest {
             Self::ColorHistory { redo: false } => "Undo Color Change",
             Self::ColorHistory { redo: true } => "Redo Color Change",
             Self::Place => "Import image as layer",
-            Self::Paste => "Paste image as layer",
+            Self::Paste { mode: PasteMode::Paste } => "Paste",
+            Self::Paste { mode: PasteMode::InPlace } => "Paste in Place",
+            Self::Paste { mode: PasteMode::Into } => "Paste Into",
+            Self::Copy { cut: true, .. } => "Cut",
+            Self::Copy { merged: true, .. } => "Copy Merged",
+            Self::Copy { .. } => "Copy",
             Self::Properties => "Document Properties",
             Self::RepairSourceProfile { .. } => "Repair Source Profile",
             Self::RasterizeSource { .. } => "Rasterize Retained Source",
@@ -97,7 +105,8 @@ impl DocumentRequest {
         match self {
             Self::ChangeColor { .. } | Self::ColorHistory { .. } => "Apply",
             Self::Place => "Import",
-            Self::Paste => "Paste",
+            Self::Paste { .. } => "Paste",
+            Self::Copy { .. } => "Copy",
             Self::Properties => "Done",
             Self::RepairSourceProfile { .. } => "Apply",
             Self::RasterizeSource { .. } => "Rasterize",
@@ -184,6 +193,7 @@ pub(super) struct DocumentFiles {
     replace_after: Option<bool>,
     pub(super) pending: Option<(u32, Option<(u64, DocumentLocation)>)>,
     close_after: bool,
+    pub(super) cut: Option<clipboard::PendingCut>,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -273,7 +283,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
-    fn document_request(&self, id: u32) -> Result<&DocumentRequest, String> {
+    pub(super) fn document_request(&self, id: u32) -> Result<&DocumentRequest, String> {
         if self.files.pending.as_ref().map(|p| p.0) != Some(id) {
             return Err("Unknown document request".into());
         }
@@ -410,12 +420,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Respond to the unsaved changes dialog".into());
         }
         let save = matches!(request, DocumentRequest::Save { .. });
+        let cutting = matches!(request, DocumentRequest::Copy { cut: true, .. });
         if save && result == Ok(true) && self.files.pending.as_ref().unwrap().1.is_none() {
             return Err("No project snapshot was saved".into());
         }
         let (_, snapshot) = self.files.pending.take().unwrap();
         self.state.requests.retain(|r| r.id != id);
         let success = result == Ok(true);
+        let cut = self.files.cut.take().filter(|_| cutting && success);
         self.state.host_error = result.err();
         if save
             && success
@@ -429,6 +441,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.files.close_after &= success;
         if !success {
             self.files.replace_after = None;
+        }
+        if let Some(cut) = cut {
+            self.finish_cut(cut);
         }
         self.poll_document_close();
         self.refresh_document();

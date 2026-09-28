@@ -16,6 +16,8 @@ mod document_tabs;
 
 #[cfg(target_os = "android")]
 mod image_import;
+#[cfg(target_os = "android")]
+mod clipboard;
 
 #[cfg(target_os = "android")]
 mod inspection;

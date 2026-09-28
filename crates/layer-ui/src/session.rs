@@ -63,6 +63,9 @@ mod selection_pixels;
 #[path = "selection_refine.rs"]
 mod selection_refine;
 pub use selection_refine::{RefineKind, SelectionRefineView};
+#[path = "clipboard.rs"]
+mod clipboard;
+pub use clipboard::{ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
 pub use notices::{Notice, NoticeAction};
 pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
@@ -2106,8 +2109,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !self.engine.document().active_mask
                     && self.can_edit_original(self.engine.document().active_layer)
             }
-            CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteImage | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
+            CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteImage | CommandId::PasteInPlace | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
+            }
+            CommandId::PasteInto => {
+                self.require_document_idle().is_ok() && !self.state.document_file.busy && self.paste_into_refusal().is_none()
+            }
+            CommandId::Copy | CommandId::Cut | CommandId::CopyMerged => {
+                self.require_document_idle().is_ok() && !self.state.document_file.busy && self.copy_refusal(id).is_none()
             }
             CommandId::SaveDocument | CommandId::SaveDocumentAs => {
                 self.require_raster_snapshot().is_ok() && !self.state.document_file.busy
@@ -4158,8 +4167,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((DOCUMENT | HOST, false))
             }
-            CommandId::ImportImage | CommandId::PasteImage => {
-                self.request_document(if command == CommandId::ImportImage { DocumentRequest::Place } else { DocumentRequest::Paste })?;
+            CommandId::ImportImage => {
+                self.request_document(DocumentRequest::Place)?;
+                Ok((DOCUMENT | HOST, false))
+            }
+            CommandId::PasteImage | CommandId::PasteInPlace | CommandId::PasteInto => {
+                self.request_paste(match command {
+                    CommandId::PasteInPlace => PasteMode::InPlace,
+                    CommandId::PasteInto => PasteMode::Into,
+                    _ => PasteMode::Paste,
+                })?;
+                Ok((DOCUMENT | HOST, false))
+            }
+            CommandId::Copy | CommandId::Cut | CommandId::CopyMerged => {
+                self.request_copy(command)?;
                 Ok((DOCUMENT | HOST, false))
             }
             CommandId::DocumentProperties => {
@@ -5406,6 +5427,7 @@ mod tests {
     include!("crop_tests.rs");
     include!("image_size_tests.rs");
     include!("image_geometry_tests.rs");
+    include!("clipboard_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

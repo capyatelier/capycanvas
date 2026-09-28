@@ -76,7 +76,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "photoshop",
-        revision: 6,
+        revision: 7,
         title: "Photoshop Style",
         app: "Photoshop",
         source: "Adobe Photoshop default keyboard shortcuts, US layout, modern undo; checked 2026-09-25",
@@ -101,6 +101,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("command.CanvasSize", &["primary+alt+c"]),
             ("command.FeatherSelection", &["shift+f6"]),
             ("command.ImageSize", &["primary+alt+i"]),
+            ("command.PasteInto", &["primary+alt+shift+v"]),
             ("layer.group", &["primary+g"]),
             ("color.swap", &["x"]),
         ],
@@ -217,7 +218,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "gimp",
-        revision: 4,
+        revision: 5,
         title: "GIMP Style",
         app: "GIMP",
         source: "GIMP 3.2 default shortcuts, US layout; checked 2026-09-26",
@@ -265,6 +266,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("command.DeleteRuler", &["delete", "backspace"]),
             ("command.CopySelectionToLayer", &[]),
             ("command.CutSelectionToLayer", &[]),
+            ("command.PasteInPlace", &["primary+alt+v"]),
             ("command.Settings", &[]),
             ("layer.duplicate", &["primary+shift+d"]),
             ("color.swap", &["x"]),
@@ -277,6 +279,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("Ctrl+E", "Capy has no quick re-export. Export with Ctrl+Shift+E."),
             ("{ and }", "Capy has no large brush size steps."),
             ("B and H", "Capy has no Paths or Heal tool. B and H keep Capy's paint tools and Hand."),
+            ("Ctrl+Shift+V", "Capy has no Paste as New Image. Create a drawing, then paste into it."),
         ],
     },
     KeymapPreset {

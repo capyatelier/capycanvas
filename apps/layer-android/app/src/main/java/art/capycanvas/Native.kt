@@ -61,6 +61,16 @@ internal object Native {
     @JvmStatic external fun imageImportAssumeProfile(task: Long, profile: String)
     @JvmStatic external fun imageImportAdopt(handle: Long, task: Long)
     @JvmStatic external fun imageImportFree(task: Long)
+    @JvmStatic external fun clipTask(handle: Long, request: Int): Long
+    @JvmStatic external fun clipTaskLarge(task: Long): Boolean
+    @JvmStatic external fun clipTaskProgress(task: Long): String
+    @JvmStatic external fun clipRun(task: Long, control: Long, nonce: String): Long
+    @JvmStatic external fun clipTaskFree(task: Long)
+    @JvmStatic external fun clipWritePng(clip: Long, path: String)
+    @JvmStatic external fun clipAdopt(handle: Long, request: Int, clip: Long)
+    @JvmStatic external fun clipFree(clip: Long)
+    @JvmStatic external fun clipNonce(handle: Long): String?
+    @JvmStatic external fun pasteClip(handle: Long, request: Int)
     /** File worker only; consumes the detached descriptor, retains the task. */
     @JvmStatic external fun exportPresets(bytes: ByteArray, request: String, color: String): Array<Any?>
     @JvmStatic external fun recoveryUpdate(state: String, event: String): String

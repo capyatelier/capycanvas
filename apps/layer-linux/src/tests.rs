@@ -35,6 +35,7 @@ mod place_source;
 mod photo_drop;
 #[path = "canvas_bar_tests.rs"]
 mod canvas_bar_tests;
+mod clipboard_tests;
 #[path = "notice_tests.rs"]
 mod notice;
 #[path = "zoom_readout_tests.rs"]

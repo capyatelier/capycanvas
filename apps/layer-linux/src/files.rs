@@ -13,6 +13,7 @@ mod properties;
 mod color;
 pub(crate) mod proof;
 mod place;
+pub(crate) mod clipboard;
 pub(crate) mod drop;
 pub(crate) mod profile;
 mod source;
@@ -233,8 +234,14 @@ async fn document_request(
     if let DocumentRequest::ColorHistory { .. } = request {
         return color::history(w, id).await;
     }
-    if matches!(request, DocumentRequest::Place | DocumentRequest::Paste) {
-        return place::run(w, matches!(request, DocumentRequest::Paste)).await;
+    if matches!(request, DocumentRequest::Place) {
+        return place::run(w, None).await;
+    }
+    if let DocumentRequest::Paste { mode } = request {
+        return clipboard::paste(w, *mode).await;
+    }
+    if let DocumentRequest::Copy { .. } = request {
+        return clipboard::copy(w, id).await;
     }
     if let DocumentRequest::RasterizeSource { .. } = request {
         return rasterize::run(w, id).await;

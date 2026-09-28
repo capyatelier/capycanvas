@@ -419,6 +419,7 @@ fn selection_bar_follows_selection_tools_commands_and_history() {
             CommandId::Deselect,
             CommandId::InvertSelection,
             CommandId::CopySelectionToLayer,
+            CommandId::Copy,
             CommandId::ScaleRotate,
             CommandId::FeatherSelection,
             CommandId::MaskSelection,
@@ -435,6 +436,7 @@ fn selection_bar_follows_selection_tools_commands_and_history() {
             ("Deselect", None),
             ("Invert", None),
             ("Copy to Layer", Some(CanvasBarMenu::CopyToLayer)),
+            ("Copy", Some(CanvasBarMenu::Copy)),
             ("Transform", None),
             ("Refine", Some(CanvasBarMenu::Refine)),
             ("Mask", None),
@@ -950,7 +952,8 @@ fn selection_bar_menus_list_their_commands_and_refuse_stale_edits() {
         curves.action.as_ref(),
         Some(UiAction::CanvasBarEdit { action, .. }) if matches!(**action, UiAction::Effect { .. })
     ));
-    assert!(s.canvas_bar_choice_menu(bar.context, "copy").is_none(), "Copy is not on the bar yet");
+    let copy = s.canvas_bar_choice_menu(bar.context, "copy").unwrap();
+    assert_eq!(menu_labels(&copy), [["Copy", "Copy Merged", "Cut"]]);
     for item in &bar.items {
         if let (Some(menu), ToolOption::Choice { id, items, segmented, .. }) = (item.menu, &item.option) {
             assert_eq!((*id, items.is_empty(), *segmented), (menu.id(), true, false), "a menu without a primary command");

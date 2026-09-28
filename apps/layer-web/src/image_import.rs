@@ -24,7 +24,7 @@ fn active(session: &UiSession<AttachedRenderer>, id: u32) -> Result<(), JsValue>
             && matches!(
                 r.kind,
                 HostRequestKind::Document {
-                    request: DocumentRequest::Place | DocumentRequest::Paste
+                    request: DocumentRequest::Place | DocumentRequest::Paste { .. }
                 }
             )
     }) {
@@ -150,13 +150,15 @@ impl WebApp {
         if !Arc::ptr_eq(&lost, &request.lost) || lost.lock().unwrap().is_some() {
             return Err(js("The canvas changed while importing; try again"));
         }
-        self.session
-            .place_layer_sources(
-                prepared.sources,
-                request.context.center,
-                request.context.destination,
-            )
-            .map_err(js)?;
+        let mode = self.session.state().requests.iter().find_map(|r| match &r.kind {
+            HostRequestKind::Document { request: DocumentRequest::Paste { mode } } if r.id == request.id => Some(*mode),
+            _ => None,
+        });
+        match mode {
+            Some(mode) => self.session.paste_layer_sources(prepared.sources, mode, &request.context),
+            None => self.session.place_layer_sources(prepared.sources, request.context.center, request.context.destination),
+        }
+        .map_err(js)?;
         let mut change = self
             .session
             .complete_document_request(request.id, Ok(true))

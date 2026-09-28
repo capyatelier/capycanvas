@@ -80,7 +80,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                 _ => None,
             })
             .ok_or("The document request is no longer active")?;
-        let place = matches!(request, DocumentRequest::Place | DocumentRequest::Paste)
+        let place = matches!(request, DocumentRequest::Place | DocumentRequest::Paste { .. })
             .then_some(session.engine().document().active_target());
         let payload = match request {
             DocumentRequest::Save { .. } => {
@@ -91,7 +91,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
             DocumentRequest::Open
             | DocumentRequest::New
             | DocumentRequest::Place
-            | DocumentRequest::Paste => {
+            | DocumentRequest::Paste { .. } => {
                 session.require_document_idle()?;
                 if session.state().document_file.epoch != epoch as u64
                     || session.engine().document().revision != revision as u64
@@ -362,7 +362,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
             };
             let previous = s.state().revision;
             if !s.state().requests.iter().any(|r| r.id == t.request && matches!(r.kind,
-                HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste })) {
+                HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste { .. } })) {
                 return Err("Image import is no longer active".into());
             }
             s.place_layer_source(name, source.as_ref().ok_or("Image already placed")?.clone(), None)?;

@@ -490,7 +490,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.image_layer_destination(Some(ImageLayerDestination { target: row.id, position })).ok()?;
         Some(position)
     }
-    fn image_layer_destination(&self, destination: Option<ImageLayerDestination>) -> Result<(usize, Option<LayerId>), String> {
+    pub(super) fn image_layer_destination(&self, destination: Option<ImageLayerDestination>) -> Result<(usize, Option<LayerId>), String> {
         let doc = self.engine.document();
         let (row, position) = if let Some(destination) = destination {
             (doc.layer(destination.target).ok_or("The destination layer was removed")?, destination.position)

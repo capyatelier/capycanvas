@@ -155,13 +155,13 @@ impl WebApp {
         if !matches!(
             (&request, &bytes),
             (
-                DocumentRequest::Open | DocumentRequest::Place | DocumentRequest::Paste,
+                DocumentRequest::Open | DocumentRequest::Place | DocumentRequest::Paste { .. },
                 Some(_)
             ) | (DocumentRequest::New, None)
         ) {
             return Err(js("Invalid project preparation request"));
         }
-        let placing = matches!(request, DocumentRequest::Place | DocumentRequest::Paste);
+        let placing = matches!(request, DocumentRequest::Place | DocumentRequest::Paste { .. });
         let target = self.session.engine().document().active_target();
         let live = self
             .session
@@ -362,7 +362,7 @@ impl WebApp {
         }
         if let Some(source) = project.placed.take() {
             if !self.session.state().requests.iter().any(|r| r.id == project.request && matches!(r.kind,
-                HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste })) {
+                HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste { .. } })) {
                 return Err(js("Image import is no longer active"));
             }
             if self.session.state().document_file.epoch != project.epoch

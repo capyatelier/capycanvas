@@ -403,6 +403,12 @@ fn entry(
         UiAction::Invoke {
             command: CommandId::MoveLeaveCopy,
         } => "duplicate keep original move selection alt",
+        UiAction::Invoke {
+            command: CommandId::CopyMerged,
+        } => "copy visible flattened",
+        UiAction::Invoke {
+            command: CommandId::PasteImage,
+        } => "paste image clipboard",
         _ => "",
     };
     Entry {
@@ -503,6 +509,12 @@ fn action_description(action: &UiAction) -> &'static str {
             Trim => "Shrink the canvas to the visible pixels, removing transparent edges. Pixels outside stay on their layers, hidden.",
             RevealAll => "Grow the canvas to show every layer's pixels, including hidden layers and pixels outside the canvas.",
             MoveLeaveCopy => "When Move drags selected pixels, place a copy and keep the original in place. Holding Alt as the drag starts does the opposite.",
+            Copy => "Copy the active layer's own pixels within the selection, before its opacity, mask and effects. Without a selection, copy the whole layer within the canvas.",
+            Cut => "Copy the active layer's selected pixels, then erase them from the layer.",
+            CopyMerged => "Copy the visible image within the selection, as an export would show it.",
+            PasteImage => "Add the clipboard as a new layer. A copy from Capy Canvas keeps its position when that is in view; an image from another app opens with placement handles.",
+            PasteInPlace => "Add the clipboard as a new layer where it was copied from, with no placement handles. An image from another app is centred at full size.",
+            PasteInto => "Add the clipboard where it was copied from, as a new layer whose mask shows only the selection.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -1037,6 +1049,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::ChangeBitDepth
             | C::ImportImage
             | C::PasteImage
+            | C::PasteInPlace
+            | C::PasteInto
+            | C::Copy
+            | C::Cut
+            | C::CopyMerged
             | C::DocumentProperties
             | C::NewDocument
             | C::OpenDocument
@@ -1240,6 +1257,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.refine_refusal().unwrap_or(UNAVAILABLE)
             }
             C::TransformSelectionOutline => self.outline_refusal().unwrap_or(UNAVAILABLE),
+            C::Copy | C::Cut | C::CopyMerged | C::PasteInto if self.state.document_file.busy => {
+                "Wait for the current file operation"
+            }
+            C::Copy | C::Cut | C::CopyMerged => self.copy_refusal(command).unwrap_or(UNAVAILABLE),
+            C::PasteInto => self.paste_into_refusal().unwrap_or(UNAVAILABLE),
             C::MaskSelection if self.engine.document().selection.is_none() => "Make a selection first",
             C::ApplyLayerMask if apply_refusal.is_some() => apply_refusal.unwrap_or(UNAVAILABLE),
             C::ApplyLayerMask if active.and_then(|l| l.mask.as_ref()).is_some_and(|m| !m.enabled) => {

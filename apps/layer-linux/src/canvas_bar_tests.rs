@@ -2,14 +2,14 @@
 use super::*;
 use serde_json::json;
 
-fn remote_input() -> RemoteInput {
+pub(super) fn remote_input() -> RemoteInput {
     let input = RemoteInput::new().settle_ms(150).timeout_secs(30);
     input.ready();
     pump(300);
     input
 }
 
-fn until_some<T>(mut find: impl FnMut() -> Option<T>, message: &str) -> T {
+pub(super) fn until_some<T>(mut find: impl FnMut() -> Option<T>, message: &str) -> T {
     let mut found = None;
     until(|| {
         found = find();
@@ -18,12 +18,12 @@ fn until_some<T>(mut find: impl FnMut() -> Option<T>, message: &str) -> T {
     found.unwrap()
 }
 
-fn center(w: &Workspace, widget: &gtk::Widget) -> [f32; 2] {
+pub(super) fn center(w: &Workspace, widget: &gtk::Widget) -> [f32; 2] {
     let b = widget.compute_bounds(&w.window).expect("mapped widget");
     [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]
 }
 
-fn bar_widget(w: &Workspace, name: &str) -> gtk::Widget {
+pub(super) fn bar_widget(w: &Workspace, name: &str) -> gtk::Widget {
     find_named(w.canvas_bar.root.upcast_ref(), name).unwrap_or_else(|| panic!("{name}"))
 }
 
@@ -64,11 +64,11 @@ fn press_bar_command(w: &Workspace, native: &mut RemoteInput, name: &str, label:
     }
 }
 
-fn shown(w: &Workspace) -> bool {
+pub(super) fn shown(w: &Workspace) -> bool {
     w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()
 }
 
-fn mapped_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
+pub(super) fn mapped_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
     if root.is_mapped() && root.downcast_ref::<gtk::Label>().is_some_and(|l| l.text() == text) {
         return Some(root.clone());
     }
@@ -288,7 +288,7 @@ fn native_canvas_bar_input() {
     until(|| !transforming(&w), "Cancel from the completion-only bar");
 }
 
-fn canvas_point(w: &Workspace, document: [f32; 2]) -> [f32; 2] {
+pub(super) fn canvas_point(w: &Workspace, document: [f32; 2]) -> [f32; 2] {
     let m = state(w).camera.document_to_surface();
     let scale = w.area.scale_factor() as f32;
     let p = gtk::graphene::Point::new(
@@ -524,13 +524,13 @@ fn native_canvas_bar_finger_moves_a_transform() {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Device {
+pub(super) enum Device {
     Mouse,
     Touch,
     Pen,
 }
 
-fn tap(native: &mut RemoteInput, device: Device, point: [f32; 2]) {
+pub(super) fn tap(native: &mut RemoteInput, device: Device, point: [f32; 2]) {
     native.perform(match device {
         Device::Mouse => json!([{"point": point}, {"down": true}, {"wait_ms": 30}, {"down": false}]),
         Device::Touch => json!([{"touch": "down", "point": point}, {"wait_ms": 40}, {"touch": "up"}]),
@@ -560,7 +560,7 @@ fn menu_action(model: &gtk::gio::MenuModel, labels: &[&str]) -> Option<String> {
 /// Open a bar menu, or its submenu in More when it does not fit, and choose
 /// `labels` in turn. The isolated tablet's synthetic serials cannot grab a
 /// popup, so a pen opens the menu and its item runs through the menu's action.
-fn choose_from_bar_menu(w: &Workspace, native: &mut RemoteInput, device: Device, menu: layer_ui::CanvasBarMenu, labels: &[&str]) {
+pub(super) fn choose_from_bar_menu(w: &Workspace, native: &mut RemoteInput, device: Device, menu: layer_ui::CanvasBarMenu, labels: &[&str]) {
     let button = bar_widget(w, &format!("canvas-bar-menu-{}", menu.id()));
     let mut path = labels.to_vec();
     let opener = if button.is_mapped() {
@@ -579,18 +579,21 @@ fn choose_from_bar_menu(w: &Workspace, native: &mut RemoteInput, device: Device,
         popover.activate_action(&action, None).unwrap();
         return;
     }
-    for label in path {
+    for (index, label) in path.iter().enumerate() {
         let item = until_some(|| mapped_label(w.canvas_bar.root.upcast_ref(), label), label);
         tap(native, device, center(w, &item));
+        if index + 1 < path.len() {
+            until(|| !item.is_mapped(), &format!("{label} opens its submenu"));
+        }
     }
 }
 
-fn document(w: &Workspace) -> layer_core::Document {
+pub(super) fn document(w: &Workspace) -> layer_core::Document {
     w.gpu.borrow().as_ref().unwrap().session.engine().document().clone()
 }
 
 /// Fill a lasso selection on `layer` and wait for its bar.
-fn filled_selection(w: &Rc<Workspace>, layer: u64) {
+pub(super) fn filled_selection(w: &Rc<Workspace>, layer: u64) {
     w.dispatch(UiAction::SelectLayer { id: layer });
     w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
     native_pen_path(w, &[[650., 500.], [1150., 500.], [1150., 850.], [650., 850.], [650., 500.]]);

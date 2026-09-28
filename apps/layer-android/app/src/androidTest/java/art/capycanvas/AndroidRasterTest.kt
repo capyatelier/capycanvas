@@ -1730,6 +1730,38 @@ class AndroidRasterTest {
         }
     }
 
+    @Test fun clipboardCopyLatency24mp() {
+        val photo = File(files, "clipboard-24mp.jpg")
+        val bitmap = android.graphics.Bitmap.createBitmap(6000, 4000, android.graphics.Bitmap.Config.ARGB_8888)
+        android.graphics.Canvas(bitmap).drawPaint(android.graphics.Paint().apply {
+            shader = android.graphics.LinearGradient(0f, 0f, 6000f, 4000f, android.graphics.Color.RED, android.graphics.Color.BLUE, android.graphics.Shader.TileMode.CLAMP)
+        })
+        photo.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, it) }
+        bitmap.recycle()
+        try {
+            open(photo); invoke("fit_canvas")
+            val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
+            fun nonce(): String? { var value: String? = null; compose.runOnUiThread { value = clipboard.primaryClipDescription?.extras?.getString(ClipboardController.NONCE) }; return value }
+            fun idle() = native { state(it) }.let { s ->
+                !s.getJSONObject("document_file").getBoolean("busy") && s.array("requests").objects().none { it.getJSONObject("kind").optString("type") == "document" }
+            }
+            fun copy(label: String) {
+                val before = nonce()
+                DocumentController.nativeFileJobsForTest = false
+                val started = SystemClock.elapsedRealtime()
+                try {
+                    compose.runOnUiThread { host.invoke("copy") }
+                    compose.waitUntil(180_000) { tick(); nonce().let { it != null && it != before } && idle() }
+                } finally { DocumentController.nativeFileJobsForTest = true }
+                println("Clipboard latency: $label copied in ${SystemClock.elapsedRealtime() - started} ms")
+            }
+            invoke("select_all"); copy("24 MP photo, Select All")
+            invoke("deselect"); invoke("brush"); stroke(0.0)
+            invoke("select_all"); copy("24 MP photo after a stroke, Select All")
+            assertNull(host.failure)
+        } finally { photo.delete() }
+    }
+
     @Test fun largePhotoFilterPreviews() {
         Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("filterPhoto") == "true")
         val photo = File(activity.filesDir, "filter-memory-test.jpg")

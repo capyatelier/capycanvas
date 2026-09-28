@@ -2429,6 +2429,85 @@ class AndroidInteractionTest {
         println("PASS move selection: Move drags the selected pixels with mouse, finger and stylus, with and without Leave Copy, in one undo step")
     }
 
+    private fun clipboardManager() = instrumentation.targetContext.getSystemService(android.content.ClipboardManager::class.java)
+    /** The nonce the system clipboard carries for a copy made in Capy Canvas. */
+    private fun clipboardNonce(): String? { var nonce: String? = null; onMain { nonce = clipboardManager().primaryClipDescription?.extras?.getString(ClipboardController.NONCE) }; return nonce }
+    private fun documentIdle() = !state().getJSONObject("document_file").getBoolean("busy") &&
+        state().array("requests").objects().none { it.getJSONObject("kind").getString("type") == "document" }
+    /** Read the clipboard's image as another app would, through its content URI. */
+    private fun clipboardImage(): android.graphics.Bitmap {
+        var uri: android.net.Uri? = null
+        onMain { uri = clipboardManager().primaryClip?.getItemAt(0)?.uri }
+        val shared = checkNotNull(uri) { "The clipboard holds no image URI" }
+        instrumentation.targetContext.grantUriPermission("com.android.shell", shared, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val bytes = android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("content read --uri $shared")).use { it.readBytes() }
+        return checkNotNull(android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) { "Another app cannot decode ${bytes.size} bytes from $shared" }
+    }
+
+    @Test fun clipboardCopyPasteAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        popupInput = true
+        try {
+            for (device in pointerTools) {
+                val name = listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]
+                tool = device
+                val selection = blueSelection(keep)
+                val before = clipboardNonce()
+                chooseFromBarMenu("copy", listOf("Copy Merged"))
+                waitFor("$name: the copy reaches the clipboard", 30_000) { clipboardNonce().let { it != null && it != before } && documentIdle() }
+                val image = clipboardImage()
+                val extent = state().array("tabs").objects().first { it.getBoolean("active") }
+                assertEquals("$name: another app reads the selection's width", extent.getInt("width") * .2, image.width.toDouble(), 2.0)
+                assertEquals("$name: and its height", extent.getInt("height") * .2, image.height.toDouble(), 2.0)
+                assertTrue("$name: the PNG holds the blue selection", blue(image.getPixel(image.width / 2, image.height / 2)))
+                val count = layerStates().size
+                command("paste_in_place")
+                waitFor("$name: Paste in Place adds a layer", 10_000) { layerStates().size == count + 1 && documentIdle() }
+                assertNotEquals("$name: a copy from Capy pastes with no handles", "placement", barKind())
+                layerAction(obj("op" to "visibility", "id" to selection.layer, "value" to false))
+                awaitPixels("$name: the pasted layer covers the selection only", listOf(selection.inside, selection.outside)) { (inside, outside) ->
+                    blue(inside) && !blue(outside)
+                }
+                println("$name: Copy ▾ › Copy Merged, another app reads the PNG, Paste in Place")
+            }
+            tool = MotionEvent.TOOL_TYPE_STYLUS
+            val selection = blueSelection(keep)
+            val filled = paintRevision(selection.layer)
+            val before = clipboardNonce()
+            chooseFromBarMenu("copy", listOf("Cut"))
+            waitFor("Cut reaches the clipboard and erases the pixels", 30_000) {
+                clipboardNonce().let { it != null && it != before } && documentIdle() && paintRevision(selection.layer) != filled
+            }
+            val count = layerStates().size
+            command("paste_into")
+            waitFor("Paste Into adds a masked layer from the selection", 10_000) {
+                layerStates().size == count + 1 && documentIdle() && !hasSelection() &&
+                    layerStates().first { it.getLong("id") == editingLayer() }.getBoolean("has_mask")
+            }
+            command("undo")
+            waitFor("one undo step restores the selection", 5_000) { layerStates().size == count && hasSelection() }
+
+            val external = File(instrumentation.targetContext.cacheDir, "clipboard/external.png")
+            external.parentFile!!.mkdirs()
+            android.graphics.Bitmap.createBitmap(64, 48, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.RED) }
+                .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, external.outputStream())
+            val uri = androidx.core.content.FileProvider.getUriForFile(instrumentation.targetContext, "${instrumentation.targetContext.packageName}.clipboard", external)
+            onMain { clipboardManager().setPrimaryClip(android.content.ClipData.newUri(instrumentation.targetContext.contentResolver, "Another app", uri)) }
+            command("paste_image")
+            waitFor("another app's image opens the placement handles", 30_000) { layerStates().size == count + 1 && barKind() == "placement" }
+            command("cancel_transform")
+            waitFor("cancelling removes it", 10_000) { layerStates().size == count && documentIdle() }
+            command("paste_in_place")
+            waitFor("Paste in Place centres another app's image without handles", 30_000) { layerStates().size == count + 1 && documentIdle() }
+            assertNotEquals("placement", barKind())
+            external.delete()
+        } finally {
+            popupInput = false
+            tool = MotionEvent.TOOL_TYPE_FINGER
+        }
+        println("PASS clipboard: Copy ▾ with mouse, finger and stylus, another app reading the URI, Paste in Place, Cut, Paste Into and another app's image")
+    }
+
     @Test fun canvasBarSelectionMenusAcrossDevices() {
         val keep = layerStates().map { it.getLong("id") }.toSet()
         val bands = fixture.getJSONObject("layout").array("bands").objects()

@@ -5,7 +5,7 @@
 | User action | Result |
 | --- | --- |
 | **Open image** | Create a document at the image's oriented pixel dimensions and fit the view. Transparency is kept; the editable `.capy` master is saved separately from the input photo. |
-| **Import / Paste image** | Add a layer centered on the canvas, with placement handles active. |
+| **Import image / paste another app's image** | Add a layer centered on the canvas, with placement handles active. Pastes of Capy Canvas copies, Paste in Place and Paste Into follow [copy and paste](clipboard.md). |
 | **Drop image on canvas** | The same placement flow, centered at the drop point in document coordinates. |
 | **Drop onto Layers** | Above, below and into feedback, using the shared group, lock and clipping rules. |
 | **Apply placement** | Store position, scale and rotation; keep the full-resolution source and existing paint in layer-local coordinates. |

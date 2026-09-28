@@ -37,6 +37,7 @@ internal data class DocumentPicker(val request: JSONObject, val epoch: Long, val
 /** SAF owns locations; the shared session owns dirty checkpoints and close policy. */
 internal class DocumentController(private val host: CanvasHost, private val application: Application) {
     val images = ImageImportController(host, application)
+    val clipboard = ClipboardController(host, application)
     companion object {
         // JNI integration tests own private file descriptors. SAF UI has a
         // separate end-to-end test and must not race those native job owners.
@@ -111,7 +112,9 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         val document = request.getJSONObject("kind").getJSONObject("request")
         when (document.getString("type")) {
             "open" -> if (queuedOpen.isEmpty()) picker = DocumentPicker(request, approval.first, approval.second) else transfer(request, queuedOpen.removeFirst(), approval)
-            "place", "paste" -> images.start(request, document.getString("type") == "paste")
+            "place" -> images.start(request, false)
+            "paste" -> host.viewModelScope.launch { if (!clipboard.paste(request)) images.start(request, true) }
+            "copy" -> clipboard.copy(request)
             "export" -> { exportRecipe = null;host.viewModelScope.launch {
                 try {
                     if(host.proof.hasPending()) {
@@ -365,6 +368,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     // Registered before workspace/popup handlers, which get first refusal.
     BackHandler { host.drawingTabs.closeSelected() }
     ImportAndTransformControls(host)
+    ClipboardProgress(host.documents.clipboard)
     host.hostError?.let { message ->
         AlertDialog(onDismissRequest = host::dismissHostError, title = { Text("Could not complete action") }, text = { Text(message) },
             confirmButton = { TextButton(host::dismissHostError) { Text("OK") } })

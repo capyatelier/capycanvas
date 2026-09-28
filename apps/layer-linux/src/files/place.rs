@@ -74,7 +74,10 @@ async fn spool(clipboard: &gdk::Clipboard) -> Result<TemporaryImage, String> {
     Ok(temporary)
 }
 
-pub(super) async fn run(w: &Rc<Workspace>, paste: bool) -> Result<bool, String> {
+/// Import chosen or dropped images, or with `mode` paste an image another
+/// application put on the clipboard.
+pub(super) async fn run(w: &Rc<Workspace>, mode: Option<layer_ui::PasteMode>) -> Result<bool, String> {
+    let paste = mode.is_some();
     let incoming = if paste { None } else { w.image_drop.borrow_mut().take() };
     let (context, policy, working) = {
         let gpu = w.gpu.borrow();
@@ -178,8 +181,14 @@ pub(super) async fn run(w: &Rc<Workspace>, paste: bool) -> Result<bool, String> 
     }
     let mut gpu = w.gpu.borrow_mut();
     let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
-    session.validate_image_placement(&context)?;
-    session.place_layer_sources(interpreted.take_sources(false)?, context.center, context.destination)?;
+    let sources = interpreted.take_sources(false)?;
+    match mode {
+        Some(mode) => session.paste_layer_sources(sources, mode, &context)?,
+        None => {
+            session.validate_image_placement(&context)?;
+            session.place_layer_sources(sources, context.center, context.destination)?;
+        }
+    }
     drop(gpu);
     w.wake();
     Ok(true)

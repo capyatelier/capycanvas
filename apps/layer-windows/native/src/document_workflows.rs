@@ -139,12 +139,12 @@ impl Task {
                 },
             ),
             HostRequestKind::Document {
-                request: DocumentRequest::Place | DocumentRequest::Paste,
+                request: DocumentRequest::Place | DocumentRequest::Paste { .. },
             } => {
                 let kind = if matches!(
                     request,
                     HostRequestKind::Document {
-                        request: DocumentRequest::Paste
+                        request: DocumentRequest::Paste { .. }
                     }
                 ) {
                     "paste"

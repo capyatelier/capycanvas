@@ -90,7 +90,8 @@ pub use session::{ImageLayerDestination, ImagePlacementContext, LayerAction, Lay
 pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
 pub use session::{
-    AdjustmentChoice, ApplicationLink, ApplicationMenu, CANCEL_DOCUMENT_LABEL, CloseDecision,
+    AdjustmentChoice, ApplicationLink, ApplicationMenu, CANCEL_DOCUMENT_LABEL, ClipboardCapture, CloseDecision,
+    LARGE_CLIP_PIXELS, PasteMode, PixelClip,
     DEFAULT_DOCUMENT_EXTENT, DISCARD_DOCUMENT_LABEL, DOCUMENT_HEIGHT_LABEL, DOCUMENT_WIDTH_LABEL,
     DocumentColorOperation, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
     FilterLoadState, FilterPickerAction, FilterPickerState, LayerPropertiesView,
@@ -517,12 +518,18 @@ command_ids! {
     CropFitContent,
     TransformLanczos,
     MoveLeaveCopy,
+    Copy,
+    Cut,
+    CopyMerged,
+    PasteInPlace,
+    PasteInto,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows),
             Self::NewWindow => platform.native_windows(),
+            Self::Copy | Self::Cut | Self::CopyMerged | Self::PasteInPlace | Self::PasteInto => platform.pixel_clipboard(),
             _ => true,
         }
     }
@@ -565,7 +572,7 @@ impl CommandId {
             Self::Sculpt => "sculpt",
             Self::SdrRendition | Self::PreviewSdr | Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => "image",
             Self::Histogram => "stats",
-            Self::ImportImage | Self::PasteImage | Self::RasterizeSource => "image",
+            Self::ImportImage | Self::RasterizeSource => "image",
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties | Self::RepairSourceProfile => "info",
             Self::NewDocument => "new-document",
             Self::OpenDocument => "open-document",
@@ -725,6 +732,12 @@ impl CommandId {
             Self::CropFitContent => "fit-content",
             Self::TransformLanczos => "lanczos",
             Self::MoveLeaveCopy => "leave-copy",
+            Self::Copy => "copy",
+            Self::Cut => "cut",
+            Self::CopyMerged => "copy-merged",
+            Self::PasteImage => "paste",
+            Self::PasteInPlace => "paste-in-place",
+            Self::PasteInto => "paste-into",
         })
     }
     pub const TOOLS: [Self; 27] = [
@@ -774,7 +787,7 @@ impl CommandId {
             Self::GamutWarning => "Gamut Warning",
             Self::Histogram => "Histogram…",
             Self::ImportImage => "Import Image as Layer…",
-            Self::PasteImage => "Paste Image as Layer",
+            Self::PasteImage => "Paste",
             Self::DocumentProperties => "Document Properties…",
             Self::AssignProfile => "Assign Profile…",
             Self::ConvertColorSpace => "Convert Color Space…",
@@ -951,6 +964,11 @@ impl CommandId {
             Self::CropFitContent => "Fit Crop to Content",
             Self::TransformLanczos => "Lanczos",
             Self::MoveLeaveCopy => "Leave Copy",
+            Self::Copy => "Copy",
+            Self::Cut => "Cut",
+            Self::CopyMerged => "Copy Merged",
+            Self::PasteInPlace => "Paste in Place",
+            Self::PasteInto => "Paste Into",
         }
     }
 }

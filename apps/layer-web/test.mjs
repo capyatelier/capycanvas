@@ -59,6 +59,7 @@ import { checkCanvasSize } from "./canvas-size-journey.test.mjs";
 import { checkCrop } from "./crop-journey.test.mjs";
 import { checkImageCommands } from "./image-commands-journey.test.mjs";
 import { checkMoveSelection } from "./move-selection-journey.test.mjs";
+import { checkClipboard } from "./clipboard-journey.test.mjs";
 import { checkEditor } from "./editor.test.mjs";
 import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
@@ -212,6 +213,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--photo-edit")) {
     await checkPhotoEdit({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--clipboard")) {
+    await checkClipboard({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--canvas-size")) {
     await checkCanvasSize({call,evaluate,settle});

@@ -33,7 +33,7 @@ fn active(a: &crate::app::App, id: u32) -> Result<(), String> {
             && matches!(
                 r.kind,
                 HostRequestKind::Document {
-                    request: DocumentRequest::Place | DocumentRequest::Paste
+                    request: DocumentRequest::Place | DocumentRequest::Paste { .. }
                 }
             )
     }) {
@@ -191,11 +191,15 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportAdopt(
             return Err("The canvas changed while importing; try again".into());
         }
         let previous = a.host.session.state().revision;
-        a.host.session.place_layer_sources(
-            b.images.take_sources(b.control.is_cancelled())?,
-            b.context.placement.center,
-            b.context.placement.destination,
-        )?;
+        let sources = b.images.take_sources(b.control.is_cancelled())?;
+        let mode = a.host.session.state().requests.iter().find_map(|r| match &r.kind {
+            HostRequestKind::Document { request: DocumentRequest::Paste { mode } } if r.id == b.id => Some(*mode),
+            _ => None,
+        });
+        match mode {
+            Some(mode) => a.host.session.paste_layer_sources(sources, mode, &b.context.placement)?,
+            None => a.host.session.place_layer_sources(sources, b.context.placement.center, b.context.placement.destination)?,
+        }
         let mut change = a.host.session.complete_document_request(b.id, Ok(true))?;
         change.canvas_wake = true;
         change.regions |= 255;

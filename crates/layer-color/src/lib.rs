@@ -22,6 +22,9 @@ pub use document_info::DocumentInfo;
 mod flatten;
 pub use flatten::flattened_document;
 
+mod clip;
+pub use clip::{ClipRows, source_png, srgb_png_interpretation, write_clip_rows};
+
 /// Validate a new interpretation without changing retained sample ownership.
 pub fn repair_source_interpretation(
     mut interpretation: layer_core::color::source::SourceInterpretation,

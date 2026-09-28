@@ -165,9 +165,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// A reveal-all mask for `layer` showing only the current selection, or
     /// hiding it with `hide`. `layer` need not be in the document yet.
     pub(super) fn selection_mask(&mut self, layer: &Layer, hide: bool) -> Result<LayerMask, String> {
+        let id = self.engine.allocate_layer_id();
+        self.selection_mask_with_id(layer, hide, id)
+    }
+
+    /// `selection_mask` with an identity the caller already allocated.
+    pub(super) fn selection_mask_with_id(&self, layer: &Layer, hide: bool, id: LayerId) -> Result<LayerMask, String> {
         let linked = layer.mask.as_ref().is_none_or(|m| m.linked);
         let offset = layer.mask.as_ref().map_or(layer.properties.offset, |m| m.offset);
-        let mut mask = LayerMask::reveal_all(self.engine.allocate_layer_id(), offset);
+        let mut mask = LayerMask::reveal_all(id, offset);
         mask.linked = linked;
         let document = self.engine.document();
         if let Some(selection) = &document.selection {

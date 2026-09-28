@@ -1409,6 +1409,7 @@ impl Workspace {
                 let editing = gtk::prelude::GtkWindowExt::focus(&this.window).is_some_and(|w| {
                     w.is::<gtk::Text>()
                         || w.is::<gtk::Entry>()
+                        || w.is::<gtk::TextView>()
                         || w.is::<gtk::Range>()
                         || w.is::<gtk::DropDown>()
                         || w.is::<gtk::CheckButton>()
@@ -1440,6 +1441,17 @@ impl Workspace {
         ));
         self.window.add_controller(keys);
         self.window.add_controller(crate::input::pad_buttons(self));
+        self.window.connect_visible_dialog_notify(glib::clone!(
+            #[weak(rename_to = this)]
+            self,
+            move |window| {
+                // A dialog takes the keyboard, so the canvas never sees the
+                // release of a shortcut that opened it, such as a large copy's progress.
+                if window.visible_dialog().is_some_and(|d| d != this.preferences.dialog) {
+                    this.interact(UiInput::Blur);
+                }
+            }
+        ));
     }
 
     pub fn action_button(self: &Rc<Self>, label: &str, action: UiAction) -> gtk::Button {

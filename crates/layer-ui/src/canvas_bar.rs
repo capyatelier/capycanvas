@@ -46,7 +46,6 @@ pub enum CanvasBarMenu {
     Clear,
     Refine,
     Adjust,
-    /// Reserved for the clipboard commands.
     Copy,
 }
 impl CanvasBarMenu {
@@ -74,7 +73,7 @@ impl CanvasBarMenu {
             Self::Clear => "clear-selection",
             Self::Refine => "feather",
             Self::Adjust => "adjustments",
-            Self::Copy => "copy-to-layer",
+            Self::Copy => "copy",
         }
     }
     /// The command a host that does not open the menu runs.
@@ -83,7 +82,8 @@ impl CanvasBarMenu {
             Self::CopyToLayer => Some(CommandId::CopySelectionToLayer),
             Self::Clear => Some(CommandId::ClearSelected),
             Self::Refine => Some(CommandId::FeatherSelection),
-            Self::Adjust | Self::Copy => None,
+            Self::Copy => Some(CommandId::Copy),
+            Self::Adjust => None,
         }
     }
     fn commands(self) -> &'static [CommandId] {
@@ -98,7 +98,8 @@ impl CanvasBarMenu {
                 CommandId::SmoothSelection,
                 CommandId::TransformSelectionOutline,
             ],
-            Self::Adjust | Self::Copy => &[],
+            Self::Copy => &[CommandId::Copy, CommandId::CopyMerged, CommandId::Cut],
+            Self::Adjust => &[],
         }
     }
 }
@@ -297,6 +298,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let edge = matches!(tool.selection_tool(), Some(SelectionTool::Tonal | SelectionTool::Brush))
             || self.canvas_bar.selection.as_ref().is_none_or(|s| s.1.is_none());
         let command = PlanItem::Command;
+        let copy = self.state.platform.pixel_clipboard().then_some(PlanItem::Menu(CanvasBarMenu::Copy));
         Some(Plan {
             kind: CanvasBarKind::Selection,
             label: None,
@@ -306,8 +308,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             ]
             .into_iter()
             .chain((tool == LayerCanvasTool::Move).then_some(command(CommandId::MoveLeaveCopy)))
+            .chain([PlanItem::Menu(CanvasBarMenu::CopyToLayer)])
+            .chain(copy)
             .chain([
-                PlanItem::Menu(CanvasBarMenu::CopyToLayer),
                 command(CommandId::ScaleRotate),
                 PlanItem::Menu(CanvasBarMenu::Refine),
                 command(CommandId::MaskSelection),
@@ -651,7 +654,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ContextMenuItem { enabled: state.enabled, ..ContextMenuItem::command(state.label, UiAction::Invoke { command: id }) }
         };
         let sections = match menu {
-            CanvasBarMenu::CopyToLayer | CanvasBarMenu::Clear => {
+            CanvasBarMenu::CopyToLayer | CanvasBarMenu::Clear | CanvasBarMenu::Copy => {
                 vec![menu.commands().iter().map(|&id| command(id)).collect()]
             }
             CanvasBarMenu::Refine => vec![
@@ -662,7 +665,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }],
             ],
             CanvasBarMenu::Adjust => vec![self.filter_category_items()],
-            CanvasBarMenu::Copy => Vec::new(),
         };
         ContextMenu { title: menu.label().into(), sections }
             .with_shortcuts(&self.state.settings, self.state.platform)

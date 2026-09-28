@@ -216,7 +216,7 @@ extension XCTestCase {
         }
         let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         let apply = app.buttons["canvas-bar-action-apply_transform"]
-        func paste() { editorMenu(in: app, menu: "Edit", id: "paste_image", label: "Paste Image as Layer") }
+        func paste() { editorMenu(in: app, menu: "Edit", id: "paste_image", label: "Paste") }
         func expect(_ count: Int, _ pixels: Data) {
             expectation(for: NSPredicate { _, _ in
                 rows.count == count && self.editorPixels(in: app) == pixels

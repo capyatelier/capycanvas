@@ -1,5 +1,6 @@
 #![cfg(target_arch = "wasm32")]
 
+mod clipboard;
 mod documents;
 mod document_tabs;
 mod document_storage;

@@ -44,6 +44,41 @@ struct OutputMetadata {
     rendition: Option<layer_core::color::hdr::SdrRendition>,
     flatten: Option<layer_core::color::DocumentColor>,
     guide: Option<GuideMetadata>,
+    #[serde(default)]
+    clip: Option<ClipMetadata>,
+}
+
+/// A clipboard copy of `extent` document pixels at `origin`.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) struct ClipMetadata {
+    pub origin: [u32; 2],
+    pub document: [u32; 2],
+    /// Write the document-depth source as well as the PNG.
+    pub source: bool,
+}
+
+pub(super) fn clip_metadata(
+    token: &str,
+    extent: [u32; 2],
+    document: &layer_core::Document,
+    rendition: Option<layer_core::color::hdr::SdrRendition>,
+    guide: Option<([u32; 2], f32)>,
+    clip: ClipMetadata,
+) -> String {
+    serde_json::to_string(&OutputMetadata {
+        token: token.into(),
+        extent,
+        color: document.color,
+        resolution: document.resolution,
+        recipe: ExportRecipe::web_share(),
+        original: None,
+        preview: false,
+        rendition,
+        flatten: None,
+        guide: guide.map(|(extent, peak)| GuideMetadata { extent, peak, buffer: 0 }),
+        clip: Some(clip),
+    })
+    .unwrap()
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -149,6 +184,7 @@ pub(super) async fn render_output(
         rendition: snapshot.project.document.color.depth.is_float().then_some(snapshot.project.document.sdr_rendition),
         flatten,
         guide: None,
+        clip: None,
     };
     let mut capture = gpu
         .capture(
@@ -319,7 +355,10 @@ pub async fn raster_worker_output(
             return Err(js("Non-finite output illumination guide"));
         }
         Ok(layer_core::color::hdr::LocalToneGuide {
-            extent: wire.extent, document_extent: metadata.extent, samples, peak: wire.peak,
+            extent: wire.extent,
+            document_extent: metadata.clip.as_ref().map_or(metadata.extent, |clip| clip.document),
+            samples,
+            peak: wire.peak,
         })
     }).transpose()?;
     let recipe = &metadata.recipe;
@@ -353,6 +392,36 @@ pub async fn raster_worker_output(
                 }
                 Ok(())
             };
+    if let Some(clip) = &metadata.clip {
+        let rows = layer_color::ClipRows {
+            extent: metadata.extent,
+            origin: clip.origin,
+            color: metadata.color,
+            resolution: metadata.resolution,
+            rendition: metadata.rendition.zip(guide.as_ref()),
+            source: clip.source,
+            limit: raster_project::photo_memory_budget().encode_bytes,
+        };
+        let (source, png) = layer_color::write_clip_rows(rows, &mut read_row).map_err(js)?;
+        let result = match source {
+            Some(source) => {
+                let mut document = layer_core::Document::new("Clipboard", source.extent[0], source.extent[1]);
+                document.color = metadata.color;
+                document.layers.truncate(1);
+                document.layers[0].source = Some(std::sync::Arc::new(source));
+                raster_project::pack(layer_core::Project { document }).await?
+            }
+            None => {
+                let empty = js_sys::Object::new();
+                js_sys::Reflect::set(&empty, &js("buffers"), &js_sys::Array::new())?;
+                empty.into()
+            }
+        };
+        let buffers: js_sys::Array = js_sys::Reflect::get(&result, &js("buffers"))?.dyn_into()?;
+        js_sys::Reflect::set(&result, &js("png"), &JsValue::from(buffers.length()))?;
+        buffers.push(&js_sys::Uint8Array::from(png.as_slice()));
+        return Ok(result);
+    }
     let before = if metadata.preview && metadata.rendition.is_some() {
         Some(mapped_preview(metadata.extent, metadata.color.space, metadata.rendition, guide.as_ref(), &mut read_row).map_err(js)?)
     } else { None };

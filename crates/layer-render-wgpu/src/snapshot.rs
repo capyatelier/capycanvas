@@ -347,14 +347,25 @@ impl SnapshotRenderer {
     fn read_band(&mut self, y: u32) -> Result<(u32, Vec<[f32; 4]>), GpuRasterError> {
         pollster::block_on(self.read_band_async(y))
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn read_window_band(&mut self, window: [u32; 4], y: u32) -> Result<(u32, Vec<[f32; 4]>), GpuRasterError> {
+        pollster::block_on(self.read_window_band_async(window, y))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn selection_coverage(
+        &mut self,
+        selection: &Arc<layer_core::Selection>,
+        window: [u32; 4],
+    ) -> Result<SelectionCoverage, GpuRasterError> {
+        pollster::block_on(self.selection_coverage_async(selection, window))
+    }
 
     /// A file worker shares the canvas queue. Complete at most two tile
     /// columns before yielding it through readback; a full 8K-wide effect band
     /// otherwise blocks presentation for several refresh intervals. Preserve
     /// the row-band cache and exact pixel/halo semantics of read_region.
     #[cfg(not(target_arch = "wasm32"))]
-    fn read_interactive_band(&mut self, y: u32, rows: u32) -> Result<Vec<[f32; 4]>, GpuRasterError> {
-        let width = self.extent[0];
+    fn read_interactive_band(&mut self, [left, width]: [u32; 2], y: u32, rows: u32) -> Result<Vec<[f32; 4]>, GpuRasterError> {
         let band_bytes = u64::from(width) * u64::from(rows) * 16;
         if band_bytes > self.planned_pixel_bytes {
             return Err(GpuRasterError::CaptureBudget { required: band_bytes, limit: self.planned_pixel_bytes });
@@ -365,7 +376,7 @@ impl SnapshotRenderer {
             let columns = 512.min(width - x);
             // The assembled CPU band stays alive beside each bounded GPU job.
             self.planned_pixel_bytes -= band_bytes;
-            let result = self.read_region([x, y, columns, rows]);
+            let result = self.read_region([left + x, y, columns, rows]);
             self.planned_pixel_bytes += band_bytes;
             let pixels = result?;
             for (row, source) in pixels.chunks_exact(columns as usize).enumerate() {
@@ -622,22 +633,33 @@ impl SnapshotRenderer {
         y: u32,
     ) -> Result<(u32, Vec<[f32; 4]>), GpuRasterError> {
         let [width, height] = self.extent;
-        if y >= height {
+        self.read_window_band_async([0, 0, width, height], y).await
+    }
+
+    /// `read_band_async` within `[x, y, width, height]` of the document;
+    /// `y` is a document row inside the window.
+    pub async fn read_window_band_async(
+        &mut self,
+        [left, top, width, height]: [u32; 4],
+        y: u32,
+    ) -> Result<(u32, Vec<[f32; 4]>), GpuRasterError> {
+        let bottom = top.checked_add(height).ok_or(GpuRasterError::SizeOverflow)?;
+        if y < top || y >= bottom || width == 0 || left.saturating_add(width) > self.extent[0] || bottom > self.extent[1] {
             return Err(GpuRasterError::InvalidExtent);
         }
         let maximum = if self.color().depth.is_float() {
             (4 * 1024 * 1024 / (width * 16)).clamp(16, 64)
         } else { (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE) };
-        let mut rows = maximum.min(height - y);
+        let mut rows = maximum.min(bottom - y);
         loop {
             #[cfg(not(target_arch = "wasm32"))]
             let result = if width > 512 {
-                self.read_interactive_band(y, rows)
+                self.read_interactive_band([left, width], y, rows)
             } else {
-                self.read_region_async([0, y, width, rows]).await
+                self.read_region_async([left, y, width, rows]).await
             };
             #[cfg(target_arch = "wasm32")]
-            let result = self.read_region_async([0, y, width, rows]).await;
+            let result = self.read_region_async([left, y, width, rows]).await;
             match result {
                 Ok(pixels) => return Ok((rows, pixels)),
                 Err(GpuRasterError::CaptureBudget { .. }) if rows > 16 => rows = (rows / 2).max(16),
@@ -680,6 +702,117 @@ struct RegionReadback {
     height: u32,
 }
 
+impl SnapshotRenderer {
+    /// The selection's coverage of `[x, y, width, height]`, rasterized by the
+    /// same GPU rules that clip brushes and clear pixels.
+    pub async fn selection_coverage_async(
+        &mut self,
+        selection: &Arc<layer_core::Selection>,
+        [x, y, width, height]: [u32; 4],
+    ) -> Result<SelectionCoverage, GpuRasterError> {
+        self.check_cancelled()?;
+        let region = PixelRect::new(
+            x,
+            y,
+            x.checked_add(width).ok_or(GpuRasterError::SizeOverflow)?,
+            y.checked_add(height).ok_or(GpuRasterError::SizeOverflow)?,
+        );
+        if region.is_empty() || region.intersect(PixelRect::full(self.extent)) != region {
+            return Err(GpuRasterError::InvalidExtent);
+        }
+        let r = &mut self.renderer;
+        let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+        r.selection_clip.prepare_region(&r.device, &mut encoder, self.extent, selection, Some(region))?;
+        let packed = r.selection_clip.buffer.as_ref().ok_or(GpuRasterError::InvalidExtent)?;
+        let readback = r.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("selection coverage readback"),
+            size: packed.size(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(packed, 0, &readback, 0, packed.size());
+        r.uploads.finish(&encoder);
+        encoder.submit(&r.queue);
+        r.selection_clip.reset();
+        #[cfg(not(target_arch = "wasm32"))]
+        let (tx, rx) = mpsc::channel();
+        #[cfg(target_arch = "wasm32")]
+        let (tx, rx) = futures_channel::oneshot::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result.map_err(|e| e.to_string()));
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::raster::wait_mapping(&self.renderer.device, &rx).map_err(GpuRasterError::MapFailed)?;
+        #[cfg(target_arch = "wasm32")]
+        rx.await
+            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
+            .map_err(GpuRasterError::MapFailed)?;
+        let words: Vec<u32> = readback
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
+            .chunks_exact(4)
+            .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+            .collect();
+        readback.unmap();
+        self.check_cancelled()?;
+        SelectionCoverage::new(words).ok_or(GpuRasterError::InvalidExtent)
+    }
+}
+
+/// Packed selection coverage read back from the GPU, sampled exactly as
+/// `brush_selection_at` samples it.
+pub struct SelectionCoverage {
+    rect: [u32; 4],
+    inverted: bool,
+    bytes: bool,
+    offset: [f32; 2],
+    stride: usize,
+    words: Vec<u32>,
+}
+impl SelectionCoverage {
+    fn new(mut words: Vec<u32>) -> Option<Self> {
+        let header: [u32; 8] = words.get(..8)?.try_into().ok()?;
+        let bytes = header[5] == 2;
+        let count = if bytes { 4 } else { 8 };
+        let stride = header[2].div_ceil(count) as usize;
+        words.drain(..8);
+        words.truncate(stride * header[3] as usize);
+        (words.len() == stride * header[3] as usize).then_some(Self {
+            rect: header[..4].try_into().ok()?,
+            inverted: header[4] != 0,
+            bytes,
+            offset: [f32::from_bits(header[6]), f32::from_bits(header[7])],
+            stride,
+            words,
+        })
+    }
+    /// Coverage of the document pixel whose top-left corner is `[x, y]`.
+    pub fn at(&self, x: u32, y: u32) -> f32 {
+        let [left, top, width, height] = self.rect.map(i64::from);
+        let px = (x as f32 + 0.5 - self.offset[0]).floor() as i64 - left;
+        let py = (y as f32 + 0.5 - self.offset[1]).floor() as i64 - top;
+        let mut coverage = 0.;
+        if (0..width).contains(&px) && (0..height).contains(&py) {
+            let (shift, bits, mask, scale) = if self.bytes { (2, 8, 255, 1. / 255.) } else { (3, 4, 15, 0.25) };
+            let word = self.words[py as usize * self.stride + (px >> shift) as usize];
+            coverage = ((word >> ((px as u32 & ((1 << shift) - 1)) * bits)) & mask) as f32 * scale;
+        }
+        if self.inverted { 1. - coverage } else { coverage }
+    }
+    /// Multiply premultiplied pixels of document row `y`, starting at column `x`.
+    pub fn apply(&self, x: u32, y: u32, row: &mut [[f32; 4]]) {
+        for (i, pixel) in row.iter_mut().enumerate() {
+            let coverage = self.at(x + i as u32, y);
+            for channel in pixel {
+                *channel *= coverage;
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod clip;
 #[cfg(not(target_arch = "wasm32"))]
 mod flatten;
 #[cfg(not(target_arch = "wasm32"))]
