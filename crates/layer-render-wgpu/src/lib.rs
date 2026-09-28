@@ -858,6 +858,7 @@ pub struct WgpuRasterizer {
     display_selection_damage: PixelRect,
     selection_painter: Option<selection_paint::SelectionPainter>,
     selection_overlay: Option<layer_render::SelectionOverlay>,
+    crop_overlay: Option<layer_render::CropOverlay>,
     selection_previews: selection_previews::SelectionPreviews,
     selection_paint_revision: u64,
     selection_paint_damage: PixelRect,
@@ -1196,6 +1197,7 @@ impl WgpuRasterizer {
             display_selection_damage: PixelRect::EMPTY,
             selection_painter: None,
             selection_overlay: None,
+            crop_overlay: None,
             selection_previews: Default::default(),
             selection_paint_revision: 0,
             selection_paint_damage: PixelRect::EMPTY,
@@ -3431,6 +3433,7 @@ impl CanvasRenderer for WgpuRasterizer {
         else { self.selection_previews.definitions.remove(&LayerId(0)); }
     }
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) { self.selection_overlay = overlay; }
+    fn set_crop_overlay(&mut self, overlay: Option<layer_render::CropOverlay>) { self.crop_overlay = overlay; }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry.enabled = enabled;
     }

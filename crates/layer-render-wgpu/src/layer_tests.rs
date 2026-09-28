@@ -23,6 +23,8 @@ mod placement;
 mod erase;
 #[path = "liquify_tests.rs"]
 mod liquify;
+#[path = "crop_overlay_tests.rs"]
+mod crop_overlay;
 
 fn view() -> ViewState {
     ViewState {

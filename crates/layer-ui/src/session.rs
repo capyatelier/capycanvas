@@ -27,6 +27,8 @@ pub use screen_status::{ScreenChip, ScreenDetails, ScreenState};
 pub(crate) mod figures;
 #[path = "operation.rs"]
 pub(crate) mod operation;
+#[path = "crop.rs"]
+mod crop;
 #[path = "tonal_selection.rs"]
 pub(crate) mod tonal_selection;
 #[path = "selection_tools.rs"]
@@ -1001,6 +1003,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !self.layer_interaction.path.is_empty())
                     || self.update_ruler_preview()
                     || self.update_transform_drag()?
+                    || self.update_crop_drag()
                 {
                     reply.change = self.changed(regions::DOCUMENT | regions::BRUSH, true);
                 }
@@ -1981,6 +1984,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn command_label(&self, id: CommandId) -> &'static str {
         if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
             "Restore Starting Layout…"
+        } else if self.cropping() && matches!(id, CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::ResetTransform) {
+            match id {
+                CommandId::ApplyTransform => "Apply crop",
+                CommandId::CancelTransform => "Cancel crop",
+                _ => "Reset crop",
+            }
         } else if id == CommandId::SoftProof {
             "Proof"
         } else {
@@ -2094,25 +2103,47 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.require_raster_snapshot().is_ok() && !self.state.document_file.busy
             }
             CommandId::CloseDocument => self.require_document_snapshot_idle().is_ok(),
-            CommandId::ScaleRotate => idle && self.can_transform(),
+            CommandId::ScaleRotate => idle && !self.cropping() && self.can_transform(),
+            CommandId::Crop => {
+                idle && (self.cropping()
+                    || (self.require_document_idle().is_ok() && self.canvas_geometry_refusal().is_none()))
+            }
+            CommandId::CropRatioFree
+            | CommandId::CropRatioOriginal
+            | CommandId::CropRatioSquare
+            | CommandId::CropRatioFourFive
+            | CommandId::CropRatioTwoThree
+            | CommandId::CropRatioFiveSeven
+            | CommandId::CropRatioSixteenNine
+            | CommandId::CropSwapOrientation
+            | CommandId::CropOverlayThirds
+            | CommandId::CropOverlayGrid
+            | CommandId::CropOverlayDiagonal
+            | CommandId::CropOverlayGolden
+            | CommandId::CropCycleOverlay
+            | CommandId::CropStraighten
+            | CommandId::CropDeleteCroppedPixels => idle && self.cropping(),
+            CommandId::StraightenToGuide => {
+                idle && self.straighten_to_guide_refusal().is_none()
+                    && (self.cropping() || self.require_document_idle().is_ok())
+            }
             CommandId::PlacementOriginalSize => idle && self.operation.placing(),
             CommandId::ApplyTransform => {
                 idle && self.operation.active() && !self.region_tools.applying_transform()
             }
-            CommandId::CancelTransform
-            | CommandId::TransformFlipHorizontal
+            CommandId::CancelTransform | CommandId::ResetTransform => idle && self.operation.active(),
+            CommandId::TransformFlipHorizontal
             | CommandId::TransformFlipVertical
             | CommandId::TransformRotateLeft
             | CommandId::TransformRotateRight
-            | CommandId::ResetTransform
             | CommandId::TransformFree
-            | CommandId::TransformUniform => idle && self.operation.active(),
+            | CommandId::TransformUniform => idle && self.operation.transforming(),
             CommandId::TransformDistort
             | CommandId::TransformWarp
             | CommandId::TransformNearest
             | CommandId::TransformBilinear
             | CommandId::TransformBicubic => {
-                idle && self.operation.active() && !self.operation.placing() && !self.operation.outline()
+                idle && self.operation.transforming() && !self.operation.placing() && !self.operation.outline()
             }
             CommandId::TransformPerspective => {
                 idle && self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
@@ -2148,8 +2179,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference => {
                 idle && self.layer_interaction.tool.selection_tool().is_some()
             }
-            CommandId::Undo => idle && (self.operation.placing() || self.engine.can_undo()),
-            CommandId::Redo => idle && self.engine.can_redo(),
+            CommandId::Undo => idle && (self.operation.placing() || self.cropping() || self.engine.can_undo()),
+            CommandId::Redo => idle && !self.cropping() && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
             CommandId::Deselect | CommandId::InvertSelection => {
                 self.require_document_idle().is_ok() && self.has_selection()
@@ -2267,6 +2298,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer
                     )
             )
+            || self.crop_selected(id)
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
             || (id == CommandId::ShowCanvasActionBar && self.state.workspace.layout.canvas_bar)
             || (id == CommandId::Fullscreen && self.state.fullscreen)
@@ -2970,6 +3002,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
                 }
+                if let Some(axis) = id.strip_prefix("crop_") {
+                    let canvas = self.engine.document();
+                    let value = match axis {
+                        "width" => canvas.width as f32,
+                        "height" => canvas.height as f32,
+                        _ => 0.,
+                    };
+                    return self.dispatch(UiAction::SetToolSetting { id, value });
+                }
                 let defaults = if id.starts_with("transform_") {
                     let value = match id.as_str() {
                         "transform_width" | "transform_height" => 1.,
@@ -3040,6 +3081,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if id.starts_with("transform_") {
                     self.set_transform_control(&id, value)?;
                     return Ok(self.changed(BRUSH, true));
+                }
+                if id.starts_with("crop_") {
+                    self.set_crop_control(&id, value)?;
+                    return Ok(self.changed(BRUSH | DOCUMENT, true));
                 }
                 let brush = tool_settings::edit(self.engine.configured_brush(), &id, value)?;
                 self.state.brush.diameter = brush.diameter;
@@ -3935,6 +3980,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let revision = self.engine.document().revision;
         changed |= self.poll_selection_paint()?;
         self.sync_selection_overlay();
+        self.sync_crop_overlay();
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
@@ -4131,8 +4177,32 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
             CommandId::ApplyTransform | CommandId::CancelTransform => {
+                let cropping = self.cropping();
                 self.finish_transform(command == CommandId::ApplyTransform)?;
-                Ok((BRUSH | DOCUMENT, true))
+                Ok((BRUSH | DOCUMENT | if cropping { CAMERA | COMMANDS } else { 0 }, true))
+            }
+            CommandId::Crop
+            | CommandId::CropRatioFree
+            | CommandId::CropRatioOriginal
+            | CommandId::CropRatioSquare
+            | CommandId::CropRatioFourFive
+            | CommandId::CropRatioTwoThree
+            | CommandId::CropRatioFiveSeven
+            | CommandId::CropRatioSixteenNine
+            | CommandId::CropSwapOrientation
+            | CommandId::CropOverlayThirds
+            | CommandId::CropOverlayGrid
+            | CommandId::CropOverlayDiagonal
+            | CommandId::CropOverlayGolden
+            | CommandId::CropCycleOverlay
+            | CommandId::CropStraighten
+            | CommandId::CropDeleteCroppedPixels => {
+                self.crop_command(command)?;
+                Ok((BRUSH | DOCUMENT | COMMANDS, true))
+            }
+            CommandId::StraightenToGuide => {
+                self.straighten_to_guide()?;
+                Ok((BRUSH | DOCUMENT | COMMANDS, true))
             }
             CommandId::TransformFlipHorizontal
             | CommandId::TransformFlipVertical
@@ -4369,9 +4439,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((BRUSH, false))
             }
             CommandId::Undo => {
-                if self.operation.placing() {
+                if self.operation.placing() || self.cropping() {
                     self.finish_transform(false)?;
-                    return Ok((BRUSH | DOCUMENT, true));
+                    return Ok((BRUSH | DOCUMENT | COMMANDS, true));
                 }
                 if self.engine.history_color(false) != self.engine.document().color {
                     self.request_document(DocumentRequest::ColorHistory { redo: false })?;
@@ -4388,6 +4458,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::Redo => {
                 if self.operation.placing() { return Err("Apply or cancel the photo placement first".into()); }
+                if self.cropping() { return Err("Apply or cancel the crop first".into()); }
                 if self.engine.history_color(true) != self.engine.document().color {
                     self.request_document(DocumentRequest::ColorHistory { redo: true })?;
                     return Ok((DOCUMENT | HOST, false));
@@ -4713,7 +4784,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn refresh_tools(&mut self) {
         self.selection_tools.options.tonal.adapt_to_document(self.engine.document().color.depth.is_float());
-        self.state.tool_actions = if self.operation.active() {
+        self.state.tool_actions = if self.cropping() {
+            self.crop_actions()
+        } else if self.operation.active() {
             [
                 CommandId::TransformFree,
                 CommandId::TransformUniform,
@@ -4804,7 +4877,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.color_picker.sample_width = self.eyedropper.area.width();
         self.state.color_picker.can_sample_layer = self.picker_layer_available();
         self.state.tool_panels = ToolPanels::new(&self.state.brush, self.layer_interaction.tool, &self.state.tool_set);
-        self.state.tool_settings = if self.operation.active() {
+        self.state.tool_settings = if self.cropping() {
+            self.crop_controls()
+        } else if self.operation.active() {
             self.transform_controls()
         } else if self.layer_interaction.tool == LayerCanvasTool::Paint {
             tool_settings::controls(self.engine.configured_brush())
@@ -5269,6 +5344,7 @@ mod tests {
     include!("binding_tests.rs");
     include!("view_tests.rs");
     include!("canvas_size_tests.rs");
+    include!("crop_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

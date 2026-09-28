@@ -115,7 +115,8 @@ fn a_refused_apply_keeps_the_canvas_size_draft() {
     invoke(&mut s, CommandId::CanvasSize);
     canvas_size(&mut s, CanvasSizeAction::Anchor { anchor: CanvasAnchor::BottomRight });
     canvas_size(&mut s, CanvasSizeAction::Width { value: 1100. });
-    assert!(canvas_view(&s).can_apply);
+    assert!(!canvas_view(&s).can_apply);
+    assert_eq!(canvas_view(&s).message, "Raster backing is busy; retry the edit");
     let error = s.dispatch(UiAction::CanvasSize { action: CanvasSizeAction::Apply }).unwrap_err();
     assert_eq!(error, "Raster backing is busy; retry the edit");
     assert_eq!((canvas_view(&s).values, canvas_view(&s).anchor), ([1100., 1000.], CanvasAnchor::BottomRight), "the draft survives");
@@ -168,7 +169,10 @@ fn edit_image_submenu_holds_the_geometry_commands_and_photo_keymaps_bind_canvas_
     let mut seen = Vec::new();
     let image = edit.sections.iter().flatten().find(|i| i.label == "Image").expect("Edit ▸ Image");
     let image: Vec<_> = image.sections.iter().flatten().map(|i| i.action.clone()).collect();
-    assert_eq!(image, [CommandId::CropCanvasToSelection, CommandId::CanvasSize].map(|command| Some(UiAction::Invoke { command })));
+    assert_eq!(
+        image,
+        [CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize].map(|command| Some(UiAction::Invoke { command }))
+    );
     for item in edit.sections.iter().flatten() {
         assert!(!seen.contains(&item.action), "{}", item.label);
         seen.push(item.action.clone());

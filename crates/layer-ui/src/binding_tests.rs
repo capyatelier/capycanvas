@@ -183,7 +183,13 @@ fn defaults_and_presets_never_share_a_key_between_overlapping_contexts() {
     // A tool-scoped binding may share its key with an application binding;
     // dispatch runs the more specific one while it is enabled.
     let layered = |a: &str, b: &str| {
-        [("command.DeleteRuler", "command.ClearSelected")].iter().any(|&(x, y)| (a, b) == (x, y) || (a, b) == (y, x))
+        [
+            ("command.DeleteRuler", "command.ClearSelected"),
+            ("command.CropCycleOverlay", "command.Move"),
+            ("command.CropCycleOverlay", "command.Eyedropper"),
+        ]
+        .iter()
+        .any(|&(x, y)| (a, b) == (x, y) || (a, b) == (y, x))
     };
     for preset in crate::keymaps::KEYMAP_PRESETS {
         let mut settings = Settings::default();

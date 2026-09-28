@@ -528,6 +528,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
             LayerCanvasTool::LassoFill => ("Lasso fill", "lasso-fill"),
             LayerCanvasTool::Move | LayerCanvasTool::Transform => unreachable!(),
             LayerCanvasTool::Hand => ("Hand", "hand"),
+            LayerCanvasTool::Crop => ("Crop", "crop"),
             LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer => unreachable!(),
             LayerCanvasTool::Gradient { .. } => unreachable!(),
             LayerCanvasTool::Figure { .. } | LayerCanvasTool::Ruler { .. } => unreachable!(),

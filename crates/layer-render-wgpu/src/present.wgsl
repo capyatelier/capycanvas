@@ -7,6 +7,8 @@ struct Camera {
     selection_inverse: vec4<f32>,
     rotation: vec4<f32>,
     overlay: vec4<f32>,
+    crop: vec4<f32>,
+    crop_offset: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var canvas: texture_2d<f32>;
@@ -187,6 +189,13 @@ fn outlined(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> bool {
     return selected(p-dx) != selected(p+dx) || selected(p-dy) != selected(p+dy);
 }
 
+// The crop tool's shield. `crop` maps document pixels onto the crop's unit
+// square; `crop_offset.z` is the shield opacity and `.w` enables it.
+fn inside_crop(p: vec2<f32>) -> bool {
+    let q = vec2<f32>(dot(camera.crop.xz, p), dot(camera.crop.yw, p)) + camera.crop_offset.xy;
+    return all(q >= vec2<f32>(0.)) && all(q <= vec2<f32>(1.));
+}
+
 struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
 @vertex fn vs_main(@builtin(vertex_index) index: u32) -> Vertex {
     let uv = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
@@ -235,8 +244,12 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     let surface = logical_surface(vertex.position.xy * footprint);
     let p = vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy;
     let extent = camera.offset_document.zw;
+    let cropping = camera.crop_offset.w > .5;
     if any(p < vec2<f32>(0.)) || any(p >= extent) {
         var rgb = view_ui_rgb(camera.surround.rgb);
+        if cropping && inside_crop(p) {
+            rgb = vec3<f32>(select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0));
+        }
         if camera.viewport.z > .5 { rgb = display_color(rgb); }
         let coverage = window_coverage(surface);
         return view_store(vec4<f32>(rgb * coverage, coverage));
@@ -265,6 +278,10 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
         if outlined(p, dx, dy) {
             rgb = vec3<f32>(select(0., 1., (surface.x+surface.y) % 6. < 3.));
         }
+    }
+    if cropping && !inside_crop(p) {
+        let keep = 1. - camera.crop_offset.z;
+        rgb = select(rgb * keep, sdr_encode(sdr_decode(rgb, 0u) * keep, 0u), camera.viewport.z > .5);
     }
     // Signed distance to the full-window rounded rectangle; no inset/cropping.
     let coverage = window_coverage(surface);

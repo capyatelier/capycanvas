@@ -248,7 +248,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Why no geometry command can change the canvas right now.
     pub(super) fn canvas_geometry_refusal(&self) -> Option<&'static str> {
         if self.operation.active() {
-            Some("Apply or cancel the transform first")
+            Some(self.operation_refusal())
         } else if self.selection_masks.target().is_some() {
             Some("Return to the artwork first")
         } else if self.state.document_file.busy {

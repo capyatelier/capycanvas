@@ -44,14 +44,35 @@ Canvas geometry commands build one batch in
 - After every geometry edit, each paint layer without a source, and each mask,
   covers the canvas window in its local coordinates.
 - A fill, gradient or figure with no selection is bounded to the canvas window on
-  a layer with hidden pixels. Brush dabs past the canvas edge may write hidden
-  pixels, as they already do on photo layers.
+  a layer with hidden pixels, and never writes past the layer's extent within an
+  edge page, so growing the canvas shows transparency there. Brush dabs past the
+  canvas edge may write hidden pixels, as they already do on photo layers.
+- A turned canvas (Straighten) is a `linear` map in the plan. Paint layers and
+  masks without a source get a pending `Transform` operation into a new local
+  frame that holds the whole turned extent; photos turn their placement, and the
+  selection, Selection Layers and guides are transformed as metadata.
+- Delete Cropped Pixels trims each paint layer and mask to the tiles its window
+  touches, rebases them to the smallest tile-aligned extent, and erases the edges
+  of paint layers with up to four bounded `Erase` operations, so only edge tiles
+  are rewritten.
+- Pixel operations run in the same undo step as the metadata edits
+  (`CanvasEngine::apply_canvas_geometry`), on locked layers too. A target whose
+  raster the batch replaced is restored from that raster before its operations run.
 
 A canvas size change resets the renderer's paint pages and restores every layer
 from its raster revision, including on undo and redo
 ([`tests/canvas_geometry.rs`](../../crates/layer-render-wgpu/tests/canvas_geometry.rs)).
 Limits are checked before the edit commits, including the device's texture limit
 through `CanvasRenderer::max_document_dimension`.
+
+The Crop tool's shield is drawn by the presentation pass itself. `set_crop_overlay`
+passes a `CropOverlay` (the map from document pixels onto the crop's unit square,
+and the shield opacity) to the renderer, which folds it into the presentation
+uniform. `present.wgsl` dims the canvas outside the crop and fills the part of the
+crop beyond the canvas with the transparency checkerboard; it never samples pixels
+hidden beyond the canvas. Without a crop the shader skips both on a uniform flag,
+and a handle drag changes only that uniform and the guide segments, so it costs a
+camera-change repaint. The frame, guides and handles are ordinary `CursorSegment`s.
 
 The viewport is the presentation of that document at the current camera position,
 zoom and rotation. The shared

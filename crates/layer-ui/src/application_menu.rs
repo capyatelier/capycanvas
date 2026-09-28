@@ -137,7 +137,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 vec![command(CommandId::PasteImage)],
                 [CommandId::RasterizeSource, CommandId::RevertToOriginal, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer].map(command).into(),
                 vec![command(CommandId::ScaleRotate)],
-                vec![ContextMenuItem::submenu("Image", vec![[CommandId::CropCanvasToSelection, CommandId::CanvasSize].map(command).into()])],
+                vec![ContextMenuItem::submenu("Image", vec![[CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize].map(command).into()])],
                 [CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth].map(command).into(),
                 vec![command(CommandId::Settings)],
             ] },

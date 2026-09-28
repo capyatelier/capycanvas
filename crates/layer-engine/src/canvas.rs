@@ -464,7 +464,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         id: LayerId,
         operation: layer_core::LayerOperation,
     ) -> Result<(), DocumentError> {
-        self.append_operations(Vec::new(), vec![(id, operation)], None)
+        self.append_operations(Vec::new(), vec![(id, operation)], None, false)
     }
 
     /// Apply `prefix` edits, such as inserting layers, and run pixel operations
@@ -477,7 +477,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         operations: Vec<(LayerId, layer_core::LayerOperation)>,
         selection_after: Option<Option<layer_core::Selection>>,
     ) -> Result<(), DocumentError> {
-        self.append_operations(prefix, operations, selection_after)
+        self.append_operations(prefix, operations, selection_after, false)
     }
 
     /// Commit the displayed pixels and moved selection as one undoable edit.
@@ -533,7 +533,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 },
             ));
         }
-        self.append_operations(Vec::new(), operations, Some(selection))?;
+        self.append_operations(Vec::new(), operations, Some(selection), false)?;
         Ok(true)
     }
 
@@ -595,6 +595,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         operations: Vec<(LayerId, layer_core::LayerOperation)>,
         // None preserves the selection; Some(None) explicitly clears it.
         selection_after: Option<Option<layer_core::Selection>>,
+        reaches_locked_layers: bool,
     ) -> Result<(), DocumentError> {
         self.flush_pending_edits()?;
         self.completed_stroke = None;
@@ -623,14 +624,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .target_owner(id)
                 .ok_or(DocumentError::MissingLayer(id))?;
             if (owner.id == id && owner.kind != layer_core::LayerKind::Paint)
-                || document.is_locked(id)
+                || (document.is_locked(id) && !reaches_locked_layers)
             {
                 return Err(DocumentError::InvalidLayerOperation(
                     "Select an unlocked paint layer",
                 ));
             }
             let pixels = document.target_raster(id).cloned().unwrap_or_default();
-            if self.document().target_owner(id).is_none() && !restores.iter().any(|(target, _)| *target == id) {
+            let replaced = self.document().target_raster(id).is_none_or(|current| *current != pixels);
+            if replaced && !restores.iter().any(|(target, _)| *target == id) {
                 restores.push((id, pixels.clone()));
             }
             let extent = document.target_extent(id);
@@ -709,7 +711,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     /// Move the canvas to `geometry` in one undo step. Limits are checked
-    /// before anything changes; a crop changes only metadata.
+    /// before anything changes. A crop that keeps hidden pixels changes only
+    /// metadata; resampling and erasing run as pixel operations in the same
+    /// step, on locked layers too.
     pub fn apply_canvas_geometry(
         &mut self,
         geometry: &layer_core::CanvasGeometry,
@@ -718,8 +722,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if self.has_active_stroke() {
             return Err(DocumentError::InvalidLayerOperation("Finish the stroke first").into());
         }
-        let edit = self.document().canvas_geometry_edit(geometry, self.geometry_limits())?;
-        self.apply_edit(edit)?;
+        let mut plan = self.document().canvas_geometry_plan(geometry, self.geometry_limits())?;
+        if plan.operations.is_empty() {
+            self.apply_edit(Edit::Batch(plan.edits))?;
+        } else {
+            for (_, operation) in &mut plan.operations {
+                operation.coverage.id = self.allocate_layer_id();
+            }
+            self.append_operations(plan.edits, plan.operations, None, true)?;
+            self.rebuild_all = true;
+            self.composite_all = true;
+        }
         debug_assert!(self.document().extents_cover_canvas());
         Ok(())
     }

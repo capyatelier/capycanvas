@@ -485,6 +485,8 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Lasso" => key("m", false, false),
         "command.Move" => key("o", false, false),
         "command.ScaleRotate" => key("t", true, false),
+        "command.Crop" => key("c", false, false),
+        "command.CropCycleOverlay" => key("o", false, false),
         "command.ApplyTransform" => key("enter", false, false),
         "command.CancelTransform" => key("escape", false, false),
         "command.Hand" => key("h", false, false),
@@ -552,6 +554,10 @@ fn command_section(command: CommandId) -> &'static str {
     match command {
         C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::PasteImage | C::ClearLayer | C::FillSelection
         | C::ClearSelected | C::ClearOutside | C::CanvasSize | C::CropCanvasToSelection => "Edit",
+        C::CropRatioFree | C::CropRatioOriginal | C::CropRatioSquare | C::CropRatioFourFive | C::CropRatioTwoThree
+        | C::CropRatioFiveSeven | C::CropRatioSixteenNine | C::CropSwapOrientation | C::CropOverlayThirds
+        | C::CropOverlayGrid | C::CropOverlayDiagonal | C::CropOverlayGolden | C::CropCycleOverlay | C::CropStraighten
+        | C::CropDeleteCroppedPixels | C::StraightenToGuide => "Transform",
         C::ApplyTransform | C::CancelTransform | C::PlacementOriginalSize | C::ResetTransform
         | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
@@ -587,6 +593,7 @@ fn command_scope(command: CommandId) -> BindingScope {
         CommandId::DeleteRuler => BindingScope::Tools {
             categories: vec![ToolCategory::ShapesRulers, ToolCategory::MoveTransform],
         },
+        CommandId::CropCycleOverlay => BindingScope::Tools { categories: vec![ToolCategory::MoveTransform] },
         _ => BindingScope::Application,
     }
 }

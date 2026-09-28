@@ -216,7 +216,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "gimp",
-        revision: 3,
+        revision: 4,
         title: "GIMP Style",
         app: "GIMP",
         source: "GIMP 3.2 default shortcuts, US layout; checked 2026-09-26",
@@ -240,6 +240,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("command.ColorSelect", &["shift+o"]),
             ("command.Move", &["m"]),
             ("command.ScaleRotate", &["shift+t", "shift+s", "shift+r"]),
+            ("command.Crop", &["shift+c"]),
             ("command.SelectionOutline", &["primary+t"]),
             ("command.Eyedropper", &["o"]),
             ("command.Fill", &["shift+b"]),

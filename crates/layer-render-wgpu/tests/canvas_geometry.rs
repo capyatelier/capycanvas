@@ -212,6 +212,171 @@ fn a_placed_photo_crops_as_metadata_and_never_rebases() {
     image(&mut engine, 2_100_000_000).assert_eq(&original, "undo both");
 }
 
+#[test]
+fn deleting_cropped_pixels_leaves_nothing_hidden_to_reveal() {
+    let (mut engine, _input) = painted();
+    let original = image(&mut engine, 3_000_000_000);
+    let (mut blank_engine, _) = self::engine(Document::new("blank", SIZE[0], SIZE[1]));
+    let blank = image(&mut blank_engine, 0);
+    let delete = CanvasGeometry { delete_outside: true, ..geometry([50, 30], [200, 150]) };
+    engine.apply_canvas_geometry(&delete).unwrap();
+    assert!(engine.document().extents_cover_canvas());
+    let cropped = image(&mut engine, 4_000_000_000);
+    cropped.assert_eq(&original.crop([50, 30], [200, 150]), "crop");
+    engine.apply_canvas_geometry(&geometry([-50, -30], SIZE)).unwrap();
+    let grown = image(&mut engine, 5_000_000_000);
+    grown.crop([50, 30], [200, 150]).assert_eq(&cropped, "the kept pixels");
+    for y in 0..SIZE[1] {
+        for x in 0..SIZE[0] {
+            if (50..250).contains(&x) && (30..180).contains(&y) {
+                continue;
+            }
+            let i = ((y * SIZE[0] + x) * 4) as usize;
+            assert_eq!(grown.rgba[i..i + 4], blank.rgba[i..i + 4], "no hidden pixel returns at {x}, {y}");
+        }
+    }
+    assert!(engine.undo().unwrap());
+    assert!(engine.undo().unwrap());
+    image(&mut engine, 5_100_000_000).assert_eq(&original, "one undo step restores every pixel");
+    assert!(engine.redo().unwrap());
+    image(&mut engine, 5_200_000_000).assert_eq(&cropped, "redo deletes again");
+}
+
+/// Two smooth gradients, so interpolation differs from the oracle by less
+/// than a code, with the paper hidden so coverage shows in alpha.
+fn gradients() -> (Engine, InputProducer<PenEvent>) {
+    let mut doc = Document::new("straighten", SIZE[0], SIZE[1]);
+    let upper = doc.allocate_layer_id();
+    doc.layers.insert(0, Layer::paint(upper, "Upper"));
+    doc.layers.last_mut().unwrap().visible = false;
+    let lower = doc.layers[1].id;
+    let (mut engine, input) = engine(doc);
+    for (id, start, end, colors) in [
+        (lower, Point { x: 0., y: 0. }, Point { x: SIZE[0] as f32, y: 0. }, [[0.9, 0.2, 0.05, 1.], [0.05, 0.3, 0.9, 1.]]),
+        (upper, Point { x: 0., y: 0. }, Point { x: 0., y: SIZE[1] as f32 }, [[0.1, 0.8, 0.1, 0.6], [0.9, 0.9, 0.2, 0.2]]),
+    ] {
+        engine
+            .append_layer_operation(id, LayerOperation {
+                placement: Affine::IDENTITY,
+                coverage: LayerMask::reveal_all(LayerId(900 + id.0), Point::default()),
+                kind: LayerOperationKind::Gradient { start, end, colors, radial: false, alpha_locked: false },
+            })
+            .unwrap();
+        image(&mut engine, 1_000_000);
+    }
+    (engine, input)
+}
+
+/// The largest `SIZE`-shaped crop turned by `angle` about the canvas centre.
+fn straightened(angle: f32, delete_outside: bool) -> CanvasGeometry {
+    let [w, h] = SIZE.map(|v| v as f32);
+    let aspect = w / h;
+    let (s, c) = (angle.sin().abs(), angle.cos().abs());
+    let height = (w / (aspect * c + s)).min(h / (aspect * s + c));
+    let size = [(aspect * height).floor() as u32, height.floor() as u32];
+    let center = Point { x: w / 2., y: h / 2. };
+    CanvasGeometry {
+        rect: CanvasRect { origin: [0, 1].map(|i| ([center.x, center.y][i] - size[i] as f32 / 2.).round() as i32), size },
+        linear: Affine::around(center, [1., 1.], -angle, Point::default()),
+        interpolation: Interpolation::Bicubic,
+        delete_outside,
+    }
+}
+
+/// Bilinear CPU sample of an 8-bit image at pixel-centre coordinates.
+fn bilinear(image: &Image, p: Point) -> [f32; 4] {
+    let (x, y) = (p.x - 0.5, p.y - 0.5);
+    let (x0, y0) = (x.floor(), y.floor());
+    let (tx, ty) = (x - x0, y - y0);
+    let texel = |xi: f32, yi: f32| {
+        let xi = xi.clamp(0., image.size[0] as f32 - 1.) as u32;
+        let yi = yi.clamp(0., image.size[1] as f32 - 1.) as u32;
+        let i = ((yi * image.size[0] + xi) * 4) as usize;
+        std::array::from_fn::<f32, 4, _>(|c| image.rgba[i + c] as f32)
+    };
+    let [a, b, c, d] = [texel(x0, y0), texel(x0 + 1., y0), texel(x0, y0 + 1.), texel(x0 + 1., y0 + 1.)];
+    std::array::from_fn(|k| (a[k] * (1. - tx) + b[k] * tx) * (1. - ty) + (c[k] * (1. - tx) + d[k] * tx) * ty)
+}
+
+fn assert_rotation(result: &Image, original: &Image, to_canvas: Affine, tolerance: f32, what: &str) {
+    let back = to_canvas.inverse().unwrap();
+    let mut worst = 0f32;
+    for y in 2..result.size[1] - 2 {
+        for x in 2..result.size[0] - 2 {
+            let expected = bilinear(original, back.map(Point { x: x as f32 + 0.5, y: y as f32 + 0.5 }));
+            let i = ((y * result.size[0] + x) * 4) as usize;
+            for (c, value) in expected.iter().enumerate() {
+                worst = worst.max((result.rgba[i + c] as f32 - value).abs());
+            }
+        }
+    }
+    assert!(worst <= tolerance, "{what}: {worst} codes from the CPU rotation");
+}
+
+#[test]
+fn straightening_matches_a_cpu_rotation_and_keeps_the_hidden_corners() {
+    let (mut engine, _input) = gradients();
+    let original = image(&mut engine, 2_000_000_000);
+    let angle = 0.2;
+    let geometry = straightened(angle, false);
+    let to_canvas = geometry.to_canvas();
+    engine.apply_canvas_geometry(&geometry).unwrap();
+    assert!(engine.document().extents_cover_canvas());
+    let straight = image(&mut engine, 3_000_000_000);
+    assert_eq!(straight.size, geometry.rect.size);
+    assert_rotation(&straight, &original, to_canvas, 2., "straightened");
+    let margin = 120;
+    let [w, h] = geometry.rect.size;
+    engine.apply_canvas_geometry(&self::geometry([-margin, -margin], [w + 2 * margin as u32, h + 2 * margin as u32])).unwrap();
+    let revealed = image(&mut engine, 4_000_000_000);
+    let alpha = |p: Point| {
+        let [x, y] = [p.x, p.y].map(|v| (v + margin as f32) as u32);
+        revealed.rgba[((y * revealed.size[0] + x) * 4 + 3) as usize]
+    };
+    let [right, bottom] = SIZE.map(|v| v as f32 - 8.);
+    for corner in [Point { x: 8., y: 8. }, Point { x: right, y: 8. }, Point { x: 8., y: bottom }, Point { x: right, y: bottom }] {
+        let at = to_canvas.map(corner);
+        assert!(at.x < 0. || at.y < 0. || at.x > w as f32 || at.y > h as f32, "{at:?} is hidden after the crop");
+        assert_eq!(alpha(at), 255, "the hidden corner {corner:?} is kept");
+    }
+    assert_eq!(alpha(to_canvas.map(Point { x: -20., y: SIZE[1] as f32 / 2. })), 0, "nothing beyond the old canvas");
+    assert!(engine.undo().unwrap());
+    image(&mut engine, 4_100_000_000).assert_eq(&straight, "undo the growth");
+    assert!(engine.undo().unwrap());
+    image(&mut engine, 4_200_000_000).assert_eq(&original, "one undo step restores the drawing");
+}
+
+#[test]
+fn straightening_turns_a_placed_photo_without_resampling_its_pixels() {
+    let mut doc = Document::new("photo straighten", SIZE[0], SIZE[1]);
+    doc.layers[0].source = Some(color::source::rgba8_source(SIZE, |x, y| {
+        [(60 + x / 3) as u8, (40 + y / 2) as u8, (200 - (x + y) / 6) as u8, 255]
+    }));
+    let photo = doc.layers[0].id;
+    let (mut engine, _input) = engine(doc);
+    let original = image(&mut engine, 0);
+    let source = engine.document().layer(photo).unwrap().source.clone().unwrap();
+    let geometry = straightened(-0.15, false);
+    engine.apply_canvas_geometry(&geometry).unwrap();
+    let layer = engine.document().layer(photo).unwrap();
+    assert!(std::sync::Arc::ptr_eq(layer.source.as_ref().unwrap(), &source), "the original is kept");
+    assert!(layer.pending_operations.is_empty(), "no pixel work");
+    let straight = image(&mut engine, 1_000_000_000);
+    assert_rotation(&straight, &original, geometry.to_canvas(), 2., "placed photo");
+}
+
+#[test]
+fn growing_past_a_filled_edge_adds_transparent_canvas() {
+    let (mut engine, _input) = gradients();
+    let original = image(&mut engine, 2_000_000_000);
+    engine.apply_canvas_geometry(&geometry([0, 0], [600, 400])).unwrap();
+    let grown = image(&mut engine, 3_000_000_000);
+    grown.crop([0, 0], SIZE).assert_eq(&original, "the drawing");
+    for (x, y) in [(SIZE[0], 10), (500, 100), (100, SIZE[1]), (599, 399)] {
+        assert_eq!(grown.rgba[((y * 600 + x) * 4 + 3) as usize], 0, "transparent at {x}, {y}");
+    }
+}
+
 /// Timing, not a gate: `cargo test --release -p layer-render-wgpu --test
 /// canvas_geometry -- --ignored --nocapture`.
 #[test]
@@ -267,3 +432,4 @@ fn canvas_geometry_timing_on_a_24_megapixel_photo() {
     let frame = settle(&mut engine);
     println!("undo the rebase: {:.2} ms, first frame to GPU idle {:.1} ms", undo.as_secs_f64() * 1e3, frame.as_secs_f64() * 1e3);
 }
+

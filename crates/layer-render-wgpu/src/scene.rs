@@ -1299,14 +1299,22 @@ impl Scene {
                     }
                 }
             }
-            self.jobs.push(Job::Copy {
-                source: self.pool[out].texture.clone(),
-                source_origin: [0; 2],
-                destination,
-                origin: [0, 0],
-                width: 256,
-                height: 256,
-            });
+            let written = if matches!(op.kind, LayerOperationKind::Fill { .. } | LayerOperationKind::Gradient { .. } | LayerOperationKind::Figure(_)) {
+                PixelRect::full(extent).page_local(c)
+            } else {
+                PixelRect::full([PAGE_SIZE; 2])
+            };
+            if !written.is_empty() {
+                let origin = [written.min_x(), written.min_y()];
+                self.jobs.push(Job::Copy {
+                    source: self.pool[out].texture.clone(),
+                    source_origin: origin,
+                    destination,
+                    origin,
+                    width: written.width(),
+                    height: written.height(),
+                });
+            }
             self.free(out);
             self.free(mask);
         }

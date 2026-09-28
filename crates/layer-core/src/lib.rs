@@ -43,7 +43,7 @@ mod warp;
 pub use warp::{MeshMap, Tessellation};
 mod project;
 mod canvas_geometry;
-pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasRect, GeometryLimits};
+pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits};
 mod project_storage;
 pub use project_storage::SelectionIndex as ProjectSelections;
 mod history_budget;

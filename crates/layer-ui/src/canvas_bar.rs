@@ -14,11 +14,12 @@ pub enum CanvasBarKind {
     SelectionLayer,
     LayerMask,
     Guide,
+    Crop,
 }
 impl CanvasBarKind {
     /// Kinds that keep their completion at the bottom edge while the bar is turned off.
     fn essential(self) -> bool {
-        matches!(self, Self::Placement | Self::Transform | Self::Polygon)
+        matches!(self, Self::Placement | Self::Transform | Self::Polygon | Self::Crop)
     }
 }
 
@@ -181,6 +182,20 @@ pub(crate) fn short_label(command: CommandId) -> &'static str {
         CommandId::BorderSelection => "Border…",
         CommandId::SmoothSelection => "Smooth…",
         CommandId::TransformSelectionOutline => "Transform Outline",
+        CommandId::CropRatioFree => "Free",
+        CommandId::CropRatioOriginal => "Original",
+        CommandId::CropRatioSquare => "1:1",
+        CommandId::CropRatioFourFive => "4:5",
+        CommandId::CropRatioTwoThree => "2:3",
+        CommandId::CropRatioFiveSeven => "5:7",
+        CommandId::CropRatioSixteenNine => "16:9",
+        CommandId::CropSwapOrientation => "",
+        CommandId::CropOverlayThirds => "Thirds",
+        CommandId::CropOverlayGrid => "Grid",
+        CommandId::CropOverlayDiagonal => "Diagonal",
+        CommandId::CropOverlayGolden => "Golden Ratio",
+        CommandId::CropDeleteCroppedPixels => "Delete Cropped",
+        CommandId::StraightenToGuide => "Straighten",
         _ => command.label(),
     }
 }
@@ -358,17 +373,39 @@ impl<R: CanvasRenderer> UiSession<R> {
         if !self.rulers.visible || !matches!(tool, LayerCanvasTool::Ruler { .. } | LayerCanvasTool::Move) {
             return None;
         }
-        self.selected_ruler()?;
+        let ruler = self.selected_ruler()?;
+        let straight = matches!(ruler.geometry, layer_core::RulerGeometry::Straight { .. });
         Some(Plan {
             kind: CanvasBarKind::Guide,
             label: None,
-            items: [CommandId::DeleteRuler, CommandId::SnapRulers, CommandId::ShowRulers].map(PlanItem::Command).into(),
+            items: [CommandId::DeleteRuler, CommandId::SnapRulers, CommandId::ShowRulers]
+                .into_iter()
+                .chain(straight.then_some(CommandId::StraightenToGuide))
+                .map(PlanItem::Command)
+                .collect(),
             completion: Vec::new(),
             placement: None,
         })
     }
 
     fn canvas_bar_plan(&self) -> Option<Plan> {
+        let completion = [CommandId::CancelTransform, CommandId::ApplyTransform];
+        if self.cropping() {
+            return Some(Plan {
+                kind: CanvasBarKind::Crop,
+                label: None,
+                items: self
+                    .state
+                    .tool_actions
+                    .iter()
+                    .map(|a| a.command)
+                    .filter(|id| !completion.contains(id))
+                    .map(PlanItem::Command)
+                    .collect(),
+                completion: completion.map(PlanItem::Command).into(),
+                placement: Some(CanvasBarPlacement::BottomEdge),
+            });
+        }
         if !self.operation.active() {
             let polygon = self.layer_interaction.tool
                 == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon })
@@ -384,7 +421,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 placement: Some(CanvasBarPlacement::BottomEdge),
             });
         }
-        let completion = [CommandId::CancelTransform, CommandId::ApplyTransform];
         let count = self.operation.placement_count();
         let label = if self.operation.outline() {
             Some(short_label(CommandId::TransformSelectionOutline).into())
@@ -418,7 +454,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn canvas_bar_anchor(&self, kind: CanvasBarKind) -> Option<[f32; 4]> {
         match kind {
             CanvasBarKind::Placement | CanvasBarKind::Transform => self.transform_document_bounds(),
-            CanvasBarKind::Polygon | CanvasBarKind::QuickMask | CanvasBarKind::SelectionLayer | CanvasBarKind::LayerMask => None,
+            CanvasBarKind::Polygon
+            | CanvasBarKind::QuickMask
+            | CanvasBarKind::SelectionLayer
+            | CanvasBarKind::LayerMask
+            | CanvasBarKind::Crop => None,
             CanvasBarKind::Selection => self.canvas_bar.selection.as_ref().and_then(|s| s.1),
             CanvasBarKind::Guide => {
                 let handles = self.guide_handles();
@@ -752,7 +792,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 points.extend(self.transform_hull()?);
                 points
             }
-            CanvasBarKind::Polygon | CanvasBarKind::QuickMask | CanvasBarKind::SelectionLayer | CanvasBarKind::LayerMask => {
+            CanvasBarKind::Polygon
+            | CanvasBarKind::QuickMask
+            | CanvasBarKind::SelectionLayer
+            | CanvasBarKind::LayerMask
+            | CanvasBarKind::Crop => {
                 return None;
             }
             CanvasBarKind::Guide => {
@@ -847,7 +891,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             CanvasBarKind::QuickMask | CanvasBarKind::SelectionLayer | CanvasBarKind::LayerMask => {
                 sections.extend(self.application_menu(ApplicationMenu::Layer).sections)
             }
-            CanvasBarKind::Placement | CanvasBarKind::Transform | CanvasBarKind::Polygon | CanvasBarKind::Guide => (),
+            CanvasBarKind::Placement
+            | CanvasBarKind::Transform
+            | CanvasBarKind::Polygon
+            | CanvasBarKind::Guide
+            | CanvasBarKind::Crop => (),
         }
         sections.push(vec![toggle]);
         Some(

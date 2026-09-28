@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2 and M3.1. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3.1 and M3.2. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -710,6 +710,11 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - a non-modal Refine panel for Grow, Shrink, Feather, Border and Smooth, with a live preview;
   - Transform Outline (Free and Uniform only);
   - Refine ▾ with Feather as its primary command.
+- **M3.2** on GTK, Web and Android:
+  - the Crop tool with Ratio and Overlay choices, Swap, Straighten (a drawn line or an angle), Delete Cropped Pixels, Reset, and Fit on the crop bar;
+  - a dimmed crop overlay drawn by the shared renderer;
+  - Straighten Image to Guide on the guide bar;
+  - Crop in the Photo workspace.
 
 **Follow-ups**
 - **Erase right after a stroke:** an Erase on a raster that is still pending, or that holds watercolor or wet state, damages the whole layer so the layer settles. Clearing right after a stroke therefore rewrites every page. It is a still-frame cost.
@@ -729,6 +734,9 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **Web frame rate on tablets:** the Web host redraws the whole WebGPU canvas every animation frame, which limits motion on the Huion even without other work. Skip unchanged presents.
 - **Canvas size changes:** the first frame after one recomposes the whole display. Recompose visible tiles first, and show the shifted old display meanwhile. Keeping layer pages across the change (local branch `canvas-resize-textures`) did not shorten it.
 - **Flaky test:** `live_display::tests::moving_transforms_drawn_into_the_display_match_recomposition_and_release_exactly` fails intermittently under heavy parallel GPU load, also on `origin/main`.
+- **Straighten and Delete Cropped Pixels** leave vacated transparent pages until M3.3's pruning. Delete Cropped Pixels trims masks by tile, so a band under 256 px of mask coverage can remain.
+- **Web on a tablet:** twice, interior tiles drew white after a crop or straighten Apply in the Huion's Chrome; it did not recur in six later runs.
+- **Android Tool Options numbers** that are not sliders need two taps: one shows the field, one focuses it.
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
 - **Apple and Windows:**
@@ -742,4 +750,4 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M3.2 to M3.7, and M4. M2 is complete. Record milestone completion in the research record's section 7.
+**Remaining:** M3.3 to M3.7, and M4. M2 is complete. Record milestone completion in the research record's section 7.

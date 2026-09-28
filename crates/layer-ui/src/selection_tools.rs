@@ -174,38 +174,56 @@ impl SelectionOptions {
         Ok(())
     }
     fn corners(&self, start: Point, end: Point, modifiers: Modifiers) -> (Point, Point) {
-        let mut dx = end.x - start.x;
-        let mut dy = end.y - start.y;
-        let centered = self.from_center || modifiers.alt;
-        if self.constraint == SelectionConstraint::Size {
-            let scale = if centered { 0.5 } else { 1. };
-            dx = self.size[0] * scale * if dx < 0. { -1. } else { 1. };
-            dy = self.size[1] * scale * if dy < 0. { -1. } else { 1. };
-        } else if modifiers.shift || self.constraint == SelectionConstraint::Ratio {
-            let ratio = if modifiers.shift {
-                1.
-            } else {
-                self.ratio[0] / self.ratio[1]
-            };
-            let width = dx.abs().max(dy.abs() * ratio);
-            dx = width * if dx < 0. { -1. } else { 1. };
-            dy = width / ratio * if dy < 0. { -1. } else { 1. };
-        }
-        (
-            if centered {
-                Point {
-                    x: start.x - dx,
-                    y: start.y - dy,
-                }
-            } else {
-                start
-            },
-            Point {
-                x: start.x + dx,
-                y: start.y + dy,
-            },
+        constrained_corners(
+            self.constraint,
+            self.ratio,
+            self.size,
+            self.from_center || modifiers.alt,
+            start,
+            end,
+            modifiers.shift,
         )
     }
+}
+
+/// Opposite corners of a rectangle dragged from `start` to `end`: a fixed
+/// width-to-height `ratio`, a fixed `size`, or free. `centered` grows it about
+/// `start`, and `square` forces 1:1 unless the size is fixed.
+pub(super) fn constrained_corners(
+    constraint: SelectionConstraint,
+    ratio: [f32; 2],
+    size: [f32; 2],
+    centered: bool,
+    start: Point,
+    end: Point,
+    square: bool,
+) -> (Point, Point) {
+    let mut dx = end.x - start.x;
+    let mut dy = end.y - start.y;
+    if constraint == SelectionConstraint::Size {
+        let scale = if centered { 0.5 } else { 1. };
+        dx = size[0] * scale * if dx < 0. { -1. } else { 1. };
+        dy = size[1] * scale * if dy < 0. { -1. } else { 1. };
+    } else if square || constraint == SelectionConstraint::Ratio {
+        let ratio = if square { 1. } else { ratio[0] / ratio[1] };
+        let width = dx.abs().max(dy.abs() * ratio);
+        dx = width * if dx < 0. { -1. } else { 1. };
+        dy = width / ratio * if dy < 0. { -1. } else { 1. };
+    }
+    (
+        if centered {
+            Point {
+                x: start.x - dx,
+                y: start.y - dy,
+            }
+        } else {
+            start
+        },
+        Point {
+            x: start.x + dx,
+            y: start.y + dy,
+        },
+    )
 }
 #[derive(Default)]
 pub(super) struct SelectionTools {

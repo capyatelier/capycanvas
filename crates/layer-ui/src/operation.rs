@@ -123,6 +123,9 @@ struct Transaction {
 #[derive(Default)]
 pub(super) struct Operation {
     current: Option<Transaction>,
+    /// An open crop is a canvas operation too, so idle checks wait on it.
+    pub crop: Option<super::crop::CropSession>,
+    pub crop_options: super::crop::CropOptions,
     serial: u64,
     pub aspect: bool,
     pub interpolation: Option<Interpolation>,
@@ -130,6 +133,9 @@ pub(super) struct Operation {
 }
 impl Operation {
     pub fn active(&self) -> bool {
+        self.current.is_some() || self.crop.is_some()
+    }
+    pub fn transforming(&self) -> bool {
         self.current.is_some()
     }
     pub fn placing(&self) -> bool {
@@ -164,6 +170,7 @@ impl Operation {
     }
     pub fn dragging(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.drag.is_some())
+            || self.crop.as_ref().is_some_and(super::crop::CropSession::dragging)
     }
     pub fn placement_count(&self) -> usize {
         self.current
@@ -190,7 +197,7 @@ fn sub(a: Point, b: Point) -> Point {
         y: a.y - b.y,
     }
 }
-fn local_handle(bounds: Rect, side: [f32; 2]) -> Point {
+pub(super) fn local_handle(bounds: Rect, side: [f32; 2]) -> Point {
     let c = center(bounds);
     Point {
         x: c.x + side[0] * (bounds.max.x - c.x),
@@ -199,7 +206,7 @@ fn local_handle(bounds: Rect, side: [f32; 2]) -> Point {
 }
 /// Half the side of a drawn transform handle, in logical pixels.
 pub(super) const HANDLE_HALF_SIZE: f32 = 3.5;
-const HANDLES: [[f32; 2]; 8] = [
+pub(super) const HANDLES: [[f32; 2]; 8] = [
     [-1., -1.],
     [0., -1.],
     [1., -1.],
@@ -322,6 +329,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn begin_transform(&mut self) -> Result<(), String> {
         self.require_idle()?;
+        if self.cropping() {
+            return Err("Apply or cancel the crop first".into());
+        }
         if !self.can_transform() {
             return Err("Select unlocked paint content or a layer mask".into());
         }
@@ -423,6 +433,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn finish_transform(&mut self, apply: bool) -> Result<(), String> {
         self.require_idle()?;
+        if self.cropping() {
+            return self.finish_crop(apply);
+        }
         if self.operation.placing() {
             return self.finish_layer_placement(apply);
         }
@@ -454,6 +467,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn cancel_transform(&mut self) -> Result<bool, String> {
+        if self.cropping() {
+            self.finish_crop(false)?;
+            return Ok(true);
+        }
         if self.operation.placing() {
             self.finish_layer_placement(false)?;
             return Ok(true);
@@ -479,6 +496,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(true)
     }
     pub(super) fn reconcile_transform(&mut self) {
+        self.reconcile_crop();
         if self
             .operation
             .current
@@ -694,6 +712,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn reorient_transform(&mut self, command: CommandId) -> Result<(), String> {
         self.require_idle()?;
+        if command == CommandId::ResetTransform && self.cropping() {
+            return self.reset_crop();
+        }
         let t = self.operation.current.as_mut().ok_or("Start a transform first")?;
         let quarter = std::f32::consts::FRAC_PI_2;
         let (flip, turn) = match command {
@@ -726,6 +747,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.update_transform()
     }
     pub(super) fn cancel_transform_drag(&mut self) -> Result<bool, String> {
+        if self.cancel_crop_drag() {
+            return Ok(true);
+        }
         let Some(t) = &mut self.operation.current else {
             return Ok(false);
         };
@@ -738,6 +762,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(true)
     }
     pub(super) fn transform_touch_hit(&self, position: [f32; 2]) -> bool {
+        if self.cropping() {
+            return self.crop_touch_hit(position);
+        }
         let Some(t) = self.operation.current.as_ref() else { return false; };
         let Some(inverse) = t.basis.inverse() else { return false; };
         let p = self.state.camera.input_transform().map(Point { x: position[0], y: position[1] });
@@ -955,7 +982,20 @@ fn quad_of(bounds: Rect, inner: Option<Projective>, outer: Affine) -> [Point; 4]
 fn midpoint(a: Point, b: Point) -> Point {
     Point { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 }
 }
-fn inside_convex(quad: &[Point; 4], p: Point) -> bool {
+/// The handle nearest `p` within `reach`, measured after `to_world`.
+pub(super) fn nearest_handle<H>(handles: impl IntoIterator<Item = (H, Point)>, p: Point, reach: f32, to_world: Affine) -> Option<H> {
+    let world = to_world.map(p);
+    handles
+        .into_iter()
+        .map(|(handle, q)| {
+            let q = to_world.map(q);
+            ((world.x - q.x).hypot(world.y - q.y), handle)
+        })
+        .filter(|(d, _)| *d <= reach)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, handle)| handle)
+}
+pub(super) fn inside_convex(quad: &[Point; 4], p: Point) -> bool {
     let side = |a: Point, b: Point| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
     let sides = [0, 1, 2, 3].map(|i| side(quad[i], quad[(i + 1) % 4]));
     sides.iter().all(|s| *s >= 0.) || sides.iter().all(|s| *s <= 0.)
@@ -1205,17 +1245,7 @@ impl Transaction {
         add(top, Point { x: s * distance, y: -c * distance })
     }
     fn hit(&self, p: Point, reach: f32) -> Option<Handle> {
-        let world = self.basis.map(p);
-        let distance = |q: Point| {
-            let q = self.basis.map(q);
-            (world.x - q.x).hypot(world.y - q.y)
-        };
-        self.handles(reach)
-            .into_iter()
-            .map(|(handle, q)| (distance(q), handle))
-            .filter(|(d, _)| *d <= reach)
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, handle)| handle)
+        nearest_handle(self.handles(reach), p, reach, self.basis)
             .or_else(|| inside_convex(&self.corners(), p).then_some(Handle::Move))
     }
     fn drag_pose(&self, drag: &Drag, p: Point, modifiers: Modifiers, aspect: bool) -> Pose {

@@ -101,6 +101,7 @@ enum Command {
     SelectionPaint(u64, layer_render::SelectionPaint),
     CancelSelectionPaint(u64),
     SelectionOverlay(Option<layer_render::SelectionOverlay>),
+    CropOverlay(Option<layer_render::CropOverlay>),
     QuickMaskThumbnail(Option<layer_core::Selection>),
     Region(u64, layer_render::RegionRequest),
     CancelRegion(u64),
@@ -185,6 +186,7 @@ pub struct RenderWorker {
     selection_ack: Option<Result<bool, String>>,
     selection_paint: Option<Result<layer_render::SelectionPaintResult, String>>,
     selection_overlay: Option<layer_render::SelectionOverlay>,
+    crop_overlay: Option<layer_render::CropOverlay>,
     quick_thumbnail: Option<layer_core::Selection>,
     pub(super) clock: Arc<crate::wayland::FrameClock>,
     telemetry: Arc<std::sync::Mutex<layer_render::RendererTelemetry>>,
@@ -376,6 +378,7 @@ impl RenderWorker {
             selection_ack: None,
             selection_paint: None,
             selection_overlay: None,
+            crop_overlay: None,
             quick_thumbnail: None,
             clock,
             stroke_target: None,
@@ -642,6 +645,12 @@ impl CanvasRenderer for RenderWorker {
         if self.selection_overlay != overlay {
             let _ = self.send(Command::SelectionOverlay(overlay));
             self.selection_overlay = overlay; self.selection = None;
+        }
+    }
+    fn set_crop_overlay(&mut self, overlay: Option<layer_render::CropOverlay>) {
+        if self.crop_overlay != overlay {
+            let _ = self.send(Command::CropOverlay(overlay));
+            self.crop_overlay = overlay;
         }
     }
     fn request_region(
@@ -1194,6 +1203,7 @@ impl Worker {
                     deferred.retain(|c| !matches!(c, Command::Region(..)));
                     self.renderer.cancel_region();
                 }
+                Command::CropOverlay(overlay) => self.renderer.set_crop_overlay(overlay),
                 Command::Region(generation, request) => {
                     region_generation = generation;
                     let result = self.renderer.request_region(request);

@@ -79,6 +79,11 @@ impl RulerGeometry {
         };
         Self::from_drag(self.kind(), shift(a), shift(b.unwrap_or(a)))
     }
+    /// The same guide under a document transform, such as a straightened canvas.
+    pub fn transformed(self, affine: crate::Affine) -> Self {
+        let (a, b) = self.handles();
+        Self::from_drag(self.kind(), affine.map(a), affine.map(b.unwrap_or(a)))
+    }
     pub fn validate(self) -> Result<(), DocumentError> {
         let (a, b) = self.handles();
         if [a, b.unwrap_or(a)]

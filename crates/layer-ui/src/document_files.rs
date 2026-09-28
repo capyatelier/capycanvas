@@ -518,7 +518,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn require_document_interaction_idle(&self) -> Result<(), String> {
         self.require_idle()?;
-        if self.operation.active() || (self.region_tools.busy() && !self.refine_previewing()) {
+        if self.operation.active() {
+            Err(self.operation_refusal().into())
+        } else if self.region_tools.busy() && !self.refine_previewing() {
             Err("Finish the current canvas operation first".into())
         } else {
             Ok(())

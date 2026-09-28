@@ -11,6 +11,7 @@ pub enum LayerCanvasTool {
     Paint,
     Move,
     Transform,
+    Crop,
     Select,
     Selection { kind: SelectionTool },
     SelectColor { source: RegionSource },
@@ -934,7 +935,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             LayerAction::Tool { tool } => {
                 if tool.selection_tool().is_some() && tool.selection_tool()!=Some(SelectionTool::Tonal) { self.return_to_artwork()?; }
-                if self.selection_masks.target().is_some() && matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Move | LayerCanvasTool::LassoFill | LayerCanvasTool::Figure { .. }) {
+                if self.selection_masks.target().is_some() && matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Crop | LayerCanvasTool::Move | LayerCanvasTool::LassoFill | LayerCanvasTool::Figure { .. }) {
                     return Err("Return to artwork to use this tool".into());
                 }
                 if tool.picks_color() {
@@ -949,6 +950,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 if tool == LayerCanvasTool::Transform {
                     return self.begin_transform();
+                }
+                if tool == LayerCanvasTool::Crop {
+                    return self.begin_crop(None);
                 }
                 if let LayerCanvasTool::Ruler { kind } = tool {
                     self.rulers.kind = kind;
@@ -1717,6 +1721,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.layer_interaction.tool == LayerCanvasTool::Transform {
             return self.transform_pen(event, p);
         }
+        if self.layer_interaction.tool == LayerCanvasTool::Crop {
+            return self.crop_pen(event, p);
+        }
         if self.layer_interaction.tool == LayerCanvasTool::Move
             && self.operation_ruler_pen(event, p)?
         {
@@ -1986,6 +1993,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn append_layer_overlay(&self, segments: &mut Vec<layer_render::CursorSegment>) {
         self.append_ruler_overlay(segments);
         self.append_transform_overlay(segments);
+        self.append_crop_overlay(segments);
         let transform = self.document_to_logical();
         let mut path = |points: &[Point], closed: bool, affine: layer_core::Affine| {
             let mut distance = 0.;

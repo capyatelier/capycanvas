@@ -33,6 +33,7 @@ import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
@@ -246,7 +247,10 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
             .then(if (caption == null) Modifier else Modifier.focusProperties { canFocus = false })
             .combinedClickable(enabled = enabled || explained, role = Role.Button, onClickLabel = command.getString("label"),
                 onLongClick = if (explained) {{ reveal++ }} else null) { if (enabled) invoke(id) else reveal++ }
-            .semantics { if (!enabled) disabled() }
+            .semantics {
+                if (!enabled) disabled()
+                if (checkable) toggleableState = ToggleableState(command.getBoolean("selected"))
+            }
             .padding(horizontal = if (caption.isNullOrEmpty()) 0.dp else CaptionPadding.dp),
             horizontalArrangement = Arrangement.spacedBy(CaptionGap.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
             val tint = if (accent && enabled) colors.accentForeground else colors.text

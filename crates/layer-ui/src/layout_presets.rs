@@ -198,6 +198,7 @@ impl WorkspacePreset {
             (Lasso, &[RectangleSelect, EllipseSelect][..]),
             (AutoSelect, &[PolygonSelect][..]),
             (Fill, &[ColorSelect][..]),
+            (Figure, &[Crop][..]),
         ] {
             let before = layout
                 .panel(Panel::Toolbar)

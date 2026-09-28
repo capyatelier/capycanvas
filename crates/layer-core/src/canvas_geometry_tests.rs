@@ -83,8 +83,9 @@ fn fixture() -> Document {
 
 fn apply(doc: &Document, geometry: CanvasGeometry) -> Editor {
     let mut editor = Editor::new(doc.clone());
-    let edit = doc.canvas_geometry_edit(&geometry, limits()).unwrap();
-    editor.perform(edit).unwrap();
+    let plan = doc.canvas_geometry_plan(&geometry, limits()).unwrap();
+    assert!(plan.operations.is_empty(), "a crop that keeps its pixels needs no pixel work");
+    editor.perform(Edit::Batch(plan.edits)).unwrap();
     assert!(editor.document().extents_cover_canvas());
     editor
 }
@@ -183,11 +184,11 @@ fn hidden_pixels_survive_a_crop_and_return_when_the_canvas_grows_back() {
     let paint = doc.layers[3].id;
     assert_eq!(editor.document().layer(paint).unwrap().properties.extent, Some([512, 256]));
     let cropped = editor.document().clone();
-    let back = cropped.canvas_geometry_edit(&rect([-300, -100], [512, 256]), limits()).unwrap();
-    editor.perform(back).unwrap();
+    let back = cropped.canvas_geometry_plan(&rect([-300, -100], [512, 256]), limits()).unwrap();
+    editor.perform(Edit::Batch(back.edits)).unwrap();
     assert!(editor.document().extents_cover_canvas());
     same_state(editor.document(), &doc);
-    let usage = |d: &Document| d.canvas_geometry_edit(&rect([0, 0], [1, 1]), GeometryLimits {
+    let usage = |d: &Document| d.canvas_geometry_plan(&rect([0, 0], [1, 1]), GeometryLimits {
         project: ProjectLimits { tiles: 3, ..Default::default() },
         ..limits()
     });
@@ -198,7 +199,7 @@ fn hidden_pixels_survive_a_crop_and_return_when_the_canvas_grows_back() {
 fn limits_are_refused_before_anything_changes() {
     let doc = fixture();
     let refuse = |geometry: CanvasGeometry, limits: GeometryLimits| {
-        let error = doc.canvas_geometry_edit(&geometry, limits).unwrap_err();
+        let error = doc.canvas_geometry_plan(&geometry, limits).unwrap_err();
         assert_eq!(doc.check_canvas_geometry(&geometry, limits), Err(error.clone()));
         error
     };
@@ -210,9 +211,9 @@ fn limits_are_refused_before_anything_changes() {
     assert_eq!(refuse(rect([0, 0], [0, 256]), limits()), CanvasGeometryError::Empty);
     let bytes = GeometryLimits { project: ProjectLimits { raster_bytes: 1024, ..Default::default() }, ..limits() };
     assert_eq!(refuse(rect([0, 0], [10, 10]), bytes), CanvasGeometryError::RasterTooLarge);
-    let mut resampled = rect([0, 0], [10, 10]);
-    resampled.linear = Affine([2., 0., 0., 2., 0., 0.]);
-    assert!(matches!(refuse(resampled, limits()), CanvasGeometryError::Unsupported(_)));
+    let mut singular = rect([0, 0], [10, 10]);
+    singular.linear = Affine([2., 0., 4., 0., 0., 0.]);
+    assert!(matches!(refuse(singular, limits()), CanvasGeometryError::Unsupported(_)));
 }
 
 #[test]
@@ -247,4 +248,183 @@ fn rebasing_conjugates_a_placement_so_pixels_stay_put() {
         let is = document_point(result, paint, Point { x: local.x + x, y: local.y + y });
         assert!((is.x - was.x - 400.).abs() < 1e-2 && (is.y - was.y).abs() < 1e-2, "{is:?} {was:?}");
     }
+}
+
+/// A 1024×768 drawing whose paint layer fills every tile, with a mask.
+fn tiled() -> Document {
+    let mut doc = Document::new("tiled", 1024, 768);
+    let color = doc.color;
+    let keys: Vec<_> = (0..3).flat_map(|y| (0..4).map(move |x| [x, y])).collect();
+    doc.layers[0].raster = raster(RasterPlane::Color, color, &keys);
+    let mut mask = LayerMask::reveal_all(doc.allocate_layer_id(), Point::default());
+    mask.raster = raster(RasterPlane::Mask, color, &keys);
+    doc.layers[0].mask = Some(mask);
+    doc
+}
+
+fn deleting(origin: [i32; 2], size: [u32; 2]) -> CanvasGeometry {
+    CanvasGeometry { delete_outside: true, ..rect(origin, size) }
+}
+
+fn near(a: Point, b: Point) {
+    assert!((a.x - b.x).abs() < 1e-2 && (a.y - b.y).abs() < 1e-2, "{a:?} != {b:?}");
+}
+
+#[test]
+fn deleting_cropped_pixels_keeps_only_the_window_tiles_and_erases_edge_strips() {
+    let doc = tiled();
+    let paint = doc.layers[0].id;
+    let plan = doc.canvas_geometry_plan(&deleting([300, 260], [400, 300]), limits()).unwrap();
+    let mut editor = Editor::new(doc.clone());
+    editor.perform(Edit::Batch(plan.edits.clone())).unwrap();
+    let result = editor.document();
+    assert!(result.extents_cover_canvas());
+    let layer = result.layer(paint).unwrap();
+    assert_eq!(layer.properties.offset, Point { x: -44., y: -4. }, "rebased down by whole tiles");
+    assert_eq!(layer.properties.extent, Some([512, 512]), "the minimal tile-aligned extent");
+    let keys = |raster: &RasterRevision| raster.wait_data().unwrap().tiles.keys().map(|k| k.coordinate).collect::<Vec<_>>();
+    assert_eq!(keys(&layer.raster), [[0, 0], [0, 1], [1, 0], [1, 1]]);
+    assert_eq!(keys(&layer.mask.as_ref().unwrap().raster), [[0, 0], [0, 1], [1, 0], [1, 1]]);
+    let old = doc.layers[0].raster.wait_data().unwrap();
+    let new = layer.raster.wait_data().unwrap();
+    for (key, tile) in &new.tiles {
+        let was = TileKey { plane: key.plane, coordinate: [key.coordinate[0] + 1, key.coordinate[1] + 1] };
+        assert!(old.tiles[&was].same_capture(tile), "kept tiles are shared");
+    }
+    let strips: Vec<_> = plan.operations.iter().map(|(id, op)| {
+        assert_eq!(*id, paint, "masks are trimmed but never erased");
+        assert!(matches!(op.kind, LayerOperationKind::Erase { alpha_locked: false }));
+        assert!(op.bounds(result.target_extent(paint)).max.y <= 512.);
+        let bounds = op.coverage.initial.as_ref().unwrap().coverage_bounds();
+        [bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y]
+    }).collect();
+    assert_eq!(strips, [[0., 0., 512., 4.], [0., 304., 512., 512.], [0., 4., 44., 304.], [444., 4., 512., 304.]]);
+    for local in [Point { x: 44., y: 4. }, Point { x: 443., y: 303. }] {
+        let doc_point = document_point(result, paint, local);
+        assert!(doc_point.x >= 0. && doc_point.y >= 0. && doc_point.x < 400. && doc_point.y < 300.);
+    }
+    assert!(editor.undo().unwrap());
+    same_state(editor.document(), &doc);
+}
+
+#[test]
+fn a_tile_limit_refusal_clears_when_cropped_pixels_are_deleted() {
+    let doc = tiled();
+    let tight = GeometryLimits { project: ProjectLimits { tiles: 20, ..Default::default() }, ..limits() };
+    let crop = rect([300, 260], [400, 300]);
+    let error = doc.canvas_geometry_plan(&crop, tight).unwrap_err();
+    assert_eq!(error, CanvasGeometryError::TooManyTiles { limit: 20 });
+    assert!(error.exceeds_raster_limits());
+    doc.canvas_geometry_plan(&deleting([300, 260], [400, 300]), tight).unwrap();
+    let whole = doc.canvas_geometry_plan(&deleting([0, 0], [1024, 768]), limits());
+    assert_eq!(whole.unwrap_err(), CanvasGeometryError::Unchanged, "nothing hidden to delete");
+}
+
+fn straighten(doc: &Document, angle: f32, rect: CanvasRect, delete_outside: bool) -> CanvasGeometry {
+    let center = Point { x: doc.width as f32 / 2., y: doc.height as f32 / 2. };
+    CanvasGeometry {
+        rect,
+        linear: Affine::around(center, [1., 1.], -angle, Point::default()),
+        interpolation: Interpolation::Bicubic,
+        delete_outside,
+    }
+}
+
+#[test]
+fn straightening_resamples_paint_and_masks_into_a_frame_that_keeps_hidden_corners() {
+    let mut doc = fixture();
+    doc.layers[3].properties.locked = true;
+    let geometry = straighten(&doc, 0.2, CanvasRect { origin: [40, 30], size: [430, 190] }, false);
+    let to_canvas = geometry.to_canvas();
+    let plan = doc.canvas_geometry_plan(&geometry, limits()).unwrap();
+    let mut editor = Editor::new(doc.clone());
+    editor.perform(Edit::Batch(plan.edits.clone())).unwrap();
+    let result = editor.document().clone();
+    assert!(result.extents_cover_canvas());
+    assert_eq!([result.width, result.height], [430, 190]);
+    let paint = doc.layers[3].id;
+    let mask = doc.layers[3].mask.as_ref().unwrap().id;
+    let child = doc.layers[1].id;
+    let targets: Vec<_> = plan.operations.iter().map(|(id, _)| *id).collect();
+    assert_eq!(targets, [child, paint, mask], "the locked layer and its mask follow");
+    for (id, op) in &plan.operations {
+        let LayerOperationKind::Transform(transform) = &op.kind else { panic!("a resample") };
+        assert_eq!(transform.interpolation, Interpolation::Bicubic);
+        let map = transform.as_affine().unwrap();
+        let extent = doc.target_extent(*id);
+        let after = result.layer_transform(*id).inverse().unwrap();
+        let new_extent = result.target_extent(*id);
+        for corner in canvas_rect(extent).corners() {
+            let expected = after.map(to_canvas.map(doc.layer_transform(*id).map(corner)));
+            near(map.map(corner), expected);
+            assert!(expected.x >= -0.01 && expected.y >= -0.01, "{expected:?}");
+            assert!(expected.x <= new_extent[0] as f32 + 0.01 && expected.y <= new_extent[1] as f32 + 0.01);
+        }
+        assert!(is_translation(result.layer_transform(*id)));
+    }
+    let saved = doc.layers[0].id;
+    let before = doc.saved_selection(saved).unwrap();
+    let moved = result.saved_selection(saved).unwrap();
+    for p in [Point { x: 100., y: 100. }, Point { x: 200., y: 150. }] {
+        near(moved.affine.map(before.affine.inverse().unwrap().map(p)), to_canvas.map(p));
+    }
+    assert_eq!(result.selection, Some(doc.selection.as_ref().unwrap().transformed(to_canvas).unwrap()));
+    assert_eq!(result.rulers[0].geometry, doc.rulers[0].geometry.transformed(to_canvas));
+    let (start, _) = result.rulers[0].geometry.handles();
+    near(start, to_canvas.map(Point { x: 1., y: 2. }));
+    assert!(editor.undo().unwrap());
+    same_state(editor.document(), &doc);
+}
+
+#[test]
+fn straightening_turns_a_photo_placement_without_touching_its_pixels() {
+    let mut doc = fixture();
+    let photo = doc.allocate_layer_id();
+    let mut layer = Layer::paint(photo, "Photo");
+    layer.source = Some(Arc::new(photo_source([300, 200])));
+    layer.properties.offset = Point { x: 20., y: 10. };
+    let mut mask = LayerMask::reveal_all(doc.allocate_layer_id(), Point { x: 20., y: 10. });
+    mask.linked = false;
+    layer.mask = Some(mask);
+    doc.layers.insert(0, layer);
+    let geometry = straighten(&doc, -0.3, CanvasRect { origin: [10, 5], size: [490, 240] }, false);
+    let plan = doc.canvas_geometry_plan(&geometry, limits()).unwrap();
+    assert!(plan.operations.iter().all(|(id, _)| *id != photo && doc.layers[0].mask.as_ref().unwrap().id != *id));
+    let mut editor = Editor::new(doc.clone());
+    editor.perform(Edit::Batch(plan.edits)).unwrap();
+    let result = editor.document();
+    let before = doc.layer(photo).unwrap();
+    let after = result.layer(photo).unwrap();
+    assert!(Arc::ptr_eq(before.source.as_ref().unwrap(), after.source.as_ref().unwrap()));
+    assert!(after.raster == before.raster, "losslessly placed");
+    let mask = before.mask.as_ref().unwrap().id;
+    for id in [photo, mask] {
+        for p in [Point { x: 0., y: 0. }, Point { x: 300., y: 200. }] {
+            near(result.layer_transform(id).map(p), geometry.to_canvas().map(doc.layer_transform(id).map(p)));
+        }
+    }
+}
+
+#[test]
+fn straightening_with_deleted_pixels_frames_the_canvas_and_erases_beyond_it() {
+    let doc = tiled();
+    let paint = doc.layers[0].id;
+    let geometry = straighten(&doc, 0.1, CanvasRect { origin: [100, 80], size: [800, 600] }, true);
+    let plan = doc.canvas_geometry_plan(&geometry, limits()).unwrap();
+    let mut editor = Editor::new(doc.clone());
+    editor.perform(Edit::Batch(plan.edits.clone())).unwrap();
+    let result = editor.document();
+    assert_eq!(result.layer(paint).unwrap().properties.offset, Point::default());
+    let extent = result.target_extent(paint);
+    let kinds: Vec<_> = plan.operations.iter().filter(|(id, _)| *id == paint).map(|(_, op)| {
+        let bounds = op.coverage.initial.as_ref().unwrap().coverage_bounds();
+        (matches!(op.kind, LayerOperationKind::Erase { .. }), [bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y])
+    }).collect();
+    assert!(!kinds[0].0);
+    assert_eq!(&kinds[1..], [
+        (true, [800., 0., extent[0] as f32, extent[1] as f32]),
+        (true, [0., 600., 800., extent[1] as f32]),
+    ]);
+    let tight = GeometryLimits { project: ProjectLimits { tiles: 20, ..Default::default() }, ..limits() };
+    assert_eq!(doc.canvas_geometry_plan(&geometry, tight).unwrap_err(), CanvasGeometryError::TooManyTiles { limit: 20 });
 }

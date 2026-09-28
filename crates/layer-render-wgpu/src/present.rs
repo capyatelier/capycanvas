@@ -3,7 +3,7 @@
 use crate::{BackdropBlurStyle, BackdropRegion, GpuRasterError, SdrSurfaceColor, Uploads, WgpuRasterizer};
 use layer_render::{CanvasRenderer, CursorSegment, ViewState};
 
-const CAMERA_SIZE: u64 = 128;
+const CAMERA_SIZE: u64 = 160;
 const SOURCE_CAMERA: u32 = 256;
 
 /// A native UI's document overview, sampled from the existing GPU image.
@@ -79,12 +79,12 @@ pub struct ViewportPresenter {
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
     uploads: Uploads,
-    camera_data: Option<[f32; 32]>,
+    camera_data: Option<[f32; 40]>,
     quarter_turns: u32,
     retained: bool,
     history: crate::present_damage::Retained,
     backdrop: Option<crate::backdrop_blur::BackdropBlur>,
-    source_camera: Option<[f32; 32]>,
+    source_camera: Option<[f32; 40]>,
     presented_area: u64,
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
@@ -321,7 +321,7 @@ impl ViewportPresenter {
         if self.standalone_overview || !crate::present_screen::ScreenCheck::counts(&self.screen_options) {
             return false;
         }
-        let signature: Vec<u32> = camera
+        let signature: Vec<u32> = camera[..32]
             .iter()
             .chain(&self.hdr_options)
             .chain(&self.screen_options)
@@ -872,7 +872,9 @@ impl ViewportPresenter {
             .0;
         let overlay = renderer.selection_overlay;
         let overlay_color = overlay.map_or([0.;4],|o| o.color);
-        let data: [f32; 32] = [
+        let crop = renderer.crop_overlay.filter(|c| c.to_crop.inverse().is_some());
+        let [ca, cb, cc, cd, cx, cy] = crop.map_or([0.; 6], |c| c.to_crop.0);
+        let data: [f32; 40] = [
             d / det,
             -b / det,
             -c / det,
@@ -899,6 +901,8 @@ impl ViewportPresenter {
             inverse[3],
             self.quarter_turns as f32, overlay.filter(|o|o.active).map_or(0.,|o| if o.protected { 2. } else { 1. }), f32::from(renderer.selection_previews.buffer.is_some()), 1.,
             overlay_color[0], overlay_color[1], overlay_color[2], overlay_color[3],
+            ca, cb, cc, cd,
+            cx, cy, crop.map_or(0., |c| c.dim.clamp(0., 1.)), f32::from(crop.is_some()),
         ];
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {

@@ -36,6 +36,7 @@ pub(crate) struct Recorder {
     pub(crate) filter_preview_cancels: usize,
     pub(crate) reject_filter_previews: bool,
     pub(crate) max_dimension: Option<u32>,
+    pub(crate) crop_overlay: Option<layer_render::CropOverlay>,
 }
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
@@ -49,6 +50,7 @@ impl CanvasRenderer for Recorder {
     }
     fn supports_tiled_sources(&self) -> bool { self.tiled_sources }
     fn max_document_dimension(&self) -> u32 { self.max_dimension.unwrap_or(u32::MAX) }
+    fn set_crop_overlay(&mut self, overlay: Option<layer_render::CropOverlay>) { self.crop_overlay = overlay; }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry_enabled = enabled;
     }

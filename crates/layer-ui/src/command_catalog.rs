@@ -480,6 +480,12 @@ fn action_description(action: &UiAction) -> &'static str {
             BorderSelection => "Replace the selection with a band of the chosen width along its edge.",
             SmoothSelection => "Fill notches and remove spikes narrower than twice the radius, keeping the canvas edges.",
             TransformSelectionOutline => "Move, scale, rotate or flip the selection outline; the pixels stay where they are.",
+            Crop => "Drag the crop handles, choose a ratio or straighten, then apply. Cropped pixels stay hidden on their layers unless Delete Cropped Pixels is on; dragging past the canvas adds transparent canvas.",
+            CropSwapOrientation => "Swap the crop between landscape and portrait.",
+            CropCycleOverlay => "Show the next crop guide: thirds, grid, diagonal or golden ratio.",
+            CropStraighten => "Draw a line along something that should be level or upright; the crop turns to match.",
+            CropDeleteCroppedPixels => "Discard the pixels outside the crop when it is applied, instead of keeping them hidden. Placed photos keep their original.",
+            StraightenToGuide => "Start a crop turned level with the selected straight guide.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -544,7 +550,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             },
             T::Hand => ToolCategory::Navigation,
             T::PickVisible | T::PickLayer => ToolCategory::ColorSampling,
-            T::Move | T::Transform => ToolCategory::MoveTransform,
+            T::Move | T::Transform | T::Crop => ToolCategory::MoveTransform,
             T::Figure { .. } | T::Ruler { .. } => ToolCategory::ShapesRulers,
             T::Gradient { .. } | T::LassoFill | T::Region { fill: true, .. } => {
                 ToolCategory::FillGradient
@@ -1060,6 +1066,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let apply_refusal = active.and_then(|l| art_layers::apply_mask_refusal(l.kind));
         let reason = match command {
             C::Undo => "Nothing to undo",
+            C::Redo if self.cropping() => "Apply or cancel the crop first",
             C::Redo => "Nothing to redo",
             C::UndoWorkspace | C::RedoWorkspace if self.state.customization.header_editing => {
                 "Finish customizing the title bar first"
@@ -1110,7 +1117,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::QuickMask | C::NewSelectionLayer | C::PlacementOriginalSize | C::ScaleRotate
                 if self.operation.active() && !self.operation.placing() =>
             {
-                "Apply or cancel the transform first"
+                self.operation_refusal()
             }
             C::PlacementOriginalSize => "Place an image first",
             C::Reselect if selection => "Deselect before restoring the previous selection",
@@ -1135,7 +1142,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::RepairSourceProfile | C::RasterizeSource if document.active_mask => "Return to the layer's artwork first",
             C::RepairSourceProfile | C::RasterizeSource => "Select an unlocked retained image layer",
             C::ApplyTransform if self.region_tools.applying_transform() => "Applying the transform",
-            C::TransformPerspective if self.operation.active() => "Choose Distort first",
+            C::TransformPerspective if self.operation.transforming() => "Choose Distort first",
             C::ApplyTransform
             | C::CancelTransform
             | C::TransformFlipHorizontal
@@ -1176,6 +1183,24 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or(UNAVAILABLE),
             C::CanvasSize => self.canvas_geometry_refusal().unwrap_or(UNAVAILABLE),
+            C::Crop if self.operation.transforming() => "Apply or cancel the transform first",
+            C::Crop => self.canvas_geometry_refusal().unwrap_or(UNAVAILABLE),
+            C::CropRatioFree
+            | C::CropRatioOriginal
+            | C::CropRatioSquare
+            | C::CropRatioFourFive
+            | C::CropRatioTwoThree
+            | C::CropRatioFiveSeven
+            | C::CropRatioSixteenNine
+            | C::CropSwapOrientation
+            | C::CropOverlayThirds
+            | C::CropOverlayGrid
+            | C::CropOverlayDiagonal
+            | C::CropOverlayGolden
+            | C::CropCycleOverlay
+            | C::CropStraighten
+            | C::CropDeleteCroppedPixels => "Choose the Crop tool first",
+            C::StraightenToGuide => self.straighten_to_guide_refusal().unwrap_or(UNAVAILABLE),
             C::CropCanvasToSelection => self.crop_to_selection_refusal().unwrap_or(UNAVAILABLE),
             C::GrowSelection | C::ShrinkSelection | C::FeatherSelection | C::BorderSelection | C::SmoothSelection => {
                 self.refine_refusal().unwrap_or(UNAVAILABLE)
@@ -1190,7 +1215,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::SelectionVisible | C::SelectionEditing | C::SelectionReference => "Choose a selection tool first",
             C::ZoomIn => "Already at the maximum zoom",
             C::ZoomOut => "Already at the minimum zoom",
-            _ if self.operation.active() => "Apply or cancel the transform first",
+            _ if self.operation.active() => self.operation_refusal(),
             _ if self.state.document_file.busy => "Wait for the current file operation",
             _ if locked => "The active layer is locked",
             C::ScaleRotate => "Select unlocked paint content or a layer mask",

@@ -488,6 +488,23 @@ command_ids! {
     BorderSelection,
     SmoothSelection,
     TransformSelectionOutline,
+    Crop,
+    CropRatioFree,
+    CropRatioOriginal,
+    CropRatioSquare,
+    CropRatioFourFive,
+    CropRatioTwoThree,
+    CropRatioFiveSeven,
+    CropRatioSixteenNine,
+    CropSwapOrientation,
+    CropOverlayThirds,
+    CropOverlayGrid,
+    CropOverlayDiagonal,
+    CropOverlayGolden,
+    CropCycleOverlay,
+    CropStraighten,
+    CropDeleteCroppedPixels,
+    StraightenToGuide,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -508,6 +525,10 @@ impl CommandId {
             Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
+                | Self::CropRatioFree | Self::CropRatioOriginal | Self::CropRatioSquare | Self::CropRatioFourFive
+                | Self::CropRatioTwoThree | Self::CropRatioFiveSeven | Self::CropRatioSixteenNine
+                | Self::CropOverlayThirds | Self::CropOverlayGrid | Self::CropOverlayDiagonal | Self::CropOverlayGolden
+                | Self::CropStraighten | Self::CropDeleteCroppedPixels
                 | Self::TransformFree | Self::TransformUniform | Self::TransformDistort | Self::TransformPerspective
                 | Self::TransformNearest | Self::TransformBilinear | Self::TransformBicubic
                 | Self::TransformWarp | Self::WarpGridThree | Self::WarpGridFour | Self::WarpGridFive
@@ -658,16 +679,31 @@ impl CommandId {
             Self::EditLayerContent => "brush",
             Self::LassoFill => "lasso-fill",
             Self::CanvasSize => "canvas-size",
-            Self::CropCanvasToSelection => "crop",
+            Self::CropCanvasToSelection | Self::Crop => "crop",
             Self::GrowSelection => "selection-grow",
             Self::ShrinkSelection => "selection-shrink",
             Self::FeatherSelection => "feather",
             Self::BorderSelection => "selection-border",
             Self::SmoothSelection => "edge-smooth",
             Self::TransformSelectionOutline => "transform-outline",
+            Self::CropRatioFree
+            | Self::CropRatioOriginal
+            | Self::CropRatioSquare
+            | Self::CropRatioFourFive
+            | Self::CropRatioTwoThree
+            | Self::CropRatioFiveSeven
+            | Self::CropRatioSixteenNine => "aspect-ratio",
+            Self::CropSwapOrientation => "swap-orientation",
+            Self::CropOverlayThirds
+            | Self::CropOverlayGrid
+            | Self::CropOverlayDiagonal
+            | Self::CropOverlayGolden
+            | Self::CropCycleOverlay => "crop-guides",
+            Self::CropStraighten | Self::StraightenToGuide => "straighten",
+            Self::CropDeleteCroppedPixels => "crop-delete",
         })
     }
-    pub const TOOLS: [Self; 26] = [
+    pub const TOOLS: [Self; 27] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::Pen,
@@ -687,6 +723,7 @@ impl CommandId {
         Self::ColorSelect,
         Self::Move,
         Self::ScaleRotate,
+        Self::Crop,
         Self::Hand,
         Self::Eyedropper,
         Self::Gradient,
@@ -862,6 +899,23 @@ impl CommandId {
             Self::BorderSelection => "Border Selection…",
             Self::SmoothSelection => "Smooth Selection…",
             Self::TransformSelectionOutline => "Transform Selection Outline",
+            Self::Crop => "Crop",
+            Self::CropRatioFree => "Free crop ratio",
+            Self::CropRatioOriginal => "Original crop ratio",
+            Self::CropRatioSquare => "Square crop (1:1)",
+            Self::CropRatioFourFive => "4:5 crop ratio",
+            Self::CropRatioTwoThree => "2:3 crop ratio",
+            Self::CropRatioFiveSeven => "5:7 crop ratio",
+            Self::CropRatioSixteenNine => "16:9 crop ratio",
+            Self::CropSwapOrientation => "Swap crop orientation",
+            Self::CropOverlayThirds => "Rule of thirds overlay",
+            Self::CropOverlayGrid => "Grid overlay",
+            Self::CropOverlayDiagonal => "Diagonal overlay",
+            Self::CropOverlayGolden => "Golden ratio overlay",
+            Self::CropCycleOverlay => "Cycle crop overlay",
+            Self::CropStraighten => "Straighten",
+            Self::CropDeleteCroppedPixels => "Delete Cropped Pixels",
+            Self::StraightenToGuide => "Straighten Image to Guide",
         }
     }
 }

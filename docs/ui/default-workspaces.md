@@ -85,6 +85,9 @@ inserts it above the selected layer, or replaces the selected filter while
 keeping its identity, mask and clipping. Cancel deletes the selected filter and
 closes the drawer, as one undoable step.
 
+Photo adds the Crop tool after Operation in the Tools toolbar on every host (see the
+[crop bar](canvas-action-bar.md#crop)).
+
 ## Workspace behavior
 
 - Fresh installations open Paint. Startup resumes the saved workspace when

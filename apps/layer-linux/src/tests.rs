@@ -41,6 +41,8 @@ mod notice;
 mod zoom_readout;
 #[path = "photo_edit_tests.rs"]
 mod photo_edit;
+#[path = "crop_tests.rs"]
+mod crop;
 #[path = "file_launch_tests.rs"]
 mod file_launch;
 #[path = "document_tab_tests.rs"]
@@ -9561,6 +9563,7 @@ fn native_frame_pacing() {
         ("Hand", None),
         ("Transform", None),
         ("Refine", None),
+        ("Crop", None),
     ] {
         let chosen = std::env::var("LAYER_PACING_BRUSH");
         if chosen.as_ref().is_ok_and(|s| s != name) || (name == "Refine" && chosen.is_err()) {
@@ -9573,6 +9576,14 @@ fn native_frame_pacing() {
             w.dispatch(UiAction::Invoke {
                 command: CommandId::Hand,
             });
+        } else if name == "Crop" {
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::FitCanvas,
+            });
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::Crop,
+            });
+            assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Crop);
         } else if name == "Transform" {
             let mut workspace = state(&w).workspace;
             workspace
@@ -9757,11 +9768,19 @@ fn native_frame_pacing() {
             .committed_strokes;
         *worker_stats.lock().unwrap() = Default::default();
         let camera = state(&w).camera;
-        let transform_path = (name == "Transform").then(|| {
-            let [x0, y0, x1, y1] = state(&w).canvas_bar.and_then(|b| b.anchor).expect("transform box");
-            let from = if distort { [x0, y0] } else { [(x0 + x1) * 0.5, (y0 + y1) * 0.5] };
-            (from, [(x1 - x0) * 0.17, (y1 - y0) * 0.13])
-        });
+        let transform_path = match name {
+            "Transform" => {
+                let [x0, y0, x1, y1] = state(&w).canvas_bar.and_then(|b| b.anchor).expect("transform box");
+                let from = if distort { [x0, y0] } else { [(x0 + x1) * 0.5, (y0 + y1) * 0.5] };
+                Some((from, [(x1 - x0) * 0.17, (y1 - y0) * 0.13]))
+            }
+            "Crop" => {
+                let document = w.gpu.borrow().as_ref().unwrap().session.engine().document().clone();
+                let [width, height] = [document.width as f32, document.height as f32];
+                Some(([width, height], [width * 0.17, height * 0.13]))
+            }
+            _ => None,
+        };
         let start = Instant::now();
         let mut first = true;
         let mut last_event = None;
@@ -9838,7 +9857,7 @@ fn native_frame_pacing() {
                     y: m[1] * x + m[3] * y + m[5],
                 };
             }
-            if preset.is_some() || name == "Transform" {
+            if preset.is_some() || transform_path.is_some() {
                 if preset.is_some() {
                     w.cursor_input(Some(event));
                 }
@@ -9887,7 +9906,7 @@ fn native_frame_pacing() {
         }
         if name == "Refine" {
             w.dispatch(UiAction::Selection { action: SelectionAction::CancelResize });
-        } else if preset.is_some() || name == "Transform" {
+        } else if preset.is_some() || transform_path.is_some() {
             w.input.send(
                 &w,
                 PenEvent {

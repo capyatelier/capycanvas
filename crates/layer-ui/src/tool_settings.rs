@@ -20,6 +20,8 @@ pub enum ToolActionGroup {
     TransformMode,
     TransformInterpolation,
     TransformWarpGrid,
+    CropRatio,
+    CropOverlay,
 }
 impl ToolActionGroup {
     pub fn segmented(self) -> bool {
@@ -32,6 +34,8 @@ impl ToolActionGroup {
             Self::TransformMode => "transform-mode",
             Self::TransformInterpolation => "transform-interpolation",
             Self::TransformWarpGrid => "transform-warp-grid",
+            Self::CropRatio => "crop-ratio",
+            Self::CropOverlay => "crop-overlay",
         }
     }
     pub fn label(self) -> &'static str {
@@ -40,6 +44,8 @@ impl ToolActionGroup {
             Self::SelectionSource => "Source",
             Self::TransformInterpolation => "Interpolation",
             Self::TransformWarpGrid => "Grid",
+            Self::CropRatio => "Ratio",
+            Self::CropOverlay => "Overlay",
         }
     }
 }
@@ -56,6 +62,11 @@ impl ToolSettingAction {
             TransformFree | TransformUniform | TransformDistort | TransformWarp => Some(ToolActionGroup::TransformMode),
             WarpGridThree | WarpGridFour | WarpGridFive => Some(ToolActionGroup::TransformWarpGrid),
             TransformNearest | TransformBilinear | TransformBicubic => Some(ToolActionGroup::TransformInterpolation),
+            CropRatioFree | CropRatioOriginal | CropRatioSquare | CropRatioFourFive | CropRatioTwoThree
+            | CropRatioFiveSeven | CropRatioSixteenNine => Some(ToolActionGroup::CropRatio),
+            CropOverlayThirds | CropOverlayGrid | CropOverlayDiagonal | CropOverlayGolden => {
+                Some(ToolActionGroup::CropOverlay)
+            }
             _ => None,
         }
     }

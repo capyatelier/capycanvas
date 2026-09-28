@@ -200,7 +200,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             preset: self.state.brush.preset,
             tools: self.tools.clone(),
             colors: self.state.colors.clone(),
-            canvas_tool: self.eyedropper.picking.previous.unwrap_or(self.layer_interaction.tool),
+            canvas_tool: self
+                .eyedropper
+                .picking
+                .previous
+                .or(self.operation.crop.as_ref().map(|crop| crop.previous()))
+                .unwrap_or(self.layer_interaction.tool),
             selection: self.selection_tools.options.clone(),
             region_values: self
                 .region_tools

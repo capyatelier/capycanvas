@@ -4,7 +4,7 @@ use super::*;
 use layer_core::{Document, LayerId, LayerKind};
 use serde_json::json;
 
-fn start(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
+pub(super) fn start(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
     let app = native_test_app(id);
     let w = fixture_workspace(&app);
     w.window.maximize();
@@ -18,7 +18,7 @@ fn start(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
     (app, w, input)
 }
 
-fn document(w: &Workspace) -> Document {
+pub(super) fn document(w: &Workspace) -> Document {
     w.gpu.borrow().as_ref().unwrap().session.engine().document().clone()
 }
 
@@ -76,7 +76,7 @@ fn menu_button(root: &gtk::Widget, label: &str) -> Option<gtk::MenuButton> {
 }
 
 /// Open a title bar menu with the mouse and click through `path`.
-fn choose(w: &Workspace, input: &mut RemoteInput, menu: &str, path: &[&str]) {
+pub(super) fn choose(w: &Workspace, input: &mut RemoteInput, menu: &str, path: &[&str]) {
     let button = menu_button(w.header.root.upcast_ref(), menu).unwrap_or_else(|| panic!("{menu} menu"));
     let popup = button.popover().unwrap();
     input.click(screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]));

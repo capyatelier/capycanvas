@@ -1071,7 +1071,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .toolbar-number-face.labeled { display: grid; grid-template-columns: 16px 1fr; grid-template-rows: 1fr 1fr; gap: 0 6px; padding: 4px 8px; text-align: left; }
 .toolbar-number-face.labeled svg { grid-row: 1 / 3; }
 .toolbar-face-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.toolbar-editor-popover { position: fixed; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--surface-radius); min-width: 220px; max-width: min(320px, 90vw); background: var(--panel); color: var(--text); }
+.toolbar-editor-popover { position: fixed; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--surface-radius); min-width: 220px; max-width: min(320px, 90vw); height: fit-content; max-height: calc(100vh - 12px); background: var(--panel); color: var(--text); }
 .toolbar-choice-menu { display: flex; flex-direction: column; gap: 2px; }
 .toolbar-choice-menu > button { display: flex; align-items: center; gap: 8px; text-align: left; min-height: 32px; }
 .toolbar-choice-menu svg { width: 16px; height: 16px; }

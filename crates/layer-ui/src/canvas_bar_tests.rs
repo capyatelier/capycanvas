@@ -1280,7 +1280,12 @@ fn guide_bar_anchors_to_the_selected_guide_under_ruler_and_move() {
     assert!((x0 - 200.).abs() < 0.01 && (y0 - 400.).abs() < 0.01 && (x1 - 400.).abs() < 0.01 && (y1 - 500.).abs() < 0.01);
     assert_eq!(
         bar_items(&bar.items),
-        [(CommandId::DeleteRuler, "Delete", false), (CommandId::SnapRulers, "Snap", true), (CommandId::ShowRulers, "Guides", true)]
+        [
+            (CommandId::DeleteRuler, "Delete", false),
+            (CommandId::SnapRulers, "Snap", true),
+            (CommandId::ShowRulers, "Guides", true),
+            (CommandId::StraightenToGuide, "Straighten", false),
+        ]
     );
     assert!(bar.completion.is_empty());
     let layout = s.canvas_bar_layout(&CanvasBarMeasure { completion: Vec::new(), ..measure(&bar, 80.) }).unwrap();

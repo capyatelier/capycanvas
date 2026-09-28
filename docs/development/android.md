@@ -204,7 +204,7 @@ APK calls, so test-APK benchmarks use the unminified build.
   transparency (off to high) and restores it afterwards. Results appear in
   logcat under `CapyDragPerf` and `CapyResizePerf`.
 - **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
-  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,selection,menus,refine`,
+  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,scaled,selection,menus,canvas_size,refine,crop`,
   `durationMs`, `width`, `height` and `transparency` (`off` to `high`) narrow or
   resize the run. Each scenario logs a `CapyBarPerf` line and writes
   `canvas-bar-benchmark/<label>.json` in external files; `ui_hz` and
@@ -213,8 +213,8 @@ APK calls, so test-APK benchmarks use the unminified build.
   2048 × 1536 document and at `width` × `height`, and logs the values sent and
   previews drawn. `-e refine grow` (or `shrink`, `border`) picks another
   operation, `-e refineSpan` the fraction of the track, and `-e refineBar off`
-  hides the canvas action bar. Photo drags are marked
-  by `capy-drag` trace sections; `capy.publish.native` and `capy.publish.parse`
+  hides the canvas action bar. `crop` drags a crop handle over a placed photo.
+  Photo drags are marked by `capy-drag` trace sections; `capy.publish.native` and `capy.publish.parse`
   time each model publication; `-e composeTrace true` adds a section per
   composable, which slows the frames it attributes.
 - **Canvas navigation and drawing.** `AndroidViewportBenchmarkTest` runs with

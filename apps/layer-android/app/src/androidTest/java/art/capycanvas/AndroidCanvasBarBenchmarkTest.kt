@@ -21,6 +21,7 @@ import org.junit.Rule
 import org.junit.Test
 import java.io.File
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
 
 class AndroidCanvasBarBenchmarkTest {
@@ -290,6 +291,32 @@ class AndroidCanvasBarBenchmarkTest {
                 invoke("transform_distort")
                 SystemClock.sleep(1000)
                 measure("photo-pixels-distort-drag") { drag(corner(), duration, wiggle) }
+                invoke("cancel_transform")
+            }
+            if (wanted("crop")) {
+                newDocument()
+                place(photo())
+                invoke("apply_transform")
+                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                SystemClock.sleep(3000)
+                invoke("crop")
+                waitFor("crop bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "crop" }
+                SystemClock.sleep(1500)
+                val camera = state().getJSONObject("camera")
+                val translation = camera.getJSONArray("translation")
+                val handle = width * camera.getDouble("zoom") + translation.getDouble(0) to height * camera.getDouble("zoom") + translation.getDouble(1)
+                val inward = { t: Double -> (-60 * (1 - cos(2 * PI * t))) to (-40 * (1 - cos(2 * PI * t))) }
+                measure("crop-handle-drag") { drag(handle, duration, inward) }
+                measure("crop-handle-drags") {
+                    val began = SystemClock.uptimeMillis()
+                    var index = 0
+                    while (SystemClock.uptimeMillis() - began < duration) {
+                        android.os.Trace.beginAsyncSection("capy-drag", ++index)
+                        drag(handle, 400) { t -> inward(t / .4) }
+                        android.os.Trace.endAsyncSection("capy-drag", index)
+                        SystemClock.sleep(900)
+                    }
+                }
                 invoke("cancel_transform")
             }
             if (wanted("scaled")) {

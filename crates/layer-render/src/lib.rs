@@ -44,6 +44,20 @@ pub struct CursorSegment {
     pub scale: f32,
 }
 
+/// The crop tool's shield, drawn by the renderer's presentation pass: the
+/// canvas outside the crop is dimmed, and where the crop reaches past the
+/// canvas the transparency checkerboard shows the area the crop adds. Pixels
+/// hidden beyond the canvas are never shown. Guides and handles are
+/// `CursorSegment`s.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CropOverlay {
+    /// Maps document pixels onto the unit square the crop covers.
+    pub to_crop: layer_core::Affine,
+    /// Opacity of the black shield outside the crop, from 0 to 1. It darkens
+    /// linear light, so every surface shows the same shield.
+    pub dim: f32,
+}
+
 /// Fully resolved brush contact consumed directly by a GPU renderer.
 /// Pressure curves, filtering, spacing, and randomness have already been
 /// evaluated by `layer-engine`.
@@ -693,6 +707,7 @@ pub trait CanvasRenderer {
     fn cancel_selection_paint(&mut self) {}
     fn set_quick_mask_thumbnail(&mut self, _selection: Option<&layer_core::Selection>) {}
     fn set_selection_overlay(&mut self, _overlay: Option<SelectionOverlay>) {}
+    fn set_crop_overlay(&mut self, _overlay: Option<CropOverlay>) {}
     fn set_telemetry_enabled(&mut self, _enabled: bool) {}
     fn telemetry(&self) -> RendererTelemetry {
         RendererTelemetry::default()

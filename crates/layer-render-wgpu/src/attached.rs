@@ -94,6 +94,9 @@ impl CanvasRenderer for AttachedRenderer {
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {
         if let Some(gpu) = self.0.as_mut() { gpu.set_selection_overlay(overlay); }
     }
+    fn set_crop_overlay(&mut self, overlay: Option<layer_render::CropOverlay>) {
+        if let Some(gpu) = self.0.as_mut() { gpu.set_crop_overlay(overlay); }
+    }
     fn set_selection_outline(
         &mut self,
         selection: Option<&layer_core::Selection>,
