@@ -13,7 +13,8 @@ internal class HdrController(private val host:CanvasHost) {
     private var surface:CanvasSurfaceView?=null
     private var displayAvailable:Boolean?=null
     private var requestedHeadroom:Float?=null
-    private var screen:Triple<String,Boolean,Boolean>?=null
+    private data class Screen(val name:String,val wide:Boolean,val hdr:Boolean,val peak:Float)
+    private var screen:Screen?=null
     fun bindSurface(view:CanvasSurfaceView){surface=view;displayAvailable=null;requestedHeadroom=null;screen=null;updateDisplay(false)}
     fun unbindSurface(view:CanvasSurfaceView){if(surface===view){surface=null;displayAvailable=null;requestedHeadroom=null}}
     private fun updateDisplay(hdr:Boolean) {
@@ -26,9 +27,10 @@ internal class HdrController(private val host:CanvasHost) {
         val desired=if(available&&hdr)0f else 1f
         if(android.os.Build.VERSION.SDK_INT>=35&&requestedHeadroom!=desired){view.setDesiredHdrHeadroom(desired);requestedHeadroom=desired}
         if(available!=displayAvailable){displayAvailable=available;host.displayInfo(available)}
-        val hdrScreen=display?.hdrCapabilities?.supportedHdrTypes?.isNotEmpty()==true
-        val facts=Triple(display?.name?:"",display?.isWideColorGamut==true,hdrScreen)
-        if(facts!=screen){screen=facts;host.screenInfo(facts.first,facts.second,facts.third)}
+        val capabilities=display?.hdrCapabilities
+        val facts=Screen(display?.name?:"",view.resources.configuration.isScreenWideColorGamut,
+            capabilities?.supportedHdrTypes?.isNotEmpty()==true,capabilities?.desiredMaxLuminance?:0f)
+        if(facts!=screen){screen=facts;host.screenInfo(facts.name,facts.wide,facts.hdr,facts.peak)}
     }
     fun pause(){paused=true;loop?.cancel();loop=null}
     fun resume(){if(!paused)return;paused=false

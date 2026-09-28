@@ -458,8 +458,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal fun displayInfo(available:Boolean) = post {
         Native.displayInfo(handle,available);publish(true);wake()
     }
-    internal fun screenInfo(name:String,wide:Boolean,hdr:Boolean) = post {
-        Native.screenInfo(handle,name,wide,hdr);publish(true);wake()
+    internal fun screenInfo(name:String,wide:Boolean,hdr:Boolean,peak:Float) = post {
+        Native.screenInfo(handle,name,wide,hdr,peak);publish(true);wake()
     }
 
     fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) {

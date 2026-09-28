@@ -1,7 +1,9 @@
 package art.capycanvas
 
 import android.annotation.SuppressLint
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.graphics.ColorSpace
 import androidx.activity.OnBackPressedCallback
 import android.os.Bundle
 import android.view.KeyEvent
@@ -25,6 +27,7 @@ class MainActivity : ComponentActivity() {
         })
         enableEdgeToEdge()
         window.enterCanvasFullscreen()
+        window.colorMode=if(wideColorWindow())ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT else ActivityInfo.COLOR_MODE_DEFAULT
         updateTheme(resources.configuration)
         setContent {
             ReportDrawnWhen { host.snapshot?.optBoolean("brush_ready") == true }
@@ -44,6 +47,8 @@ class MainActivity : ComponentActivity() {
         }
         if(uris.isNotEmpty())host.documents.openUris(uris,intent.flags)
     }
+    private fun wideColorWindow()=resources.configuration.isScreenWideColorGamut&&
+        androidx.core.content.ContextCompat.getDisplayOrDefault(this).preferredWideGamutColorSpace?.id==ColorSpace.Named.DISPLAY_P3.ordinal
     private fun updateTheme(config: Configuration) {
         host.dispatch(obj("type" to "system_theme_changed", "theme" to
             if (config.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES) "dark" else "light",

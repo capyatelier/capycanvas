@@ -40,6 +40,7 @@ pub(crate) struct Surface {
     presenter: ViewportPresenter,
     color: SdrSurfaceColor,
     hdr_capable: bool,
+    p3_capable: bool,
     presented_hdr: Option<bool>,
     presented_tone_publications: Option<u64>,
     submitted_frames: u64,
@@ -154,6 +155,7 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "submitted_frames": surface.submitted_frames,
                 "completed_frames": surface.completed_frames.load(Ordering::Acquire),
                 "hdr_capable": a.hdr_capable(),
+                "display_wide": a.display_wide,
                 "hdr_output": a.hdr_output(),
                 "presented_hdr": surface.presented_hdr,
                 "presented_tone_publications": surface.presented_tone_publications,
@@ -184,15 +186,18 @@ pub extern "system" fn Java_art_capycanvas_Native_displayInfo(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_screenInfo(
-    mut env: JNIEnv, _: JClass, handle: jlong, name: JString, wide: jboolean, hdr: jboolean,
+    mut env: JNIEnv, _: JClass, handle: jlong, name: JString, wide: jboolean, hdr: jboolean, peak: jfloat,
 ) {
     use layer_color::screen::{Chromaticities, ScreenReport};
     use layer_core::color::RgbSpace;
     let a = unsafe { app(handle) };
     let name = read(&mut env, &name).ok().filter(|n| !n.is_empty());
-    let gamut = Chromaticities::of(if wide != 0 { RgbSpace::DisplayP3 } else { RgbSpace::Srgb });
+    let wide = wide != 0;
+    let gamut = Chromaticities::of(if wide { RgbSpace::DisplayP3 } else { RgbSpace::Srgb });
     let hdr = hdr != 0;
-    if a.host.session.set_screen_report(ScreenReport::managed(name, gamut, hdr, Some(hdr))) {
+    let report = ScreenReport::managed(name, gamut, hdr, Some(peak), Some(hdr));
+    let wide_changed = std::mem::replace(&mut a.display_wide, wide) != wide;
+    if a.host.session.set_screen_report(report) | wide_changed {
         a.host.dirty = true;
     }
 }
@@ -249,6 +254,13 @@ impl App {
     }
     pub(crate) fn hdr_capable(&self) -> bool {
         self.display_hdr_available && self.surface.as_ref().is_some_and(|s|s.hdr_capable)
+    }
+    pub(crate) fn sdr_color(&self) -> SdrSurfaceColor {
+        if self.display_wide && self.surface.as_ref().is_some_and(|s| s.p3_capable) {
+            SdrSurfaceColor::DisplayP3
+        } else {
+            SdrSurfaceColor::Srgb
+        }
     }
     pub(crate) fn hdr_output(&self) -> bool {
         self.hdr_capable() && self.host.session.engine().document().color.depth.is_float()
@@ -384,11 +396,12 @@ impl App {
         {
             config.format = format;
         }
-        // Keep SDR on the native sRGB target. Float16 adds conversion and
+        // Keep SDR on the native 8-bit target. Float16 adds conversion and
         // bandwidth costs even when the document has no HDR output.
         let sdr_format = config.format;
         let hdr_capable=crate::display::hdr_surface(&caps);
-        // Start with SDR; the first document frame selects PQ for HDR artwork with Proof Off.
+        let p3_capable=crate::display::p3_surface(&caps, sdr_format);
+        // Start with sRGB; the first document frame selects P3 or PQ for the screen and artwork.
         let color=SdrSurfaceColor::Srgb;
         config.color_space=color.surface_color_space();
         let presenter = ViewportPresenter::for_surface(gpu, config.format, color).map_err(error)?;
@@ -400,6 +413,7 @@ impl App {
             presenter,
             color,
             hdr_capable,
+            p3_capable,
             presented_hdr: None,
             presented_tone_publications: None,
             submitted_frames: 0,
@@ -424,6 +438,7 @@ impl App {
         Ok(())
     }
     fn retire_gpu(&mut self) -> Result<(), String> {
+        self.tone.clear();
         self.surface = None;
         let retired = self.host.session.renderer_mut().0.take();
         self.instance = None;
@@ -516,11 +531,11 @@ impl App {
         let tone = self.tone.current(&self.host);
         let presented_tone = tone.is_some().then(|| self.tone.publications());
         let hdr_output=self.hdr_output();
+        let color=if hdr_output {SdrSurfaceColor::Bt2100Pq} else {self.sdr_color()};
         let screen = &self.host.session.state().screen;
-        let screen_check = layer_render_wgpu::ScreenCheck::for_view(&screen.assessment, layer_core::color::RgbSpace::Srgb, hdr_output, screen.show_clipped);
+        let screen_check = layer_render_wgpu::ScreenCheck::for_view(&screen.assessment, color.primaries(), hdr_output, screen.show_clipped);
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
-        let color=if hdr_output {SdrSurfaceColor::Bt2100Pq} else {SdrSurfaceColor::Srgb};
         let format = if hdr_output { wgpu::TextureFormat::Rgba16Float } else { surface.sdr_format };
         let output_changed = surface.color!=color || surface.config.format!=format;
         if output_changed {

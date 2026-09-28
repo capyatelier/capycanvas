@@ -12,7 +12,7 @@ impl WebApp {
             "p3" => Chromaticities::of(RgbSpace::DisplayP3),
             _ => Chromaticities::of(RgbSpace::Srgb),
         };
-        let report = ScreenReport::managed(None, gamut, hdr, hdr.then_some(true));
+        let report = ScreenReport::managed(None, gamut, hdr, None, hdr.then_some(true));
         if self.session.set_screen_report(report) { layer_ui::regions::HOST } else { 0 }
     }
 

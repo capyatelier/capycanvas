@@ -137,7 +137,13 @@ pub struct ScreenReport {
 }
 
 impl ScreenReport {
-    pub fn managed(name: Option<String>, gamut: Chromaticities, hdr_on: bool, hdr_capable: Option<bool>) -> Self {
+    pub fn managed(
+        name: Option<String>,
+        gamut: Chromaticities,
+        hdr_on: bool,
+        hdr_peak: Option<f32>,
+        hdr_capable: Option<bool>,
+    ) -> Self {
         Self {
             name,
             color: ScreenColor::Described(CompositorDescription {
@@ -145,7 +151,11 @@ impl ScreenReport {
                 target: gamut,
                 transfer: if hdr_on { Transfer::Pq } else { Transfer::Srgb },
                 reference_white: ARTWORK_WHITE,
-                target_peak: (!hdr_on).then_some(ARTWORK_WHITE),
+                target_peak: if hdr_on {
+                    hdr_peak.filter(|peak| peak.is_finite() && *peak > ARTWORK_WHITE)
+                } else {
+                    Some(ARTWORK_WHITE)
+                },
             }),
             monitor: None,
             hdr_capable,
@@ -330,14 +340,20 @@ mod tests {
     }
 
     #[test]
-    fn managed_platforms_describe_gamut_and_hdr_without_a_peak() {
+    fn managed_platforms_describe_gamut_and_an_optional_hdr_peak() {
         let p3 = Chromaticities::of(RgbSpace::DisplayP3);
-        let sdr = assess(&ScreenReport::managed(None, p3, false, Some(false)));
+        let sdr = assess(&ScreenReport::managed(None, p3, false, Some(1000.), Some(true)));
         assert_eq!((sdr.basis, sdr.gamut, sdr.hdr_signal), (Basis::System, Some(p3), false));
         assert_eq!(sdr.headroom(), 1.);
-        let hdr = assess(&ScreenReport::managed(None, p3, true, Some(true)));
+        let hdr = assess(&ScreenReport::managed(None, p3, true, None, Some(true)));
         assert_eq!((hdr.basis, hdr.peak, hdr.hdr_signal), (Basis::System, None, true));
         assert!(!hdr.approximate());
+        let measured = assess(&ScreenReport::managed(None, p3, true, Some(1000.), Some(true)));
+        assert_eq!(measured.peak, Some(1000.));
+        assert!((measured.headroom() - 1000. / 203.).abs() < 1e-4);
+        for implausible in [0., 150., f32::NAN] {
+            assert_eq!(assess(&ScreenReport::managed(None, p3, true, Some(implausible), Some(true))).peak, None);
+        }
     }
 
     #[test]

@@ -181,6 +181,15 @@ pool policy and continue to destroy framebuffers at every reset.
 See the [wide-brush measurements](../docs/development/android-wide-brush-performance.md)
 for driver allocation costs, performance and sustained-memory qualification.
 
+`wgpu-instance-identity.patch` makes native wgpu handles equal only when the
+same instance owns them. Upstream compares only the registry identifier, and
+every instance restarts identifiers, so a device recreated after GPU recovery
+compared equal to the retired one. Android kept the retired device's HDR tone
+guide, bound its buffer on the new device, and aborted in `create_bind_group`
+with `Cannot get non-existent resource`. Ordering and hashing include the owning
+instance too. WebGPU handles are unchanged. The `layer-host` test
+`a_restarted_gpu_is_never_mistaken_for_the_retired_one` covers the behavior.
+
 Remove each patch when an upstream release supplies its equivalent fix, and
 remove these snapshots when no patch remains necessary.
 

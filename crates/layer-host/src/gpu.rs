@@ -129,4 +129,13 @@ mod tests {
         gpu.shader_input();
         assert!(gpu.shader_wait_ms() > 0.);
     }
+
+    #[test]
+    fn a_restarted_gpu_is_never_mistaken_for_the_retired_one() {
+        let color = DocumentColor::default();
+        let retired = WgpuRasterizer::new_native_headless(color).unwrap();
+        let restarted = WgpuRasterizer::new_native_headless(color).unwrap();
+        assert!(retired.device() != restarted.device());
+        assert!(retired.device() == retired.device());
+    }
 }

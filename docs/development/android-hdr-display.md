@@ -20,17 +20,25 @@ Android HDR brightness policy. Separate mastering/MaxCLL metadata is not sent;
 Android uses PQ's absolute encoding and its platform tone-mapping defaults.
 
 Proof SDR, Print, gamut warnings, appearance drafts and SDR documents select
-an sRGB surface and the shared SDR mapper, with headroom request 1. Display
+the 8-bit SDR surface and the shared SDR mapper, with headroom request 1. That
+surface is Display P3 when `Configuration.isScreenWideColorGamut` is true and
+Vulkan offers `DISPLAY_P3_NONLINEAR` for the format, otherwise sRGB. Android's
+Saturated color mode reports no wide color to apps and composes every layer
+unconverted, so the canvas then stays sRGB like the interface. Display
 capability loss also returns to SDR. Canvas and Navigator share the presenter
-and surface. Document adoption and GPU recovery preserve the encoding.
+and surface. Document adoption and GPU recovery preserve the encoding. GPU
+recovery clears the tone service, whose guides belong to the retired device.
 GTK's linear/scRGB shoulder remains in use by GTK; it is not an obsolete
 Android experiment and is retained in the shared renderer.
 
 The footer shows the shared screen chip (**HDR**, **SDR preview**, **Showing
 SDR**, **Colors clipped** or **May not match print**) with the zoom/rotation bubble
 styling; its popup explains the view. A separate label shows **Preparing SDR…** or
-**SDR preview unavailable** while the SDR version is analyzed. Color controls and
-layer thumbnails remain SDR previews.
+**SDR preview unavailable** while the SDR version is analyzed. HDR details give
+the headroom from the display's desired maximum luminance relative to the 203
+cd/m² artwork white: 4.9× (+2.3 EV) on the Wacom's 1000 cd/m² panel. Color
+controls and layer thumbnails remain sRGB SDR previews, so colors beyond sRGB
+appear clipped there while the canvas shows them.
 
 ## PQ display validation
 
@@ -39,7 +47,8 @@ sRGB/ProPhoto, alpha, negative/bright samples, different SDR recipes, retained
 viewing captures, normal HDR shoulders and explicit proof.
 
 On the Wacom, SurfaceFlinger confirms `BT2020_PQ` / `RGBA16161616F_UBWC` for
-HDR and `V0_SRGB` for SDR proof. The final device regression checks above-white
+HDR. With Natural colors, SDR proof and the window are `DISPLAY_P3`; in the
+tablet's default Saturated mode they are `V0_SRGB`. The final device regression checks above-white
 canvas/Navigator pixels, an SDR display fallback and exact HDR restoration,
 SDR/Print switching, idle tone-guide presentation, GPU recovery, footer geometry
 and the concise HDR label. HDR editing/delivery/recovery and print portability

@@ -949,31 +949,45 @@ class AndroidRasterTest {
     }
 
     @Test fun screenStatusFlagsAndHighlightsClippedColors() {
-        val output=File(activity.getExternalFilesDir(null),"screen-status").apply{mkdirs()}
+        val output=File(activity.getExternalFilesDir(null),"screen-status").apply{deleteRecursively();mkdirs()}
         val automation=instrumentation.uiAutomation
+        val evidence=JSONObject()
         fun shot(name:String):Int {
             refresh();SystemClock.sleep(300)
             val bitmap=automation.takeScreenshot()!!
             File(output,"$name.png").outputStream().use{bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)}
-            return bitmap.getPixel(bitmap.width/2,bitmap.height/2).also{bitmap.recycle()}
+            val pixel=bitmap.getPixel(bitmap.width/2,bitmap.height/2)
+            evidence.put(name,obj("pixel" to Integer.toHexString(pixel),"color_space" to bitmap.colorSpace?.name,"wide" to (bitmap.colorSpace?.isWideGamut==true)))
+            bitmap.recycle()
+            return pixel
         }
         fun screen()=native{state(it).getJSONObject("screen")}
+        fun surface()=native{JSONObject(Native.displayStatus(it))}
         fun chip()=compose.onAllNodesWithTag("screen-status").fetchSemanticsNodes().firstOrNull()?.config
             ?.getOrElseNullable(androidx.compose.ui.semantics.SemanticsProperties.Text){null}?.joinToString()
-        fun fill(rgba:List<Double>) {
+        fun await(what:String,condition:()->Boolean)=try{compose.waitUntil(20_000){refresh();condition()}}
+            catch(e:androidx.compose.ui.test.ComposeTimeoutException){throw AssertionError("$what: chip=${chip()} screen=${screen()}",e)}
+        fun fill(space:String,rgba:List<Double>) {
             send(obj("type" to "color","action" to obj("op" to "set_slot","slot" to "foreground",
-                "color" to obj("space" to "DisplayP3","rgba" to org.json.JSONArray(rgba)))))
+                "color" to obj("space" to space,"rgba" to org.json.JSONArray(rgba)))))
             invoke("select_all");invoke("fill_selection");invoke("deselect")
         }
         val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
         try {
-            Native.projectOptions(task,obj("extent" to org.json.JSONArray(listOf(512,384)),"color" to obj("space" to "DisplayP3","depth" to "U8"),"background" to "White").toString())
+            Native.projectOptions(task,obj("extent" to org.json.JSONArray(listOf(512,384)),"color" to obj("space" to "ProPhoto","depth" to "U8"),"background" to "White").toString())
             Native.projectWork(task,-1,512,384);native{Native.projectAdopt(it,task,"null")}
         } finally {Native.projectFree(task)}
         invoke("fit_canvas")
         compose.waitUntil(10_000){screen().getJSONObject("assessment").getString("basis")=="System"}
-        fill(listOf(0.0,1.0,0.0,1.0))
-        compose.waitUntil(20_000){refresh();chip()=="Colors clipped"}
+        val wideScreen=activity.resources.configuration.isScreenWideColorGamut
+        compose.waitUntil(10_000){refresh();surface().optBoolean("display_wide")==wideScreen}
+        val status=surface()
+        val p3Surface=wideScreen&&status.getJSONArray("formats").objects().any{
+            it.getString("format")==status.getString("format")&&"DISPLAY_P3" in it.getString("color_spaces")}
+        compose.waitUntil(10_000){refresh();surface().getString("color_space")==if(p3Surface)"DisplayP3" else "Srgb"}
+        evidence.put("wide_screen",wideScreen).put("surface",surface())
+        fill("ProPhoto",listOf(0.0,1.0,0.0,1.0))
+        await("ProPhoto green clips"){chip()=="Colors clipped"}
         val green=shot("clipped")
         compose.onNodeWithTag("screen-status").performClick()
         compose.waitUntil(5_000){compose.onAllNodesWithTag("screen-details").fetchSemanticsNodes().isNotEmpty()}
@@ -987,9 +1001,22 @@ class AndroidRasterTest {
         assertTrue("Highlighted pixels are blue: ${Integer.toHexString(marked)}",android.graphics.Color.blue(marked)>200&&android.graphics.Color.red(marked)<80)
         compose.onNodeWithTag("screen-highlight").performClick()
         compose.waitUntil(5_000){!screen().getBoolean("show_clipped")}
-        fill(listOf(0.5,0.5,0.5,1.0))
-        compose.waitUntil(20_000){refresh();screen().optBoolean("clipped",true)==false&&chip()==null}
+        fill("DisplayP3",listOf(0.0,1.0,0.0,1.0))
+        if(p3Surface) {
+            await("Display P3 green fits"){screen().optBoolean("clipped",true)==false&&chip()==null}
+            val p3=shot("display-p3-green")
+            File(output,"display-p3-surfaceflinger.txt").writeBytes(ParcelFileDescriptor.AutoCloseInputStream(
+                automation.executeShellCommand("dumpsys SurfaceFlinger")).use{it.readBytes()})
+            if(evidence.getJSONObject("display-p3-green").getBoolean("wide"))
+                assertTrue("Display P3 green reaches the screen unclipped: ${Integer.toHexString(p3)}",android.graphics.Color.red(p3)<60&&android.graphics.Color.green(p3)>230)
+        } else {
+            await("Display P3 green clips on sRGB"){chip()=="Colors clipped"}
+            shot("display-p3-green")
+        }
+        fill("DisplayP3",listOf(0.5,0.5,0.5,1.0))
+        await("Gray fits"){screen().optBoolean("clipped",true)==false&&chip()==null}
         shot("fits")
+        File(output,"evidence.json").writeText(evidence.toString(2))
     }
     @Test fun hdrDisplayNegotiation() {
         val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile") ?: throw AssumptionViolatedException("Supply -e hdrFile for the display regression")
@@ -1053,9 +1080,11 @@ class AndroidRasterTest {
         compose.waitUntil(30_000){tone().getBoolean("ready")}
         compose.waitUntil(5_000){native{JSONObject(Native.displayStatus(it)).optLong("presented_tone_publications",-1)}==tone().getLong("publications")}
         val supports=tone().getBoolean("display_hdr")
+        fun sdrSpace(s:JSONObject)=if(s.optBoolean("display_wide")&&s.getJSONArray("formats").objects()
+            .firstOrNull{it.getString("format").endsWith("Srgb")}?.getString("color_spaces")?.contains("DISPLAY_P3")==true)"DisplayP3" else "Srgb"
         fun awaitSurface(hdr:Boolean) {
             compose.waitUntil(10_000){native{JSONObject(Native.displayStatus(it)).let{s->
-                s.opt("presented_hdr")==hdr&&s.optString("color_space")==if(hdr)"Bt2100Pq" else "Srgb"
+                s.opt("presented_hdr")==hdr&&s.optString("color_space")==if(hdr)"Bt2100Pq" else sdrSpace(s)
             }}}
             val surface=native{JSONObject(Native.displayStatus(it))}
             assertTrue(surface.getString("present_mode") in listOf("SharedDemandRefresh", "Fifo"))

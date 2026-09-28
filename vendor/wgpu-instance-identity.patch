@@ -1,0 +1,114 @@
+--- a/wgpu/src/backend/wgpu_core.rs
++++ b/wgpu/src/backend/wgpu_core.rs
+@@ -748,31 +748,31 @@ impl Drop for CoreBufferMappedRange {
+ }
+ 
+ crate::cmp::impl_eq_ord_hash_arc_address!(ContextWgpuCore => .0);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreAdapter => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreDevice => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreQueue => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreShaderModule => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreBindGroupLayout => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreBindGroup => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreTextureView => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreSampler => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreBuffer => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreTexture => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreExternalTexture => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreBlas => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreTlas => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreQuerySet => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CorePipelineLayout => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderPipeline => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreComputePipeline => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CorePipelineCache => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreCommandEncoder => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreComputePass => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderPass => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreCommandBuffer => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderBundleEncoder => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderBundle => .id);
+-crate::cmp::impl_eq_ord_hash_proxy!(CoreSurface => .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreAdapter => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreDevice => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreQueue => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreShaderModule => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreBindGroupLayout => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreBindGroup => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreTextureView => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreSampler => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreBuffer => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreTexture => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreExternalTexture => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreBlas => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreTlas => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreQuerySet => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CorePipelineLayout => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreRenderPipeline => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreComputePipeline => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CorePipelineCache => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreCommandEncoder => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreComputePass => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreRenderPass => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreCommandBuffer => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreRenderBundleEncoder => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreRenderBundle => .context, .id);
++crate::cmp::impl_eq_ord_hash_scoped_proxy!(CoreSurface => .context, .id);
+ crate::cmp::impl_eq_ord_hash_proxy!(CoreSurfaceOutputDetail => .surface_id);
+ crate::cmp::impl_eq_ord_hash_proxy!(CoreQueueWriteBuffer => .mapping.ptr);
+ crate::cmp::impl_eq_ord_hash_proxy!(CoreBufferMappedRange => .ptr);
+--- a/wgpu/src/cmp.rs
++++ b/wgpu/src/cmp.rs
+@@ -62,6 +62,46 @@ macro_rules! impl_eq_ord_hash_proxy {
+     };
+ }
+ 
++/// Implements `PartialEq`, `Eq`, `PartialOrd`, `Ord`, and `Hash` for a type by proxying the operations to
++/// the instance that owns it and then to its identifier. Identifiers restart in every instance.
++///
++/// ```ignore
++/// impl_eq_ord_hash_scoped_proxy!(MyType => .context, .id);
++/// ```
++#[cfg_attr(not(wgpu_core), expect(unused_macros))]
++macro_rules! impl_eq_ord_hash_scoped_proxy {
++    ($type:ty => .$scope:ident, .$id:ident) => {
++        impl PartialEq for $type {
++            fn eq(&self, other: &Self) -> bool {
++                self.$scope == other.$scope && self.$id == other.$id
++            }
++        }
++
++        impl Eq for $type {}
++
++        impl PartialOrd for $type {
++            fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
++                Some(self.cmp(other))
++            }
++        }
++
++        impl Ord for $type {
++            fn cmp(&self, other: &Self) -> core::cmp::Ordering {
++                self.$scope
++                    .cmp(&other.$scope)
++                    .then_with(|| self.$id.cmp(&other.$id))
++            }
++        }
++
++        impl core::hash::Hash for $type {
++            fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
++                self.$scope.hash(state);
++                self.$id.hash(state);
++            }
++        }
++    };
++}
++
+ /// Implements `PartialEq`, `Eq`, `PartialOrd`, `Ord`, and `Hash` for a type by comparing the addresses of the `Arc`s.
+ ///
+ /// ```ignore
+@@ -107,3 +147,5 @@ macro_rules! impl_eq_ord_hash_arc_address {
+ 
+ #[cfg_attr(not(any(wgpu_core, custom)), expect(unused_imports))]
+ pub(crate) use {impl_eq_ord_hash_arc_address, impl_eq_ord_hash_proxy};
++#[cfg_attr(not(wgpu_core), expect(unused_imports))]
++pub(crate) use impl_eq_ord_hash_scoped_proxy;

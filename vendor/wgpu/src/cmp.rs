@@ -62,6 +62,46 @@ macro_rules! impl_eq_ord_hash_proxy {
     };
 }
 
+/// Implements `PartialEq`, `Eq`, `PartialOrd`, `Ord`, and `Hash` for a type by proxying the operations to
+/// the instance that owns it and then to its identifier. Identifiers restart in every instance.
+///
+/// ```ignore
+/// impl_eq_ord_hash_scoped_proxy!(MyType => .context, .id);
+/// ```
+#[cfg_attr(not(wgpu_core), expect(unused_macros))]
+macro_rules! impl_eq_ord_hash_scoped_proxy {
+    ($type:ty => .$scope:ident, .$id:ident) => {
+        impl PartialEq for $type {
+            fn eq(&self, other: &Self) -> bool {
+                self.$scope == other.$scope && self.$id == other.$id
+            }
+        }
+
+        impl Eq for $type {}
+
+        impl PartialOrd for $type {
+            fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for $type {
+            fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+                self.$scope
+                    .cmp(&other.$scope)
+                    .then_with(|| self.$id.cmp(&other.$id))
+            }
+        }
+
+        impl core::hash::Hash for $type {
+            fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                self.$scope.hash(state);
+                self.$id.hash(state);
+            }
+        }
+    };
+}
+
 /// Implements `PartialEq`, `Eq`, `PartialOrd`, `Ord`, and `Hash` for a type by comparing the addresses of the `Arc`s.
 ///
 /// ```ignore
@@ -107,3 +147,5 @@ macro_rules! impl_eq_ord_hash_arc_address {
 
 #[cfg_attr(not(any(wgpu_core, custom)), expect(unused_imports))]
 pub(crate) use {impl_eq_ord_hash_arc_address, impl_eq_ord_hash_proxy};
+#[cfg_attr(not(wgpu_core), expect(unused_imports))]
+pub(crate) use impl_eq_ord_hash_scoped_proxy;

@@ -27,7 +27,7 @@ impl SdrSurfaceColor {
             Self::Bt2100Pq => wgpu::SurfaceColorSpace::Bt2100Pq,
         }
     }
-    pub(crate) fn primaries(self) -> RgbSpace {
+    pub fn primaries(self) -> RgbSpace {
         if self == Self::DisplayP3 {
             RgbSpace::DisplayP3
         } else {

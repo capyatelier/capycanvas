@@ -304,10 +304,15 @@ never during motion.
   BT.2020 PQ signal in HDR mode; it never uses an assigned ICC profile for its
   conversion. TV EDIDs that report BT.709 while accepting BT.2020 leave the HDR
   gamut unknown.
-- **Android** reports the display's name, `isWideColorGamut` (Display P3 or
-  sRGB) and whether it supports any HDR type (`ScreenReport::managed`). The
-  presenter uses an sRGB surface, so Display P3 artwork beyond sRGB is clipped by
-  the app itself. The idle count runs from the 200 ms tone-status poll.
+- **Android** reports the display's name, whether Android offers apps wide
+  color (`Configuration.isScreenWideColorGamut`: Display P3 or sRGB), whether it
+  supports any HDR type and its desired maximum luminance
+  (`ScreenReport::managed`). When Android offers wide color, SDR presents on a
+  Display P3 surface and the window uses `COLOR_MODE_WIDE_COLOR_GAMUT` if the
+  display prefers 8-bit Display P3, so the canvas and interface agree. Android's
+  Saturated color mode disables wide color for every app and sends colors to the
+  panel unconverted; the canvas then stays sRGB like the rest of the interface.
+  The idle count runs from the 200 ms tone-status poll.
 - **Web** reports the `color-gamut` and `dynamic-range` media queries; peak
   brightness is never known. The canvas is sRGB, or extended sRGB for HDR, and
   the idle count runs from the same 200 ms display poll.
@@ -508,7 +513,8 @@ uses a floating-point BT.2100 PQ surface for HDR artwork with Proof Off when
 both the HDR10 display and the Vulkan format/encoding support it. Android chooses
 brightness and tone mapping; reported headroom does not precompress the artwork
 or force an SDR preview. SDR, Print, gamut warning and appearance drafts use the
-shared SDR mapping on an sRGB surface. Older/unsupported hosts retain mapped SDR.
+shared SDR mapping on the SDR surface: Display P3 when Android offers wide color,
+otherwise sRGB. Older/unsupported hosts retain mapped SDR.
 The left footer chip matches zoom/rotation styling and opens the screen details
 described above; **HDR** describes the active output route, not measured screen
 brightness. PQ output is bounded to BT.2020 and 0–10,000 cd/m² at the fixed 203
