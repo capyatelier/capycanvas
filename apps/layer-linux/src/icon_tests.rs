@@ -468,7 +468,11 @@ fn controls(app: &adw::Application, output: &Path) {
                 .save_to_png(output.join(format!("{label}-filters-{}.png", category.id.unwrap())))
                 .unwrap();
         }
-        assert_eq!(count, 40);
+        assert_eq!(
+            count,
+            layer_core::bundled_effect_catalog().filters().len(),
+            "the picker lists every filter"
+        );
         // Native toolbar size changes retain the approved vector geometry.
         for style in [TileStyle::Small, TileStyle::Medium, TileStyle::Large] {
             w.customize(CustomizationAction::SetTileStyle {

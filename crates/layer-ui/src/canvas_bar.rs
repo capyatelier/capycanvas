@@ -835,15 +835,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let viewport = self.logical_viewport?;
         let layout = self.layout(viewport);
-        let area = self.canvas_bar_area(&layout, viewport, bar_width(measure, 0));
+        let area = self.canvas_bar_area(&layout, viewport, bar_width(measure, measure.items.len().min(1)));
         let shown = fitted_items(measure, area.width - 2. * CANVAS_BAR_MARGIN);
         let obstacles: Vec<Bounds> = layout.groups.iter().filter(|g| g.floating).map(|g| g.bounds).collect();
+        let window = area.width > layout.work_area.width;
         let (bounds, side) = place_canvas_bar(
             area,
             &obstacles,
             self.canvas_bar_protected(bar.context.kind),
             [bar_width(measure, shown), measure.height],
-            bar.placement,
+            if window { CanvasBarPlacement::BottomEdge } else { bar.placement },
         );
         Some(CanvasBarLayout { bounds, items: shown, side })
     }

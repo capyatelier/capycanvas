@@ -306,6 +306,23 @@ fn canvas_bar_stays_in_the_window_when_docks_leave_no_work_area() {
 }
 
 #[test]
+fn canvas_bar_uses_the_window_width_before_it_would_show_only_more() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::RectangleSelect);
+    let bar = s.state.canvas_bar.clone().unwrap();
+    assert_eq!(bar.context.kind, CanvasBarKind::Selection);
+    let work = s.layout([1600., 1000.]).work_area;
+    let wide = CanvasBarMeasure { completion: Vec::new(), ..measure(&bar, work.width - 60.) };
+    let margin = canvas_bar::CANVAS_BAR_MARGIN;
+    assert!(2. * (wide.padding + margin) + wide.more <= work.width, "More alone fits the work area");
+    let layout = s.canvas_bar_layout(&wide).unwrap();
+    assert_eq!(layout.items, 1, "the bar leaves the work area to show its first item");
+    assert_eq!(layout.side, CanvasBarSide::BottomEdge, "a bar across the docks keeps to the bottom edge");
+    assert!(layout.bounds.width > work.width - 2. * margin, "{layout:?} {work:?}");
+    assert!(layout.bounds.x >= 0. && layout.bounds.x + layout.bounds.width <= 1600., "{layout:?}");
+}
+
+#[test]
 fn placements_hint_the_layer_their_drags_may_move() {
     let mut s = placed_photo("hinted placement");
     let photo = s.engine.document().active_layer;

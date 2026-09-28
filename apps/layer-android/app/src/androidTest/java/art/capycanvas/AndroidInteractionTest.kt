@@ -2715,6 +2715,7 @@ class AndroidInteractionTest {
     }
 
     @Test fun guideBarDeletesTheSelectedGuideAcrossDevices() {
+        fixture.getJSONObject("layout").put("bands", JSONArray(fixture.getJSONObject("layout").array("bands").objects().filter { it.getInt("id") == 44 }))
         popupInput = true
         try {
             restore(); command("fit_canvas"); command("ruler")
