@@ -22,7 +22,7 @@ internal object ProfileStore {
     private fun key(id:String)=JSONObject(call(obj("type" to "remove","id" to id))).getString("id")
     private fun visibility(context:Context,id:String?=null,visible:Boolean?=null):JSONArray {
         val file=AtomicFile(File(root(context),"menus.json"))
-        val hidden=if(file.baseFile.exists())JSONArray(file.openRead().use{it.readBytes().decodeToString()}) else JSONArray()
+        val hidden=if(file.baseFile.exists())runCatching{JSONArray(file.openRead().use{it.readBytes().decodeToString()})}.getOrDefault(JSONArray()) else JSONArray()
         val next=JSONArray(call(obj("type" to "visibility","hidden" to hidden,"id" to id,"visible" to visible)))
         if(id!=null){val output=file.startWrite();try{output.write(next.toString().toByteArray());file.finishWrite(output)}catch(e:Exception){file.failWrite(output);throw e}}
         return next

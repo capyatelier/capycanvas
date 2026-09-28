@@ -4,7 +4,6 @@ import Foundation
 final class EditorPersistence: @unchecked Sendable {
     struct Loaded: Sendable {
         var settings: Data?
-        var error: String?
     }
     struct SettingsChange: Sendable { let revision: UInt64; let data: Data }
     static let shared = EditorPersistence(root: configuredRoot())
@@ -34,8 +33,7 @@ final class EditorPersistence: @unchecked Sendable {
             observers[observer] = changed
             var result = Loaded()
             if let root {
-                do { result.settings = try AtomicJSONFile.read(root.appendingPathComponent("settings.json")) }
-                catch { result.error = "Could not restore settings: \(error.localizedDescription)" }
+                result.settings = try? AtomicJSONFile.read(root.appendingPathComponent("settings.json"))
             }
             completion(result)
         }

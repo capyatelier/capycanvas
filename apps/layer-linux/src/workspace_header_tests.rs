@@ -496,6 +496,17 @@ fn native_unreadable_workspace_storage_input() {
         sql("UPDATE items SET working=json_set(working,'$.zen_mode',json('{}')); SELECT changes()"),
         "3"
     );
+    let settings = std::path::PathBuf::from(std::env::var_os("LAYER_SETTINGS_FILE").unwrap());
+    std::fs::write(
+        &settings,
+        r#"{"pan_speed":2.0,"tip_lock":true,"prediction_algorithm":"kalman","zoom_speed":"fast"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        settings.with_file_name("export-presets.json"),
+        r#"{"destinations":[null,null,null,null],"named":[]}"#,
+    )
+    .unwrap();
     d.w = Workspace::new(&d._app);
     d.w.window.maximize();
     d.w.window.present();
@@ -509,10 +520,26 @@ fn native_unreadable_workspace_storage_input() {
         Some("Saved workspaces couldn't be opened, so they were reset.".into())
     );
     assert!(d.w.area.is_mapped());
+    assert_eq!(state(&d.w).settings.pan_speed, 2.0);
+    assert_eq!(state(&d.w).settings.zoom_speed, 1.0);
     assert_eq!(
         sql("SELECT count(*) FROM items WHERE json_type(working,'$.zen_mode')='object'"),
         "0"
     );
+    d.w.dispatch(UiAction::Invoke {
+        command: CommandId::ExportDocument,
+    });
+    until(
+        || {
+            d.w.window
+                .visible_dialog()
+                .is_some_and(|dialog| dialog.widget_name() == "export-options")
+        },
+        "export dialog with unreadable presets",
+    );
+    assert!(state(&d.w).host_error.is_none(), "{:?}", state(&d.w).host_error);
+    d.w.window.visible_dialog().unwrap().close();
+    until(|| d.w.window.visible_dialog().is_none(), "export dialog close");
     d.click_name("workspace-switch-painter");
     wait_workspaces(&d.w);
     pump(400);

@@ -158,7 +158,7 @@ pub(crate) fn presets(
     locked(cancel, |directory| {
         let path = directory.join("export-presets.json");
         let mut library = if path.exists() {
-            layer_ui::ExportPresets::decode(&read(&path, layer_ui::ExportPresets::MAX_FILE_BYTES)?)?
+            layer_ui::ExportPresets::restore(&read(&path, layer_ui::ExportPresets::MAX_FILE_BYTES)?)
         } else {
             Default::default()
         };

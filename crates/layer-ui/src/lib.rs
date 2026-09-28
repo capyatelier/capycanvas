@@ -1236,6 +1236,10 @@ pub enum UiAction {
     RestoreSettings {
         settings: Settings,
     },
+    /// Settings as a host saved them, possibly by another build.
+    RestoreSavedSettings {
+        saved: String,
+    },
     CompleteRequest {
         id: u32,
         error: Option<String>,
@@ -1249,6 +1253,7 @@ impl UiAction {
             Self::CompleteRequest { .. }
                 | Self::CloseSettings
                 | Self::RestoreSettings { .. }
+                | Self::RestoreSavedSettings { .. }
                 | Self::MeasureColumnDrawers { .. }
                 | Self::MeasureDrawerTiles { .. }
                 | Self::MeasureColumnScroll { .. }

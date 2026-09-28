@@ -274,7 +274,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 handle = Native.create(BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK)
                 choreographer = Choreographer.getInstance()
                 attempt(canvas = false) {
-                    saved.getString("settings", null)?.let { Native.dispatch(handle, obj("type" to "restore_settings", "settings" to JSONObject(it)).toString()) }
+                    saved.getString("settings", null)?.let { Native.dispatch(handle, obj("type" to "restore_saved_settings", "saved" to it).toString()) }
                 }
                 attempt(canvas = false) {
                     val directory = workspaceDirectoryForTest ?: java.io.File(application.filesDir, "workspaces").absolutePath

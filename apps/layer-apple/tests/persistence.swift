@@ -70,8 +70,7 @@ private final class ResultBox<Value>: @unchecked Sendable {
 
         try Data("broken".utf8).write(to: file)
         let failed = load()
-        precondition(failed.settings == nil && failed.error != nil,
-            "Corrupt settings must report failure without overwriting the file")
+        precondition(failed.settings == nil, "Corrupt settings must read as defaults without overwriting the file")
         check(try Data(contentsOf: file) == Data("broken".utf8))
 
         let blocked = directory.appendingPathComponent("blocked")

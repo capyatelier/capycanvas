@@ -222,14 +222,32 @@ rows; macOS and Windows receive no finger contacts and list no taps.
 ## Saving and loading
 
 The host performs storage through its own APIs. Native clients write application
-settings in platform storage; the web client uses browser storage. Shared code
-validates loaded values and handles supported migrations before replacing live
-state. A failed write must be reported without blocking pen input.
+settings in platform storage; the web client uses browser storage. A failed
+write must be reported without blocking pen input.
+
+Stored data may come from any build, older or newer, and is never migrated.
+Reading it never fails and never shows a message:
+
+- Preferences: hosts pass the saved text to `UiAction::RestoreSavedSettings`, or
+  to `Settings::restore` when they need settings before a session exists. Each
+  field this build reads and validates is kept, and every other field keeps its
+  default. Loading does not rewrite the saved copy; the next change replaces it.
+- Export presets load through `ExportPresets::restore`, and the hidden-profile
+  list keeps the IDs this build reads. A copy this build cannot read counts as
+  empty, and the next change replaces it. The web color-preference database
+  replaces its stores when its version changes.
+- Workspaces: startup replaces a store it cannot read; see
+  [workspace startup](../internals/workspace-ownership.md#startup-always-adopts-a-workspace).
+- Caches discard data they cannot use.
+- Artwork is never replaced automatically. A recovery copy this build cannot
+  open is still offered, with Discard.
+
+`node apps/layer-web/test.mjs --headless --stale-storage` writes stale data into
+every web store, reloads, and requires a clean start and a working Export dialog.
 
 Only shortcut overrides are stored, so an unmodified default can evolve with the
-app. Retired fields and actions are handled by explicit migration rules. New
-settings should define their default, validation and migration behavior in Rust
-before a host adds a control.
+app. New settings define their default and validation in Rust before a host adds
+a control.
 
 [`WorkspaceState`](../../crates/layer-ui/src/workspace.rs) has its own version
 and validation for layout. Every host stores named workspaces through

@@ -36,7 +36,7 @@ import {checkCompactWorkspaces} from "./compact-workspaces.test.mjs";
 import {checkMenuLabels} from "./menu-labels.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
-import {checkWorkspaceStore,checkStaleWorkspaceStartup} from "./workspace-store.test.mjs";
+import {checkWorkspaceStore,checkStaleStorageStartup} from "./workspace-store.test.mjs";
 import {checkLayerHolding,checkLayerSwipes} from "./layer-hold.test.mjs";
 import {checkLongPressDragging} from "./long-press-drag.test.mjs";
 import {checkPalettes} from "./palettes.test.mjs";
@@ -313,8 +313,8 @@ try {
   } else if (process.argv.includes("--workspace-store")) {
     await checkWorkspaceStore({evaluate});
     assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--workspace-startup")) {
-    await checkStaleWorkspaceStartup({evaluate,reload});
+  } else if (process.argv.includes("--stale-storage")) {
+    await checkStaleStorageStartup({evaluate,reload});
   } else if (process.argv.includes("--drawer-switch")) {
     await checkToolbarDrawerSwitching({call,evaluate,settle});
     assert.deepEqual(errors,[]);

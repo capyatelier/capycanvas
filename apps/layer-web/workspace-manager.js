@@ -142,7 +142,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   // when the browser copies its opener's sessionStorage.
   let owner;
   try { if (performance.getEntriesByType("navigation")[0]?.type === "reload") owner = JSON.parse(sessionStorage.getItem("capy.workspace.owner")); } catch {}
-  if (!owner?.id || !owner?.epoch) owner = {id:crypto.randomUUID(),epoch:crypto.randomUUID()};
+  owner = typeof owner?.id === "string" && typeof owner?.epoch === "string" ? {id:owner.id,epoch:owner.epoch} : {id:crypto.randomUUID(),epoch:crypto.randomUUID()};
   try { sessionStorage.setItem("capy.workspace.owner",JSON.stringify(owner)); } catch {}
   store.holdOwner(owner.id);
   app.workspace_start(store.execute, JSON.stringify(owner));

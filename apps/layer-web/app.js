@@ -1719,7 +1719,7 @@ try {
   let restoreError;
   try {
     const saved = localStorage.getItem(settingsKey);
-    if (saved) app.dispatch({ type: "restore_settings", settings: JSON.parse(saved) });
+    if (saved) app.dispatch({ type: "restore_saved_settings", saved });
   } catch (error) { restoreError = `Cannot restore preferences: ${error}`; }
   const themeAction = () => ({
     type: "system_theme_changed",
@@ -1728,7 +1728,7 @@ try {
   app.dispatch(themeAction());
   window.addEventListener("storage", (event) => {
     if (event.key !== settingsKey || !event.newValue) return;
-    try { dispatch({ type: "restore_settings", settings: JSON.parse(event.newValue) }); }
+    try { dispatch({ type: "restore_saved_settings", saved: event.newValue }); }
     catch (error) { message(`Cannot restore preferences: ${error}`); }
   });
   systemTheme.addEventListener("change", () => dispatch(themeAction()));

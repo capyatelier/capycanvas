@@ -69,7 +69,7 @@ pub unsafe extern "C" fn capy_export_presets(input: i32, output: i32, request: *
             let mut bytes = Vec::new();
             (&*file).take(layer_ui::ExportPresets::MAX_FILE_BYTES as u64 + 1)
                 .read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-            layer_ui::ExportPresets::decode(&bytes)?
+            layer_ui::ExportPresets::restore(&bytes)
         };
         let color = serde_json::from_str(unsafe { read_title(color) }?).map_err(|e| e.to_string())?;
         let action = serde_json::from_str(unsafe { read_title(request) }?).map_err(|e| e.to_string())?;

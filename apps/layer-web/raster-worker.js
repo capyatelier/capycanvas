@@ -17,7 +17,7 @@ async function execute({id,request}) {
       case "profile-library": result=await navigator.locks.request("capy-profile-library",()=>profileLibrary(JSON.parse(request.metadata),request.buffers[0]));break;
       case "export-presets": result=await navigator.locks.request("capy-export-presets",async()=>{
         const bytes=await colorPreferences("readonly",store=>store.get("export-presets"));
-        const prepared=wasm.raster_worker_export_presets(request.metadata,bytes??new Uint8Array());
+        const prepared=wasm.raster_worker_export_presets(request.metadata,bytes instanceof Uint8Array?bytes:new Uint8Array());
         if(prepared.bytes)await colorPreferences("readwrite",store=>store.put(prepared.bytes,"export-presets"));
         return prepared.view;
       });break;
@@ -124,7 +124,11 @@ async function recovery(mode, operation) {
 async function colorPreferences(mode,operation,storeName="values") {
   const database=await new Promise((resolve,reject)=>{
     const request=indexedDB.open("capy-color-preferences",2);
-    request.onupgradeneeded=()=>{for(const name of ["values","profiles"])request.result.createObjectStore(name);};
+    request.onupgradeneeded=()=>{
+      const database=request.result;
+      for(const name of [...database.objectStoreNames])database.deleteObjectStore(name);
+      for(const name of ["values","profiles"])database.createObjectStore(name);
+    };
     request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
   });
   try{return await new Promise((resolve,reject)=>{

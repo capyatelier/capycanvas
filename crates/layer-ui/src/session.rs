@@ -2434,7 +2434,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             )
         });
         let previous_mask_mode = self.state.settings.selection_painting;
-        let restores_settings = matches!(&action, UiAction::RestoreSettings { .. });
+        let restores_settings = matches!(
+            &action,
+            UiAction::RestoreSettings { .. } | UiAction::RestoreSavedSettings { .. }
+        );
         let mut save_settings = matches!(
             &action,
             UiAction::SetTheme { .. }
@@ -3314,6 +3317,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::RestoreSettings { settings } => {
                 settings.validate()?;
                 self.apply_settings(settings)?;
+                (SETTINGS | COMMANDS, true)
+            }
+            UiAction::RestoreSavedSettings { saved } => {
+                self.apply_settings(Settings::restore(&saved))?;
                 (SETTINGS | COMMANDS, true)
             }
             UiAction::CompleteRequest { id, error } => {
@@ -16311,6 +16318,33 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn saved_settings_from_any_build_restore_without_an_error_on_every_platform() {
+        let saved = serde_json::to_string(&Settings {
+            pan_speed: 2.0,
+            ..Default::default()
+        })
+        .unwrap();
+        for saved in [
+            saved.clone(),
+            saved.replacen('{', r#"{"tip_lock":true,"#, 1),
+            "{".into(),
+        ] {
+            for platform in Platform::ALL {
+                let mut s = session(platform);
+                s.dispatch(UiAction::RestoreSavedSettings { saved: saved.clone() })
+                    .unwrap();
+                let expected = if saved == "{" { 1.0 } else { 2.0 };
+                assert_eq!(s.state.settings.pan_speed, expected, "{saved}");
+                assert!(
+                    !s.state
+                        .requests
+                        .iter()
+                        .any(|r| matches!(r.kind, HostRequestKind::SaveSettings { .. }))
+                );
+            }
+        }
     }
     #[test]
     fn shortcut_search_includes_current_bindings_and_modifiers_on_every_platform() {

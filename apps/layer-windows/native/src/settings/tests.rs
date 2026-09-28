@@ -37,6 +37,12 @@ fn settings_round_trip_uses_shared_validation() {
     )
     .unwrap();
     assert_eq!(file.load().unwrap().unwrap().pressure_gamma, 1.5);
+    fs::write(
+        directory.path.join("settings.json"),
+        br#"{"pressure_gamma":1.5,"tip_lock":true,"zoom_speed":"fast"}"#,
+    )
+    .unwrap();
+    assert_eq!(file.load().unwrap().unwrap().pressure_gamma, 1.5);
     assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
     assert!(SettingsFile::new(PathBuf::from("relative")).is_err());
 }
@@ -46,7 +52,7 @@ fn oversized_saved_preferences_are_bounded_and_not_rewritten_on_load() {
     let directory = TempDir::new();
     let path = directory.path.join("settings.json");
     fs::write(&path, vec![b' '; MAX_BYTES + 1]).unwrap();
-    assert!(storage(&directory).load().unwrap_err().contains("size limit"));
+    assert_eq!(storage(&directory).load().unwrap(), Some(Settings::default()));
     assert_eq!(fs::metadata(path).unwrap().len(), (MAX_BYTES + 1) as u64);
 }
 

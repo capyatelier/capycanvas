@@ -163,8 +163,8 @@ final class ColorPreferencesStore: @unchecked Sendable {
     }
     private func visibility(id: String? = nil, visible: Bool? = nil) throws -> [String] {
         let url = directory?.appendingPathComponent("menus.json")
-        let data = try url.flatMap { try AtomicJSONFile.read($0) }
-        let hidden = try data.map { try JSONSerialization.jsonObject(with: $0) } ?? []
+        let data = url.flatMap { try? AtomicJSONFile.read($0) }
+        let hidden = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } ?? []
         let next = try library(JSON(["type": "visibility", "hidden": hidden,
             "id": id as Any? ?? NSNull(), "visible": visible as Any? ?? NSNull()]))
         if id != nil {

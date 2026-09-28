@@ -1120,13 +1120,15 @@ pub fn load() -> Result<Option<Settings>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Cannot read preferences: {e}")),
     };
-    if file.metadata().map_err(|e| e.to_string())?.len() > 1_048_576 {
-        return Err("Preferences file is too large".into());
-    }
-    let settings: Settings = serde_json::from_reader(file)
-        .map_err(|e| format!("Cannot read preferences: {e}"))?;
-    settings.validate()?;
-    Ok(Some(settings))
+    use std::io::Read;
+    const LIMIT: usize = 1_048_576;
+    let mut saved = String::new();
+    let readable = file
+        .take(LIMIT as u64 + 1)
+        .read_to_string(&mut saved)
+        .is_ok()
+        && saved.len() <= LIMIT;
+    Ok(Some(Settings::restore(if readable { &saved } else { "" })))
 }
 fn save(settings: &Settings) -> Result<(), String> {
     let Some(path) = path() else {

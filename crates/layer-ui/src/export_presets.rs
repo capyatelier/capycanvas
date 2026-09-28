@@ -242,6 +242,11 @@ impl ExportPresets {
         };
         binary_payload::encode(b"CAPYPRESETS\x01", &metadata, &payloads, Self::MAX_FILE_BYTES)
     }
+    /// Presets saved by any build. A copy this build cannot read counts as
+    /// empty, and the next save replaces it.
+    pub fn restore(bytes: &[u8]) -> Self {
+        Self::decode(bytes).unwrap_or_default()
+    }
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > Self::MAX_FILE_BYTES {
             return Err("Export preset file exceeds 64 MiB".into());
@@ -285,6 +290,9 @@ mod tests {
         }
         let mut corrupt = bytes; corrupt[100] ^= 1;
         assert!(ExportPresets::decode(&corrupt).is_err());
+        for stale in [&corrupt[..], b"{\"destinations\":[]}", b""] {
+            assert_eq!(ExportPresets::restore(stale), ExportPresets::default());
+        }
     }
     #[test]
     fn named_and_remembered_recipes_retain_profiles_independently_and_retire_unused_bytes() {

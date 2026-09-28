@@ -161,6 +161,29 @@ impl EraserEnd {
     }
 }
 impl Settings {
+    /// Read settings saved by any build. Each field this build cannot read or
+    /// validate keeps its default; the next save replaces the saved copy.
+    pub fn restore(saved: &str) -> Self {
+        let valid = |value: &serde_json::Value| {
+            serde_json::from_value::<Self>(value.clone())
+                .ok()
+                .filter(|settings| settings.validate().is_ok())
+        };
+        let mut kept = serde_json::Value::Object(Default::default());
+        if let Ok(serde_json::Value::Object(saved)) = serde_json::from_str(saved) {
+            if let Some(settings) = valid(&serde_json::Value::Object(saved.clone())) {
+                return settings;
+            }
+            for (key, value) in saved {
+                let mut candidate = kept.clone();
+                candidate[key] = value;
+                if valid(&candidate).is_some() {
+                    kept = candidate;
+                }
+            }
+        }
+        valid(&kept).unwrap_or_default()
+    }
     pub fn validate(&self) -> Result<(), String> {
         if self.eraser_end.tool.is_some_and(|t| !crate::shortcuts::ERASER_END_TOOLS.contains(&t)) {
             return Err("The eraser end can't use this tool".into());
@@ -2375,6 +2398,39 @@ mod copy_tests {
                     state.error.unwrap()
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use super::*;
+
+    #[test]
+    fn saved_settings_keep_every_field_this_build_reads() {
+        let chosen = Settings {
+            theme: Some(Theme::Dark),
+            pan_speed: 2.0,
+            zen_show_capy: false,
+            zen_reveal_at_edges: true,
+            pressure_gamma: 1.5,
+            ..Default::default()
+        };
+        let mut saved = serde_json::to_value(&chosen).unwrap();
+        assert_eq!(Settings::restore(&saved.to_string()), chosen);
+        saved["retired_setting"] = serde_json::json!(true);
+        saved["zen_reveal_at_edges"] = serde_json::json!({});
+        saved["pressure_gamma"] = serde_json::json!(-1.0);
+        assert_eq!(
+            Settings::restore(&saved.to_string()),
+            Settings {
+                zen_reveal_at_edges: false,
+                pressure_gamma: 1.0,
+                ..chosen
+            }
+        );
+        for saved in ["", "not json", "null", "[]", r#"{"version":2}"#, r#"{"shortcuts":7}"#] {
+            assert_eq!(Settings::restore(saved), Settings::default(), "{saved}");
         }
     }
 }

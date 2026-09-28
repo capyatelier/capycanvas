@@ -80,7 +80,7 @@ startup request in turn, with and without a healing reset. The SQLite cases
 `sqlite_startup_replaces_workspaces_of_the_same_version_it_cannot_read` and
 `sqlite_startup_keeps_a_newer_store_and_runs_in_memory` cover the rest. The same
 journey runs on real storage with
-`node apps/layer-web/test.mjs --headless --workspace-startup` and
+`node apps/layer-web/test.mjs --headless --stale-storage` and
 `bash tools/performance/workspace-motion.sh gtk
 --native-test=native_unreadable_workspace_storage_input --native-storage`.
 

@@ -15,11 +15,7 @@ pub extern "system" fn Java_art_capycanvas_Native_exportPresets(
 ) -> jobjectArray {
     let result = (|| {
         let bytes = env.convert_byte_array(bytes).map_err(error)?;
-        let mut library = if bytes.is_empty() {
-            layer_ui::ExportPresets::default()
-        } else {
-            layer_ui::ExportPresets::decode(&bytes)?
-        };
+        let mut library = layer_ui::ExportPresets::restore(&bytes);
         let request = serde_json::from_str(&read(&mut env, &request)?).map_err(error)?;
         let color: layer_core::color::DocumentColor =
             serde_json::from_str(&read(&mut env, &color)?).map_err(error)?;

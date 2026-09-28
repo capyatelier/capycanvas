@@ -54,11 +54,7 @@ pub fn raster_worker_export_presets(
         color: layer_core::color::DocumentColor,
     }
     let request: Request = serde_json::from_str(metadata).map_err(js)?;
-    let mut library = if bytes.length() == 0 {
-        layer_ui::ExportPresets::default()
-    } else {
-        layer_ui::ExportPresets::decode(&bytes.to_vec()).map_err(js)?
-    };
+    let mut library = layer_ui::ExportPresets::restore(&bytes.to_vec());
     let view = library
         .operate(request.action, request.color)
         .map_err(js)?;

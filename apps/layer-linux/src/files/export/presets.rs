@@ -26,8 +26,7 @@ fn read(path: &std::path::Path) -> Result<ExportPresets, String> {
     file.take(ExportPresets::MAX_FILE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    ExportPresets::decode(&bytes)
-        .map_err(|e| format!("Cannot read export presets at {}: {e}", path.display()))
+    Ok(ExportPresets::restore(&bytes))
 }
 pub(super) async fn load(
     document: layer_core::color::DocumentColor,
@@ -310,8 +309,11 @@ mod tests {
         );
         assert_eq!(read(&path).unwrap(), next);
         std::fs::write(&path, b"broken").unwrap();
+        assert_eq!(read(&path).unwrap(), empty);
         assert!(write(&path, &next, &empty).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"broken");
+        write(&path, &empty, &next).unwrap();
+        assert_eq!(read(&path).unwrap(), next);
         std::fs::remove_file(path).unwrap();
     }
 }

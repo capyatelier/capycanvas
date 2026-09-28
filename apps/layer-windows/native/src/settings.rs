@@ -56,15 +56,8 @@ impl SettingsFile {
         file.take((MAX_BYTES + 1) as u64)
             .read_to_end(&mut bytes)
             .map_err(|error| io_error("read saved", error))?;
-        if bytes.len() > MAX_BYTES {
-            return Err("Saved preferences exceed the size limit.".into());
-        }
-        let settings: Settings = serde_json::from_slice(&bytes)
-            .map_err(|_| "Saved preferences use an unsupported or invalid format.")?;
-        settings
-            .validate()
-            .map_err(|error| format!("Saved preferences are invalid: {error}"))?;
-        Ok(Some(settings))
+        let saved = std::str::from_utf8(&bytes).ok().filter(|_| bytes.len() <= MAX_BYTES);
+        Ok(Some(Settings::restore(saved.unwrap_or_default())))
     }
     fn write(&mut self, bytes: &[u8]) -> Result<(), String> {
         if bytes.len() > MAX_BYTES {

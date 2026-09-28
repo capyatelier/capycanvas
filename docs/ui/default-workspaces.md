@@ -221,7 +221,7 @@ bash tools/performance/workspace-motion.sh gtk --native-test=native_paint_fitted
 bash tools/performance/workspace-motion.sh gtk --native-test=native_brush_drawer_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_unreadable_workspace_storage_input --native-storage
 node apps/layer-web/test.mjs --workspace-switcher
-node apps/layer-web/test.mjs --headless --workspace-startup
+node apps/layer-web/test.mjs --headless --stale-storage
 node apps/layer-web/device.test.mjs --paint-columns
 ```
 

@@ -177,11 +177,10 @@ final class NativeOwner: @unchecked Sendable {
         }
     }
     private func restore(_ loaded: EditorPersistence.Loaded) {
-        storageError = loaded.error
+        storageError = nil
         if let data = loaded.settings {
             do {
-                let value = try JSONSerialization.jsonObject(with: data)
-                _ = try request(0, JSON(["type": "restore_settings", "settings": value]))
+                _ = try request(0, JSON(["type": "restore_saved_settings", "saved": String(decoding: data, as: UTF8.self)]))
             } catch { storageError = "Could not restore settings: \(error.localizedDescription)" }
         }
         do {
@@ -415,10 +414,10 @@ final class NativeOwner: @unchecked Sendable {
         // of this owner's writes have been acknowledged, including our own.
         guard settingsWrites == 0, !failedSettingsWrite, let change = latestSettings else { return }
         latestSettings = nil; appliedSettingsRevision = change.revision
-        let settings = try JSONSerialization.jsonObject(with: change.data)
         storageError = nil
-        guard !NSDictionary(dictionary: currentSettings.object).isEqual(settings) else { return }
-        _ = try request(0, JSON(["type": "restore_settings", "settings": settings]))
+        if let settings = try? JSONSerialization.jsonObject(with: change.data),
+            NSDictionary(dictionary: currentSettings.object).isEqual(settings) { return }
+        _ = try request(0, JSON(["type": "restore_saved_settings", "saved": String(decoding: change.data, as: UTF8.self)]))
     }
     private func reportStorage() {
         let status = JSON(["pending": settingsWrites, "error": storageError as Any? ?? NSNull(),

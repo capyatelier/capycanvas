@@ -159,9 +159,9 @@ private final class State: @unchecked Sendable {
             let invalidState = State()
             let invalid = try NativeOwner(platform: platform, persistence: persistence,
                 receive: { invalidState.receive($0, $1) })
-            precondition(!flush(invalid))
-            precondition(invalidState.read().2 == nil && !invalidState.read().1["error"].isNull,
-                "Invalid saved models must report a storage error without disabling the canvas")
+            precondition(flush(invalid))
+            precondition(invalidState.read().2 == nil && invalidState.read().1["error"].isNull,
+                "Settings from another version must restore without a storage error")
             let preserved = try Data(contentsOf: settingsFile)
             precondition(preserved == unsupported, "Defaults must not overwrite an unsupported saved version")
         }

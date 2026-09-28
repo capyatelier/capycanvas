@@ -124,6 +124,16 @@ pub fn prepare_profile_import(
     Ok(entry)
 }
 
+/// Hidden ids as any build saved them; entries this build cannot read are dropped.
+fn saved_ids<'de, D: serde::Deserializer<'de>>(saved: D) -> Result<Vec<String>, D::Error> {
+    let saved = serde_json::Value::deserialize(saved)?;
+    Ok(saved
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|id| id.as_str().map(Into::into))
+        .collect())
+}
 /// The same stateless transport for Wasm workers and JNI. File paths never
 /// enter this contract; a Remove result can only name an app-owned object.
 #[derive(Deserialize)]
@@ -131,6 +141,7 @@ pub fn prepare_profile_import(
 pub enum ProfileLibraryAction {
     Limits,
     Visibility {
+        #[serde(deserialize_with = "saved_ids")]
         hidden: Vec<String>,
         id: Option<String>,
         visible: Option<bool>,
@@ -247,5 +258,20 @@ mod tests {
         );
         assert!(!valid_profile_id("original.icc"));
         assert!(prepare_profile_import(vec![], &vec![0; PROFILE_READ_LIMIT + 1]).is_err());
+    }
+    #[test]
+    fn hidden_profiles_saved_by_any_build_read_what_this_build_can() {
+        let id = "a".repeat(64);
+        for (hidden, expected) in [
+            (serde_json::json!([id, 7, {"id": id}, "original.icc"]), serde_json::json!([id])),
+            (serde_json::json!({"hidden": [id]}), serde_json::json!([])),
+            (serde_json::json!("broken"), serde_json::json!([])),
+        ] {
+            let action: ProfileLibraryAction = serde_json::from_value(
+                serde_json::json!({"type": "visibility", "hidden": hidden, "id": null, "visible": null}),
+            )
+            .unwrap();
+            assert_eq!(action.execute(&[]).unwrap(), expected);
+        }
     }
 }
