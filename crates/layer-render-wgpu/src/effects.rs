@@ -55,6 +55,21 @@ pub(super) enum Execution {
 /// the effect blends onto. Linear variants convert nothing.
 type Stage = (Execution, layer_core::BlendSpace);
 
+pub(super) fn image_grid(output: display_mips::Plan, front: display_mips::Plan, original: display_mips::Plan) -> [f32; 32] {
+    let mut data = [0.; 32];
+    let [w, h] = output.size.map(|n| n as f32);
+    data[..6].copy_from_slice(&[0., 0., w, h, w, h]);
+    data[12..16].copy_from_slice(&[output.bounds.min_x() as f32, output.bounds.min_y() as f32,
+        output.extent[0] as f32, output.extent[1] as f32]);
+    for (offset, plan) in [(16, front), (20, original)] {
+        data[offset..offset + 4].copy_from_slice(&[plan.bounds.min_x() as f32, plan.bounds.min_y() as f32,
+            plan.bounds.width() as f32, plan.bounds.height() as f32]);
+    }
+    data[24..27].copy_from_slice(&[front, original, output].map(|p| (1 << p.level) as f32));
+    data[28..30].copy_from_slice(&[output.bounds.width() as f32, output.bounds.height() as f32]);
+    data
+}
+
 #[derive(Clone)]
 pub(super) struct PreparedEffect {
     pub pipeline: Deferred<wgpu::RenderPipeline>,
@@ -580,15 +595,27 @@ fn fx_lookup(base:u32,table:u32,index:u32)->vec4<f32> {
 }
 fn fx_time(base:u32)->f32 { return effect_data[base-1u].w; }
 fn fx_extent()->vec2<f32> { return settings.color.zw; }
+fn fx_position(local:vec2<f32>)->vec2<f32> {
+    let side=settings.operation_linear.z;
+    if side<=1. {return settings.color.xy+local;}
+    let low=floor(local)*side;
+    return settings.color.xy+(low+min(low+side,settings.operation_offset.xy))*.5;
+}
+fn fx_grid_sample(image:texture_2d<f32>,point:vec2<f32>,grid:vec4<f32>,step:f32)->vec4<f32> {
+    if grid.z<=0. {return working_sample_float(image,point);}
+    if step<=1. {return working_sample_float(image,clamp(point-grid.xy,vec2(.5),grid.zw-.5));}
+    let q=(point-grid.xy)/step;let extent=grid.zw/step;
+    let last=ceil(extent)-1.;let previous=last-.5;
+    let adjusted=select(q,previous+(q-previous)/((extent-last+1.)*.5),q>previous);
+    return working_sample_float(image,clamp(adjusted,vec2(.5),last+.5));
+}
 fn fx_sample(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
-    if settings.source_over.z>0. {return working_sample_float(front,point-settings.source_over.xy);}
-    return working_sample_float(front,point);
+    return fx_grid_sample(front,point,settings.source_over,settings.operation_linear.x);
 }
 fn fx_original(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
-    if settings.backdrop.z>0. {return working_sample_float(back,point-settings.backdrop.xy);}
-    return working_sample_float(back,point);
+    return fx_grid_sample(back,point,settings.backdrop,settings.operation_linear.y);
 }
 @fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {
     return effect_result(v);
@@ -615,7 +642,7 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
         let p = &programs[0];
         let base = offsets[0] + 1;
         let shown = |expression: String| if input_encoded { format!("working_decode({expression})") } else { expression };
-        source.push_str("fn effect_result(v:Vertex)->vec4<f32> {let position=v.position.xy+settings.color.xy;let c=fx_sample(position);\n");
+        source.push_str("fn effect_result(v:Vertex)->vec4<f32> {let position=fx_position(v.position.xy);let c=fx_sample(position);\n");
         for (j, pass) in p.passes.iter().enumerate() {
             let result = format!("{}(c,position,{base}u)", pass.entry);
             let result = if j + 1 == p.passes.len() { shown(result) } else { result };
@@ -630,7 +657,7 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
         let last = stage + 1 >= p.passes.len();
         let adjusted = format!("{entry}(fx_sample(position),position,1u)");
         let adjusted = if last { encoded(adjusted) } else { adjusted };
-        source.push_str(&format!("fn effect_result(v:Vertex)->vec4<f32> {{ let position=v.position.xy+settings.color.xy; let adjusted={adjusted};\n"));
+        source.push_str(&format!("fn effect_result(v:Vertex)->vec4<f32> {{ let position=fx_position(v.position.xy); let adjusted={adjusted};\n"));
         if last && p.kind == EffectKind::Adjustment {
             source.push_str(&format!("let c={};let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {{coverage=textureLoad(effect_mask_0,vec2<i32>(v.position.xy),0).a;}}let rgb=fx_output_range(blend(fx_unassociate(adjusted),fx_unassociate(c),u32(controls.y)));", encoded("fx_original(position)".into())));
             if p.alpha == layer_core::EffectAlpha::Filter {
@@ -659,7 +686,7 @@ fn effect_result(v:Vertex)->vec4<f32> {
         if settings.source_over.w<1.5 {c+=settings.backdrop*(1.-c.a);}
     }
     let mask=select(1.,textureLoad(back,vec2<i32>(local),0).a,settings.options.w>.5);
-    let position=settings.color.xy+local;
+    let position=fx_position(local);
 "#,
     );
     for (i, (p, offset)) in programs.iter().zip(offsets).enumerate() {

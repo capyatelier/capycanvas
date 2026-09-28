@@ -100,6 +100,31 @@ unchanged at 62.01 and 45.87. Viewport GPU medians fall from 5.60 to 5.03 ms for
 translation and 5.61 to 4.96 ms for resize. Old-main transform throughput still
 exceeds this build; these gains do not close the geometry regressions.
 
+## Sources larger than the canvas
+
+This diagnostic places the 12 MP photo at original size over a 1062 × 708 canvas
+and moves it at reduced zoom. It measures source-window retention, not the
+12 MP canvas target above. Three five-second gestures alternate before/after
+order on the TCL at thermal status 0, using the same test APK and private app.
+
+| Measurement | Full source images | Bounded source windows |
+| --- | --- | --- |
+| Completed updates/s | 139.06 | 137.71 |
+| Completion gap p99 | 12.80 ms | 12.99 ms |
+| Screen presents/s | 59.57 | 59.39 |
+| Renderer-owned storage | 501.4 MiB | 321.4 MiB |
+
+The 1.0% throughput difference lies within these runs' overlapping ranges;
+renderer-owned storage falls 35.9%. This is not a process-memory measurement.
+Windows retain nearby motion up to twice the requested pixel storage. Returning
+to covered pixels preserves textures and avoids repeated source decoding.
+
+Measured 2026-09-28 against `d99823d2`; candidate APK SHA-256
+`7056d5dc4c92fcb3b2c07936ad027c901150f8844f1b42643feee6eab779ff5f`.
+Source patch, immutable APKs, raw results and traces are under
+`artifacts/display-production/source-window-oscillation-*`. The screen-present
+accounting limits in the geometry section apply.
+
 ## Brushes
 
 Target: **60 completed updates/s** at the guaranteed size, on the 12 MP canvas.

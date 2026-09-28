@@ -109,18 +109,18 @@ impl Sources {
         source.damage = if reset { PixelRect::full(extent) } else { damage.iter().fold(PixelRect::EMPTY, |r, c| r.union(page_rect(*c).intersect(PixelRect::full(extent)))) };
         for level in source.levels.values_mut() { level.valid.retain(|c| !damage.contains(c)); }
     }
-    pub fn sample(&self, id: LayerId, requested: u32) -> Option<(u32, &wgpu::TextureView, [u32; 2])> {
+    pub fn sample(&self, id: LayerId, requested: u32) -> Option<(display_mips::Plan, &wgpu::TextureView)> {
         let source = self.entries.get(&id)?;
-        let (&level, image) = source.levels.range(..=requested).next_back()?;
-        let size = [image.image.texture.width(), image.image.texture.height()];
-        Some((level, &image.image.view, size))
+        let (_, image) = source.levels.range(..=requested).next_back()?;
+        Some((image.image.plan, &image.image.view))
     }
     pub fn complete_texture(&self, layer: &Layer, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
         let source = self.entries.get(&layer.id)?;
         let current = source.extent == extent && source.raster == layer.raster.identity() && source.preview.is_empty()
             && match (&source.source, &layer.source) { (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false };
         let image = source.levels.get(&level)?;
-        (current && page_coordinates(PixelRect::full(extent)).all(|c| image.valid.contains(&c))).then_some(&image.image.texture)
+        (current && image.image.plan.bounds == PixelRect::full(extent)
+            && page_coordinates(PixelRect::full(extent)).all(|c| image.valid.contains(&c))).then_some(&image.image.texture)
     }
     pub fn placement_levels(&mut self, requested: &BTreeMap<LayerId, u32>, budget: u64, max_side: u32) -> BTreeMap<LayerId, u32> {
         let cost = |id: LayerId, level: u32| display_mips::Plan::at(self.entries[&id].extent, level).level_bytes(level);
@@ -166,16 +166,43 @@ impl Sources {
         selected
     }
     pub(super) fn image(&self, id: LayerId, level: u32) -> &Level { &self.entries[&id].levels[&level] }
+    pub(super) fn resident_plan(&self, id: LayerId, requested: display_mips::Plan) -> display_mips::Plan {
+        self.entries.get(&id).and_then(|s| s.levels.get(&requested.level)).map(|l| l.image.plan)
+            .filter(|p| p.extent == requested.extent && !requested.bounds.is_empty())
+            .map(|p| display_mips::Plan::window(p.extent, p.level, p.bounds.union(requested.bounds)))
+            .filter(|p| p.level_bytes(p.level) <= requested.level_bytes(requested.level).saturating_mul(2))
+            .unwrap_or(requested)
+    }
     pub(super) fn ensure_level(&mut self, commands: &mut Commands, r: &mut WgpuRasterizer,
-        encoder: &mut crate::submission::CommandEncoder, id: LayerId, level: u32,
+        encoder: &mut crate::submission::CommandEncoder, id: LayerId, plan: display_mips::Plan,
     ) -> Result<(), GpuRasterError> {
         let source = self.entries.get_mut(&id).unwrap();
-        let plan = display_mips::Plan::at(source.extent, level);
-        let mut target = source.levels.remove(&level).unwrap_or_else(|| Level { image: Image::new(r, plan.size), valid: BTreeSet::new() });
+        let level = plan.level;
+        let mut target = source.levels.remove(&level).unwrap_or_else(|| Level { image: Image::new(r, plan, "composition source level"), valid: BTreeSet::new() });
+        if target.image.plan != plan {
+            let previous = target;
+            target = Level { image: Image::new(r, plan, "composition source level"), valid: BTreeSet::new() };
+            let overlap = previous.image.plan.bounds.intersect(plan.bounds);
+            if !overlap.is_empty() {
+                let [sx, sy, width, height] = paint_transform::texel_rect(overlap.window_local(previous.image.plan.bounds), 1 << level);
+                let [dx, dy, _, _] = paint_transform::texel_rect(overlap.window_local(plan.bounds), 1 << level);
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo { origin: wgpu::Origin3d { x: sx, y: sy, z: 0 }, ..previous.image.texture.as_image_copy() },
+                    wgpu::TexelCopyTextureInfo { origin: wgpu::Origin3d { x: dx, y: dy, z: 0 }, ..target.image.texture.as_image_copy() },
+                    wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
+                target.valid.extend(previous.valid.into_iter().filter(|c| {
+                    let region = page_rect(*c).intersect(PixelRect::full(plan.extent));
+                    region.intersect(overlap) == region
+                }));
+            }
+        }
         if let Some((&finer, previous)) = source.levels.range(..level).next_back() {
             let mut columns: Vec<PixelRect> = Vec::new();
+            let mut completed = Vec::new();
             for tile in previous.valid.difference(&target.valid) {
                 let region = page_rect(*tile).intersect(PixelRect::full(source.extent));
+                if region.intersect(plan.bounds) != region { continue; }
+                completed.push(*tile);
                 if let Some(last) = columns.last_mut().filter(|r| r.min_x() == region.min_x() && r.max_y() == region.min_y()) {
                     *last = last.union(region);
                 } else { columns.push(region); }
@@ -187,11 +214,13 @@ impl Sources {
                 } else { regions.push(column); }
             }
             for changed in regions {
-                let [x, y, width, height] = paint_transform::texel_rect(changed, 1 << level);
+                let [x, y, width, height] = paint_transform::texel_rect(changed.window_local(plan.bounds), 1 << level);
                 let binding = Commands::binding(r, &previous.image.view, &r.empty_view, &target.image.view);
                 let mut values = [0; 16];
-                values[..8].copy_from_slice(&[x, y, width, height, source.extent[0], source.extent[1],
+                values[..8].copy_from_slice(&[x, y, width, height, previous.image.plan.bounds.width(), previous.image.plan.bounds.height(),
                     1 << (level - finer), (finer << 8) | 8]);
+                values[14] = ((previous.image.plan.bounds.min_x() as f32 - plan.bounds.min_x() as f32) / (1 << finer) as f32).to_bits();
+                values[15] = ((previous.image.plan.bounds.min_y() as f32 - plan.bounds.min_y() as f32) / (1 << finer) as f32).to_bits();
                 let offset = commands.record(r, encoder, values)?;
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("derive source level"), timestamp_writes: None,
@@ -201,23 +230,23 @@ impl Sources {
                 pass.set_bind_group(1, &binding, &[]);
                 pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
             }
-            target.valid.extend(&previous.valid);
+            target.valid.extend(completed);
         }
         source.levels.insert(level, target);
         Ok(())
     }
-    pub fn retain_levels(&mut self, requested: &BTreeMap<LayerId, BTreeSet<u32>>, budget: u64) {
+    pub fn retain_levels(&mut self, requested: &BTreeMap<LayerId, BTreeMap<u32, display_mips::Plan>>, budget: u64) {
         let mut reserve = 0;
-        let empty = BTreeSet::new();
+        let empty = BTreeMap::new();
         for (id, source) in &mut self.entries {
             let levels = requested.get(id).unwrap_or(&empty);
-            let finer = levels.first().and_then(|requested| source.levels.range(..requested).next_back()).or_else(|| levels.is_empty().then(|| source.levels.first_key_value()).flatten()).map(|(&level, _)| level);
-            source.levels.retain(|level, _| levels.contains(level) || Some(*level) == finer);
-            reserve += levels.iter().filter(|level| !source.levels.contains_key(level))
-                .map(|level| display_mips::Plan::at(source.extent, *level).level_bytes(*level)).sum::<u64>();
+            let finer = levels.first_key_value().and_then(|(requested, _)| source.levels.range(..requested).next_back()).or_else(|| levels.is_empty().then(|| source.levels.first_key_value()).flatten()).map(|(&level, _)| level);
+            source.levels.retain(|level, _| levels.contains_key(level) || Some(*level) == finer);
+            reserve += levels.iter().map(|(level, plan)| plan.level_bytes(*level)
+                .saturating_sub(source.levels.get(level).map_or(0, |l| l.image.bytes()))).sum::<u64>();
         }
         let mut optional: Vec<_> = self.entries.iter().flat_map(|(id, source)| source.levels.iter()
-            .filter(|(level, _)| !requested.get(id).is_some_and(|levels| levels.contains(level))).map(|(level, image)| (texture_bytes(&image.image.texture), *id, *level))).collect();
+            .filter(|(level, _)| !requested.get(id).is_some_and(|levels| levels.contains_key(level))).map(|(level, image)| (texture_bytes(&image.image.texture), *id, *level))).collect();
         optional.sort_unstable_by_key(|(bytes, _, _)| std::cmp::Reverse(*bytes));
         let mut bytes = self.storage_bytes() + reserve;
         for (size, id, level) in optional {
@@ -233,14 +262,16 @@ impl Scene {
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder, layer: &Layer, request: SourceRequest,
     ) -> Result<PixelRect, GpuRasterError> {
-        let SourceRequest { level, required, covered } = request;
+        let SourceRequest { plan, required, covered } = request;
+        if plan.bounds.is_empty() { return Ok(PixelRect::EMPTY); }
+        let level = plan.level;
         let extent = layer.local_extent(packet.document_extent);
         let mut changed = PixelRect::EMPTY;
-        self.scale_sources.ensure_level(commands, r, encoder, layer.id, level)?;
+        self.scale_sources.ensure_level(commands, r, encoder, layer.id, plan)?;
         let cached = self.scale_sources.image(layer.id, level);
         let output = cached.image.view.clone();
-        let missing: Vec<_> = page_coordinates(PixelRect::full(extent))
-            .filter(|c| !cached.valid.contains(c) && !page_rect(*c).intersect(required).is_empty() && page_rect(*c).intersect(covered).is_empty())
+        let missing: Vec<_> = page_coordinates(required.intersect(plan.bounds))
+            .filter(|c| !cached.valid.contains(c) && page_rect(*c).intersect(covered).is_empty())
             .collect();
         for chunk in missing.chunks(32) {
             let mut jobs = Vec::with_capacity(chunk.len());
@@ -281,7 +312,7 @@ impl Scene {
                 changed = changed.union(valid);
                 let size =
                     [valid.width(), valid.height()].map(|n| n.div_ceil(1 << level));
-                let origin = tile.map(|n| (n * PAGE_SIZE) >> level);
+                let origin = [(tile[0] * PAGE_SIZE - plan.bounds.min_x()) >> level, (tile[1] * PAGE_SIZE - plan.bounds.min_y()) >> level];
                 let input_level = if reduced_preview { r.preview_level } else { 0 };
                 let mut values = [0; 16];
                 values[..8].copy_from_slice(&[
@@ -319,19 +350,21 @@ impl Scene {
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         mask: &layer_core::LayerMask, request: SourceRequest,
     ) -> Result<PixelRect, GpuRasterError> {
-        let SourceRequest { level, required, covered } = request;
+        let SourceRequest { plan, required, covered } = request;
+        if plan.bounds.is_empty() { return Ok(PixelRect::EMPTY); }
+        let level = plan.level;
         let extent = self.scale_sources.entries[&mask.id].extent;
         let mut changed = PixelRect::EMPTY;
-        self.scale_sources.ensure_level(commands, r, encoder, mask.id, level)?;
+        self.scale_sources.ensure_level(commands, r, encoder, mask.id, plan)?;
         let cached = self.scale_sources.image(mask.id, level);
         let output = cached.image.view.clone();
-        let missing: Vec<_> = page_coordinates(PixelRect::full(extent)).filter(|c| !cached.valid.contains(c) && !page_rect(*c).intersect(required).is_empty() && page_rect(*c).intersect(covered).is_empty()).collect();
+        let missing: Vec<_> = page_coordinates(required.intersect(plan.bounds)).filter(|c| !cached.valid.contains(c) && page_rect(*c).intersect(covered).is_empty()).collect();
         for tile in missing {
             let source = r.layer_masks.pages.get(&(mask.id, tile)).map(|p| p.view.clone());
             let valid = page_rect(tile).intersect(PixelRect::full(extent));
             changed = changed.union(valid);
             let size = [valid.width(), valid.height()].map(|n| n.div_ceil(1 << level));
-            let origin = tile.map(|n| (n * PAGE_SIZE) >> level);
+            let origin = [(tile[0] * PAGE_SIZE - plan.bounds.min_x()) >> level, (tile[1] * PAGE_SIZE - plan.bounds.min_y()) >> level];
             let mut values = [0; 16];
             values[..8].copy_from_slice(&[
                 origin[0], origin[1], size[0], size[1], valid.width(), valid.height(), 1 << level,
@@ -372,12 +405,14 @@ impl Scene {
         for (id, level) in selected {
             if requested[&id] == 0 { continue; }
             let layer = packet.layers.iter().find(|l| l.id == id).unwrap();
-            self.prepare_scale_color(commands, r, packet, encoder, layer, SourceRequest { level, required: PixelRect::full(layer.local_extent(packet.document_extent)), covered: PixelRect::EMPTY })?;
+            let extent = layer.local_extent(packet.document_extent);
+            self.prepare_scale_color(commands, r, packet, encoder, layer, SourceRequest {
+                plan: display_mips::Plan::at(extent, level), required: PixelRect::full(extent), covered: PixelRect::EMPTY })?;
             for next in level + 1..=8 {
                 let source = &self.scale_sources.entries[&id];
                 let bytes = display_mips::Plan::at(source.extent, next).level_bytes(next);
                 if source.levels.contains_key(&next) || self.scale_sources.storage_bytes() + bytes <= budget {
-                    self.scale_sources.ensure_level(commands, r, encoder, id, next)?;
+                    self.scale_sources.ensure_level(commands, r, encoder, id, display_mips::Plan::at(extent, next))?;
                 }
             }
         }

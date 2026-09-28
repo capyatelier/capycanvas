@@ -122,7 +122,7 @@ impl Resample {
         for (dst, value) in values[160..192].chunks_exact_mut(4).zip(options) {
             dst.copy_from_slice(&value.to_le_bytes());
         }
-        let sizes = [source.extent.map(|n| n as f32 / (1 << source.level) as f32),
+        let sizes = [[source.bounds.width(), source.bounds.height()].map(|n| n as f32 / (1 << source.level) as f32),
             display.extent.map(|n| n as f32 / display.side as f32)];
         for (row, size) in values[192..].chunks_exact_mut(16).zip(sizes) {
             for (dst, value) in row.chunks_exact_mut(4).zip(size.into_iter().chain([0.; 2])) {

@@ -504,9 +504,12 @@ retains reusable GPU images, tracks input changes and reuses compatible precedin
 results where possible. Each image has document-coordinate bounds independent of
 its texture size. Region capture expands its window by the accumulated declared
 filter support, and applies the existing group, clipping, mask and effect logic
-inside that window. Shaders keep document coordinates for their calculations;
-current-pass and original-input sampling each carry their own texture origin.
-Native one-to-one image reads use fragment positions directly, avoiding a
+inside that window. Shaders keep document coordinates for their calculations.
+Output, current-pass input and original input each carry their own bounds and
+texel footprint through the shared image-grid descriptor. Reduced inputs use
+the centers of their actual covered cells, including partial boundary cells.
+Filter-picker previews use the same coordinate contract. Native one-to-one
+image reads use fragment positions directly, avoiding a
 window-size-dependent interpolation error from reconstructed UV coordinates.
 
 Filter previews scan four source tiles per asynchronous completion, including
@@ -575,6 +578,10 @@ in a small stroke update. A contact that begins before its brush is ready stays
 suppressed until release.
 Changing paint color or HDR intensity leaves brush readiness intact when the
 tip, texture assets and shader pass requirements stay the same.
+
+Headless capture compiles the dependencies its requested regions execute.
+Creating a read-only snapshot does not compile paint-publication kernels.
+Interactive brush readiness still prepares those kernels before accepting paint.
 
 On Web, GPU initialization waits for the workspace (at most 1 s), and pipelines
 are created through the asynchronous WebGPU APIs, a few at a time: synchronous

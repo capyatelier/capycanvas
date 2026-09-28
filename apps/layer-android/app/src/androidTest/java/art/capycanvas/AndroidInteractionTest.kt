@@ -4130,7 +4130,11 @@ class AndroidInteractionTest {
                 assertFalse("Reset Offset waits for an offset", commandState("clone_reset_offset").getBoolean("enabled"))
                 for (theme in listOf("light", "dark")) {
                     action(obj("type" to "set_theme", "theme" to theme))
-                    captureCanvasBar("clone-bar-$theme", "clone")
+                    copied("$theme keeps the reference visible", at(.25, .4))
+                    captureCanvasBar("clone-bar-$theme", "clone") { image, origin ->
+                        val p = point(at(.25, .4)) + origin
+                        assertTrue("$theme keeps the reference in the captured canvas", blue(image.getPixel(p.x.toInt(), p.y.toInt())))
+                    }
                 }
                 action(obj("type" to "set_theme", "theme" to originalTheme))
                 pick("Editing layer")

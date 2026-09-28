@@ -373,6 +373,21 @@ class AndroidCanvasBarBenchmarkTest {
                 measure("photo-pixels-warp-drag") { drag(anchorPoint(1.0 / 3), duration, wiggle) }
                 invoke("cancel_transform")
             }
+            if (wanted("cropped_photo")) {
+                newDocument(width / 4 to height / 4)
+                place(photo())
+                invoke("placement_original_size")
+                val anchor = state().getJSONObject("canvas_bar").getJSONArray("anchor")
+                check(kotlin.math.abs(anchor.getDouble(2) - anchor.getDouble(0) - width) < 1) { "Photo width: $anchor, expected $width" }
+                check(kotlin.math.abs(anchor.getDouble(3) - anchor.getDouble(1) - height) < 1) { "Photo height: $anchor, expected $height" }
+                repeat(4) { if (state().getJSONObject("camera").getDouble("zoom") > .35) invoke("zoom_out") }
+                check(state().getJSONObject("camera").getDouble("zoom") <= .35)
+                SystemClock.sleep(1500)
+                drag(anchorPoint(.5), 500, wiggle)
+                SystemClock.sleep(1500)
+                measure("cropped-photo-translate-drag") { drag(anchorPoint(.5), duration, wiggle) }
+                invoke("cancel_transform")
+            }
             if (wanted("crop")) {
                 newDocument()
                 place(photo())

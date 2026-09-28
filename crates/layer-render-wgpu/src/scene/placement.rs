@@ -60,12 +60,13 @@ impl Scene {
         let affine = layer_core::target_transform(packet.layers, layer.id);
         if self.placement_display
             && scale::placement_level(packet.layers, layer.id) > 0
-            && let Some((level, view, size)) = self.scale_sources.sample(layer.id, scale::placement_level(packet.layers, layer.id))
+            && let Some((plan, view)) = self.scale_sources.sample(layer.id, scale::placement_level(packet.layers, layer.id))
         {
-            let scale = (1 << level) as f32;
+            let scale = (1 << plan.level) as f32;
+            let size = plan.size;
             let view = view.clone();
             let transform = layer_core::ImageTransform::affine(
-                layer_core::Affine([scale, 0., 0., scale, 0., 0.]).then(affine),
+                layer_core::Affine([scale, 0., 0., scale, plan.bounds.min_x() as f32, plan.bounds.min_y() as f32]).then(affine),
             );
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             self.jobs.push(Job::Placement(Box::new(PlacementJob {

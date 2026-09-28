@@ -100,6 +100,7 @@ impl NativeEdit {
             validator: validate::Validator::new(&r.device, r.document_color().depth),
         }
     }
+    #[cfg(test)]
     pub(crate) fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
         self.color
             .pipelines
@@ -274,11 +275,6 @@ impl WgpuRasterizer {
         self.scene = None;
         let transfer = self.prepare_native_transfer(color.space)?;
         let native = NativeEdit::new(self, transfer);
-        if self.startup.is_none() {
-            for pipeline in native.pipelines() {
-                pipeline.compile();
-            }
-        }
         // Transfer-table preparation creates the scene before NativeEdit's
         // headroom snapshot exists. Admit live source storage now, while that
         // new scene still owns no decoded pixels. Background snapshots retain

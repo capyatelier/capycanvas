@@ -188,7 +188,7 @@ impl Reduced<'_> {
                 return Ok(Value::Image { view: image.view.clone(), slot: None, opacity: 1. });
         }
         let output = if let Some(branch) = self.cache.graph.branches.get_mut(node) {
-            Some((branch.image.get_or_insert_with(|| Image::new(self.r, self.cache.plan.size)).view.clone(), None))
+            Some((branch.image.get_or_insert_with(|| Image::new(self.r, self.cache.plan, "composition branch")).view.clone(), None))
         } else { output };
         let result = match node.as_ref() {
             Expression::Color(c) => Value::Color(c.map(f32::from_bits)),

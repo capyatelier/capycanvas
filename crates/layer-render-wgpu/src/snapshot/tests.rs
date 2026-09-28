@@ -16,6 +16,16 @@ fn capture(project: Project) -> Result<SnapshotRenderer, GpuRasterError> {
 }
 
 #[test]
+fn read_only_capture_does_not_compile_paint_publication_pipelines() {
+    let document = Document::new("Read-only capture", 33, 17);
+    let color = [0.25, 0.5, 0.75, 1.];
+    let mut capture = gpu().capture(Project { document }, color, 0., Default::default()).unwrap();
+    assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
+    assert!(capture.read_region([0, 0, 33, 17]).unwrap().iter().all(|p| *p == color));
+    assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
+}
+
+#[test]
 fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
     let mut doc = Document::new("Animation phase", 32, 32);
     let program = crate::tests::fixture("domain_warp").program();

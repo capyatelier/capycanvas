@@ -234,17 +234,17 @@ fn whole_image_selections_reserve_one_transform_input_pyramid() {
     let mut preview = layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id,
         moving: true, selection: None, transform: ImageTransform::affine(Affine([4.,0.,0.,4.,0.,0.])) };
     r.set_transform_preview(Some(&preview)).unwrap();
-    let no_selection = allocation(&r, plan, frame);
+    let no_selection = allocation(&r, plan, frame, None);
     assert_eq!(level(&r, frame), Some(2));
     preview.selection = Some(Selection::polygon([[0.,0.],[4248.,0.],[4248.,2832.],[0.,2832.]]
         .map(|[x,y]| Point { x,y }).to_vec()).unwrap());
     r.set_transform_preview(Some(&preview)).unwrap();
-    assert_eq!(allocation(&r, plan, frame), no_selection);
+    assert_eq!(allocation(&r, plan, frame, None), no_selection);
     assert_eq!(level(&r, frame), Some(2));
     preview.selection = Some(Selection::polygon([[0.,0.],[2124.,0.],[2124.,2832.],[0.,2832.]]
         .map(|[x,y]| Point { x,y }).to_vec()).unwrap());
     r.set_transform_preview(Some(&preview)).unwrap();
-    assert!(allocation(&r, plan, frame)[1] > no_selection[1]);
+    assert!(allocation(&r, plan, frame, None)[1] > no_selection[1]);
 }
 
 #[test]

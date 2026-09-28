@@ -24,6 +24,15 @@ which local pages are valid. Paint uses premultiplied working color and masks
 use scalar coverage. Source identity, immutable native captures, brush damage
 and retired prediction footprints invalidate the affected pages at every level.
 One current native backing is retained per source, rather than per level.
+Each image carries its native extent, resident bounds and texel footprint.
+Source windows cover the inverse-mapped output with page-aligned sampling
+padding. A resident window grows to include nearby requests while it occupies at
+most twice the requested pixel storage; admission charges the retained window.
+Motion back into that window preserves its images. Moving beyond that allowance
+replaces the window, copies valid overlap and prepares only missing pages.
+Reduction between windows uses their origins and weights partial boundary texels.
+Admission charges the resident dimensions, including replacement windows and
+presentation levels. A partial source image cannot satisfy a whole-image query.
 
 A changed exact page is averaged directly into its source image. Empty pages
 write zero without reading a full page. Decode batches consume their inputs
@@ -185,7 +194,8 @@ edges, changing prediction footprints, opacity, ordering, source removal,
 resolution changes, window overlap, active pixel transforms, cancellation,
 zoom transitions, release, exact commit and linked mask/group/clipping semantics,
 bounded exact queries, affine source and mask placement, sparse
-source derivation, prediction cancellation and entry/exit through the filter fallback.
+source derivation across different window origins, bounded source storage,
+prediction cancellation and entry/exit through the filter fallback.
 A 32-layer test edits the beginning, middle and end of the stack, checks exact
 output agreement and bounds the command count while preserving untouched pages. Direct
 placement presentation is compared with supersampled exact output through

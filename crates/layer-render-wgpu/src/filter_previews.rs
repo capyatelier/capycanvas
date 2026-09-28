@@ -431,8 +431,8 @@ impl FilterPreviews {
             )
             .expand(pad, extent)
         });
-        let packed_bounds = [source_bounds.min_x(), source_bounds.min_y(), source_bounds.width(), source_bounds.height()]
-            .map(|v| v as f32);
+        let source_grid = display_mips::Plan::window(extent, 0,
+            if self.point.is_some() { source_bounds } else { PixelRect::full(extent) });
         let source = if self.point.is_some() {
             self.source = Some(create_color_target(
                 &r.device,
@@ -538,38 +538,17 @@ impl FilterPreviews {
                 ));
             }
             let mut previous = source.clone();
+            let grid = display_mips::Plan::window(extent, 0,
+                PixelRect::new(crop[0], crop[1], crop[0] + size[0], crop[1] + size[1]));
             for stage in 0..count {
                 let target = self.scratch[stage % 2].1.clone();
-                let mut data = [0.; 32];
-                data[..8].copy_from_slice(&[
-                    0.,
-                    0.,
-                    size[0] as f32,
-                    size[1] as f32,
+                let mut data = effects::image_grid(grid, if stage == 0 { source_grid } else { grid }, source_grid);
+                data[4..8].copy_from_slice(&[
                     self.scratch_size[0] as f32,
                     self.scratch_size[1] as f32,
                     0.,
                     stage as f32,
                 ]);
-                data[12..16].copy_from_slice(&[
-                    crop[0] as f32,
-                    crop[1] as f32,
-                    extent[0] as f32,
-                    extent[1] as f32,
-                ]);
-                if self.point.is_some() {
-                    data[20..24].copy_from_slice(&packed_bounds);
-                }
-                if stage == 0 && self.point.is_some() {
-                    data[16..20].copy_from_slice(&packed_bounds);
-                } else if stage > 0 {
-                    data[16..20].copy_from_slice(&[
-                        crop[0] as f32,
-                        crop[1] as f32,
-                        self.scratch_size[0] as f32,
-                        self.scratch_size[1] as f32,
-                    ]);
-                }
                 self.scene.jobs.push(Job::Effect {
                     target: target.clone(),
                     sources: [previous, source.clone(), r.empty_view.clone()],

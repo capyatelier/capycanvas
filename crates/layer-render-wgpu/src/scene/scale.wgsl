@@ -21,8 +21,7 @@ fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {
         textureStore(output, vec2<i32>(region.origin + id.xy), region.paper);
         return;
     }
-    // Page inputs start at zero; retained images use global input coordinates.
-    let start = (id.xy + select(vec2<u32>(0u), region.origin, (region.flags & 8u) != 0u)) * region.side - vec2<u32>(region.opacity.zw);
+    let start = vec2<u32>(vec2<i32>((id.xy + select(vec2<u32>(0u), region.origin, (region.flags & 8u) != 0u)) * region.side) - vec2<i32>(region.opacity.zw));
     let step = 1u << (region.flags >> 8u);
     let remaining = region.extent - start * step;
     let size = min(vec2<u32>(region.side), (remaining + step - 1u) / step);

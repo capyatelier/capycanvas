@@ -17,6 +17,20 @@ pub(crate) mod resample;
 pub(crate) mod scale;
 
 #[derive(Clone)]
+struct Image {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    plan: display_mips::Plan,
+}
+impl Image {
+    fn new(r: &WgpuRasterizer, plan: display_mips::Plan, label: &'static str) -> Self {
+        let (texture, view) = create_color_target(&r.device, plan.size, label);
+        Self { texture, view, plan }
+    }
+    fn bytes(&self) -> u64 { texture_bytes(&self.texture) }
+}
+
+#[derive(Clone)]
 enum Job {
     Placement(Box<placement::PlacementJob>),
     DecodedTile(std::sync::Arc<sources::PendingTile>),
@@ -992,10 +1006,10 @@ impl Scene {
         let mask = layer.mask.as_ref().filter(|m| m.enabled);
         if mask.is_none() && self.placement_display && self.cached_composition()
             && scale::placement_level(packet.layers, layer.id) > 0
-            && let Some((level, view, _)) = self.scale_sources.sample(layer.id, scale::placement_level(packet.layers, layer.id))
+            && let Some((plan, view)) = self.scale_sources.sample(layer.id, scale::placement_level(packet.layers, layer.id))
         {
-            let scale = (1 << level) as f32;
-            let transform = layer_core::Affine([scale, 0., 0., scale, 0., 0.])
+            let scale = (1 << plan.level) as f32;
+            let transform = layer_core::Affine([scale, 0., 0., scale, plan.bounds.min_x() as f32, plan.bounds.min_y() as f32])
                 .then(layer_core::target_transform(packet.layers, layer.id));
             let inverse = transform.inverse().ok_or(GpuRasterError::InvalidTransform(
                 "Transform must be finite and invertible"))?.0;
@@ -1361,7 +1375,8 @@ impl Scene {
             self.display_source_tiles.release_pixels();
             self.effects.retain(packet.layers);
             cache.prepare_graph(r, packet, &self.scale_sources, &commands)?;
-            self.scale_sources.retain_levels(&cache.source_levels(r, packet), cache.source_budget(r, packet, &commands));
+            self.scale_sources.retain_levels(&cache.source_levels(r, packet, &self.scale_sources),
+                cache.source_budget(r, packet, &commands, Some(&self.scale_sources)));
             let result = (|| {
                 if cache.plan.level == 0 { self.prepare_placed_sources(r, packet, encoder, &mut commands)?; }
                 cache.render(self, r, packet, dirty, &mut scale::Encoding { encoder, commands: &mut commands }, tiles)

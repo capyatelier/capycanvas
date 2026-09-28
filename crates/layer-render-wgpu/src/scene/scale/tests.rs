@@ -16,7 +16,7 @@ fn document_at(extent: [u32; 2]) -> Document {
             profile: Default::default(),
             profile_assumed: false,
         },
-        8 << 20,
+        extent[0] as usize * extent[1] as usize * 16,
     )
     .unwrap();
     for y in 0..extent[1] {
@@ -147,6 +147,46 @@ fn placed_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
 }
 
 #[test]
+fn source_windows_keep_overlap_and_sample_global_coordinates() {
+    let source_extent = [4099, 2053];
+    let mut doc = document_at(source_extent);
+    let extent = [513, 257];
+    doc.width = extent[0]; doc.height = extent[1];
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    let mut updates = 0;
+    let mut previous = None;
+    for (step, offset) in [[-2050., -1000.], [-2100., -1000.], [-2350., -1000.], [-2100., -1000.], [-3575., -1790.], [700., 400.]].into_iter().enumerate() {
+        doc.layers[0].properties.placement = layer_core::Affine::translation(layer_core::Point { x: offset[0], y: offset[1] });
+        let mut frame = packet(&doc.layers, extent);
+        frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        let cache = r.scale_display.as_ref().unwrap();
+        assert!(r.live_display.is_none() && r.composite_texture.is_none());
+        let sources = &r.scene.as_ref().unwrap().scale_sources;
+        assert!(sources.storage_bytes() < 8 << 20, "small output retains bounded source windows: {}", sources.storage_bytes());
+        let source = &sources.entries[&doc.layers[0].id];
+        eprintln!("source window step={step} bytes={} native_page_updates={}", sources.storage_bytes(), source.updates);
+        let images: Vec<_> = source.levels.values().map(|l| l.image.texture.clone()).collect();
+        if step == 1 || step == 3 {
+            assert_eq!(source.updates, updates, "motion inside the retained window reuses source pixels");
+            assert_eq!(previous.as_ref().unwrap(), &images, "covered motion retains the same textures");
+        }
+        previous = Some(images);
+        updates = source.updates;
+        let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), cache.plan);
+        assert!(error[0] < 0.004 && error[1] < 0.04, "step={step}: {error:?}");
+        assert_presentation_mip(&r);
+    }
+    doc.layers[0].properties.placement = layer_core::Affine([0.5, 0., 0., 0.5, -100., -100.]);
+    let frame = packet(&doc.layers, extent);
+    r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+    let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), r.scale_display.as_ref().unwrap().plan);
+    assert!(error[0] < 0.004 && error[1] < 0.04, "native placement after a partial source: {error:?}");
+}
+
+#[test]
 fn source_retention_reserves_images_that_composition_allocates_later() {
     let mut doc = document_at([33, 17]);
     doc.width = 4096; doc.height = 4096;
@@ -159,13 +199,51 @@ fn source_retention_reserves_images_that_composition_allocates_later() {
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     let cache = Cache::new(&r, display_mips::Plan::at(frame.document_extent, 2), doc.layers.len());
     assert!(cache.output.is_empty() && cache.next.is_none());
-    let source_budget = cache.source_budget(&r, frame, &Commands::new(&r));
+    let source_budget = cache.source_budget(&r, frame, &Commands::new(&r), None);
     r.scale_display = Some(cache);
     r.submit(frame).unwrap();
     let cache = r.scale_display.as_ref().unwrap();
     assert!(!cache.output.is_empty() && cache.next.is_some());
     let commands = r.scene.as_ref().unwrap().scale_commands.as_ref().unwrap();
     assert!(source_budget + cache.storage_bytes() + commands.storage_bytes() <= live_display::CACHE_BYTES);
+}
+
+#[test]
+fn source_windows_derive_across_origins_and_fill_only_missing_pages() {
+    let doc = document_at([1027, 773]);
+    let extent = [doc.width, doc.height];
+    let id = doc.layers[0].id;
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, extent);
+    r.submit(frame).unwrap();
+    let reference = pixels(&r, r.scale_display.as_ref().unwrap().texture());
+    frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+    r.submit(frame).unwrap();
+    let mut scene = r.scene.take().unwrap();
+    let full = PixelRect::full(extent);
+    let window = PixelRect::new(256, 256, extent[0], extent[1]);
+    for (fine, coarse) in [(full, window), (window, full)] {
+        let mut commands = Commands::new(&r);
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        scene.prepare_scale_color(&mut commands, &mut r, frame, &mut encoder, &doc.layers[0], SourceRequest {
+            plan: display_mips::Plan::window(extent, 1, fine), required: fine, covered: PixelRect::EMPTY,
+        }).unwrap();
+        scene.scale_sources.entries.get_mut(&id).unwrap().levels.remove(&2);
+        let plan = display_mips::Plan::window(extent, 2, coarse);
+        let updates = scene.scale_sources.entries[&id].updates;
+        scene.scale_sources.ensure_level(&mut commands, &mut r, &mut encoder, id, plan).unwrap();
+        let complete = scene.scale_sources.image(id, 2).valid.len();
+        assert_eq!(complete, page_coordinates(fine.intersect(coarse)).count());
+        assert_eq!(scene.scale_sources.entries[&id].updates, updates);
+        scene.prepare_scale_color(&mut commands, &mut r, frame, &mut encoder, &doc.layers[0], SourceRequest {
+            plan, required: coarse, covered: PixelRect::EMPTY,
+        }).unwrap();
+        assert_eq!(scene.scale_sources.entries[&id].updates - updates, (page_coordinates(coarse).count() - complete) as u64);
+        r.uploads.finish(&encoder); encoder.submit(&r.queue);
+        let actual = pixels(&r, &scene.scale_sources.image(id, 2).image.texture);
+        assert!(quality(&actual, &reference, plan)[2] < 1e-6);
+        assert_eq!(scene.scale_sources.complete_texture(&doc.layers[0], extent, 2).is_some(), coarse == full);
+    }
 }
 
 #[test]
@@ -308,9 +386,9 @@ fn deriving_partial_sources_preserves_completed_texels_between_refreshed_regions
     for tile in [[0, 0], [3, 3]] {
         scene.scale_sources.entries.get_mut(&id).unwrap().levels.get_mut(&3).unwrap().valid.remove(&tile);
         scene.prepare_scale_color(&mut commands, &mut r, frame, &mut encoder, &doc.layers[0],
-            SourceRequest { level: 1, required: page_rect(tile), covered: PixelRect::EMPTY }).unwrap();
+            SourceRequest { plan: display_mips::Plan::at(extent, 1), required: page_rect(tile), covered: PixelRect::EMPTY }).unwrap();
     }
-    scene.scale_sources.ensure_level(&mut commands, &mut r, &mut encoder, id, 3).unwrap();
+    scene.scale_sources.ensure_level(&mut commands, &mut r, &mut encoder, id, display_mips::Plan::at(extent, 3)).unwrap();
     r.uploads.finish(&encoder);
     encoder.submit(&r.queue);
     let actual = pixels(&r, &scene.scale_sources.image(id, 3).image.texture);
@@ -579,8 +657,8 @@ fn materialized_display(r: &WgpuRasterizer) -> Image {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         pass.encode(&mut encoder, &binding, texels, scene::resample::Sampling::AffineArea);
         encoder.submit(&r.queue);
-        Image { texture, view }
-    } else { Image { texture: cache.texture().clone(), view: cache.view().clone() } }
+        Image { texture, view, plan: cache.plan }
+    } else { Image { texture: cache.texture().clone(), view: cache.view().clone(), plan: cache.plan } }
 }
 
 fn assert_presentation_mip(r: &WgpuRasterizer) {
