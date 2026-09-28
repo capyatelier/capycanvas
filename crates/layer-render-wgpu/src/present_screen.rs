@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 pub(crate) const UNIFORM_SIZE: u64 = 64;
-pub(crate) const COUNTS_SIZE: u64 = 64 * 4;
+const COUNTS_SIZE: u64 = 64 * 4;
 const WORKGROUP: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,6 +61,8 @@ const FAILED: u8 = 3;
 
 pub(crate) struct ScreenCounter {
     pipeline: wgpu::ComputePipeline,
+    counts: wgpu::Buffer,
+    group: wgpu::BindGroup,
     readback: wgpu::Buffer,
     state: Arc<AtomicU8>,
     counted: Option<Vec<u32>>,
@@ -68,16 +70,36 @@ pub(crate) struct ScreenCounter {
 }
 
 impl ScreenCounter {
-    pub(crate) fn new(device: &wgpu::Device, layout: &wgpu::PipelineLayout, shader: &wgpu::ShaderModule) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, viewport: &wgpu::BindGroupLayout, shader: &wgpu::ShaderModule) -> Self {
+        let layout = crate::bindings::layout(device, "screen gamut counts", &[crate::bindings::buffer(
+            0,
+            wgpu::ShaderStages::COMPUTE,
+            wgpu::BufferBindingType::Storage { read_only: false },
+            false,
+            wgpu::BufferSize::new(COUNTS_SIZE),
+        )]);
+        let counts = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("screen gamut counts"),
+            size: COUNTS_SIZE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("screen gamut count"),
+            bind_group_layouts: &[Some(viewport), Some(&layout)],
+            immediate_size: 0,
+        });
         Self {
             pipeline: device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("screen gamut count"),
-                layout: Some(layout),
+                layout: Some(&pipeline_layout),
                 module: shader,
                 entry_point: Some("screen_count"),
                 compilation_options: Default::default(),
                 cache: None,
             }),
+            group: crate::bindings::group(device, "screen gamut counts", &layout, [counts.as_entire_binding()]),
+            counts,
             readback: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("screen gamut readback"),
                 size: COUNTS_SIZE,
@@ -102,25 +124,25 @@ impl ScreenCounter {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        group: &wgpu::BindGroup,
-        counts: &wgpu::Buffer,
-        viewport: [u32; 2],
+        viewport: &wgpu::BindGroup,
+        extent: [u32; 2],
         signature: Vec<u32>,
     ) {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("screen gamut count"),
         });
-        encoder.clear_buffer(counts, 0, None);
+        encoder.clear_buffer(&self.counts, 0, None);
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("screen gamut count"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, group, &[0]);
-            pass.dispatch_workgroups(viewport[0].div_ceil(WORKGROUP), viewport[1].div_ceil(WORKGROUP), 1);
+            pass.set_bind_group(0, viewport, &[0]);
+            pass.set_bind_group(1, &self.group, &[]);
+            pass.dispatch_workgroups(extent[0].div_ceil(WORKGROUP), extent[1].div_ceil(WORKGROUP), 1);
         }
-        encoder.copy_buffer_to_buffer(counts, 0, &self.readback, 0, COUNTS_SIZE);
+        encoder.copy_buffer_to_buffer(&self.counts, 0, &self.readback, 0, COUNTS_SIZE);
         queue.submit([encoder.finish()]);
         self.state.store(MAPPING, Ordering::Release);
         let state = self.state.clone();

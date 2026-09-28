@@ -56,7 +56,6 @@ pub struct ViewportPresenter {
     hdr_options: [f32; 8],
     screen_uniform: wgpu::Buffer,
     screen_options: [f32; 16],
-    screen_counts: wgpu::Buffer,
     screen_counter: Option<crate::present_screen::ScreenCounter>,
     local_buffer: wgpu::Buffer,
     disabled_local_buffer: wgpu::Buffer,
@@ -331,13 +330,13 @@ impl ViewportPresenter {
             .chain([renderer.composite_revision as u32, (renderer.composite_revision >> 32) as u32])
             .collect();
         let counter = self.screen_counter.get_or_insert_with(|| {
-            crate::present_screen::ScreenCounter::new(&renderer.device, &self.pipeline_layout, &self.shader)
+            crate::present_screen::ScreenCounter::new(&renderer.device, &self.layout, &self.shader)
         });
         if counter.busy() || counter.current(&signature) {
             return false;
         }
         let viewport = [camera[8] as u32, camera[9] as u32];
-        counter.start(&renderer.device, &renderer.queue, group, &self.screen_counts, viewport, signature);
+        counter.start(&renderer.device, &renderer.queue, group, viewport, signature);
         true
     }
 
@@ -456,13 +455,6 @@ impl ViewportPresenter {
                 false,
                 std::num::NonZeroU64::new(crate::present_screen::UNIFORM_SIZE),
             ),
-            crate::bindings::buffer(
-                13,
-                wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Storage { read_only: false },
-                false,
-                std::num::NonZeroU64::new(crate::present_screen::COUNTS_SIZE),
-            ),
         ]);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("viewport layout"),
@@ -547,12 +539,6 @@ impl ViewportPresenter {
                 mapped_at_creation: false,
             }),
             screen_options: [0.; 16],
-            screen_counts: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("screen gamut counts"),
-                size: crate::present_screen::COUNTS_SIZE,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
             screen_counter: None,
             local_buffer: disabled_local_buffer.clone(),
             disabled_local_buffer,
@@ -862,7 +848,6 @@ impl ViewportPresenter {
                 self.local_buffer.as_entire_binding(),
                 wgpu::BindingResource::TextureView(saved),
                 self.screen_uniform.as_entire_binding(),
-                self.screen_counts.as_entire_binding(),
             ]));
             self.document_extent = renderer.document_extent;
             self.selection_buffer = Some(coverage.clone());

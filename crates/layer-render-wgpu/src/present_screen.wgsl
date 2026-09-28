@@ -1,6 +1,6 @@
 struct ScreenCheck { red: vec4<f32>, green: vec4<f32>, blue: vec4<f32>, options: vec4<f32> }
 @group(0) @binding(12) var<uniform> screen_check: ScreenCheck;
-@group(0) @binding(13) var<storage, read_write> screen_counts: array<atomic<u32>, 64>;
+@group(1) @binding(0) var<storage, read_write> screen_counts: array<atomic<u32>, 64>;
 const SCREEN_TOLERANCE: f32 = .01;
 const SCREEN_MARK: vec3<f32> = vec3<f32>(0., .17, 1.);
 
