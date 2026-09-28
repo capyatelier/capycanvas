@@ -210,6 +210,9 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
     doc.sdr_rendition.validate().map_err(str::to_string)?;
     if let Some(resolution) = doc.resolution { resolution.validate()?; }
     doc.metadata.validate()?;
+    if doc.blend_space != doc.blend_space.for_depth(doc.color.depth) {
+        return Err("Float documents blend in linear light".into());
+    }
     if let Some(recipe) = &doc.proof {
         recipe.validate()?;
         if let color::ColorProfile::Icc(bytes) = &recipe.profile

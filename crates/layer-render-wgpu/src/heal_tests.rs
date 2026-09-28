@@ -108,7 +108,14 @@ fn texture_and_gradient(x: u32, y: u32) -> f32 {
 
 #[test]
 fn healing_keeps_the_source_texture_and_takes_the_destination_tone() {
-    let doc = photo(|x, y| grey(texture_and_gradient(x, y)));
+    for blend_space in layer_core::BlendSpace::ALL {
+        heals_texture_and_tone(blend_space);
+    }
+}
+
+fn heals_texture_and_tone(blend_space: layer_core::BlendSpace) {
+    let mut doc = photo(|x, y| grey(texture_and_gradient(x, y)));
+    doc.blend_space = blend_space;
     let (mut input, mut engine) = healer(doc, DefaultBrushPreset::HealingBrush, 64., false);
     source_at(&mut engine, 150., 256.);
     stroke(&mut engine, &mut input, 1, [600., 256.], [880., 256.]);
@@ -121,27 +128,31 @@ fn healing_keeps_the_source_texture_and_takes_the_destination_tone() {
         let block: Vec<_> = (x0..x0 + 16).flat_map(|x| (248..264).map(move |y| (x, y))).collect();
         let got = mean(&block.iter().map(|&(x, y)| healed(x, y)[1]).collect::<Vec<_>>());
         let wanted = mean(&block.iter().map(|&(x, y)| decoded(x, y)).collect::<Vec<_>>());
-        assert!((got - wanted).abs() < 0.01, "block at {x0}: mean {got} against the destination's {wanted}");
+        assert!((got - wanted).abs() < 0.01, "{blend_space:?} block at {x0}: mean {got} against the destination's {wanted}");
     }
     let result = high_pass(|x, y| healed(x, y)[1], &interior);
     let source = high_pass(|x, y| decoded((x as i32 + offset) as u32, y), &interior);
     let r = correlation(&result, &source);
-    assert!(r > 0.9, "the healed texture follows its source: correlation {r}");
+    assert!(r > 0.9, "{blend_space:?}: the healed texture follows its source: correlation {r}");
     assert_eq!(counts(&engine).heals, 1);
 }
 
 #[test]
 fn with_matching_surroundings_healing_is_the_clone() {
     let periodic = |x: u32, y: u32| grey(0.4 + 0.2 * noise(x % 32, y % 32));
-    let mut pages = Vec::new();
-    for preset in [DefaultBrushPreset::CloneStamp, DefaultBrushPreset::HealingBrush] {
-        let (mut input, mut engine) = healer(photo(periodic), preset, 48., false);
-        source_at(&mut engine, 216., 144.);
-        stroke(&mut engine, &mut input, 1, [600., 144.], [860., 300.]);
-        pages.push(target_pages(engine.backend()));
+    for blend_space in layer_core::BlendSpace::ALL {
+        let mut pages = Vec::new();
+        for preset in [DefaultBrushPreset::CloneStamp, DefaultBrushPreset::HealingBrush] {
+            let mut doc = photo(periodic);
+            doc.blend_space = blend_space;
+            let (mut input, mut engine) = healer(doc, preset, 48., false);
+            source_at(&mut engine, 216., 144.);
+            stroke(&mut engine, &mut input, 1, [600., 144.], [860., 300.]);
+            pages.push(target_pages(engine.backend()));
+        }
+        assert!(pages[0].iter().any(|(_, page)| page.iter().any(|p| p[3] > 0.)), "{blend_space:?}: the clone painted");
+        assert_eq!(pages[0], pages[1], "{blend_space:?}: a membrane of zero leaves the clone exactly");
     }
-    assert!(pages[0].iter().any(|(_, page)| page.iter().any(|p| p[3] > 0.)), "the clone painted");
-    assert_eq!(pages[0], pages[1], "a membrane of zero leaves the clone exactly");
 }
 
 #[test]

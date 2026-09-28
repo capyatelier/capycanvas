@@ -391,8 +391,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
 fn native_hdr_export_preflight_rejects_range_and_allows_explicit_clipping() {
     use layer_core::color::{source::*, hdr};
     let app = native_test_app("art.capycanvas.HdrPreflight");
-    let mut p = new_drawing(64, 64).unwrap();
-    p.document.color.depth = SampleDepth::F16;
+    let mut p = new_drawing_at(64, 64, SampleDepth::F16);
     p.document.layers[1].visible = false;
     let mut source = SourceBuilder::new([64, 64], SourceInterpretation {
         channels: SourceChannels::Rgba, depth: SampleDepth::F16,
@@ -505,8 +504,7 @@ fn native_hdr_display_negotiation_and_export_navigation() {
 fn native_hdr_export_preview_preserves_master_and_tracks_display() {
     use layer_core::color::{ColorProfile, source::*};
     let app = native_test_app("art.capycanvas.HdrExportPreview");
-    let mut p = new_drawing(64, 64).unwrap();
-    p.document.color.depth = SampleDepth::F16;
+    let mut p = new_drawing_at(64, 64, SampleDepth::F16);
     p.document.layers[1].visible = false;
     p.document.sdr_rendition.exposure = -4.;
     let mut source = SourceBuilder::new([64, 64], SourceInterpretation {
@@ -604,7 +602,7 @@ fn native_gainmap_export() {
         let path=output.join(name);if path.exists(){std::fs::remove_file(path).unwrap();}
     }
     for transparent in [false,true] {
-        let mut p=new_drawing(64,48).unwrap();p.document.color.depth=SampleDepth::F16;p.document.layers[1].visible=false;
+        let mut p=new_drawing_at(64,48,SampleDepth::F16);p.document.layers[1].visible=false;
         let mut source=SourceBuilder::new([64,48],SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F16,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false},1024*1024).unwrap();
         for _ in 0..48{let mut row=Vec::new();for x in 0..64{let a=if transparent{x as f32/63.}else{1.};let v=layer_core::color::hdr::encode_pixel([4.,0.5,0.2,a]).unwrap();row.extend(v.into_iter().flat_map(u16::to_le_bytes));}source.push_row(&row).unwrap();}
         p.document.layers[0].source=Some(std::sync::Arc::new(source.finish().unwrap()));
@@ -718,7 +716,7 @@ fn native_proof_dial_hit_regions() {
 #[ignore = "private Mutter input and LAYER_NATIVE_CAPTURE_DIR compositor captures"]
 fn native_proof_dial_composited_motion() {
     let app = native_test_app("art.capycanvas.ProofDialComposited");
-    let mut project=new_drawing(64,64).unwrap();project.document.color.depth=SampleDepth::F16;
+    let project=new_drawing_at(64,64,SampleDepth::F16);
     let w=Workspace::with_project(&app,Some((project,None)));
     w.window.maximize();w.window.present();ready(&w);
     invoke(&w,CommandId::SdrRendition);appearance(&w);pump(300);
@@ -789,7 +787,7 @@ fn native_proof_dial_composited_motion() {
 #[ignore = "isolated Mutter native-input.js --native-test=native_proof_dial_pointer_input"]
 fn native_proof_dial_pointer_input() {
     let app = native_test_app("art.capycanvas.ProofDialPointer");
-    let mut p = new_drawing(64,64).unwrap(); p.document.color.depth=SampleDepth::F16;
+    let p = new_drawing_at(64,64,SampleDepth::F16);
     let w=Workspace::with_project(&app,Some((p,None)));
     w.window.maximize(); w.window.present(); ready(&w);
     invoke(&w,CommandId::SdrRendition); appearance(&w); pump(300);
@@ -883,8 +881,7 @@ fn native_float32_new_open_edit_save_and_exr_export() {
 fn native_hdr_close_cancels_pending_local_analysis() {
     let app = native_test_app("art.capycanvas.HdrCloseAnalysis");
     for depth in [SampleDepth::F16, SampleDepth::F32] {
-        let mut project = new_drawing(4096, 4096).unwrap();
-        project.document.color.depth = depth;
+        let project = new_drawing_at(4096, 4096, depth);
         let w = Workspace::with_project(&app, Some((project, None)));
         w.window.present();
         ready(&w);

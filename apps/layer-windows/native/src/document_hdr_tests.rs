@@ -109,6 +109,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             extent: [32, 24],
             color,
             background: layer_ui::DocumentBackground::Transparent,
+            ..Default::default()
         }
         .project()
         .unwrap();

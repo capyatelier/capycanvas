@@ -2,7 +2,7 @@
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::glib;
-use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
+use layer_core::{BlendSpace, color::{DocumentColor, SampleDepth, RgbSpace}};
 use layer_ui::*;
 use std::{cell::Cell, rc::Rc};
 
@@ -14,6 +14,8 @@ struct Form {
     background: adw::ComboRow,
     space: adw::ComboRow,
     depth: adw::ComboRow,
+    blending: adw::ComboRow,
+    blend_space: Cell<BlendSpace>,
     color: adw::ExpanderRow,
     note: gtk::Label,
     remove: gtk::Button,
@@ -32,6 +34,7 @@ impl Form {
             } else {
                 DocumentBackground::Transparent
             },
+            blend_space: self.blend_space.get(),
         }
     }
     fn populate(&self, options: NewDocumentOptions) {
@@ -49,15 +52,25 @@ impl Form {
         self.background.set_selected(u32::from(
             options.background == DocumentBackground::Transparent,
         ));
+        self.blend_space.set(options.blend_space);
         self.updating.set(false);
         self.describe();
     }
     fn describe(&self) {
         let options = self.options();
+        let blending = options.blend_space.for_depth(options.color.depth);
+        let updating = self.updating.replace(true);
+        self.blending.set_selected(BlendSpace::ALL.iter().position(|b| *b == blending).unwrap() as u32);
+        self.updating.set(updating);
+        self.blending.set_sensitive(!options.color.depth.is_float());
+        self.blending.set_subtitle(
+            BlendSpace::unavailable_reason(options.color.depth).unwrap_or(blending.description()),
+        );
         self.color.set_subtitle(&format!(
-            "{} · {}",
+            "{} · {} · {}",
             options.color.space.name(),
-            options.color.depth.label()
+            options.color.depth.label(),
+            blending.label()
         ));
         self.note
             .set_text("16-bit SDR is recommended for ProPhoto gradients and photo adjustments.");
@@ -74,6 +87,12 @@ impl Form {
         if !self.updating.get() {
             self.preset.set_selected(0);
             self.describe();
+        }
+    }
+    fn blending_edited(&self) {
+        if !self.updating.get() && self.blending.is_sensitive() {
+            self.blend_space.set(BlendSpace::ALL[self.blending.selected().min(1) as usize]);
+            self.edited();
         }
     }
     fn presets(&self, settings: &NewDocumentSettings, selected: u32) {
@@ -147,12 +166,21 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         "new-document-depth",
         &["8-bit SDR", "16-bit SDR", "16-bit float HDR", "32-bit float HDR"],
     );
+    let choices = NewDocumentBlending::new();
+    let blending = combo(
+        choices.label,
+        "new-document-blending",
+        &choices.choices.iter().map(|c| c.label).collect::<Vec<_>>(),
+    );
+    blending.set_subtitle_lines(2);
     group.remove(&space);
     group.remove(&depth);
+    group.remove(&blending);
     let color = adw::ExpanderRow::builder().title("Color").build();
     color.set_widget_name("new-document-color");
     color.add_row(&space);
     color.add_row(&depth);
+    color.add_row(&blending);
     group.add(&color);
     let note = gtk::Label::builder()
         .wrap(true)
@@ -201,6 +229,8 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         background,
         space,
         depth,
+        blending,
+        blend_space: Cell::new(settings.defaults.blend_space),
         color,
         note,
         remove,
@@ -227,6 +257,11 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
             move |_| form.edited()
         ));
     }
+    form.blending.connect_selected_notify(glib::clone!(
+        #[weak]
+        form,
+        move |_| form.blending_edited()
+    ));
     form.preset.connect_selected_notify(glib::clone!(
         #[weak]
         form,

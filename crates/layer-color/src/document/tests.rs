@@ -598,3 +598,23 @@ fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
     wide.document.layers[0].raster = RasterRevision::backed(RasterData { tiles: [(key(RasterPlane::Color), RasterTile::backed(TileBlob::encode(wide.document.color.paint_descriptor(), &bytes).unwrap()))].into(), watercolor: None });
     assert!(prepare_document_color(&wide, demote, LIMIT, || false).err().unwrap().contains("range"));
 }
+
+#[test]
+fn converting_to_float_blends_in_linear_light_in_the_same_step() {
+    let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
+    let mut project = fixture(color);
+    project.document.blend_space = layer_core::BlendSpace::Perceptual;
+    let promote = DocumentColorChange::Depth { depth: SampleDepth::F32, dither: OutputDither::None };
+    let result = prepare_document_color(&project, promote, LIMIT, || false).unwrap();
+    assert_eq!(result.project.document.blend_space, layer_core::BlendSpace::Linear);
+    let mut editor = Editor::new(project.document.clone());
+    editor.perform(edit(&result)).unwrap();
+    assert_eq!(editor.document().color.depth, SampleDepth::F32);
+    assert_eq!(editor.document().blend_space, layer_core::BlendSpace::Linear);
+    assert!(editor.undo().unwrap());
+    assert_eq!((editor.document().color, editor.document().blend_space), (color, layer_core::BlendSpace::Perceptual));
+    assert!(!editor.can_undo());
+    assert!(editor.redo().unwrap());
+    assert_eq!(editor.document().blend_space, layer_core::BlendSpace::Linear);
+    assert!(editor.perform(Edit::SetBlendSpace(layer_core::BlendSpace::Perceptual)).unwrap_err().to_string().contains("linear light"));
+}

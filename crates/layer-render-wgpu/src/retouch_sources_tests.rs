@@ -45,6 +45,18 @@ fn over(top: [f32; 4], below: [f32; 4]) -> [f32; 4] {
     std::array::from_fn(|i| top[i] + below[i] * (1. - top[3]))
 }
 
+/// `top` over `below`, premultiplied linear, combined in `space`.
+fn over_in(space: layer_core::BlendSpace, top: [f32; 4], below: [f32; 4]) -> [f32; 4] {
+    let convert = |p: [f32; 4], f: fn(layer_core::color::RgbSpace, f64) -> f64| -> [f32; 4] {
+        if p[3] <= 0. { return p; }
+        std::array::from_fn(|i| if i == 3 { p[3] } else { (f(layer_core::color::RgbSpace::Srgb, f64::from(p[i] / p[3])) * f64::from(p[3])) as f32 })
+    };
+    if space == layer_core::BlendSpace::Linear {
+        return over(top, below);
+    }
+    convert(over(convert(top, layer_core::color::RgbSpace::encode), convert(below, layer_core::color::RgbSpace::encode)), layer_core::color::RgbSpace::decode)
+}
+
 /// The target (layer 1) above a patterned photo marked as a reference, above
 /// the paper.
 fn document(extent: [u32; 2]) -> Document {
@@ -210,7 +222,14 @@ fn clone_reads_over_the_strokes_own_dabs_see_the_pixels_it_started_on() {
 
 #[test]
 fn current_and_below_lays_the_target_at_its_opacity_over_the_references() {
-    let (mut input, mut engine) = engine(document(SIZE), false);
+    for space in layer_core::BlendSpace::ALL {
+        current_and_below_in(space);
+    }
+}
+fn current_and_below_in(space: layer_core::BlendSpace) {
+    let mut doc = document(SIZE);
+    doc.blend_space = space;
+    let (mut input, mut engine) = engine(doc, false);
     engine.set_layer_opacity(TARGET, 0.5).unwrap();
     engine.set_retouch(Some(RetouchSource::References));
     engine.set_retouch_points(&[Point { x: 40., y: 40. }]);
@@ -221,15 +240,15 @@ fn current_and_below_lays_the_target_at_its_opacity_over_the_references() {
         let (source, complete) = sample(engine.backend_mut(), [0, 0], offset);
         assert!(complete);
         for (x, y) in [(20u32, 30u32), (100, 200), (230, 17)] {
-            let expected = over(top, reference(x + offset[0] as u32, y + offset[1] as u32));
+            let expected = over_in(space, top, reference(x + offset[0] as u32, y + offset[1] as u32));
             let got = source[(y * 256 + x) as usize];
-            assert!(close(got, expected), "{offset:?} ({x},{y}): {got:?} != {expected:?}");
+            assert!(close(got, expected), "{space:?} {offset:?} ({x},{y}): {got:?} != {expected:?}");
         }
     }
     let (half, _) = sample(engine.backend_mut(), [0, 0], [-5.5, 0.]);
     let [left, right] = [reference(94, 40), reference(95, 40)];
-    let expected = over(top, std::array::from_fn(|i| (left[i] + right[i]) / 2.));
-    assert!(close(half[40 * 256 + 100], expected), "a half-pixel shift blends neighbors");
+    let expected = over_in(space, top, std::array::from_fn(|i| (left[i] + right[i]) / 2.));
+    assert!(close(half[40 * 256 + 100], expected), "a half-pixel shift blends neighbors in linear light");
     draw(&mut engine, &mut input, pen(2, PenPhase::Up, [600., 400.], SampleFlags::PRIMARY));
     flush(&mut engine);
 

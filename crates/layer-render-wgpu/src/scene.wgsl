@@ -21,6 +21,13 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
     o.position = vec4<f32>(p.x/settings.extent.x*2.-1.,1.-p.y/settings.extent.y*2.,0.,1.);
     o.uv = uv; return o;
 }
+// operation_offset.w converts the color a layer draw contributes: 1 encodes
+// linear layer pixels into the Perceptual composite, 2 decodes the composite.
+fn scene_space(c:vec4<f32>)->vec4<f32> {
+    if settings.operation_offset.w==1. {return working_encode(c);}
+    if settings.operation_offset.w==2. {return working_decode(c);}
+    return c;
+}
 fn scene_sample(image:texture_2d<f32>,uv:vec2<f32>)->vec4<f32> {
     return working_sample_float(image,uv*vec2<f32>(textureDimensions(image)));
 }
@@ -129,7 +136,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     return foreground*outline+background*interior;
 }
 @fragment fn fragment_main(v: Vertex) -> @location(0) vec4<f32> {
-    if settings.options.x==12. {return scene_image(v)*settings.options.y;}
+    if settings.options.x==12. {return scene_space(scene_image(v))*settings.options.y;}
     if any(v.uv<vec2<f32>(0.)) || any(v.uv>vec2<f32>(1.)) { discard; }
     let op = u32(settings.options.x);
     if op == 0u { return settings.color; }
@@ -172,16 +179,16 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
         }
         return src + dst * (1. - src.a);
     }
-    if op == 1u { return raw*settings.options.y; }
+    if op == 1u { return scene_space(raw)*settings.options.y; }
     // Store pooled mask coverage in alpha to avoid an sRGB encode/decode
     // round trip quantizing feather coverage through a color channel.
     if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m); }
     if op == 7u || op == 13u { return scene_normal(raw,v); }
     let dst = scene_read(back,v);
-    if op == 14u { return (raw + dst * (1. - raw.a)) * settings.options.y; }
+    if op == 14u { return scene_space(raw + dst * (1. - raw.a)) * settings.options.y; }
     if op == 16u { return raw * settings.options.y + dst * settings.options.z; }
     if op == 3u { return raw*mix(dst.a,1.-dst.a,settings.options.z); }
-    if op == 5u { let a = (1.-raw.a)*.42; return vec4<f32>(.46,.12,.8,1.)*a; }
+    if op == 5u { let a = (1.-raw.a)*.42; return scene_space(vec4<f32>(.46,.12,.8,1.)*a); }
     let src = raw*settings.options.y;
     if settings.options.w > .5 { return blend_clip(src,dst,u32(settings.options.z)); }
     return blend_composite(src,dst,u32(settings.options.z));
@@ -193,7 +200,7 @@ fn scene_normal(raw: vec4<f32>, v: Vertex) -> vec4<f32> {
         let mask=scene_read(back,v).r;
         m=mix(mask,1.-mask,settings.options.w-2.);
     }
-    let src = raw * m * settings.options.y;
+    let src = scene_space(raw) * m * settings.options.y;
     if settings.options.x == 13. { return src + settings.source_over * (1. - src.a); }
     return src;
 }

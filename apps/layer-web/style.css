@@ -801,6 +801,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .document-dialog form { display:flex; flex-direction:column; gap:14px; }
 .document-dialog h2 { margin:0; font-size:1.15em; }
 .document-dialog footer { display:flex; gap:8px; justify-content:flex-end; }
+.document-dialog .document-note { margin:-8px 0 0; color:var(--settings-secondary); font-size:.9em; }
 .size-dialog { width:min(380px,90vw); height:fit-content; }
 .size-dialog h2:focus { outline:none; }
 .size-dialog-fields { display:flex; flex-direction:column; gap:10px; }

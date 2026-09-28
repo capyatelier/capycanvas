@@ -1,7 +1,7 @@
 //! Capture small document/source metadata on the owner; profile inspection runs
 //! on the file worker. Raster sample payloads never enter this message.
 use layer_core::{
-    Document, ImageResolution,
+    BlendSpace, Document, ImageResolution,
     color::{
         ColorProfile, DocumentColor,
         source::{SourceInterpretation, SourceKind},
@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 pub struct DocumentInfo {
     extent: [u32; 2],
     color: DocumentColor,
+    #[serde(default)]
+    blend_space: BlendSpace,
     resolution: Option<ImageResolution>,
     sources: Vec<SourceInfo>,
 }
@@ -28,6 +30,7 @@ impl DocumentInfo {
         Self {
             extent: [document.width, document.height],
             color: document.color,
+            blend_space: document.blend_space,
             resolution: document.resolution,
             sources: document
                 .layers
@@ -54,6 +57,7 @@ impl DocumentInfo {
                 "Bit depth".into(),
                 self.color.depth.label().into(),
             ),
+            ("Blending".into(), self.blend_space.label().into()),
             (
                 "Resolution metadata".into(),
                 self.resolution.map_or_else(
@@ -99,5 +103,21 @@ impl DocumentInfo {
             ));
         }
         Ok(rows)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn properties_show_how_layers_blend() {
+        let mut document = Document::new("Properties", 64, 48);
+        let rows = |document: &Document| DocumentInfo::capture(document).describe().unwrap();
+        assert!(rows(&document).contains(&("Blending".into(), "Linear light".into())));
+        document.blend_space = BlendSpace::Perceptual;
+        let described = rows(&document);
+        let position = |label: &str| described.iter().position(|(l, _)| l == label).unwrap();
+        assert_eq!(described[position("Blending")].1, "Perceptual");
+        assert_eq!(position("Blending"), position("Bit depth") + 1);
     }
 }

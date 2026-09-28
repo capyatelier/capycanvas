@@ -44,9 +44,20 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
       });
       const space=select("Color space",model.spaces,model.options.color.space);
       const depth=select("Bit depth",[["U8","8-bit SDR"],["U16","16-bit SDR"],["F16","16-bit float HDR"],["F32","32-bit float HDR"]],model.options.color.depth);
+      const blending=select(model.blending.label,model.blending.choices.map(c=>[c.id,c.label]),model.options.blend_space);
+      const blendingNote=element("p","document-note");form.append(blendingNote);
+      let chosen=model.options.blend_space;
+      const describeBlending=()=>{
+        const linear=model.blending.linear_only.includes(depth.value);
+        blending.disabled=linear;blending.value=linear?"Linear":chosen;
+        blendingNote.textContent=linear?model.blending.float_reason:model.blending.choices.find(c=>c.id===blending.value).description;
+      };
+      blending.onchange=()=>{chosen=blending.value;describeBlending();};
+      depth.addEventListener("change",describeBlending);
+      describeBlending();
       const background=select("Background",[["White","White"],["Transparent","Transparent"]],model.options.background);
-      const read=()=>({extent:fields.map(i=>Number(i.value)),color:{space:space.value,depth:depth.value},background:background.value});
-      preset.onchange=()=>{const p=model.presets[Number(preset.value)];if(!p)return;fields.forEach((f,i)=>f.value=p.options.extent[i]);space.value=p.options.color.space;depth.value=p.options.color.depth;background.value=p.options.background;};
+      const read=()=>({extent:fields.map(i=>Number(i.value)),color:{space:space.value,depth:depth.value},background:background.value,blend_space:chosen});
+      preset.onchange=()=>{const p=model.presets[Number(preset.value)];if(!p)return;fields.forEach((f,i)=>f.value=p.options.extent[i]);space.value=p.options.color.space;depth.value=p.options.color.depth;background.value=p.options.background;chosen=p.options.blend_space;describeBlending();};
       const name=field("Save as preset",element("input"));name.maxLength=64;name.placeholder="Optional name";
       const remember=element("input");remember.type="checkbox";field("Use as defaults",remember);
       const error=element("p","error-message");form.append(error);

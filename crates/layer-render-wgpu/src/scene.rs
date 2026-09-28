@@ -55,6 +55,36 @@ enum Job {
         height: u32,
     },
 }
+/// What a draw does to the color it writes (`scene_space` in scene.wgsl).
+/// Layer pixels are linear; a Perceptual composite holds encoded values.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Convert {
+    None,
+    Encode,
+    Decode,
+}
+impl Convert {
+    fn code(self) -> f32 {
+        match self {
+            Self::None => 0.,
+            Self::Encode => 1.,
+            Self::Decode => 2.,
+        }
+    }
+    /// How a layer's own pixels enter the composite of `packet`.
+    pub(super) fn layers(packet: FramePacket<'_>) -> Self {
+        if packet.blend_space == layer_core::BlendSpace::Perceptual { Self::Encode } else { Self::None }
+    }
+    /// How the composite of `packet` becomes linear pixels.
+    pub(super) fn linear(packet: FramePacket<'_>) -> Self {
+        if packet.blend_space == layer_core::BlendSpace::Perceptual { Self::Decode } else { Self::None }
+    }
+}
+/// The premultiplied `color` as the composite of `packet` holds it.
+fn composite_color(r: &WgpuRasterizer, packet: FramePacket<'_>, [red, green, blue, alpha]: [f32; 4]) -> wgpu::Color {
+    let [red, green, blue, alpha] = packet.blend_space.composite(r.device.working_space(), [red * alpha, green * alpha, blue * alpha, alpha]);
+    wgpu::Color { r: f64::from(red), g: f64::from(green), b: f64::from(blue), a: f64::from(alpha) }
+}
 pub(super) struct Scene {
     placement: pixel_transform::PixelTransform,
     placement_display: bool,
@@ -442,6 +472,7 @@ impl Scene {
         c: [u32; 2],
         out: usize,
         rect: [f32; 4],
+        convert: Convert,
     ) -> Result<(), GpuRasterError> {
         let preview = r.preview_layer_id == Some(layer.id)
             && !r.preview_damage.intersect(page_rect(c)).is_empty();
@@ -463,9 +494,9 @@ impl Scene {
                 }));
         if wet_nearby {
             let binding = self.watercolor_binding(r, layer, stored.unwrap(), c, preview)?;
-            // Aligned pages already cover the layer tile. Only a
-            // translated page needs an intermediate and placement.
-            let page = if rect == [0., 0., 256., 256.] {
+            // Aligned pages already cover the layer tile. Only a translated
+            // or converted page needs an intermediate and placement.
+            let page = if rect == [0., 0., 256., 256.] && convert == Convert::None {
                 out
             } else {
                 self.alloc(r, wgpu::Color::TRANSPARENT)
@@ -486,6 +517,7 @@ impl Scene {
                     rect,
                     [1., 1., 0., 0.],
                     true,
+                    convert,
                 );
                 self.free(page);
             }
@@ -496,31 +528,23 @@ impl Scene {
             } else {
                 None
             };
-            if let Some(p) =
-                predicted.filter(|_| r.preview_requires_base).or(persistent)
-            {
-                self.draw(
-                    r,
-                    out,
-                    p.active().view.clone(),
-                    None,
-                    rect,
-                    [1., 1., 0., 0.],
-                    true,
-                );
-            } else if let Some(view) = self.source_tile(r, layer, c)? {
-                self.draw(r, out, view, None, rect, [1., 1., 0., 0.], true);
-            }
-            if let Some(p) = predicted.filter(|_| !r.preview_requires_base) {
-                self.draw(
-                    r,
-                    out,
-                    p.active().view.clone(),
-                    None,
-                    rect,
-                    [1., 1., 0., 0.],
-                    true,
-                );
+            let base = if let Some(p) = predicted.filter(|_| r.preview_requires_base).or(persistent) {
+                Some(p.active().view.clone())
+            } else {
+                self.source_tile(r, layer, c)?
+            };
+            let flow = predicted.filter(|_| !r.preview_requires_base).map(|p| p.active().view.clone());
+            match (base, flow) {
+                // A Flow preview lies on its layer's pixels before they are
+                // converted, as its stroke will once committed.
+                (Some(base), Some(flow)) if convert != Convert::None => {
+                    self.draw(r, out, flow, Some(base), rect, [14., 1., 0., 0.], true, convert);
+                }
+                (base, flow) => {
+                    for view in base.into_iter().chain(flow) {
+                        self.draw(r, out, view, None, rect, [1., 1., 0., 0.], true, convert);
+                    }
+                }
             }
         }
         Ok(())
@@ -583,7 +607,7 @@ impl Scene {
         }
         let prepared =
             self.effects
-                .prepare(r, &layers, effects::Execution::Fused, packet.time_seconds)?;
+                .prepare(r, &layers, effects::Execution::Fused, packet.time_seconds, packet.blend_space)?;
         let mask =
             if indices.len() == 1 && !direct_effect_mask(packet.layers, layer) {
                 layer.mask.as_ref().filter(|m| m.enabled).map(|m| {
@@ -644,6 +668,7 @@ impl Scene {
                 && *clear == self.pool[input].view
                 && target == clear
                 && paint_data[..4] == [0., 0., 256., 256.]
+                && paint_data[31] == Convert::layers(packet).code()
                 && ((*over && (paint_data[8] == 7. || paint_data[8] == 1.))
                     || (!*over && paint_data[8] == 13.))
             {
@@ -685,12 +710,14 @@ impl Scene {
         rect: [f32; 4],
         options: [f32; 4],
         mut over: bool,
+        convert: Convert,
     ) {
         let mut data = [0.; 32];
         let mut sources = [source, back.unwrap_or_else(|| r.empty_view.clone()), r.empty_view.clone()];
         data[..4].copy_from_slice(&rect);
         data[4..8].copy_from_slice(&[256., 256., 0., 0.]);
         data[8..12].copy_from_slice(&options);
+        data[31] = convert.code();
         // A normal draw over a constant clear supplies its own backdrop. Lower
         // this once when creating the job, for both tiled and direct composition.
         if over && options[0] == 7.
@@ -712,7 +739,7 @@ impl Scene {
             && let Some(Job::Draw { target: prior_target, sources: prior_sources,
                 data: prior, over: false, clip: None }) = self.jobs.last()
             && *prior_target == self.pool[target].view
-            && prior[..4] == rect && prior[8] == 13. && prior[11] < 2.
+            && prior[..4] == rect && prior[8] == 13. && prior[11] < 2. && prior[31] == data[31]
         {
             if options[0] == 7. {
                 data[9] *= options[2];
@@ -733,6 +760,7 @@ impl Scene {
             clip: None,
         });
     }
+    #[allow(clippy::too_many_arguments)] // Explicit composite operands.
     fn combine(
         &mut self,
         r: &WgpuRasterizer,
@@ -741,6 +769,7 @@ impl Scene {
         opacity: f32,
         blend: layer_core::LayerBlend,
         clip: bool,
+        space: layer_core::BlendSpace,
     ) -> usize {
         let n = self.jobs.len();
         // Watercolor already outputs premultiplied source-over. A complete,
@@ -773,7 +802,7 @@ impl Scene {
             {
                 data[8] = 1.;
                 data[9] = opacity;
-                data[10] = crate::blend_code(blend, &r.device) as f32;
+                data[10] = crate::blend_code(blend, &r.device, space) as f32;
                 if data[19] > 0.5 {
                     data[19] = 2.;
                 }
@@ -790,11 +819,23 @@ impl Scene {
             self.pool[front].view.clone(),
             Some(self.pool[back].view.clone()),
             [0., 0., 256., 256.],
-            [4., opacity, crate::blend_code(blend, &r.device) as f32, f32::from(clip)],
+            [4., opacity, crate::blend_code(blend, &r.device, space) as f32, f32::from(clip)],
             false,
+            Convert::None,
         );
         self.free(front);
         self.free(back);
+        out
+    }
+    /// `tile` drawn through `convert` into a new tile, or `tile` itself when
+    /// nothing converts.
+    pub(super) fn converted(&mut self, r: &WgpuRasterizer, tile: usize, convert: Convert) -> usize {
+        if convert == Convert::None {
+            return tile;
+        }
+        let out = self.reserve(r);
+        self.draw(r, out, self.pool[tile].view.clone(), None, [0., 0., 256., 256.], [1., 1., 0., 0.], false, convert);
+        self.free(tile);
         out
     }
     fn mask_tile(
@@ -834,6 +875,7 @@ impl Scene {
                 rect,
                 [2., 1., f32::from(mask.inverted), 0.],
                 false,
+                Convert::None,
             );
         }
         out
@@ -853,7 +895,8 @@ impl Scene {
             // Generator coverage is applied below with ordinary layer masks.
             self.effect(r, packet, &[index], tile, input)?
         } else if layer.properties.placement != layer_core::Affine::IDENTITY {
-            self.placed_tile(r, packet, index, tile)?
+            let placed = self.placed_tile(r, packet, index, tile)?;
+            self.converted(r, placed, Convert::layers(packet))
         } else {
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             let offset = world_offset(packet.layers, layer.id, false);
@@ -881,7 +924,7 @@ impl Scene {
                     if !intersects(rect) {
                         continue;
                     }
-                    self.paint_page(r, packet, layer, stored, c, out, rect)?;
+                    self.paint_page(r, packet, layer, stored, c, out, rect, Convert::layers(packet))?;
                 }
             }
             out
@@ -897,6 +940,7 @@ impl Scene {
                 [0., 0., 256., 256.],
                 [3., 1., 0., 0.],
                 false,
+                Convert::None,
             );
             self.free(out);
             self.free(m);
@@ -915,13 +959,7 @@ impl Scene {
         let mut output = self.alloc(
             r,
             if parent.is_none() {
-                let c = packet.view.background_rgba_linear;
-                wgpu::Color {
-                    r: (c[0] * c[3]) as f64,
-                    g: (c[1] * c[3]) as f64,
-                    b: (c[2] * c[3]) as f64,
-                    a: c[3] as f64,
-                }
+                composite_color(r, packet, packet.view.background_rgba_linear)
             } else {
                 wgpu::Color::TRANSPARENT
             },
@@ -1005,7 +1043,7 @@ impl Scene {
                 }
                 if let Some((pixels, base)) = stack {
                     let b = &packet.layers[base];
-                    output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false);
+                    output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false, packet.blend_space);
                 }
                 return Ok(Flow::Stopped(output));
             }
@@ -1018,7 +1056,7 @@ impl Scene {
                     && let Some((pixels, base)) = stack.take()
                 {
                     let b = &packet.layers[base];
-                    output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false);
+                    output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false, packet.blend_space);
                 }
                 if !layer.visible {
                     continue;
@@ -1047,7 +1085,7 @@ impl Scene {
             if !layer.properties.clipped {
                 if let Some((pixels, base)) = stack.take() {
                     let b = &packet.layers[base];
-                    output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false);
+                    output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false, packet.blend_space);
                 }
                 if layer.passes_through() {
                     if layer.visible {
@@ -1092,6 +1130,7 @@ impl Scene {
                         layer.opacity,
                         layer.properties.blend,
                         true,
+                        packet.blend_space,
                     ),
                     base,
                 ));
@@ -1099,7 +1138,7 @@ impl Scene {
         }
         if let Some((pixels, base)) = stack {
             let b = &packet.layers[base];
-            output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false);
+            output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false, packet.blend_space);
         }
         Ok(Flow::Done(output))
     }
@@ -1119,7 +1158,7 @@ impl Scene {
             return self.group_into(r, packet, Some(group.id), tile, backdrop, None, None);
         }
         let start = self.reserve(r);
-        self.draw(r, start, self.pool[backdrop].view.clone(), None, [0., 0., 256., 256.], [1., 1., 0., 0.], false);
+        self.draw(r, start, self.pool[backdrop].view.clone(), None, [0., 0., 256., 256.], [1., 1., 0., 0.], false, Convert::None);
         let result = match self.group_into(r, packet, Some(group.id), tile, start, None, None)? {
             Flow::Done(result) => result,
             stopped => {
@@ -1145,6 +1184,7 @@ impl Scene {
                 [0., 0., 256., 256.],
                 [3., 1., 0., 0.],
                 false,
+                Convert::None,
             );
             self.free(change);
             self.free(coverage);
@@ -1169,6 +1209,7 @@ impl Scene {
             [0., 0., 256., 256.],
             [16., weights[0], weights[1], 0.],
             false,
+            Convert::None,
         );
         out
     }
@@ -1206,7 +1247,7 @@ impl Scene {
                 "Transform must be finite and invertible"))?.0;
             let view = view.clone();
             self.draw(r, target, view, None, [0., 0., 256., 256.],
-                [12., layer.opacity, 0., 0.], true);
+                [12., layer.opacity, 0., 0.], true, Convert::layers(packet));
             let Some(Job::Draw { data, .. }) = self.jobs.last_mut() else { unreachable!() };
             data[12..14].copy_from_slice(&tile.map(|n| (n * PAGE_SIZE) as f32));
             data[24..28].copy_from_slice(&inverse[..4]);
@@ -1258,6 +1299,7 @@ impl Scene {
                 [0., 0., 256., 256.],
                 [14., layer.opacity, 0., 0.],
                 true,
+                Convert::layers(packet),
             );
             return Ok(true);
         }
@@ -1289,6 +1331,7 @@ impl Scene {
                 source.map_or(0., |_| 2. + f32::from(mask.unwrap().inverted)),
             ],
             true,
+            Convert::layers(packet),
         );
         Ok(true)
     }
@@ -1367,6 +1410,7 @@ impl Scene {
                         [0., 0., 256., 256.],
                         [3., 1., erase, 0.],
                         false,
+                        Convert::None,
                     );
                     if let Some(p) = resolved {
                         self.free(p);
@@ -1413,6 +1457,7 @@ impl Scene {
                         [0., 0., 256., 256.],
                         options,
                         false,
+                        Convert::None,
                     );
                     if let Some(Job::Draw { data, .. }) = self.jobs.last_mut() {
                         data[6..8].copy_from_slice(&c.map(|v| (v * PAGE_SIZE) as f32));
@@ -1524,6 +1569,7 @@ impl Scene {
             self.stop_before = None;
             for tile in page_coordinates(region) {
                 let output = self.group(r, packet, parent, tile)?;
+                let output = self.converted(r, output, Convert::linear(packet));
                 self.copy_window_tile(output, destination, tile, region);
             }
             self.encode_jobs(r, encoder)
@@ -1697,11 +1743,8 @@ impl Scene {
         let clear_composite = self.cached_composition() && r.live_display.is_none()
             && tiles.is_none() && dirty == PixelRect::full(packet.document_extent);
         if clear_composite {
-            let c = packet.view.background_rgba_linear;
-            self.jobs.push(Job::Clear(r.composite_view.as_ref().unwrap().clone(), wgpu::Color {
-                r: f64::from(c[0] * c[3]), g: f64::from(c[1] * c[3]),
-                b: f64::from(c[2] * c[3]), a: f64::from(c[3]),
-            }));
+            self.jobs.push(Job::Clear(r.composite_view.as_ref().unwrap().clone(),
+                composite_color(r, packet, packet.view.background_rgba_linear)));
         }
         let mut composited = 0;
         let mut display_tiles = 0;
@@ -1753,6 +1796,7 @@ impl Scene {
                         [0., 0., 256., 256.],
                         [5., 1., 0., 0.],
                         false,
+                        Convert::layers(packet),
                     );
                     self.free(m);
                     output = self.combine(
@@ -1762,6 +1806,7 @@ impl Scene {
                         1.,
                         layer_core::LayerBlend::Normal,
                         false,
+                        packet.blend_space,
                     );
                 }
             }

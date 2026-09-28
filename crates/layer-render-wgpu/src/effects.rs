@@ -51,6 +51,9 @@ pub(super) enum Execution {
     Image(usize),
     Preview,
 }
+/// A compiled variant: the execution, and the blend space of the composite
+/// the effect blends onto. Linear variants convert nothing.
+type Stage = (Execution, layer_core::BlendSpace);
 
 #[derive(Clone)]
 pub(super) struct PreparedEffect {
@@ -63,7 +66,7 @@ struct Instance {
     buffer: wgpu::Buffer,
     binding: wgpu::BindGroup,
     compute_binding: wgpu::BindGroup,
-    pipelines: HashMap<Execution, Deferred<wgpu::RenderPipeline>>,
+    pipelines: HashMap<Stage, Deferred<wgpu::RenderPipeline>>,
     lookups: Vec<preparation::State>,
     offsets: Vec<u32>,
 }
@@ -73,7 +76,7 @@ pub(super) struct Effects {
     pipeline_layout: wgpu::PipelineLayout,
     pipelines: Vec<(
         Vec<Arc<EffectProgram>>,
-        Execution,
+        Stage,
         Deferred<wgpu::RenderPipeline>,
     )>,
     // Parameters and GPU tables are shared by every pass of the same chain.
@@ -84,9 +87,9 @@ pub(super) struct Effects {
     pub compilations: u64,
 }
 impl Effects {
-    pub(super) fn chain_ready(&self, layers: &[&Layer], execution: Execution) -> bool {
+    pub(super) fn chain_ready(&self, layers: &[&Layer], execution: Execution, space: layer_core::BlendSpace) -> bool {
         let programs: Vec<_> = layers.iter().filter_map(|l| l.effect.as_ref().map(|e| &e.program)).collect();
-        self.pipelines.iter().any(|(chain, stage, pipeline)| *stage == execution
+        self.pipelines.iter().any(|(chain, stage, pipeline)| *stage == (execution, space)
             && chain.iter().eq(programs.iter().copied()) && pipeline.ready())
             && self.preparation.pipelines.iter().all(|(_, p)| p.ready())
     }
@@ -231,7 +234,10 @@ impl Effects {
         layers: &[&Layer],
         stage: Execution,
         time: f32,
+        space: layer_core::BlendSpace,
     ) -> Result<PreparedEffect, GpuRasterError> {
+        let execution = stage;
+        let stage = (execution, space);
         self.ids.clear();
         self.ids.extend(layers.iter().map(|l| l.id));
         if let Some(old) = self.instances.get_mut(self.ids.as_slice())
@@ -244,7 +250,7 @@ impl Effects {
                 .properties
                 .iter()
                 .zip(layers)
-                .all(|(a, layer)| a[..3] == effect_properties(r.device(), layer, time)[..3])
+                .all(|(a, layer)| a[..3] == effect_properties(r.device(), layer, time, space)[..3])
             && let Some(pipeline) = old.pipelines.get(&stage)
         {
             // Animation updates only one scalar per instance, never its LUTs.
@@ -269,7 +275,7 @@ impl Effects {
             .iter()
             .map(|l| l.effect.as_ref().unwrap().clone())
             .collect();
-        let properties: Vec<_> = layers.iter().map(|l| effect_properties(r.device(), l, r.effect_time(l, time))).collect();
+        let properties: Vec<_> = layers.iter().map(|l| effect_properties(r.device(), l, r.effect_time(l, time), space)).collect();
         let mut data = Vec::new();
         let mut offsets = Vec::new();
         for (effect, properties) in effects.iter().zip(&properties) {
@@ -293,9 +299,10 @@ impl Effects {
             let source = shader_source(
                 &programs,
                 &offsets,
-                stage,
+                execution,
                 r.device().working_space(),
                 r.device().hdr(),
+                space,
             )?;
             validate_source(&source)?;
             let module = r
@@ -456,10 +463,10 @@ impl Effects {
     }
 }
 
-fn effect_properties(device: &PipelineDevice, layer: &Layer, time: f32) -> [f32; 4] {
+fn effect_properties(device: &PipelineDevice, layer: &Layer, time: f32, space: layer_core::BlendSpace) -> [f32; 4] {
     [
         layer.opacity,
-        crate::blend_code(layer.properties.blend, device) as f32,
+        crate::blend_code(layer.properties.blend, device, space) as f32,
         layer.mask.as_ref().filter(|m| m.enabled).map_or(1., |m| {
             if m.inverted {
                 1. - m.default_coverage
@@ -528,6 +535,7 @@ pub(super) fn validate_namespace(programs: &[Arc<EffectProgram>]) -> Result<(), 
         Execution::Preview,
         Default::default(),
         false,
+        Default::default(),
     )?)
 }
 fn shader_source(
@@ -536,7 +544,13 @@ fn shader_source(
     stage: Execution,
     space: layer_core::color::RgbSpace,
     hdr: bool,
+    blend: layer_core::BlendSpace,
 ) -> Result<String, GpuRasterError> {
+    // Filters read and write linear values; a Perceptual composite holds
+    // encoded ones, which the effect blends on.
+    let perceptual = blend == layer_core::BlendSpace::Perceptual;
+    let encoded = |expression: String| if perceptual { format!("working_encode({expression})") } else { expression };
+    let linear = |expression: &str| if perceptual { format!("working_decode({expression})") } else { expression.into() };
     let mut source = working_color::source(space);
     source.push_str(&crate::view_color::hdr_shader(space, layer_core::color::RgbSpace::Srgb));
     source.push_str(include_str!("blend_modes.wgsl"));
@@ -611,9 +625,11 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
         let p = &programs[0];
         let entry = p.passes.get(stage).map_or(&p.entry, |p| &p.entry);
         let last = stage + 1 >= p.passes.len();
-        source.push_str(&format!("fn effect_result(v:Vertex)->vec4<f32> {{ let position=v.position.xy+settings.color.xy; let adjusted={entry}(fx_sample(position),position,1u);\n"));
+        let adjusted = format!("{entry}(fx_sample(position),position,1u)");
+        let adjusted = if last { encoded(adjusted) } else { adjusted };
+        source.push_str(&format!("fn effect_result(v:Vertex)->vec4<f32> {{ let position=v.position.xy+settings.color.xy; let adjusted={adjusted};\n"));
         if last && p.kind == EffectKind::Adjustment {
-            source.push_str("let c=fx_original(position);let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {coverage=textureLoad(effect_mask_0,vec2<i32>(v.position.xy),0).a;}let rgb=fx_output_range(blend(fx_unassociate(adjusted),fx_unassociate(c),u32(controls.y)));");
+            source.push_str(&format!("let c={};let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {{coverage=textureLoad(effect_mask_0,vec2<i32>(v.position.xy),0).a;}}let rgb=fx_output_range(blend(fx_unassociate(adjusted),fx_unassociate(c),u32(controls.y)));", encoded("fx_original(position)".into())));
             if p.alpha == layer_core::EffectAlpha::Filter {
                 source.push_str("if settings.options.y<.5 {return mix(c,vec4<f32>(rgb*adjusted.a,adjusted.a),controls.x*coverage);}");
             }
@@ -629,7 +645,13 @@ fn effect_result(v:Vertex)->vec4<f32> {
     let local=v.position.xy-settings.rect.xy;
     var c=textureLoad(front,vec2<i32>(local),0);
     if settings.source_over.w>.5 {
-        let coverage=select(settings.source_over.y,mix(textureLoad(back,vec2<i32>(local),0).r,1.-textureLoad(back,vec2<i32>(local),0).r,settings.source_over.z-2.),settings.source_over.z>=2.);
+"#,
+    );
+    if perceptual {
+        source.push_str("        c=working_encode(c);\n");
+    }
+    source.push_str(
+        r#"        let coverage=select(settings.source_over.y,mix(textureLoad(back,vec2<i32>(local),0).r,1.-textureLoad(back,vec2<i32>(local),0).r,settings.source_over.z-2.),settings.source_over.z>=2.);
         c*=settings.source_over.x*coverage;
         if settings.source_over.w<1.5 {c+=settings.backdrop*(1.-c.a);}
     }
@@ -644,9 +666,8 @@ fn effect_result(v:Vertex)->vec4<f32> {
             ));
         }
         source.push_str(&format!(
-            "{{ let adjusted={} (c,position,{}u); let controls=effect_data[{}u];\n",
-            p.entry,
-            offset + 1,
+            "{{ let adjusted={}; let controls=effect_data[{}u];\n",
+            encoded(format!("{} ({},position,{}u)", p.entry, linear("c"), offset + 1)),
             offset
         ));
         if p.kind == EffectKind::Adjustment {
@@ -703,8 +724,9 @@ mod tests {
         assert!(validate_namespace(&[programs[0].clone(), Arc::new(changed)]).is_err());
     }
     fn validate(p: &[Arc<EffectProgram>], execution: Execution) {
-        let source =
-            shader_source(p, &vec![0; p.len()], execution, Default::default(), false).unwrap();
-        validate_source(&source).unwrap();
+        for blend in layer_core::BlendSpace::ALL {
+            let source = shader_source(p, &vec![0; p.len()], execution, Default::default(), false, blend).unwrap();
+            validate_source(&source).unwrap();
+        }
     }
 }

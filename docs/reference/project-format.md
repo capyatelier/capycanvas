@@ -64,13 +64,15 @@ live edge settings are committed because they affect composition and later paint
 
 ## Container and validation
 
-The header is the twelve bytes `CAPYRASTER\x0a\0`, followed by a little-endian
+The header is the twelve bytes `CAPYRASTER\x0b\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
 blobs and image roles/interpretations. Payload offsets are relative to the payload start.
 Readers accept version 8 and every later version, including recovery files.
 Version 9 adds the optional stored layer extent; a version 8 file reads with none.
 Version 10 adds photo metadata payloads; earlier files read with none.
+Version 11 adds the document's blend space (`document.blend_space`, `Linear` or
+`Perceptual`); earlier files read as `Linear`. A float document must be `Linear`.
 Version 8 fixes the tile encoding to one lossless LZ4 block per tile, without a
 frame header or prepended size. The pixel descriptor determines the exact decoded
 size, bounded to 1 MiB; the library's compression bound caps stored bytes. Painted

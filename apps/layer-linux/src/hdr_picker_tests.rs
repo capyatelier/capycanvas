@@ -40,17 +40,12 @@ fn native_hdr_picker_intensity_shape_and_input() {
         .unwrap_or_else(|| std::path::PathBuf::from("../../artifacts/color-m4/hdr-picker-native"));
     std::fs::create_dir_all(&output).unwrap();
     for hdr in [false, true] {
-        let mut p = new_drawing(64, 64).unwrap();
-        if hdr {
-            if let Some(path) = std::env::var_os("LAYER_HDR_LARGE_INPUT") {
-                p = layer_core::Project::read(
-                    std::fs::File::open(path).unwrap(),
-                    Default::default(),
-                )
-                .unwrap();
-                assert!(u64::from(p.document.width) * u64::from(p.document.height) >= 59_000_000);
-            }
+        let mut p = new_drawing_at(64, 64, if hdr { SampleDepth::F16 } else { SampleDepth::U8 });
+        if hdr && let Some(path) = std::env::var_os("LAYER_HDR_LARGE_INPUT") {
+            p = layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap();
+            assert!(u64::from(p.document.width) * u64::from(p.document.height) >= 59_000_000);
             p.document.color.depth = SampleDepth::F16;
+            p.document.blend_space = layer_core::BlendSpace::Linear;
         }
         let w = Workspace::with_project(&app, Some((p, None)));
         w.window.maximize();

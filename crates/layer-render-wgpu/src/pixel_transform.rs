@@ -18,6 +18,8 @@ pub(super) const UNCOVERED: f64 = -3.0e38;
 /// Destination-to-source rows, attachment origin and options of one job, how
 /// a display level composites it, and the source bounds and views it reads.
 const RECORD_BYTES: u64 = 112 + (1 + TRANSFORM_SLOTS as u64) * 16;
+/// A display level flag: see `DisplayLevel::encode`.
+const ENCODED: f32 = 512.;
 const BINDING_CAPACITY: usize = 4096;
 
 pub(super) struct TransformTile<'a> {
@@ -41,13 +43,16 @@ pub(super) struct TiledTransformRecord<'a> {
 }
 /// Draw a display level: each texel is the mean of `side` x `side` layer
 /// pixels within `extent`, times `opacity`, over the premultiplied
-/// `backdrop`. `side` divides 16.
+/// `backdrop`. `side` divides 16. With `encode`, the display holds a
+/// Perceptual composite: the mean is encoded before it lies over the
+/// backdrop, which is encoded already.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct DisplayLevel {
     pub side: u32,
     pub opacity: f32,
     pub extent: [u32; 2],
     pub backdrop: [f32; 4],
+    pub encode: bool,
 }
 /// One region drawn into a shared attachment by `encode_batch`.
 pub(super) struct BatchDraw<'a> {
@@ -481,8 +486,10 @@ fn region_record(
         opacity: 1.,
         extent: [0; 2],
         backdrop: [0.; 4],
+        encode: false,
     });
     let [r, g, b, a] = level.backdrop;
+    let flags = if level.encode { flags + ENCODED } else { flags };
     [
         x[0], x[1], x[2], taps as f32, y[0], y[1], y[2], 0., w[0], w[1], w[2], 0., target[0], target[1],
         flags, background, level.side as f32, level.opacity, level.extent[0] as f32,
@@ -492,6 +499,7 @@ fn region_record(
 
 fn shader(device: &PipelineDevice) -> Deferred<wgpu::ShaderModule> {
     Deferred::wgsl(device, "transform pixels", super::compose_wgsl(&[
+        &crate::working_color::shader(device),
         include_str!("pixel_transform.wgsl"),
         &crate::texture_switch(1, TRANSFORM_SLOTS, "source_load"),
         &include_str!("selection_clip.wgsl").replace("@group(1) @binding(1)", "@group(1) @binding(16)"),

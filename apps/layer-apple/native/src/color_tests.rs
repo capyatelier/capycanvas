@@ -14,6 +14,7 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
             extent: [67, 43],
             color: DocumentColor { space: RgbSpace::AdobeRgb, depth: SampleDepth::U16 },
             background: DocumentBackground::Transparent,
+            ..Default::default()
         };
         app.action(json!({"type":"new_document_preferences","action":{"type":"remember","options":defaults,"name":"","defaults":true}}));
         let adopt = |job: &ProjectJob, options: NewDocumentOptions| {
@@ -41,7 +42,7 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
             for depth in [SampleDepth::U8, SampleDepth::U16] {
                 for background in [DocumentBackground::White, DocumentBackground::Transparent] {
                     let options = NewDocumentOptions {
-                        extent: [63, 47], color: DocumentColor { space, depth }, background,
+                        extent: [63, 47], color: DocumentColor { space, depth }, background, ..Default::default()
                     };
                     let job = ProjectJob::new(&app, true);
                     let text = CString::new(serde_json::to_string(&options).unwrap()).unwrap();

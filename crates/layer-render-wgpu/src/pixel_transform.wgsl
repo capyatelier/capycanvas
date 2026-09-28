@@ -5,7 +5,8 @@
 // attachment holds its origin in layer pixels, the flags and the background.
 // A display level reads display: layer pixels per texel side, layer opacity
 // and the layer extent; texels: the region of its texels drawn; and
-// composites over the backdrop. bounds holds the source bounds and views the
+// composites over the backdrop, encoding the layer's mean for a Perceptual
+// composite when ENCODED is set. bounds holds the source bounds and views the
 // origin and size of each bound source view.
 struct Transform {
     x:vec4<f32>, y:vec4<f32>, w:vec4<f32>, attachment:vec4<f32>,
@@ -28,6 +29,7 @@ const SELECTED=32u;
 const KEPT=64u;
 const LANCZOS=128u;
 const KEEP_SOURCE=256u;
+const ENCODED=512u;
 const UNCOVERED=-1e38;
 
 @vertex fn vertex_main(@builtin(vertex_index) index:u32)->@builtin(position) vec4<f32> {
@@ -288,6 +290,7 @@ fn display_main(@builtin(workgroup_id) group:vec3<u32>,@builtin(local_invocation
             }
         }
     }
-    let layer=sum*(transform.display.y/max(count,1.));
+    var layer=sum*(transform.display.y/max(count,1.));
+    if (flags()&ENCODED)!=0u {layer=working_encode(sum/max(count,1.))*transform.display.y;}
     textureStore(display_level,vec2<i32>(texel),layer+transform.backdrop*(1.-layer.a));
 }

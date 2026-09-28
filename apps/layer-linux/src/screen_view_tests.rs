@@ -120,8 +120,7 @@ fn native_screen_status_describes_hdr_drawings() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "../../artifacts/screen-status/gtk".into());
     std::fs::create_dir_all(&output).unwrap();
-    let mut project = new_drawing(96, 64).unwrap();
-    project.document.color.depth = SampleDepth::F16;
+    let project = new_drawing_at(96, 64, SampleDepth::F16);
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);

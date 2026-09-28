@@ -52,6 +52,7 @@ struct DocumentKey {
     operations: bool,
     transform: bool,
     mesh: bool,
+    blend_space: layer_core::BlendSpace,
     chains: Vec<(Vec<Arc<layer_core::EffectProgram>>, effects::Execution)>,
 }
 impl DocumentKey {
@@ -69,6 +70,7 @@ impl DocumentKey {
                 .chain(l.masks().flat_map(|m| m.pending_operations.iter()))
                 .any(|op| matches!(&op.kind, layer_core::LayerOperationKind::Transform(t)
                     if matches!(t.map, layer_core::TransformMap::Mesh(_))))),
+            blend_space: document.blend_space,
             chains: scene::startup_effect_chains(&document.layers).into_iter()
                 .map(|(layers, execution)| (layers.into_iter().filter_map(|l| l.effect.as_ref().map(|e| e.program.clone())).collect(), execution)).collect(),
         }
@@ -355,7 +357,8 @@ impl WgpuRasterizer {
             startup.document_key = Some(shader);
             let chains = scene::startup_effect_chains(&document.layers);
             let cached = self.scene.as_ref().map(|s| &s.effects).or(self.validated_effects.as_ref());
-            if !chains.iter().all(|(layers, execution)| cached.is_some_and(|cache| cache.chain_ready(layers, *execution))) {
+            let blend_space = document.blend_space;
+            if !chains.iter().all(|(layers, execution)| cached.is_some_and(|cache| cache.chain_ready(layers, *execution, blend_space))) {
                 let mut candidate = self
                     .scene
                     .as_ref()
@@ -377,6 +380,7 @@ impl WgpuRasterizer {
                                 &layers.iter().collect::<Vec<_>>(),
                                 execution,
                                 0.,
+                                blend_space,
                             )?;
                         }
                         Ok::<_, GpuRasterError>(())

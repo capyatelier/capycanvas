@@ -123,7 +123,9 @@ photo, `layered` puts it between painted strokes and a second photo, and
 Light copy of the second photo above the photo, so strokes on the photo
 recompose through three non-Normal layers. `pass_through` puts those three layers
 and a Hue/Saturation adjustment in a Pass Through group, so the adjustment and
-the modes act on the photos below the group.
+the modes act on the photos below the group. The photo blends in linear light;
+`LAYER_PHOTO_BLENDING=perceptual` makes it a Perceptual document, here and in
+`native_large_photo_navigation`.
 
 For the high-DPI large-photo case, set `LAYER_TEST_MONITOR=3840x2160@120` and
 `LAYER_TEST_SCALE=2`. The harness applies and verifies the private Mutter monitor's

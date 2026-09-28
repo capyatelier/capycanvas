@@ -9,6 +9,7 @@ import android.view.View
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.core.view.ViewCompat
@@ -2466,6 +2467,24 @@ class AndroidInteractionTest {
         }
         return result
     }
+    /** Scroll the open menu until `text` lies inside it and the scroll has stopped. */
+    private fun revealInMenu(text: String) {
+        var scrolled = false
+        onMain { scrolled = scrollMenuTo(text) }
+        if (scrolled) SystemClock.sleep(1_000)
+    }
+    private fun scrollMenuTo(text: String): Boolean =
+        semanticsRoots().filter { it !== owner && it.find(hasTag("workspace-menu")) != null }
+            .firstNotNullOfOrNull { root -> root.find(hasLabel(text))?.let { root to it } }?.let { (root, item) ->
+                generateSequence(item.parent) { it.parent }.firstOrNull { it.config.getOrNull(SemanticsActions.ScrollBy) != null }?.let { list ->
+                    val margin = item.size.height.toFloat()
+                    val shownTop = list.boundsInRoot.top + margin
+                    val shownBottom = minOf(list.boundsInRoot.bottom, root.view.height.toFloat()) - margin
+                    val top = item.positionInRoot.y; val bottom = top + item.size.height
+                    val by = if (bottom > shownBottom) bottom - shownBottom else if (top < shownTop) top - shownTop else 0f
+                    by != 0f && list.config[SemanticsActions.ScrollBy].action!!.invoke(0f, by)
+                }
+            } == true
     /** Open a bar menu, or its submenu in More when it does not fit, and choose `path` in it. */
     private fun chooseFromBarMenu(menu: String, path: List<String>) {
         val tag = "canvas-bar-menu-$menu"
@@ -3108,16 +3127,24 @@ class AndroidInteractionTest {
     }
 
     /** Open an application menu from the title bar, or through the compact menu, and choose `path` in it. */
-    private fun chooseFromApplicationMenu(menu: String, path: List<String>) {
+    private fun chooseFromApplicationMenu(menu: String, path: List<String>, lastShown: () -> Unit = {}) {
         val label = snapshot().array("application_menus").objects().first { it.getString("id") == menu }.getString("label")
         val labelled = shown("application-menu-$menu")
         tap(bounds(if (labelled) "application-menu-$menu" else "header-menu-labels-compact").center)
         waitFor("the $label menu opens", 5_000) { popupCount() == 1 }
         for (text in if (labelled) path else listOf(label) + path) {
             waitFor("$text in the $label menu", 5_000) { menuText(text) != null }
+            revealInMenu(text)
+            if (text == path.last()) lastShown()
             settle()
             var at: Rect? = null
-            waitFor("$text stays in the $label menu", 5_000) { menuText(text).also { at = it } != null }
+            var still = 0
+            waitFor("$text rests in the $label menu", 5_000) {
+                val now = menuText(text)
+                still = if (now != null && !now.isEmpty && now == at) still + 1 else 0
+                at = now
+                still >= 4
+            }
             tap(at!!.center)
         }
         waitFor("the $label menu closes", 5_000) { popupCount() == 0 }
@@ -3261,6 +3288,52 @@ class AndroidInteractionTest {
             }
         } finally { popupInput = false }
         println("PASS Ctrl+E and Layer › Merge Down keep the canvas in one undo step, and Stamp Visible adds the visible image on top, with mouse, finger and stylus")
+    }
+
+    @Test fun documentBlendingAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        popupInput = true
+        try {
+            val (width, height) = cleanDocument(keep)
+            if (!selected("blend_perceptual")) command("blend_perceptual")
+            val center = listOf(documentPoint(width * .5, height * .5))
+            tool = MotionEvent.TOOL_TYPE_STYLUS
+            command("pen"); action(obj("type" to "select_brush", "id" to 1)); action(obj("type" to "set_brush_size", "value" to 60))
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(0.0, 0.0, 0.0, .5))))
+            command("add_layer")
+            val layer = editingLayer()
+            val revision = paintRevision(layer)
+            drag(documentPoint(width * .3, height * .5), documentPoint(width * .7, height * .5))
+            waitFor("the stroke is committed", 5_000) { paintRevision(layer) != revision }
+            SystemClock.sleep(300)
+            val perceptual = screenPixels(center)[0]
+            val red = { pixel: Int -> android.graphics.Color.red(pixel) }
+            assertTrue("half-covered black paint darkens the white page: ${red(perceptual)}", red(perceptual) in 60..235)
+            for ((index, device) in pointerTools.withIndex()) {
+                val name = listOf("mouse", "finger", "stylus")[index]
+                tool = device
+                val (label, id) = if (index % 2 == 0) "Linear Light Blending" to "blend_linear" else "Perceptual Blending" to "blend_perceptual"
+                chooseFromApplicationMenu("edit", listOf("Blending", label)) {
+                    if (device == MotionEvent.TOOL_TYPE_STYLUS) for (theme in listOf("light", "dark")) {
+                        action(obj("type" to "set_theme", "theme" to theme))
+                        waitFor("$name: the menu stays open across themes", 3_000) { popupCount() >= 1 && menuText(label) != null }
+                        captureCanvasBar("blending-menu-$theme", "blending")
+                    }
+                }
+                waitFor("$name: Edit › Blending › $label", 5_000) { selected(id) }
+                if (id == "blend_linear") awaitPixels("$name: linear light shows the half-covered paint lighter", center) { (pixel) -> red(pixel) > red(perceptual) + 15 }
+                else awaitPixels("$name: Perceptual returns the canvas", center) { (pixel) -> same(pixel, perceptual) }
+                println("PASS document blending $name")
+            }
+            command("undo")
+            waitFor("one undo step restores Perceptual", 5_000) { selected("blend_perceptual") && !selected("blend_linear") }
+            awaitPixels("undo restores the canvas", center) { (pixel) -> same(pixel, perceptual) }
+        } finally {
+            popupInput = false
+            action(obj("type" to "set_theme", "theme" to originalTheme))
+        }
+        println("PASS Edit › Blending with mouse, finger and stylus changes the canvas in one undo step each")
     }
 
     @Test fun solidColorFillMasksTheSelectionAcrossDevices() {

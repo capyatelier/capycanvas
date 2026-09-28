@@ -1,16 +1,17 @@
 //! Every layer blend mode against an independent f64 reference, through each
-//! compositor path that applies a layer's blend, at every document depth.
+//! compositor path that applies a layer's blend, at every document depth and
+//! in both blend spaces.
 use super::*;
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation};
 use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth};
-use layer_core::{BlendRange, Document, EffectInstance, LayerBlend, Project};
+use layer_core::{BlendRange, BlendSpace, Document, EffectInstance, LayerBlend, Project};
 
 const EXTENT: [u32; 2] = [64, 32];
 const DIVISOR: f64 = 1. / 16384.;
 const BACKDROP: [f32; 4] = [0.25, 0.5, 0.125, 0.75];
 
-type Rgb = [f64; 3];
-type Rgba = [f64; 4];
+pub(super) type Rgb = [f64; 3];
+pub(super) type Rgba = [f64; 4];
 
 fn lum(c: Rgb, w: Rgb) -> f64 {
     c[0] * w[0] + c[1] * w[1] + c[2] * w[2]
@@ -47,7 +48,7 @@ fn hard_light(s: f64, d: f64) -> f64 {
 }
 
 /// The blend of straight source `s` over straight backdrop `d`.
-fn blend(s: Rgb, d: Rgb, mode: LayerBlend, float: bool, w: Rgb) -> Rgb {
+pub(super) fn blend(s: Rgb, d: Rgb, mode: LayerBlend, float: bool, w: Rgb, space: BlendSpace) -> Rgb {
     use LayerBlend as B;
     let unit = |c: Rgb| c.map(|v| v.clamp(0., 1.));
     let (s, d) = if mode.range() == BlendRange::Unit { (unit(s), unit(d)) } else { (s, d) };
@@ -59,6 +60,9 @@ fn blend(s: Rgb, d: Rgb, mode: LayerBlend, float: bool, w: Rgb) -> Rgb {
         B::Screen => each(&|s, d| if float { s + d - s.min(1.) * d.min(1.) } else { s + d - s * d }),
         B::Add => each(&|s, d| if float { s + d } else { (s + d).min(1.) }),
         B::Overlay => each(&|s, d| hard_light(d, s)),
+        B::SoftLight if space == BlendSpace::Perceptual => each(&|s, d| {
+            if s > 0.5 { 2. * d * (1. - s) + d.sqrt() * (2. * s - 1.) } else { 2. * d * s + d * d * (1. - 2. * s) }
+        }),
         B::SoftLight => each(&|s, d| {
             let curve = if d > 0.25 { d.sqrt() } else { ((16. * d - 12.) * d + 4.) * d };
             if s > 0.5 { d + (2. * s - 1.) * (curve - d) } else { d - (1. - 2. * s) * d * (1. - d) }
@@ -89,16 +93,16 @@ fn blend(s: Rgb, d: Rgb, mode: LayerBlend, float: bool, w: Rgb) -> Rgb {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Form {
+pub(super) enum Form {
     /// Source over backdrop.
     Composite,
     /// Inside the backdrop's coverage, keeping its alpha.
     Clip,
 }
-fn straight(p: Rgba) -> Rgb {
+pub(super) fn straight(p: Rgba) -> Rgb {
     if p[3] > 0. { [p[0] / p[3], p[1] / p[3], p[2] / p[3]] } else { [0.; 3] }
 }
-fn combine(form: Form, s: Rgb, sa: f64, dst: Rgba, b: Rgb) -> Rgba {
+pub(super) fn combine(form: Form, s: Rgb, sa: f64, dst: Rgba, b: Rgb) -> Rgba {
     let da = dst[3];
     match form {
         Form::Composite => {
@@ -113,13 +117,14 @@ fn combine(form: Form, s: Rgb, sa: f64, dst: Rgba, b: Rgb) -> Rgba {
 }
 /// The reference result and its range under operand perturbations of a few
 /// f32 ulps, which is where branches and divisions are ill-conditioned.
-fn expected(form: Form, s: Rgb, sa: f64, dst: Rgba, mode: LayerBlend, float: bool, w: Rgb) -> [Rgba; 2] {
+#[allow(clippy::too_many_arguments)] // The reference's operands.
+fn expected(form: Form, s: Rgb, sa: f64, dst: Rgba, mode: LayerBlend, float: bool, w: Rgb, space: BlendSpace) -> [Rgba; 2] {
     let d = straight(dst);
     let nudge = |c: Rgb, k: f64| c.map(|v| v + k * (v.abs() * 2e-6 + 1e-7));
     let mut range = [[f64::INFINITY; 4], [f64::NEG_INFINITY; 4]];
     for i in [-1., 0., 1.] {
         for j in [-1., 0., 1.] {
-            let result = combine(form, s, sa, dst, blend(nudge(s, i), nudge(d, j), mode, float, w));
+            let result = combine(form, s, sa, dst, blend(nudge(s, i), nudge(d, j), mode, float, w, space));
             for c in 0..4 {
                 range[0][c] = range[0][c].min(result[c]);
                 range[1][c] = range[1][c].max(result[c]);
@@ -191,6 +196,18 @@ fn probe(depth: SampleDepth, [x, y]: [u32; 2]) -> Rgb {
     let k = f64::from(scale(depth)) * 0.9;
     [p[0] / 64. * k, p[1] / 32. * k, (1. - (p[0] + p[1]) / 96.) * k]
 }
+/// Straight linear `c` as the composite of `space` holds it.
+pub(super) fn held(c: Rgb, space: BlendSpace) -> Rgb {
+    if space == BlendSpace::Linear { c } else { c.map(|v| RgbSpace::Srgb.encode(v)) }
+}
+/// A composite pixel of `space` as linear premultiplied values.
+pub(super) fn linear(p: Rgba, space: BlendSpace) -> Rgba {
+    if space == BlendSpace::Linear || p[3] <= 0. {
+        return p;
+    }
+    let rgb = straight(p).map(|v| RgbSpace::Srgb.decode(v) * p[3]);
+    [rgb[0], rgb[1], rgb[2], p[3]]
+}
 fn probe_effect(depth: SampleDepth, image: bool) -> Arc<EffectInstance> {
     let mut program = (*fixture("exposure").program()).clone();
     let k = f64::from(scale(depth)) * 0.9;
@@ -237,9 +254,10 @@ struct Case {
     /// The layer whose blend varies.
     blended: usize,
 }
-fn case(depth: SampleDepth, path: Path) -> Case {
+fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
     let mut document = Document::new("Blend oracle", EXTENT[0], EXTENT[1]);
     document.color = DocumentColor { space: RgbSpace::Srgb, depth };
+    document.blend_space = space;
     let paper = document.layers.pop().unwrap();
     document.layers.clear();
     let paint = |document: &mut Document, name: &str, image| {
@@ -295,14 +313,14 @@ fn case(depth: SampleDepth, path: Path) -> Case {
     Case { document, background, blended }
 }
 
-fn live(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4]) -> Vec<Rgba> {
+fn live(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], blend_space: BlendSpace) -> Vec<Rgba> {
     let view = ViewState { background_rgba_linear: background, ..crate::test_support::view(EXTENT) };
-    r.submit(FramePacket { view, reset_layers: true, ..packet(layers, EXTENT) }).unwrap();
+    r.submit(FramePacket { view, reset_layers: true, blend_space, ..packet(layers, EXTENT) }).unwrap();
     for _ in 0..16 {
         if !layer_render::CanvasRenderer::has_pending_work(r) {
             break;
         }
-        r.submit(FramePacket { view, ..packet(layers, EXTENT) }).unwrap();
+        r.submit(FramePacket { view, blend_space, ..packet(layers, EXTENT) }).unwrap();
     }
     assert!(!layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
     crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap())
@@ -332,58 +350,68 @@ fn alone(r: &mut WgpuRasterizer, document: &Document, index: usize) -> Vec<Rgba>
         layer.properties.blend = LayerBlend::Normal;
         layer.properties.clipped = false;
     }
-    live(r, &layers, [0.; 4])
+    live(r, &layers, [0.; 4], document.blend_space)
 }
 
 #[test]
 fn every_blend_mode_matches_the_reference_on_every_path_and_depth() {
-    let w = RgbSpace::Srgb.to_xyz()[1];
-    for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+    for (depth, space) in [
+        (SampleDepth::U8, BlendSpace::Linear),
+        (SampleDepth::U8, BlendSpace::Perceptual),
+        (SampleDepth::U16, BlendSpace::Linear),
+        (SampleDepth::U16, BlendSpace::Perceptual),
+        (SampleDepth::F16, BlendSpace::Linear),
+        (SampleDepth::F32, BlendSpace::Linear),
+    ] {
+        let w = if space == BlendSpace::Perceptual { [0.3, 0.59, 0.11] } else { RgbSpace::Srgb.to_xyz()[1] };
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth })
             .expect("physical GPU required");
         let float = depth.is_float();
         for path in [Path::Layer, Path::Clip, Path::Effect, Path::Folded, Path::ImageComposition] {
-            let Case { mut document, background, blended } = case(depth, path);
+            let Case { mut document, background, blended } = case(depth, path, space);
             let inputs: Vec<_> = (0..document.layers.len() - 1).map(|i| alone(&mut r, &document, i)).collect();
-            let backdrop = BACKDROP.map(f64::from);
-            let backdrop = [backdrop[0] * backdrop[3], backdrop[1] * backdrop[3], backdrop[2] * backdrop[3], backdrop[3]];
+            let a = f64::from(BACKDROP[3]);
+            let backdrop = held([BACKDROP[0], BACKDROP[1], BACKDROP[2]].map(f64::from), space);
+            let backdrop = [backdrop[0] * a, backdrop[1] * a, backdrop[2] * a, a];
             let opacity = f64::from(OPACITY);
+            let probe = |xy| held(probe(depth, xy), space);
             for mode in LayerBlend::ALL.into_iter().filter(|m| *m != LayerBlend::PassThrough) {
                 document.layers[blended].properties.blend = mode;
-                let composite = live(&mut r, &document.layers, background);
+                let composite = live(&mut r, &document.layers, background, space);
                 let export = exported(&r, &document, background);
                 for (i, (actual, export)) in composite.iter().zip(&export).enumerate() {
                     let xy = [i as u32 % EXTENT[0], i as u32 / EXTENT[0]];
                     let [low, high] = match path {
                         Path::Layer => {
                             let t = inputs[0][i];
-                            expected(Form::Composite, straight(t), t[3] * opacity, inputs[1][i], mode, float, w)
+                            expected(Form::Composite, straight(t), t[3] * opacity, inputs[1][i], mode, float, w, space)
                         }
                         Path::Clip => {
                             let t = inputs[0][i];
-                            expected(Form::Clip, straight(t), t[3] * opacity, inputs[1][i], mode, float, w)
+                            expected(Form::Clip, straight(t), t[3] * opacity, inputs[1][i], mode, float, w, space)
                         }
-                        Path::Effect => expected(Form::Clip, probe(depth, xy), opacity, inputs[1][i], mode, float, w),
+                        Path::Effect => expected(Form::Clip, probe(xy), opacity, inputs[1][i], mode, float, w, space),
                         Path::Folded => {
                             let a = inputs[1][i][3];
-                            expected(Form::Composite, probe(depth, xy), a * opacity, backdrop, mode, float, w)
+                            expected(Form::Composite, probe(xy), a * opacity, backdrop, mode, float, w, space)
                         }
                         Path::ImageComposition => {
                             let a = inputs[1][i][3];
-                            expected(Form::Composite, probe(depth, xy), a * opacity, inputs[2][i], mode, float, w)
+                            expected(Form::Composite, probe(xy), a * opacity, inputs[2][i], mode, float, w, space)
                         }
                     };
+                    let linear = linear(*actual, space);
                     for c in 0..4 {
                         let tol = tolerance(depth, high[c]);
                         assert!(
                             actual[c] >= low[c] - tol && actual[c] <= high[c] + tol,
-                            "{depth:?} {path:?} {mode:?} at {xy:?} channel {c}: {} outside [{}, {}]",
+                            "{depth:?} {space:?} {path:?} {mode:?} at {xy:?} channel {c}: {} outside [{}, {}]",
                             actual[c], low[c], high[c]
                         );
                         assert!(
-                            (export[c] - actual[c]).abs() <= tol,
-                            "{depth:?} {path:?} {mode:?} at {xy:?} channel {c}: export {} != live {}",
-                            export[c], actual[c]
+                            (export[c] - linear[c]).abs() <= tol,
+                            "{depth:?} {space:?} {path:?} {mode:?} at {xy:?} channel {c}: export {} != live {}",
+                            export[c], linear[c]
                         );
                     }
                 }
@@ -431,7 +459,7 @@ fn brush_blend_modes_use_the_layer_formulas() {
             frame(&mut r, source, mode, false);
             let actual = read(&mut r);
             let s = source.map(f64::from);
-            let expected = blend([s[0], s[1], s[2]], straight(d), mode.into(), depth.is_float(), w);
+            let expected = blend([s[0], s[1], s[2]], straight(d), mode.into(), depth.is_float(), w, BlendSpace::Linear);
             for c in 0..3 {
                 assert!(
                     (actual[c] - expected[c]).abs() <= tolerance * expected[c].abs().max(1.),

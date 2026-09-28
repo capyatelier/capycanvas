@@ -1068,6 +1068,8 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::MergeVisible => "Merge every visible layer into one",
                 CommandId::FlattenImage => "Merge every visible layer and discard hidden ones",
                 CommandId::StampVisible => "Add a layer holding everything visible",
+                CommandId::BlendPerceptual => "Blend layers like Photoshop and Clip Studio Paint",
+                CommandId::BlendLinear => "Blend layers in physically based linear light",
                 CommandId::CanvasSize => "Add or remove canvas around the image",
                 CommandId::CropCanvasToSelection => "Crop the canvas to the selection, keeping the hidden pixels",
                 CommandId::GrowSelection => "Expand the selection or edited mask by a distance, previewed live",

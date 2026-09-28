@@ -9,6 +9,7 @@ struct Camera {
     overlay: vec4<f32>,
     crop: vec4<f32>,
     crop_offset: vec4<f32>,
+    composite: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var canvas: texture_2d<f32>;
@@ -117,6 +118,12 @@ fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
         }
     }
     return color / 16.;
+}
+// Linear premultiplied artwork from the composite, which holds the
+// document's encoded values when it blends perceptually (composite.x).
+fn canvas_linear(c: vec4<f32>) -> vec4<f32> {
+    if camera.composite.x == 0. || c.a <= 0. { return c; }
+    return vec4<f32>(sdr_decode(c.rgb / c.a, CANVAS_SPACE) * c.a, c.a);
 }
 fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>) -> vec4<f32> {
     if cache.info.x == 0u { return sample_overview(canvas, canvas_sampler, uv, footprint); }
@@ -255,7 +262,7 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
         return view_store(vec4<f32>(rgb * coverage, coverage));
     }
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
-    let paint = proof_artwork(artwork_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint),p);
+    let paint = proof_artwork(canvas_linear(artwork_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint)),p);
     let checker = select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0);
     var rgb = screen_marked(paint, view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a), checker);
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}
@@ -399,7 +406,7 @@ fn segment_distance(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let footprint = fwidth(v.uv);
     let p = logical_surface(v.position.xy);
     if any(p < v.clip.xy) || any(p >= v.clip.xy+v.clip.zw) { discard; }
-    let paint = proof_artwork(coarse_area(v.uv, footprint),v.uv*camera.offset_document.zw);
+    let paint = proof_artwork(canvas_linear(coarse_area(v.uv, footprint)),v.uv*camera.offset_document.zw);
     var rgb = view_working_rgb(paint.rgb) + view_ui_rgb(v.background_scale.rgb) * (1.-paint.a);
     let edge = min(min(segment_distance(p,v.ab.xy,v.ab.zw),segment_distance(p,v.ab.zw,v.cd.xy)),
                    min(segment_distance(p,v.cd.xy,v.cd.zw),segment_distance(p,v.cd.zw,v.ab.xy)));
@@ -457,7 +464,7 @@ fn picker_layer_mark(p: vec2<f32>, center: vec2<f32>) -> f32 {
     let point = vec2(dot(camera.inverse.xz,sample_surface),dot(camera.inverse.yw,sample_surface)) + camera.offset_document.xy;
     var rgb = view_ui_rgb(camera.surround.rgb);
     if all(point >= vec2(0.)) && all(point < camera.offset_document.zw) {
-        let paint = proof_artwork(artwork_at(point,camera.inverse.xy*.5,camera.inverse.zw*.5),point);
+        let paint = proof_artwork(canvas_linear(artwork_at(point,camera.inverse.xy*.5,camera.inverse.zw*.5)),point);
         let checker = select(.80,.94,(i32(floor(point.x/16.))+i32(floor(point.y/16.)))%2==0);
         rgb = view_working_rgb(paint.rgb) + vec3(checker)*(1.-paint.a);
     }

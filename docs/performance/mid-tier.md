@@ -20,14 +20,14 @@ canvas is 6000 × 4000.
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
-| Pan: Hand tool, one or two fingers | 90 | Huion: 89 fps; input → GPU completion p50 25.6–26.0 ms (1024 px document) | [Panel transparency](../ui/panel-transparency.md), 2026-09-25 |
-| Pinch zoom | 90 | Huion: **not met**, 72 fps; input → GPU completion p50 29.5–31.5 ms (1024 px document) | [Panel transparency](../ui/panel-transparency.md), 2026-09-25 |
+| Pan: Hand tool, one or two fingers | 90 | Every 60 Hz vsync, 4096 px document; GPU p50 6.8 ms Linear, 7.5 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
+| Pinch zoom | 90 | Every 60 Hz vsync, 4096 px document; GPU p50 7.8 ms Linear, 8.5 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
 | Two-finger rotate | 90 | | |
 | Navigator drag | 90 | | |
 | Brush-cursor hover | 90 | | |
-| Placed-photo drag (24 MP photo) | 90 | Renderer 204–208 submissions/s; renderer frame ≤ 10.8 ms | `73f96880`, 2026-09-27 |
-| Pixel transform handle drag: Free, Uniform, Skew or Rotate | 90 | Renderer 188 submissions/s; worst frame in the second after release 15.4 ms | `6fcc6fba`, 2026-09-27 |
-| Pixel transform: Distort or Perspective | 90 | Renderer 193 submissions/s; worst frame after release 17.6 ms | `6fcc6fba`, 2026-09-27 |
+| Placed-photo drag (24 MP photo) | 90 | Renderer 216 submissions/s, GPU p50 4.8 ms Linear; 202 and 5.2 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
+| Pixel transform handle drag: Free, Uniform, Skew or Rotate | 90 | Renderer 181 submissions/s, GPU p50 5.6 ms Linear; 174 and 5.9 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
+| Pixel transform: Distort or Perspective | 90 | Renderer 190 submissions/s, GPU p50 5.6 ms Linear; 180 and 5.9 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
 | Pixel transform: Warp | 90 | | |
 | Selection transform, full canvas | 90 | Renderer 217 submissions/s (handle and Distort); worst frame after release 16.4–27.1 ms | `6fcc6fba`, 2026-09-27 |
 | Move tool layer drag | 90 | | |

@@ -325,6 +325,8 @@ fn entry(
                 | CommandId::MergeVisible
                 | CommandId::FlattenImage
                 | CommandId::StampVisible
+                | CommandId::BlendPerceptual
+                | CommandId::BlendLinear
                 | CommandId::LoadSelectionLayer
                 | CommandId::InvertSelectionLayer
                 | CommandId::InvertLayerMask
@@ -499,6 +501,8 @@ fn action_description(action: &UiAction) -> &'static str {
             MergeVisible => "Merge every visible layer into one, keeping hidden layers. Placed photos become document pixels.",
             FlattenImage => "Merge every visible layer into one over the paper and discard hidden layers and pixels outside the canvas. Placed photos become document pixels.",
             StampVisible => "Add a layer on top with everything visible merged into it, keeping every layer.",
+            BlendPerceptual => "Combine layers on the document's encoded values, as Photoshop and Clip Studio Paint do. Painted pixels keep their values.",
+            BlendLinear => "Combine layers in linear light, which is physically based. Painted pixels keep their values.",
             LoadSelectionLayer => "Use the Selection Layer being edited as the current selection and return to the artwork.",
             InvertSelectionLayer => "Invert the stored coverage of the Selection Layer being edited, staying in the mode.",
             InvertLayerMask => "Swap what the active layer's mask shows and hides.",
@@ -1098,6 +1102,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::MergeVisible
             | C::FlattenImage
             | C::StampVisible
+            | C::BlendPerceptual
+            | C::BlendLinear
             | C::LoadSelectionLayer
             | C::InvertSelectionLayer
             | C::InvertLayerMask
@@ -1257,6 +1263,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::MergeDown | C::MergeGroup | C::MergeVisible | C::FlattenImage | C::StampVisible => {
                 super::merges::merge_kind(command).and_then(|kind| self.merge_refusal(kind)).unwrap_or(UNAVAILABLE)
             }
+            C::BlendPerceptual | C::BlendLinear => self.blending_refusal().unwrap_or(UNAVAILABLE),
             C::CanvasSize
             | C::ImageSize
             | C::RotateImageLeft

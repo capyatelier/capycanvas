@@ -4,6 +4,7 @@ use super::fixtures::{drag, selection_app, selection_bounds, surface, until};
 
 fn tonal_app(platform: u32) -> App {
     let app = selection_app(platform);
+    app.invoke("blend_linear");
     app.action(json!({"type":"set_color","rgba":[0.02,0.02,0.02,1.]}));
     app.draw_until_idle();
     app.invoke("rectangle_select");

@@ -67,8 +67,12 @@ Under **Color**, provide independent **Color space** and **Bit depth** fields:
 8-bit and 16-bit SDR for supported RGB spaces; Adobe RGB and ProPhoto are useful
 advanced photographic spaces. Recommend 16-bit for ProPhoto. HDR creation is a
 separate later preset, not the consequence of selecting P3 or increasing depth.
+A **Blending** field follows them: **Perceptual**, "like Photoshop and Clip Studio
+Paint" (the default), or **Linear light**, "physically based". At float depth it
+is disabled with "Float documents blend in linear light". Presets and the
+defaults remember it; settings saved before it existed use Perceptual.
 
-Document/canvas properties show the profile and depth. An optional compact status
+Document/canvas properties show the profile, depth and Blending. An optional compact status
 item is a shortcut; the workflow does not require another permanent toolbar.
 Users on an sRGB display can still create P3 artwork. Explain incomplete display
 gamut when relevant without preventing editing or discarding those colors.
@@ -227,6 +231,10 @@ image from a wrong export setting or a viewing limitation.
   new layer. Do not claim that replay can recover arbitrary edited pixels.
 - **Change Bit Depth…** is separate from profile conversion. Preview reductions
   and keep one-step undo. No silent depth/range reduction under memory pressure.
+  Converting to float makes the document blend in linear light in the same step.
+- **Blending ▸ Perceptual Blending / Linear Light Blending** changes how layers
+  combine, with no dialog and in one undo step. Painted pixels keep their values.
+  Both are unavailable at float depth, with the reason above.
 
 Show Before/After, Apply and Cancel for consequential changes. Apply is one undo
 step. Routine edits and settings do not trigger repeated confirmation dialogs.

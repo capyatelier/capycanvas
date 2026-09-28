@@ -170,7 +170,7 @@ impl PlacementDrag {
             Some((captured, original)) if !ready => {
                 let back = layer_core::ImageTransform::affine(original.inverse().unwrap());
                 let transform = paint_transform::resample_map(&back, placement, self.level, self.level)?;
-                let over_paper = pixel_transform::DisplayLevel { opacity: 1., ..at_level };
+                let over_paper = pixel_transform::DisplayLevel { opacity: 1., encode: false, ..at_level };
                 let captured_at = clip.then(*original);
                 let document = r.document_extent;
                 captured.draw(r, pass, encoder, target, &transform, &transform, captured_at, document, texels, over_paper, None)?;

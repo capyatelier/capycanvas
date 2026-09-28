@@ -176,7 +176,7 @@ fn edit_image_submenu_holds_the_geometry_commands_and_photo_keymaps_bind_canvas_
         invoke(&[CommandId::FlipImageHorizontal, CommandId::FlipImageVertical]),
         invoke(&[CommandId::Trim, CommandId::RevealAll]),
     ]);
-    for item in edit.sections.iter().flatten() {
+    for item in edit.sections.iter().flatten().filter(|i| i.action.is_some()) {
         assert!(!seen.contains(&item.action), "{}", item.label);
         seen.push(item.action.clone());
     }

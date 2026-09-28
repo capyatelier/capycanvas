@@ -1,7 +1,7 @@
 //! Shared photo-to-master policy. Original samples and metadata are retained;
 //! source file locations remain the host's separate, read-only import reference.
 use layer_core::{
-    Document, PhotoMetadata, Project, ProjectLimits,
+    BlendSpace, Document, PhotoMetadata, Project, ProjectLimits,
     color::{DocumentColor, SampleDepth, RgbSpace, source::SourceImage},
 };
 use std::sync::Arc;
@@ -32,6 +32,7 @@ pub fn photo_project(
     document.resolution = source.resolution;
     document.metadata = metadata;
     document.color = DocumentColor { space, depth };
+    document.blend_space = BlendSpace::Perceptual.for_depth(depth);
     let name: String = name.chars().filter(|c| !c.is_control()).take(128).collect();
     document.layers[0].name = if name.is_empty() {
         "Photo".into()

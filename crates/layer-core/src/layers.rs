@@ -601,6 +601,47 @@ pub enum BlendRange {
     /// offer the mode.
     Unit,
 }
+/// The values a document's layers combine on. Layer pixels stay linear; in
+/// Perceptual documents the composite holds the document's encoded values.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum BlendSpace {
+    #[default]
+    Linear,
+    Perceptual,
+}
+impl BlendSpace {
+    pub const ALL: [Self; 2] = [Self::Perceptual, Self::Linear];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Perceptual => "Perceptual",
+            Self::Linear => "Linear light",
+        }
+    }
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Perceptual => "Like Photoshop and Clip Studio Paint",
+            Self::Linear => "Physically based",
+        }
+    }
+    /// Why a document of this depth cannot blend perceptually.
+    pub fn unavailable_reason(depth: color::SampleDepth) -> Option<&'static str> {
+        depth.is_float().then_some("Float documents blend in linear light")
+    }
+    /// The space a document of `depth` uses when this one is chosen.
+    pub fn for_depth(self, depth: color::SampleDepth) -> Self {
+        if depth.is_float() { Self::Linear } else { self }
+    }
+    /// Premultiplied linear `rgba` as the composite of this space holds it,
+    /// with the transfer curve of `rgb`.
+    pub fn composite(self, rgb: color::RgbSpace, rgba: [f32; 4]) -> [f32; 4] {
+        if self == Self::Linear || rgba[3] <= 0. {
+            return rgba;
+        }
+        let a = rgba[3];
+        let encode = |c: f32| (rgb.encode(f64::from(c / a)) * f64::from(a)) as f32;
+        [encode(rgba[0]), encode(rgba[1]), encode(rgba[2]), a]
+    }
+}
 impl LayerBlend {
     pub const ALL: [Self; 25] = [
         Self::Normal,

@@ -14,10 +14,11 @@ use photo_metadata::MetadataIndex;
 #[cfg(test)]
 mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x0a\0";
-/// Version 8 has no stored layer extents and versions before 10 no photo
-/// metadata; those files read with none.
-const READABLE: [&[u8; 12]; 3] = [b"CAPYRASTER\x08\0", b"CAPYRASTER\x09\0", MAGIC];
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x0b\0";
+/// Version 8 has no stored layer extents, versions before 10 no photo
+/// metadata and versions before 11 no blend space; those files read with
+/// none, and Linear blending.
+const READABLE: [&[u8; 12]; 4] = [b"CAPYRASTER\x08\0", b"CAPYRASTER\x09\0", b"CAPYRASTER\x0a\0", MAGIC];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -474,8 +475,24 @@ mod tests {
         assert!(read(&sources).is_err());
         bytes[10] = 7;
         assert!(read(&bytes).is_err());
-        bytes[10] = 11;
+        bytes[10] = 12;
         assert!(read(&bytes).is_err());
+    }
+
+    #[test]
+    fn blend_space_round_trips_and_version_10_reads_as_linear() {
+        let mut project = fixture();
+        project.document.blend_space = BlendSpace::Perceptual;
+        let mut bytes = Vec::new();
+        project.write(&mut bytes).unwrap();
+        assert_eq!(Project::read(bytes.as_slice(), Default::default()).unwrap().document.blend_space, BlendSpace::Perceptual);
+        let mut version_10 = rewrite_manifest(&bytes, |m| {
+            m["document"].as_object_mut().unwrap().remove("blend_space");
+        });
+        version_10[10] = 10;
+        assert_eq!(Project::read(version_10.as_slice(), Default::default()).unwrap().document.blend_space, BlendSpace::Linear);
+        let float = rewrite_manifest(&bytes, |m| m["document"]["color"]["depth"] = "F32".into());
+        assert!(Project::read(float.as_slice(), Default::default()).unwrap_err().contains("linear light"));
     }
 
     #[test]
@@ -485,7 +502,7 @@ mod tests {
         project.document.metadata = PhotoMetadata { exif: Some(block(300, 1)), xmp: Some(block(5000, 2)), iptc: None };
         let mut bytes = Vec::new();
         project.write(&mut bytes).unwrap();
-        assert_eq!(&bytes[..12], b"CAPYRASTER\x0a\0");
+        assert_eq!(&bytes[..12], MAGIC);
         let loaded = Project::read(bytes.as_slice(), Default::default()).unwrap();
         assert_eq!(loaded.document.metadata, project.document.metadata);
         let mut again = Vec::new();

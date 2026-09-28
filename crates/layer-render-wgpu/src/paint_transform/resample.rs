@@ -2,7 +2,7 @@
 //! display level the view samples, one bilinear sample per texel.
 use super::*;
 
-const UNIFORM_BYTES: u64 = 192;
+const UNIFORM_BYTES: u64 = 208;
 
 pub(crate) struct Resample {
     layout: wgpu::BindGroupLayout,
@@ -33,7 +33,10 @@ impl Resample {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = Deferred::wgsl(device, "display resample", include_str!("../display_resample.wgsl"));
+        let shader = Deferred::wgsl(device, "display resample", crate::compose_wgsl(&[
+            &crate::working_color::shader(device),
+            include_str!("../display_resample.wgsl"),
+        ]));
         let pipeline = Deferred::compute(device, "display resample", &pipeline_layout, &shader, "resample_main");
         Self { layout, pipeline }
     }
@@ -119,9 +122,10 @@ impl Reduced {
             .backdrop
             .into_iter()
             .chain([display.opacity, f32::from(u8::from(self.kept.is_some())), f32::from(u8::from(positions.is_some())), f32::from(u8::from(kept.keep_source))]);
-        for (dst, value) in values[160..].chunks_exact_mut(4).zip(options) {
+        for (dst, value) in values[160..192].chunks_exact_mut(4).zip(options) {
             dst.copy_from_slice(&value.to_le_bytes());
         }
+        values[192..196].copy_from_slice(&f32::from(u8::from(display.encode)).to_le_bytes());
         r.uploads.write(encoder, &self.uniforms, &values)?;
         let kept = self.kept.as_ref().unwrap_or(&self.image);
         let positions = positions.unwrap_or(&r.empty_view);

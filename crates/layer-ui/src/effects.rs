@@ -71,6 +71,7 @@ impl<B: CanvasRenderer> UiSession<B> {
             size,
             extent: [doc.width, doc.height],
             view: self.engine.view(),
+            blend_space: doc.blend_space,
             layers: doc.layers.iter().filter(|l| !replacing || l.id != current.id)
                 .map(Layer::composite_snapshot).collect(),
             filters: filters

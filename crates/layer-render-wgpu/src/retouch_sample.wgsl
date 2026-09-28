@@ -1,5 +1,6 @@
 // What a retouching stroke copies at a destination pixel: the target as the
-// stroke found it, over the reference composite below it. Each 2x2 block of
+// stroke found it, over the reference composite below it, combined in the
+// document's blend space. Each 2x2 block of
 // pages covers the 512px a 256px region can reach. A shader that includes this
 // defines retouch_target_load and retouch_reference_load for the block pages.
 struct RetouchMapping {
@@ -12,6 +13,7 @@ struct RetouchMapping {
     opacity: f32,
     mode: u32,
     exact: bool,
+    perceptual: bool,
 }
 
 const RETOUCH_NONE: u32 = 0u;
@@ -32,6 +34,7 @@ fn retouch_mapping(words: array<vec4<u32>, 4>) -> RetouchMapping {
         bitcast<f32>(words[3].x),
         words[3].y,
         words[3].z != 0u,
+        words[3].w != 0u,
     );
 }
 
@@ -101,6 +104,10 @@ fn retouch_source(m: RetouchMapping, destination: vec2<f32>) -> vec4<f32> {
         return current;
     }
     let below = retouch_sample_reference(m, source + m.to_document);
+    if m.perceptual {
+        let over = working_encode(current) * m.opacity;
+        return working_decode(over + working_encode(below) * (1.0 - over.a));
+    }
     let over = current * m.opacity;
     return over + below * (1.0 - over.a);
 }

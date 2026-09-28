@@ -12,6 +12,9 @@ enum Ready {
     ProbeNext(Result<u32, GpuRasterError>),
     Pixels(Result<ReadbackImage, GpuRasterError>),
 }
+/// What a captured filter source depends on: the source epoch, the target,
+/// the extent, the paper and the blend space.
+type SourceKey = (u64, LayerId, [u32; 2], [f32; 4], layer_core::BlendSpace);
 pub(crate) struct FilterPreviews {
     scene: Scene,
     source_scene: Scene,
@@ -23,7 +26,7 @@ pub(crate) struct FilterPreviews {
     probe: Deferred<wgpu::ComputePipeline>,
     mask: Image,
     source: Option<Image>,
-    key: Option<(u64, LayerId, [u32; 2], [f32; 4])>,
+    key: Option<SourceKey>,
     source_layers: Vec<PreviewMetadata>,
     point: Option<[u32; 2]>,
     scratch: Vec<Image>,
@@ -112,7 +115,7 @@ impl FilterPreviews {
         if let Some(request) = &self.request {
             self.cancelled |= self
                 .key
-                .is_none_or(|key| key.0 != epoch || key.2 != packet.document_extent)
+                .is_none_or(|key| key.0 != epoch || key.2 != packet.document_extent || key.4 != packet.blend_space)
                 || self.capture_background != packet.view.background_rgba_linear
                 || source_scope(packet.layers, request.target).is_none_or(|(_, mut scope)| {
                     let mut old = self.source_layers.iter();
@@ -159,12 +162,12 @@ impl FilterPreviews {
             // Visible rows prepare just their own preview variants. No draw or
             // readback is admitted until their asynchronous pipelines are ready.
             for effect in &request.filters {
-                self.scene.effects.prepare(r, &[&self.programs[&effect.program.id]], effects::Execution::Preview, 0.)?;
+                self.scene.effects.prepare(r, &[&self.programs[&effect.program.id]], effects::Execution::Preview, 0., Default::default())?;
             }
             let source_layers = source_scope(&request.layers, request.target)
                 .map_or_else(Vec::new, |(_, layers)| layers.map(|(l, _)| l.clone()).collect());
             for (layers, execution) in scene::startup_effect_chains(&source_layers) {
-                self.source_scene.effects.prepare(r, &layers, execution, 0.)?;
+                self.source_scene.effects.prepare(r, &layers, execution, 0., request.blend_space)?;
             }
             let mut ready = self.scene.effects.enqueue(&startup.compiler, startup::OTHER);
             ready &= self.source_scene.effects.enqueue(&startup.compiler, startup::OTHER);
@@ -192,6 +195,7 @@ impl FilterPreviews {
             request.target,
             request.extent,
             request.view.background_rgba_linear,
+            request.blend_space,
         );
         let resized = self.size != request.size;
         if resized {
@@ -460,6 +464,7 @@ impl FilterPreviews {
                 &[&self.programs[id]],
                 effects::Execution::Preview,
                 0.,
+                Default::default(),
             )?;
             let program = self.programs[id].effect.as_ref().unwrap().program.clone();
             // A document-remapping pass after another pass genuinely needs its
@@ -739,6 +744,7 @@ impl Scene {
             restore_rasters: &[],
             reset_layers: false,
             composite_all: false,
+            blend_space: request.blend_space,
         };
         self.capture_region(r, packet, destination, region, parent, encoder)
     }
@@ -867,6 +873,7 @@ mod tests {
                 size: [120, 40],
                 extent,
                 view,
+                blend_space: Default::default(),
                 layers: layers.iter().map(Layer::composite_snapshot).collect(),
                 filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
             })
@@ -928,6 +935,7 @@ mod tests {
                 restore_rasters: &[],
                 reset_layers: false,
                 composite_all: true,
+                blend_space: Default::default(),
             })
             .unwrap()
         };
@@ -938,6 +946,7 @@ mod tests {
             size: [200, 40],
             extent,
             view,
+            blend_space: Default::default(),
             layers: layers.iter().map(Layer::composite_snapshot).collect(),
             filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
         };

@@ -2,7 +2,7 @@
 //! document color default; precision and working RGB remain independent.
 use crate::{DEFAULT_DOCUMENT_EXTENT, MAX_NEW_DOCUMENT_DIMENSION};
 use layer_core::{
-    Document, Project,
+    BlendSpace, Document, Project,
     color::{DocumentColor, SampleDepth, RgbSpace},
 };
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,12 @@ pub struct NewDocumentOptions {
     pub extent: [u32; 2],
     pub color: DocumentColor,
     pub background: DocumentBackground,
+    /// Settings from before this field read with the new-document default.
+    #[serde(default = "perceptual")]
+    pub blend_space: BlendSpace,
+}
+fn perceptual() -> BlendSpace {
+    BlendSpace::Perceptual
 }
 impl Default for NewDocumentOptions {
     fn default() -> Self {
@@ -27,6 +33,7 @@ impl Default for NewDocumentOptions {
             extent: DEFAULT_DOCUMENT_EXTENT,
             color: DocumentColor::default(),
             background: DocumentBackground::White,
+            blend_space: BlendSpace::Perceptual,
         }
     }
 }
@@ -47,6 +54,7 @@ impl NewDocumentOptions {
         self.validate()?;
         let mut document = Document::new("untitled", self.extent[0], self.extent[1]);
         document.color = self.color;
+        document.blend_space = self.blend_space.for_depth(self.color.depth);
         document.layers[1].visible = self.background == DocumentBackground::White;
         Ok(Project { document })
     }
@@ -84,6 +92,7 @@ impl NewDocumentPreset {
             name: name.into(),
             options: NewDocumentOptions {
                 color: DocumentColor { space, depth },
+                blend_space: BlendSpace::Perceptual.for_depth(depth),
                 ..Default::default()
             },
         })
@@ -166,6 +175,43 @@ pub struct NewDocumentForm {
     pub options: NewDocumentOptions,
     pub presets: Vec<NewDocumentPreset>,
     pub spaces: Vec<(RgbSpace, &'static str)>,
+    pub blending: NewDocumentBlending,
+}
+/// The Blending field: its choices, the depths that blend only in linear
+/// light, and why.
+#[derive(Serialize)]
+pub struct NewDocumentBlending {
+    pub label: &'static str,
+    pub choices: Vec<BlendingChoice>,
+    pub linear_only: Vec<SampleDepth>,
+    pub float_reason: &'static str,
+}
+#[derive(Serialize)]
+pub struct BlendingChoice {
+    pub id: BlendSpace,
+    pub label: &'static str,
+    pub description: &'static str,
+}
+impl NewDocumentBlending {
+    pub fn new() -> Self {
+        Self {
+            label: "Blending",
+            choices: BlendSpace::ALL
+                .into_iter()
+                .map(|id| BlendingChoice { id, label: id.label(), description: id.description() })
+                .collect(),
+            linear_only: [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32]
+                .into_iter()
+                .filter(|depth| BlendSpace::unavailable_reason(*depth).is_some())
+                .collect(),
+            float_reason: BlendSpace::unavailable_reason(SampleDepth::F32).unwrap_or_default(),
+        }
+    }
+}
+impl Default for NewDocumentBlending {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl NewDocumentSettings {
     pub fn form(&self) -> NewDocumentForm {
@@ -173,6 +219,7 @@ impl NewDocumentSettings {
             options: self.defaults,
             presets: NewDocumentPreset::builtins().into_iter().chain(self.presets.iter().cloned()).collect(),
             spaces: RgbSpace::ALL.into_iter().map(|space| (space, space.name())).collect(),
+            blending: NewDocumentBlending::new(),
         }
     }
 }
@@ -202,6 +249,31 @@ mod tests {
         assert_eq!(settings.defaults, options);
     }
     #[test]
+    fn new_documents_blend_perceptually_except_at_float_and_presets_keep_the_choice() {
+        let project = NewDocumentOptions::default().project().unwrap();
+        assert_eq!(project.document.blend_space, BlendSpace::Perceptual);
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+            for blend_space in BlendSpace::ALL {
+                let options = NewDocumentOptions { color: DocumentColor { depth, ..Default::default() }, blend_space, ..Default::default() };
+                assert_eq!(options.project().unwrap().document.blend_space, if depth.is_float() { BlendSpace::Linear } else { blend_space });
+            }
+        }
+        let options = NewDocumentOptions { blend_space: BlendSpace::Linear, ..Default::default() };
+        let mut settings = NewDocumentSettings::default();
+        settings.apply(NewDocumentAction::Remember { options, name: "Linear".into(), defaults: true }).unwrap();
+        let read: NewDocumentSettings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!((read.defaults.blend_space, read.presets[0].options.blend_space), (BlendSpace::Linear, BlendSpace::Linear));
+        let mut older = serde_json::to_value(&settings).unwrap();
+        older["defaults"].as_object_mut().unwrap().remove("blend_space");
+        older["presets"][0]["options"].as_object_mut().unwrap().remove("blend_space");
+        let older: NewDocumentSettings = serde_json::from_value(older).unwrap();
+        assert_eq!((older.defaults.blend_space, older.presets[0].options.blend_space), (BlendSpace::Perceptual, BlendSpace::Perceptual));
+        let form = serde_json::to_value(NewDocumentSettings::default().form()).unwrap();
+        assert_eq!(form["blending"]["choices"][0]["description"], "Like Photoshop and Clip Studio Paint");
+        assert_eq!(form["blending"]["float_reason"], "Float documents blend in linear light");
+        assert_eq!(form["blending"]["linear_only"], serde_json::json!(["F16", "F32"]));
+    }
+    #[test]
     fn creation_preserves_independent_depth_space_and_background() {
         for space in RgbSpace::ALL {
             for depth in [SampleDepth::U8, SampleDepth::U16] {
@@ -210,6 +282,7 @@ mod tests {
                         extent: [513, 257],
                         color: DocumentColor { space, depth },
                         background,
+                        blend_space: BlendSpace::Perceptual,
                     };
                     let project = options.project().unwrap();
                     assert_eq!(project.document.color, options.color);

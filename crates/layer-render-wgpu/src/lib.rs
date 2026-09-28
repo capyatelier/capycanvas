@@ -941,6 +941,8 @@ pub struct WgpuRasterizer {
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
     composite_damage: PixelRect,
+    /// The composite's blend space, from the latest frame.
+    blend_space: layer_core::BlendSpace,
     filter_previews: Option<scene::FilterPreviews>,
     effect_validation: Option<effect_validation::Pending>,
     validated_effects: Option<effects::Effects>,
@@ -1281,6 +1283,7 @@ impl WgpuRasterizer {
             composite_texture: None,
             composite_view: None,
             composite_bind_group: None,
+            blend_space: layer_core::BlendSpace::Linear,
             preview_pages: Vec::with_capacity(16),
             preview_coverage_pages: Vec::with_capacity(8),
             preview_watercolor_wetness_pages: Vec::with_capacity(8),
@@ -1732,13 +1735,15 @@ impl WgpuRasterizer {
             return None;
         }
         let [r, g, b, a] = packet.view.background_rgba_linear;
+        let backdrop = packet.blend_space.composite(self.device.working_space(), [r * a, g * a, b * a, a]);
         Some((
             level,
             pixel_transform::DisplayLevel {
                 side: 1 << level,
                 opacity: layer.opacity,
                 extent: packet.document_extent,
-                backdrop: if lone { [r * a, g * a, b * a, a] } else { [0.; 4] },
+                backdrop: if lone { backdrop } else { [0.; 4] },
+                encode: packet.blend_space == layer_core::BlendSpace::Perceptual,
             },
             (!lone).then_some((index, above, layer.properties.blend)),
         ))
@@ -3731,7 +3736,8 @@ impl CanvasRenderer for WgpuRasterizer {
         };
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
         let (resized, display_rebuilt) = self.ensure_document(packet.document_extent, packet.layers)?;
-        let packet = FramePacket { composite_all: packet.composite_all || display_rebuilt, ..packet };
+        let blending_changed = std::mem::replace(&mut self.blend_space, packet.blend_space) != packet.blend_space;
+        let packet = FramePacket { composite_all: packet.composite_all || display_rebuilt || blending_changed, ..packet };
         self.prepare_selection_previews(packet.layers)?;
         let mut batch_tiles = original_batches.iter().map(|batch| {
             let start = batch.first_dab as usize;
@@ -4988,7 +4994,7 @@ impl StyleGpu {
             style.deform.momentum,
         ];
         result.render_mode = [
-            blend_code(style.rendering.blend_mode.into(), device) as f32,
+            blend_code(style.rendering.blend_mode.into(), device, layer_core::BlendSpace::Linear) as f32,
             f32::from(style.rendering.accumulation == BrushAccumulation::Uniform),
             f32::from(style.wet_mix.mix_space as u8),
             style.deform.distortion,
@@ -5030,15 +5036,15 @@ impl StyleGpu {
     }
 }
 
-/// A blend as `blend_modes.wgsl` reads it: the `LayerBlend` code in bits 0-7
-/// and float documents in bit 9. Bit 8 is reserved for the Perceptual space.
+/// A blend as `blend_modes.wgsl` reads it: the `LayerBlend` code in bits 0-7,
+/// Perceptual documents in bit 8 and float documents in bit 9.
 /// Normal needs no flags, so its code is always 0; a clipped Pass Through
 /// group composites isolated, as Normal.
-pub(crate) fn blend_code(blend: layer_core::LayerBlend, device: &PipelineDevice) -> u32 {
+pub(crate) fn blend_code(blend: layer_core::LayerBlend, device: &PipelineDevice, space: layer_core::BlendSpace) -> u32 {
     if matches!(blend, layer_core::LayerBlend::Normal | layer_core::LayerBlend::PassThrough) {
         return 0;
     }
-    blend.code() | u32::from(device.hdr()) << 9
+    blend.code() | u32::from(space == layer_core::BlendSpace::Perceptual) << 8 | u32::from(device.hdr()) << 9
 }
 
 fn liquify_mode_code(mode: LiquifyMode) -> f32 {
@@ -6157,6 +6163,7 @@ mod tests {
     }
     mod adjustments;
     mod blend_modes;
+    mod blend_space;
     pub(crate) mod image_windows;
     mod pass_through;
     mod live_windows;

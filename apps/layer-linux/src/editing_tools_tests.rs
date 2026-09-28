@@ -66,6 +66,7 @@ fn native_portable_paint_pointer_workflow() {
     ] {
         let mut project = new_drawing(384, 256).unwrap();
         project.document.color = DocumentColor { space, depth };
+        project.document.blend_space = project.document.blend_space.for_depth(depth);
         let w = Workspace::with_project(&app, Some((project, None)));
         w.window.maximize(); w.window.present(); ready(&w);
         invoke(&w, CommandId::FitCanvas);

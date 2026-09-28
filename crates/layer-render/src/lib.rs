@@ -261,6 +261,8 @@ pub struct FramePacket<'a> {
     pub reset_layers: bool,
     /// Re-composite the visible surface without re-rasterizing unchanged layers.
     pub composite_all: bool,
+    /// How the layers combine. Changing it recomposes the composite.
+    pub blend_space: layer_core::BlendSpace,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -293,6 +295,7 @@ pub struct FilterPreviewRequest {
     pub size: [u32; 2],
     pub extent: [u32; 2],
     pub view: ViewState,
+    pub blend_space: layer_core::BlendSpace,
     pub layers: Vec<Layer>,
     pub filters: Vec<std::sync::Arc<layer_core::EffectInstance>>,
 }

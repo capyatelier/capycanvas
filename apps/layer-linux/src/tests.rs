@@ -42,6 +42,8 @@ mod notice;
 mod zoom_readout;
 #[path = "blend_menu_tests.rs"]
 mod blend_menu;
+#[path = "blending_tests.rs"]
+mod blending;
 #[path = "photo_edit_tests.rs"]
 mod photo_edit;
 #[path = "merge_tests.rs"]
@@ -99,6 +101,17 @@ use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_ui::FloatingToolbarLayout;
 use std::time::{Duration, Instant};
+
+/// A new drawing at `depth`, as New drawing makes it.
+fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::SampleDepth) -> layer_core::Project {
+    NewDocumentOptions {
+        extent: [width, height],
+        color: layer_core::color::DocumentColor { depth, ..Default::default() },
+        ..Default::default()
+    }
+    .project()
+    .unwrap()
+}
 
 fn pump(ms: u64) {
     let until = Instant::now() + Duration::from_millis(ms);
@@ -3136,8 +3149,8 @@ fn native_navigation_tools() {
     pump(250);
     let color = state(&w).colors.foreground.rgba;
     assert!(
-        color[0] > 0.99 && (color[1] - 0.735).abs() < 0.015 && (color[2] - 0.735).abs() < 0.015,
-        "visible color {color:?}"
+        color[0] > 0.99 && (color[1] - 0.5).abs() < 0.015 && (color[2] - 0.5).abs() < 0.015,
+        "half-opacity red over white blends perceptually: {color:?}"
     );
     assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Paint);
     click(&eye);

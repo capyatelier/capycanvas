@@ -15,6 +15,7 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
     let color = document.color;
     let extent = [document.width, document.height];
     let resolution = document.resolution;
+    let blending = document.blend_space.label();
     // Profiles can contain substantial metadata. Parse once off the GTK owner.
     let sources = gtk::gio::spawn_blocking(move || {
         document
@@ -91,6 +92,7 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
         ),
     );
     add(&group, "Bit depth", color.depth.label());
+    add(&group, "Blending", blending);
     body.append(&group);
     if !sources.is_empty() {
         let group = adw::PreferencesGroup::builder()

@@ -57,7 +57,7 @@ impl Pipelines {
         let shader = Deferred::wgsl(
             device,
             "retouch sources",
-            compose_wgsl(&[include_str!("retouch_sample.wgsl"), include_str!("retouch_sources.wgsl")]),
+            compose_wgsl(&[&working_color::shader(device), include_str!("retouch_sample.wgsl"), include_str!("retouch_sources.wgsl")]),
         );
         let pipeline = |entry: &'static str| {
             let (device, layout, shader) = (device.clone(), pipeline_layout.clone(), shader.clone());
@@ -99,6 +99,7 @@ struct ReferenceKey {
     members: Arc<BTreeSet<LayerId>>,
     extent: [u32; 2],
     background: [f32; 4],
+    blend_space: layer_core::BlendSpace,
     layers: Vec<Layer>,
 }
 impl ReferenceKey {
@@ -110,6 +111,7 @@ impl ReferenceKey {
             members: members.clone(),
             extent,
             background: frame.background,
+            blend_space: frame.blend_space,
             layers: Self::members(frame, members).cloned().collect(),
         }
     }
@@ -117,6 +119,7 @@ impl ReferenceKey {
         *self.members == *members
             && self.extent == extent
             && self.background == frame.background
+            && self.blend_space == frame.blend_space
             && Self::members(frame, members).count() == self.layers.len()
             && Self::members(frame, members).zip(&self.layers).all(|(a, b)| artwork::same_layer(a, b))
     }
@@ -663,6 +666,7 @@ impl RetouchSources {
         words[12] = opacity.to_bits();
         words[13] = mode as u32;
         words[14] = u32::from(exact);
+        words[15] = u32::from(frame.blend_space == layer_core::BlendSpace::Perceptual);
         Ok(Mapping { words, mode, target, stroke, references, blocks })
     }
 

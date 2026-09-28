@@ -531,5 +531,51 @@ class AndroidFeatureParityTest {
         assertTrue(state().getJSONObject("document_file").getBoolean("modified"))
         awaitPixel(Offset(.55f,.5f)) { android.graphics.Color.green(it) < 50 }
     }
+    @Test fun newDocumentBlendingAndPropertiesInBothThemes() {
+        fun selected(id: String) = state().array("commands").objects().first { it.getString("id") == id }.getBoolean("selected")
+        fun blending() = compose.onNodeWithTag("color-choice-Blending").performScrollTo()
+        fun note() = compose.onNodeWithTag("new-document-blending-note").performScrollTo()
+        fun choose(field: String, choice: String) {
+            val item = hasText(choice) and hasClickAction() and !hasTestTag("color-choice-$field")
+            compose.onNodeWithTag("color-choice-$field").performScrollTo().performClick()
+            shown(item)
+            compose.onNode(item).performClick()
+            compose.waitForIdle()
+        }
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        try {
+            for (theme in listOf("light", "dark")) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                action(obj("type" to "invoke", "command" to "new_document"))
+                shown("color-choice-Blending")
+                blending().assertIsEnabled().assert(hasText("Perceptual"))
+                note().assertTextEquals("Like Photoshop and Clip Studio Paint")
+                capture("new-document-blending-$theme")
+                choose("Bit depth", "16-bit float HDR")
+                blending().assertIsNotEnabled().assert(hasText("Linear light"))
+                note().assertTextEquals("Float documents blend in linear light")
+                capture("new-document-blending-float-$theme")
+                choose("Bit depth", "8-bit SDR")
+                blending().assertIsEnabled().assert(hasText("Perceptual"))
+                compose.onNodeWithTag("new-document-cancel").performClick()
+                awaitDocument()
+            }
+            action(obj("type" to "invoke", "command" to "new_document"))
+            shown("color-choice-Blending")
+            choose("Blending", "Linear light")
+            note().assertTextEquals("Physically based")
+            compose.onNodeWithTag("new-document-create").performClick()
+            awaitDocument()
+            compose.waitUntil(60_000) { selected("blend_linear") && !selected("blend_perceptual") }
+            action(obj("type" to "invoke", "command" to "document_properties"))
+            shown(hasText("Blending") and !hasClickAction())
+            shown(hasText("Linear light"))
+            capture("document-properties-blending")
+            compose.onNodeWithText("Done").performClick()
+            compose.waitUntil(15_000) { compose.onAllNodesWithText("Document Properties").fetchSemanticsNodes().isEmpty() }
+        } finally {
+            action(obj("type" to "set_theme", "theme" to originalTheme))
+        }
+    }
 
 }

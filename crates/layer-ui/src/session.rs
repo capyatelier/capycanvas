@@ -64,6 +64,8 @@ mod notices;
 mod selection_pixels;
 #[path = "merges.rs"]
 mod merges;
+#[path = "blending.rs"]
+mod blending;
 #[path = "selection_refine.rs"]
 mod selection_refine;
 pub use selection_refine::{RefineKind, SelectionRefineView};
@@ -218,8 +220,7 @@ fn transform_choice(command: CommandId) -> Option<TransformChoice> {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn blank(renderer: R, viewport: [u32; 2], platform: Platform) -> Result<Self, String> {
-        let [width, height] = DEFAULT_DOCUMENT_EXTENT;
-        Self::new(renderer, Document::new("untitled", width, height), viewport, platform)
+        Self::new(renderer, NewDocumentOptions::default().project()?.document, viewport, platform)
     }
 
     pub fn new(renderer: R, document: Document, viewport: [u32; 2], platform: Platform) -> Result<Self, String> {
@@ -2246,6 +2247,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.require_document_idle().is_ok()
                     && merges::merge_kind(id).is_some_and(|kind| self.merge_refusal(kind).is_none())
             }
+            CommandId::BlendPerceptual | CommandId::BlendLinear => {
+                self.require_document_idle().is_ok() && !self.state.document_file.busy && self.blending_refusal().is_none()
+            }
             CommandId::CanvasSize
             | CommandId::ImageSize
             | CommandId::RotateImageLeft
@@ -2335,6 +2339,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let brush = self.engine.configured_brush();
                 tool_settings::mixes_color(brush) && brush.wet_mix.mix_space == space
             })
+            || blending::blend_space(id).is_some_and(|space| document.blend_space == space)
             || matches!((id, self.layer_interaction.tool.region()),
                 (CommandId::SelectionVisible, Some((false, RegionSource::Visible, _)))
                 | (CommandId::SelectionEditing, Some((false, RegionSource::Editing, _)))
@@ -4442,6 +4447,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.merge(merges::merge_kind(command).ok_or("Unknown merge")?)?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
+            CommandId::BlendPerceptual | CommandId::BlendLinear => {
+                self.set_blend_space(blending::blend_space(command).ok_or("Unknown blending")?)?;
+                Ok((DOCUMENT | COMMANDS, true))
+            }
             CommandId::CanvasSize => {
                 self.open_canvas_size()?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, false))
@@ -5524,6 +5533,7 @@ mod tests {
     include!("blend_menu_tests.rs");
     include!("clone_source_tests.rs");
     include!("color_mixing_tests.rs");
+    include!("blending_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

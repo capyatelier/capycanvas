@@ -200,13 +200,13 @@ fn compile_candidate(
         for (i, program) in request.programs.iter().enumerate() {
             let mut layer = Layer::paint(LayerId(u64::MAX - i as u64), "");
             layer.effect = Some(Arc::new(layer_core::EffectInstance::new(program.clone())));
-            candidate.prepare(gpu, &[&layer], effects::Execution::Preview, 0.)?;
+            candidate.prepare(gpu, &[&layer], effects::Execution::Preview, 0., Default::default())?;
             if program.image_boundary() {
                 for pass in 0..program.passes.len().max(1) {
-                    candidate.prepare(gpu, &[&layer], effects::Execution::Image(pass), 0.)?;
+                    candidate.prepare(gpu, &[&layer], effects::Execution::Image(pass), 0., Default::default())?;
                 }
             } else {
-                candidate.prepare(gpu, &[&layer], effects::Execution::Fused, 0.)?;
+                candidate.prepare(gpu, &[&layer], effects::Execution::Fused, 0., Default::default())?;
             }
         }
         Ok::<_, GpuRasterError>(())

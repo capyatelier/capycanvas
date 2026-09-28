@@ -44,9 +44,9 @@ export async function checkMerges({call,evaluate,settle,device=false}) {
     await wait(`!document.querySelector('.header-menu[data-menu="${menu}"]').open`);
   };
   const sample=async p=>{
-    if(await evaluate("layerApp.state().layer_tools.tool!=='pick_visible'"))await invoke('eyedropper');
     await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:p.x+1,y:p.y,buttons:0,pointerType:'mouse'});
     await call('Input.dispatchMouseEvent',{type:'mouseMoved',...p,buttons:0,pointerType:'mouse'});await settle();
+    if(await evaluate("layerApp.state().layer_tools.tool!=='pick_visible'"))await invoke('eyedropper');
     await pause(150);
     let last;
     for(const end=Date.now()+10000;Date.now()<end;await pause(100)){

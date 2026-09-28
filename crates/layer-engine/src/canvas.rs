@@ -1374,6 +1374,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             restore_rasters: &self.restore_rasters,
             reset_layers: rebuilt,
             composite_all: self.composite_all,
+            blend_space: self.editor.document().blend_space,
         };
         if !self.backend.raster_dependencies_ready(packet) {
             self.pending_frame = Some((rebuilt, time_seconds));

@@ -10,7 +10,7 @@ pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, Docum
 mod document_sessions;
 pub use document_sessions::{DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument};
 mod document_creation;
-pub use document_creation::{DocumentBackground, NewDocumentAction, NewDocumentOptions, NewDocumentPreset, NewDocumentSettings};
+pub use document_creation::{BlendingChoice, DocumentBackground, NewDocumentAction, NewDocumentBlending, NewDocumentOptions, NewDocumentPreset, NewDocumentSettings};
 mod document_workflow;
 pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, SourceWorkflow};
 
@@ -541,6 +541,8 @@ command_ids! {
     ColorMixClassic,
     Heal,
     SpotHeal,
+    BlendPerceptual,
+    BlendLinear,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -579,6 +581,8 @@ impl CommandId {
                 | Self::SnapRulers
                 | Self::LayerMaskEnabled
                 | Self::MoveLeaveCopy
+                | Self::BlendPerceptual
+                | Self::BlendLinear
                 | Self::PreviewSdr
                 | Self::SoftProof
                 | Self::GamutWarning
@@ -777,6 +781,7 @@ impl CommandId {
             Self::ColorMixOklab => "color-mix-oklab",
             Self::ColorMixLinear => "color-mix-linear",
             Self::ColorMixClassic => "color-mix-classic",
+            Self::BlendPerceptual | Self::BlendLinear => "blend",
         })
     }
     pub const TOOLS: [Self; 30] = [
@@ -1027,6 +1032,8 @@ impl CommandId {
             Self::ColorMixOklab => "Oklab mixing",
             Self::ColorMixLinear => "Linear light mixing",
             Self::ColorMixClassic => "Classic mixing",
+            Self::BlendPerceptual => "Perceptual Blending",
+            Self::BlendLinear => "Linear Light Blending",
         }
     }
 }

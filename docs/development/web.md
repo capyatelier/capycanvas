@@ -87,7 +87,7 @@ Journeys by area; the dispatch in `test.mjs` lists them all:
 | Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-readout`, `--move-selection` |
 | Retouching | `--clone`, `--heal` |
 | Color | `--color-panel`, `--color-picker`, `--palettes` |
-| Layers and filters | `--layers`, `--blend-menu`, `--pass-through`, `--adjustments`, `--filter-drawer`, `--photo-edit`, `--merges` |
+| Layers and filters | `--layers`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--filter-drawer`, `--photo-edit`, `--merges` |
 | Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |
 | Photo files and export | `--portable-photo`, `--export-metadata` |
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |

@@ -81,7 +81,8 @@ through `CanvasRenderer::max_document_dimension`.
 A merge inserts its result with a pending `LayerOperationKind::Bake` holding the
 merged layers as they were. The frame that runs it composites them with
 `Scene::group` over transparency, isolated and moved into the result's pixels,
-and copies each tile into the result's pages
+in the document's blend space, and copies each tile into the result's pages,
+decoded to linear pixels in a Perceptual document so the result looks the same
 ([`scene/bake.rs`](../../crates/layer-render-wgpu/src/scene/bake.rs)). Placed
 photos are sampled as for export, never from the display's mip levels, and
 watercolor settles into the result, which keeps no wet state. The same edit
@@ -125,9 +126,10 @@ view transformations do not change those pages.
 unassociation, interpolation and perceptual conversion across scene composition,
 effects and materials. Positive alpha is divided directly; only zero coverage
 returns black. Native scene/image interpolation uses explicit Float32 texel loads.
-Ordinary source-over and the existing channel blend formulas operate in **linear
-document RGB**, independently of bit depth. Each blend mode states its own bounds;
-see [Blend modes](#blend-modes). Region tolerance uses encoded document RGB
+Layer pixels are **linear document RGB**, independently of bit depth. Layers
+combine in the document's [blend space](#blend-space): linear document RGB, or
+the document's encoded values in a Perceptual document. Each blend mode states
+its own bounds; see [Blend modes](#blend-modes). Region tolerance uses encoded document RGB
 weighted by coverage, independent of display/checker colors.
 
 Paint color mixing (`mix_color` in
@@ -185,8 +187,8 @@ base's coverage. They serve every place a layer's blend applies:
   edges on an Adreno Vulkan driver.
 
 `blend_code` passes a blend to shaders as the mode's code in bits 0-7, the
-Perceptual blend space in bit 8 (reserved; always 0 for now) and float documents
-in bit 9. Normal is always 0.
+Perceptual blend space in bit 8 and float documents in bit 9. Normal is always 0.
+Brush blend modes pass the Linear space.
 
 **Pass Through** has no formula. `Scene::group_into` composes a group's layers
 onto a running composite, so a Pass Through group
@@ -214,7 +216,9 @@ documents leave them out of their menus; a layer that already uses one keeps it.
 | Overlay, Soft Light, Hard Light, Color Burn, Color Dodge, Vivid Light, Hard Mix, Exclusion | Unit | Unit, not offered |
 | Hue, Saturation, Color, Luminosity | W3C `ClipColor` | `ClipColor` without its upper bound |
 
-Soft Light is the W3C formula. Hard Mix is 1 where `s + d ≥ 1`, which matches
+Soft Light is the W3C formula in Linear documents and Photoshop's in Perceptual
+ones: with backdrop `a` and source `b`, `2ab + a²(1 − 2b)` where `b ≤ 0.5`, else
+`2a(1 − b) + √a(2b − 1)`. Hard Mix is 1 where `s + d ≥ 1`, which matches
 Photoshop's threshold of Vivid Light. The component modes use W3C `SetLum`,
 `SetSat` and `ClipColor` with the luma weights of the document's primaries (the Y
 row of their XYZ matrix). Bit 8 selects Rec. 601 weights, for Photoshop parity
@@ -230,8 +234,74 @@ on encoded values in the Perceptual space.
 
 The oracle `every_blend_mode_matches_the_reference_on_every_path_and_depth`
 checks every mode against an independent reference through each path above at
-8-bit, 16-bit, half-float and float depths, and checks that export renders the
-same composite.
+8-bit, 16-bit, half-float and float depths, in both blend spaces at 8 and 16
+bits, and checks that export renders the same composite.
+
+## Blend space
+
+A document's Blending (`Document.blend_space`) is **Perceptual** or **Linear
+light**. Layer pixels are linear premultiplied in both. In a Perceptual document
+the *composite* holds the document's encoded values, premultiplied:
+`enc(c / a) · a`, where `enc` is the document's transfer curve (`sdr_encode` with
+`WORKING_SPACE`): sRGB for sRGB and Display P3, 563/256 for Adobe RGB, and 1.8
+with a linear toe for ProPhoto. Only 8- and 16-bit documents blend perceptually;
+float documents are Linear. `FramePacket.blend_space` carries it to the renderer,
+and a change recomposes everything.
+
+Normal layers keep hardware premultiplied blending, which is correct on encoded
+values. Blend modes, clipping, masks, opacity and groups work on the encoded
+values directly. Scene draws convert behind a uniform; effect shaders are
+compiled once per blend space, because a branch in every filter pixel costs a
+Linear document time. Either way a Linear document runs the arithmetic it ran
+before the setting existed. Resampling stays linear: layer pixels are sampled or
+reduced first and converted after.
+
+**Writers.** These put layer pixels into the composite and encode them:
+- scene draws of layer pixels: `scene_space` in
+  [`scene.wgsl`](../../crates/layer-render-wgpu/src/scene.wgsl) and
+  `scene_constant.wgsl`, selected by the draw's `Convert` (ops 1, 7, 12, 13,
+  14 and 15, and the mask-area tint, op 5). A Flow preview lies on its layer's
+  pixels before they are encoded, as its committed stroke will;
+- placed layers and watercolor layers, which the renderer draws linear first
+  and then converts in one draw (`Scene::converted`);
+- effects ([`effects.rs`](../../crates/layer-render-wgpu/src/effects.rs)): a
+  filter receives linear input and its result is encoded before it blends onto
+  its input, inline in fused chains and in the last pass of an image filter;
+- the paper and every constant backdrop, encoded on the CPU
+  (`BlendSpace::composite`);
+- drag frames that draw a moving layer into the display
+  ([`display_resample.wgsl`](../../crates/layer-render-wgpu/src/display_resample.wgsl)
+  and `display_main` in `pixel_transform.wgsl`), which encode the layer's
+  resampled color when `DisplayLevel::encode` is set.
+
+**What holds the composite.** Group and clipping scratch tiles, the live
+composite and display pyramid, image-filter outputs and checkpoints
+(`scene_images`), clipping backdrops and cached clipping compositions, the static
+layers of the layered display, the folded constant backdrop, and the backdrop
+and result a Pass Through group fades between hold the document's composite
+values. Their caches include the blend space
+(`ImageStages`, `artwork::Frame`, the filter-preview source key and the
+retouch reference cache's key). An image
+filter's input window is captured once per pixel and decoded, so filters read
+linear input; in a Perceptual document adjacent filters therefore do not share
+an image.
+
+**Readers.** Each decodes where it needs linear values:
+
+| Reader | Where | Reads |
+| --- | --- | --- |
+| Canvas presentation, Navigator, color picker loupe, screen check, backdrop blur | `canvas_linear` in [`present.wgsl`](../../crates/layer-render-wgpu/src/present.wgsl) and `present_screen.wgsl` | decoded before proofing and SDR or HDR mapping |
+| Export and snapshot rows, Copy and Copy Merged, histogram, color conversion previews | `Scene::capture_region` in [`snapshot.rs`](../../crates/layer-render-wgpu/src/snapshot.rs) | decoded per tile |
+| Eyedropper, Wand and Fill on the composite or the reference layers, tonal selection, whole-image readback | [`artwork.rs`](../../crates/layer-render-wgpu/src/artwork.rs) captures | decoded |
+| Clone Stamp, Healing and Spot Healing: the reference layers below the target | reference cache in [`retouch_sources.rs`](../../crates/layer-render-wgpu/src/retouch_sources.rs), captured through `artwork.rs` | composed in the document space, cached decoded; `retouch_source` in [`retouch_sample.wgsl`](../../crates/layer-render-wgpu/src/retouch_sample.wgsl) lays the target over them in the blend space |
+| Filter previews | `capture_filter_source` in [`filter_previews.rs`](../../crates/layer-render-wgpu/src/filter_previews.rs) | decoded |
+| Merges | [`scene/bake.rs`](../../crates/layer-render-wgpu/src/scene/bake.rs) | composed in the document space, stored decoded |
+| Image filter input windows | `capture_tile` in [`scene_images.rs`](../../crates/layer-render-wgpu/src/scene_images.rs) | decoded |
+| Layered display during drags | [`display_layers.wgsl`](../../crates/layer-render-wgpu/src/display_layers.wgsl) | composite values; blends with the document's blend code |
+| Layer and paper thumbnails, brushes | layer pages | linear layer pixels, not the composite |
+
+The export matte, and resizing on export, apply to the decoded rows in linear
+light.
 
 ## Incremental composition
 

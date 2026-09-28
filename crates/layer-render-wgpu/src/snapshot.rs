@@ -144,6 +144,7 @@ pub struct SnapshotRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     output_metadata: layer_color::photo::DeliveryMetadata,
     background: [f32; 4],
+    blend_space: layer_core::BlendSpace,
     time: f32,
     planned_pixel_bytes: u64,
     control: CaptureControl,
@@ -224,6 +225,7 @@ impl SnapshotRenderer {
                 policy: Default::default(),
             },
             background,
+            blend_space: project.document.blend_space,
             time,
             planned_pixel_bytes: PLANNED_PIXEL_BYTES,
             control,
@@ -544,6 +546,7 @@ impl SnapshotRenderer {
             restore_rasters: &[],
             reset_layers: false,
             composite_all: true,
+            blend_space: self.blend_space,
         };
         let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
         r.prepare_uploads(packet, &mut [], &mut encoder)?;

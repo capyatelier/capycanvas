@@ -1309,6 +1309,9 @@ pub struct Document {
     pub width: u32,
     pub height: u32,
     pub color: color::DocumentColor,
+    /// How layers combine. Files from before this field read as Linear.
+    #[serde(default)]
+    pub blend_space: BlendSpace,
     pub resolution: Option<ImageResolution>,
     /// Saved independently of delivery, with binary profile bytes deduplicated
     /// by the project source/profile index. Temporary view toggles live in UI.
@@ -1358,6 +1361,7 @@ impl Document {
             width,
             height,
             color: color::DocumentColor::default(),
+            blend_space: BlendSpace::Linear,
             resolution: None,
             proof: None,
             metadata: PhotoMetadata::default(),
@@ -1413,6 +1417,14 @@ impl Document {
             Edit::SetSdrRendition(recipe) => {
                 recipe.validate().map_err(|_| DocumentError::InvalidLayerOperation("Invalid SDR rendition"))?;
                 Edit::SetSdrRendition(std::mem::replace(&mut self.sdr_rendition, recipe))
+            }
+            Edit::SetBlendSpace(space) => {
+                if space == BlendSpace::Perceptual
+                    && let Some(reason) = BlendSpace::unavailable_reason(self.color.depth)
+                {
+                    return Err(DocumentError::InvalidLayerOperation(reason));
+                }
+                Edit::SetBlendSpace(std::mem::replace(&mut self.blend_space, space))
             }
             Edit::SetProof(recipe) => {
                 if let Some(recipe) = &recipe {
@@ -1681,6 +1693,9 @@ pub enum Edit {
     /// Metadata only; no raster conversion or composite invalidation.
     SetProof(Option<color::ProofRecipe>),
     SetSdrRendition(color::hdr::SdrRendition),
+    /// How layers combine; Perceptual only at 8 and 16 bits. Pixels keep
+    /// their values.
+    SetBlendSpace(BlendSpace),
     /// One atomic interpretation/backing change. Structure and properties stay
     /// intact; all native color and scalar replacements must be host-backed.
     SetColor {
@@ -2229,6 +2244,23 @@ impl std::error::Error for DocumentError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changing_the_blend_space_is_one_undo_step_that_keeps_every_pixel() {
+        let document = Document::new("Blend", 64, 64);
+        let mut editor = Editor::new(document.clone());
+        let edit = Edit::SetBlendSpace(BlendSpace::Perceptual);
+        assert!(edit.changes_image());
+        editor.perform(edit).unwrap();
+        assert_eq!(editor.document().blend_space, BlendSpace::Perceptual);
+        assert_eq!(editor.document().layers, document.layers);
+        assert!(editor.undo().unwrap());
+        assert_eq!(editor.document(), &Document { revision: editor.document().revision, ..document });
+        assert!(!editor.can_undo());
+        let mut float = Document::new("Float", 64, 64);
+        float.color.depth = color::SampleDepth::F16;
+        assert!(Editor::new(float).perform(Edit::SetBlendSpace(BlendSpace::Perceptual)).is_err());
+    }
 
     #[test]
     fn brush_colors_preserve_finite_extended_rgb_and_validate_coverage_separately() {

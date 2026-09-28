@@ -1,6 +1,6 @@
 //! A flattened conversion is a separate native document, never a replacement edit.
 use layer_core::{
-    Document, ImageResolution, Project,
+    BlendSpace, Document, ImageResolution, Project,
     color::{
         ColorProfile, DocumentColor,
         source::{SourceBuilder, SourceChannels, SourceInterpretation, SourceKind},
@@ -35,6 +35,7 @@ pub fn flattened_document(
     source.resolution = resolution;
     let mut document = Document::new("Converted copy", extent[0], extent[1]);
     document.color = color;
+    document.blend_space = BlendSpace::Perceptual.for_depth(color.depth);
     document.resolution = resolution;
     document.layers.truncate(1);
     document.layers[0].name = "Converted image".into();

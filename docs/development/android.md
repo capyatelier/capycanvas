@@ -205,8 +205,8 @@ APK calls, so test-APK benchmarks use the unminified build.
   logcat under `CapyDragPerf` and `CapyResizePerf`.
 - **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
   `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,scaled,move,selection,menus,canvas_size,refine,crop,merge`,
-  `durationMs`, `width`, `height` and `transparency` (`off` to `high`) narrow or
-  resize the run. Each scenario logs a `CapyBarPerf` line and writes
+  `durationMs`, `width`, `height`, `transparency` (`off` to `high`) and `blending`
+  (`perceptual` or `linear`, the new document's Blending) narrow or resize the run. Each scenario logs a `CapyBarPerf` line and writes
   `canvas-bar-benchmark/<label>.json` in external files; `ui_hz` and
   `ui_interval_ms` count the distinct vsyncs the UI drew until the gestures end.
   `refine` drags the Refine panel's Feather slider with the stylus on a
@@ -225,7 +225,7 @@ APK calls, so test-APK benchmarks use the unminified build.
 - **Canvas navigation and drawing.** `AndroidViewportBenchmarkTest` runs with
   `-e viewportBenchmark true`. `-e motion pan|pinch` measures navigation;
   the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,
-  `intervalMs`, `durationMs`, `repeats` and `label`. `-e passThrough true` puts a
+  `intervalMs`, `durationMs`, `repeats`, `blending` and `label`. `-e passThrough true` puts a
   Black & White adjustment in a Pass Through group over a Solid Color fill. Pull
   `files/viewport-benchmark/` from the app's external storage and summarize it
   with `python3 tools/performance/android-viewport-report.py DIRECTORY`.

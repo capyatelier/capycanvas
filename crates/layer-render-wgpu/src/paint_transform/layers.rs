@@ -133,7 +133,7 @@ impl LayeredDisplay {
         texels: [u32; 4],
         blend: layer_core::LayerBlend,
     ) -> Result<(), GpuRasterError> {
-        let values = [texels[0], texels[1], texels[2], texels[3], crate::blend_code(blend, &r.device), u32::from(self.above.is_some()), 0, 0];
+        let values = [texels[0], texels[1], texels[2], texels[3], crate::blend_code(blend, &r.device, r.blend_space), u32::from(self.above.is_some()), 0, 0];
         let mut bytes = [0; 32];
         for (dst, value) in bytes.chunks_exact_mut(4).zip(values) {
             dst.copy_from_slice(&value.to_le_bytes());

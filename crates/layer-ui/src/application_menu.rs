@@ -147,7 +147,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     [CommandId::FlipImageHorizontal, CommandId::FlipImageVertical].map(command).into(),
                     [CommandId::Trim, CommandId::RevealAll].map(command).into(),
                 ])],
-                [CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth].map(command).into(),
+                [CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth].map(command).into_iter()
+                    .chain([ContextMenuItem::submenu("Blending", vec![[CommandId::BlendPerceptual, CommandId::BlendLinear].map(command).into()])])
+                    .collect(),
                 vec![command(CommandId::Settings)],
             ] },
             M::Select => ContextMenu { title: menu.label().into(), sections: vec![

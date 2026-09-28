@@ -95,17 +95,19 @@ impl ImageComposition {
             valid: false,
         }
     }
+    #[allow(clippy::too_many_arguments)] // Explicit composite operands.
     fn encode(
         &mut self,
         scene: &Scene,
         r: &WgpuRasterizer,
         base: &Layer,
         region: PixelRect,
+        space: layer_core::BlendSpace,
         encoder: &mut crate::submission::CommandEncoder,
     ) {
         let properties = [
             if base.visible { base.opacity } else { 0. },
-            crate::blend_code(base.properties.blend, &r.device) as f32,
+            crate::blend_code(base.properties.blend, &r.device, space) as f32,
         ];
         if properties != self.properties {
             r.queue.write_buffer(
@@ -146,6 +148,7 @@ pub(super) struct ImageStages {
     backdrops: std::collections::HashMap<LayerId, Backdrop>,
     preview_layer: Option<LayerId>,
     background: [f32; 4],
+    blend_space: layer_core::BlendSpace,
     pub input_updates: u64,
     pub pass_updates: u64,
     pub pass_pixels: u64,
@@ -159,8 +162,9 @@ impl ImageStages {
         self.scratch.clear();
         self.backdrops.clear();
     }
-    pub(super) fn metadata_changed(&self, layers: &[Layer], background: [f32; 4]) -> bool {
+    pub(super) fn metadata_changed(&self, layers: &[Layer], background: [f32; 4], blend_space: layer_core::BlendSpace) -> bool {
         self.background != background
+            || self.blend_space != blend_space
             || self.metadata.len() != layers.len()
             || self.metadata.iter().zip(layers).any(|(old, layer)| *old != Metadata::new(layer))
     }
@@ -386,7 +390,7 @@ impl Scene {
                 self.stop_before = Some((base_index, false));
                 for tile in page_coordinates(backdrop.damage) {
                     let pixels = self.group(r, packet, input_scope(packet.layers, base), tile)?;
-                    self.capture_tile(r, pixels, &backdrop.image, tile);
+                    self.capture_tile(r, pixels, &backdrop.image, tile, Convert::None);
                 }
                 self.stop_before = None;
                 self.encode_jobs(r, encoder)?;
@@ -411,7 +415,7 @@ impl Scene {
                 output_dirty.union(backdrop.damage).intersect(bounds)
             };
             if !damage.is_empty() {
-                composition.encode(self, r, base, damage, encoder);
+                composition.encode(self, r, base, damage, packet.blend_space, encoder);
             }
             damage
         } else {
@@ -432,7 +436,9 @@ impl Scene {
         output: usize,
         destination: &Image,
         tile: [u32; 2],
+        convert: Convert,
     ) {
+        let output = self.converted(r, output, convert);
         let bounds = destination.bounds;
         let extent = [bounds.width(), bounds.height()];
         let view = &self.pool[output].view;
@@ -511,6 +517,7 @@ impl Scene {
             ],
             [1., 1., 0., 0.],
             false,
+            Convert::None,
         );
         out
     }
@@ -607,7 +614,8 @@ impl Scene {
                 });
         let reset = packet.reset_layers
             || structure
-            || self.images.background != packet.view.background_rgba_linear;
+            || self.images.background != packet.view.background_rgba_linear
+            || self.images.blend_space != packet.blend_space;
         if structure
             || self.images.inputs.len() != packet.layers.len()
             || self
@@ -702,11 +710,13 @@ impl Scene {
             };
             // Adjacent compatible boundaries consume the same GPU image. No
             // allocation, intermediate composition, or image copy is needed.
+            // A Perceptual composite is encoded, and filters read linear input.
             let alias = packet.layers[index + 1..]
                 .iter()
                 .find(|l| l.properties.parent == layer.properties.parent)
                 .filter(|l| {
-                    l.visible
+                    Convert::linear(packet) == Convert::None
+                        && l.visible
                         && (!layer.properties.clipped || l.properties.clipped)
                         && effect.program.kind == layer_core::EffectKind::Adjustment
                         && l.effect
@@ -795,7 +805,7 @@ impl Scene {
                 } else {
                     for tile in page_coordinates(input_dirty) {
                         let input = self.group(r, packet, input_scope(packet.layers, layer), tile)?;
-                        self.capture_tile(r, input, &cached.input, tile);
+                        self.capture_tile(r, input, &cached.input, tile, Convert::linear(packet));
                     }
                 }
                 self.stop_before = None;
@@ -907,6 +917,7 @@ impl Scene {
                             &[layer],
                             effects::Execution::Image(pass),
                             packet.time_seconds,
+                            packet.blend_space,
                         )?,
                         masks,
                     });
@@ -932,6 +943,7 @@ impl Scene {
         }
         self.images.metadata = packet.layers.iter().map(Metadata::new).collect();
         self.images.background = packet.view.background_rgba_linear;
+        self.images.blend_space = packet.blend_space;
         self.images.preview_layer = r.preview_layer_id;
         Ok(damage)
     }

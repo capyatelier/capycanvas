@@ -4,7 +4,7 @@
 use super::*;
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation};
 use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth};
-use layer_core::{Document, Edit, EffectInstance, LayerBlend, LayerMask, Project, Selection};
+use layer_core::{BlendSpace, Document, Edit, EffectInstance, LayerBlend, LayerMask, Project, Selection};
 
 const EXTENT: [u32; 2] = [300, 280];
 const COLOR: DocumentColor = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
@@ -112,14 +112,16 @@ fn nested() -> (Document, LayerId) {
     (b.0, outer)
 }
 
-fn render(r: &mut WgpuRasterizer, layers: &[Layer]) -> Vec<[f32; 4]> {
+/// The live composite of `document`, in its blend space.
+fn render(r: &mut WgpuRasterizer, document: &Document) -> Vec<[f32; 4]> {
     let view = ViewState { background_rgba_linear: PAPER, ..crate::test_support::view(EXTENT) };
-    r.submit(FramePacket { view, reset_layers: true, ..packet(layers, EXTENT) }).unwrap();
+    let frame = FramePacket { view, blend_space: document.blend_space, ..packet(&document.layers, EXTENT) };
+    r.submit(FramePacket { reset_layers: true, ..frame }).unwrap();
     for _ in 0..16 {
         if !layer_render::CanvasRenderer::has_pending_work(r) {
             break;
         }
-        r.submit(FramePacket { view, ..packet(layers, EXTENT) }).unwrap();
+        r.submit(frame).unwrap();
     }
     assert!(!layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
     crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap())
@@ -134,6 +136,20 @@ fn exported(r: &WgpuRasterizer, document: &Document) -> Vec<[f32; 4]> {
         .capture(Project { document: document.clone() }, PAPER, 0., Default::default())
         .unwrap();
     capture.read_region([0, 0, EXTENT[0], EXTENT[1]]).unwrap()
+}
+
+/// `composite` as linear pixels, decoded from a Perceptual composite.
+fn linear(document: &Document, composite: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    composite
+        .iter()
+        .map(|&[red, green, blue, alpha]| {
+            if document.blend_space == BlendSpace::Linear || alpha <= 0. {
+                return [red, green, blue, alpha];
+            }
+            let decode = |c: f32| (RgbSpace::Srgb.decode(f64::from(c / alpha)) * f64::from(alpha)) as f32;
+            [decode(red), decode(green), decode(blue), alpha]
+        })
+        .collect()
 }
 
 fn largest_difference(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
@@ -164,34 +180,37 @@ fn set(document: &Document, id: LayerId, change: impl Fn(&mut Layer)) -> Documen
 #[test]
 fn pass_through_groups_composite_as_their_layers_ungrouped() {
     let mut r = WgpuRasterizer::new_native_headless(COLOR).expect("physical GPU required");
-    let (document, outer) = nested();
-    let passing = render(&mut r, &document.layers);
-    let flat = ungrouped(&document);
-    assert!(flat.layers.iter().all(|l| l.kind != LayerKind::Group || !l.passes_through()));
-    assert_close(&passing, &render(&mut r, &flat.layers), 2e-5, "nested groups against their layers ungrouped");
-    let isolated = render(&mut r, &set(&document, outer, |g| g.properties.blend = LayerBlend::Normal).layers);
-    assert!(
-        largest_difference(&passing, &isolated) > 0.1,
-        "the adjustment and Multiply layer inside reach the backdrop below the group"
-    );
-    let backdrop = set(&document, outer, |g| g.visible = false);
-    let without = render(&mut r, &backdrop.layers);
-    let corner = (270 + 10 * EXTENT[0]) as usize;
-    assert!(
-        (0..3).any(|c| (passing[corner][c] - without[corner][c]).abs() > 0.05),
-        "the Black & White adjustment desaturates the backdrop where no grouped layer draws"
-    );
-    assert_close(&exported(&r, &document), &passing, 2e-5, "export");
+    for blend_space in BlendSpace::ALL {
+        let (mut document, outer) = nested();
+        document.blend_space = blend_space;
+        let passing = render(&mut r, &document);
+        let flat = ungrouped(&document);
+        assert!(flat.layers.iter().all(|l| l.kind != LayerKind::Group || !l.passes_through()));
+        assert_close(&passing, &render(&mut r, &flat), 2e-5, &format!("{blend_space:?}: nested groups against their layers ungrouped"));
+        let isolated = render(&mut r, &set(&document, outer, |g| g.properties.blend = LayerBlend::Normal));
+        assert!(
+            largest_difference(&passing, &isolated) > 0.1,
+            "{blend_space:?}: the adjustment and Multiply layer inside reach the backdrop below the group"
+        );
+        let backdrop = set(&document, outer, |g| g.visible = false);
+        let without = render(&mut r, &backdrop);
+        let corner = (270 + 10 * EXTENT[0]) as usize;
+        assert!(
+            (0..3).any(|c| (passing[corner][c] - without[corner][c]).abs() > 0.05),
+            "{blend_space:?}: the Black & White adjustment desaturates the backdrop where no grouped layer draws"
+        );
+        assert_close(&exported(&r, &document), &linear(&document, &passing), 2e-5, &format!("{blend_space:?}: export"));
 
-    let mut moved = document.clone();
-    let inner = moved.layers.iter().find(|l| &*l.name == "Inner").unwrap().id;
-    let last_child = moved.layers.iter().rposition(|l| l.properties.parent == Some(inner)).unwrap();
-    moved.apply(Edit::MoveLayer { id: inner, to: last_child }).unwrap();
-    assert!(
-        moved.layers.iter().position(|l| l.id == inner).unwrap()
-            > moved.layers.iter().position(|l| l.properties.parent == Some(inner)).unwrap()
-    );
-    assert_close(&render(&mut r, &moved.layers), &passing, 2e-5, "a group stored after its layers");
+        let mut moved = document.clone();
+        let inner = moved.layers.iter().find(|l| &*l.name == "Inner").unwrap().id;
+        let last_child = moved.layers.iter().rposition(|l| l.properties.parent == Some(inner)).unwrap();
+        moved.apply(Edit::MoveLayer { id: inner, to: last_child }).unwrap();
+        assert!(
+            moved.layers.iter().position(|l| l.id == inner).unwrap()
+                > moved.layers.iter().position(|l| l.properties.parent == Some(inner)).unwrap()
+        );
+        assert_close(&render(&mut r, &moved), &passing, 2e-5, &format!("{blend_space:?}: a group stored after its layers"));
+    }
 }
 
 /// The mask's coverage at each pixel, from an isolated group that holds one
@@ -245,11 +264,11 @@ fn opacity_and_mask_fade_between_the_backdrop_and_the_groups_result() {
             b.layer(outer).properties.parent = Some(around);
             faded = b.0;
         }
-        let without = render(&mut r, &set(&faded, outer, |g| g.visible = false).layers);
+        let without = render(&mut r, &set(&faded, outer, |g| g.visible = false));
         let full = render(&mut r, &set(&faded, outer, |g| {
             g.opacity = 1.;
             g.mask = None;
-        }).layers);
+        }));
         let expected: Vec<[f32; 4]> = without
             .iter()
             .zip(&full)
@@ -259,7 +278,7 @@ fn opacity_and_mask_fade_between_the_backdrop_and_the_groups_result() {
                 std::array::from_fn(|c| a[c] + k * (b[c] - a[c]))
             })
             .collect();
-        let actual = render(&mut r, &faded.layers);
+        let actual = render(&mut r, &faded);
         let what = format!("nested {nested}, opacity {opacity}, mask {masked}");
         assert_close(&actual, &expected, 5e-5, &what);
         assert_close(&exported(&r, &faded), &actual, 2e-5, &format!("export, {what}"));
@@ -277,9 +296,9 @@ fn a_clipped_pass_through_group_composites_isolated() {
     b.paint("Multiply", Some(group), LayerBlend::Multiply, 5, disc(150, 140, 110));
     b.paint("Base", None, LayerBlend::Normal, 11, disc(140, 150, 120));
     b.paint("Backdrop", None, LayerBlend::Normal, 19, |_, _| 65535);
-    let clipped = render(&mut r, &b.0.layers);
-    let normal = render(&mut r, &set(&b.0, group, |g| g.properties.blend = LayerBlend::Normal).layers);
+    let clipped = render(&mut r, &b.0);
+    let normal = render(&mut r, &set(&b.0, group, |g| g.properties.blend = LayerBlend::Normal));
     assert_close(&clipped, &normal, 1e-6, "a clipped Pass Through group against a clipped Normal group");
-    let unclipped = render(&mut r, &set(&b.0, group, |g| g.properties.clipped = false).layers);
+    let unclipped = render(&mut r, &set(&b.0, group, |g| g.properties.clipped = false));
     assert!(largest_difference(&clipped, &unclipped) > 0.1, "unclipped, the group passes through");
 }

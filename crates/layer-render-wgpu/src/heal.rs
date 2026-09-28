@@ -88,7 +88,7 @@ impl Pipelines {
         let score_layout = layout("heal candidate scores", &[Some(&planes), Some(&pages), Some(&candidate)]);
         let pick_layout = layout("heal chosen source", &[Some(&parameters), None, Some(&candidate), Some(&chosen)]);
         let apply_layout = layout("heal apply", &[Some(&apply_planes), Some(&apply_pages)]);
-        let shader = Deferred::wgsl(device, "heal", compose_wgsl(&[include_str!("retouch_sample.wgsl"), include_str!("heal.wgsl")]));
+        let shader = Deferred::wgsl(device, "heal", compose_wgsl(&[&working_color::shader(device), include_str!("retouch_sample.wgsl"), include_str!("heal.wgsl")]));
         let kernel = |layout: &wgpu::PipelineLayout, entry| Deferred::compute(device, entry, layout, &shader, entry);
         let apply = {
             let (device, layout, shader) = (device.clone(), apply_layout.clone(), shader.clone());

@@ -21,6 +21,7 @@ pub(crate) fn packet(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
         dab_batches: &[],
         reset_layers: false,
         composite_all: true,
+        blend_space: Default::default(),
     }
 }
 

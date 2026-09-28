@@ -1770,8 +1770,7 @@ fn native_tonal_toolbar_input() {
     crate::snapshot(&d.w).save_to_png(d.input.dir.join("tonal-toolbar-overflow.png")).unwrap();
     assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
     // A floating-point document adds Bright HDR, with Custom still last.
-    let mut project=new_drawing(2048,1536).unwrap();
-    project.document.color.depth=layer_core::color::SampleDepth::F16;
+    let project=new_drawing_at(2048,1536,layer_core::color::SampleDepth::F16);
     let hdr=Workspace::with_project(&d._app,Some((project,None)));
     hdr.window.maximize();hdr.window.present();pump(1800);
     d.w.window.destroy();d.w=hdr;

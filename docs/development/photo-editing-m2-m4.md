@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3, M4.1–M4.4, M4.6 and Color mixing from M4.5. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3, M4.1–M4.4, M4.5a, M4.6 and Color mixing from M4.5. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -730,6 +730,7 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - Flatten confirms through the shared notice when it would discard hidden layers.
   - Merge Down needs a Normal, visible layer below. Merge Visible and Flatten accept any blend mode, with the paper kept separate, so a non-Normal layer can look different where the paper shows through.
 - **M3.7** on GTK, Web and Android: photos opened as documents keep their Exif, XMP and IPTC in `.capy` (version 10); exports keep camera, lens, exposure, dates, copyright and contact, with location removed by default; a Metadata row in each export dialog.
+- **M4.5a** on GTK, Web and Android: the document's **Blending** (Perceptual or Linear light) in New Document, Edit ▸ Blending and Document Properties; new 8/16-bit documents and photos blend perceptually, float documents in linear light, and `.capy` v11 keeps the choice (older files read as Linear light). In Perceptual documents the composite holds encoded values, Soft Light uses Photoshop's formula, and every reader of the composite decodes; Linear-light documents render as before.
 - **Retouch speed:** Clone Stamp, Healing and Spot Healing are contact brushes on the dry compute kernels and hold the Huion's panel rate at 300 px; Spot Healing's pen-up no longer gathers every candidate.
 - **M4.6** on GTK, Web and Android: Pass Through as a group blend mode, whose opacity and mask fade between the layers below and the group's result; a clipped Pass Through group composites isolated; Ungroup keeps its appearance. The **Use Pass Through for new groups** preference (off) applies to New Group and Group Layers.
 - **M4.3** on GTK, Web and Android: the Healing Brush (preset 41) previews as the clone and heals into its surroundings at pen-up; the Spot Healing Brush (preset 42) picks the best of 16 nearby offsets on the GPU and heals it in. S cycles the three retouching brushes; J and Shift+J choose Spot Healing and Healing in the Photoshop keys.
@@ -780,6 +781,9 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **Pass Through checkpoints:** the renderer's checkpoints stay on a group's direct children, so a Pass Through group recomposes more of its surroundings than needed.
 - **Ungroup of an isolated group** ignores adjustment children below its layers.
 - **Apple and Windows** list Pass Through in their flat blend pickers for every layer, where non-groups refuse it; they need the grouped menu or the `offered` filter, and the new-group preference row.
+- **Perceptual on Mali:** encoding and decoding the composite adds 0.25–0.7 ms of GPU time to presentation and drags on the Huion and the MovinkPad 11. A Float32-accurate fitted curve cost more than `pow`.
+- **GTK Document Properties** builds its rows in the host instead of from `DocumentInfo::describe`, as Web and Android do.
+- **Export matte and resize** run in linear light in Perceptual documents.
 - **Headless Web** screenshots leave out WebGPU pixels, so the Clone and Heal live-preview checks need a headed run or a tablet.
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.

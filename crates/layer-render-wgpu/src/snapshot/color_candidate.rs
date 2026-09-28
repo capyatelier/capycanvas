@@ -119,6 +119,7 @@ impl ColorCanvas {
             restore_rasters: &restored,
             reset_layers: true,
             composite_all: true,
+            blend_space: document.blend_space,
         };
         if !renderer.raster_dependencies_ready(packet) {
             return Ok(false);

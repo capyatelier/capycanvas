@@ -35,6 +35,7 @@ class AndroidViewportBenchmarkTest {
         val zoomSteps = args.getString("zoomSteps", "0")!!.toInt()
         val transparency = args.getString("transparency")?.let { listOf("off", "low", "medium", "high").indexOf(it) }
         val motion = args.getString("motion", "stroke")!!
+        val blending = args.getString("blending")
         check(motion in listOf("stroke", "pan", "pinch"))
         val passThrough = args.getString("passThrough", "false") == "true"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -48,7 +49,7 @@ class AndroidViewportBenchmarkTest {
             }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             host.newDocument(size, size)
-            scenario.onActivity { host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
+            scenario.onActivity { blending?.let { host.invoke("blend_$it") }; host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
             val preset = host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() }.first { it.getString("label") == "G-Pen" }.getInt("id")
             scenario.onActivity {
                 host.dispatch(obj("type" to "select_brush", "id" to preset))

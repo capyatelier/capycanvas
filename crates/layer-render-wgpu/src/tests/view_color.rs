@@ -225,6 +225,7 @@ fn native_export_thumbnails_and_raw_samples_keep_their_declared_color_coordinate
                             size: [200, 40],
                             extent: [256; 2],
                             view: view(),
+                            blend_space: Default::default(),
                             layers: vec![layer.composite_snapshot()],
                             filters: vec![Arc::new(layer_core::EffectInstance::new(
                                 fixture("exposure").program(),

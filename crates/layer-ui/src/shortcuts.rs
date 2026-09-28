@@ -594,7 +594,7 @@ fn command_section(command: CommandId) -> &'static str {
         | C::ZenMode | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
         | C::ToggleTheme => "View",
         C::SdrRendition | C::PreviewSdr | C::SoftProofSetup | C::SoftProof | C::GamutWarning | C::Histogram
-        | C::AssignProfile | C::ConvertColorSpace | C::ChangeBitDepth => "Color",
+        | C::AssignProfile | C::ConvertColorSpace | C::ChangeBitDepth | C::BlendPerceptual | C::BlendLinear => "Color",
         C::NewDocument | C::OpenDocument | C::SaveDocument | C::SaveDocumentAs | C::ExportDocument | C::CloseDocument
         | C::ImportImage | C::DocumentProperties | C::NewWindow | C::Drawings => "File",
         C::About | C::Website | C::SourceCode => "Help",

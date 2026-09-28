@@ -31,6 +31,7 @@ impl Scene {
             reset_layers: false,
             composite_all: true,
             time_seconds: packet.time_seconds,
+            blend_space: packet.blend_space,
         };
         let pages: Vec<_> = r
             .paint_layers
@@ -51,6 +52,7 @@ impl Scene {
                 self.used.fill(false);
                 for (coordinate, destination) in batch {
                     let output = self.group(r, source, None, *coordinate)?;
+                    let output = self.converted(r, output, Convert::linear(source));
                     self.jobs.push(Job::Copy {
                         source: self.pool[output].texture.clone(),
                         source_origin: [0; 2],

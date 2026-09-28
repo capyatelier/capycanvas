@@ -91,7 +91,7 @@ impl Scene {
             || packet.reset_layers
             || self
                 .images
-                .metadata_changed(packet.layers, packet.view.background_rgba_linear)
+                .metadata_changed(packet.layers, packet.view.background_rgba_linear, packet.blend_space)
             || packet.layers.iter().any(|l| {
                 images::visible(packet.layers, l) && l.effect.as_ref().is_some_and(|e| e.animated())
             }) {

@@ -331,6 +331,7 @@ fn native_new_presets_and_profiled_photo_master() {
             depth: SampleDepth::U8,
         },
         background: DocumentBackground::Transparent,
+        blend_space: layer_core::BlendSpace::Perceptual,
     };
     click(
         &find_button(

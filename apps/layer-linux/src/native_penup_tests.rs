@@ -11,6 +11,7 @@ fn native_penup_and_following_strokes() {
         space: RgbSpace::ProPhoto,
         depth: match std::env::var("LAYER_DRAWING_HDR").as_deref() { Ok("32") => SampleDepth::F32, Ok("1") => SampleDepth::F16, _ => SampleDepth::U16 },
     };
+    project.document.blend_space = project.document.blend_space.for_depth(project.document.color.depth);
     for _ in 0..31 {
         let id = project.document.allocate_layer_id();
         let position = project.document.layers.len() - 1;

@@ -15,6 +15,10 @@ pub(super) fn photo(extent: [u32; 2]) -> layer_core::Project {
         space: RgbSpace::ProPhoto,
         depth,
     };
+    project.document.blend_space = match std::env::var("LAYER_PHOTO_BLENDING").as_deref() {
+        Ok("perceptual") => layer_core::BlendSpace::Perceptual.for_depth(depth),
+        _ => layer_core::BlendSpace::Linear,
+    };
     let mut source = SourceBuilder::new(
         extent,
         SourceInterpretation {

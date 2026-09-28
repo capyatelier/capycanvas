@@ -1,0 +1,27 @@
+//! The document's Blending, how its layers combine: Edit ▸ Blending.
+use super::*;
+use layer_core::{BlendSpace, Edit};
+
+pub(super) fn blend_space(command: CommandId) -> Option<BlendSpace> {
+    match command {
+        CommandId::BlendPerceptual => Some(BlendSpace::Perceptual),
+        CommandId::BlendLinear => Some(BlendSpace::Linear),
+        _ => None,
+    }
+}
+
+impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn blending_refusal(&self) -> Option<&'static str> {
+        BlendSpace::unavailable_reason(self.engine.document().color.depth)
+    }
+    pub(super) fn set_blend_space(&mut self, space: BlendSpace) -> Result<(), String> {
+        self.require_document_idle()?;
+        if let Some(reason) = self.blending_refusal() {
+            return Err(reason.into());
+        }
+        if self.engine.document().blend_space != space {
+            self.layer_edit(Edit::SetBlendSpace(space))?;
+        }
+        Ok(())
+    }
+}

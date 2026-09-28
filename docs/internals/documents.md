@@ -48,6 +48,25 @@ not clipped, that is either Pass Through, holding any layers, or Normal, holding
 only Normal layers. A referenced adjustment inside a Pass Through group keeps what
 lies below the group in the reference composite.
 
+### Blending
+
+A document's **Blending** (`Document.blend_space`) sets how its layers combine:
+- **Perceptual**, like Photoshop and Clip Studio Paint: opacity, masks, groups,
+  clipping and blend modes work on the document's encoded values, so black at
+  50% over white is middle gray (8-bit 128) and Soft Light follows Photoshop's
+  formula. New 8- and 16-bit documents and photos opened as documents start
+  Perceptual.
+- **Linear light**, physically based: layers combine in linear document RGB.
+  Float documents always blend this way, and documents saved before the setting
+  existed read as Linear.
+
+Painted pixels keep their values either way; only their combination changes
+([blend space](rendering.md#blend-space)). **Edit ▸ Blending** switches it in
+one undo step (`Edit::SetBlendSpace`), refused at float depth with "Float
+documents blend in linear light". Converting a document to float makes it
+Linear in the same step, and undo restores both. How brushes lay paint on a
+layer and how filters read their input do not depend on it yet.
+
 ### Merging layers
 
 Merge Down, Merge Group, Merge Visible, Flatten Image and Stamp Visible, in the
@@ -68,6 +87,8 @@ ordinary document pixels.
   keeps the group's blend mode and opacity. Hidden layers inside are discarded. A
   Pass Through group is composited isolated into a Normal layer, as in Photoshop,
   so layers inside that blended with those below can look different.
+- Every merge composites in the document's Blending, so the result looks as the
+  layers did.
 - **Merge Visible** composites the visible layers over transparency. Hidden
   layers stay; hidden layers clipped to a merged base are released. The paper
   is not part of the composite, so a non-Normal layer can look different where

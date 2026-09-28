@@ -12,10 +12,7 @@ fn native_paint_fitted_columns() {
     std::fs::create_dir_all(&output).unwrap();
     let mut sdr_color = None;
     for (hdr, document) in [(false, [1600, 900]), (true, [900, 1200])] {
-        let mut project = new_drawing(document[0], document[1]).unwrap();
-        if hdr {
-            project.document.color.depth = SampleDepth::F16;
-        }
+        let project = new_drawing_at(document[0], document[1], if hdr { SampleDepth::F16 } else { SampleDepth::U8 });
         let w = Workspace::with_project(&app, Some((project, None)));
         w.window.present();
         ready(&w);

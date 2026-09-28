@@ -146,7 +146,7 @@ impl Scene {
     ) -> Result<usize, GpuRasterError> {
         let out = self.alloc(r, wgpu::Color::TRANSPARENT);
         let stored = r.paint_layers.iter().find(|l| l.id == layer.id);
-        self.paint_page(r, packet, layer, stored, c, out, [0., 0., 256., 256.])?;
+        self.paint_page(r, packet, layer, stored, c, out, [0., 0., 256., 256.], Convert::None)?;
         Ok(out)
     }
 }

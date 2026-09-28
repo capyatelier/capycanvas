@@ -1,5 +1,6 @@
 //! Merges bake their members into one layer: for Normal stacks the merged
-//! composite equals the one before, and one undo step restores the layers.
+//! composite equals the one before, in both blend spaces, and one undo step
+//! restores the layers.
 mod support;
 use layer_core::*;
 use layer_engine::{InputProducer, PenEvent};
@@ -34,8 +35,9 @@ fn gradient(engine: &mut Engine, name: &str, colors: [[f32; 4]; 2], vertical: bo
     operate(engine, id, LayerOperationKind::Gradient { start: Point::default(), end, colors, radial: false, alpha_locked: false });
 }
 
-fn document(names: &[&str]) -> Document {
+fn document(names: &[&str], space: BlendSpace) -> Document {
     let mut doc = Document::new("merge", SIZE[0], SIZE[1]);
+    doc.blend_space = space;
     doc.layers.remove(0);
     for (i, name) in names.iter().enumerate() {
         let id = doc.allocate_layer_id();
@@ -62,8 +64,8 @@ fn stroke(engine: &mut Engine, input: &mut InputProducer<PenEvent>, name: &str, 
 
 /// Top to bottom: a stroke masked by a polygon at 60% opacity, a stroke over
 /// a gradient, then the paper.
-fn painted() -> (Engine, InputProducer<PenEvent>) {
-    let (mut engine, mut input) = engine(document(&["Upper", "Lower"]));
+fn painted(space: BlendSpace) -> (Engine, InputProducer<PenEvent>) {
+    let (mut engine, mut input) = engine(document(&["Upper", "Lower"], space));
     gradient(&mut engine, "Lower", [[0.9, 0.3, 0.1, 1.], [0.1, 0.6, 0.8, 0.4]], false);
     stroke(&mut engine, &mut input, "Lower", [0.1, 0.1, 0.8, 1.], Point { x: 20., y: 200. }, Point { x: 360., y: 40. }, 1_000_000_000);
     stroke(&mut engine, &mut input, "Upper", [0.9, 0.8, 0.1, 0.9], Point { x: 30., y: 30. }, Point { x: 350., y: 220. }, 2_000_000_000);
@@ -84,7 +86,12 @@ fn painted() -> (Engine, InputProducer<PenEvent>) {
 
 #[test]
 fn merge_down_keeps_the_composite_in_one_undo_step() {
-    let (mut engine, _input) = painted();
+    for space in BlendSpace::ALL {
+        merge_down_in(space);
+    }
+}
+fn merge_down_in(space: BlendSpace) {
+    let (mut engine, _input) = painted(space);
     let original = image(&mut engine, 3_000_000_000);
     let result = merge(&mut engine, MergeKind::Down);
     let merged = image(&mut engine, 4_000_000_000);
@@ -108,7 +115,7 @@ fn merge_down_keeps_the_composite_in_one_undo_step() {
 
 #[test]
 fn a_merge_right_after_a_stroke_bakes_it_and_undo_restores_it() {
-    let (mut engine, mut input) = engine(document(&["Upper", "Lower"]));
+    let (mut engine, mut input) = engine(document(&["Upper", "Lower"], BlendSpace::Linear));
     stroke(&mut engine, &mut input, "Lower", [0.2, 0.7, 0.3, 1.], Point { x: 20., y: 40. }, Point { x: 360., y: 200. }, 1_000_000_000);
     let original = image(&mut engine, 1_500_000_000);
     stroke(&mut engine, &mut input, "Upper", [0.9, 0.1, 0.4, 0.8], Point { x: 30., y: 220. }, Point { x: 340., y: 30. }, 2_000_000_000);
@@ -123,7 +130,12 @@ fn a_merge_right_after_a_stroke_bakes_it_and_undo_restores_it() {
 
 #[test]
 fn clipping_stacks_and_groups_merge_to_the_same_composite() {
-    let (mut engine, mut input) = engine(document(&["Group", "Front", "Back", "Shade", "Base"]));
+    for space in BlendSpace::ALL {
+        clipping_stacks_and_groups_in(space);
+    }
+}
+fn clipping_stacks_and_groups_in(space: BlendSpace) {
+    let (mut engine, mut input) = engine(document(&["Group", "Front", "Back", "Shade", "Base"], space));
     let group = id(&engine, "Group");
     edit(&mut engine, "Group", |layer| {
         layer.kind = LayerKind::Group;
@@ -156,7 +168,12 @@ fn clipping_stacks_and_groups_merge_to_the_same_composite() {
 
 #[test]
 fn merge_visible_and_flatten_keep_the_composite() {
-    let (mut engine, mut input) = painted();
+    for space in BlendSpace::ALL {
+        merge_visible_and_flatten_in(space);
+    }
+}
+fn merge_visible_and_flatten_in(space: BlendSpace) {
+    let (mut engine, mut input) = painted(space);
     let hidden = engine.allocate_layer_id();
     engine.apply_edit(Edit::InsertLayer { index: 1, layer: Layer::paint(hidden, "Hidden") }).unwrap();
     stroke(&mut engine, &mut input, "Hidden", [0., 0., 0., 1.], Point { x: 0., y: 0. }, Point { x: 380., y: 250. }, 3_000_000_000);
@@ -175,7 +192,12 @@ fn merge_visible_and_flatten_keep_the_composite() {
 
 #[test]
 fn stamp_visible_adds_the_composite_of_every_visible_layer() {
-    let (mut engine, _input) = painted();
+    for space in BlendSpace::ALL {
+        stamp_visible_in(space);
+    }
+}
+fn stamp_visible_in(space: BlendSpace) {
+    let (mut engine, _input) = painted(space);
     let original = image(&mut engine, 3_000_000_000);
     let stamp = merge(&mut engine, MergeKind::Stamp);
     image(&mut engine, 4_000_000_000);
@@ -188,7 +210,7 @@ fn stamp_visible_adds_the_composite_of_every_visible_layer() {
 
 #[test]
 fn an_effect_applies_to_the_layer_below() {
-    let (mut engine, _input) = engine(document(&["Mono", "Photo", "Backdrop"]));
+    let (mut engine, _input) = engine(document(&["Mono", "Photo", "Backdrop"], BlendSpace::Linear));
     gradient(&mut engine, "Photo", [[0.9, 0.3, 0.1, 1.], [0.1, 0.6, 0.8, 1.]], false);
     gradient(&mut engine, "Backdrop", [[0.2, 0.2, 0.2, 1.], [0.8, 0.8, 0.8, 1.]], true);
     let invert = bundled_effect_catalog().get("black_white").unwrap();
@@ -206,7 +228,7 @@ fn an_effect_applies_to_the_layer_below() {
 
 #[test]
 fn pixels_outside_the_canvas_survive_a_merge() {
-    let (mut engine, _input) = painted();
+    let (mut engine, _input) = painted(BlendSpace::Linear);
     edit(&mut engine, "Upper", |layer| {
         layer.properties.offset = Point { x: -120., y: 40. };
         layer.mask = None;
@@ -223,7 +245,12 @@ fn pixels_outside_the_canvas_survive_a_merge() {
 
 #[test]
 fn placed_photos_and_watercolor_become_plain_pixels() {
-    let mut doc = document(&["Wash", "Photo"]);
+    for space in BlendSpace::ALL {
+        placed_photos_and_watercolor_in(space);
+    }
+}
+fn placed_photos_and_watercolor_in(space: BlendSpace) {
+    let mut doc = document(&["Wash", "Photo"], space);
     doc.layers[1].source = Some(color::source::rgba8_source([300, 200], |x, y| {
         [(x * 5 % 256) as u8, (y * 3 % 256) as u8, ((x ^ y) % 256) as u8, 255]
     }));

@@ -1726,6 +1726,7 @@ impl ImageTransformState {
             opacity: 1.,
             extent,
             backdrop: [0.; 4],
+            encode: false,
         };
         let identity = layer_core::ImageTransform::default();
         #[cfg(test)]

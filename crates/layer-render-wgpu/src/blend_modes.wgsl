@@ -1,7 +1,8 @@
 // Layer blend modes on straight colors. A blend code holds the LayerBlend
 // discriminant in bits 0-7, the Perceptual blend space in bit 8 and float
 // documents in bit 9. Float documents clamp no result; Unit modes clamp their
-// operands to [0, 1].
+// operands to [0, 1]. Perceptual Soft Light is Photoshop's formula, and Linear
+// Soft Light the W3C one.
 const BLEND_PERCEPTUAL: u32 = 256u;
 const BLEND_FLOAT: u32 = 512u;
 const BLEND_DIVISOR: f32 = .00006103515625;
@@ -50,6 +51,9 @@ fn blend(s: vec3<f32>, d: vec3<f32>, code: u32) -> vec3<f32> {
         }
         case 4u: { return blend_hard_light(su,du,du); }
         case 5u: {
+            if (code & BLEND_PERCEPTUAL) != 0u {
+                return select(2.*du*su+du*du*(1.-2.*su),2.*du*(1.-su)+sqrt(du)*(2.*su-1.),su>vec3<f32>(.5));
+            }
             let curve = select(((16.*du-12.)*du+4.)*du,sqrt(du),du>vec3<f32>(.25));
             return select(du-(1.-2.*su)*du*(1.-du),du+(2.*su-1.)*(curve-du),su>vec3<f32>(.5));
         }

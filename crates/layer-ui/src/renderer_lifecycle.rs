@@ -52,6 +52,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let view = self.state.camera.view();
         let document = self.engine.document();
         let extent = [document.width, document.height];
+        let blend_space = document.blend_space;
         let layers: Vec<_> = document
             .layers
             .iter()
@@ -70,6 +71,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 restore_rasters: &[],
                 reset_layers: true,
                 composite_all: true,
+                blend_space,
             })
             .map_err(error)
     }

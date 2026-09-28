@@ -992,7 +992,7 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
     let output=directory.as_path();
     std::fs::create_dir_all(output).unwrap();
     let app=native_test_app("art.capycanvas.ProofPanel");
-    let mut p=new_drawing(512,384).unwrap();p.document.color.depth=SampleDepth::F16;
+    let p=new_drawing_at(512,384,SampleDepth::F16);
     let w=Workspace::with_project(&app,Some((p,None)));w.window.maximize();w.window.present();ready(&w);
     for preset in [layer_ui::WorkspacePreset::Illustrator,layer_ui::WorkspacePreset::Photographer] {
         let mut workspace=state(&w).workspace;
@@ -1067,8 +1067,7 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
 fn native_proof_toggle_remembers_mode_and_reveals_hidden_panel() {
     use layer_ui::ProofMode;
     let app = native_test_app("art.capycanvas.ProofToggle");
-    let mut project = new_drawing(256, 192).unwrap();
-    project.document.color.depth = SampleDepth::F16;
+    let project = new_drawing_at(256, 192, SampleDepth::F16);
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();
     w.window.present();

@@ -9,6 +9,7 @@ pub(super) struct Frame {
     pub layers: Vec<Layer>,
     pub view: ViewState,
     pub background: [f32; 4],
+    pub blend_space: layer_core::BlendSpace,
     pub time: f32,
     pub previews: Vec<DabBatch>,
 }
@@ -52,6 +53,7 @@ impl Frame {
     fn placed(&self, packet: FramePacket<'_>, background: [f32; 4]) -> Option<Vec<LayerId>> {
         let artwork = |l: &&Layer| l.kind != LayerKind::Selection;
         let same = self.background == background
+            && self.blend_space == packet.blend_space
             && self.previews.is_empty()
             && packet.dab_batches.is_empty()
             && self.layers.iter().filter(artwork).count()
@@ -94,6 +96,7 @@ impl Frame {
                 .collect(),
             view: packet.view,
             background,
+            blend_space: packet.blend_space,
             time: packet.time_seconds,
             previews: packet
                 .dab_batches
@@ -114,6 +117,7 @@ impl Frame {
             restore_rasters: &[],
             reset_layers: false,
             composite_all: true,
+            blend_space: self.blend_space,
         }
     }
 }

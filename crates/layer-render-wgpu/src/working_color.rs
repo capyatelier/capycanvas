@@ -16,7 +16,7 @@ pub(crate) fn source(space: RgbSpace) -> String {
         RgbSpace::Srgb,
         space,
     ));
-    let space_id = RgbSpace::ALL.iter().position(|s| *s == space).unwrap();
+    let space_id = space_id(space);
     let [r, g, b] = space.to_xyz()[1];
     shader.push_str(&format!(
         "const WORKING_SPACE:u32={space_id}u;\nconst WORKING_LUMA:vec3<f32>=vec3<f32>({r:.12},{g:.12},{b:.12});\n"
@@ -24,4 +24,8 @@ pub(crate) fn source(space: RgbSpace) -> String {
     shader.push_str(include_str!("sdr_color.wgsl"));
     shader.push_str(include_str!("working_color.wgsl"));
     shader
+}
+/// The id `sdr_encode` and `sdr_decode` take for `space`'s transfer curve.
+pub(crate) fn space_id(space: RgbSpace) -> usize {
+    RgbSpace::ALL.iter().position(|s| *s == space).unwrap()
 }

@@ -44,6 +44,7 @@ struct Frame {
     restore_rasters: Vec<(layer_core::LayerId, layer_core::raster::RasterRevision)>,
     reset: bool,
     composite: bool,
+    blend_space: layer_core::BlendSpace,
     geometry: Geometry,
     surround: [f32; 4],
     picker: Option<layer_render::ColorPickerOverlay>,
@@ -79,6 +80,7 @@ impl Frame {
             restore_rasters: &self.restore_rasters,
             reset_layers: self.reset,
             composite_all: self.composite,
+            blend_space: self.blend_space,
         }
     }
 }
@@ -854,6 +856,7 @@ impl CanvasRenderer for RenderWorker {
             restore_rasters: packet.restore_rasters.to_vec(),
             reset: packet.reset_layers,
             composite: packet.composite_all,
+            blend_space: packet.blend_space,
             geometry,
             surround: self.surround,
             picker: self.picker,

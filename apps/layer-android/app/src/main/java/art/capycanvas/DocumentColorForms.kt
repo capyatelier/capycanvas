@@ -76,6 +76,15 @@ import org.json.JSONObject
                 val spaces = model.getJSONArray("spaces")
                 ColorChoice("Color space", (0 until spaces.length()).map { spaces.getJSONArray(it).let { a -> a.getString(0) to a.getString(1) } }, options.getJSONObject("color").getString("space")) { color("space", it) }
                 ColorChoice("Bit depth", listOf("U8" to "8-bit SDR", "U16" to "16-bit SDR", "F16" to "16-bit float HDR", "F32" to "32-bit float HDR"), options.getJSONObject("color").getString("depth")) { color("depth", it) }
+                val blending = model.getJSONObject("blending")
+                val linearOnly = blending.getJSONArray("linear_only").let { a -> (0 until a.length()).any { a.getString(it) == options.getJSONObject("color").getString("depth") } }
+                val blendChoices = blending.getJSONArray("choices").objects()
+                val blendSpace = if (linearOnly) "Linear" else options.getString("blend_space")
+                ColorChoice(blending.getString("label"), blendChoices.map { it.getString("id") to it.getString("label") }, blendSpace, enabled = !linearOnly) {
+                    options = JSONObject(options.toString()).put("blend_space", it)
+                }
+                Text(if (linearOnly) blending.getString("float_reason") else blendChoices.first { it.getString("id") == blendSpace }.getString("description"),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("new-document-blending-note"))
                 ColorChoice("Background", listOf("White" to "White", "Transparent" to "Transparent"), options.getString("background")) { options = JSONObject(options.toString()).put("background", it) }
                 OutlinedTextField(name, { name = it }, label = { Text("Save as preset (optional)") }, singleLine = true)
                 Row { Checkbox(defaults, { defaults = it }); Text("Use as defaults", Modifier.padding(top = 12.dp)) }

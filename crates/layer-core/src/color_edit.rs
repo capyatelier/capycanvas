@@ -78,6 +78,7 @@ impl Document {
         }
         let mut candidate = self.clone();
         candidate.color = color;
+        candidate.blend_space = self.blend_space.for_depth(color.depth);
         candidate.layers = layers;
         project::validate_document(&candidate, ProjectLimits::default())
             .map_err(|_| invalid("Invalid document color candidate"))?;
@@ -86,6 +87,9 @@ impl Document {
             layers: std::mem::replace(&mut self.layers, candidate.layers),
         };
         self.color = color;
-        Ok(inverse)
+        if candidate.blend_space == self.blend_space {
+            return Ok(inverse);
+        }
+        Ok(Edit::Batch(vec![inverse, Edit::SetBlendSpace(std::mem::replace(&mut self.blend_space, candidate.blend_space))]))
     }
 }

@@ -5,8 +5,7 @@ use super::*;
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_gpu_tone_retains_preview_cancels_and_refreshes_after_drawing() {
     let app = native_test_app("art.capycanvas.GpuToneDrawing");
-    let mut p = new_drawing(4096, 2160).unwrap();
-    p.document.color.depth = SampleDepth::F32;
+    let p = new_drawing_at(4096, 2160, SampleDepth::F32);
     let w = Workspace::with_project(&app, Some((p, None)));
     w.window.present();
     ready(&w);
@@ -116,8 +115,7 @@ fn native_gpu_tone_retains_preview_cancels_and_refreshes_after_drawing() {
         pump(1);
         assert!(Instant::now() < deadline);
     }
-    let mut next = new_drawing(4096, 2160).unwrap();
-    next.document.color.depth = SampleDepth::F32;
+    let next = new_drawing_at(4096, 2160, SampleDepth::F32);
     glib::MainContext::default()
         .block_on(w.documents.open(&w, (next, None, None)))
         .unwrap();

@@ -5,12 +5,13 @@
 // coordinates of the moved copy, kept_x, kept_y and kept_w to those of the
 // kept copy, and clip_x and clip_y to layer pixels, of which the layer keeps
 // only those inside its extent. A transform that keeps its source (options.w)
-// also leaves the moved pixels in place.
+// also leaves the moved pixels in place. For a Perceptual composite
+// (encoding.x) the layer's color is encoded before it lies over the backdrop.
 struct Resample {
     x:vec4<f32>, y:vec4<f32>, w:vec4<f32>,
     kept_x:vec4<f32>, kept_y:vec4<f32>, kept_w:vec4<f32>,
     clip_x:vec4<f32>, clip_y:vec4<f32>, extent:vec4<f32>,
-    texels:vec4<u32>, backdrop:vec4<f32>, options:vec4<f32>,
+    texels:vec4<u32>, backdrop:vec4<f32>, options:vec4<f32>, encoding:vec4<f32>,
 }
 @group(0) @binding(0) var moved:texture_2d<f32>;
 @group(0) @binding(1) var level:texture_storage_2d<rgba32float,write>;
@@ -45,7 +46,8 @@ fn store(t:vec2<u32>,moved_color:vec4<f32>,h:vec3<f32>,within:bool) {
         if resample.options.w!=0. {under+=bilinear(moved,resample.kept_x,resample.kept_y,resample.kept_w,h);}
         color+=under*(1.-color.a);
     }
-    let layer=color*resample.options.x;
+    var layer=color*resample.options.x;
+    if resample.encoding.x!=0. {layer=working_encode(color)*resample.options.x;}
     textureStore(level,vec2<i32>(t),layer+resample.backdrop*(1.-layer.a));
 }
 fn inside(h:vec3<f32>)->bool {

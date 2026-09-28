@@ -205,6 +205,7 @@ impl Worker {
             restore_rasters: &restored,
             reset_layers: true,
             composite_all: true,
+            blend_space: document.blend_space,
         };
         while !renderer.raster_dependencies_ready(packet) {
             check()?;

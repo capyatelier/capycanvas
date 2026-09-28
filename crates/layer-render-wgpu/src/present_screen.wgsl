@@ -29,7 +29,7 @@ fn screen_sample_clipped(block: vec2<u32>) -> bool {
     if any(surface >= camera.viewport.xy) { return false; }
     let p = vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy;
     if any(p < vec2<f32>(0.)) || any(p >= camera.offset_document.zw) { return false; }
-    return screen_clipped(proof_artwork(artwork_at(p, camera.inverse.xy, camera.inverse.zw), p));
+    return screen_clipped(proof_artwork(canvas_linear(artwork_at(p, camera.inverse.xy, camera.inverse.zw)), p));
 }
 
 @compute @workgroup_size(8, 8)

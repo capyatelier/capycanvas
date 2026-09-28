@@ -42,6 +42,7 @@ class AndroidCanvasBarBenchmarkTest {
         val refine = args.getString("refine", "feather")!!
         val refineSpan = args.getString("refineSpan", ".5")!!.toDouble()
         val refineBar = args.getString("refineBar", "on") == "on"
+        val blending = args.getString("blending")
         if (args.getString("composeTrace") == "true") @OptIn(androidx.compose.runtime.InternalComposeTracingApi::class)
             androidx.compose.runtime.Composer.setTracer(object : androidx.compose.runtime.CompositionTracer {
                 override fun isTraceInProgress() = android.os.Trace.isEnabled()
@@ -61,6 +62,7 @@ class AndroidCanvasBarBenchmarkTest {
             fun newDocument(extent: Pair<Int, Int> = width to height) {
                 documentExtent = "${extent.first}x${extent.second}"
                 host.newDocument(extent.first, extent.second)
+                blending?.let { invoke("blend_$it") }
                 invoke("fit_canvas"); invoke("zoom_out")
                 SystemClock.sleep(800)
             }
