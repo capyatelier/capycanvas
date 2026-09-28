@@ -532,6 +532,7 @@ fn action_description(action: &UiAction) -> &'static str {
             PasteImage => "Add the clipboard as a new layer. A copy from Capy Canvas keeps its position when that is in view; an image from another app opens with placement handles.",
             PasteInPlace => "Add the clipboard as a new layer where it was copied from, with no placement handles. An image from another app is centred at full size.",
             PasteInto => "Add the clipboard where it was copied from, as a new layer whose mask shows only the selection.",
+            ColorMixOklab | ColorMixLinear | ColorMixClassic => "Choose how this brush mixes the colors it picks up: Oklab blends evenly as the eye sees color, Linear light blends as light does, and Classic blends like Clip Studio Paint.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -1233,6 +1234,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             C::TransformNearest | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos => "Start a transform first",
             C::TransformDistort => "Start a transform first",
+            C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic => crate::tool_settings::NOT_MIXING,
             C::SnapRulers => "Show rulers first",
             C::DeleteRuler => "Select a ruler first",
             C::CompleteSelection

@@ -83,7 +83,7 @@ Journeys by area; the dispatch in `test.mjs` lists them all:
 
 | Area | Selectors |
 | --- | --- |
-| Editor smoke, drawing, pen | `--editor`, `--pen`, `--prediction`, `--raster` |
+| Editor smoke, drawing, pen | `--editor`, `--pen`, `--prediction`, `--raster`, `--color-mixing` |
 | Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-readout`, `--move-selection` |
 | Retouching | `--clone` |
 | Color | `--color-panel`, `--color-picker`, `--palettes` |

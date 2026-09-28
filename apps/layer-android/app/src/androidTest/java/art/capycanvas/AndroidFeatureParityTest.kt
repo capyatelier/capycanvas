@@ -26,7 +26,7 @@ class AndroidFeatureParityTest {
     @Before fun ready() {
         wakeDevice()
         compose.activity.runOnUiThread { compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
-        host.awaitReady()
+        host.awaitReady(compose = compose)
         savedWorkspace = JSONObject(state().getJSONObject("workspace").toString())
         savedSettings = JSONObject(state().getJSONObject("settings").toString())
         val native = Native.create(false)
@@ -75,6 +75,57 @@ class AndroidFeatureParityTest {
             }
             capture("tool-$command")
             assertNull(host.actionError)
+        }
+    }
+    private fun tap(tag: String, tool: Int) {
+        val at = compose.onNodeWithTag(tag).performScrollTo().fetchSemanticsNode().boundsInWindow.center
+        val downAt = android.os.SystemClock.uptimeMillis()
+        for (phase in listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP)) {
+            val event = motion(tool, phase, at, downAt)
+            try { instrumentation.runOnMainSync { compose.activity.window.decorView.dispatchTouchEvent(event) } }
+            finally { event.recycle() }
+            android.os.SystemClock.sleep(40)
+        }
+        compose.waitForIdle()
+        host.drain()
+        compose.waitForIdle()
+    }
+    @Test fun colorMixingChoicesAcrossDevicesPaintInEachSpace() {
+        val choices = listOf("color_mix_oklab", "color_mix_linear", "color_mix_classic")
+        fun command(id: String) = state().array("commands").objects().first { it.getString("id") == id }
+        fun revision() = state().getJSONObject("document_file").getLong("revision")
+        fun paint(from: Offset, to: Offset) {
+            val before = revision()
+            stroke(from, to)
+            compose.waitUntil(15_000) { revision() > before || host.failure != null }
+            assertNull(host.failure)
+        }
+        action(obj("type" to "select_brush", "id" to 1))
+        action(obj("type" to "set_brush_size", "value" to 120))
+        for ((y, rgba) in listOf(.45f to listOf(.9, .05, .05, 1), .55f to listOf(.05, .3, .9, 1))) {
+            action(obj("type" to "set_color", "rgba" to JSONArray(rgba)))
+            paint(Offset(.35f, y), Offset(.65f, y))
+        }
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "tool_settings", "visible" to true)))
+        action(obj("type" to "move_panel", "panel" to "tool_settings", "target" to obj("kind" to "edge", "edge" to "right", "outer" to false), "viewport" to viewport()))
+        compose.onAllNodesWithTag("tool-action-color_mix_oklab").assertCountEquals(0)
+        action(obj("type" to "select_brush", "id" to 24))
+        for (id in choices) compose.onNodeWithTag("tool-action-$id").assertExists()
+        assertTrue("Mixing brushes default to Oklab", command("color_mix_oklab").getBoolean("selected"))
+        for ((i, choice) in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE to "color_mix_classic",
+            android.view.MotionEvent.TOOL_TYPE_FINGER to "color_mix_linear", android.view.MotionEvent.TOOL_TYPE_STYLUS to "color_mix_oklab").withIndex()) {
+            val (tool, id) = choice
+            tap("tool-action-$id", tool)
+            for (other in choices) assertEquals("tool $tool chose $id", other == id, command(other).getBoolean("selected"))
+            val x = .4f + i * .1f
+            paint(Offset(x, .4f), Offset(x, .6f))
+            assertTrue("$id holds while painting", command(id).getBoolean("selected"))
+        }
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            compose.onNodeWithTag("tool-action-color_mix_classic").performScrollTo()
+            compose.waitForIdle()
+            capture("color-mixing-$theme")
         }
     }
     @Test fun colorWheelPixelsMatchSharedPickedColors() {

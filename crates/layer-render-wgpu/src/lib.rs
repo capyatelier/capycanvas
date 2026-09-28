@@ -20,7 +20,7 @@ use pixel_rect::{PixelRect, page_coordinates, page_rect, pixel_rect};
 
 use layer_core::{
     AssetId, BrushAccumulation, BrushBlendMode, BrushExecution,
-    BrushGrainBehavior, BrushTip, ColorMixSpace, Layer, LayerId, LayerKind,
+    BrushGrainBehavior, BrushTip, Layer, LayerId, LayerKind,
     LiquifyMode, PAPER_GRAIN_TEXTURE_ASSET,
     StrokeId, WATERCOLOR_TIP_TEXTURE_ASSET, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,
     WATERCOLOR_TRANSPORT_LONG_NARROW_ASSET, WATERCOLOR_TRANSPORT_SHORT_BROAD_ASSET,
@@ -4957,7 +4957,7 @@ impl StyleGpu {
         result.render_mode = [
             blend_code(style.rendering.blend_mode.into(), device) as f32,
             f32::from(style.rendering.accumulation == BrushAccumulation::Uniform),
-            f32::from(style.wet_mix.mix_space == ColorMixSpace::Oklab),
+            f32::from(style.wet_mix.mix_space as u8),
             style.deform.distortion,
         ];
         if let Some(transport) = &style.transport {

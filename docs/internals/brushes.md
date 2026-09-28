@@ -51,6 +51,20 @@ GPU resources. Depending on the brush, those resources track coverage, wetness o
 paint carried by the brush. Reading and writing the same image requires controlled
 staging; it cannot be treated as ordinary independent source-over blending.
 
+Brushes that mix paint (Smudge, the blenders, and the wet oil, gouache and
+watercolor brushes) show a **Color mixing** choice in Tool Options, from shared
+Rust on every host:
+
+- **Oklab mixing**, the default of every built-in mixing brush, blends evenly as
+  the eye sees color.
+- **Linear light mixing** blends as light does.
+- **Classic mixing** blends the document's encoded values, as Clip Studio Paint
+  does.
+
+Each preset keeps its own choice with its other edited settings. The choice does
+not follow the document's blending, and it changes no pipeline; see
+[rendering](rendering.md#native-sdr-working-color).
+
 Watercolor uses its own pigment and wetness behavior. It is not a general physical
 fluid simulation, and not every brush uses the same state or passes. The
 [painterly paint-state reference](../reference/painterly-paint-state.md) explains

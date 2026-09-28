@@ -572,6 +572,7 @@ fn command_section(command: CommandId) -> &'static str {
         | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
         | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent | C::MoveLeaveCopy => "Transform",
+        C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic => "Painting",
         command if CommandId::TOOLS.contains(&command) => "Tools",
         C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical | C::CloneResetOffset => {
             "Painting"

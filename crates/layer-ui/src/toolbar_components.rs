@@ -332,6 +332,7 @@ impl UiState {
             ToolActionGroup::TransformWarpGrid,
             ToolActionGroup::SelectionMode,
             ToolActionGroup::SelectionSource,
+            ToolActionGroup::ColorMixing,
         ] {
             let items = self
                 .tool_actions

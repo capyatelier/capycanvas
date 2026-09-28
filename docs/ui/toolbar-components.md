@@ -54,7 +54,7 @@ bookmarks do not create workspace-layout history entries.
 Rust derives the ordered form from existing tool settings, subtools and actions:
 completion actions first, tool/variant choices, independent eyedropper sample
 size, tool-specific fields (including tonal presets and intervals), selection
-combination and sampling-source choices, numeric fields, then
+combination, sampling-source and brush Color mixing choices, numeric fields, then
 remaining actions/toggles. A tool switch changes the form,
 not the toolbar allocation or canvas size. Value changes retain native editors.
 GTK also presents shared list (single or multiple choice), text, and information

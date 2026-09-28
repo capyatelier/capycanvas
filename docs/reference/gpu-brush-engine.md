@@ -294,7 +294,8 @@ Implemented now:
 - grain coverage;
 - pressure/dynamics-resolved ordered contacts;
 - premultiplied paint and erase;
-- blend modes, smudge pickup/pull/blur, wet deposition, and Oklab mixing;
+- blend modes, smudge pickup/pull/blur, wet deposition, and per-brush color
+  mixing in Oklab, linear light or encoded (Classic) values;
 - a persistent spatial wet-brush reservoir with deterministic charge depletion;
 - layer-wide same-layer watercolor mixing with stroke-uniform coverage and a
   live wetness-driven morphology edge;

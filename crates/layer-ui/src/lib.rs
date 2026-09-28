@@ -536,6 +536,9 @@ command_ids! {
     CloneFlipHorizontal,
     CloneFlipVertical,
     CloneResetOffset,
+    ColorMixOklab,
+    ColorMixLinear,
+    ColorMixClassic,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -563,6 +566,7 @@ impl CommandId {
                 | Self::CropStraighten | Self::CropDeleteCroppedPixels
                 | Self::TransformFree | Self::TransformUniform | Self::TransformDistort | Self::TransformPerspective
                 | Self::TransformNearest | Self::TransformBilinear | Self::TransformBicubic | Self::TransformLanczos
+                | Self::ColorMixOklab | Self::ColorMixLinear | Self::ColorMixClassic
                 | Self::TransformWarp | Self::WarpGridThree | Self::WarpGridFour | Self::WarpGridFive
                 | Self::ZenMode
                 | Self::Fullscreen
@@ -766,6 +770,9 @@ impl CommandId {
             Self::FlattenImage => "flatten",
             Self::StampVisible => "stamp-visible",
             Self::MergeGroup => "merge-group",
+            Self::ColorMixOklab => "color-mix-oklab",
+            Self::ColorMixLinear => "color-mix-linear",
+            Self::ColorMixClassic => "color-mix-classic",
         })
     }
     pub const TOOLS: [Self; 28] = [
@@ -1009,6 +1016,9 @@ impl CommandId {
             Self::FlattenImage => "Flatten Image",
             Self::StampVisible => "Stamp Visible",
             Self::MergeGroup => "Merge Group",
+            Self::ColorMixOklab => "Oklab mixing",
+            Self::ColorMixLinear => "Linear light mixing",
+            Self::ColorMixClassic => "Classic mixing",
         }
     }
 }
@@ -1530,6 +1540,7 @@ mod icon_tests {
             &[CommandId::FlipVertical, CommandId::FlipImageVertical],
             &[CommandId::CanvasSize, CommandId::ImageSize, CommandId::CropFitContent, CommandId::FitCanvas],
             &[CommandId::TransformNearest, CommandId::TransformBilinear, CommandId::TransformBicubic, CommandId::TransformLanczos],
+            &[CommandId::ColorMixOklab, CommandId::ColorMixLinear, CommandId::ColorMixClassic],
         ] {
             let icons: std::collections::BTreeSet<_> = commands.iter().map(|c| c.icon()).collect();
             assert_eq!(

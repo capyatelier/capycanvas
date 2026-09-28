@@ -25,6 +25,8 @@ mod erase;
 mod liquify;
 #[path = "crop_overlay_tests.rs"]
 mod crop_overlay;
+#[path = "paint_mixing_tests.rs"]
+mod paint_mixing;
 
 fn view() -> ViewState {
     ViewState {

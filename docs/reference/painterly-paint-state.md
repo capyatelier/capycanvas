@@ -62,7 +62,7 @@ source alpha   = requested                                      (flow mode)
 source alpha   = alpha increment to max(stroke coverage, requested) (uniform mode)
 pickup         = source(position - motion × pull), optionally blurred
 carried paint  = spatial reservoir sample (wet only)
-paint color    = linear/Oklab mix(pickup, carried paint)
+paint color    = mix(pickup, carried paint) in the brush's Color mixing space
 color output   = premultiplied source-over(destination, paint color, source alpha)
 wetness output = max(old wetness, coverage × configured wetness)
 ```
@@ -76,9 +76,10 @@ contacts.
 
 Smudge and Natural Blender do not use that reservoir. Their fragment path
 reverse-composes the ordered contact motion into one semi-Lagrangian backtrace,
-bilinearly samples the immutable canvas once, and transports straight color
-without lowering existing alpha. This prevents repeated source-edge scallops,
-transparent holes, and accidental selected-color marks.
+bilinearly samples the immutable canvas once, and mixes straight color in the
+brush's Color mixing space without lowering existing alpha. This prevents
+repeated source-edge scallops, transparent holes, and accidental selected-color
+marks.
 
 The CPU precomputes remaining charge as a deterministic exponential of traveled
 stroke distance measured in brush diameters. This scalar is carried in the
@@ -100,9 +101,9 @@ layer down and continue on a fresh layer.
 Each stroke uses uniform coverage, so overlapping contacts contribute only the
 increment required to reach the requested opacity. One motion-directed
 backtrace samples the same layer as newly covered pixels arrive, mixes straight
-color in Oklab, preserves existing alpha, then deposits selected pigment. This
-gives same-layer wet interaction without repeated-dab darkening, alpha holes,
-or carried silhouettes.
+color in the brush's Color mixing space, preserves existing alpha, then deposits
+selected pigment. This gives same-layer wet interaction without repeated-dab
+darkening, alpha holes, or carried silhouettes.
 
 The built-in watercolor tip has a pinhole-free but deliberately varied
 low-frequency interior and a ragged perimeter. Deterministic random rotation

@@ -2308,6 +2308,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::FlipVertical => idle,
             CommandId::ZoomIn => idle && self.state.camera.zoom < MAX_ZOOM,
             CommandId::ZoomOut => idle && self.state.camera.zoom > MIN_ZOOM,
+            CommandId::ColorMixOklab | CommandId::ColorMixLinear | CommandId::ColorMixClassic => {
+                tool_settings::mixes_color(self.engine.configured_brush())
+            }
             _ => true,
         };
         let selection = self.layer_interaction.tool.selection_tool();
@@ -2328,6 +2331,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::SelectionFixedSize && self.selection_tools.options.constraint == SelectionConstraint::Size)
             || (id == CommandId::SelectionFromCenter && self.selection_tools.options.from_center)
             || (id == CommandId::MoveLeaveCopy && self.operation.leave_copy)
+            || tool_settings::color_mixing(id).is_some_and(|space| {
+                let brush = self.engine.configured_brush();
+                tool_settings::mixes_color(brush) && brush.wet_mix.mix_space == space
+            })
             || matches!((id, self.layer_interaction.tool.region()),
                 (CommandId::SelectionVisible, Some((false, RegionSource::Visible, _)))
                 | (CommandId::SelectionEditing, Some((false, RegionSource::Editing, _)))
@@ -3155,13 +3162,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.set_crop_control(&id, value)?;
                     return Ok(self.changed(BRUSH | DOCUMENT, true));
                 }
-                let brush = tool_settings::edit(self.engine.configured_brush(), &id, value)?;
-                self.state.brush.diameter = brush.diameter;
-                self.state.brush.opacity = brush.opacity;
-                self.engine.set_brush(brush).map_err(error)?;
-                self.apply_brush()?;
-                self.tools
-                    .set_override(self.state.brush.preset, &id, value)?;
+                self.edit_brush(&id, value)?;
                 (BRUSH, false)
             }
             UiAction::SelectLayer { id } => {
@@ -4322,6 +4323,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.toggle_transform_perspective()?;
                 Ok((BRUSH | COMMANDS, false))
             }
+            CommandId::ColorMixOklab | CommandId::ColorMixLinear | CommandId::ColorMixClassic => {
+                let space = tool_settings::color_mixing(command).expect("a color mixing choice");
+                self.edit_brush(tool_settings::COLOR_MIXING, f32::from(space as u8))?;
+                Ok((BRUSH, false))
+            }
             CommandId::PlacementOriginalSize => {
                 self.placement_original_size()?;
                 Ok((BRUSH | DOCUMENT, true))
@@ -4896,6 +4902,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.apply_brush()
     }
 
+    fn edit_brush(&mut self, id: &str, value: f32) -> Result<(), String> {
+        let brush = tool_settings::edit(self.engine.configured_brush(), id, value)?;
+        self.state.brush.diameter = brush.diameter;
+        self.state.brush.opacity = brush.opacity;
+        self.engine.set_brush(brush).map_err(error)?;
+        self.apply_brush()?;
+        self.tools.set_override(self.state.brush.preset, id, value)
+    }
+
     fn apply_brush(&mut self) -> Result<(), String> {
         self.cursor.hover.reset();
         let state = &self.state.brush;
@@ -4962,10 +4977,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             let tool = self.layer_interaction.tool;
             let moving = tool == LayerCanvasTool::Move;
             let guides = matches!(tool, LayerCanvasTool::Ruler { .. }) || (moving && self.selected_ruler().is_some());
+            let mixing = tool == LayerCanvasTool::Paint && tool_settings::mixes_color(self.engine.configured_brush());
             moving
                 .then_some(CommandId::MoveLeaveCopy)
                 .into_iter()
                 .chain(guides.then_some([CommandId::ShowRulers, CommandId::SnapRulers, CommandId::DeleteRuler]).into_iter().flatten())
+                .chain(mixing.then_some(tool_settings::COLOR_MIXING_COMMANDS).into_iter().flatten())
                 .map(|command| ToolSettingAction {
                     command,
                     checkable: command.is_toggle(),
@@ -5504,6 +5521,7 @@ mod tests {
     include!("clipboard_tests.rs");
     include!("blend_menu_tests.rs");
     include!("clone_source_tests.rs");
+    include!("color_mixing_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

@@ -2969,6 +2969,8 @@ fn native_header_window_actions_input() {
 mod selection_tools;
 #[path = "toolbar_component_tests.rs"]
 mod toolbar_components;
+#[path = "color_mixing_tests.rs"]
+mod color_mixing;
 
 #[test]
 #[ignore = "isolated native-input.js --native-test=native_layer_swipe_alpha_lock"]

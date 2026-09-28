@@ -54,6 +54,7 @@ import { checkCanvasBar } from "./canvas-bar-journey.test.mjs";
 import { checkNotices } from "./notice-journey.test.mjs";
 import { checkZoomReadout } from "./zoom-readout-journey.test.mjs";
 import { checkBlendMenu } from "./blend-menu-journey.test.mjs";
+import { checkColorMixing } from "./color-mixing-journey.test.mjs";
 import { checkScreenStatus } from "./screen-status-journey.test.mjs";
 import { checkPipelineTakeover } from "./pipeline-takeover.test.mjs";
 import { checkPhotoEdit } from "./photo-edit-journey.test.mjs";
@@ -98,7 +99,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--contact-brushes","--filter-drawer","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo","--export-metadata","--filter-investigation","--pipeline-takeover"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo","--export-metadata","--filter-investigation","--pipeline-takeover"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -219,6 +220,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--blend-menu")) {
     await checkBlendMenu({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--color-mixing")) {
+    await checkColorMixing({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--photo-edit")) {
     await checkPhotoEdit({call,evaluate,settle});

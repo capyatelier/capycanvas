@@ -614,11 +614,7 @@ impl WorkspaceToolMemory {
     pub fn set_override(&mut self, id: u32, setting: &str, value: f32) -> Result<(), String> {
         let defaults = layer_core::default_brush(preset(id)?);
         crate::tool_settings::edit(&defaults, setting, value)?;
-        let default = crate::tool_settings::controls(&defaults)
-            .into_iter()
-            .find(|c| c.id == setting)
-            .ok_or("Unknown tool setting")?
-            .value;
+        let default = crate::tool_settings::value(&defaults, setting).ok_or("Unknown tool setting")?;
         if value == default {
             if let Some(values) = self.overrides.get_mut(&id) {
                 values.remove(setting);

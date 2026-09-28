@@ -177,11 +177,19 @@ fn contact_segment_progress(dab: Dab, world: vec2<f32>) -> f32 {
     return clamp(dot(world - previous_center, dab.motion) / motion_squared, 0.0, 1.0);
 }
 
+// ColorMixSpace discriminants, carried in render_mode.z.
+const MIX_OKLAB: u32 = 1u;
+const MIX_CLASSIC: u32 = 2u;
+
 fn mix_color(a: vec3<f32>, b: vec3<f32>, amount: f32) -> vec3<f32> {
     if amount==0. || all(a==b) {return a;}
     if amount==1. {return b;}
-    if style.render_mode.z > 0.5 {
+    let space = u32(style.render_mode.z);
+    if space == MIX_OKLAB {
         return working_from_oklab(mix(working_to_oklab(a), working_to_oklab(b), amount));
+    }
+    if space == MIX_CLASSIC {
+        return sdr_decode(mix(sdr_encode(a, WORKING_SPACE), sdr_encode(b, WORKING_SPACE), amount), WORKING_SPACE);
     }
     return working_mix(a, b, amount);
 }
@@ -312,7 +320,7 @@ fn mix_smudged_material(original: vec4<f32>, dragged: vec4<f32>, influence: f32)
         working_has_color(dragged.a),
     );
     let alpha = max(original.a, dragged.a * influence);
-    let color = mix(original_color, dragged_color, influence * dragged.a);
+    let color = mix_color(original_color, dragged_color, influence * dragged.a);
     return vec4<f32>(color * alpha, alpha);
 }
 

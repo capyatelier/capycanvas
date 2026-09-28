@@ -515,6 +515,12 @@ pub enum ColorMixSpace {
     #[default]
     LinearRgb,
     Oklab,
+    /// Encoded values under the document's transfer curve, as Clip Studio Paint mixes.
+    Classic,
+}
+
+impl ColorMixSpace {
+    pub const ALL: [Self; 3] = [Self::LinearRgb, Self::Oklab, Self::Classic];
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

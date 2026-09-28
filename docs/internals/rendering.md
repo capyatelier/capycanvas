@@ -127,11 +127,24 @@ effects and materials. Positive alpha is divided directly; only zero coverage
 returns black. Native scene/image interpolation uses explicit Float32 texel loads.
 Ordinary source-over and the existing channel blend formulas operate in **linear
 document RGB**, independently of bit depth. Each blend mode states its own bounds;
-see [Blend modes](#blend-modes). Native Oklab material mixing converts through
-linear sRGB/D65 (including document-white adaptation), uses signed cube roots,
-then returns to document primaries without a blanket negative-RGB clamp. Oklab
-endpoints retain the selected operand. Region tolerance uses encoded document RGB
+see [Blend modes](#blend-modes). Region tolerance uses encoded document RGB
 weighted by coverage, independent of display/checker colors.
+
+Paint color mixing (`mix_color` in
+[`material_brush.wgsl`](../../crates/layer-render-wgpu/src/material_brush.wgsl):
+Smudge and blender pickups, the Wet reservoir exchange and Watercolor's
+same-layer exchange) follows the brush's Color mixing choice (`ColorMixSpace`),
+never the document's blending. The choice is a style uniform, so no brush
+pipeline is specialized for it:
+
+- **Oklab** converts through linear sRGB/D65 (including document-white
+  adaptation), uses signed cube roots, then returns to document primaries
+  without a blanket negative-RGB clamp.
+- **Linear light** mixes linear document RGB.
+- **Classic** mixes values encoded with the document's own transfer curve
+  (`sdr_encode` and `sdr_decode` in `sdr_color.wgsl`), as Clip Studio Paint does.
+
+A mix at either endpoint returns that operand exactly in every space.
 
 Watercolor keeps its water activation threshold as a material-model parameter.
 That threshold no longer rejects faint native pigment. Native transport constrains

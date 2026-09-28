@@ -1,7 +1,7 @@
 //! Brush controls are a shared schema, not a GTK form. Field access is kept
 //! beside its label, constraints and visibility so native hosts never guess.
 use crate::NumericControl;
-use layer_core::{BrushExecution, BrushSnapshot, BrushTip, LiquifyMode};
+use layer_core::{BrushExecution, BrushSnapshot, BrushTip, ColorMixSpace, LiquifyMode};
 use serde::Serialize;
 
 /// Reusable tool settings actions. Labels, enabled/checked state and shortcuts
@@ -22,6 +22,7 @@ pub enum ToolActionGroup {
     TransformWarpGrid,
     CropRatio,
     CropOverlay,
+    ColorMixing,
 }
 impl ToolActionGroup {
     pub fn segmented(self) -> bool {
@@ -36,6 +37,7 @@ impl ToolActionGroup {
             Self::TransformWarpGrid => "transform-warp-grid",
             Self::CropRatio => "crop-ratio",
             Self::CropOverlay => "crop-overlay",
+            Self::ColorMixing => "color-mixing",
         }
     }
     pub fn label(self) -> &'static str {
@@ -46,6 +48,7 @@ impl ToolActionGroup {
             Self::TransformWarpGrid => "Grid",
             Self::CropRatio => "Ratio",
             Self::CropOverlay => "Overlay",
+            Self::ColorMixing => "Color mixing",
         }
     }
 }
@@ -67,6 +70,7 @@ impl ToolSettingAction {
             CropOverlayThirds | CropOverlayGrid | CropOverlayDiagonal | CropOverlayGolden => {
                 Some(ToolActionGroup::CropOverlay)
             }
+            ColorMixOklab | ColorMixLinear | ColorMixClassic => Some(ToolActionGroup::ColorMixing),
             _ => None,
         }
     }
@@ -99,11 +103,38 @@ struct Definition {
     field: fn(&mut BrushSnapshot) -> Option<&mut f32>,
 }
 
-fn wet(b: &BrushSnapshot) -> bool {
+pub(crate) fn mixes_color(b: &BrushSnapshot) -> bool {
     matches!(
         b.execution_class(),
         BrushExecution::Wet | BrushExecution::Smudge | BrushExecution::Watercolor
     )
+}
+
+/// The brush's Color mixing choice, kept with the numeric overrides as its
+/// `ColorMixSpace` discriminant.
+pub(crate) const COLOR_MIXING: &str = "color_mixing";
+pub(crate) const COLOR_MIXING_COMMANDS: [crate::CommandId; 3] =
+    [crate::CommandId::ColorMixOklab, crate::CommandId::ColorMixLinear, crate::CommandId::ColorMixClassic];
+pub(crate) const NOT_MIXING: &str = "Choose a brush that mixes paint first";
+
+pub(crate) fn color_mixing(command: crate::CommandId) -> Option<ColorMixSpace> {
+    use crate::CommandId::*;
+    Some(match command {
+        ColorMixOklab => ColorMixSpace::Oklab,
+        ColorMixLinear => ColorMixSpace::LinearRgb,
+        ColorMixClassic => ColorMixSpace::Classic,
+        _ => return None,
+    })
+}
+
+/// The stored value of a setting, including the Color mixing choice.
+pub(crate) fn value(brush: &BrushSnapshot, id: &str) -> Option<f32> {
+    if id == COLOR_MIXING {
+        return mixes_color(brush).then_some(f32::from(brush.wet_mix.mix_space as u8));
+    }
+    let mut brush = brush.clone();
+    let definition = DEFINITIONS.iter().find(|d| d.id == id)?;
+    (definition.field)(&mut brush).copied()
 }
 
 const DEFINITIONS: &[Definition] = &[
@@ -187,21 +218,21 @@ const DEFINITIONS: &[Definition] = &[
         label: "Paint load",
         group: "Mixing",
         numeric: NumericControl::percent,
-        field: |b| wet(b).then_some(&mut b.wet_mix.amount_of_paint),
+        field: |b| mixes_color(b).then_some(&mut b.wet_mix.amount_of_paint),
     },
     Definition {
         id: "pull",
         label: "Color pickup",
         group: "Mixing",
         numeric: NumericControl::percent,
-        field: |b| wet(b).then_some(&mut b.wet_mix.pull),
+        field: |b| mixes_color(b).then_some(&mut b.wet_mix.pull),
     },
     Definition {
         id: "dilution",
         label: "Dilution",
         group: "Mixing",
         numeric: NumericControl::percent,
-        field: |b| wet(b).then_some(&mut b.wet_mix.dilution),
+        field: |b| mixes_color(b).then_some(&mut b.wet_mix.dilution),
     },
     Definition {
         id: "wet_edge",
@@ -291,6 +322,18 @@ pub(crate) fn controls(brush: &BrushSnapshot) -> Vec<ToolSetting> {
 }
 
 pub(crate) fn edit(brush: &BrushSnapshot, id: &str, value: f32) -> Result<BrushSnapshot, String> {
+    if id == COLOR_MIXING {
+        let space = ColorMixSpace::ALL
+            .into_iter()
+            .find(|space| f32::from(*space as u8) == value)
+            .ok_or("Unknown color mixing")?;
+        if !mixes_color(brush) {
+            return Err(NOT_MIXING.into());
+        }
+        let mut next = brush.clone();
+        next.wet_mix.mix_space = space;
+        return Ok(next);
+    }
     let d = DEFINITIONS
         .iter()
         .find(|d| d.id == id)
