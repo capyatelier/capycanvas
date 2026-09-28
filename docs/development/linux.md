@@ -91,11 +91,12 @@ Rules and pitfalls:
 - **Inject input only on the private display.** `native-input.js` drives
   Mutter's RemoteDesktop API and refuses any display not named `layer-bench-*`.
   Never point it at a desktop session.
-- **`GDK_DEBUG=color-mgmt`.** GTK 4.22 binds the Wayland color-management
-  protocol only with this flag and has no public API for it. The app adds it in
-  `main()` before GTK starts, but tests do not run `main()`. `gtk-raster.sh` sets
-  it; `workspace-motion.sh` and plain `cargo test` do not, so set it yourself for
-  tests that check display color.
+- **`GDK_DEBUG=no-portals:color-mgmt`.** GTK 4.22 binds the Wayland
+  color-management protocol only with `color-mgmt` and has no public API for it.
+  The app adds it in `main()` before GTK starts, but tests do not run `main()`.
+  `no-portals` makes file dialogs use GTK's in-process chooser, which tests can
+  drive, instead of the desktop portal. `gtk-raster.sh` and
+  `workspace-motion.sh gtk` set both; plain `cargo test` sets neither.
 - **Tablet proxy limits.** `--tablet` pen serials cannot authorize compositor
   drag-and-drop; use mouse and touch for those journeys. The proxy also drops its
   connection when Quick Mask or Selection Layer rows change, so journeys through

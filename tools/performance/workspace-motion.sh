@@ -26,6 +26,9 @@ export XDG_RUNTIME_DIR="$motion_run_dir/runtime"
 mkdir -m 700 "$XDG_RUNTIME_DIR"
 export WAYLAND_DISPLAY=layer-bench-motion
 export GDK_BACKEND=wayland GSK_RENDERER=vulkan GTK_A11Y=none
+if [[ "$motion_platform" == gtk ]]; then
+    export GDK_DEBUG="${GDK_DEBUG:+$GDK_DEBUG:}no-portals:color-mgmt"
+fi
 export LAYER_NATIVE_INPUT_DIR="$motion_run_dir/input"
 export LAYER_SETTINGS_FILE="$motion_run_dir/settings.json"
 export CAPY_WORKSPACE_DIR="$motion_run_dir/workspaces"

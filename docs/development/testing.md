@@ -87,7 +87,7 @@ brush previews with `cargo run --locked --release -p layer-bench -- --brush-prev
 These fail on `main` independently of your change. Don't chase them unless they
 are your task, and remove an entry when you fix it.
 
-- GTK `native_selection_pen_input`, and tests that open the portal file chooser.
+- GTK `native_selection_pen_input`.
 - Android: 7 of 15 `AndroidTitleBarTest` cases;
   `detachedPanelsKeepBodiesAndWiderResizeTargets`;
   `AndroidInteractionTest#cachedPanelsMatchDirectDrawing` (light docked panels);

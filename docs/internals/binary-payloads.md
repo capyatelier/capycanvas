@@ -70,6 +70,5 @@ Use the workspace store contract test for IndexedDB parity. Native Android
 `exportPresetsPersistAndRestoreEveryDeliveryChoice` cover real CMM-validated
 profiles and preset persistence. GTK's
 `native_export_presets_save_update_remove_reset_and_remember_after_delivery`
-checks the same delivery flow through its native controls.
-Run that GTK chooser test with `GDK_DEBUG=no-portals` on the isolated Wayland
-display so it can drive the in-process chooser.
+checks the same delivery flow through its native controls; run it through
+`tools/performance/workspace-motion.sh gtk --native-test=<name>`.
