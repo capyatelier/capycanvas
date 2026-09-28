@@ -1,5 +1,5 @@
 //! Original sRGB starter palettes, grouped by hue, ink family, or value.
-//! Research and ordering rationale: docs/development/color-palettes-panel.md.
+//! Research and ordering rationale: docs/ui/color-palettes.md.
 use super::*;
 const STARTERS: &[(&str, &[(&str, u32)])] = &[
     (

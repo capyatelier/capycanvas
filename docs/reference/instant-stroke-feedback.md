@@ -228,7 +228,7 @@ absent, no placeholder records are synthesized by the adapter.
 | macOS | AppKit tablet/mouse events with pressure, tilt, and rotation | none documented for tablet points | shared predictor |
 | iPadOS | `coalescedTouches(for:)` using precise locations | `predictedTouches(for:)` | shared predictor if UIKit returns none |
 | Android | `MotionEvent` history and nanosecond timestamps | framework `MotionPredictor.predict()` on pen moves (API 34+) | shared predictor when unavailable/disabled or no samples arrive |
-| Web/Wasm | `pointermove`/`getCoalescedEvents()` | `getPredictedEvents()` | shared predictor when the list is empty |
+| Web/Wasm | the active pen's coalesced samples from `pointerrawupdate`, falling back to `pointermove` where raw updates don't arrive; frame time from `performance.now()` after admission | `getPredictedEvents()` from the matching `pointermove` | shared predictor when the list is empty |
 
 UIKit estimated force/altitude/azimuth updates are a separate sensor-correction
 concern. Adapters must preserve their stable sample identity; support for

@@ -1,12 +1,13 @@
-# Workspace title bar (GTK)
+# Workspace title bar
+
+[Workspace and UI](README.md) · [Default workspaces](default-workspaces.md) · [Drag convention](drag-and-reorder.md)
 
 The title bar is a workspace-owned arrangement of individual controls, not a
-dock for toolbar containers. The default workspaces are **Sketch**, **Paint** and
-**Photo** (their internal IDs remain unchanged). Sketch starts with Capy, Main
-Menu, Filters, Lasso and Transform on the left; workspace choices in the center;
-and Brush, Blend, Erase, Layers and Color on the right.
-It uses medium icons and hides canvas zoom/rotation. The canvas extends behind
-the transparent bar.
+dock for toolbar containers. Its left, center and right regions hold tools,
+menus and informational items; each workspace also sets the bar size and
+whether the canvas readout shows. Sketch's arrangement is in
+[default workspaces](default-workspaces.md#arrangements). The canvas extends
+behind the transparent bar.
 
 ## Customize inline
 
@@ -35,9 +36,7 @@ designer or opening shortcut.
   returns to the editor without adding anything.
 - Whole items and bank chips drag immediately after native movement slop, with
   mouse, touch and pen. Grips are visual hints, not separate buttons or hit
-  targets. Touch/pen holds on existing bar items can still open the
-  existing context menu and continue into a drag; mouse holds never open menus.
-  See the editor exception in the [application convention](drag-and-reorder.md).
+  targets; this is the editor exception in the [drag convention](drag-and-reorder.md).
 - While held in the bar, the item tracks horizontally and its neighbors slide
   to make room. Reorder thresholds use the same frozen-geometry algorithm as
   tab groups, so animated neighbors do not cause oscillation. Moving more than
@@ -73,12 +72,12 @@ bar's height with toolbar-style feedback and use the toolbar tile gap:
 form one full-height strip with the same gap; each tab's 24px close button
 keeps equal end and vertical insets so it stays concentric with the tab. Every
 title-bar surface (bars, menu labels, the tab strip, the document title, clock,
-battery, compact menus, the native close button and the Zen Capy) uses the
-canvas surround at 75% opacity in both themes, so artwork behind it stays
-partly visible; the workspace switcher's well is the inactive-tab grey at 75%.
-Hover and press add overlays to that surface. The selected workspace and tool
-use the panels' opaque selection blue, and the selected drawing tab the opaque
-panel grey. Capy, menu labels, the switcher, the document title or
+battery, compact menus, the native close button and the Zen Capy) is a glass
+chip filled with the canvas surround color, so it vanishes over the surround and
+lets artwork show through at the [panel transparency](panel-transparency.md)
+level; at Off it is opaque. Hover and press add overlays to that surface. The
+selected workspace and tool use the header selection tint, and the selected
+drawing tab the panel color; see [theme colors](theme-colors.md). Capy, menu labels, the switcher, the document title or
 tabs, clock, battery and Space stay separate with 6px gaps, and customization
 shows every item separately. Drawer origins
 fill their whole tile with square bottom corners until their drawer has closed.
@@ -93,7 +92,8 @@ Text items use 8px side padding, so the full menu still fits beside a centered
 title in a 1200px-wide window.
 Native window-control targets grow equally in both axes, with 6px outer clearance.
 
-At narrow widths, each region overflows whole items into a More menu. Tools
+Menu Labels compacts to an icon-sized menu inside its own item when space is
+short. At narrow widths, each region overflows whole items into a More menu. Tools
 still open their normal drawers, anchored to the visible overflow control;
 resizing does not change the stored arrangement. Workspace choices compact to
 a menu when needed. Clock and battery items occupy space only in fullscreen,
@@ -115,21 +115,18 @@ the drawer in one click; clicking its current opener toggles it closed. Contacts
 inside the drawer or its connector stay inside. Canvas dismissal consumes that
 first contact so it cannot leave a mark.
 
-## Zen and compatibility
-
-Zen has its original single mode: hide normal chrome, with edge/corner reveal
-and the Tab shortcut to return. Explicitly floating palettes retain the
-original behavior. There is no partial-Zen toolbar projection or Total Zen
-preference. A minimal persistent UI belongs in a workspace instead.
+## Ownership
 
 The builder's model, validation, overflow policy, tool activation, drawer
-origins, bar membership and history are shared Rust. GTK owns native widgets,
-measurements, caption behavior and device timing. Web, Android, Windows, macOS and
-iPadOS paint the same bars, surfaces and selection roles; macOS has no Main Menu or
-menu labels because the system menu bar owns them. This is not a claim of
-macOS/Windows tablet testing.
+origins, bar membership and history are shared Rust. Web implements the same bar
+and inline editor in `header.js` with the shared `HeaderDrag`; its `#header`
+uses `touch-action: manipulation` and tracks the pressed contact itself. Hosts own native widgets,
+measurements, caption behavior and device timing, and paint the same bars,
+surfaces and selection roles. macOS has no Main Menu or menu labels because the
+system menu bar owns them. Zen hides the title bar like other chrome; see
+[shared UI](shared-ui.md#window-chrome-and-zen-mode).
 
-## Regression checks
+## Checks
 
 Run native input in a private compositor, never on the user's desktop:
 
@@ -139,42 +136,15 @@ bash tools/performance/workspace-motion.sh gtk --native-test=native_header_drag_
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_catalog_preview_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_managed_input --native-storage
 LAYER_MOTION_VIEWPORT=640x600 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_overflow_input
-LAYER_MOTION_VIEWPORT=3200x2000 LAYER_MOTION_SCALE=2 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_catalog_preview_input
 bash tools/performance/workspace-motion.sh web --tool-picker
 ```
 
-The GTK picker journey checks dropped tool-picker destinations, multi-selection across
-queries, empty results, nested Cancel/Escape, exact insertion order, singleton
-availability, removal, exact drop positions and parent cancellation. The bank
-case checks inert clicks/holds, slop and immediate pickup from padding, grips,
-icons and labels. The catalog case checks mouse/touch immediate bodies/grips and
-cancellation on outside drop, Escape, blur and source replacement. Managed input
-checks Done, workspace switching, restart and unsaved-preview cancellation.
-The narrow case includes hidden-item selection and modal Escape with an empty
-search field. The focused Web check protects the shared picker's existing toolbar
-destinations; it does not imply that Web implements this GTK editor.
+Web runs `tools/performance/workspace-motion.sh web` with `--title-bar`,
+`--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`,
+`--menu-labels`, `--compact-workspaces` and `--header-controls`.
 
-Additional native cases are `native_header_editor_controls_input` (all component
-types, sizes, visibility, empty-bar recovery and defaults),
-`native_header_editor_keyboard_input` (menu entry, focus, navigation,
-reordering, cross-region moves, contextual actions, removal and cancellation),
-`native_header_editor_short_window_input` (640×480 minimum window, full palette,
-bounded panel and keyboard access to Done),
-`native_header_spacing_visual`
-(both themes, all sizes, gaps, corners and grip alignment),
-`native_header_hold_context_input`, `native_header_cancel_caption_input`, and
-`native_drawer_dismissal_input`. The new `native_header_slide_remove_input`
-checks live neighbor shifts, backtracking, grab offsets, detachment, re-entry,
-removal and palette return with mouse and touch; run it at 1× and 2×.
-`native_header_overflow_drag_input` runs at 640×600 and checks that hidden
-neighbors survive preview, removal and Cancel at every size.
-`native_header_empty_center_input` removes the center item and restores it by
-dropping near either edge of the enlarged target, with mouse and touch at every
-size. Run it both at 640×600 and at 2× scale.
-`native_header_tools_drop_input` checks the palette-to-modal handoff, and
-`native_header_window_actions_input` checks Settings and F11 at all sizes,
-including reopening Settings, keyboard focus, fullscreen-only clock/battery
-geometry, editable windowed placeholders and exclusion of saved Web-only tiles.
-Inspect their captured screenshots as well as
-assertions. Physical pen input and non-GTK window managers still require their
-own platform/hardware validation.
+Other cases in `apps/layer-linux/src/workspace_header_tests.rs` cover editor
+controls, keyboard editing, the 640×480 minimum window, spacing in both themes,
+hold menus, caption cancellation, drawer dismissal, slide-to-remove (run at 1×
+and 2×), overflow drags, the empty center target and window actions. Inspect
+their screenshots as well as their assertions.

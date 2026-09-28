@@ -2,9 +2,6 @@
 
 [Technical documentation](../README.md)
 
-The expanded professional-brush feature surface and finite pipeline model are
-specified in [../history/advanced-brush-engine.md](../history/advanced-brush-engine.md).
-
 ## Decision
 
 Layer has one production pixel engine: `layer-render-wgpu`. The CPU interprets
@@ -23,7 +20,7 @@ accumulation, live and optional post-stroke edges, blend, and liquify contacts.
 The same packet and native UI boundary select all of them.
 
 Pencil, charcoal and the new ink family use the [swept contact
-model](../development/contact-brush-engine.md). Graphite uses normalized flow
+model](../internals/contact-brush-engine.md). Graphite uses normalized flow
 deposition against fixed paper; ink uses per-stroke maximum coverage. These
 contacts carry the preceding pose and interpolate their footprint on the GPU.
 
@@ -286,8 +283,8 @@ simulation code. That persistence format is deliberately deferred.
 - Production submission never waits for GPU completion.
 - The benchmark separately reports input-to-submit and serialized
   input-to-completed-work latency.
-- Acceptance at 120 Hz remains end-to-end input-to-present p99 below 8.33 ms on
-  each target device; offscreen GPU time alone is necessary but not sufficient.
+- Acceptance follows the [performance targets](../PERFORMANCE_TARGETS.md);
+  offscreen GPU time alone is necessary but not sufficient.
 
 ## Current implementation boundary
 

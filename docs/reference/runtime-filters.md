@@ -144,7 +144,7 @@ values, picker previews and recovery from missing/invalid files. A separate
 hardware D3D12 full-image test verifies atomic replacement/rejection and compatible
 library refresh without altering the current document. These scoped checks do not
 resolve the strict v4 reference discrepancy recorded below or establish performance.
-See [Windows host commands](../../apps/layer-windows/README.md#runtime-filter-packages).
+See [Windows host commands](../development/windows.md#runtime-filter-packages).
 
 ## Persistent GPU preparation
 

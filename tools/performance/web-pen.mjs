@@ -1,5 +1,5 @@
 // Real Chrome input -> DOM -> Wasm -> WebGPU. Use a dedicated test origin.
-// See docs/development/web-pen-huion-2026-09-20.md for device setup and measurements.
+// See docs/performance/measuring.md for device setup.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";

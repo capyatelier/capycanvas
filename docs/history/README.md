@@ -1,67 +1,26 @@
-# Design and validation history
+# Design history
 
 [Technical documentation](../README.md)
 
-These records preserve earlier proposals, implementation checkpoints and measured
-results. They are useful when investigating a decision or regression. Statements
-about what is finished, planned or supported apply to the recorded checkpoint,
-not automatically to the current application.
+These records hold research and design decisions that explain why the current
+design is the way it is, or that inform planned work. Their claims apply to when
+they were written; check the code and the current guides before relying on them.
+Progress notes, validation reports and other work records are not committed
+([writing](../development/writing.md)).
 
-For the current explanation, use [Architecture](../architecture.md), the
-[UI guide](../ui/README.md), [platform integration](../platforms/README.md) or the
-[developer guide](../development/README.md). The platform trackers below may gain
-new evidence, but their earlier sections remain historical. The [workspace implementation tracker](../familiar-workspace.md)
-remains at its existing path while implementation work continues.
+## Research
 
-## Platform integration and measurements
+- [Photo editing: user journeys, gap audit and build list](photo-editing-research.md),
+  with its [source reports](photo-editing-research).
+- [Vector drawing and editing](vector-drawing-research.md).
+- [Vector layers: tool subset, stroke storage and new-artist journey](vector-layers-research.md),
+  with its [source reports](vector-layers-research).
+- [Layers: illustration workflows and panel design](layers-research.md).
+- [Color palettes](color-palettes-research.md).
 
-- [Android native host](android-implementation.md).
-- [Android feature parity](android-feature-parity.md).
-- [Android editor visual audit](android-ui-audit.md).
-- [Apple implementation goal and acceptance tracker](apple-acceptance.md).
-- [iPadOS design review](ipados-design-review.md).
-- [Native Windows implementation](windows-implementation.md).
-- [Vulkan rendering with native Windows presentation — deferred investigation, 2026-09-22](windows-vulkan-presentation-20260922.md).
-- [Native and web workspace implementation](ui-implementation.md).
-- [GTK + Wayland canvas subsurface: feasibility proof](wayland-subsurface-feasibility.md).
-- [Android UI before canvas shaders](android-first-ui.md).
-- [Four-stage WebGPU startup — 2026-09-10](web-staged-startup.md).
-- [Tablet web startup: input lock and GPU compilation — 2026-09-17](web-startup-tablet-2026-09-17.md).
+## Design records
 
-## Workspace and settings
-
-- [Command search, shortcut presets, and device input audit — 2026-09-25](command-input-shortcut-audit-2026-09-25.md).
-- [Familiar drawing workspace (GTK review)](../familiar-workspace.md).
-- [Shared workspace logic audit](workspace-core-audit.md).
-- [Workspace management implementation](workspace-management-progress.md).
-- [Capy Canvas preferences](settings-implementation-plan.md).
-
-## Documents, layers and filters
-
-- [Vector drawing and editing: artist workflows, formats and recommended scope](vector-drawing-research.md).
-- [Vector layers: tool subset, stroke storage and new-artist journey](vector-layers-research.md), with its [source reports](vector-layers-research/).
-- [Photo editing: user journeys, gap audit and build list](photo-editing-research.md), with its [source reports](photo-editing-research/).
-- [Project validation checkpoint](project-validation.md).
-- [Layers research: illustration workflows and panel design](layers-research.md).
-- [Layers: recommended initial design](layers-initial-design.md).
-- [Layer context-menu audit](layers-context-menu-audit.md).
-- [Filters and programmable effects](adjustments-implementation.md).
-- [Filter validation](adjustments-validation.md).
-- [WGSL filter library](filter-library-design.md).
-- [Forty-filter validation](filter-library-validation.md).
-- [Incremental clipping composition](filter-clipping-regression.md).
-- [Non-Destructive Filter Layers + WGSL Shader Subsystem](non_destructive_filters_wgsl_shader_subsystem.md).
-
-## Brushes and rendering
-
-- [Color-management and raster-project implementation plan](color-management-research.md).
-- [Color-management delivery milestones and merge gates](color-management-milestones.md).
-- [Color-management code and product review](color-management-review.md).
-- [Advanced brush engine](advanced-brush-engine.md).
 - [Pencil, charcoal and ink brush redesign](dry-media-brush-design.md).
-- [Wgpu rendering program](rendering-program.md).
-- [Rendering optimization log](optimization-log.md).
-
-## Documentation
-
-- [README and documentation audit](readme-audit.md).
+- [GTK and Wayland canvas subsurface](wayland-subsurface-feasibility.md).
+- [Vulkan rendering with native Windows presentation](windows-vulkan-presentation.md),
+  a deferred candidate.

@@ -14,7 +14,7 @@ as inputs, lists and sliders, stay opaque. Menus, popovers and tooltips stay
 opaque.
 
 Off keeps the opaque theme. Title-bar controls, the zoom readout and the Zen
-button are opaque too, rather than the earlier translucent fill with no blur.
+button are opaque too.
 At Off every `GlassPalette` color equals its opaque role, so hosts apply the
 glass colors in every mode and gate only the blur.
 
@@ -123,35 +123,22 @@ looks unchanged over an empty canvas, and only artwork behind it shows through.
   and layers) keep at least 60% of their opaque OKLab color difference from
   their parent over white paper and over dark grey. Their alpha rises where
   needed. Some cases cannot reach 60% at any alpha, so they use the best
-  achievable. In dark Low the header selection reaches about 46% over white,
-  because the chip itself lightens toward the selection color. In light High the
-  document tab reaches about 42% over white.
+  achievable.
 - Drop shadows are cut away beneath drawer and column connectors, so a
   translucent bridge matches the surfaces it joins. Windows Composition shadows
   would also fill beneath their own surface, so Windows clips panel and drawer
   shadows to the outside of the surface with a Direct2D geometry.
 
-Measured alphas:
-
-| Level | Panel | Chips | Document tab | Header / workspace selection | Tool / layer selection |
-| --- | --- | --- | --- | --- | --- |
-| Dark Low | 0.96 | 0.88 | 0.87 | 0.86 / 0.86 | 0.86 |
-| Dark Medium | 0.845 | 0.77 | 0.74 | 1.00 / 1.00 | 0.74 |
-| Dark High | 0.72 | 0.65 | 0.55 | 0.68 / 0.77 | 0.55 |
-| Light Low | 0.94 | 0.71 | 0.78 | 0.78 / 0.78 | 0.78 |
-| Light Medium | 0.76 | 0.51 | 0.75 | 0.59 / 0.59 | 0.96 |
-| Light High | 0.56 | 0.43 | 0.75 | 0.41 / 0.40 | 0.40 |
+The per-level alphas are in `Transparency::alphas` in
+[`glass.rs`](../../crates/layer-ui/src/glass.rs).
 
 `LAYER_GLASS_PROBE=1` makes the capture test paint white and dark-grey
 backdrops. It prints element rectangles (`ELEM`) for the Paint, Sketch and Photo
 scenes, so compositor captures can be sampled per element.
 
 Web and Android apply the same fills, and browsers and Android's compositor
-blend them in sRGB as GTK does. Probed over the same white and dark-grey
-backdrops at every level and theme, the share of the backdrop showing through
-each surface matches GTK's captures within 0.02 on Web (Chrome) and 0.01 on
-Android. Selection fills follow the accent, so a system accent can change their
-alpha: a tan Android accent reaches opaque in dark Low.
+blend them in sRGB as GTK does. Selection fills follow the accent, so a system
+accent can change their alpha.
 
 Channels outside 0–255 are clamped. Light themes with a darker base therefore
 look slightly darker at High than the opaque theme.
@@ -175,77 +162,11 @@ begins just after a gesture keeps the moved blur until it ends. Retained
 targets, such as Android's front buffer, repaint only glass that changed. Idle
 views present nothing.
 
-GPU time per presented frame on an RTX PRO 6000 (`backdrop_blur_cost`, the
-default Paint layout's glass):
-
-| Surface (glass share) | Viewport only | Cached glass | Recomputed, Low / High | Moved, Low |
-| --- | --- | --- | --- | --- |
-| 1600×1000 @1× (35%) | 0.015 ms | 0.013 ms | 0.026 / 0.031 ms | 0.017 ms |
-| 3200×2000 @2× (35%) | 0.037 ms | 0.033 ms | 0.048 / 0.054 ms | 0.036 ms |
-| 3840×2160 @1× (15%) | 0.044 ms | 0.044 ms | 0.056 / 0.062 ms | 0.046 ms |
-| 5120×2880 @2× (23%) | 0.071 ms | 0.070 ms | 0.084 / 0.090 ms | 0.071 ms |
-
 Cached and moved glass cost no more than the plain viewport, because their
-interiors replace viewport pixels. A moving camera recomputes the blur on every
-fourth frame.
-
-The Huion tablet (Mali-G57 MC2, 2400×1600) sets the tight budget. For
-navigation, two injected fingers pan or pinch a 1024 px document at 205% for
-3×5 s (`AndroidViewportBenchmarkTest` with `motion`); the latency runs from each
-frame's newest input to its GPU completion (p50):
-
-| Motion | Off | Low | Medium | High |
-| --- | --- | --- | --- | --- |
-| Pan, half-resolution blur every frame | 25.7 ms | 31.1 ms | 30.7 ms | 32.2 ms |
-| Pan, quarter-resolution blur every frame | 25.8 ms | 27.4 ms | 27.1 ms | 28.1 ms |
-| Pan, moved between refreshes | 25.6 ms | 25.7 ms | 25.8 ms | 26.0 ms |
-| Pinch, half-resolution blur every frame | 29.5 ms | 41.5 ms | 40.2 ms | 42.5 ms |
-| Pinch, quarter-resolution blur every frame | 29.4 ms | 36.8 ms | 37.5 ms | 37.9 ms |
-| Pinch, moved between refreshes | 29.5 ms | 30.8 ms | 31.4 ms | 31.5 ms |
-
-A pinch already keeps this GPU nearly busy at Off while display mips follow the
-zoom, so recomputing the blur on every frame made it GPU-bound and queued a
-frame even at quarter resolution. Moving the cached blur between refreshes
-recomputes it on about a quarter of the frames; pan and pinch then present 89
-and 72 frames/s at Low, as at Off.
-
-The tablet's pen measurements compare the same build at each level, drawing an
-18 px round brush on a 1024 px document with replayed OS pen input.
-
-Android, front-buffer presentation, submission to GPU completion of each
-presentation (p50 / p95):
-
-| Stroke | Off | Low | Medium | High |
-| --- | --- | --- | --- | --- |
-| Across the fitted document | 2.88 / 5.00 ms | 2.83 / 4.93 ms | — | 2.80 / 4.91 ms |
-| Zoomed 2×, beside the panels | 2.93 / 5.83 ms | 2.85 / 5.88 ms | 2.86 / 6.04 ms | 2.95 / 5.96 ms |
-
-Before strokes held the glass, the near-panel stroke cost +0.4 / +1.9 ms at
-Low and +2.1 / +4.2 ms at High: contact brushes report damage in 256-pixel
-document pages, and each refresh runs four to six render passes, each with a
-fixed cost on this tile-based GPU.
-
-Web, Chrome on the tablet, a stroke across the fitted document (3–6 runs of
-5 s each; updates/s drift by several between runs as the tablet warms):
-
-| Level | Updates/s | Input → submit p50 / p95 / p99 |
-| --- | --- | --- |
-| Off | 80.2 | 28.4 / 32.0 / 33.4 ms |
-| Low | 77.4 | 28.3 / 32.2 / 33.8 ms |
-| Medium | 75.8 | 28.0 / 32.0 / 34.3 ms |
-| High | 77.3 | 28.3 / 32.2 / 33.6 ms |
-
-Every level reuses the cached blur for the whole stroke; High, whose 123-pixel
-reach touches the panels, refreshes it once when the stroke ends.
-
-Apple Release builds, the synthetic `ink` workload (2048 px document, 24 px
-brush, 60 s after warm-up) with the Paint glass registered, measured before
-strokes held the glass:
-
-| Host | Before glass | Low | High |
-| --- | --- | --- | --- |
-| Mac, M2 Pro, 90 Hz | 84.8 fps, GPU p50 1.09 ms | 84.4 fps, 1.47 ms | 83.9 fps, 1.55 ms |
-| iPad Pro 13 M4, 120 Hz | 112.6 fps, GPU p50 1.26 ms | 113.2 fps, 1.35 ms | — |
+interiors replace viewport pixels. Stopping the blur at quarter resolution and
+moving the cached blur between refreshes keep pan and pinch on tile-based
+tablet GPUs at the frame rate of Off. Current measurements are in the tier
+tables, such as [low tier](../performance/low-tier.md).
 
 ## Known limitations
 
@@ -270,8 +191,8 @@ strokes held the glass:
   size while zooming, trail by up to three frames. At the window edges the
   moved blur repeats its outermost pixels for up to 48 pixels.
 - The blur reach is in device pixels, so on a 2× display it covers half the
-  distance it does at 1×. Scaling it to logical pixels roughly doubled the
-  refreshed area on the tablet and added pen latency, so it was not adopted.
+  distance it does at 1×. Scaling it to logical pixels would roughly double the
+  refreshed area and add pen latency on tablets.
 - Drawer shadows are cut only beneath connectors. Beneath a translucent source
   toolbar or column they can darken it by about one level; drawer-style tests
   therefore run at Off, as on GTK.
@@ -320,11 +241,10 @@ Off to Low to High. `CAPY_WORKLOAD_TRANSPARENCY=off|low|medium|high` selects the
 level for the Apple drawing workloads.
 
 For tablet pen timing, `LAYER_PEN_TRANSPARENCY=off|low|medium|high` selects the
-level in the [Web pen harness](../development/web-pen-huion-2026-09-20.md), and
-each run reports recomputed and reused glass frames. The Android viewport
-benchmark takes `-e transparency low`, `-e zoomSteps 2` and `-e strokeOffset 0.25`
-(a fraction of the work area toward the right-hand panels) alongside the
-[front-buffer benchmark arguments](../development/android-front-buffer-results-2026-09-20.md).
-`-e motion pan` or `-e motion pinch` replaces the stroke with two injected
-fingers. `android-viewport-report.py` reports `completion_ms` and
+level in the Web pen harness (`tools/performance/web-pen.mjs`), and each run
+reports recomputed and reused glass frames. The Android viewport benchmark
+(`AndroidViewportBenchmarkTest`) takes `-e transparency low`, `-e zoomSteps 2`
+and `-e strokeOffset 0.25` (a fraction of the work area toward the right-hand
+panels); `-e motion pan` or `-e motion pinch` replaces the stroke with two
+injected fingers. `tools/performance/android-viewport-report.py` reports `completion_ms` and
 `input_to_completion_ms`, from each frame's newest input to its GPU completion.

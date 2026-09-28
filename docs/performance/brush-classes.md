@@ -4,9 +4,8 @@
 
 The class decides a brush's guaranteed size.
 
-- **Measurements decide the class** where they exist. The
-  [1000 px Apple and Windows matrices](../development/apple-port-1000px-20260922.md)
-  split the dry presets cleanly into a fast group and a slow group.
+- **Measurements decide the class** where they exist. The 1000 px Apple and
+  Windows runs split the dry presets cleanly into a fast group and a slow group.
 - **Otherwise the execution path decides it** (see [Brushes](../internals/brushes.md)).
 
 | Class | Guaranteed size | What puts a brush here | Brushes (preset id) |

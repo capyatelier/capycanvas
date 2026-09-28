@@ -2,7 +2,7 @@
 
 Research and design proposal, 2026-09-13. The audit below describes the engine
 before this work. The implemented follow-up and measurements are recorded in
-[Contact brush engine](../development/contact-brush-engine.md).
+[Contact brush engine](../internals/contact-brush-engine.md).
 
 The proposed change preserves shared Rust input processing and the sparse wgpu
 renderer while replacing the contact, deposition and ending behavior of these

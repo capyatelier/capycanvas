@@ -7,7 +7,7 @@ Research date: **2026-09-25**. Source baseline: **`796f7f5b`**.
 Research and proposed direction for future vector support. Recommendations and
 phases below describe potential work, not implemented capabilities.
 
-This report combines eight research streams. Their full write-ups, with every source URL, are in [`vector-layers-research/`](vector-layers-research/):
+This report combines eight research streams. Their full write-ups, with every source URL, are in [`vector-layers-research/`](vector-layers-research):
 
 | # | Stream | File |
 |---|---|---|

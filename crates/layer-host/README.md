@@ -7,14 +7,14 @@ and Windows clients. It combines [`layer-ui`](../layer-ui/README.md) with the
 [`wgpu renderer`](../layer-render-wgpu/README.md), handling common input transport,
 startup state and UI snapshots. GTK and web integrate the shared session directly.
 
-## NativeHost and Renderer
+## NativeHost and the attached renderer
 
 `NativeHost` owns a `UiSession`, tracks canvas readiness and prepares state for the
 native frontend. Pointer batches preserve the view revision from the moment their
 samples were collected. UI snapshots are refreshed when relevant state changes,
 with camera updates tracked separately.
 
-`Renderer` wraps an optional `WgpuRasterizer`. This allows a host to create editor
+`layer_render_wgpu::AttachedRenderer` wraps an optional `WgpuRasterizer`. This allows a host to create editor
 state before attaching the GPU renderer and preparing its shaders. Pixel operations
 require the attached GPU; the wrapper does not provide a CPU painting fallback.
 
@@ -26,8 +26,8 @@ file access remain platform responsibilities.
 
 - [lib.rs](src/lib.rs) defines `NativeHost`, pointer batches, action dispatch,
   startup coordination and snapshots.
-- [renderer.rs](src/renderer.rs) forwards the rendering contract to the attached
-  `WgpuRasterizer`.
+- [`AttachedRenderer`](../layer-render-wgpu/src/attached.rs) forwards the rendering
+  contract to the attached `WgpuRasterizer`.
 - The [Android bridge](../../apps/layer-android/native),
   [Apple bridge](../../apps/layer-apple/native) and
   [Windows bridge](../../apps/layer-windows/native) show how hosts use this crate.

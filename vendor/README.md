@@ -1,5 +1,10 @@
 # Pinned dependency fixes
 
+Vendor a crate only when a required fix cannot wait for upstream. Every vendored
+crate keeps its original licences, its registry archive SHA-256 and the upstream
+revision it came from. Each change is a named `.patch` described below. Remove
+the vendored copy once an upstream release contains the fix.
+
 ## Portable HEIF/HEVC decoding
 
 `rust_h265` 0.1.0 is the published MIT OR Apache-2.0 crate. Its decoder sources,
@@ -36,8 +41,8 @@ Original migration verification included the upstream suites (128 HEVC and 35
 HEIF tests), exact
 libde265 YUV comparison of a photographic still, shared source/ICC/grid/alpha
 tests, Chrome execution and GTK Open/Import/Paste with an empty codec directory.
-Initial HEIC variant limits and outstanding host work are recorded in the
-[migration plan](../docs/development/portable-photo-core.md).
+HEIC support and its limits are described in the
+[portable colour guide](../docs/development/portable-color.md).
 
 Run the isolated vendor tests with:
 
@@ -159,8 +164,7 @@ allocation/reset costs: full 61 MP drawing took roughly 14–16 ms per host
 callback despite only 1–2 ms of GPU work. Retaining pool storage while still
 freeing every completed buffer reduced median callbacks to about 4.6 ms and
 reached 8.33 ms presentation intervals. Submission ownership and completion
-synchronization remain unchanged. Other targets retain their existing policy. See the
-[host qualification](../docs/development/image-placement-web-android-progress.md).
+synchronization remain unchanged. Other targets retain their existing policy.
 
 `wgpu-android-resource-reuse.patch` applies after the command-memory patch
 and reuses up to 128 Vulkan framebuffers per completed Android encoder. Entries
@@ -178,8 +182,6 @@ cleanup addresses mapping growth in sustained wide-brush drawing; releasing
 pool storage at every reset would restore the earlier driver-allocation cost.
 Completion synchronization is unchanged. Other platforms keep their original
 pool policy and continue to destroy framebuffers at every reset.
-See the [wide-brush measurements](../docs/development/android-wide-brush-performance.md)
-for driver allocation costs, performance and sustained-memory qualification.
 
 `wgpu-instance-identity.patch` makes native wgpu handles equal only when the
 same instance owns them. Upstream compares only the registry identifier, and
@@ -203,16 +205,13 @@ Native backends and the existing immediate API are unchanged.
 The renderer chooses this API in its browser compilation queue, retaining
 required-work ordering, error scopes and readiness gates. Native compilation
 keeps its existing worker/cache path. This addresses GPU-process display
-stalls that merely yielding JavaScript tasks did not resolve. The
-[tablet startup record](../docs/history/web-startup-tablet-2026-09-17.md)
-records the evidence and physical-device regressions.
+stalls that merely yielding JavaScript tasks did not resolve.
 
 `wgpu-webgpu-device-features.patch` caches the mapped, immutable `GPUDevice`
 feature set when the device is created. Feature tests in material and composition
 loops then read Rust bits instead of remapping all browser feature strings on
 every call. The cache uses the features exposed by the actual device, not its
-adapter, and is recreated with each device. See the
-[Huion Web pen investigation](../docs/development/web-pen-huion-2026-09-20.md).
+adapter, and is recreated with each device.
 
 ## Android front-buffer presentation
 
@@ -239,8 +238,7 @@ presentation semaphore. The Android host bounds outstanding updates at two,
 allowing CPU encoding to overlap the preceding GPU update in queue order.
 The former single-update gate serialized the pipeline; widening it without
 removing the obsolete acquisition wait produced raster work followed by
-acquisition timeouts and no presentation. See the
-[Wacom admission measurements](../docs/development/gpen-drawing-admission-20260920.md).
+acquisition timeouts and no presentation.
 
 Lost/outdated presentation results remain latched until swapchain recreation,
 so the next shared acquisition reaches the host's recovery path even though it
@@ -260,5 +258,5 @@ cargo test --manifest-path vendor/wgpu-hal/Cargo.toml --features vulkan --lib \
 All Android builds require shared presentation for SDR and HDR pen input.
 Camera navigation uses FIFO until a new paint contact. Unsupported drivers report
 a canvas initialization error; there is no driver-support fallback or build flag.
-Other platform hosts retain their existing presentation modes. See
-[production qualification](../docs/development/android-front-buffer-production-2026-09-20.md).
+Other platform hosts retain their existing presentation modes. [Android presentation](../docs/platforms/README.md#android-presentation)
+describes the host side.

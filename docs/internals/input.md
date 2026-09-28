@@ -33,11 +33,16 @@ navigation or a native control. Tool selection, pressure response and navigation
 rules remain shared. Native widgets retain their own focus, text editing and
 accessibility behavior.
 
-Canvas pen side buttons have no action. Pressing or releasing them must not
-interrupt, finish, or restart a tip/eraser stroke, or start mouse navigation.
-Tip contact still begins and ends normally while a side button stays held.
-Adapters filter native button transitions before gesture arbitration and preserve
-tip/eraser identity; mouse navigation buttons keep their existing behavior.
+Pen side buttons arrive as `pen_button` input, never as pen samples, and do
+nothing until the artist binds them ([pen buttons](../ui/settings.md#touch-gestures-and-pen-buttons)).
+Pressing or releasing one must not interrupt, finish or restart a tip or eraser
+stroke, or start mouse navigation; a bound tool change applies after the stroke
+ends. Adapters filter native button transitions before gesture arbitration and
+preserve tip and eraser identity.
+
+Some pens, such as the Wacom Pro Pen 3 on Android, report the final up event at
+the last move's position with nonzero pressure. Adapters keep the raw values;
+the brush's pressure-fall limit shapes the lift taper.
 
 Native control pickup follows the [drag and reorder convention](../ui/drag-and-reorder.md).
 Preserve actual device identity: pen requires the touch-style hold before list
@@ -63,7 +68,7 @@ paint state.
 
 An estimated-sample correction is different: it updates an earlier observation,
 such as Apple Pencil pressure or position that UIKit initially estimated. The
-[correction model](../../crates/layer-core/src/input_corrections.rs) preserves sample
+[correction model](../../crates/layer-engine/src/corrections.rs) preserves sample
 identity and allows the affected stroke data to be revised and replayed.
 
 The [detailed feedback reference](../reference/instant-stroke-feedback.md) records

@@ -4,7 +4,7 @@
 Run on an otherwise idle checkout; do not edit/build concurrently. Outputs are
 ignored artifacts, and the source edit is restored even when a build fails.
 The generated Cargo overrides affect workspace packages only, preserving cached
-third-party release dependencies. See docs/development/rust-build-times.md.
+third-party release dependencies. See docs/development/environment.md.
 """
 
 import argparse

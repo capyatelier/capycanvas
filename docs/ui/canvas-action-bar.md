@@ -4,7 +4,7 @@
 
 The canvas action bar shows the next steps for the object being edited, beside it. It is an accelerator: every item is an ordinary command, so the menus, Tool Options and command search stay complete, and each item keeps its shared validation and one-step history.
 
-Status: shared model, GTK, Web, Android, Windows, macOS and iPadOS hosts implemented. Bar menu items open on GTK, Web, Android, macOS and iPadOS; until Windows opens them, it runs the item's primary command or shows its choice. The mode and guide bars need no host code of their own; their journeys are tested on GTK, Web and Android.
+Every host presents the bar. Bar item menus open on GTK, Web, Android, macOS and iPadOS; Windows runs the item's primary command or shows its choice instead. The mode and guide bars need no host code of their own.
 
 ## Contexts
 

@@ -72,7 +72,7 @@ A vector layer that owns ordinary paint pages would need no compositor changes.
 
 Spacing depends on the brush type:
 - Stamp brushes are placed by distance (`spacing` as a fraction of diameter).
-- Swept "contact" brushes (pencil, charcoal, ink) use an online simplifier with a tolerance of 0.25 px or 1% of the radius (`docs/development/contact-brush-engine.md`).
+- Swept "contact" brushes (pencil, charcoal, ink) use an online simplifier with a tolerance of 0.25 px or 1% of the radius (`docs/internals/contact-brush-engine.md`).
 
 Prediction (`crates/layer-engine/src/feedback.rs` and `feedback/motion_fit.rs`) only ever produces replaceable preview batches and never reaches the document.
 
@@ -108,7 +108,7 @@ The limits on this determinism:
 
 History accounting (`HistoryEntry::new`, `lib.rs:1793-1850`) serializes each layer's metadata to JSON and multiplies by 4. Big shared content has to be charged by `Arc` identity, as selections already are (`lib.rs:1820`). Otherwise every edit to a vector layer would cost O(content) to add up.
 
-**Where vector data fits.** Give `Layer` a new field such as `vector: Option<Arc<VectorContent>>`, or add a new `LayerKind::Vector` that carries it. The small parts (object list, styles, a table of deduplicated `BrushSnapshot`s, transforms) go in JSON. Point and control-point arrays go in LZ4 blobs through a `VectorIndex`. The raster revision stays as the persisted cache. Undo is `ReplaceLayer` with `Arc`-shared object lists, plus `SetRaster` to a pending revision. On the web, the worker protocol detaches binary data before transfer (`docs/development/binary-payloads.md`), so new payloads need the same treatment.
+**Where vector data fits.** Give `Layer` a new field such as `vector: Option<Arc<VectorContent>>`, or add a new `LayerKind::Vector` that carries it. The small parts (object list, styles, a table of deduplicated `BrushSnapshot`s, transforms) go in JSON. Point and control-point arrays go in LZ4 blobs through a `VectorIndex`. The raster revision stays as the persisted cache. Undo is `ReplaceLayer` with `Arc`-shared object lists, plus `SetRaster` to a pending revision. On the web, the worker protocol detaches binary data before transfer (`docs/internals/binary-payloads.md`), so new payloads need the same treatment.
 
 ## 4. Tools, selection and geometry
 

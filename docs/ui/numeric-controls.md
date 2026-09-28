@@ -1,8 +1,8 @@
 # Numeric controls
 
-[Technical documentation](../README.md)
+[Workspace and UI](README.md)
 
-GTK, web and Android share the same touch-first numeric controls.
+Every host shares the same touch-first numeric controls.
 
 - Small-range integers: label left, a conventional spin control right. GTK
   uses `GtkSpinButton` in panels and `AdwSpinRow` in Preferences.
@@ -52,36 +52,23 @@ of brush area, not quadratic diameter response.
 literals and diagnostic printing are rejected. The evaluator has no host I/O.
 The resulting number goes through the existing typed app/preference action,
 which remains authoritative for availability, dependencies, application and
-persistence. The separate legacy preference-slider action has been removed.
+persistence.
 
 GTK calls the policy directly; web uses `WebApp.number_input`; Android uses
 the stateless `Native.number` JNI call, and Windows uses `capy_number`. No GPU handle/lock or UI-state snapshot
 is needed to evaluate a number. Hosts own native focus, gesture capture,
 unfinished text and transient display state only.
 
-## Validation
+## Checks
 
-`native_number_controls` is an ignored Wayland widget test and produces a
-dark/light review sheet in `artifacts/ui/numeric/`. Settings screenshots are
-in `artifacts/ui/preferences/`; Android instrumented tests also cover native
-editing, expression evaluation, slider geometry and settings input isolation.
-`native_slider_feedback` covers fractional model echoes and a full forward/back
-brush-size sweep through the GTK session. Model refreshes do not emit edits;
-deferred GTK range changes compare values at the core's numeric resolution,
-avoiding f64/f32 rounding feedback loops on the main thread.
-No drawing renderer or input hot path changes are part of this UI work.
+`native_number_controls` (an ignored Wayland widget test) writes a dark/light
+review sheet to `artifacts/ui/numeric/`. `native_slider_feedback` sweeps brush
+size forward and back through the GTK session: model refreshes do not emit
+edits, and deferred GTK range changes compare values at the core's numeric
+resolution, avoiding f64/f32 rounding loops. Android instrumented tests cover
+native editing, expression evaluation, slider geometry and settings input
+isolation.
 
 References: [GTK Scale](https://docs.gtk.org/gtk4/class.Scale.html),
 [Adwaita SpinRow](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1-latest/class.SpinRow.html),
 [Compose Slider](https://developer.android.com/develop/ui/compose/components/slider).
-
-## Entering Zen
-
-Enabling Zen immediately hides editor chrome. The core suppresses hover reveal
-inside a fixed 300 × 300 logical-pixel top-left guard until the pointer leaves
-it; this prevents the activating button from revealing itself again. This is
-not configurable. A fresh deliberate contact re-enables normal edge reveal for
-touch users. Subsequent docking, drawer and drag visibility use the existing
-shared interaction rules. Edge reveal is fixed at 80px and the control-relative
-keep-visible margin at 40px. Neither is exposed as a preference; older saved
-distance preferences are discarded on load.

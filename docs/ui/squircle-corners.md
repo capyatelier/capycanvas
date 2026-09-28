@@ -78,8 +78,7 @@ Blurred outset shadows never reach GTK's analytic box-shadow shader. In GTK
 NVIDIA, including the 9.72px drawer radius with its 24px blur. HDR windows
 render in float, so Mutter shows those pixels as black boxes; SDR loses the
 shadow there. Each shadow style (corner radii, blur, offset and scale) is
-instead blurred once on the CPU, about 2 ms for the drawer shadow at 2×, and
-drawn as nine cached slices. Shapes too small for the slices use a GSK blur
+instead blurred once on the CPU and drawn as nine cached slices. Shapes too small for the slices use a GSK blur
 node.
 `squircle::Popover` applies the same conversion to the brush-size preview.
 Subtrees that must stay round are drawn through `squircle::append_round`.
@@ -98,10 +97,9 @@ columns, drawers and segmented controls draw the exact squircle as their fill,
 with a cached shadow outside it, and clip content only with the fitted circular
 radius. Tabbed groups draw their strip and body as separate squircle segments,
 and glass regions publish the same design radii with `BackdropRegion::SQUIRCLE`.
-Core
-Animation applies circular clips directly; a squircle path clip is an
-offscreen mask on every composited frame, which halved the Mac ink rate
-beside a live canvas. Clipping does not narrow SwiftUI hit testing, and
+Core Animation applies circular clips directly; a squircle path clip is an
+offscreen mask on every composited frame, which is too slow beside a live
+canvas. Clipping does not narrow SwiftUI hit testing, and
 squircled controls use their whole bounds or the same shape as their content
 shape. Open drawers publish their source bounds and
 direction, and panel groups, collapsed columns and drawer bodies square the
@@ -116,25 +114,19 @@ bars, chips, document tabs and toolbar tiles keep WinUI's circular
 `CornerRadius` at the fitted radius (design radius × 0.54), as on Web without
 `corner-shape`. Panel content clips with the fitted circle.
 
-## Validation
+## Checks
 
-- GTK: `tools/performance/workspace-motion.sh gtk` with
-  `--native-test=native_squircle_corners` (corner picks reach tiles,
-  shadowed subtrees convert and blurred drawer shadows stay finite; add
-  `GDK_DEBUG=color-mgmt MUTTER_DEBUG_FORCE_HDR=1` for the HDR path),
-  `--native-test=native_toolbar_visual_audit_input`, `--drawer-style` and
-  `--drag-pickup`. `--workspace-motion` presentation rate
-  is unchanged by the conversion.
+- GTK: `tools/performance/workspace-motion.sh gtk --native-test=native_squircle_corners`
+  (corner picks reach tiles, shadowed subtrees convert and blurred drawer shadows
+  stay finite; add `GDK_DEBUG=color-mgmt MUTTER_DEBUG_FORCE_HDR=1` for the HDR
+  path), plus `--drawer-style` and `--drag-pickup`.
 - Web: `apps/layer-web/test.mjs` with `--drawer-style`, `--toolbar-components`,
   `--compact-workspaces`, `--tab-styles` and `--title-bar-state`.
-- Apple: `bash apps/layer-apple/scripts/test-project-files.sh
-  apps/layer-apple/tests/squircle-geometry.swift` checks the corner formula,
-  clamping, joined drawer sources and source-corner flattening; the Mac and
-  iPad `testToolbarComponents`, `testColumnStacks`, `testTitleBarToolDrawers`
-  and `testColorPicker` journeys attach the drawer, column and title-bar
-  captures.
+- Apple: `bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/squircle-geometry.swift`
+  checks the corner formula, clamping and source-corner flattening; the
+  `testToolbarComponents`, `testColumnStacks`, `testTitleBarToolDrawers` and
+  `testColorPicker` journeys attach captures.
 - Android: `AndroidInteractionTest` `drawerButtonsAndBridgesKeepTheirColors`,
   `drawerTabsKeepActiveColorsAndPadding`,
   `collapsedIconsKeepTheirSourceWhenDrawerTabsAreVisible` and
-  `toolbarComponentsAcrossDevicesAndLayouts`, plus `AndroidTitleBarTest` in
-  the landscape orientation recorded by its acceptance.
+  `toolbarComponentsAcrossDevicesAndLayouts`, plus `AndroidTitleBarTest`.

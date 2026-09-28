@@ -38,7 +38,7 @@ geometry, so resizing, rotation and divider drags restyle tiles during
 layout-only updates. GTK rebuilds an affected strip once, on idle after the
 allocation that crossed a threshold.
 
-Sketch's default places size and opacity in the centered left region on every host.
+Sketch's default places size and opacity in the centered left region.
 Dragging the handle to the centered right target moves the same toolbar there.
 Saved layouts keep their toolbar placement until Restore Starting Layout.
 
@@ -48,23 +48,14 @@ identity, detach, validation, and workspace history paths. Rust owns target
 selection, stacking order, alignment, sizing and layout publication. GTK, Web,
 Android, macOS, iPadOS and Windows use their existing native handles and drag capture.
 
-Validation includes all edges and tile styles, collisions in small windows,
-reduced presentation at every anchor and resize threshold, round trips,
-conservative migration, rejection of content/tab groups, stacking and returning
-to full edge/floating layouts. Native checks use
-`tools/performance/workspace-motion.sh gtk` with:
+## Checks
 
-- `--native-test=native_compact_toolbar_edges_input` for mouse/touch docking,
-  gradual approaches and live previews, stacking, full-height targets and
-  one-step undo/redo.
-- `--native-test=native_compact_toolbar_edges_pen_input --tablet` for the same
-  handle workflow with GDK pen contacts.
-- `--native-test=native_compact_toolbar_presentation_input` for Sketch's
-  Medium toolbar shrinking to one Small column at 960×600 and returning to
-  Medium when the window grows, with matching tile and icon sizes.
-
-The Web `--toolbar-components` journey and Android
-`toolbarComponentsAcrossDevicesAndLayouts` test drag actual handles into every
-edge/start/center/end target with mouse, touch and pen, then verify one-step
-undo/redo. See [toolbar validation](toolbar-components.md#validation) for the
-browser-on-tablet harness and native test setup.
+GTK native tests through `tools/performance/workspace-motion.sh gtk --native-test=`:
+`native_compact_toolbar_edges_input` (mouse and touch docking, previews,
+stacking and one-step undo), `native_compact_toolbar_edges_pen_input --tablet`,
+and `native_compact_toolbar_presentation_input` (Sketch's Medium toolbar
+shrinking to one Small column at 960×600 and returning). The Web
+`--toolbar-components` journey and Android
+`AndroidInteractionTest#toolbarComponentsAcrossDevicesAndLayouts` drag real
+handles into every edge target with mouse, touch and pen; see
+[toolbar checks](toolbar-components.md#checks).

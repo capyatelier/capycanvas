@@ -3,75 +3,61 @@
 [Technical documentation](../README.md)
 
 Start by building one client. Shared Rust changes can usually be developed with
-that client and focused crate tests; you do not need every platform SDK installed.
-The [architecture guide](../architecture.md) explains the code boundaries before
-you choose where to make a change.
+that client and focused crate tests; you do not need every platform SDK. Read the
+[architecture guide](../architecture.md) before choosing where to make a change,
+and follow the rules in [`AGENTS.md`](../../AGENTS.md) and the
+[commit guide](../COMMIT_GUIDE.md).
 
-Before contributing, install the commit and push guards with
-`sh tools/git/install-hooks.sh` and follow the [commit guide](../COMMIT_GUIDE.md).
+## Working here
+
+| Guide | Covers |
+| --- | --- |
+| [Environment](environment.md) | Worktrees, build directories, build profiles, test state, ports and environment variables on a shared machine. |
+| [Devices](devices.md) | The test tablets and how to reserve them, the Windows VMs and PC, Apple hardware. |
+| [Testing](testing.md) | Which checks to run for each kind of change, and known failures on `main`. |
+| [Writing](writing.md) | Where docs belong, their style, UI text and handoffs. |
+| [Publication](publication.md) | Licensing, dependencies and distribution checks. |
+| [GPU benchmark workloads](gpu-raster-benchmarks.md) | Offscreen GPU workloads for comparing revisions. |
+| [Stroke recording](stroke-recording.md) | Recording tablet input and replaying it for predictor comparisons. |
 
 ## Build a client
 
-Run the commands in these guides from the repository root unless stated otherwise.
-Use a recent stable Rust toolchain. The workspace uses Rust 2024, and dependencies
-may require a newer compiler than the edition's minimum. Keep `Cargo.lock` intact
-when reproducing a build.
+Run commands from the repository root unless a guide says otherwise. Use a recent
+stable Rust toolchain; the workspace uses Rust 2024. Pass `--locked` and keep
+`Cargo.lock` intact.
 
-| Platform | Setup and build instructions |
+| Platform | Guide |
 | --- | --- |
-| Linux | [GTK4/libadwaita, Wayland and Vulkan](linux.md). This is the primary UI development client. |
-| Web | [WebAssembly, DOM and WebGPU](web.md), with a separate [static/PWA packaging reference](web-packaging.md). |
+| Linux | [GTK4/libadwaita, Wayland and Vulkan](linux.md). The primary UI development client. |
+| Web | [WebAssembly, DOM and WebGPU](web.md), with [static/PWA packaging](web-packaging.md). |
 | Android | [Kotlin/Compose, Android SDK/NDK and Rust JNI](android.md). |
 | macOS and iPadOS | [Xcode, AppKit/UIKit, Swift and the Rust Metal bridge](apple.md). |
-| Windows | [WinUI 3, C++/WinRT and the Rust D3D12 bridge](windows.md). |
+| Windows | [WinUI 3, C++/WinRT and the Rust D3D12 bridge](windows.md), or [a VM from Linux](windows-vm.md). |
 
-Painting requires a hardware GPU. Building code or running pure model tests does
-not establish that a machine can run the canvas. Native clients also need their
-platform's windowing environment and SDK; a workspace-wide build is not a
+Painting requires a hardware GPU. Building code or running model tests does not
+show that a machine can run the canvas, and a workspace-wide build is not a
 substitute for the platform build scripts.
 
 ## Find the right place to change
-
-UI changes must follow the [agent interaction rules](../../AGENTS.md) and the
-[drag and reorder convention](../ui/drag-and-reorder.md). Classify the hit surface
-and input device before choosing a gesture recognizer; existing implementations
-still have [documented gaps](../ui/drag-inventory.md).
 
 | Change | Start here |
 | --- | --- |
 | Layer semantics, edit history or saved drawing data | [Documents and edits](../internals/documents.md), then `layer-core`. |
 | Stroke placement, pressure or brush dynamics | [Brushes](../internals/brushes.md), then `layer-engine`. |
-| Pixel operations, blend behavior or GPU performance | [Rendering](../internals/rendering.md), then `layer-render-wgpu`. |
-| Tools, commands, docking or customization | [Workspace and UI](../ui/README.md), then `layer-ui` and the affected frontend. |
+| Pixel operations, blend behaviour or GPU performance | [Rendering](../internals/rendering.md), then `layer-render-wgpu`. |
+| Tools, commands, docking or customization | [Workspace and UI](../ui/README.md), then `layer-ui` and the affected client. |
 | Preferences or shortcut rules | [Settings](../ui/settings.md), then the shared definitions. |
-| Native widgets, input collection, surfaces or file pickers | [Platform integration](../platforms/README.md), then the relevant app under `apps/`. |
-| A runtime filter | The [JSON/WGSL contract](../reference/runtime-filters.md) and [Tent Blur example](../../examples/filters/tent-blur). |
+| Native widgets, input collection, surfaces or file pickers | [Platform integration](../platforms/README.md), then the client under `apps/`. |
+| A runtime filter | The [JSON/WGSL contract](../reference/runtime-filters.md) and the [Tent Blur example](../../examples/filters/tent-blur). |
+| Porting a feature to Apple or Windows | The [Apple](../APPLE_PORTING_GUIDE.md) and [Windows](../WINDOWS_PORTING_GUIDE.md) porting guides. |
 
-Native bridges live with their hosts. The shared UI can also be called directly
-from Rust or WebAssembly bindings.
+New UI is built on GTK first, then Web, then the native clients; the
+[platform guide](../platforms/README.md#development-workflow) explains the order
+and how parity is checked.
 
-The [shared workflow centralization handoff](shared-workflow-centralization-handoff.md)
-tracks portable color/photo, export, profile-library and recovery rules that Web
-and Android should consolidate before Windows adds the same workflows.
+## Work in progress
 
-The [canvas action bar and transforms plan](canvas-action-bar-transforms.md)
-sequences Phase 1 of the [photo editing build list](../history/photo-editing-research.md):
-the contextual bar on every host and one transform session with Distort and Warp.
-
-[Stroke recording and prediction datasets](stroke-recording.md) explains how to
-collect tablet input from Diagnostics and replay it for predictor comparisons.
-
-## Validate a change
-
-The [testing guide](testing.md) separates model tests, native interaction checks
-and GPU measurements. Use checks relevant to the behavior you changed, then test
-on the affected hosts. A shared test cannot establish native widget parity or
-physical pen behavior.
-
-[Rust build timings](rust-build-times.md) profiles cached GTK, Web and Android
-rebuilds after a shared-core edit and compares optimized incremental settings.
-
-Generated builds, screenshots and traces belong in ignored output directories,
-not in source commits. The [publication guide](publication.md) covers licensing
-and distribution checks. Contribution priorities are in the
-[root README](../../README.md#contributing).
+- [Photo editing, milestones 2 to 4](photo-editing-m2-m4.md) continues the
+  [photo editing build list](../history/photo-editing-research.md).
+- [Canvas action bar and transforms](canvas-action-bar-transforms.md) is Phase 1
+  of the same list.

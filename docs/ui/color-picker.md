@@ -1,7 +1,7 @@
 # Color picking
 
-Implemented on GTK, Web, Android, macOS, iPadOS and Windows, September 2026.
-GTK was reviewed before the Web and Android rollout.
+[Workspace and UI](README.md) · [Color palettes](color-palettes.md) ·
+[Color-management journeys](color-management.md)
 
 ## Research
 
@@ -13,7 +13,17 @@ GTK was reviewed before the Web and Android rollout.
 | [Krita](https://docs.krita.org/en/reference_manual/tools/color_sampler.html) | Temporary Ctrl access, visible/active-layer sampling, average radius, foreground/palette destinations and channel information. Blend percentage mixes the sample with the current paint. |
 | [Clip Studio Paint](https://help.clip-studio.com/en-us/manual_en/810_subtools/E.htm) | Current layer, top painted layer, or image sampling; layer exclusions and an adjustable average area. Optional magnifying circle follows hover, with sampled color above and current paint below. |
 
-## End state
+## Color panel
+
+The Color panel offers an Okhsv circle, an HSV square and an HLS triangle;
+switching shapes keeps the sRGB paint. Only the circle's hue ring is rotated,
+24° counterclockwise, so its blue sits where HSV's does. The readout shows the
+shape's units or RGB, and tapping its label toggles them. Picker coordinates
+are kept per paint, so neutral colors keep their hue. Hit testing, conversions,
+component values and the selected swatch live in Rust
+([`color.rs`](../../crates/layer-ui/src/color.rs)).
+
+## Picker
 
 One tool family has two presentations: **Color Picker** (default glass loupe)
 and **Eyedropper** (small pipette cursor). Sample area and source are settings,
@@ -26,7 +36,7 @@ While editing Quick Mask or a selection layer, the picker previews and updates
 the mask's painting colors, preserving the artwork colors. Returning to artwork
 cancels any pending sample.
 
-The Sketch toolbar gains a picker with a plain squircle icon between size and
+The Sketch toolbar has a picker with a plain squircle icon between size and
 opacity, followed by Undo and Redo below opacity. Its tile uses the standard
 toolbar styling and joins the open drawer with square corners. Press it
 or **I** to enter temporary picking; mouse/pen hover previews, mouse press
@@ -123,18 +133,7 @@ Point sampling bypasses this conversion and stays exact, including HDR values.
 Unrelated colors can still lose saturation: a true average cannot promise to
 preserve the saturation of arbitrary contrasting colors.
 
-## Changes from the previous implementation
-
-- Replace visible/layer and small-area subtool entries with presentation styles
-  and actual settings.
-- Replace contact-only color updates with separate hover preview and commit.
-- Add temporary tool restoration, touch hold arbitration and the glass loupe.
-- Retain the bounded asynchronous GPU sampler and coalesce hover requests;
-  reject stale results after source changes, cancellation and tool switches.
-  Hover displays completed samples while coalescing movement; acceptance uses
-  the exact contact point, so rapid hover cannot starve the preview.
-- Add the Sketch picker and history buttons conservatively to untouched included
-  layouts; preserve customized workspaces.
+## Scope
 
 Navigator sampling is explicitly excluded because it would conflict with its
 existing navigation. Reference-panel sampling is a future extension. Desktop
@@ -143,111 +142,32 @@ color mixing are separate workflows and are deferred rather than crowding this
 drawer. The existing color panel already supplies numeric inspection and color
 library access.
 
-## Validation
+## Checks
 
-- Resting-contact regressions run in the shared picker tests,
-  `native_color_picker_input` on GTK, `--color-picker` in the Web desktop/device
-  harnesses, and Android's
-  `AndroidColorPanelTest#pickerRetiresRestingContactsAndPendingHolds` with
-  `-e systemInput true`. They cover toolbar entry during contact, pending holds,
-  release/cancellation, inert subsequent single-finger drags, and continued
-  two-finger navigation. Shared tests also cover pointer-kind ID collisions and
-  terminal cleanup during blocked routing.
+```sh
+LAYER_NATIVE_EVENT_MS=60 tools/performance/workspace-motion.sh gtk --native-test=native_color_picker_input --tablet
+LAYER_NATIVE_EVENT_MS=8 LAYER_MOTION_VIEWPORT=4800x3000 LAYER_MOTION_SCALE=3 \
+  tools/performance/workspace-motion.sh gtk --native-test=native_color_picker_preview_pacing
+tools/performance/workspace-motion.sh gtk --color-panel      # or web
+node apps/layer-web/test.mjs --color-picker                   # device.test.mjs --color-picker on a tablet
+./apps/layer-windows/scripts/exercise-color-picker.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
+```
 
-- GTK release build: `cargo build --locked --release -p layer-linux`.
-- Shared UI/host/workspace library coverage includes reversible hover,
-  exact acceptance during rapid motion, stale readbacks, transparent
-  samples, tool restoration, touch ownership, source switching and Navigator
-  navigation. Temporary picking is omitted from saved workspace tool state.
-- GPU checks cover circular Oklab averages, sRGB/Display P3, alpha weighting,
-  signed/HDR values and exact points. Existing point/area, imported-source and
-  cold-paint sampling regressions pass.
-- Native GTK checks use the isolated Mutter driver with a virtual tablet:
-  `LAYER_NATIVE_EVENT_MS=60 tools/performance/workspace-motion.sh gtk --native-test=native_color_picker_input --tablet`.
-  They exercise real mouse/pen/touch, pen-up acceptance, crosshair-centered touch,
-  source feedback, double press, both themes, native dropdown clicks/taps,
-  Sketch's settings-only drawer, Paint/Photo categories, retained settings, Undo/Redo,
-  live wheel preview, the traditional cursor, and hold-before-drag for all three
-  devices, plus cancellation when another window gains focus. Popup checks run
-  before synthetic tablet injection, whose serials cannot authorize compositor
-  popup grabs. Generated screenshots belong under ignored `artifacts/`, not in git.
-- Apple: the `picker` and `inspection` bridge tests in `cargo test --locked -p layer-apple
-  --target aarch64-apple-darwin --lib` cover mouse hover preview and press acceptance,
-  pen contact preview and lift acceptance, `cursor_leave` versus pointer cancel,
-  finger holds sampling above the contact, second-finger source toggling, sole-contact
-  admission, preview publication and circular/point samples from visible and layer
-  sources. The `testColorPicker` XCUITest journey (`ColorPickerChecks.swift`) runs on
-  macOS and a physical iPad: toolbar and Sketch entry, hover preview while leaving the
-  canvas, mouse acceptance, finger-tap cancellation, long-press sampling, neutral
-  shortcuts, Sketch's toolbar order and the double-press settings drawer.
-- The existing `native_drawer_dismissal_input` regression also passes in both
-  themes with mouse and touch, preserving other drawers' dismissal behavior.
-- `native_color_picker_preview_pacing` moves continuously across painted hues
-  with the wheel hidden and visible, in SDR and Float16 documents. It checks the
-  final field texture, preview restoration, and Show footer's HDR badge behavior.
-  It records actual compositor presentation intervals and GTK paint time, as well
-  as raster CPU time; counting fewer field rebuilds alone did not detect the lag.
-  Reproduce at 3× scaling with `LAYER_NATIVE_EVENT_MS=8
-  LAYER_MOTION_VIEWPORT=4800x3000 LAYER_MOTION_SCALE=3
-  tools/performance/workspace-motion.sh gtk --native-test=native_color_picker_preview_pacing`.
-  Use `3200x2000` and scale `2` for the corresponding 2× check. These are small
-  drawing fixtures on a virtual SDR display, not physical HDR-display or
-  large-document qualification. With a 120 Hz virtual monitor at 3×, the final
-  run measured 120 fps with the panel closed, 120 fps with the SDR wheel open,
-  and 119 fps with the HDR wheel open; presentation-gap p95 stayed at 8.5 ms.
-  GTK paint p95 was 3.1 ms for SDR and 5.2 ms for HDR on the NVIDIA Vulkan host.
-- `native_solid_colors_match_tagged_textures` compares native fills against
-  managed textures through GTK's GPU renderer, including Display P3, transparent
-  colors, and HDR-to-SDR rendition. The existing native color-panel and HDR-picker
-  regressions cover the retained readouts, controls, and field/arc rendering.
-- Web release build: `apps/layer-web/build.sh`. The shared
-  `apps/layer-web/color-picker.test.mjs` runs through `test.mjs --color-picker`
-  on a composited desktop and `device.test.mjs --color-picker` on the Huion.
-  It checks keyboard entry/cancel, Sketch toolbar order, both drawer layouts,
-  settings, real red-paint sampling, pen-up acceptance, touch offset/source/cancel,
-  and a visible wheel preview without synchronous field or workspace rebuilds.
-  The existing color-panel regression covers 60 layouts, both themes, three
-  shapes, and mouse/touch/pen/keyboard input. Use a composited browser for GPU
-  screenshots; headless captures can omit the canvas surface.
-- Web performance uses `tools/performance/web-pen.mjs --os-input --picker`
-  with a dedicated tablet test origin and CDP endpoint. Build/push
-  `tools/performance/AndroidPenMotion.java` as described in
-  [the Huion pen guide](../development/web-pen-huion-2026-09-20.md), or set
-  `LAYER_PEN_HELPER` to the dedicated device dex path. The replay remains clear
-  of the floating color panel. `LAYER_PICKER_SAMPLE_SIZE=101` exercises the
-  largest sample. On the 90 Hz Huion, three alternating five-second point-sample
-  runs measured 78.5–79.9 canvas submissions/sec with the wheel closed and
-  73.3–73.9 open; input-to-submit p95 was 26.3–26.5 ms closed and 27.2–27.8 ms
-  open. Frame CPU p95 was 2.3–2.8 ms. These are submission and input timings,
-  not compositor presentation measurements. No synchronous wheel rasters or
-  workspace model rebuilds occurred during these runs. A five-second 101-pixel
-  run measured 75.5 submissions/sec closed and 64.7 open, with input-to-submit
-  p95 of 27.9 and 27.6 ms respectively. Large-area averaging and browser
-  composition still cost throughput on this tablet; an additional preview timer
-  did not recover it, so the Web port retains display-paced updates.
-- Windows: `apps/layer-windows/scripts/exercise-color-picker.ps1 -Executable
-  artifacts/windows/Release/CapyCanvas.exe` drives the production app with
-  OS-injected mouse, pen and touch. It checks **I**/Escape, Sketch toolbar order,
-  double-press into the explicit Sketch drawer and the two-column Paint drawer,
-  the Source and Sample size choices, reversible pen and mouse hover, pen-lift
-  and mouse-press acceptance, finger-tap cancellation, touch-and-hold with the
-  lifted sample and second-finger source toggle, and a Paint hover sweep with no
-  workspace rebuilds or UI-thread field rasters. Synthetic pens leave range
-  without frames, so it keeps them hovering while waiting, as a physical pen does.
-  `exercise-canvas-touch.ps1` covers a finger lifted under a modal dialog.
-- Android builds with `:app:assembleDebug :app:assembleDebugAndroidTest`.
-  `AndroidColorPanelTest#glassPickerInputAndSettings` and
-  `#pickerWheelPreviewPerformance`, with instrumentation argument
-  `-e systemInput true`, exercise production Compose/Rust and OS-injected
-  stylus, touch and keyboard input on the Huion. The performance test alternates
-  a visible and hidden wheel at the 101-pixel setting with 200 Hz hover input;
-  it records frame CPU time and publication counters in the app's validation
-  directory. On the Huion, 101-pixel samples measured median frame CPU time of
-  4.6 ms closed and 4.8–5.1 ms open, with p95 below 9.6 ms and no full snapshot
-  or panel-content publications during hover. Test workspace/settings storage
-  is isolated from user preferences.
-  The existing `touchPenAndMousePickWithoutHoldAndKeepCapture` regression also
-  passes through View dispatch, including intentionally invalid post-cancel
-  motion that Android's OS injector correctly refuses to deliver.
-  These device checks use typed input replay, not a person moving the pen, and
-  do not qualify physical HDR output or very large documents.
+- `native_color_picker_input` drives mouse, pen and touch in both themes. Popup
+  checks run before synthetic tablet injection, whose serials cannot authorize
+  compositor popup grabs.
+- `native_color_picker_preview_pacing` moves across painted hues with the wheel
+  hidden and shown, in SDR and Float16 documents, and records compositor
+  presentation intervals and GTK paint time; counting field rebuilds alone does
+  not detect lag. Use `3200x2000` and scale `2` for the 2× check.
+  `native_solid_colors_match_tagged_textures` compares native fills with managed
+  textures.
+- Android runs `AndroidColorPanelTest#glassPickerInputAndSettings`,
+  `#pickerWheelPreviewPerformance` and `#pickerRetiresRestingContactsAndPendingHolds`
+  with `-e systemInput true`. Apple runs the `picker` and `inspection` tests in
+  `cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib` and the
+  `testColorPicker` journey.
+- Web pen timing uses `tools/performance/web-pen.mjs --os-input --picker`
+  (`LAYER_PICKER_SAMPLE_SIZE=101` for the largest sample); see
+  [measuring](../performance/measuring.md). Large-area averaging still costs
+  throughput on tablets, so the Web port keeps display-paced updates.

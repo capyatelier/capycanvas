@@ -1,10 +1,10 @@
 # Color-management user journeys and product requirements
 
-[Workspace and UI](README.md) · [Implementation plan](../history/color-management-research.md) ·
-[Delivery milestones](../history/color-management-milestones.md)
+[Workspace and UI](README.md) · [Open and import](open-and-import.md) ·
+[Color picking](color-picker.md)
 
-**Reassessed proposal, 2026-09-13; not implemented.** Start with the work a
-painter, illustrator or photographer needs to finish. Existing APIs and GPU
+These journeys set the product requirements for color management. They start
+with the work a painter, illustrator or photographer needs to finish. Existing APIs and GPU
 formats determine implementation effort; they do not determine which user
 workflows deserve support. The new project format stores editable raster content;
 old Capy projects and legacy code paths are not supported.
@@ -32,7 +32,7 @@ they do not establish that every photographer needs the same default depth.
 | WhiteWall supplies profiles specifically for proofing and instructs users not to convert/embed them in delivery files. [Lab instructions](https://service.whitewall.com/hc/en-us/articles/213813645-Does-WhiteWall-offer-color-management-ICC-color-profiles). | Store proof and delivery targets separately; obey the lab's actual specification. |
 | Lightroom separates HDR editing from the SDR rendition used for viewing/export. [HDR workflow](https://helpx.adobe.com/lightroom/desktop/edit-photos/hdr-output.html). | HDR needs intentional SDR delivery and useful viewing on SDR hardware. |
 
-**Decisions corrected by the reassessment**
+**Decisions**
 
 - 8-bit is a standard editing option, including in Display P3 and Adobe RGB SDR
   documents. Wide gamut does not require float storage or HDR. Higher precision
@@ -334,7 +334,7 @@ can edit on an SDR monitor without silently losing HDR source data.
 
 **Proof** is a dockable panel with a common **Off / SDR / Print** segmented
 control. In the Paint and Photo
-starting layouts it shares Color's tab group. Drag its tab to float or relocate
+starting layouts it follows Navigator in its tab group. Drag its tab to float or relocate
 it using the normal workspace controls. SDR documents offer Off / Print.
 
 For HDR artwork, **Proof → SDR** uses a circular control. Its glass-like field
@@ -362,13 +362,8 @@ it. Escape cancels an adjustment. The small refresh icon resets all appearance
 controls while preserving the stored HDR range. Reset returns the circle to its
 center. There are no older algorithm modes or custom-recipe placeholders.
 The glass field is a fixed direction guide. Use the canvas and export preview
-to judge the image. The
-[algorithm, fixtures and qualification notes](../history/color-management-local-tone.md)
-explain the bounded local-Laplacian approximation and its limits.
-The [circular-control review](../history/color-management-proof-dial.md) records
-its original geometry. The [contrast update](../history/color-management-contrast-dial.md)
-records the contrast model. The [Proof polish review](../history/color-management-proof-polish.md)
-records the centered treatment, input fix and current validation.
+to judge the image. The texture balance uses a bounded local-Laplacian
+approximation.
 
 Changes are live, saved document edits, with one undo step per slider gesture.
 **Off** restores normal viewing without discarding the saved SDR rendition.
@@ -387,22 +382,22 @@ prepares asynchronously with cancellation
 and retains the previous recipe if validation fails. View simulation and gamut
 warnings never enter artwork or export. The master saves one print recipe;
 Export's deliberate **Use print profile** action converts delivery pixels and
-tags them correctly. Normal sharing keeps its chosen RGB delivery profile. See
-the [mapping research and validation](../history/color-management-proof-export-update.md).
+tags them correctly. Normal sharing keeps its chosen RGB delivery profile.
 
-Export offers **HDR JPEG**, **HDR with transparency · AVIF**, **HDR native · PNG**,
-or **SDR** in one Output selector. The pinned Linux codecs regenerate one gain
-map from edited HDR and authored SDR at the final size; JPEG carries ISO and
-Ultra HDR metadata for that map. The HDR/SDR preview shows decoded output and
-its actual embedded base. Transparency recommends AVIF; JPEG requires explicit
-flattening. Size, Color & transparency and Preset have separate detail pages.
+HDR documents export **HDR JPEG**, **HDR AVIF with transparency**, **HDR PNG ·
+BT.2020 PQ** or **OpenEXR · 32-bit float**; SDR delivery offers PNG, TIFF, JPEG
+and WebP. [`export.rs`](../../crates/layer-ui/src/export.rs) owns the valid
+combinations. Gain-map outputs regenerate one gain map from the edited HDR and
+the authored SDR rendition at the final size, and the SDR base is the Proof
+rendition, so the fallback is predictable. JPEG carries ISO and Ultra HDR
+metadata for that same map. The HDR/SDR preview shows decoded output and its
+actual embedded base. Transparency recommends AVIF; JPEG requires explicit
+flattening onto white or black. HDR PNG is a native HDR route with alpha, not a
+float archive. Size, Color & transparency and Preset have separate detail pages.
 
-GTK's review implementation uses linear half-float storage with Float32
-processing and fixed reference white of 203 cd/m². It supports noninterlaced
-16-bit PQ PNG input and BT.2020 PQ PNG output, Ultra HDR JPEG and a constrained
-gain-map AVIF route, plus authored SDR PNG/TIFF/JPEG. Unsupported AVIF profiles,
-transforms and gain-map layouts fail explicitly. Other hosts reject the new
-gain-map output choices until their codec integration is qualified.
+Documents store linear half-float with Float32 processing and a fixed reference
+white of 203 cd/m². Unsupported AVIF profiles, transforms and gain-map layouts
+fail explicitly.
 The footer reports **HDR**, **SDR preview** or **Showing SDR**; click it for the
 screen details described above. New Drawing offers an **HDR drawing** preset.
 HDR Edit Color opens in **Linear RGB**, accepting above-white and negative
@@ -447,9 +442,7 @@ the warning. The writer checks again. SDR files use the saved SDR appearance.
 GTK negotiates scRGB or parametric BT.2020 PQ on a floating surface and responds
 to compositor feedback even while idle. Promoting an existing SDR drawing does
 not require reopening it. The displayed headroom is a compositor hint, not a
-measurement of monitor luminance. Other hosts explicitly reject HDR masters.
-See [the feedback validation](../history/color-management-gtk-m4-feedback.md)
-for the current workflow, review runtime and remaining hardware qualifications.
+measurement of monitor luminance.
 
 “16-bit float” is not a promise that all HDR workflows or 32-bit source values fit. Full 32-bit float, scene-based
 VFX/OCIO and specialist EXR processing remain separately scoped.
@@ -469,18 +462,6 @@ recipes and SDR renditions are document metadata. View toggles, monitor changes
 and temporary export choices do not dirty the artwork. Preferences apply to new
 work, not silently to every open document.
 
-Menu placement proposal: **File** for New/Open/Import/Save/Export and Document
-Color; **Adjustments/Filter** for editable corrections; **View** for Histogram,
-the unified Proof panel; **Color panel / tool options** for numeric entry and
-sampling. The same actions need explicit touch and keyboard access. Exact native
-placement can adapt without altering meaning; no flow depends on existing menu
-or transport limitations.
-
-Deliver journeys 1–5 and 7 as the core SDR release, with 8/16-bit SDR editing,
-profile-aware P3/Adobe RGB/ProPhoto handling, calibrated viewing, reversible photo
-adjustments and reliable interchange. Print proofing (6) is the next expected
-prosumer milestone; HDR (8) follows as a separate complete workflow.
-
 RAW development and layered exchange are important future photography/illustration
 work, with their own feature and format contracts. In the first release, a photo
 can be developed externally and handed off as a profiled 16-bit TIFF. Do not
@@ -492,43 +473,18 @@ previews, manageable large-photo/layer memory, background saves and bounded undo
 Use sharing, caching and bounded processing before reducing user data. A storage
 size ratio is not a measured speedup or whole-application memory ratio.
 
-Validate with task sessions covering ordinary sRGB drawing, 8-bit P3 painting,
-16-bit ProPhoto photo edits and handoff, an untagged reference, transparent color
-sampling, lab proof-only profiles and SDR/HDR delivery. Users should complete
-ordinary tasks without visiting global settings or confusing Assign with Convert.
-Check cancelled operations, reopen/editability, exported color/depth and work on
-multiple displays. Numerical/performance tests remain in the implementation plan;
-manual availability is evidence of expectations, not a substitute for these checks.
-
-
-Web and Android's [phase-4 integration report](../development/color-management-web-android-m4.md)
-records their supported HDR editing and delivery routes. Both reuse the GTK
-picker placement and shared Proof dial. Web uses extended-range `rgba16float`
-WebGPU canvases when the browser accepts extended tone mapping and the display
-reports HDR support. Canvas and Navigator pass signed, above-white sRGB values
-to the browser; the browser and system choose display brightness. SDR/Print
-proofing uses the shared SDR rendition on standard canvases. Unsupported
-browsers/displays keep mapped SDR. Android 15+
-uses a floating-point BT.2100 PQ surface for HDR artwork with Proof Off when
-both the HDR10 display and the Vulkan format/encoding support it. Android chooses
-brightness and tone mapping; reported headroom does not precompress the artwork
-or force an SDR preview. SDR, Print, gamut warning and appearance drafts use the
-shared SDR mapping on the SDR surface: Display P3 when Android offers wide color,
-otherwise sRGB. Older/unsupported hosts retain mapped SDR.
-The left footer chip matches zoom/rotation styling and opens the screen details
-described above; **HDR** describes the active output route, not measured screen
-brightness. PQ output is bounded to BT.2020 and 0–10,000 cd/m² at the fixed 203
-cd/m² artwork reference white. The HDR master remains unchanged.
-The [tablet display investigation](../development/android-hdr-display.md#pq-display-validation)
-records the reviewed route. Color controls and layer thumbnails remain SDR previews.
-Web admits HDR documents up to 12 MP and rejects larger ones while retaining the
-open artwork. Neither host currently offers gain-map output. The user accepted the tablet’s HDR appearance;
-instrumented brightness/colorimetry remain unqualified. Proof follows Navigator in the Paint/Photo tab group and supports the normal
-docked, floating and drawer views. The report separates these tested workflows
-from outstanding hardware qualification and measured performance limits.
-
-The [GTK parity audit](../development/color-management-gtk-parity.md) records the
-near visual match for Color, Proof and Edit Color: shared geometry and labels,
-neutral mode buttons, compact Print rows, grouped color entries and the same
-color-definition/gamut feedback. Restore Starting Layout includes adjacent
-Navigator/Proof tabs in Paint and Photo on both hosts.
+Web uses extended-range `rgba16float` WebGPU canvases when the browser accepts
+extended tone mapping and the display reports HDR support. Canvas and Navigator
+pass signed, above-white sRGB values to the browser; the browser and system
+choose display brightness. Web admits HDR documents up to 12 MP and rejects
+larger ones while keeping the open artwork. Android 15 and later use a
+floating-point BT.2100 PQ surface for HDR artwork with Proof Off when both the
+HDR10 display and the Vulkan format support it; Android chooses brightness and
+tone mapping, and reported headroom does not precompress the artwork. SDR, Print,
+gamut warning and appearance drafts use the shared SDR mapping on the SDR
+surface, Display P3 when Android offers wide color and sRGB otherwise, and
+unsupported hosts keep mapped SDR. PQ output is bounded to BT.2020
+and 0–10,000 cd/m² at the 203 cd/m² reference white. Color controls and layer
+thumbnails remain SDR previews. The left footer chip matches the zoom readout
+and opens the screen details described above; **HDR** describes the active
+output route, not measured screen brightness.

@@ -1,6 +1,6 @@
-# Configurable base colors
+# Theme colors
 
-[Technical documentation](../README.md)
+[Workspace and UI](README.md) · [Panel transparency](panel-transparency.md)
 
 Appearance offers **Dark theme base color** (`#333333`) and **Light theme base color**
 (`#b8b8b8`). These are opaque sRGB hex strings: exactly `#RRGGBB`, case-insensitive,
@@ -13,11 +13,10 @@ row as four grey circles and a Custom circle that reveals a hex entry beside the
 `#1f1f1f`, `#292929`, `#333333`, `#3d3d3d`; light `#a4a4a4`, `#b8b8b8`,
 `#cccccc`, `#dedede`.
 
-## Inventory and existing relationships
+## Surface roles
 
-Before this change, most surfaces were independently chosen constants, not
-computed from the base. The equations below reconstruct those choices; they
-are the new calibration, not a claim about the old implementation.
+[`theme.rs`](../../crates/layer-ui/src/theme.rs) derives every surface from the
+chosen base. The equations reproduce the reference surfaces at the default bases.
 
 Let `B` be the chosen base in **encoded sRGB** (channels 0–255), `W` white,
 `K` black, and `mix(a,b,t) = (1-t)a + tb`. Dark's reference base `D=51`,
@@ -29,8 +28,8 @@ in the table is transformed per channel using the same rule as a grey.
 | Canvas surround, browser theme color, GPU-unavailable background | `#333333` = B | `#b8b8b8` = B | Chosen base |
 | Panel bodies, selected tabs and concave joins, tool ribbons, expanded drawers, popovers/menus | `#414141` = mix(B,W,14/204) | `#ededed` = mix(B,W,53/71) | Regenerate |
 | Inactive tab bar | `#2e2e2e` = mix(B,K,5/51) | `#d2d2d2` = mix(B,W,26/71) | Regenerate |
-| Workspace switcher well | Inactive tab bar at 75% opacity | Same | Translucent over artwork |
-| Title-bar controls, bars, menu labels, drawing-tab strip, readouts, GTK close button, Zen Capy, footer zoom/HDR/proof status | B at 75% opacity | B at 75% opacity | Translucent over artwork |
+| Workspace switcher well | mix(tab bar, B, 25%) | Same | Glass chip; see [panel transparency](panel-transparency.md) |
+| Title-bar controls, bars, menu labels, drawing-tab strip, readouts, GTK close button, Zen Capy, footer zoom/HDR/proof status | B | B | Glass chip: opaque at transparency Off, translucent otherwise |
 | Selected workspace and title-bar tool | Accent tint of reference grey 82 (`#40546e` from `#3584e4`) | Accent tint of reference grey 196 (`#afc6e5`) | See [Accent color](#accent-color); stays visible on the light title-bar well |
 | Selected drawing tab | Panel body, opaque | Same | Matches selected panel tabs |
 | Panel input backgrounds, inactive compact slider track | `#333333` = B | `#fafafa` = mix(B,W,66/71) | Regenerate |
@@ -70,14 +69,12 @@ semantic palettes; GTK's accent follows the resolved accent. New surface roles m
 including inactive header/sidebar variants. GTK's native card and shade overlays
 continue to composite normally. Transparent areas remain transparent.
 
-Title-bar controls use the chosen base at 75% opacity in both themes, and the
-workspace switcher's well uses the tab-bar color at 75%. Joined bars and Menu
-Labels share one surface behind their members; standalone controls carry their
-own. Hover, press and selection feedback composite over this surface. Header text
-has no outline; no host adds a toolkit backdrop blur. Every host follows the
-[panel transparency](panel-transparency.md) setting instead: title-bar controls
-are opaque when it is Off and frosted glass, blurred in the canvas renderer,
-otherwise.
+Title-bar controls are filled with the chosen base, so they vanish over the
+canvas surround. Their opacity follows the [panel transparency](panel-transparency.md)
+level: opaque at Off, frosted glass blurred in the canvas renderer otherwise.
+Joined bars and Menu Labels share one surface behind their members; standalone
+controls carry their own. Hover, press and selection feedback composite over
+this surface. Header text has no outline; no host adds a toolkit backdrop blur.
 
 ## Accent color
 
@@ -119,7 +116,7 @@ grey, and reduces chroma further only if the color would leave sRGB:
 | `header_selection_hover` | `header_selection` lightness + 0.03 | `header_selection` lightness − 0.03 |
 
 With the default bases every accent gives the same lightness, so warm accents
-look more muted than the old HSL formula and Slate's tints read as blue-grey.
+look muted and Slate's tints read as blue-grey.
 A custom light base moves the light tints with it.
 
 ## Transformation
@@ -144,7 +141,7 @@ An Oklab lightness/chroma transformation could offer more perceptual uniformity,
 but requires more conversions and gamut handling and is unnecessary for this
 small, default-preserving theme control. This is a UI palette, not paint mixing.
 
-Text and semantic colors are not derived from the base. As requested, there is
+Text and semantic colors are not derived from the base. There is
 no automatic mode switching or luminance restriction: choose a dark base for
 dark mode, and a mid/light base for light mode. Highly saturated or opposite-mode
 colors can reduce contrast; this does not promise contrast compliance for every

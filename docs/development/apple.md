@@ -2,107 +2,240 @@
 
 [Developer guide](README.md) · [Platform integration](../platforms/README.md)
 
-The Apple clients use AppKit on macOS and UIKit on iPadOS. They share Swift editor
-components and a Rust bridge built around `NativeHost`. Metal renders the canvas
-through a `CAMetalLayer` behind native controls.
+The Apple clients use AppKit on macOS and UIKit on iPadOS. They share Swift
+editor components and the `layer-apple` Rust bridge built around `NativeHost`.
+Metal renders the canvas through a `CAMetalLayer` behind native controls. The
+[package README](../../apps/layer-apple/README.md) describes the source layout,
+and the [Apple porting guide](../APPLE_PORTING_GUIDE.md) holds the porting rules
+and XCTest pitfalls. Features usually land on GTK, Web and Android first.
 
 ## Prerequisites
 
-Use an Apple Silicon Mac with Xcode, the required iOS simulator runtime, Python 3
-and Rust. The current build script targets arm64 macOS, arm64 iPad devices and the
-arm64 iOS simulator:
+Everything except the Rust bridge tests needs an Apple Silicon Mac with Xcode,
+the iOS simulator runtime, Python 3 and Rust. [Test devices](devices.md#apple)
+lists the Mac and iPad. The build targets arm64 macOS, arm64 iPad devices and
+the arm64 iOS simulator:
 
 ```bash
 rustup target add aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
 ```
 
-The script defaults to `/Applications/Xcode.app/Contents/Developer`. Set
-`DEVELOPER_DIR` if Xcode is elsewhere. A physical iPad build also needs a signing
-team and a provisioned device.
+The scripts default to `/Applications/Xcode.app/Contents/Developer`; set
+`DEVELOPER_DIR` if Xcode is elsewhere. A physical iPad also needs Developer Mode,
+pairing, a development certificate and a profile covering the device. A first
+Personal Team install may require trusting the developer account in the iPad's
+Settings. Team IDs, keys and provisioning profiles are never committed.
 
 ## Build
 
 ```bash
 bash apps/layer-apple/scripts/build.sh macos
 bash apps/layer-apple/scripts/build.sh simulator
-```
-
-For a device build:
-
-```bash
 CAPY_APPLE_TEAM=YOUR_TEAM_ID bash apps/layer-apple/scripts/build.sh device
 ```
 
-These commands generate resources and `apps/layer-apple/CapyCanvas.xcodeproj`,
-then invoke Xcode. They build the app; they do not install it on a device. Open
-the generated project in Xcode to select a run destination and launch the
-`CapyCanvas-Mac` or `CapyCanvas-iPad` scheme.
+`build.sh` runs `scripts/prepare.py` and `scripts/project.py`, then builds with
+`xcodebuild`; it does not install or launch. The Xcode build phases compile the
+Rust library through `scripts/rust.sh`.
 
-Set `CAPY_CONFIGURATION=Release` for optimized Swift and Rust builds.
-For the color-management implementation and current validation evidence, see
-[Apple HDR validation](../history/color-management-apple-m4-validation.md).
-`CAPY_DESTINATION='id=DEVICE_UDID'` selects a device build destination, and
-`CAPY_DERIVED_DATA` changes the output directory. macOS builds use ad-hoc signing
-unless a team is supplied.
+- `CAPY_CONFIGURATION=Release` builds optimized Swift and Rust.
+- `CAPY_DESTINATION='id=DEVICE_UDID'` selects a device destination.
+- `CAPY_DERIVED_DATA` changes the output directory (default
+  `apps/layer-apple/DerivedData`, ignored by Git).
+- macOS builds are ad-hoc signed unless `CAPY_APPLE_TEAM` is set.
 
-## How the hosts work
+### Xcode project
 
-The shared Swift components present Rust tool, layer and workspace models. AppKit
-provides desktop windows, menus and tablet/mouse input; UIKit provides iPad controls
-and Pencil events. Platform display callbacks drive presentation, with GPU work
-kept separate from native control updates.
+`apps/layer-apple/CapyCanvas.xcodeproj` is tracked, and `scripts/project.py`
+regenerates it deterministically from the Swift files under `Shared/`, `iOS/`
+and `macOS/`; files in `Tests/` folders go to the UI test targets. Every
+`build.sh` run rewrites it. Never edit the project in Xcode or by hand: change
+`project.py`, run it, and commit the regenerated project with the change. Adding
+or removing a Swift file also changes the project, so commit that diff too.
 
-New editor sessions use the shared full editor workspace and grouped tool
-catalog, matching the web preset. Saved workspaces retain their existing layout
-and toolbar contents. The shared Swift views project those Rust models on both
-Apple targets; native adapters handle focus, input and platform services.
+`scripts/prepare.py` fills the ignored `Generated/` directory with the shared
+icons and brush previews from `apps/layer-web` and the license files. Edit those
+sources, never `Generated/`.
 
-The iPad adapter forwards coalesced and predicted touches and later updates to
-estimated Pencil samples. Those corrections use the shared stroke model rather
-than creating an Apple-specific brush implementation. macOS and iPadOS also have
-different file services and window lifecycles despite sharing the Metal bridge.
+## Install and run
 
-Features usually land on GTK, Web and Android first. Follow the
-[Apple porting guide](../APPLE_PORTING_GUIDE.md) to audit and port them.
+Launch a local Mac build:
 
-## Validation status
+```sh
+open apps/layer-apple/DerivedData/Build/Products/Debug/CapyCanvas-Mac.app
+```
 
-Build success does not establish complete input or UI parity. The
-[Apple acceptance record](../history/apple-acceptance.md) tracks the two clients,
-including physical Pencil checks, file integration and remaining performance work.
-The [Apple host notes](../../apps/layer-apple/README.md) contain focused test and
-capture commands.
+Install and launch on the iPad:
 
-## Testing and debugging on local hardware
+```sh
+xcrun devicectl list devices
+xcrun devicectl device install app --device DEVICE_ID \
+  apps/layer-apple/DerivedData/Build/Products/Debug-iphoneos/CapyCanvas-iPad.app
+xcrun devicectl device process launch --device DEVICE_ID \
+  --console art.capycanvas.apple.ipad
+```
 
-Run commands from the repository root with `DEVELOPER_DIR` pointing to your
-Xcode installation's `Contents/Developer` directory.
+Or open the project in Xcode and run the `CapyCanvas-Mac` or `CapyCanvas-iPad`
+scheme. Attach Xcode or LLDB to the launched process for breakpoints and native
+errors. Wait for each build or install to finish before launching.
 
-- Discover destinations with `xcrun devicectl list devices` (attached iPad) and
+**Isolated installs.** The regular apps hold an artist's drawings; never
+replace them or clear their data. Pass `CAPY_APPLE_BUNDLE_ID=<your id>` to
+`xcodebuild` to build under another identity; its UI test target uses the
+`.tests` suffix, so the regular editor stays installed. Benchmarks use their own
+identity and DerivedData directory as well. A free Personal Team profile limits
+how many apps a device may hold, and the XCTest runner counts as one; do not
+remove the artist's apps to make room.
+
+**Debug fixture variables.** Release builds ignore all of these.
+
+| Variable | Effect |
+| --- | --- |
+| `CAPY_INITIAL_ACTIONS` | JSON array of shared actions applied once after restoration and the first surface size. Also disables persistence unless a namespace is set. |
+| `CAPY_PERSISTENCE_NAMESPACE` | A UUID; settings, workspaces and recovery live in a private `test-<uuid>` folder. |
+| `CAPY_DISABLE_PERSISTENCE=1` | Runs with memory-only storage. |
+
+For example, this opens the Tool panel without driving the Mac menu bar:
+
+```sh
+open -n --env CAPY_INITIAL_ACTIONS='[{"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":true}}]' \
+  apps/layer-apple/DerivedData/Build/Products/Debug/CapyCanvas-Mac.app
+```
+
+## Tests
+
+On Linux only the Rust bridge tests run; everything else needs the Mac.
+[Testing](testing.md) lists which checks a change needs.
+
+### Rust bridge
+
+```sh
+cargo test --locked -p layer-apple --lib -- --test-threads=1
+cargo test -p layer-apple tests::photo -- --test-threads=1
+```
+
+The tests drive both Apple platform policies through the real C ABI and a
+hardware GPU, comparing exact document pixels through Undo and Redo. Filter by
+module (`tests::input`, `tests::recovery`, `tests::workspace` and the other
+`*_tests.rs` files under `native/src`). The ignored 61 MP regression needs a
+disposable sRGB JPEG:
+
+```sh
+CAPY_APPLE_PHOTO_JPEG=/path/to/photo.jpg cargo test -p layer-apple --lib \
+  large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery -- \
+  --ignored --nocapture --test-threads=1
+```
+
+### Swift fixtures
+
+The fixtures in `apps/layer-apple/tests` run the production Swift sources on the
+Mac without XCTest or a simulator:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
+```
+
+`test-project-files.sh` builds the Rust library, compiles `Shared/`, `macOS/`
+and `tests/support` with the given fixture (default `tests/project-files.swift`)
+and runs it. Both Apple policies run on the Mac with temporary storage. Point
+`CAPY_TEST_ASSETS_APP` at a built Mac app when a fixture needs the vector or
+filter assets. Fixtures that open windows take focus: run them one at a time and
+never alongside a UI test batch.
+
+Fixtures for a single Swift file compile directly, for example:
+
+```sh
+xcrun swiftc -parse-as-library apps/layer-apple/Shared/Bridge/CanvasFrameDriver.swift \
+  apps/layer-apple/tests/frame-driver.swift -o "$TMPDIR/capy-frame-driver" && "$TMPDIR/capy-frame-driver"
+```
+
+The same pattern pairs `json-lookup`, `reorder-contact`, `estimated-input`,
+`frame-trace` and `drawing-workload-plan` with their `Shared/Bridge` sources
+(`JSON.swift`, `ReorderContact.swift`, `EstimatedInput.swift`, `FrameTrace.swift`
+and `DrawingWorkloadPlan.swift`). Other runners in `scripts/` and `tests/`:
+
+| Runner | Checks |
+| --- | --- |
+| `scripts/test-persistence.sh` | Atomic settings files and the settings owner |
+| `scripts/test-color-input.sh` | AppKit color text entry in all RGB spaces |
+| `scripts/test-project-access.py` | Project writes through a file-only App Sandbox grant |
+| `scripts/test-recovery-interruption.py` | Recovery publication when a writer is killed |
+| `tests/background-expiration.py` | iPad background-task lease ordering |
+| `scripts/test-native-rows.py` | UIKit row scrolling and contacts on one booted iPad simulator (`--fixture scenes` for per-scene cancellation) |
+| `scripts/test-workspace-scrolling.py` | Long workspace list on an iPad simulator |
+
+The UIKit fixtures `canvas-modifiers.swift`, `canvas-hover.swift` and
+`pencil-estimates.swift` run as a standalone scene app built from the `Shared/`
+and `iOS/` sources; they have no runner script.
+
+### UI tests
+
+XCTest journeys run through `xcodebuild test` with `-only-testing`. Use a fresh
+result-bundle path for each run and inspect the `.xcresult` for failures and
+attachments:
+
+```sh
+xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
+  -scheme CapyCanvas-iPad -destination 'platform=iOS Simulator,id=SIMULATOR_ID' \
+  -derivedDataPath apps/layer-apple/DerivedData/Simulator \
+  -resultBundlePath artifacts/ui/ipad-launch.xcresult \
+  -only-testing:CapyCanvas-iPadTests/EditorLaunchTests/testCompleteEditorCapture \
+  CODE_SIGNING_ALLOWED=NO test
+xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
+  -scheme CapyCanvas-Mac -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath apps/layer-apple/DerivedData/Mac \
+  -resultBundlePath artifacts/ui/mac-launch.xcresult \
+  -only-testing:CapyCanvas-MacTests/EditorLaunchTests/testCompleteEditorCapture \
+  DEVELOPMENT_TEAM=YOUR_TEAM_ID CODE_SIGN_IDENTITY='Apple Development' test
+```
+
+- Journeys launch with their own persistence namespace or with persistence
+  disabled, and never touch the artist's data.
+- The iOS simulator lacks Float32 filtering, so journeys that render the canvas
+  need a physical iPad. UIKit component checks still run on the simulator.
+- On a physical iPad, keep the device awake and unlocked and turn on
+  **Settings → Developer → Enable UI Automation**; Developer Mode alone does not
+  enable the UI runner.
+- To test apps already installed on the iPad, set `UseDestinationArtifacts` in
+  the `.xctestrun` target with `TestHostBundleIdentifier`,
+  `UITargetAppBundleIdentifier` and `TestBundleDestinationRelativePath`. Omit
+  `TestHostPath`, `TestBundlePath`, `UITargetAppPath` and
+  `DependentProductPaths`, which can make XCTest try to install an unavailable
+  bundle during `app.launch()`.
+- Resolve any device-trust or automation and capture permission prompt before
+  retrying a failed run. A physical iPad runner that times out while enabling
+  automation is a runner failure, not a product result.
+
+Known failures on iPad: `testCompactMenuShortcutAcrossPages` (Command-Z) and
+`testSettingsTextSelectionShortcut` (Command-A) fail because XCTest key events
+do not reach UIKit key commands, and on the simulator title-bar customization
+near the window's top edge resizes the OS window instead. No product workaround
+is adopted for either.
+
+### Command coverage audit
+
+`command-coverage.json` classifies every shared command, panel control,
+preference and property kind with Apple handler and check references. The audit
+fails on catalog or availability drift and on unresolved tool choices:
+
+```sh
+cargo run --locked -p layer-host --example inventory -- --gpu > "$TMPDIR/capy-inventory.json"
+python3 apps/layer-apple/scripts/audit-commands.py "$TMPDIR/capy-inventory.json"
+python3 apps/layer-apple/scripts/test-property-audit.py "$TMPDIR/capy-inventory.json"
+```
+
+Passing the audit establishes catalog coverage, not working native workflows.
+
+## Debugging and evidence
+
+- Discover destinations with `xcrun devicectl list devices` and
   `xcodebuild -showdestinations -project apps/layer-apple/CapyCanvas.xcodeproj -scheme CapyCanvas-iPad`.
-  Use this environment's identifiers and signing team; follow
-  [install/run](../../apps/layer-apple/README.md#install-and-run).
-  Wait for each build/install to finish before launching. Attach Xcode/LLDB to
-  the launched app process for breakpoints and native errors.
-- Start with [focused checks](../../apps/layer-apple/README.md#validation):
-  `bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift`
-  exercises the real Swift/Rust coordinator on Mac; select another fixture as needed.
-  For native UI delivery, use the
-  relevant Xcode test with `-only-testing`; test editor actions rather than macOS
-  system-menu mechanics. Inspect the `.xcresult` for failures and resolve any
-  reported device-trust or automation/capture permission blocker before retrying.
-  On a physical iPad, keep the device awake and unlocked and enable
-  **Settings → Developer → Enable UI Automation**; Developer Mode alone does
-  not enable the XCTest UI runner.
-  Simulator and injected input do not replace the
-  [physical Pencil check](../../apps/layer-apple/INPUT.md#physical-pencil-smoke-check).
-- Use the [isolated drawing workloads](../../apps/layer-apple/PERFORMANCE.md#repeatable-native-drawing-workloads)
-  for Release hardware measurements. [Capture/export](../../apps/layer-apple/PERFORMANCE.md#capture-locally)
-  covers device traces and GPU debugging. Measure the display's actual refresh
-  rate; keep builds and UI automation idle during timing.
-- Keep raw logs and screenshots in ignored `artifacts/` or
-  `apps/layer-apple/DerivedData/`; never commit private device or signing details.
-  Use isolated test storage/bundles, record the tested revision and launched PID,
-  and close only owned test processes.
-  For pixel comparisons, use the [visual tools](../../tools/visual/README.md) with
-  matching state, viewport, scale and color space on native and local Chrome.
+- Keep raw logs, screenshots and traces in ignored `artifacts/` or
+  `apps/layer-apple/DerivedData/`. Record the tested revision and launched PID,
+  and close only your own test processes.
+- For pixel comparisons with Web, use the [visual tools](../../tools/visual/README.md)
+  with matching state, viewport, scale and color space on native and local
+  Chrome.
+- Measure performance in Release builds as described in
+  [Apple performance](../../apps/layer-apple/PERFORMANCE.md). Keep builds and UI
+  automation idle while timing.

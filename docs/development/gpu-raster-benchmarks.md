@@ -8,14 +8,6 @@ hardware for each tier, are in [Performance targets](../PERFORMANCE_TARGETS.md).
 Paths under `artifacts/` refer to ignored local outputs, not files shipped in
 this repository. See [publication notes](publication.md#publication-checks).
 
-The [GTK raster foundation qualification](../history/color-management-gtk-m1-validation.md)
-records the encoded sRGB8 replacement's baseline, repeated drawing comparison,
-dense-image/concurrent-save workloads, capture memory and native presentation.
-
-The [Huion swept-brush optimization](gpen-huion-sparse-strokes-2026-09-20.md)
-records the causes of G-Pen GPU tails, matched native Android benchmarks,
-on-device copy-bandwidth calibration, large-brush controls and CPU costs.
-
 ## What is measured
 
 `layer-bench` submits 15 legacy, 10 painter-focused and 3 sculpt (Liquify
@@ -27,8 +19,7 @@ The current diagnostic factory uses GTK's native integer-backed SDR renderer
 with Float32 working tiles. Select `--space srgb|p3|adobe-rgb|prophoto` and
 `--depth 8|16`; defaults are sRGB8. Generated reports identify the mode. Reports
 from before this replacement used the older sRGB8 working renderer and cannot
-qualify the current native editing path. The [final GTK SDR qualification](../history/color-management-gtk-m2-performance.md)
-records comparison arms and declared budgets.
+qualify the current native editing path.
 
 It reports two time boundaries:
 
@@ -151,8 +142,6 @@ remaining in cadence and work totals. Inspect distinct presented requests as
 well as refresh cadence: repeating old poses can hide coalesced input. Optional
 `LAYER_NAVIGATION_SETTLE_MS` separates a ready-window run from the default cold
 first interaction; retain both, including first response and lost requests.
-The [GTK acceptance summary](../history/color-management-gtk-m2-acceptance.md)
-records the qualified envelope and outstanding platform work.
 The first-response measurement includes initial coalesced requests; the ordinary
 request-latency distribution can only contain requests matched to presentation.
 
@@ -203,43 +192,6 @@ advection are timed directly. The watercolor cases also time the bounded
 conductance-gated transport pass. Watercolor's edge is part of ordinary
 composition; the older optional post-stroke edge remains in the pen-up
 distribution only for non-watercolor brushes that request it.
-
-## Workstation result
-
-The painter result is
-`artifacts/benchmarks/painter-brushes-4k.md`.
-The corrected destination-feedback and liquify result is
-`artifacts/benchmarks/complex-brush-interactions-4k.md`.
-The current layer-wide watercolor and three-stage capillary-relaxation result is
-`artifacts/benchmarks/watercolor-relaxation-4k.md`.
-The unchanged-path regression result is
-`artifacts/benchmarks/gpu-4k-paint-state-regression.md`,
-with the pre-state baseline retained at
-`artifacts/benchmarks/gpu-4k.md`. Exact
-p50/p95/p99, maxima, over-budget wall-clock samples, work counts, sparse page
-counts, and resident bytes remain in those generated reports rather than being
-duplicated here.
-
-The three-repeat legacy report contains one 24.804 ms serialized wall-clock
-Pencil pen-up sample among only 36 pen-ups. The larger
-`artifacts/benchmarks/pencil-pen-up-investigation.md`
-measures 144 pen-ups at 2.903 ms p99 and 6,480 total frames at 2.880 ms move
-p99. Combined with an unchanged 2.36 ms median, this classifies the isolated
-sample as host/GPU scheduling noise rather than a repeatable raster regression;
-the raw failed small-sample gate remains visible in the original report.
-
-The state-specific implementation is also bounded structurally. A brush that
-opts out keeps the original dry pipeline. The material stage has prepared
-color-only, coverage-only, scalar-state-only, and combined target layouts, so
-it does not attach or write unused state. Coverage, wetness, and watercolor
-wetness pages allocate lazily. This is the optimization claim the timings test;
-it is not a claim that a finite benchmark proves a globally optimal shader.
-
-The offscreen suite proves brush and composition execution headroom but does not
-include surface acquisition, compositor scheduling, or scanout. The current GTK
-milestone-2 user scope requires smooth 120 Hz unchanged-photo navigation with
-input-to-present latency documented; the earlier strict p99 below 8.33 ms is a
-historical target. See the [scope and measured limits](../history/color-management-gtk-m2-performance.md).
 
 ## Run
 
@@ -324,6 +276,4 @@ written to `LAYER_TEST_ARTIFACTS`. It never changes Chrome flags or
 launches/closes user tabs. This injects camera commands, not hardware touch; it
 is not an input-to-photon test. Run tablet
 native and Web workloads separately, with other test photos released. Account for
-browser refresh throttling independently of GPU rendering time. The milestone
-[tablet validation record](../history/color-management-web-android-m2-validation.md)
-records current results, exact baselines and remaining limits.
+browser refresh throttling independently of GPU rendering time.

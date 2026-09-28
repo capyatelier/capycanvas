@@ -3,7 +3,7 @@
 [Workspace and UI](README.md) · [Panel contract](panel-customization.md) ·
 [Numeric controls](numeric-controls.md) · [Drag convention](drag-and-reorder.md)
 
-GTK, Web, Android, macOS, iPadOS and Windows toolbars support **Brush size slider**, **Brush opacity slider**, and
+Toolbars support **Brush size slider**, **Brush opacity slider**, and
 **Tool Options**. Add them through Add Tools like ordinary tiles. Each has a
 stable tile identity; the entire component moves, copies, removes, docks, and
 participates in workspace undo/redo as a single item.
@@ -13,10 +13,8 @@ They are not title-bar items.
 ## Included workspaces
 
 Sketch centers size and opacity in a compact toolbar on the left edge. Photo appends
-Tool Options to its top commands toolbar, retaining New/Open/Save, Undo/Redo,
-Scale/Rotate, and removing Flip Horizontal, Clear Layer and Fill Selection.
-Tool Options takes the remaining lane width. Paint and hosts without component views retain their previous defaults. Only untouched built-in Sketch/Photo layouts migrate; custom
-baselines, copied workspaces and edited histories are preserved.
+Tool Options to its top commands toolbar, where it takes the remaining lane width.
+Paint uses neither. See [default workspaces](default-workspaces.md#arrangements).
 
 ## Numeric controls
 
@@ -87,7 +85,7 @@ put the icon beside the label and value; the other styles stack icon and value.
 Text follows the shared 11 pt typography; form icons stay 16px. Units sit
 beside values on the same baseline and hide when space is tight. Only oversized
 numbers in small tiles shrink to fit. Popovers close on context changes or teardown.
-The tonal interval on GTK, Web, Android, macOS, iPadOS and Windows is one atomic field using the panel's two-ended range
+The tonal interval is one atomic field using the panel's two-ended range
 component: compact one-decimal low/high values surround a wide track. Units are
 in tooltips. Narrow bars expose the complete interval through existing overflow.
 Floating toolboxes and side toolbars wider than one tile fill rows left-to-right.
@@ -147,66 +145,29 @@ a numeric interaction. Disabled controls retain a draggable cap wrapper. Holding
 empty Tool Options space with touch or pen opens its display menu; mouse uses
 secondary click. Vertical options always use icons.
 
-## Validation
+Compact top/bottom options prefer sixteen tiles of length (side options eight),
+then shrink to the available edge.
 
-Core regressions cover numeric bindings and invalid/stale edits, contextual
-settings and completion actions, all five tile styles and both axes, flexible
-allocation/overflow, supported-host defaults, serialization, and conservative migration.
-GTK native-input regressions run through
-`tools/performance/workspace-motion.sh gtk` on a private Mutter display:
+## Checks
 
-- `--native-test=native_toolbar_components_input`: mouse/touch editing and
-  hold-to-reorder caps, stamp preview lifetime and bookmarks, context changes,
-  inline sliders, vertical/floating placement, independent eyedropper
-  choices, Apply/Cancel, and light/dark screenshots.
-- `--native-test=native_toolbar_components_pen_input --tablet`: the same slider
-  and reorder gestures with GDK tablet events in both themes. The proxy targets
-  the main surface only, so popup buttons are activated through GTK in that
-  journey; native popup hits are covered by mouse/touch and the Wacom hosts.
-- `--native-test=native_toolbar_components_narrow_input` with
-  `LAYER_MOTION_VIEWPORT=680x500`: overflow and full options at small widths.
-- `--native-test=native_toolbar_components_drawer_input`: retained toolbar
-  drawer sliders and cleanup on close.
-- `--native-test=native_toolbar_options_presentation_input`: display preferences,
-  tile action dimensions, dropdown alignment, and four-digit values in every style.
-- `--native-test=native_toolbar_visual_audit_input`: both themes, all tile sizes,
-  both orientations, label/value alignment and clipping, separate horizontal
-  icons, inline editing and outside-tap dismissal, and drawer appearance.
-- `--native-test=native_toolbar_value_controls_input`: slider previews and bookmarks,
-  label resets, and vertical option popovers.
-- `--native-test=native_toolbar_visible_edges_input`: compact docking at all
-  twelve anchors when the visible toolbar reaches an edge before its handle.
+GTK native input runs through `tools/performance/workspace-motion.sh gtk` on a
+private Mutter display with `--native-test=` and one of these tests from
+`apps/layer-linux/src/toolbar_component_tests.rs`:
 
-Use the release test executable through `LAYER_NATIVE_TEST_EXECUTABLE` when
-iterating. The tablet proxy exercises GDK pen input, not physical tablet hardware;
-its synthetic serials cannot authorize native popup grabs, so popup journeys
-run separately without that proxy.
+- `native_toolbar_components_input`: editing, hold-to-reorder caps, stamp
+  previews and bookmarks, context changes, placement and both themes. The
+  `native_toolbar_components_pen_input` variant adds `--tablet`; its synthetic
+  serials cannot authorize popup grabs, so popups are covered by mouse and touch.
+- `native_toolbar_components_narrow_input` with `LAYER_MOTION_VIEWPORT=680x500`:
+  overflow and full options at small widths.
+- `native_toolbar_components_drawer_input`, `native_toolbar_options_presentation_input`,
+  `native_toolbar_visual_audit_input`, `native_toolbar_value_controls_input`,
+  `native_toolbar_visible_edges_input` and `native_toolbar_rows_input`.
 
-The Photo default's command/options band is outermost at the top, above both
-side columns, without a Flip Image tile. Only untouched included layouts migrate; custom layouts and their
-history remain intact. Compact top/bottom options use a preferred length of
-sixteen tiles (side options retain eight), then shrink to the available edge.
-`native_toolbar_rows_input` verifies stable readout bounds across range changes,
-all six horizontal compact anchors, and editing in floating/left/right toolboxes.
-
-Web regression: `tools/performance/workspace-motion.sh web --toolbar-components`.
-The same journey runs with `apps/layer-web/device.test.mjs --toolbar-components`
-against a dedicated tablet test origin and forwarded Chrome debugger. It covers
-mouse/touch/pen sliders, fixed value widths, segmented/list choices, all twelve
-compact handle targets and history, all tile sizes, editor dismissal, and drawers.
-
-Android regressions: `AndroidInteractionTest#toolbarComponentsAcrossDevicesAndLayouts`
-and `#toolbarEditorsAndOverflow`, built with a separate application ID, on an
-attached tablet. They use native mouse/finger/stylus MotionEvents and isolated
-workspace stores. Screenshots cover both themes, standalone tracks, horizontal
-options, vertical sizes, numeric popovers and the connected drawer. These are
-injected native input journeys, not a hands-on physical stylus test.
-
-Apple regressions: the `toolbar_component` bridge tests in
-`cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib` cover
-both Apple policies: stateless queries, slider edits, bookmarks, stamps, stale
-contexts, Photo options and compact-edge docking with one-step undo/redo. The
-`testToolbarComponents` XCUITest journey (`ToolbarComponentChecks.swift`) runs on
-macOS and a physical iPad: Sketch slider previews, caption updates, bookmarks,
-outside-tap and drag dismissal, quick-drag rejection and hold-to-reorder caps,
-the options display menu, 24px segmented choices and the Photo More drawer.
+Set `LAYER_NATIVE_TEST_EXECUTABLE` to the release test binary when iterating.
+Web runs `tools/performance/workspace-motion.sh web --toolbar-components`, or
+`apps/layer-web/device.test.mjs --toolbar-components` on a tablet. Android runs
+`AndroidInteractionTest#toolbarComponentsAcrossDevicesAndLayouts` and
+`#toolbarEditorsAndOverflow`. Apple runs the `toolbar_component` tests in
+`cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib` and the
+`testToolbarComponents` journey on macOS and iPad.

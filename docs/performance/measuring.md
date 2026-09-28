@@ -95,8 +95,9 @@ headline number with its source in the table.
 
 **Brushes (Android).**
 
-- Build the release benchmark under an isolated application ID, and wrap device
-  commands in the device lock (`flock /tmp/capy-<serial>.lock`), as the
+- Reserve the tier's tablet and run device commands through
+  `tools/devices/devices.py run` ([devices](../development/devices.md)). Build
+  the release benchmark as the
   [Android guide](../development/android.md#brush-workload-benchmark) describes.
 - Push the tier photo:
   - Top tier: the 9504 × 6336 original, at `/data/local/tmp/capy-brush-photo.jpg`.
@@ -105,7 +106,7 @@ headline number with its source in the table.
 - Then run:
 
 ```bash
-python3 tools/performance/android-brush-benchmark.py OUT --serial "$SERIAL" \
+python3 tools/performance/android-brush-benchmark.py OUT --serial "$CAPY_ANDROID_SERIAL" \
   --package art.capycanvas.brushbench --photo /data/local/tmp/capy-tier-24mp.jpg \
   --presets 1,5,3 --size 2048 --prefix mid
 python3 tools/performance/android-brush-report.py OUT --package art.capycanvas.brushbench
@@ -121,7 +122,7 @@ zoom, three 10 s strokes, with the default 16 ms prediction.
   (`-e viewportBenchmark true -e motion pan|pinch`).
 - The brush runner's `-e mode pinch` does the same on the photo.
 
-See [Android development](../development/android.md#focused-device-tests-and-debugging).
+See [Android development](../development/android.md#benchmarks).
 
 **Transforms, placement, selections and the canvas bar (Android).**
 
@@ -130,9 +131,30 @@ See [Android development](../development/android.md#focused-device-tests-and-deb
 - Its "Hz" is renderer submissions. Its JSON also records `display_hz` and the UI
   `FrameMetrics`.
 
+**Web on a tablet.** In your own tablet Chrome tab ([devices](../development/devices.md)),
+`tools/performance/web-pen.mjs` draws timed strokes over DevTools
+(`LAYER_DEVICE_CDP`, `LAYER_WEB_URL`) and reports submissions per second, frame
+CPU time and event-to-submission latency. `--os-input` replays a 200 Hz stylus
+through Android's input dispatcher instead, using a helper built from
+`tools/performance/AndroidPenMotion.java`; never pool the two kinds of run.
+`tools/performance/web-refresh.mjs` reloads the tab and records startup
+milestones. Both scripts list their options in their headers.
+
 **Workspace motion (desktop and Web).** Use
 `tools/performance/workspace-motion.sh` with `LAYER_MOTION_MIN_HZ` at 95% of the
 tier rate.
+
+**Brushes (Windows).** Build `cargo build --locked --release -p layer-render-wgpu
+--example brush_frames`, list adapters with `brush_frames.exe --adapters`, then
+run `brush_frames.exe OUT.csv dx12 240 3 [preset-ids]`. It draws a 1000 px brush
+on a 9504 × 6336 canvas and reports completed generations, not displayed frames.
+
+**Pen latency (Windows).** Against a Release build, run
+`tools/performance/windows-pen-latency.ps1 -Executable <exe> -Project <.capy>
+-OutputDirectory <dir>`, then `node tools/performance/windows-pen-report.mjs <dir>`.
+It injects a 240 Hz pen circle and matches inputs to DXGI frame statistics, so it
+reports software input-to-display time, not input-to-photon. PresentMon needs
+administrator rights.
 
 **Desktop GPUs.**
 

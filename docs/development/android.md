@@ -1,17 +1,12 @@
 # Android development
 
-Android pen rendering requires Vulkan shared-demand presentation and swapchain-maintenance
-present fences. Unsupported drivers show a canvas initialization error. Pen strokes use
-the retained front buffer; whole-view navigation uses FIFO buffering to avoid scanout
-artifacts. See [buffered navigation and pen handoff qualification](android-buffered-navigation-20260921.md)
-and the earlier [front-buffer qualification](android-front-buffer-production-2026-09-20.md).
-
-
 [Developer guide](README.md) · [Platform integration](../platforms/README.md)
 
 The Android client uses Kotlin and Jetpack Compose for the editor UI. A Rust JNI
 bridge connects it to `NativeHost`, and the shared Vulkan renderer presents into
-a `SurfaceView`.
+a `SurfaceView`. The canvas needs Vulkan shared-demand presentation with
+swapchain-maintenance present fences; a driver without them shows a canvas
+initialization error instead of a canvas.
 
 ## Prerequisites
 
@@ -25,7 +20,7 @@ and these SDK packages:
 The exact versions are set in
 [`app/build.gradle.kts`](../../apps/layer-android/app/build.gradle.kts). Install
 these through Android Studio's SDK Manager. Set `ANDROID_HOME` if the SDK is not
-at `$HOME/Android/Sdk`; the launcher uses that path by default.
+at `$HOME/Android/Sdk`; the launcher and the Rust build use that path by default.
 
 Prepare the Rust targets and JNI build tool:
 
@@ -52,349 +47,188 @@ the same version.
 bash apps/layer-android/run.sh
 ```
 
-The launcher starts the configured emulator if necessary, builds for its ABI,
-installs the debug APK and opens the app. The default serial is `emulator-5554`.
-For an already connected device, select its serial:
+The launcher starts the configured emulator if no device is connected, builds
+the debug APK for the device's ABI, installs it with `adb install -r` and opens
+the app. It targets `CAPY_ANDROID_SERIAL`, default `emulator-5554`.
+`run.sh headless` starts the emulator without a window. The launcher always
+builds the default application ID `art.capycanvas` and cannot pass Gradle
+properties, so use Gradle directly for an [isolated install](#isolated-installs).
 
-```bash
-CAPY_ANDROID_SERIAL=DEVICE_SERIAL bash apps/layer-android/run.sh
-```
+`run.sh test` runs `:app:connectedDebugAndroidTest`: every instrumented test,
+against `art.capycanvas`. The Gradle config does not set
+`android.injected.androidTest.leaveApksInstalledAfterRun`, so Gradle uninstalls
+the app and its test APK after the run, deleting the app's data. Use it only on
+an emulator.
 
-`DEVICE_SERIAL` is the value shown by `adb devices`. `run.sh headless` starts an
-emulator without a window; `run.sh test` runs instrumented tests. The Gradle
-wrapper supplies Gradle and builds the Rust library through `cargo-ndk`.
+The Gradle wrapper supplies Gradle and builds the Rust library through
+`cargo-ndk`. Direct Gradle builds default to both ABIs; use
+`-PcapyAbi=arm64-v8a` or `-PcapyAbi=x86_64` for one device.
 
 Debug APKs use the `dev-perf` Rust profile: release optimization level 3,
 incremental compilation, 16 codegen units and line tables for source-level
 profiling. Release and benchmark APKs use `release`. Set `CAPY_RUST_PROFILE`
 or pass `-PcapyRustProfile=release` to Gradle to override the selection; the Gradle
 property takes precedence. Each variant has its own JNI output directory, and
-profile/ABI changes invalidate its Rust task. Direct Gradle builds default to
-both ABIs; use `-PcapyAbi=arm64-v8a` or `-PcapyAbi=x86_64` for one device.
-See [Rust build times](rust-build-times.md) for measured Rust rebuild times.
+profile/ABI changes invalidate its Rust task.
 
-## How the host works
+### Isolated installs
 
-Android runs a single editor window: `MainActivity` is `singleTop` and does not
-opt into multi-instance system UI, and drawing tabs hold multiple documents.
-Compose renders shared tool and workspace models. Android collects `MotionEvent`
-history and available predictions, while a dedicated render owner handles the
-session and Vulkan work. `Choreographer` supplies frame timing. Surface recreation,
-backgrounding and input cancellation need Android lifecycle handling.
+`-PcapyApplicationId=<id>` builds the app under a separate package, and
+`-PcapyAppLabel=<label>` gives it its own launcher name. Its instrumentation
+package is `<id>.test`. On a shared tablet use `$CAPY_APPLICATION_ID`, which
+[`devices.py run`](devices.md) sets; the commands below write `art.capycanvas`
+for the single-user case.
 
-[Document transport](../../apps/layer-android/app/src/main/java/art/capycanvas/Documents.kt)
-uses Android's Storage Access Framework. Kotlin opens document-provider locations;
-Rust processes projects using file descriptors and background work. Providers
-control their own destination behavior, so local-filesystem atomic replacement
-cannot be assumed for every URI.
+## Device tests
 
-[`NoticeBubble.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/NoticeBubble.kt)
-shows the shared canvas notice (`UiState.notice`, see
-[shared UI](../ui/shared-ui.md)) as a Compose surface over the canvas. It is
-centred above the status strip, or above a canvas action bar along the bottom
-edge, and keeps that place while a contact hides the bar. It is not a popup, so it never takes window focus or cancels a transform.
-Its action button answers `accept: true`. The host hides it after 4 s, answering
-`accept: false`, and at the next canvas contact. When the core refuses a
-command, action, query or input, the refusal appears in the same surface as a
-host-local notice without an action. Only errors that need acknowledgement open
-a dialog: the core's `host_error` (file and renderer errors), shown once each
-time its published value changes, and file or platform errors that Kotlin
-reports through `reportActionError`. `CanvasHost.actionError`, which tests check,
-is the open dialog's error or the refusal being shown. Disabled canvas action
-bar items show the command's published `disabled_reason` on a tap, a touch or
-pen hold, or mouse hover.
+Without a device, build both APKs and run lint:
 
-[`ZoomReadout.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/ZoomReadout.kt)
-turns the footer's "N% · D°" readout into a button (see
-[shared UI](../ui/shared-ui.md#actions-and-observation)). It opens a windowless
-dropdown with a zoom field from `catalog.zoom` above the shared menu, which it
-fetches with the `zoom_menu` native query. Opening the menu and choosing an item
-leave window focus with the canvas. Tapping the field's value makes the popup
-focusable for typing, as the toolbar number menus do, and Back closes it.
-`CanvasHost.cameraZoom` holds the camera stream's exact zoom. Only an open menu
-reads it, so navigation still recomposes one `Text`.
+```bash
+(cd apps/layer-android && ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug -PcapyAbi=arm64-v8a)
+```
 
-The export dialog offers **WebP · lossless**. `Documents.kt` asks the Storage
-Access Framework for `image/webp` and a `.webp` name; its fallback would
-otherwise label the file PNG. The `export_validate` query refuses an output over
-16,384 pixels per side before the file picker opens.
-
-## Validation status
-
-The [feature-parity record](../history/android-feature-parity.md) and
-[Android implementation record](../history/android-implementation.md) describe
-completed checkpoints and outstanding checks. Emulator UI tests do not establish
-physical stylus accuracy, thermal behavior or high-refresh presentation. Use a
-real tablet to validate those properties.
-
-## Focused device tests and debugging
-
-Run from the repository root with the SDK's `platform-tools` on `PATH`. Enable
-USB debugging and authorize the development computer on the device. Select an
-attached device or running emulator, then build and install without clearing data:
+On a device, run from the repository root with the SDK's `platform-tools` on
+`PATH`, USB debugging enabled and the computer authorized. On a shared tablet,
+reserve it and run each device command through `tools/devices/devices.py run`
+([Devices](devices.md)). Select the device, then build and install without
+clearing data:
 
 ```bash
 adb devices -l
 export CAPY_ANDROID_SERIAL=DEVICE_SERIAL
 CAPY_TEST_ABI=$(adb -s "$CAPY_ANDROID_SERIAL" shell getprop ro.product.cpu.abi | tr -d '\r')
-(cd apps/layer-android && ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug "-PcapyAbi=$CAPY_TEST_ABI")
+(cd apps/layer-android && ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest "-PcapyAbi=$CAPY_TEST_ABI")
 adb -s "$CAPY_ANDROID_SERIAL" install -r apps/layer-android/app/build/outputs/apk/debug/app-debug.apk
 adb -s "$CAPY_ANDROID_SERIAL" install -r apps/layer-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w -e class art.capycanvas.AndroidWorkspaceSwitcherTest art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-Use `ClassName#methodName` in the fully qualified test selector for one regression.
-`AndroidRasterTest#portablePhotoGainmapDelivery` takes
-`-e photoDirectory /data/local/tmp/capy-portable-photo`. Push the shared
-`p3-grid-8bit.heic`, `p3-gray-10bit.heic` and `p3-12bit.avif` fixtures, plus
-`web-hdr.jpg` and `web-hdr.avif` produced by Web's `--portable-photo` test, into
-that directory. It checks the real gain-map export dialog, preview switching,
-provider save, HDR reopen, unchanged master, presets and cancellation. For an
-isolated installation, build with `-PcapyApplicationId=art.capycanvas.portablephoto`
-and use `art.capycanvas.portablephoto.test` as the instrumentation package.
+`DEVICE_SERIAL` is the value shown by `adb devices`. Use
+`ClassName#methodName` in the fully qualified selector for one test, and pass
+test arguments with `-e name value`. Gradle can run the same selection with
+`:app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=...`
+and `ANDROID_SERIAL` set, but it uninstalls the APKs afterwards, so combine it
+with an isolated application ID on a tablet.
 
-[`AndroidTitleBarTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidTitleBarTest.kt)
-covers the shared title-bar editor, compact menus, native input and keyboard
-focus, Sketch drawers, feedback and persistence. It isolates workspace and
-recovery stores and restores preferences; see its [tablet acceptance record](title-bar-android-acceptance.md).
-`AndroidInteractionTest#detachedPanelsKeepBodiesAndWiderResizeTargets` covers
-mouse/finger/stylus panel and group tear-off, fixed-size clipped native allocation,
-compact and scrolling release heights, squashed and usable sidebar heights,
-footer anchors, widened resize targets, cancellation, and undo/redo. Lazy lists
-report fixed controls and full row-count height without realizing every row.
+Read the instrumentation result: `OK (N tests)` or `FAILURES!!!`. `am instrument`
+can exit 0 when tests fail, so the exit status proves nothing. Opt-in tests skip
+through JUnit assumptions when their `-e` argument is missing, so confirm that
+the test ran.
+[Testing](testing.md#known-failures-on-main) lists the tests that fail on `main`.
 
-Read the instrumentation result (`OK` or `FAILURES`); the shell exit status alone
-does not establish success. Start with
-[`AndroidInteractionTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidInteractionTest.kt)
-for drawers and drag geometry, or
-[`AndroidWorkspaceManagerTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidWorkspaceManagerTest.kt)
-and [`AndroidWorkspaceSwitcherTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidWorkspaceSwitcherTest.kt)
-for persistence, menus and window lifecycle. Workspace-manager tests use isolated
-SQLite stores; other tests can edit live document/settings state, so save user work
-before running them. Do not uninstall the app or clear its storage to reset a test.
+Emulator runs check logic and layout. Physical stylus accuracy, thermal
+behavior and high-refresh presentation need a real tablet.
 
-```bash
-mkdir -p artifacts/android
-adb -s "$CAPY_ANDROID_SERIAL" logcat -d -v threadtime > artifacts/android/logcat.txt
-adb -s "$CAPY_ANDROID_SERIAL" exec-out screencap -p > artifacts/android/screen.png
-adb -s "$CAPY_ANDROID_SERIAL" pull /sdcard/Android/data/art.capycanvas/files/validation artifacts/android/
-adb -s "$CAPY_ANDROID_SERIAL" shell am start -n art.capycanvas/.MainActivity
-```
+### Where to start
 
-The validation directory contains captures from tests that produce them. Trace
-input in [`WorkspaceInput.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/WorkspaceInput.kt)
-and [`WorkspaceRows.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/WorkspaceRows.kt),
-then host publication in [`CanvasHost.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/CanvasHost.kt).
-Shared drag/drop policy and history live in `crates/layer-ui`; workspace storage
-and ownership live in `crates/layer-workspace`. Android uses Bionic `flock` for
-workspace liveness because `std::fs::File::try_lock` is unsupported on this
-target. The file stays open for the claim and releases its lock on close;
-database owner/epoch/fence validation still governs writes.
-`AndroidWorkspaceOwnershipTest` verifies independent native sessions cannot
-take an active workspace and can acquire it after its owner closes.
+- [`AndroidInteractionTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidInteractionTest.kt):
+  drawers, drag geometry, panels, the canvas action bar, notices, the zoom
+  readout and effects, each with mouse, finger and stylus. It dispatches typed
+  `MotionEvent`s through the native views; `-e systemInput true` uses OS
+  injection where the device allows it.
+- [`AndroidWorkspaceManagerTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidWorkspaceManagerTest.kt)
+  and [`AndroidWorkspaceSwitcherTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidWorkspaceSwitcherTest.kt):
+  persistence, menus and window lifecycle. `AndroidWorkspaceOwnershipTest`
+  checks that a second native session cannot take an active workspace.
+- [`AndroidTitleBarTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidTitleBarTest.kt):
+  the title-bar editor, compact menus, keyboard focus, Sketch drawers and
+  persistence.
+- `AndroidRasterTest`: document, file and GPU lifecycle.
+  - `#navigationBuffersAndPenReturnsToFrontBuffer` and
+    `#frontBufferSurfaceLifecycle` cover the switch between buffered navigation
+    and front-buffer ink, rotation, surface recreation and GPU recovery.
+  - `#hdrDisplayNegotiation` takes `-e hdrFile <device path of a PQ PNG>`;
+    `-e requireHdr true` fails instead of passing on an SDR-only display.
+  - `#portablePhotoGainmapDelivery` takes
+    `-e photoDirectory /data/local/tmp/capy-portable-photo`. Push the shared
+    `p3-grid-8bit.heic`, `p3-gray-10bit.heic` and `p3-12bit.avif` fixtures, plus
+    `web-hdr.jpg` and `web-hdr.avif` produced by Web's `--portable-photo` test,
+    into that directory.
+  - `#largePhotoFilterPreviews` and `#largePhotoFilterPreviewLifecycle` opt in
+    with `-e filterPhoto true`, `#largePhotoFilterPreviewDrawing` with
+    `-e filterDrawing true`. They read the app's private
+    `files/filter-memory-test.jpg` and write reports to its external-files
+    directory.
 
-`Native.modelUpdate` sends the paths that changed since the last full model
-([`model_update.rs`](../../crates/layer-host/src/model_update.rs)). Arrays of
-unchanged length are diffed element by element, with a decimal index as the path
-segment. An object whose keys change, such as a layout node switching variant,
-is sent whole, so every object keeps a full model's key order. The model omits
-the header's primary menu; `WorkspaceHeader.kt` opens it with the
-`application_menu` query. A single command-availability
-change, such as Select All, is about 1.5 KB. On the owner thread, Rust still
-builds and serializes the full 178 KB snapshot and splits it by top-level field
-before diffing. That takes about 0.7 ms per publication on a desktop and 6–9 ms
-on the MovinkPad 11. The follow-up is to rebuild and re-serialize only the
-entries whose input revisions changed.
+### Test data
 
-`CanvasHost` applies each model update on the native owner thread. Replaced
-values reuse every part the previous model repeats, so unchanged objects and
-array elements keep their identity. The main thread then assigns the model into
-[`ObservedModel`](../../apps/layer-android/app/src/main/java/art/capycanvas/ObservedModel.kt).
-Compose observes the published root, `state` and `state.document_file` one key
-at a time, so a publication recomposes only the scopes that read a changed
-key. Composables with unchanged arguments skip.
+`CapyDeviceRule` gives a test its own workspace, recovery and color stores
+under the app cache, and restores the user's preferences afterwards. Tests
+without it can edit the live document and settings, so save work before running
+them. Never uninstall the app or clear its storage to reset a test; use an
+isolated application ID instead.
 
-Camera, workspace layout and command search messages leave the update baseline
-alone on both sides. Rust keeps diffing against its last full model. The owner's
-model in `CanvasHost` stays equal to that baseline, and those messages patch
-only the observed model. The next model update therefore carries every value
-that differs from the baseline, including ones a message changed in between.
+Tests that produce captures write them to the app's external
+`files/validation/` directory. `AndroidHostTest` and `AndroidShortcutsTest`
+also save images under `Pictures/` through MediaStore.
 
-Interaction tests dispatch typed mouse/touch/stylus `MotionEvent`s through native
-views; `AndroidInteractionTest` optionally accepts `-e systemInput true` where OS
-injection is supported. Neither substitutes for physical pen testing. When adding
-held-contact tests, use `runOnMainSync` and bounded condition polling: global idle
-waits can hang during a held gesture. Test focus loss with a real window and send
-keyboard events through system dispatch so Android leaves touch mode correctly.
+### Writing device tests
 
-`AndroidInteractionTest#menuBodyAndExtendedTabDropsAcrossDevices` covers
-menu-bar insertion above expanded columns and collapsed stacks, body prepending,
-and enlarged tab targets in first and lower groups. It uses mouse/finger/stylus
-contacts, both column sides and themes, all supported payloads, cancellation and
-one-step undo/redo. Body-preview captures are in `validation/layout-drops`.
-Nested columns remain expanded; only top-level columns can collapse. New stacks
-open whole columns by default, so compact-drawer test fixtures opt in explicitly.
+- Poll with `CanvasHost.awaitMain`, which checks a condition in `runOnMainSync`
+  until a timeout, and `CanvasHost.drain`, which waits for native publication.
+  Global idle waits can hang while a gesture is held.
+- Between consecutive popup or held-contact journeys, wait for native window
+  focus to settle.
+- Test focus loss with a real window. Send keyboard events through system
+  dispatch so Android leaves touch mode correctly.
+- `PixelCopy` cannot read the canvas: its shared front-buffer image stays
+  acquired. Debug and benchmark builds give the swapchain copy usage, so tests
+  read the retained image directly or take a compositor screenshot. Release
+  builds cannot be read back.
+- `awaitMain` defaults to a 10 s timeout. A cold shader cache on a slow tablet
+  can take longer to start; see [Devices](devices.md).
 
-The Color panel retains its native hue-ring brush by shape; its shader tracks
-physical drawing size. Color changes and overlapping panel motion reuse it. The
-color-field bitmap remains cached by shape, hue and size.
-`AndroidColorPanelTest` checks rendering and picking across shapes and sizes.
+## Benchmarks
 
-Panel groups, collapsed columns, drawers and the canvas action bar draw through
-`panelSurface` in [`PanelShadow.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/PanelShadow.kt).
-Each is an offscreen Compose layer enlarged by its shadow reach
-(`PanelShadowReach` × elevation). The layer draws the native elevation shadow
-once, clears the panel interior so translucent fills cannot reveal it, and then
-draws the content clipped to the panel outline. HWUI re-renders a layer only when
-its content changes. A moved panel, or a frame drawn for some other change,
-composites the cached texture instead. If HWUI drops layers after a memory trim,
-it re-renders them on the next frame. In the Paint workspace the panel layers
-hold about 8.5 MB of GPU memory, plus 0.6 MB while the canvas bar is shown. The
-Navigator clears its overview opening
-after its layer is composited (`PanelOpening`), so the live overview in the
-SurfaceView still shows through. Command Search is not in a cached layer; its
-shadow comes from a shadow texture that is recorded once.
-
-Caching matters because of how this GPU driver presents frames. The MovinkPad 11
-(MT8781, Mali-G57) EGL driver offers neither `EGL_EXT_buffer_age` nor an
-`EGL_SWAP_BEHAVIOR_PRESERVED` config. Every process logs
-`Unable to match the desired swap behavior`. As a result, HWUI redraws the whole
-2200 × 1440 window on every frame. Any chrome that is not cached therefore
-repeats its full draw on every frame, including the squircle clip masks, which
-Skia rasterizes on the CPU and uploads as textures.
-
-Test coverage:
-
-- `AndroidPanelShadowTest` compares hardware-rendered interiors with and without
-  shadows across fills, corner shapes, sizes and elevations. It checks that
-  exterior shadows and content remain visible.
-
-For measured overlap motion, build the release-based benchmark variant and run:
+The `benchmark` build type inherits `release`, is not debuggable, and is signed
+with the debug key. `-PcapyBenchmark` makes it the build type of the test APK.
+Make performance decisions with it, never with a debug build. Reinstall the
+debug APK afterwards for ordinary development.
 
 ```bash
 (cd apps/layer-android && ./gradlew :app:assembleBenchmark :app:assembleBenchmarkAndroidTest "-PcapyAbi=$CAPY_TEST_ABI" -PcapyBenchmark)
 adb -s "$CAPY_ANDROID_SERIAL" install -r apps/layer-android/app/build/outputs/apk/benchmark/app-benchmark.apk
 adb -s "$CAPY_ANDROID_SERIAL" install -r apps/layer-android/app/build/outputs/apk/androidTest/benchmark/app-benchmark-androidTest.apk
-adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w -e workspaceBenchmark true -e workspaceTransparency 3 -e class art.capycanvas.AndroidWorkspacePerformanceTest#colorPanelOverlapFrameTiming art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
-adb -s "$CAPY_ANDROID_SERIAL" logcat -d -s CapyDragPerf:I
 ```
 
-This uses the real display clock and Android `FrameMetrics`, with typed native
-mouse/touch input over a visible Color wheel. It asserts retained UI models and
-matching placement. The benchmark variant enables measurement without making
-the app debuggable. Reinstall the debug APK afterward for ordinary development.
-`workspaceTransparency` accepts 0–3 (off through high); the test restores the
-previous setting afterward. The same option applies to `continuousDragFrameTiming`
-and `continuousResizeFrameTiming`.
+`-PcapyOptimize` also enables R8 minification. Use it only for the
+self-instrumenting runners in `app/src/benchmark` (`BrushBenchmarkInstrumentation`
+and `UiStartupInstrumentation`). R8 can remove methods that only a separate test
+APK calls, so test-APK benchmarks use the unminified build.
 
-`AndroidCanvasBarBenchmarkTest` measures the canvas action bar on a 6000 × 4000
-canvas with the same benchmark APKs: pen strokes, a 24-megapixel photo placement
-and a full-canvas selection transform, each with stylus handle drags, contact
-taps that hide and return the bar, and bar show/hide alone. Run it with
-`-e canvasBarBenchmark true`; `-e scenarios ui,paint,photo,selection,menus`, `durationMs`,
-`width`, `height` and `transparency` narrow or resize the run. The `ui` scenario
-uses a 2048 × 1536 document to isolate UI frames: bar show/hide, bar moves, show/hide
-in Zen and a plain Tool Options change. The `menus` scenario, also on 2048 × 1536,
-repeats rectangle-selection pen strokes after which the selection bar returns,
-the same strokes with the bar turned off, and opening and closing the Adjust ▾
-menu and More. The `photo` scenario also repeats short
-placement and pixel transform drags, each marked by a `capy-drag` trace section, so a
-Perfetto trace shows every drag start and release. The `capy.publish.native` and
-`capy.publish.parse` trace sections time each publication on the owner thread, and
-`-e composeTrace true` adds a trace section for every composable, which slows the
-frames it attributes. Each scenario logs one `CapyBarPerf` line and writes
-`canvas-bar-benchmark/<label>.json` with the renderer frame rows, GPU completions
-and UI `FrameMetrics` percentiles.
-`AndroidInteractionTest#canvasActionBarJourneysAcrossDevices` covers the bar's
-mouse, finger and stylus behavior and saves light and dark captures in
-`validation/canvas-bar`.
-`AndroidInteractionTest#canvasBarSelectionMenusAcrossDevices` chooses Copy to
-Layer, Clear ▾ › Clear Outside Selection and Adjust ▾ › Curves with mouse,
-finger and stylus, from the bar in a wide layout and through More beside wide
-docks. It checks one undo step for each, the new layer's pixels, and the masked
-Curves layer. `#selectionBarOverflowsIntoMoreInBothOrientations` checks in
-landscape and portrait that the selection bar keeps a leading run of items and
-lists the rest in More, then cuts the selection to a new layer through its
-menu. `#hardwareDeleteClearsSelectedPixels` presses the keyboard's Delete and
-Backspace over a selection. A focused text field keeps both keys, and a focused
-drawing tab keeps Delete, which closes that drawing: `MainActivity` does not
-forward that Delete to the core.
-`#modeBarsLeaveFromTheirExitsAcrossDevices` enters Quick Mask, a Selection
-Layer and a layer mask and taps their bottom-edge bars with mouse, finger and
-stylus: Quick Mask's Invert and Exit, the Selection Layer's Invert and Return to
-Artwork, and the mask's Disable, which then reads Enable, and Edit Content. It
-checks each bar's label, placement and accented exit, and that Disable is drawn
-as a plain button rather than a pressed toggle. The keyboard's Escape leaves
-mask and Selection Layer editing, and Move on a locked mask shows its notice
-above the mode bar (`validation/canvas-bar/mask-mode-notice.png`).
-`#guideBarDeletesTheSelectedGuideAcrossDevices` draws a guide with the Ruler
-tool, checks that its bar sits below the guide's handles, and deletes the guide
-from the bar. Fingers navigate the canvas, so its finger pass draws the guide
-with the pen and taps the bar with the finger.
+- **Workspace motion.** `AndroidWorkspacePerformanceTest` runs with
+  `-e workspaceBenchmark true`. `#colorPanelOverlapFrameTiming`,
+  `#continuousDragFrameTiming` and `#continuousResizeFrameTiming` use the real
+  display clock and `FrameMetrics`. `-e workspaceTransparency 0`–`3` sets panel
+  transparency (off to high) and restores it afterwards. Results appear in
+  logcat under `CapyDragPerf` and `CapyResizePerf`.
+- **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
+  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,selection,menus`,
+  `durationMs`, `width`, `height` and `transparency` (`off` to `high`) narrow or
+  resize the run. Each scenario logs a `CapyBarPerf` line and writes
+  `canvas-bar-benchmark/<label>.json` in external files. Photo drags are marked
+  by `capy-drag` trace sections; `capy.publish.native` and `capy.publish.parse`
+  time each model publication; `-e composeTrace true` adds a section per
+  composable, which slows the frames it attributes.
+- **Canvas navigation and drawing.** `AndroidViewportBenchmarkTest` runs with
+  `-e viewportBenchmark true`. `-e motion pan|pinch` measures navigation;
+  the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,
+  `intervalMs`, `durationMs`, `repeats` and `label`. Pull
+  `files/viewport-benchmark/` from the app's external storage and summarize it
+  with `python3 tools/performance/android-viewport-report.py DIRECTORY`.
+- **UI startup.** With an `-PcapyOptimize` build under an isolated ID, run
+  `adb shell am instrument -w -e uiStartupAudit true -e auditLabel LABEL <id>/art.capycanvas.UiStartupInstrumentation`.
+  It records first draw, Settings responses, UI frame intervals and publication
+  costs in external `files/ui-startup-audit/`.
+- **Pen workflow traces.** `tools/performance/AndroidPenMotion.java` injects a
+  200 Hz stylus ellipse from the shell and prints `CLOCK_BOOTTIME` action
+  markers. Compile it with `javac` against `platforms/android-37.0/android.jar`
+  and `d8 --min-api 29`, push the dex, and run
+  `CLASSPATH=<dex> app_process / AndroidPenMotion CX CY RX RY workflow [turns/s] [seconds]`
+  while Perfetto records. `tools/performance/android-pen-report.py TRACE MARKERS --processor TRACE_PROCESSOR`
+  reports CPU scopes, GPU observations and canvas latches per action.
 
-[`Effects.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Effects.kt)
-draws effect properties from the shared `layer_properties` view. Each Color
-control is a labelled `ManagedColorButton` row. When the control has a
-`color_action`, a bucket after the swatch dispatches it to use the current
-colour. The bucket's test tag is the control key with dashes and `-bucket`,
-such as `paper-color-bucket`, `tint-color-bucket` or `mask-color-bucket`.
-`AndroidInteractionTest#solidColorFillMasksTheSelectionAcrossDevices` chooses
-Layer › New › Solid Color Fill over a rectangle selection with mouse, finger
-and stylus. It checks the fill's mask, colour and pixels, and one undo step.
-`#blackWhiteTintRowAppliesTheCurrentColorAcrossDevices` inserts Black & White
-from the Filter menu, checks the labelled Tint color row, and applies the
-current colour with its bucket in one undo step.
-`#liquifyPinchStrokeMovesThePixelsUnderTheStylus` pinches striped paint with an
-OS-injected 240 Hz stylus stroke. It checks the pixels under and far from the
-stroke and one undo step, and writes the stroke's frame timing to
-`validation/photo-edit/pinch-frames.json`. On the MovinkPad 14 debug build,
-three runs completed about 400 canvas updates per second on the 120 Hz display,
-with GPU completion intervals of 2.6 ms p50 and 4.9–5.1 ms p99, none over
-8.33 ms. Captures are in `validation/photo-edit`.
-
-`AndroidInteractionTest#zoomReadoutMenuAndFieldAcrossDevices` opens the
-readout with mouse, finger and stylus. It chooses 200%, uses Actual Pixels at a
-quarter turn, types 50, and closes the menu with Back. It checks whole-pixel
-translations and that the canvas keeps window focus, and saves light and dark
-captures in `validation/zoom-readout`.
-`AndroidRasterTest#webpExportThroughTheDialogDecodes` exports strokes through the
-real dialog to a file in app storage. It checks the `image/webp` picker
-request, decodes the file and compares it with an 8-bit PNG delivery. It also
-checks that a saved preset enlarging to 20,000 px is refused before the picker.
-With the readout visible, `AndroidViewportBenchmarkTest` on the MovinkPad 14
-benchmark build (`-e viewportBenchmark true -e motion pinch|pan`, 3 × 5 s)
-presents two-finger pinch zoom at 117.7 Hz, with frame intervals of 8.3 ms p50
-and 15.6 ms p99. Pan presents at 118.8 Hz, 8.3 ms p50 and 12.0 ms p99. The
-build before the readout became a button measured 117.7 Hz, 8.3 and 15.6 ms,
-and 118.7 Hz, 8.3 and 11.5 ms.
-`AndroidInteractionTest#canvasNoticesExplainRefusalsAcrossDevices` covers the
-notice with mouse, finger and stylus. Fingers navigate the canvas, so the finger
-pass makes its tool gestures with the pen and uses the finger for the notice.
-It checks the Wand's reference offer and its action, the canvas rendering
-afterwards, Move on a locked layer without a dialog or focus change, a repeated
-refusal, dismissal by contact and by timeout, clearance above a bottom-edge bar,
-and a disabled bar item's reason on tap and hold. It saves light and dark
-captures in `validation/canvas-notice`.
-
-The [61 MP Filters memory investigation](../history/filter-preview-tablet-memory-2026-09-17.md)
-records the shared source-probe texture reuse fix, tablet measurements, and
-remaining preview/display memory-budget work.
-
-The [shared filter preview scheduling record](../history/filter-preview-scheduling-2026-09-17.md)
-records the Rust lifecycle, 61 MP latency and drawing responsiveness measurements,
-platform handoff and remaining memory work.
-
-The focused physical-device regressions are in `AndroidRasterTest`:
-`largePhotoFilterPreviews`, `largePhotoFilterPreviewDrawing` and
-`largePhotoFilterPreviewLifecycle`. They are opt-in via `-e filterPhoto true` and
-`-e filterDrawing true`. Place the photo at the test app's private
-`files/filter-memory-test.jpg`. Use a separate app ID with
-`-PcapyApplicationId=art.capycanvas.filtertest -PcapyAppLabel="Capy Filter Test"`;
-install both matching APKs and target `art.capycanvas.filtertest.test` for
-instrumentation. Reports are in its external-files directory. Production app
-storage must not be cleared to prepare these tests.
-
-## Brush workload benchmark
+### Brush workload benchmark
 
 `BrushBenchmarkInstrumentation` draws with OS-injected stylus input on a photo in
 release code. Build `:app:assembleBenchmark -PcapyAbi=arm64-v8a
@@ -410,3 +244,48 @@ Perfetto and simpleperf captures. The default preset list is the dry brushes;
 `--presets` accepts every built-in preset, including wet, smudge and Liquify.
 `python3 tools/performance/android-brush-report.py OUT` summarizes completed
 canvas updates per second, the rate the performance targets use for brushes.
+Run directly, the instrumentation also accepts `-e navigationBetweenStrokes true`
+and `-e navigationSettleMs` to measure the handoff from navigation back to ink.
+[Measuring performance](../performance/measuring.md) has the tier rules.
+
+## Debugging
+
+```bash
+mkdir -p artifacts/android
+adb -s "$CAPY_ANDROID_SERIAL" logcat -d -v threadtime > artifacts/android/logcat.txt
+adb -s "$CAPY_ANDROID_SERIAL" exec-out screencap -p > artifacts/android/screen.png
+adb -s "$CAPY_ANDROID_SERIAL" pull /sdcard/Android/data/art.capycanvas/files/validation artifacts/android/
+adb -s "$CAPY_ANDROID_SERIAL" shell am start -n art.capycanvas/.MainActivity
+```
+
+Where to look:
+
+- Input: [`CanvasSurfaceView.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/CanvasSurfaceView.kt)
+  for the canvas, [`WorkspaceInput.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/WorkspaceInput.kt)
+  and [`WorkspaceRows.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/WorkspaceRows.kt)
+  for chrome drags. Shared drag/drop policy and history live in `crates/layer-ui`.
+- Publication: [`CanvasHost.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/CanvasHost.kt)
+  runs the native session on its `capy-canvas` thread and applies model updates
+  into [`ObservedModel`](../../apps/layer-android/app/src/main/java/art/capycanvas/ObservedModel.kt).
+  `CanvasHost.actionError` holds the open error dialog's text or the refusal
+  being shown; tests check it.
+- Presentation: [`native/src/android.rs`](../../apps/layer-android/native/src/android.rs)
+  owns the Vulkan surface and its present-mode switches. `Native.displayStatus`
+  reports the present mode, frame latency, surface format and color space, and
+  submitted and completed frames. A submitted frame is not proof that Android
+  displayed it.
+- Files: [`Documents.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Documents.kt)
+  uses the Storage Access Framework. Providers control their own destination
+  behavior, so atomic replacement cannot be assumed for every URI.
+- Workspaces: `crates/layer-workspace` stores them. Android takes the
+  workspace liveness lock with Bionic `flock`, because `std::fs::File::try_lock`
+  is unsupported on this target.
+- Panel rendering: `panelSurface` in [`PanelShadow.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/PanelShadow.kt);
+  `AndroidPanelShadowTest` compares panels with and without shadows.
+
+If the canvas stops updating while menus still respond, keep the app running.
+Record a Perfetto trace with the SurfaceFlinger frame timeline during the
+gesture, and compare canvas submissions with the canvas `SurfaceView`'s latches
+and the UI layer's. Restarting the app hides the cause. Do not add device-idle
+waits or reconfiguration loops before the missing completion or consumption
+signal is found.

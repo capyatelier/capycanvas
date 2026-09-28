@@ -1,11 +1,11 @@
 # Drag and reorder convention
 
-[Workspace and UI](README.md) · [Implementation inventory](drag-inventory.md)
+[Workspace and UI](README.md)
 
 This is the required interaction convention for all Capy Canvas frontends.
 It applies to existing and new reorderable controls, including their docked,
-floating, collapsed-column, and drawer presentations. The convention was set on
-2026-09-12; older implementation descriptions do not override it.
+floating, collapsed-column, and drawer presentations. Older implementation
+descriptions do not override it.
 
 ## Pickup rules
 
@@ -45,7 +45,7 @@ The component bank has no click, tap or keyboard activation: a component must
 be dropped into the bar, and Add Tools opens its picker only on a valid drop.
 Selecting an existing bar item still supports keyboard move/remove and context
 menus. Outside this editor, ordinary tile holds and native window movement keep
-their existing rules. This explicit exception was requested on 2026-09-13.
+their existing rules.
 
 Pen includes stylus contacts such as Apple Pencil. Do not infer mouse behavior
 from “not touch,” the absence of a touch sequence, or synthesized mouse events
@@ -59,6 +59,10 @@ change the immediate pickup rule for handles and title/tab bars.
 
 ## Scrolling, menus, and cancellation
 
+- Pen drags scroll lists like touch on every host (GTK's shared pen scroller,
+  Web `pen-scroll.js`, Android Compose); mouse drags never pan lists.
+- A touch or pen swipe across a layer row reveals Delete; a reverse swipe or an
+  outside click closes it. Deletion is the shared action and one undo step.
 - Before a touch/pen list-row hold wins, motion remains available to normal list
   scrolling and cancels the pending reorder hold. Lifting, cancellation, capture
   loss, focus loss, or invalidating the source also retires pending holds.
@@ -158,3 +162,15 @@ scrolling early, mouse holds must not open menus, and a handle/tab must not wait
 for the hold timeout. Measure
 steady motion separately from the intentional pickup delay and preserve retained
 controls and display-paced rendering.
+
+## Known gaps
+
+- Physical pen and Apple Pencil acceptance is outstanding on most hosts;
+  automated suites inject pen events, which do not qualify physical digitizers.
+- Windows: injected pen and touch workspace-tab tear-off can lose capture.
+- iPadOS: held collapsed-column icons and the expanded toolbar cases
+  (disabled commands, dividers, drawers) lack UIKit coverage.
+- macOS: Manage Workspaces rows keep custom vertical row menus, because the
+  native menu presenter does not preserve the held contact for dragging.
+- Android: check that the layer-row trailing grip's 20 dp hit region matches
+  its visible handle.

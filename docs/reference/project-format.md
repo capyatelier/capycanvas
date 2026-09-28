@@ -159,5 +159,3 @@ one file worker per window. It uses the same immutable revision model and atomic
 writer. A failed capture/write retains the previous copy. Startup offers copies
 from terminated processes for recovery; recovery opens a new, modified document
 requiring an explicit Save. Active GPU-only samples are not promised recoverable.
-Native failure and performance qualification is recorded in the
-[GTK validation report](../history/color-management-gtk-m1-validation.md).

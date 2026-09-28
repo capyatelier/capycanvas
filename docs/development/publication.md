@@ -32,37 +32,32 @@ resources are not copied into this source checkout. Research documents link to
 upstream documentation, papers and implementations. A reference is not a license
 to copy its code, figures, screenshots, textures or other artwork.
 
+## Adding dependencies
+
+Add a dependency or vendored code only when the project cannot reasonably do
+without it. After adding or updating one, run
+`cargo deny --locked check licenses sources` and add any required notice to
+[third-party notices](../../THIRD_PARTY_NOTICES.md). Vendored crates follow the
+[vendor rules](../../vendor/README.md).
+
 ## Publication checks
 
-The initial source audit reviewed the file inventory, asset provenance and PNG
-metadata, source attributions, dependency licenses, secret-like strings, personal
-paths, hardware fingerprints and generated outputs. Automated scans and source
-review reduce risk; they are not a legal guarantee of ownership or noninfringement.
-The branding policy reserves rights but does not register trademarks or establish
-their availability; obtain legal review before relying on it for enforcement.
-
-Initial audit, 2026-09-07: `cargo-deny` 0.20.2 accepted all 201 locked third-party
-Rust packages; Gitleaks 8.30.1 found no secrets in the exported publication tree.
-The 48 runtime PNGs contained only IHDR/IDAT/IEND chunks, with no embedded text
-metadata. Personal-path, old-origin and hardware-fingerprint scans were clean.
-All 115 non-ignored Rust tests, Clippy, the Wasm check and seven launcher tests
-passed. Eight display-dependent native tests are outside this source-only audit.
-
+Automated scans and source review reduce risk; they are not a legal guarantee of
+ownership or noninfringement. The branding policy reserves rights but does not
+register trademarks; obtain legal review before relying on it for enforcement.
 Repeat these checks before publishing:
 
 1. Review `git diff --cached` and `git ls-files`. Do not include local credentials,
-   absolute personal paths, browser profiles, machine-specific logs, screenshots,
-   vendored third-party trees or build outputs. Scan the exact staged tree for
-   secrets, not just the working directory. Inspect binary metadata and provenance
-   whenever an asset changes.
+   absolute personal paths, browser profiles, machine-specific logs, screenshots
+   or build outputs. Scan the exact staged tree for secrets, not just the working
+   directory. Inspect binary metadata and provenance whenever an asset changes.
 2. Install `cargo-deny` and run `cargo deny --locked check licenses sources`.
    The allowlist checks build/dev dependencies and all platform targets. Missing
    licenses, unreviewed licenses and non-registry sources fail the gate. License
    expressions containing `OR` permit a choice; `AND` requires both terms.
 3. Keep `Cargo.lock` tracked. Check dependency updates and preserve every required
    upstream notice; a successful allowlist check does not fulfill those obligations.
-4. Run `cargo test --workspace --locked`, check the Wasm target, and run the
-   [UI validation](../history/ui-implementation.md#run) appropriate to any functional change.
+4. Run the [checks](testing.md) for every area, including the Wasm target.
 5. Publish only the reviewed branch. When replacing history, preserve a private
    recovery copy outside the source checkout and verify that the public branch
    has only the intended root commit. New history does not erase old remotes,
@@ -72,9 +67,7 @@ Repeat these checks before publishing:
 `artifacts/` is entirely local and ignored, including review PNGs, benchmark
 reports, traces and historical baseline notes. Paths under that directory in
 design documents describe local outputs, not files included in a fresh clone.
-Generate fresh results with the documented test/benchmark commands; older
-measurements are historical observations, not performance guarantees for another
-machine. Build trees, generated Wasm bindings and local editor/agent state are
+Build trees, generated Wasm bindings and local editor/agent state are
 also ignored. The runtime brush previews above are the intentional exception
 for generated images: both frontends need them without running a GPU generator
 at startup.

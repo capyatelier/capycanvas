@@ -42,8 +42,8 @@ Two claims are wrong:
 | core/lib.rs | crates/layer-core/src/lib.rs |
 | flatten.rs | crates/layer-color/src/flatten.rs |
 | INV | docs/ui/selection-command-inventory.md |
-| SELTOOLS | docs/development/selection-tools.md |
-| TONAL | docs/development/tonal-selection.md |
+| SELTOOLS | docs/ui/selection-tools.md |
+| TONAL | docs/ui/tonal-selection.md |
 | SAVED | docs/ui/saved-selections-assessment.md |
 | PAINTSEL | docs/ui/paintable-selection-proposal.md |
 | IMPORT | docs/ui/image-open-import-proposal.md |

@@ -60,8 +60,7 @@ Watercolor keeps its water activation threshold as a material-model parameter.
 That threshold no longer rejects faint native pigment. Native transport constrains
 coverage while retaining extended RGB between commits; it does not clamp RGB to
 alpha. These helpers are not a claim that all brush dynamics and nonlinear tone
-controls are fully qualified. Active workload limits and remaining workflow gaps
-are in the [GTK milestone record](../history/color-management-gtk-m2-validation.md).
+controls are fully qualified.
 
 [`view_color.rs`](../../crates/layer-render-wgpu/src/view_color.rs) converts the
 composition to explicitly declared sRGB, Display P3 or extended-linear sRGB view
@@ -93,9 +92,6 @@ operations that need reusable image inputs. A blur needs pixels outside its outp
 rectangle, so filter definitions describe their sampling footprint. Global effects,
 layer reordering and invalidated caches can require much larger updates than a
 single brush mark. Animated effects also need updates without new pen input.
-
-The [clipping regression record](../history/filter-clipping-regression.md)
-provides a concrete example of a cache invalidation bug and the work it caused.
 
 A transform or placement drag skips both the full-resolution pages and
 composition when a native document keeps a complete display pyramid and the
@@ -282,10 +278,20 @@ platform APIs may still need staging or copies.
 
 ## Startup
 
-GPU preparation is staged so the platform can display its controls before the
-entire brush and filter catalog is ready. Required document and brush dependencies
-must be prepared before drawing uses them. This avoids moving expensive pipeline
-creation into an otherwise small stroke update.
+GPU preparation is staged so the platform can display its controls first.
+Startup prepares the paper, then the open document, then the selected brush and
+eraser; unused brushes and filters compile on first use
+([shader readiness](shared-shader-readiness.md)). Required
+dependencies are ready before drawing uses them, so pipeline creation never lands
+in a small stroke update. A contact that begins before its brush is ready stays
+suppressed until release.
+
+On Web, GPU initialization waits for the workspace (at most 1 s), and pipelines
+are created through the asynchronous WebGPU APIs, a few at a time: synchronous
+creation blocks Chrome's GPU process and display callbacks even when JavaScript
+yields between jobs. An edit that needs a pipeline whose asynchronous compile is
+still in flight creates it synchronously and drops the asynchronous result
+(`node apps/layer-web/test.mjs --headless --pipeline-takeover`).
 
 For brush-specific passes, continue with [Brushes](brushes.md). For performance
 work, use the [measurement guide](../development/testing.md#performance).

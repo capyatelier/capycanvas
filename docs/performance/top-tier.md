@@ -9,8 +9,8 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
-| Pan: Hand tool, one or two fingers | 120 | Met on a small document: 118.8 fps, interval p50/p99 8.3/12.0 ms (1024 px document; not yet at 61 MP) | [Android development](../development/android.md#focused-device-tests-and-debugging), 2026-09-27 |
-| Pinch zoom | 120 | **Met.** 119.3 fps on the 61 MP photo; 117.7 fps, p99 15.6 ms on a 1024 px document | [Buffered navigation](../development/android-buffered-navigation-20260921.md), 2026-09-22; `2c3cb244`, 2026-09-27 |
+| Pan: Hand tool, one or two fingers | 120 | Met on a small document: 118.8 fps, interval p50/p99 8.3/12.0 ms (1024 px document; not yet at 61 MP) | [Android development](../development/android.md#benchmarks), 2026-09-27 |
+| Pinch zoom | 120 | **Met.** 119.3 fps on the 61 MP photo; 117.7 fps, p99 15.6 ms on a 1024 px document | 2026-09-22; `2c3cb244`, 2026-09-27 |
 | Two-finger rotate | 120 | | |
 | Navigator drag | 120 | | |
 | Brush-cursor hover | 120 | | |
@@ -51,8 +51,7 @@ Target: **120 completed updates/s** at the guaranteed size, on the 61 MP canvas.
 Measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets. The ellipse is 520 × 299 px at 16.5% zoom.
 
 **The 2026-09-22 G-Pen record used a different stroke.** It recorded 105.76
-updates/s for a 2000 px G-Pen
-([buffered navigation](../development/android-buffered-navigation-20260921.md)).
+updates/s for a 2000 px G-Pen.
 That run's wider work area set Fit zoom to 18.0%, so each stroke crossed about 8%
 less canvas at the same screen speed.
 

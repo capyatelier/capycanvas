@@ -290,7 +290,6 @@ impl CapyHost {
             .ok_or("D3D12 surface unsupported")?;
         // Present completed ink without waiting for vblank when DXGI supports
         // tearing. Keep the one-frame queue and acquire-before-input ordering.
-        // See docs/development/windows-pen-latency-20260920.md for measurements.
         config.present_mode = if self.surface.get_capabilities(&adapter).present_modes
             .contains(&wgpu::PresentMode::Immediate) {
             wgpu::PresentMode::Immediate

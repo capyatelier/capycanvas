@@ -23,9 +23,4 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   cargo build -p layer-apple --target aarch64-apple-ios
 ```
 
-This is the shared-host/Metal foundation milestone. Native editor integration,
-complete input sensor handling, persistence, visual comparisons and measured
-hardware acceptance remain required on both iPadOS and macOS. The shared bridge
-and owner must serve both native hosts throughout implementation; neither port
-can substitute for the other's input, lifecycle or performance evidence. See
-[the Apple goal and milestone matrix](../../../docs/history/apple-acceptance.md).
+See [Capy Canvas for macOS and iPadOS](../README.md).

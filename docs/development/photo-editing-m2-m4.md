@@ -116,7 +116,7 @@ The user asked for these to be settled by research into other editors, without n
 
 ## Shortcuts
 
-Check each chord against the cross-editor tables in the [shortcut audit](../history/command-input-shortcut-audit-2026-09-25.md) before binding it. Bump a preset's `revision` whenever its rows change.
+Check each chord against the other editors' defaults ([settings](../ui/settings.md)) before binding it. Bump a preset's `revision` whenever its rows change.
 
 | Command | capy | photoshop | affinity | gimp |
 | --- | --- | --- | --- | --- |
@@ -615,22 +615,9 @@ Sizes: S ≤ ½ day, M ≈ 1 day, L 2–3 days, XL > 3 days.
   - Web and Android agents then work in parallel, each in its own worktree.
   - No more than three agents run at once.
 - **Verify before pushing:** check each agent's commit yourself (build, suites, and a tree that matches what was measured).
-- **The tablet:** every Web and Android test and measurement runs on the Wacom MovinkPad 14 (`5ll21u1002931`, Adreno 735, 120 Hz panel), which is reserved for this work.
-  - Its target is 120 fps for every operation that moves on screen: strokes, drags, pan and zoom, and animations.
-  - One agent uses it at a time. Wrap device commands in `flock /tmp/capy-5ll21u1002931.lock`.
-  - Install under an isolated `-PcapyApplicationId`, so other sessions' installs on other tablets are untouched.
-  - Check that none of this session's app processes are still running before each run.
+- **The tablet:** Web and Android tests and measurements run on a reserved top tier tablet ([devices](devices.md)). Its target is 120 fps for every operation that moves on screen: strokes, drags, pan and zoom, and animations.
 - **Shared renderer changes:** after any of them (M2.2 `Erase`, M3.1, M3.3, M4.1–M4.6), run the Android journey `AndroidInteractionTest#canvasActionBarJourneysAcrossDevices`, not only GTK.
-- **Cargo:**
-  - Set `CARGO_TERM_COLOR=never`.
-  - Run `cargo test -p layer-core -p layer-engine -p layer-render-wgpu -p layer-ui -p layer-host`, then Clippy.
-- **Known failures that also occur on main**, not to chase:
-  - GTK `native_selection_pen_input`, and tests that open the portal file chooser;
-  - 7 of 15 `AndroidTitleBarTest` cases;
-  - Android `detachedPanelsKeepBodiesAndWiderResizeTargets`, and `AndroidInteractionTest#cachedPanelsMatchDirectDrawing` (light docked panels);
-  - Android `AndroidHostTest#cameraNavigationPublishesOnlyReadoutUpdates` (its last assertion); Android two-finger pinch misses about 1% of vsyncs (15.6 ms p99);
-  - headless Web `--toolbar-components`, `--tonal-selection`, `--editor` and `--layers`, and 8 pen side-button cases in `pointer.test.mjs`;
-  - Clippy with `-D warnings` stops in `layer-core` on lints that are new with Clippy 1.96. New code adds no warnings.
+- **Cargo:** run `cargo test -p layer-core -p layer-engine -p layer-render-wgpu -p layer-ui -p layer-host`, then Clippy. [Known failures on main](testing.md#known-failures-on-main) are not this work's to chase.
 - **Performance gaps that already exist on main:** GTK `native_frame_pacing` with `photo24` presents the Transform scenario at about 13 ms per frame (GPU p99 17 ms), while GPen, Pan and Hand hold 8.33 ms.
 
 ## Apple and Windows

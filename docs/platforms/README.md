@@ -59,7 +59,8 @@ Native GPU waits must stay off the UI input path. On the web, work follows brows
 animation callbacks and cannot assume blocking waits or a separate thread.
 
 Linux currently requires Wayland, Vulkan mailbox presentation and premultiplied
-alpha. Android must handle `SurfaceView` recreation and application suspension.
+alpha. Android must handle `SurfaceView` recreation and application suspension;
+see [Android presentation](#android-presentation).
 Apple uses its native display callbacks and Metal-layer lifecycle. Windows must
 coordinate swap-chain attachment and reconfiguration with the WinUI thread.
 Browser GPU availability and event delivery depend on the browser and device.
@@ -79,17 +80,23 @@ connects the shared `.capy` workflow to browser file access and download handlin
 UI coverage and hardware validation still vary independently of shared tool
 implementation.
 
-The port records describe their measured checkpoints:
+## Android presentation
 
-- [Android feature parity](../history/android-feature-parity.md) includes device
-  workflow checks; the [implementation record](../history/android-implementation.md)
-  also retains earlier emulator results.
-- [Apple acceptance](../history/apple-acceptance.md) tracks macOS and iPadOS
-  separately, including Pencil and native file behavior.
-- [Windows implementation](../history/windows-implementation.md) records current
-  integration gaps and the distinction between replay and real OS input tests.
-- [GTK/web implementation](../history/ui-implementation.md) records earlier
-  workspace and surface checks.
+Android draws pen strokes into one retained Vulkan shared-demand image
+(`VK_KHR_shared_presentable_image`), redrawing only the damaged regions. The
+display can read while the app writes, so ink can tear; the trade is lower pen
+latency. Camera changes switch to FIFO presentation and stay buffered until the
+next paint contact, which switches back before any brush GPU work is submitted.
+Each switch resets damage history, so its first frame is a full redraw. There is
+no buffered fallback: a driver without shared presentation fails to initialize.
+The swapchain is pre-rotated to the display's native orientation, and the
+changes to wgpu's HAL are listed in [vendor/README.md](../../vendor/README.md).
 
-Treat these as evidence for particular revisions and devices. Build success,
-shared model coverage and visual parity are separate claims.
+The `capy-canvas` thread owns the Rust session, the wgpu device and the
+swapchain; Compose stays on the main thread. Actions and models cross JNI as
+JSON, and `Native.modelUpdate` sends only changed paths
+([model_update.rs](../../crates/layer-host/src/model_update.rs)). The system bars
+stay hidden, and the workspace reserves only display cutouts, so bar animations
+never resize the Vulkan buffer. An opaque cover hides the `SurfaceView` until
+the first frame of each surface generation completes. Surface loss keeps the
+session and document.

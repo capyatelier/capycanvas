@@ -67,7 +67,7 @@ Follow [AGENTS.md](../../AGENTS.md) and the [commit guide](../COMMIT_GUIDE.md) t
 | Name | "Canvas action bar". "Command bar" is command search. | Research BAR-0 decision 7 |
 | Surface | A glass surface in the panel layer, registered for blur like panels and drawers, and visible in Zen like floating panels. Menus opened from it stay opaque. | User, 2026-09-26 |
 | Scope | The bar is the canvas route for selection, transform and placement flows. Menus, Tool Options and command search stay complete. | User, 2026-09-26 |
-| Toggle storage | `DockLayout.canvas_bar`, beside `canvas_info` (`crates/layer-ui/src/layout.rs:1060`). `SavedDockLayout` gives fields `#[serde(default)]` and accepts unknown fields (`crates/layer-ui/src/layout_saved.rs:9`), so no migration is needed. It is on in every built-in workspace and joins workspace history. | Report 15 |
+| Toggle storage | `DockLayout.canvas_bar`, beside `canvas_info` (`crates/layer-ui/src/layout.rs:1060`). It is on in every built-in workspace and joins workspace history. | Report 15 |
 | Movability | Not movable in Phase 1. | Research BAR-0 decision 6 |
 | Tool Options | Keeps the complete form, including completion actions and mode choices. The bar reuses its row builders. | Research section 4.2 |
 

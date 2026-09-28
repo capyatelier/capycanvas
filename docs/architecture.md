@@ -73,7 +73,8 @@ Platform surface and presentation
 The CPU performs ordered, comparatively small operations: input interpretation,
 brush dynamics, document edits, layout, dependency tracking and command encoding.
 The GPU evaluates canvas pixels, including brush coverage, blending, masks,
-filters and composition. Native widgets are drawn by their own toolkit; the
+filters, selection masks, fills, gradients, transforms and composition; the CPU
+never processes canvas pixels. Native widgets are drawn by their own toolkit; the
 canvas renderer does not draw the application's controls.
 
 `wgpu` provides access to Vulkan, Metal, D3D12 and browser WebGPU. The renderer

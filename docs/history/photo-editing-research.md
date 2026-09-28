@@ -8,7 +8,7 @@ The research was carried out against `dac76c20`, a bristle-brush branch commit. 
 
 The 2026-09-26 revision adds an interaction audit. The first draft placed most new verbs in menus, submenus, modal dialogs, the docked Tool Options bar or modifier keys. The revision adds a shared **canvas action bar** ([section 5](#canvas-action-bar-bar)): a floating bar beside the selection, transform box or other object being edited, which offers its most common next steps and mode switches. It also makes Transform one session with switchable modes, and moves destructive Distort and Warp ahead of the non-affine placement model.
 
-**Phase 1** (milestone M1) is the canvas action bar plus the improved transforms. It is **done** (2026-09-27); its [implementation plan](../development/canvas-action-bar-transforms.md) lists the steps, measurements and follow-ups, and the [canvas action bar guide](../ui/canvas-action-bar.md) documents the result.
+**Phase 1** (milestone M1) is the canvas action bar plus the improved transforms. The [canvas action bar guide](../ui/canvas-action-bar.md) documents the current behaviour, and [photo editing M2–M4](../development/photo-editing-m2-m4.md) plans the next milestones.
 
 This record compares Capy Canvas with the photo-editing tasks people most often
 learn, ask about and complain about in Photoshop, Affinity Photo, GIMP, Krita,
@@ -65,7 +65,7 @@ Photo editing starts with pixel and geometry work, and that is where Capy falls 
 | --- | --- |
 | Clone | Absent. [RET-2](#ret-2-clone-stamp-p0) samples the **reference layers** ([RET-1](#ret-1-retouch-source-reference-layers-p0)). It needs three shared additions: a copy of each tile taken just before the stroke first changes it, pen barrel-button bindings, and a Retouch tool family. |
 | Mesh transform | Absent. It becomes the Warp mode of one transform session, switched from the action bar ([BAR-2](#bar-2-transform-session-and-modes-p0)). Paint layers, masks and selected pixels already commit transforms by resampling pixels, so destructive Warp ([XF-3](#xf-3-warp-and-mesh-transform-p1-requested)) needs a new mesh pass but not the non-affine placement model. That model (P-10) is needed only to keep warped photo placements lossless. Skew ([XF-1a](#xf-1a-skew-handles-p0)) is nearly free. |
-| Create layer from selection | Absent as a command. It is already specified as "Copy/Cut Selection to New Layer" in the [selection inventory](../ui/selection-command-inventory.md). It can be built from Duplicate plus a selection-aware clear, with no pixel readback ([SEL-2](#sel-2-copy-and-cut-selection-to-new-layer-p0)). It is a primary action on the selection bar ([BAR-1](#bar-1-selection-p0)). |
+| Create layer from selection | Absent as a command. It can be built from Duplicate plus a selection-aware clear, with no pixel readback ([SEL-2](#sel-2-copy-and-cut-selection-to-new-layer-p0)). It is a primary action on the selection bar ([BAR-1](#bar-1-selection-p0)). |
 
 **Scorecard:** of the 30 journeys, **3 are supported**, **16 work with friction** and **11 are blocked**. The [recommended sequence](#7-recommended-sequencing) starts with the open decisions, then the canvas action bar and a batch of quick wins. It opens 8 of the 11 blocked journeys by the end of milestone M5.
 
@@ -104,7 +104,7 @@ Every build-list item was then checked for the canvas contexts it creates or cha
 
 Reddit, photopea.com/learn and some Adobe help pages refused automated access, so none are cited. View counts measure search demand, not usage. The rankings below are product judgment.
 
-**Source reports.** The full reports, with every source URL and `file:line` detail, are in [`photo-editing-research/`](photo-editing-research/). They are dated agent output. Reports 1–10 use baseline `dac76c20`, and those audits refer to the superseded first draft of this plan. Reports 11–17 use `5eb45a47`; 15–17 prepare [Phase 1](../development/canvas-action-bar-transforms.md).
+**Source reports.** The full reports, with every source URL and `file:line` detail, are in [`photo-editing-research/`](photo-editing-research). They are dated agent output. Reports 1–10 use baseline `dac76c20`, and those audits refer to the superseded first draft of this plan. Reports 11–17 use `5eb45a47`; 15–17 prepare [Phase 1](../development/canvas-action-bar-transforms.md).
 
 | # | Report | File |
 | --- | --- | --- |
@@ -447,7 +447,7 @@ The Photo workspace deliberately shows no placeholders for missing tools
 | "Show mask area" is a tinted overlay, not a black-and-white mask view | `docs/history/layers-initial-design.md:224` | LYR-4 extends the overlay instead of adding a mask-only view. |
 | Add Mask consumes the selection | `docs/history/layers-initial-design.md:185, 189` | T-1 consumes it by default. |
 | Import/Paste place images centered with handles | `docs/ui/image-open-import-proposal.md:80` | SEL-1/T-11 change this only for in-app copies. |
-| The tonal panel has no apply/actions/destination UI (tested on Apple) | `docs/development/tonal-selection.md:41` | T-9 is withdrawn. A tonal result gets only the ordinary selection bar ([BAR-1](#bar-1-selection-p0)), never Apply/Cancel or tonal controls. |
+| The tonal panel has no apply/actions/destination UI (tested on Apple) | `docs/ui/tonal-selection.md:41` | T-9 is withdrawn. A tonal result gets only the ordinary selection bar ([BAR-1](#bar-1-selection-p0)), never Apply/Cancel or tonal controls. |
 | An optional floating selection action bar is Next work: default Deselect, Invert, Quick Mask, Fill, More; a View toggle; an explicit drag handle; no second customization system; never move during a stroke | `docs/ui/selection-command-inventory.md:142-151, 287` | BAR-1 supersedes the default set and the "optional, Next" status. More still opens the shared Selection Actions menu. The View toggle becomes one generic toggle. |
 | A compact placement bar keeps Original Size, Cancel and Apply visible when Tool Options is hidden | `docs/development/image-placement-gtk-progress.md:868`, `docs/development/image-placement-web-android-progress.md:18`, `docs/development/apple-handoff.md:452` | BAR-3 replaces the six host bars rather than adding a second implementation (`docs/COMMIT_GUIDE.md:35`). Completion actions stay visible when the bar is hidden. |
 | Tool Options orders completion actions first and its More always opens the complete form | `docs/ui/toolbar-components.md:56, 94` | Tool Options keeps the complete form, including completion actions and mode choices. The bar is a shorter projection of the same `ToolOption` data. |
@@ -525,7 +525,7 @@ These pieces of infrastructure do not exist yet and block several build-list ite
 | P-2 | **Stroke-start copy-on-write pages:** a copy of each tile taken before the stroke first changes it, kept on the GPU because nothing may be uploaded during contact | RET-1…4, RET-9, XF-5 Reconstruct |
 | P-3 | **Window-level rich clipboard**, plus image writers in each host. Android needs a FileProvider for image `ClipData`. | SEL-1, SEL-2 across documents, ADJ-10 |
 | P-4 | **Command disabled-reason field and a shared transient notice**, following the precedent of `ShortcutCapture.notice`. `command_disabled_reason` already produces text for command search (`crates/layer-ui/src/command_catalog.rs:862`); publish it on `CommandState`. | T-15, BAR-0 and every new command |
-| P-5 | **Enumerated choices in tool settings** (today `DEFINITIONS` are f32 only, `crates/layer-ui/src/tool_settings.rs:72`) and **pen-button bindings**. Pen buttons belong to stage D of the command framework (explicit opt-in pen-button handling); never synthesize pen tip events from a barrel press ([command framework handoff](command-framework-handoff-2026-09-25.md)). | RET-2, XF-5, T-19 |
+| P-5 | **Enumerated choices in tool settings** (today `DEFINITIONS` are f32 only, `crates/layer-ui/src/tool_settings.rs:72`) and **pen-button bindings**. Pen buttons belong to stage D of the command framework (explicit opt-in pen-button handling); never synthesize pen tip events from a barrel press ([settings](../ui/settings.md)). | RET-2, XF-5, T-19 |
 | P-6 | **Paged or conditional Properties UI** (only Curves is special-cased today) | ADJ-2, ADJ-4, ADJ-5 Selective Color |
 | P-7 | **Optional effect-parameter metadata**: picker, slider mapping, soft bounds, page. These go in optional fields, not new ABI kinds. | ADJ-1, ADJ-2, T-3 |
 | P-8 | **Pixel-tight content bounds.** `content_bounds` is tile-granular (`crates/layer-ui/src/operation.rs:133`). A GPU alpha-bounds pass exists in `crates/layer-render-wgpu/src/thumbnails.rs:408`. | GEO-3 Trim, XF-4, LYR-6 |
@@ -539,7 +539,7 @@ These pieces of infrastructure do not exist yet and block several build-list ite
 
 New defaults give way to chords a user has already assigned. Two identical defaults are resolved silently by `CommandId::ALL` order (`crates/layer-ui/src/shortcuts.rs:646`).
 
-Bindings are moving to the shared command framework ([command search](../ui/command-search.md), [shortcut audit](command-input-shortcut-audit-2026-09-25.md)). In that framework:
+Bindings are moving to the shared command framework ([command search](../ui/command-search.md)). In that framework:
 - a chord conflicts only when contexts and trigger lifecycles overlap, and the stage C contextual resolver decides precedence;
 - presets that match other editors' defaults ship as stage F.
 
@@ -597,9 +597,9 @@ Serialized variant and shortcut IDs are persisted. Never rename them.
 
 ### Canvas action bar (BAR)
 
-The canvas action bar is the shared component that shows a flow's next steps beside the object being edited. It generalizes the image-placement bar that every host already ships, and the optional selection action bar specified in the [selection inventory](../ui/selection-command-inventory.md) (§2).
+The canvas action bar is the shared component that shows a flow's next steps beside the object being edited. It generalizes the image-placement bar that every host already ships, and the optional selection action bar.
 
-The first draft of this plan gave each feature a menu entry, a dialog or a modifier. With the bar, each selection, transform, crop and mask flow can be finished from the canvas without a keyboard. Evidence: [source reports 11–14](photo-editing-research/).
+The first draft of this plan gave each feature a menu entry, a dialog or a modifier. With the bar, each selection, transform, crop and mask flow can be finished from the canvas without a keyboard. Evidence: [source reports 11–14](photo-editing-research).
 
 **Principles**
 - **Accelerator only.** The bar is an accelerator, not a home. Menus, Tool Options and command search stay complete. Every bar item is a `CommandId`, or a `UiAction` backed by one, so bindings, the catalog, validation and one-step history stay shared.
@@ -726,7 +726,7 @@ The first draft of this plan gave each feature a menu entry, a dialog or a modif
   - Also shown after a command creates a selection (Select All, Load Selection, Select Layer Opacity, Reselect), until the next tool change.
   - Painting tools hide it (decision 3).
 - **Selection under construction (polygon):** Complete · Remove Last Point · Cancel, at the bottom edge. Remove Last Point is a new command; today only Backspace does it.
-- **Tonal Range:** the ordinary completed-selection bar at the bottom edge, never Apply/Cancel or tonal controls (`docs/development/tonal-selection.md:38`).
+- **Tonal Range:** the ordinary completed-selection bar at the bottom edge, never Apply/Cancel or tonal controls (`docs/ui/tonal-selection.md:38`).
 - **Paint selection:** at the bottom edge, because its coverage changes with every stroke. There is no confirmation step.
 - **Wand and Color Select:** while the last result can still be refined, a Tolerance slider leads the bar and amends the same undo step (T-10).
 - **Move with a selection:** a Leave Copy toggle, the touch equivalent of Alt-drag (SEL-3).
@@ -1249,7 +1249,7 @@ Each route starts from the canvas and uses no application menu.
 **Behavior**
 - With a selection, a Move drag runs a translation-only transform transaction (`crates/layer-ui/src/operation.rs:216`) committed by `commit_transform`.
 - Alt-drag leaves a copy behind. This needs a copy flag on the transform operation, because `ImageTransform` always cuts.
-- The Alt latch works as in the selection tools: it is read before the gesture (`docs/development/selection-tools.md:32`). Before-contact and during-drag modifiers are separate stage C contexts.
+- The Alt latch works as in the selection tools: it is read before the gesture (`docs/ui/selection-tools.md:32`). Before-contact and during-drag modifiers are separate stage C contexts.
 - **Visible toggle:** Leave Copy, on the selection bar while Move is active ([BAR-1](#bar-1-selection-p0)) and in Move's Tool Options.
 
 **Notes**
@@ -2069,7 +2069,7 @@ Each route starts from the canvas and uses no application menu.
 **Withdrawn after the audit:**
 - **T-5** is part of ADJ-3.
 - **T-6** is part of XF-2.
-- **T-9** conflicts with `docs/development/tonal-selection.md:41`. T-1 covers the need: make a tonal selection, then insert an effect.
+- **T-9** conflicts with `docs/ui/tonal-selection.md:41`. T-1 covers the need: make a tonal selection, then insert an effect.
 - **T-13** is part of XF-4.
 
 ## 7. Recommended sequencing
@@ -2079,7 +2079,7 @@ Work lands in the usual order: shared Rust and GTK first, then Web and Android, 
 | Milestone | Contents | Journeys |
 | --- | --- | --- |
 | **M0 Decisions** (documents only) | GEO-0 extent model; P-9 blend domain; Pass Through default; Copy source semantics; whether the retouch Reference source includes the target; Image/Document menu versus Edit; shortcut conflicts (Ctrl+V, Merge Visible, Web-safe Transform Again). **Canvas action bar:** the BAR-0 decisions still open; whether leaving Warp keeps the mesh (BAR-2); Distort and Warp on placed photos (BAR-3); keeping transforms across focus loss (T-24). The Phase 1 plan lists the decisions it needs and their recommendations. | — |
-| **M1 Phase 1: canvas action bar and transforms** — done 2026-09-27 ([implementation plan](../development/canvas-action-bar-transforms.md)) | BAR-0 with BAR-3, replacing the six host placement bars; BAR-2 with P-13: Free, Uniform, Distort (XF-1b) and Warp (XF-3), Flip, Rotate 90°, Reset, Skew (XF-1a), destructive commits; XF-2 bicubic and minification supersampling; finger-touch handles for every transform (part of XF-4); BAR-1 with existing selection commands and the polygon context; T-20; T-24; Remove Last Point (part of T-26). | Opens 27 for paint layers and selected pixels; improves 17, 26 |
+| **M1 Phase 1: canvas action bar and transforms** | BAR-0 with BAR-3, replacing the six host placement bars; BAR-2 with P-13: Free, Uniform, Distort (XF-1b) and Warp (XF-3), Flip, Rotate 90°, Reset, Skew (XF-1a), destructive commits; XF-2 bicubic and minification supersampling; finger-touch handles for every transform (part of XF-4); BAR-1 with existing selection commands and the polygon context; T-20; T-24; Remove Last Point (part of T-26). | Opens 27 for paint layers and selected pixels; improves 17, 26 |
 | **M2 Quick wins** | Each lands with its bar item: T-1, SEL-4 with T-2, SEL-2 within a document, SEL-5, T-4, LYR-5 Solid/Gradient, ADJ-1 `color_action` quick win, ADJ-11 vignette removal, VIEW-1, IO-2 lossless WebP, T-8 rename, T-15 with P-4, T-23, fix the Apply Mask group message, RET-9 "revert to original photo". Also BAR-5 for Quick Mask, Selection Layers and mask editing; BAR-6 for guides; T-25; the rest of T-26. | Improves 11, 13, 14, 26, 29; canvas routes for 11, 14 and 26 |
 | **M3 Foundations** | GEO-0, GEO-1 to GEO-5 with BAR-4, the rest of XF-2 (Lanczos, the export aliasing fix), SEL-1 with P-3, SEL-3, LYR-2, IO-1, T-16. | Opens 1, 2, 3, 4; completes 26 |
 | **M4 Retouching** | P-2 stroke-start pages, P-5 enumerated options and pen buttons, P-11 job model, RET-1 to RET-4 with the clone-source bar (BAR-6), BAR-7, LYR-1 (after P-9), RET-7, ADJ-9. | Opens 20, 22, 23; 21 for small objects; improves 17, 24, 28 |
@@ -2140,7 +2140,7 @@ M1 to M5 open 8 of the 11 blocked journeys. M1 opens 27 for paint layers and sel
   - Test each new bar item with mouse, touch and pen on every host that ships it.
   - A touch hold is already taken by the color picker.
   - Check each chord with `KeyChord::available` for Web.
-  - Route contextual keys, held modifiers and pen buttons through the command framework's resolver stages (C and D) rather than host-specific handlers ([command framework handoff](command-framework-handoff-2026-09-25.md)).
+  - Route contextual keys, held modifiers and pen buttons through the command framework's resolver stages (C and D) rather than host-specific handlers ([settings](../ui/settings.md#keyboard-shortcuts)).
 - **Evidence.**
   - Independent GPU oracle tests for each algorithm.
   - Clone, heal and new blend modes join the brush acceptance matrix and the benchmarks.
@@ -2151,7 +2151,7 @@ M1 to M5 open 8 of the 11 blocked journeys. M1 opens 27 for paint layers and sel
 
 | Item | Decision and reason |
 | --- | --- |
-| RAW development | Out of scope ([float32/HDR scope](../development/float32-hdr-scope.md), [color management](../ui/color-management.md)). Use the IO-6 hand-off. |
+| RAW development | Out of scope ([float32/HDR scope](../internals/float32-hdr-scope.md), [color management](../ui/color-management.md)). Use the IO-6 hand-off. |
 | Generative fill, expand, upscale and harmonize | Conflicts with local-only processing and the no-accounts principle. Exemplar inpainting (RET-5) and optional on-device segmentation (SEL-9) cover the core demand. |
 | CMYK, Lab and Grayscale modes | Soft proofing plus CMYK/Gray ICC delivery already cover print. |
 | Layered PSD | Already on the color-management roadmap; large interoperability surface. |

@@ -1,31 +1,25 @@
 # Panel and toolbar customization
 
-[Technical documentation](../README.md)
+[Workspace and UI](README.md) · [Drag convention](drag-and-reorder.md)
 
 ## Interaction contract
 
 The Rust UI core owns customization and the complete serializable workspace.
-GTK, web and Android translate native events and render its menu/dialog/control models.
-This feature does not add another canvas/rendering path.
+Hosts translate native events and render its menu, dialog and control models.
+Customization adds no canvas or rendering path. Zen behavior is described in
+[shared UI](shared-ui.md#window-chrome-and-zen-mode).
 
-The rollout and per-platform evidence are tracked in
-[../history/workspace-management-progress.md](../history/workspace-management-progress.md).
-
-Zen interactions below describe the default **At edges** mode. GTK's **With button**
-trial hides floating panels too and disables all hidden docking targets. Button
-visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and-zen-mode).
-
-- **Workspace** contains Undo/Redo Workspace Change, checkable built-in-panel
-  visibility, a separate toolbar-visibility section, **New Toolbar…**, then
-  **Manage Toolbars…**.
-  Hiding removes placement, not configuration; checking the item shows it again.
+- The **Window** menu (see the [workspace manager](default-workspaces.md#workspace-manager))
+  has checkable built-in-panel rows and a **Quick Access Toolbars** submenu with
+  toolbar visibility, **New Toolbar…** and **Manage Toolbars…**. Hiding removes
+  placement, not configuration; checking the item shows it again.
 - **Manage Toolbars…** opens a single-selection list of all toolbars, including
   hidden ones. Select a row, then **Delete Toolbar…** to open the existing
   confirmation. Cancel returns to the selected row; successful deletion clears
   selection and keeps the manager open. Delete is disabled without a selection.
   The empty list shows **No toolbars**. Workspace Undo restores deleted toolbars.
-  Rust owns this list, copy, selection, eligibility and actions; GTK, web and
-  Android only render them. Manager selection is transient, not saved workspace data.
+  Rust owns this list, copy, selection, eligibility and actions; hosts only
+  render them. Manager selection is transient, not saved workspace data.
 - A built-in-panel tab or body opens **Configure Tool Set panel…** and
   **Hide Tool Set panel** (using its actual
   name). A toolbar tab/body has **Configure Tools toolbar…** and
@@ -47,7 +41,7 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   icons-and-active-name shows every icon and only the active name regardless of
   count; icons-and-names shows both on every tab;
   names-only and icons-only likewise apply to all tabs.
-  Rust resolves `PanelView.tab` into `show_icon` / `show_name`; GTK, web and Android
+  Rust resolves `PanelView.tab` into `show_icon` / `show_name`; hosts
   render and measure those contents with a 6px icon/name gap. Whole-group moves
   retain style; merges adopt the destination style, and splitting out a tab creates
   a new group with the default style. Per-tab overrides and their menu/API are removed;
@@ -73,18 +67,10 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   management lives under Workspace. Its confirmation explains Workspace Undo
   with the current shortcut. A tabbed
   toolbar keeps the group grip; its configuration column contains these options.
-- Drag pickup must follow the [drag and reorder convention](drag-and-reorder.md):
-  tile bodies require a hold for mouse, touch, and pen; grips and title/tab bars
-  allow dragging without a hold. This also applies inside drawers and to
-  draggable collapsed-column icons. See the [inventory](drag-inventory.md) for
-  implementations that still need to change.
-- Secondary click and touch/pen holds open the same menu. Mouse holds only arm
-  tile dragging; they never open context menus.
-  Native gesture recognition owns timing/slop; the deepest applicable target
-  wins. Recognized hold/drag suppresses the ordinary click, and scrolling cancels
-  a pending hold. Moving with the same held contact closes the menu and starts
-  dragging; release without dragging retains the menu. Existing input/context
-  menus inside text inputs remain native.
+- Drag pickup, including inside drawers and on collapsed-column icons, follows
+  the [drag and reorder convention](drag-and-reorder.md). Secondary click and
+  touch/pen holds open the same menu, and the deepest applicable target wins.
+  Menus inside text inputs remain native.
 - **Configure <name> panel…** / **Configure <name> toolbar…** raises the existing tab group and animates its bounds
   into a two-column layout. The original column remains a live preview of the
   compact panel; a wider configuration column opens on the canvas-facing side.
@@ -271,156 +257,82 @@ no third-party code or assets are imported.
 - Context-menu contents, picker validation/search/selection, control visibility,
   and tile drop targets are generated/validated by Rust, not duplicated in hosts.
 
-## Implementation and verification
+## Tool drawers
 
-The shared model now implements dynamic panel configuration, stable tile IDs,
-transactional creation/insertion, context menu targeting, picker search/selection,
-group-owned tab styles, expanded-control view metadata, tile movement and
-variable-count ribbon allocation. Workspace JSON stores tab display style on each
-group; the retired per-panel display field is not migrated. Tests cover these
-policies and native/Wasm type checks pass.
+Rust owns tile semantics, drawer open/closed state, contents, placement and
+animation geometry ([`drawers.rs`](../../crates/layer-ui/src/drawers.rs)). Hosts
+report tile bounds, content measurements and input.
 
-GTK now renders dynamic toolbars, native contextual menus, the searchable picker
-and in-place two-column configuration. The original group and preview controls
-stay in their parents; closing restores its allocation without changing saved geometry. Native
-checks exercise group/panel/tile/empty-ribbon targets, all five tab-group styles,
-creation/insertion, control visibility and editing, a GTK drop signal, restore
-and reset. Dark/light GTK widget captures are inspected in
-`artifacts/ui/customization/` (ignored). These presentation checks call the menu
-presenter; the pickup/hold suites exercise device arbitration through real input.
+- A tool tile first selects its tool. Pressing it again opens its drawer, and
+  pressing the originating tile again closes it; an already selected tool opens
+  on the first press. Selecting another tool closes the old drawer.
+- Color and built-in-panel tiles toggle their drawer directly without changing
+  the tool. Command tiles (New, Open, Save, Undo, transforms, navigation) stay
+  immediate actions. Size preset tiles apply a value; the Brush size tile opens
+  its panel. Every built-in panel has a drawer tile in the toolbar picker.
+- A tool drawer holds the Tool Set and Tool columns; Color opens the Color panel
+  and Opacity opens Tool. Columns stack ordinary panel bodies, without tabs or
+  grips, separated by vertical rules. Each panel declares a `drawer_width`,
+  wider than its docked default. Opening a drawer does not detach a docked copy
+  of the panel or duplicate preview generation.
+- The drawer joins its tile across the panel gap: the tile extends toward the
+  drawer with concave, tab-like joins, and only exposed corners are rounded.
+- Top toolbars open downward, left-aligned with the tile; bottom toolbars open
+  upward, up to 800 px and never over the title bar; side toolbars open toward
+  the canvas, starting 500 px above the tile. Floating toolbars choose by
+  orientation and room. Drawers clamp to the usable viewport and scroll.
+- An outside click closes a tool drawer without painting or hiding Zen chrome.
+  Collapsed-column drawers stay open on outside clicks and close from their
+  opening icon; see [stacked columns](stacked-columns.md).
+
+## Host notes
 
 Tabbed ribbons reserve one padded lane below the header; further overflow clips.
-GTK tool ribbons are explicitly clipped and never gain a scroller.
+Tool ribbons never gain a scroller. Panel, group and resize gestures capture on
+the stable workspace, so replacing a tab or grip during tear-off cannot cancel
+the gesture; Rust handles every phase, including sizing cycles, history,
+snapping and Zen visibility. Disabled command buttons stay inside an enabled
+drag and context target, so they can still be removed or moved.
 
-Web uses `customization.js` for DOM context menus, picker widgets, live controls
-and expansion presentation. `app.js` keeps event routing and the existing panel
-widgets; toolbars now consume the dynamic Rust tile views instead of a fixed
-six-button list. The Wasm adapter exposes the same workspace/context menus,
-toolbar prompts, picker, tile layout, expanded geometry and validated drop APIs.
-Panel, group and resize gestures capture on the stable workspace, so replacing a
-tab or grip during tear-off cannot cancel the gesture. Rust handles every phase,
-including sizing cycles, history, snapping and Zen visibility. External resize
-strips suppress native selection drags. The required tile pickup is a cancellable
-hold for mouse, touch, and pen, followed by captured dragging; secondary click
-uses the browser context event. Current missing hold guards are recorded in the
-[source inventory](drag-inventory.md). Disabled command buttons remain
-inside an enabled drag/context target, so they can still be removed or moved.
-
-The web expansion animates the existing group's two columns with one CSS
-`drop-shadow` on their common ancestor. GTK wraps the whole group's snapshot in
-one GSK shadow. Both include the preview, tabs and drawer, without darkening their
-internal seam. DOM content heights are measured on layout changes, not every
-animation frame; interpolation and placement stay in Rust. Switching tabs uses
-the currently displayed bounds as the animation origin. Docking into an expanded
-group keeps its configuration synchronized with the group's active tab.
-
-Android renders the same workspace/context menu trees and toolbar prompts in
-Compose. `WorkspaceMenus.kt` presents shared items and actions, including nested
-menu pages, validation, hints and disabled states. `WorkspaceInput.kt` holds only
-native hit geometry, pointer capture and asynchronous reply guards. The stable
-workspace captures panel/group/divider/resize gestures; child reparenting cannot
-cancel a live tear-off. Tile reordering uses the same validated drop query and
-must wait for a hold on every input device; headers and grips stay immediate.
-Context gestures open the shared context model. The source inventory records
-the current pickup-policy gaps separately from these requirements.
+The expanded configuration drawer draws one shadow around both columns: Web
+uses one CSS `drop-shadow` on their common ancestor, and GTK wraps the group's
+snapshot in one GSK shadow, without darkening the internal seam. Content heights
+are measured on layout changes, not every animation frame; interpolation and
+placement stay in Rust. Switching tabs animates from the displayed bounds, and
+docking into an expanded group keeps its configuration on the active tab.
 
 Content fitting belongs to a tab group: its preferred height is the largest
 measured minimum height among its pages, so selecting a shorter page does not
 move dock dividers. Compact pages stay whole; scrollers reserve controls and four
-rows using the same rule as floating drops. Manual dock resizing opts out of fitting. Floating groups retain a
-manually set height across tab selection, rather than discarding it on every switch.
+rows using the same rule as floating drops. Manual dock resizing opts out of
+fitting. Floating groups keep a manually set height across tab selection.
+Native content is measured before viewport stretching and returns to Rust as one
+measurement set, separate from saved workspace JSON. Floating panels draw above
+the status display.
 
-Floating groups remain composed when Zen hides docked groups. Core bounds drive
-their layout, external handles and compact/vertical/horizontal presets; Compose
-animates size changes but follows drag coordinates immediately. Native text and
-intrinsic content measurements return to Rust as one complete measurement set,
-separate from saved workspace JSON. Content is measured before viewport stretching
-so resizing cannot redefine its natural height. The shared accepted measurements
-also prevent repeated UI measurement dispatches. Both drawer columns share one
-outline/shadow, including the flat join when the tab is hidden. Floating panels
-draw above the status display. No canvas/GPU integration changes are needed.
-
-Regression coverage:
-
-| Contract | Evidence |
-| --- | --- |
-| Named toolbars, transactional multi-selection, search/cancel/validation | Core customization tests; GTK and web picker controls |
-| Panel/group/tile/empty-ribbon menus and group-owned tab styles | Core context models; GTK gesture/action signals; browser pointer/hold events |
-| Live controls, visibility, selected-tab toggle, different-tab switch, outside/Escape dismissal | Core interaction tests; native expansion test; browser customization test |
-| Same/cross-toolbar moves, stable IDs and insertion previews | Core slot/move tests; native drop signal; browser native-DND and touch movement |
-| Dynamic wrapping, tabbing, clipped overflow and resize | Core allocation tests; GTK ribbon captures; web customization/parity checks |
-| Combined shadow, permitted expansion placements, seamless corners, 11pt controls | Dark/light GTK and browser captures; web geometry/shadow comparison |
-| Workspace restore, reset retaining custom toolbars, malformed/stale targets | Core validation tests and both host round trips |
-| Zen drag/dismiss lifecycle and no accidental ink | Core input tests; native expansion test; browser customization/parity tests |
-| Workspace menus, naming/duplicate/delete prompts, visibility and independent history | GTK workspace-management test; browser workspace menu/button/shortcut tests |
-| Live tear-off, external resize, first double-click reset, layout/style cycles, floating-only Zen merges | Shared core tests; GTK native input tests; browser mouse/touch workspace regressions |
-
-Android's `AndroidHostTest` covers every row above with native Compose input and
-the actual JNI/Vulkan host: workspace menus, nested moves, naming validation,
-duplicate/rename/delete/undo, creation, tile reorder, configuration, all eighteen
-theme/layout/tile-style combinations, live tear-off continuation, all eight
-resize/reset directions, hidden tabs, group collapse, narrow-ribbon merging,
-top snap coordinates and Zen hidden-edge/floating-only targets. The complete
-suite also retains drawing, settings, numeric-input and lifecycle checks.
-
-The group-tab-style tests on GTK, web and Android check all five modes with
-every tab active in turn, in both themes. GTK, Web and Android additionally
-check Automatic resizing between full and mixed labels without changing the saved style. Shared tests also cover serialization,
-undo/redo, whole-group moves, merging into a differently styled group and
-splitting out a new default-style group. GTK keeps the existing tab widgets and
-changes child visibility; all hosts render the Rust-resolved icon/name flags.
-Review captures are in `artifacts/ui/group-tab-styles/` (ignored).
-
-Toolbar-manager coverage uses GTK `native_toolbar_manager`, web
-`--toolbar-manager`, and Android `toolbarManagerSelectsConfirmsDeletesAndRestores`.
-These exercise selection, hidden entries, cancellation, confirmed deletion,
-the empty state, dismissal and undo in both themes. Review captures are in
-`artifacts/ui/toolbar-manager/` (ignored).
-
-Run the native tests separately (GTK initialization is thread-affine):
+## Checks
 
 ```sh
 cargo test -p layer-linux native_group_tab_styles -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_panel_customization -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_panel_expansion -- --ignored --test-threads=1
+cargo test --release -p layer-linux native_toolbar_manager -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_web_parity_reference -- --ignored --test-threads=1
 ```
 
-Use isolated `LAYER_SETTINGS_FILE` paths and a Wayland/Vulkan display. After
-building/serving the web client, run `node apps/layer-web/test.mjs --customization`,
-`--tab-styles`, `--workspace` and `--parity` against `LAYER_WEB_URL`, or add `--package` to test
-the static build. `--workspace --gestures` runs only the pointer/touch subset.
-`--parity` restores GTK's `WorkspaceState::default()` fixture at 1200×900 and
-compares it with the `native_web_parity_reference` JSON and PNGs; run it with a
-headed browser, since its pixel checks sample the presented canvas and glass.
-Web customization/workspace captures are under
-`artifacts/ui/workspace-management/web/`; parity captures remain under
-`artifacts/ui/parity/`. These directories are ignored. The browser
-harness uses a temporary profile; its software Canvas2D context only inspects
-captured PNGs, never renders the application's canvas.
+GTK tests are thread-affine and need isolated `LAYER_SETTINGS_FILE` paths and a
+Wayland/Vulkan display. Against a served web client (`LAYER_WEB_URL`, or
+`--package` for the static build), run `node apps/layer-web/test.mjs` with
+`--customization`, `--tab-styles`, `--workspace`, `--toolbar-manager` and
+`--parity`. `--parity` compares the `WorkspaceState::default()` fixture at
+1200×900 with the `native_web_parity_reference` JSON and PNGs; run it headed,
+because its pixel checks sample the presented canvas and glass. Android runs
+`apps/layer-android/run.sh test`; `AndroidHostTest` covers the same contracts
+with native Compose input, including `toolbarManagerSelectsConfirmsDeletesAndRestores`.
 
-Run Android's emulator suite with `apps/layer-android/run.sh test`. Review PNGs
-are in `artifacts/ui/workspace-management/android/` after pulling the run from
-`Pictures/CapyCanvasValidation` on the emulator. These are ignored build artifacts.
+## Collapsed columns
 
-These tests exercise native bindings and browser-injected input, not physical
-tablet delivery or an iPad device. They do not claim a new latency benchmark;
-customization leaves the GPU brush/raster path unchanged. Static packaging
-includes and fingerprints the new module and its importing app, so service
-worker versions follow the changed runtime content. Generated bundles/captures
-remain ignored and no third-party code or assets are added.
-
-## Collapsed-column presentation
-
-The former Group panel mode is retired. See [stacked columns](stacked-columns.md)
-for the replacement: each stack contains complete collapsed columns and owns
-“Open individual panels” and Auto-hide. GTK opens a member using the ordinary
-dock views when “Open individual panels” is disabled. Other hosts preserve the
-portable preferences and use ordinary drawers until their new presentation is
-implemented.
-
-The double-caret Expand button is removed. Member footer handles stack and
-unstack columns with immediate pickup; sidebar tiles still require hold then
-drag. All active tabs in the open member highlight their sidebar tiles and use
-shared drawer connectors. Members have 6 px gaps. The expanded column aligns
-with the stack’s top and bottom and has horizontal workspace spacing.
+[Stacked columns](stacked-columns.md) replace the former Group panel mode. Each
+stack contains complete collapsed columns and owns “Open individual panels” and
+Auto-hide. Member footer handles stack and unstack columns with immediate
+pickup; sidebar tiles hold before dragging.

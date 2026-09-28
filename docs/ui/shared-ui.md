@@ -53,9 +53,8 @@ brush categories/presets, and [numeric input kind, limits, mapping, units and pr
 the same typed constants exposed to DOM through the Wasm catalog; hosts supply
 widgets/icons, not separate command lists or numeric rules. The ribbon allocator
 derives its item count from each toolbar's saved panel configuration.
-`TOOLBAR_CONTROLS` supplies the original defaults. Context menu, picker and
-expanded-panel APIs are being integrated as described in
-[Panel customization](panel-customization.md). `SetLayerOpacity` may omit `id` to
+`TOOLBAR_CONTROLS` supplies the original defaults. Context menus, pickers and
+expanded panels are described in [panel customization](panel-customization.md). `SetLayerOpacity` may omit `id` to
 target the live active layer instead of resolving it from a frontend snapshot.
 
 ## Docking
@@ -65,34 +64,34 @@ complete dock layout, and Zen mode. Save that value using Serde; restore it via
 `UiAction::RestoreWorkspace { workspace }`. Validation rejects unsupported
 versions, missing/duplicate panels, invalid selections/ratios/extents, duplicate
 node IDs, and invalid ID allocation state before any live state changes. A
-restore does not edit the document or move the current camera. This is the legacy
-single-workspace API. GTK's approved named-workspace manager uses `WorkspaceCapture`,
-`PreparedWorkspace`, and `layer-workspace` to preserve separate tool settings,
-layout history/navigation, and the starting layout. Other hosts must follow the
-[workspace-manager handoff](workspace-manager-host-handoff.md) when migrating;
-do not implement named switching with `RestoreWorkspace`, which clears history.
-Hosts provide asynchronous storage transport rather than reconstructing layout
-decisions from widgets.
+restore does not edit the document or move the current camera. Named workspaces
+use `WorkspaceCapture`, `PreparedWorkspace` and `layer-workspace` on every host
+to keep separate tool settings, layout history and the starting layout; see the
+[workspace manager](default-workspaces.md#workspace-manager). Do not implement
+named switching with `RestoreWorkspace`, which clears history. Hosts provide
+asynchronous storage transport rather than reconstructing layout decisions from
+widgets. Routine workspace operations pause input without disabling or
+restyling the editor.
 
 `UiSession::layout` supplies the standard workspace rectangles.
 `UiSession::drop_hint` validates a proposed target with the same transactional
-move used on drop; GTK and Wasm no longer clone and probe the layout themselves.
+move used on drop; hosts do not clone and probe the layout themselves.
 
 A `DockLayout` is an ordered list of `DockBand`s, outermost first. Each band
 consumes a strip at an `Edge`: top, bottom, left, or right. Earlier bands own
 shared corners. Multiple bands on the same edge form adjacent rows or columns.
 The canvas covers the entire window, underneath native chrome. The unoccupied
 rectangle is `work_area`, used for initial/explicit Fit Canvas; it is not the GPU
-viewport. The single document's title appears in the header, without a tab strip.
+viewport. Open drawings appear as drawing tabs in the [title bar](window-bar.md).
 
 A band contains `DockNode::Split` or `DockNode::Tabs`. Splits specify an axis
 and fraction. Tab groups contain semantic `Panel` IDs and an active panel.
 Stable node IDs target resize, tab selection, and moves. Moving the last panel
 out of a group prunes empty groups and collapses redundant splits.
 
-The default has left Brushes/Brush Size (68%/32%) and right Layers bands owning
-the corners. The top tool ribbon and bottom canvas-status HUD fit between them;
-the HUD also stays above any bottom dock. `DockTarget` supports a new edge band,
+The canvas-status HUD stays above any bottom dock. The shipped arrangements are
+in [`layout_presets.rs`](../../crates/layer-ui/src/layout_presets.rs); see
+[default workspaces](default-workspaces.md). `DockTarget` supports a new edge band,
 a tab insertion slot (including same-group reorder), or a split beside a group.
 Moves validate before replacing the layout.
 
@@ -114,7 +113,7 @@ from these logical layout units.
 accepts host measurements and derives physical fitting bounds from the shared
 layout. It fits the first measured viewport once; later dock changes update
 fitting bounds without moving the camera or issuing GPU work. Explicit Fit Canvas
-uses the latest bounds. Hosts no longer set work areas or decide initial fitting.
+uses the latest bounds. Hosts do not set work areas or decide initial fitting.
 Resolved groups include tab visibility and tool-tile rectangles; DOM does not
 recalculate content height or tool count. Native tiles use the same allocator
 with their measured widget size.
@@ -136,9 +135,10 @@ Tabbed ribbons have no additional grip. Color and opacity
 tiles open native/DOM popovers rather than embedding wide controls in the ribbon.
 
 Both hosts render one `DropHint` from shared hit testing, supplying measured tab
-rectangles. Headers prioritize tab insertion slots; body centers append tabs.
-The top and bottom 20% of the body split above/below; narrow side strips split
-left/right. Every tab insertion (including a body-center append) shows a vertical
+rectangles. Headers prioritize tab insertion slots. The upper 20% of a body with
+visible tabs extends the tab-strip target, the lower 20% splits below, and 18px
+side strips split left/right; the rest of the body adds the incoming tabs to the
+group (see [stacked columns](stacked-columns.md)). Tab insertions show a vertical
 line in the tab row, clamped before the fixed trailing grip if tabs overflow.
 Tab labels scroll horizontally without moving the grip.
 Tabs have the same 36px button height as tool tiles, in a shared 36px tab bar
@@ -155,8 +155,7 @@ about 9.17 pt); Android settings retain their native 16 sp/14 sp hierarchy.
 Text-bearing inputs/buttons and inline +/− symbols use font-relative sizes.
 There is no font-size setting. Checkboxes stay 16px, sliders retain
 their dimensions, and toolbar icons remain 16px in 36px tiles; brush-size sample
-cells keep their preview space. Future panel context menus use the same
-typography role. Both hosts keep resize handles transparent during hover/drag.
+cells keep their preview space. Both hosts keep resize handles transparent during hover/drag.
 Native divider widgets are reconciled by split identity, not only panel identity,
 and drag start uses the gesture's widget coordinates mapped into the dock surface.
 Horizontal splits preserve the source and destination widths, growing the dock
@@ -171,8 +170,8 @@ are no panel move menus.
 
 ## Window chrome and Zen mode
 
-GTK uses an `AdwHeaderBar` with native window controls/drag region; the existing
-dock widget allocates the full-window GPU picture, transparent header, HUD and panels.
+GTK uses an `AdwHeaderBar` with native window controls and drag region; the dock
+widget allocates the full-window GPU picture, transparent header, HUD and panels.
 On Wayland, an app-owned Vulkan subsurface presents the full viewport below
 transparent GTK chrome. The viewport shader rounds the outer corners; no crop
 or theme-colored strips hide any canvas area. DOM elements do the equivalent
@@ -181,36 +180,25 @@ compositor or full-window drag gesture is required. The optional
 [panel transparency](panel-transparency.md) blurs behind panels inside the
 canvas renderer rather than in a compositor.
 
-An icon-only Zen toggle (a shared, centered capybara SVG, Looking up by default)
-occupies the top-left, followed by caret-free Edit and View menus. Its active
-state uses the subtle grey hover background while controls are visible. When
-the button remains visible alone, its active highlight is suppressed; hover
-still works. Header controls are [squircle](squircle-corners.md) tiles; only the
-close control is circular, with unchanged shared header-control colors. Its
-circle uses libadwaita's native 16px icon plus 4px padding (24px circle), within
-the larger native click target; we do not enlarge the circle to the entire button.
-Workspace gaps are 6px at the window sides/bottom, between panels and header
-menu buttons, and above/below the 36px header controls. The Zen button is 36×36px,
-matching ribbon tiles. The header's bottom padding is normalized from 7px to 6px;
-the native close circle keeps its padding and has no additional application inset.
-See [libadwaita's window-controls styling](https://github.com/GNOME/libadwaita/blob/main/src/stylesheet/widgets/_header-bar.scss).
-GTK's top-right primary menu contains New Window, Preferences, Keyboard Shortcuts
-and About Capy Canvas. Web has a gear opening Preferences directly. Panel
-visibility/reset live in View. No workspace-grid or
-hamburger button remains. The lighter ribbon contains brush, eraser, undo/redo,
-color and opacity. Panel contents and ribbons use `#414141` dark / `#EDEDED` light;
-tab bars use `#2E2E2E` / `#DEDEDE`. The active tab matches its content, with rounded
-top corners and concave lower shoulders joining the two surfaces. GTK paints only
-those small corner joins in a non-interactive native overlay; DOM uses CSS
-pseudo-elements. Native tab controls and all their hit targets remain unchanged.
-The canvas surround is sRGB `#333333` in dark mode and `#B8B8B8` in light mode.
-The header and HUD containers are transparent. Their text/control backgrounds
-match the surround, disappearing by default but remaining readable over zoomed
-artwork. Panels have soft shadows rather than persistent outlines.
-Text uses the shared 11 pt typography; keyboard focus halos are disabled
-for the requested pen-first presentation, without removing control semantics.
-Panel input fields use `#333333` in dark mode and `#FAFAFA` in light mode,
-matching the light GTK slider knob interior rather than the canvas surround.
+The title bar's contents are a workspace arrangement; see [title bar](window-bar.md).
+Header controls are [squircle](squircle-corners.md) tiles; only the native close
+control is circular, using libadwaita's 16px icon plus 4px padding within the
+larger native click target. Workspace gaps are 6px at the window sides and
+bottom, between panels and between header controls. Panel visibility and reset
+live in the Window menu.
+
+Colors come from the [theme palette](theme-colors.md). The active tab matches
+its content, with rounded top corners and concave lower shoulders joining the
+two surfaces. GTK paints only those corner joins in a non-interactive native
+overlay; DOM uses CSS pseudo-elements. Native tab controls and their hit
+targets are unchanged. Panels have soft shadows rather than persistent outlines.
+The header and HUD containers are transparent. Their controls sit on chips
+filled with the canvas surround color, translucent or opaque according to
+[panel transparency](panel-transparency.md), so they disappear over the
+surround but stay readable over artwork. Web hides keyboard focus rings on the
+pen-first workspace chrome, and GTK hides them in Preferences; where they show
+(native GTK controls, the Web workspace manager and title-bar editor, drawing
+tabs) they use the accent.
 
 Appearance defaults to System. `Settings.theme = None` (`null` in JSON) follows
 the host; Light/Dark are explicit overrides. `SystemThemeChanged` updates the
@@ -219,92 +207,75 @@ GTK observes the default `AdwStyleManager` and applies overrides to the display
 manager; web observes `prefers-color-scheme`. OS changes never overwrite a user
 override. Returning to System uses the latest OS value.
 
-`ZenMode` toggles shared `UiState.workspace.zen_mode`. With **Reveal panels near
-screen edges** enabled, the shared `near_chrome` rule reveals
-hidden controls only within a fixed 80 logical pixels of an occupied window edge,
-not by approaching a hidden toolbar/panel. The top always reveals the header;
+`ZenMode` toggles shared `UiState.workspace.zen_mode`. Zen has a single
+presentation: it hides the header and docked chrome, keeps floating panels, and
+never projects alternate toolbar strips or changes the saved layout. A minimal
+persistent UI belongs in a workspace instead. The standalone Capy button or Tab
+exits Zen; Tab toggles Zen outside settings and native text editors. Explicit
+settings dialogs remain usable.
+
+Preferences → Appearance → Zen mode has **Show Capy in Zen mode** (on by
+default) and **Reveal panels near screen edges** (off by default). With reveal
+enabled, the shared `near_chrome` rule reveals hidden controls only within
+80 logical pixels (`WORKSPACE_PROXIMITY`) of an occupied window edge, not by
+approaching a hidden toolbar or panel. The top always reveals the header;
 left/right/bottom reveal only when a visible dock band occupies that edge. The
-status HUD alone does not enable bottom-edge reveal. Moving/hiding panels updates
-these targets through the shared resolved layout. Once visible, the same
+status HUD alone does not enable bottom-edge reveal. Once visible, the same
 80px margin around panels, header and HUD keeps controls available; enabled
-edge zones also retain visibility to prevent oscillation. Hosts animate
-opacity over 180 ms and disable hit-testing while hidden. Keyboard navigation,
-open menus, settings and native title-bar grabs keep controls available. Floating
-panel movement reveals hidden docks only at an occupied screen edge, then holds
-that visibility for the rest of the drag. Every drop returns to normal cursor
-proximity, without a post-drop pin. These decisions belong to `DragWorkspace`
-and the Rust interaction state, not frontend callbacks. An initial contact in a hidden
-control's reveal zone reveals instead of painting. A captured stroke does not
+edge zones also retain visibility to prevent oscillation. Neither distance is a
+preference.
+
+Enabling Zen hides the chrome at once. The core suppresses hover reveal inside
+a fixed 300 × 300 logical-pixel top-left guard until the pointer leaves it, so
+the activating button does not reveal itself again; a fresh deliberate contact
+re-enables edge reveal for touch users. Hosts animate opacity over 180 ms and
+disable hit-testing while hidden. Web respects reduced-motion preferences; GTK
+uses the platform animation setting. Keyboard navigation, open menus, settings
+and native title-bar grabs keep controls available. Floating panel movement
+reveals hidden docks only at an occupied screen edge, then holds that visibility
+for the rest of the drag. Every drop returns to normal cursor proximity. An
+initial contact in a hidden control's reveal zone reveals instead of painting,
+and cannot also activate a newly exposed button. A captured stroke does not
 reveal controls under its moving tip. Moving away or leaving the window fades
 the chrome, except during a native title-bar grab. A release or subsequent
 unpressed motion clears that grab latch; leave/cancel during a WM drag does not.
-Tab toggles Zen outside settings and native text editors. Web respects reduced-motion preferences; GTK
-uses the platform animation setting.
 On touch, the last contact keeps revealed controls available after finger lift;
-another contact away from controls can hide them. The reveal contact cannot
-also activate a newly exposed button.
-
-Preferences → Appearance → Zen mode has **Show Capy in Zen mode** (on by
-default) and **Reveal panels near screen edges** (off by default); see the
-[Zen preference record](../development/zen-mode-validation.md). Zen has a single
-presentation: it hides the header and docked chrome, keeps floating panels, and
-never projects alternate toolbar strips or changes the saved layout. The
-standalone Capy or Tab exits Zen. Explicit settings dialogs remain usable.
-
-**Button icon** offers Looking up (default), Facing forward, Bathing and Sleeping.
-Rust stores `Settings.zen_icon` and supplies each command's icon. The generic
-`ChoicePresentation::ImageTiles { columns: 4 }` uses the same choice validation,
-persistence and Reset to Default as dropdowns. Hosts render four selectable
-64px tiles with centered 48px previews and accessible labels (tooltips on desktop). There is no import control
-yet, and no Zen-specific selection logic. The context menu's **Change icon…**
-opens the selector via a generic `PreferenceAction::Reveal { id }`: Rust resolves
-the page and the host reveals the named row. All four canonical, theme-tinted SVGs live in the shared
-icon bank; app/launcher/PWA icons derive from Looking up at build time.
-The main Zen icon is 28px inside its unchanged 36px button. SVG artwork retains
-roughly 5% padding along its longest dimension without stretching its proportions.
-GTK/web Preferences dialogs default to 1000×744 logical pixels, constrained by
-the window. Neither has a footer/Done button; × or Escape close them, following
-libadwaita behavior without custom outside-click dismissal. Errors appear below
-the header only while present. Detailed shortcut dialogs retain their own actions.
-Android retains its full-screen settings overlay and pane-level Done button.
-
-Rust owns these decisions through `Settings.zen_show_capy`/`zen_reveal_at_edges`
-and `InputReply`'s `chrome_hidden` and `keep_zen_button` flags. Hosts only apply
-visibility, hit-testing and styling. Android carries both flags in its
-change-detected snapshot, including updates without a document revision.
-The button is a sibling of the header with a same-sized spacer, preserving its
-36×36px size and 6px inset. Its active background is subtle grey while the full UI
-is visible, but neutral when only the button remains.
-Right-clicking or touch-holding the Zen button opens **Change icon…**, which
-Rust generates from the same preference row and applies without opening
-Preferences.
+another contact away from controls can hide them.
 
 Zen's hidden/visible state, last hover/contact, keyboard pin, and first-contact
-consumption live in Rust, not frontend booleans. Hosts send `UiInput::Chrome`
-events plus `ChromeFacts` (native grab, panel drag, popup visibility). Rust
-combines those facts with settings/divider state and returns visibility and
-dismiss/consume instructions. The DOM retains only its suppressed-click pointer
-ID to prevent the browser's subsequent click from activating a revealed control.
+consumption live in Rust (`Settings.zen_show_capy`, `zen_reveal_at_edges`, and
+`InputReply`'s `chrome_hidden` and `keep_zen_button` flags), not frontend
+booleans. Hosts send `UiInput::Chrome` events plus `ChromeFacts` (native grab,
+panel drag, popup visibility) and only apply visibility, hit-testing and
+styling. Android carries both flags in its change-detected snapshot, including
+updates without a document revision. The DOM retains only its suppressed-click
+pointer ID to prevent the browser's subsequent click from activating a revealed
+control. These decisions belong to `DragWorkspace` and the Rust interaction
+state, not frontend callbacks.
+
+The Capy button is a sibling of the header with a same-sized spacer. Its active
+background is subtle grey while the full UI is visible and neutral when only
+the button remains; hover still works. Its icon is 31px (`ZEN_ICON_SIZE`).
+**Button icon** offers Looking up (default), Facing forward, Bathing and
+Sleeping. Rust stores `Settings.zen_icon` and supplies each command's icon. The
+generic `ChoicePresentation::ImageTiles { columns: 4 }` uses the same choice
+validation, persistence and Reset to Default as dropdowns. Hosts render four
+selectable 64px tiles with centered 48px previews and accessible labels. There
+is no import control. Right-clicking or touch-holding the Capy button opens
+**Change icon…**, generated from the same preference row, which reveals the
+row through `PreferenceAction::Reveal { id }`. All four theme-tinted SVGs live
+in the shared icon bank; app, launcher and PWA icons derive from Looking up at
+build time.
 
 Fading does not change allocation, camera or viewport. Zen is the sole global
-controls-visibility toggle; Workspace still manages individual panels. Dock moves,
-resizes, hiding and Zen do not request brush/render frames. Window resize still
-resizes the full GPU viewport; Fit Canvas explicitly uses updated work-area bounds.
-
-Brush previews are cached transparent PNGs from the actual GPU presets, with
-destination paint seeded for blender/eraser/liquify examples. GTK bundles the
-same dark/light assets served by the web client. `gpu-bench --brush-previews`
-regenerates them; no live brush jobs or canvas readbacks run when opening the picker.
+controls-visibility toggle; the Window menu still manages individual panels.
+Dock moves, resizes, hiding and Zen do not request brush/render frames. Window
+resize still resizes the full GPU viewport; Fit Canvas explicitly uses updated
+work-area bounds.
 
 ## Actions and observation
 
-Drag pickup follows the [application-wide convention](drag-and-reorder.md):
-reorderable tiles require a hold for mouse, touch, and pen; list-row bodies
-require a hold for touch/pen but allow immediate mouse dragging; explicit handles
-and title/tab bars never require a hold. Native recognition supplies timing,
-device identity, and capture; the shared actions below retain drop validation,
-layout publication, cancellation, and history. See the
-[inventory](drag-inventory.md) for current host gaps.
+Drag pickup follows the [drag and reorder convention](drag-and-reorder.md).
 
 `dispatch(UiAction)` returns `Result<UiChange, String>`. `UiChange` contains a
 revision, changed-region bits, and `canvas_wake`. The host updates only affected
@@ -354,7 +325,13 @@ replaced or cleared id is rejected. The core clears the notice at the next
 canvas contact that raises nothing new, and when another document becomes
 active. Hosts show each id once, in a bubble over the canvas that never takes
 focus, and hide it after about 4 s (answering `accept: false`) or at the next
-canvas contact. `host_error` is kept for file and renderer errors.
+canvas contact. Notices overlay the canvas and never resize its viewport or GPU
+surface. `host_error` is kept for file and renderer errors.
+
+Brush previews are cached transparent PNGs from the actual GPU presets, with
+destination paint seeded for blender/eraser/liquify examples. GTK bundles the
+same dark/light assets served by the web client. `gpu-bench --brush-previews`
+regenerates them; no live brush jobs or canvas readbacks run when opening the picker.
 
 Brush picker labels, preset identities, and size choices have one Rust source.
 Picker colors are display-encoded sRGB; Rust converts them to linear brush
@@ -398,7 +375,8 @@ Ctrl+Alt+0; Ctrl+1 in the Photoshop and Affinity keymaps, 1 in GIMP's) shows
 one image pixel per device pixel, zooming about the work-area centre. When the
 view rotation is a quarter turn, `Camera::zoom_to` also rounds the translation
 to whole device pixels, so the bilinear presenter samples pixel centres and the
-1:1 view is not blurred. It differs from the placement bar's **Original Size
+1:1 view is not blurred. On Web, Ctrl+1 and Ctrl+Alt+0 call `preventDefault` so
+Chrome does not switch tabs. It differs from the placement bar's **Original Size
 (100%)**, which returns a placed image to its own pixel size.
 The footer's "N% · D°" readout is a button. It opens `UiSession::zoom_menu()`:
 Zoom In, Zoom Out, Fit, Actual Pixels, then 25% to 400% as
@@ -452,7 +430,9 @@ Printable keys outside editable controls start preferences search through the
 shared input router; the view's transient `search_focus` revision asks each host
 to reveal and focus its search field. Native text editing and shortcut recording
 keep ownership of their input. GTK/web dialogs target 1000 × 744 logical pixels
-and shrink to fit smaller windows.
+and shrink to fit smaller windows. They have no footer or Done button: × or
+Escape closes them, following libadwaita, without custom outside-click
+dismissal. Errors appear below the header only while present.
 Android renders simple choices as native anchored dropdowns, with options,
 icons and the selected value supplied by Rust. Selection submits `Edit` without
 navigating. `ImageTiles` renders centered selectable previews instead; both
@@ -485,9 +465,8 @@ not invent defaults. GTK retains its native check indicator when a hint is
 present. Web and Android render the same menu models. Native text editing is
 separate from canvas commands: Cut/Copy/Paste/Select All copy and conventional
 hints come from `text_edit_menu`, while the host text editor owns execution and
-selection. OS-provided text-selection menus remain platform-owned. Translation
-infrastructure is still deferred; this removes host-owned context-menu copy,
-not a claim that the application is already localized.
+selection. OS-provided text-selection menus remain platform-owned. There is no translation
+infrastructure yet.
 
 Android tooltips use Material's [TooltipBox](https://developer.android.com/develop/ui/compose/components/tooltip)
 with explicit hover activation. They do not consume touch holds reserved for
@@ -506,42 +485,33 @@ text. Windows keeps native WinUI tooltips for mouse and pen hover and closes any
 tooltip that opens while the latest contact is touch
 (`apps/layer-windows/scripts/exercise-tooltips.ps1`). Tooltip controllers never
 consume touch holds or request model refreshes.
-Run `tools/performance/workspace-motion.sh gtk --tooltips` (or `web`), which uses
-an isolated display. Web tests inject mouse/pen/contact; GTK tests use real mouse input plus
-the pen pick/timeout path. Physical GTK tablet hover still needs a hardware check.
+`tools/performance/workspace-motion.sh gtk --tooltips` (or `web`) checks them.
 
 Applied settings emit a durable `HostRequest::SaveSettings`; GTK writes atomically
 on GIO's I/O pool and web uses localStorage. Completion/error returns through
 `CompleteRequest`. `RestoreSettings` validates without emitting another save.
-New Window uses the same request/acknowledgement boundary. No file/window handles
-or OS paths enter Rust UI state. The host relays applied settings to other open
+New Window uses the same request/acknowledgement boundary. Documents carry only
+an opaque host URI and name (`DocumentLocation`); native handles, browser Files
+and permissions stay in the host. The host relays applied settings to other open
 windows using the same validated restore action; GTK serializes file writes so
 an older pending snapshot cannot overwrite a newer one.
-See [settings design and validation](../history/settings-implementation-plan.md).
 
 `cursor_input` accepts the latest optional pen/hover
 record independently of the paint queue; `canvas_cursor` returns vector paths
 in logical display coordinates. Hosts display those paths without brush math or
 canvas readback. Native GPU segments and web SVG use the same thin contrasting dashes.
 
-When file pickers or other asynchronous platform services are implemented,
-their handles must stay in the frontend. Add a typed request/result carrying an
-opaque resource identity at that point; do not put paths, browser Files, or
-platform permissions into shared state ahead of a real use case.
-
 ## Binding portability
 
 The Wasm wrapper uses typed scalar input and owned JavaScript records, not JSON
 per pointer sample. `u64` identities/revisions cross as JavaScript `bigint`.
 Actions use explicit tagged variants; native GTK calls those Rust variants
-directly. Other frontends can expose this same finite, synchronous facade using
-UniFFI for Swift/Kotlin or a C ABI for WinUI when those clients are built.
-No frontend duplicates validation, command availability, or document behavior.
-
-GTK and web are developed together; see the current acceptance checklist in
-[../history/ui-implementation.md](../history/ui-implementation.md). Shared tests cover state and
-input semantics; actual frontend tests and screenshots must additionally prove
-widget wiring, docking, presentation, and drawing in both themes.
+directly. Android, Apple and Windows reach the same finite, synchronous facade
+through [`layer-host`](../../crates/layer-host/src/lib.rs) and their native
+bridges. No frontend duplicates validation, command availability, or document
+behavior. Shared tests cover state and input semantics; frontend tests and
+screenshots must additionally prove widget wiring, docking, presentation, and
+drawing in both themes.
 
 In the GTK host, `preferences.rs` renders the preferences view and services its
 storage/window requests; `workspace.rs` maps other state to
@@ -562,7 +532,8 @@ The GPU worker sleeps when idle. No GPU wait, image import or canvas pixel copy
 runs on GTK's drawing/input hot path. The shared cursor geometry is drawn in the
 same GPU viewport pass; the browser uses its equivalent SVG paths.
 The web has the equivalent native DOM host in `app.js` and a small Wasm bridge
-in `src/lib.rs`. There is no cross-toolkit widget framework or second action
+in `src/lib.rs`. Its GPU help (`gpu.js`) picks guidance by platform hint only
+and never blocks a browser. There is no cross-toolkit widget framework or second action
 dispatcher.
 
 Navigator camera/drag geometry and preview scheduling live in the shared UI core.

@@ -2,50 +2,31 @@
 
 [Developer guide](README.md) · [Platform integration](../platforms/README.md)
 
-Linux with Wayland is the primary development target and receives new editor
-features first. The client uses GTK4/libadwaita for controls and the shared wgpu
-renderer through Vulkan. Coding agents use this implementation as the basis for
-the web UI, then adapt that reference to the other native toolkits. The
-[platform workflow](../platforms/README.md#development-workflow) explains how the
-ports are compared.
+Linux with Wayland is the primary development target. New editor features land
+here first, then move to Web and the native ports, as the
+[platform workflow](../platforms/README.md#development-workflow) describes. The
+client uses GTK4/libadwaita for controls and the shared wgpu renderer through
+Vulkan.
 
 ## Prerequisites
 
-Install a recent stable Rust toolchain, a C/C++ build toolchain, `pkg-config`,
-GTK4 and libadwaita development packages, and Wayland development libraries.
-JPEG decoding/encoding uses `libjpeg-turbo-rs`; ICC color management uses `moxcms`.
-Neither requires libjpeg-turbo or LittleCMS development packages. See the
-[portable color backend](portable-color.md) for memory policy and compatibility.
-Package names vary by distribution. GTK 4.22 or later is required for the shared
-SVG icon paintables; the current stack uses libadwaita 1.9. Enabled API features are declared in
-[`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
-
-Check the libraries visible to the build:
+Install a recent stable Rust toolchain, a C/C++ toolchain, `pkg-config`, and the
+GTK 4.22+, libadwaita 1.9 and Wayland development packages. Enabled API features
+are declared in [`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
+Photo codecs and ICC color management are Rust crates; no libjpeg-turbo,
+LittleCMS or HEIF system packages are needed.
 
 ```bash
 pkg-config --modversion gtk4 libadwaita-1 wayland-client
 ```
 
-### Omarchy
+The canvas needs a Wayland session and a hardware Vulkan driver with mailbox
+presentation and premultiplied-alpha surfaces. There is no X11, GLES or CPU
+canvas fallback. GTK chooses its own renderer for the controls.
 
-Omarchy includes the native build and runtime libraries above in its base
-installation. Install its supported Rust development environment, then build
-normally:
-
-```bash
-omarchy install dev-env rust
-source "$HOME/.cargo/env"
-./apps/layer-linux/run.sh
-```
-
-Capy Canvas runs directly in Omarchy's Wayland session. No XWayland override or
-Hyprland window rule is required; the application advertises
-`art.capycanvas.CapyCanvas`, matching its desktop entry and icon.
-
-Running the canvas requires a Wayland session and a hardware Vulkan driver with
-mailbox presentation and premultiplied-alpha surface support. The app has no X11,
-GLES or CPU canvas fallback. GTK chooses its own renderer for controls; that is
-separate from the canvas's Vulkan renderer.
+On Omarchy the native libraries are in the base install; add Rust with
+`omarchy install dev-env rust`. The app runs directly in its Wayland session and
+advertises `art.capycanvas.CapyCanvas`, matching its desktop entry and icon.
 
 ## Build and run
 
@@ -53,321 +34,78 @@ separate from the canvas's Vulkan renderer.
 ./apps/layer-linux/run.sh
 ```
 
-The launcher uses `dev-perf`: release optimization level 3, incremental compilation,
-16 codegen units and line tables for source-level profiling. Its executable is
-normally `target/dev-perf/layer-linux`; Cargo honors `CARGO_TARGET_DIR`.
-Use `CAPY_RUST_PROFILE=release ./apps/layer-linux/run.sh` for release comparisons.
-Arguments are forwarded to the app. See [Rust build times](rust-build-times.md)
-for measurements and the distinction between development and distribution builds.
+The launcher runs `cargo run` with the `dev-perf` profile and forwards its
+arguments to the app; set `CAPY_RUST_PROFILE=release` for release comparisons.
+See [build profiles](environment.md#build-profiles).
 
-## How the host works
+Where to look in [`apps/layer-linux/src`](../../apps/layer-linux/src):
+`main.rs` creates the application and handles file launches, `canvas.rs` adapts
+the shared session and schedules frames against Wayland presentation timing,
+`render_thread.rs` owns canvas GPU work, `wayland.rs` presents into an app-owned
+subsurface beneath the GTK controls ([design record](../history/wayland-subsurface-feasibility.md)),
+and `files.rs` supplies native dialogs and project/photo transport.
 
-[`main.rs`](../../apps/layer-linux/src/main.rs) creates the native application and
-workspace. [`canvas.rs`](../../apps/layer-linux/src/canvas.rs) adapts the shared
-session and prepares updates on an independent timer aligned to Wayland
-presentation timing, with a 120 Hz fallback. A dedicated
-[render worker](../../apps/layer-linux/src/render_thread.rs) owns canvas GPU work
-and presents into an app-owned [Wayland subsurface](../../apps/layer-linux/src/wayland.rs)
-beneath the GTK controls. The timer target alone does not establish display latency.
+## Tests
 
-GTK owns native input and the parent window. The canvas and cursor are rendered
-by the shared GPU viewport path; GTK does not download or reimport a canvas-sized
-bitmap. Window movement, resizing and scaling must preserve the relationship
-between the native surface, pen coordinates and document camera.
-
-[`files.rs`](../../apps/layer-linux/src/files.rs) supplies native dialogs and local
-project and photo transport. New offers sRGB8, P3 8-bit and ProPhoto 16-bit presets,
-independent color/depth controls, white or transparent backgrounds, saved presets
-and remembered defaults. New windows use those same defaults. Open recognizes
-native projects and JPEG/PNG/TIFF/BMP/GIF/WebP by signature. The Linux HEIF/HEIC
-and AVIF readers are enabled when the packaged codec bundle is available;
-picker and encoded-clipboard formats reflect actual decoder availability.
-Photos retain their supported integer depth,
-original samples, profile bytes and transparency. Ordinary untagged RGB assumes
-sRGB; unfamiliar supported ICC gamuts use ProPhoto working RGB while preserving
-the original source interpretation. Familiar matrix gamuts select the corresponding
-built-in working space from colorimetry, never a profile name.
-
-GIF/WebP/AVIF animation imports the first displayed frame with a name suffix.
-AVIF selects the sequence track even when the file also has a different poster.
-HEIF collections import the primary image with the same disclosure. HEIF sequences,
-AVIF track-level display transformations/scaling, and PQ/HLG HDR currently require
-a still-image SDR export; APNG is also explicitly unsupported. Supported HEIF/AVIF high-depth samples use U16
-storage, and container rotation/mirroring is applied without repeating EXIF
-orientation. See the [format matrix and remaining qualification](../ui/image-open-import-proposal.md#3-deliver-common-format-parity-through-the-shared-decoder).
-
-Preferences → Color edits future drawing defaults and reuses the New form for
-dimensions and saved presets. Photo opening defaults to source depth; optional
-16-bit editing changes the new document's precision while retaining original
-source samples at their original depth. Native masters ignore photo-open policies.
-Untagged RGB/grayscale can assume sRGB or ask for an interpretation before Open,
-Place or Paste publishes the image. Valid tagged images keep their profile without
-a mismatch prompt. Cancelling interpretation leaves the destination untouched.
-
-The same page manages a reusable ICC library for source and delivery choosers.
-Imports preserve exact bytes, deduplicate by content and validate the profile;
-each chooser also validates its actual input/output transform. Removal affects
-the library copy, leaving source files and embedded document profiles intact.
-The library admits 128 profiles, 16 MiB per profile and 64 MiB total. It lives in
-the user's data directory under `capycanvas/color-profiles`, or beside an explicitly
-selected `LAYER_SETTINGS_FILE` in `color-profiles`. The Color page reports the
-negotiated canvas view space and the monitor reported by GTK. Viewing prefers
-Display P3, then sRGB. Vulkan color pass-through is required so the application
-can describe the pixels itself. The
-compositor owns monitor/profile conversion. Physical monitor/profile
-qualification remains pending.
-
-GTK 4.22 disables its Wayland color-manager binding unless `GDK_DEBUG=color-mgmt`
-is enabled. The application enables that flag before GTK initialization, preserving
-other diagnostic flags; the native test harness sets it before launching tests.
-This is a version-specific workaround because GTK has no public equivalent API.
-The app-owned canvas uses Wayland's explicit piecewise sRGB transfer function
-(color-management v2 TF 14), or a matching generated ICC profile when needed.
-It never relies on legacy TF 9: Mutter 50.4 interprets that value as gamma 2.2.
-If no color-management protocol is available, canvas and controls use the same
-untagged sRGB fallback. An available protocol that rejects both precise SDR
-descriptions reports an initialization error instead of displaying incorrect
-colors. The narrowly patched wgpu dependency is documented in
-[`vendor/README.md`](../../vendor/README.md).
-
-The app-owned canvas and GTK parent each publish their own color description;
-tagging only the canvas does not qualify the controls. GTK selects its own output
-color state and converts the explicitly tagged artwork textures into it. A
-Wayland protocol trace verifies both surfaces, while physical monitor moves and
-profile changes still require qualification.
-
-Effect colors, gradient stops and retained brush-color controls use the shared
-numeric editor with explicit defining spaces, extended RGB and separate alpha.
-Switching input models or cancelling preserves exact definitions; accepting an
-unchanged effect value creates no history entry. Gradient previews interpolate
-encoded document RGB, then convert for viewing and composite their alpha over
-the checkerboard in linear light. Toolbar and title-bar paint swatches use the
-original icon geometry with tagged artwork fills. None of these display textures
-feeds edits, sampling or export. The saved color and GPU-coordinate contracts are
-specified in [Runtime filters](../reference/runtime-filters.md).
-
-File → Export offers original dimensions or a proportion-preserving fit inside
-maximum pixel dimensions, with explicit enlargement. The resolved output size
-stays visible above the action buttons. Resampling operates on the full linear
-premultiplied composition before output profile conversion, matte application and
-integer quantization. Reductions integrate covered source pixels; enlargements
-use Catmull–Rom interpolation. PNG/TIFF/JPEG share the bounded row pipeline, and
-an unchanged-size identity export retains exact integer samples. Resizing never
-changes the editable master or its dirty state.
-
-Photo Open retains valid physical density in the master and original source;
-native save/reopen preserves its rational values. Export can retain that density,
-set an explicit pixels-per-inch value, or omit it. The footer shows physical and
-pixel dimensions separately. Density changes do not resample artwork; resizing
-with retained density changes the physical size. PNG uses rounded pixels/metre,
-TIFF uses rational density, and JPEG carries rational Exif plus applicable JFIF
-density. Unknown physical size stays unspecified. Document Properties reports
-the master density. See the [resolution validation](../history/color-management-gtk-m2-validation.md#2026-09-15--preserve-and-select-physical-resolution-metadata).
-
-Export offers named presets with embedded ICC profiles, Save as/Update/Remove,
-and Reset for the built-in destinations. Successful delivery remembers each
-destination's choices; cancellation leaves that memory alone. Preset preferences
-are separate from New/Open and the master. Shared validation bounds names/profile
-storage; GTK validates CMM support and atomically saves on a worker, rejecting
-stale-window overwrites. See the [preset validation](../history/color-management-gtk-m2-validation.md#2026-09-15--reusable-export-presets-and-remembered-destinations).
-
-Export's Master/Output comparison uses the same immutable snapshot as the final
-file. Output rows pass through size, profile, depth, dithering and matte before
-being interpreted for viewing and reduced. JPEG compression artifacts are
-explicitly excluded. Shared renderer previews also serve Assign/Convert and
-source repair/rasterization; GTK applies a linear checker and tags the opaque
-thumbnail with its sRGB/P3 viewing space. Closing cancels and drains the preview
-worker. See the [output-preview validation](../history/color-management-gtk-m2-validation.md#2026-09-15--preview-the-delivered-sdr-samples).
-
-GTK alert waits use `alert::choose`, which disconnects its response handler on
-completion and closes the dialog if its future is abandoned. The installed
-libadwaita-rs 0.9.2 `choose_future` wrapper leaks an owned dialog reference across
-a borrowed C argument; it is no longer called by the application. Native checks
-cover response/cancellation, abandoned waits and repeated export-sheet disposal.
-
-File → Import Image as Layer and Edit → Paste Image as Layer retain original
-PNG/JPEG/TIFF source data while keeping the destination document's working mode.
-Recognized HDR gain-map and multiple-picture JPEG inputs are rejected with an
-actionable error; SDR import does not discard their richer content silently.
-HDR rendition import belongs to the HDR milestone.
-
-TIFF import supports a single interleaved 8/16-bit unsigned RGB/gray image, with
-explicitly unassociated alpha where present, or profiled CMYK without alpha.
-Supported strips/tiles, classic/BigTIFF containers and both byte orders are read
-under the codec limits. Planar, associated-alpha, floating-point and multi-page
-layouts are rejected. TIFF delivery is single-image uncompressed classic TIFF;
-an output exceeding its 32-bit offset limit fails before requesting pixels.
-See the [variant and input-policy validation](../history/color-management-gtk-m2-validation.md#2026-09-15--explicit-sdr-input-and-tiff-variant-policy).
-
-Open offers Cancel while reading a photo or native project. Open, Place and
-Paste keep their request reserved until the reader acknowledges cancellation,
-then discard the candidate before publication. Paste prefers TIFF, then PNG,
-then JPEG; transfer and worker decoding can be cancelled. Clear removes retained content, and Undo restores it exactly. The native
-`workspace::tests::place_source::native_profiled_place_paste_and_source_history`
-check covers import, clipboard format preference, history, reopen and cancellation.
-
-File → Repair Source Profile and the layer context menu correct retained originals.
-The ICC chooser validates input profiles against the image channels and validates
-export profiles against the output transform. Repair previews the complete Before/After
-canvas on a cancellable worker before Apply, using the same tagged display space
-as the canvas. Repair preserves original sample
-bytes; a layer with baked edits gets a separate corrected source layer. The native
-`workspace::tests::source_repair::native_source_profile_repair_preserves_originals_and_baked_edits`
-check covers correction, cancellation, mismatched profiles, history and reopening.
-
-Edit → Rasterize Source and the layer context menu explicitly convert an original
-image to document-space RGBA at the document depth. The complete Before/After
-comparison precedes Apply; cancellation discards the worker result. Full source
-extent, placement, painted overrides and masks survive, including content brought
-into the canvas by moving a larger photo. The original remains in Undo history;
-the native project saves the rasterized role and pixels. The native
-`workspace::tests::source_rasterize::native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen`
-check covers these boundaries, reopen and continued painting.
-
-Edit → Revert to Original Photo, also under Layer Settings in the layer context
-menu, discards the painting, erasing and applied masks on a placed photo in one
-undo step, keeping its source, placement, mask, opacity and blend mode. It
-explains why it is unavailable: no edits, a rasterized or locked photo, or an
-edited mask. `workspace::tests::photo_edit::native_revert_to_original_after_painting_on_a_placed_photo`
-paints over a photo and reverts from the Edit menu with the mouse.
-`native_layer_new_solid_color_fill_masks_to_the_selection` adds a fill layer from
-Layer › New over a lasso selection, and `native_liquify_pinch_stroke_on_a_pattern`
-(with `--tablet`) pinches striped paint with the pen.
-
-Edit → Assign Profile, Convert Color Space and Change Bit Depth prepare a complete
-Before/After comparison before changing the drawing. Assign retains committed RGB
-numbers; Convert transforms editable backing with the selected intent, or creates
-a separate flattened copy. Retained originals keep
-their independent profiles. Depth changes offer optional dithering for 8-bit RGB.
-The GPU prepares the destination configuration before the document and history
-change together. Cancel discards pending work; Undo/Redo restores exact backing and
-the matching renderer and picker space. The native
-`workspace::tests::document_color::native_document_color_assignment_conversion_depth_history_and_copy`
-check covers these controls, save/reopen, continued drawing and GPU recovery.
-Canvas, comparisons, picker fields, paint/palette samples, layer thumbnails and
-filter thumbnails use the negotiated display space. View-only encoding never
-feeds document edits, exact sampling or profiled export. Monitor/profile and complete preview-matrix qualification remain open.
-
-View → Histogram opens a separate window that stays available while editing.
-It counts the full-resolution committed composite, including visible paper and
-masks, before display/output conversion. RGB uses the document profile's encoded
-coordinates; luminance uses linear relative Y. Fully transparent pixels are
-excluded; partial coverage is unassociated and counted once. Endpoint counts and
-values outside SDR are shown separately. The graph offers RGB, individual channels,
-luminance and logarithmic scaling. Automatic updates wait for committed changes
-to settle, can be paused, and cancel when the window closes. Animated effects are
-sampled at the stated time. `workspace::tests::histogram::native_composite_histogram_updates_without_changing_the_drawing`
-checks numerical counts, transparency/mask-overlay exclusion, live exposure edits,
-pause/resume, cancellation and reopening without changing document data.
-
-File → Document Properties shows working color/depth and each retained source's
-profile or assumption. New/Open preserve the current drawing in its own window
-while the incoming document is validated. An opened photo has no native Save
-location: Save asks for a separate `.capy` master. Saving uses a background write
-and atomic replacement; the [project reference](../reference/project-format.md)
-explains checkpoints and failure handling. The ignored native test
-`workspace::tests::new_photo::native_new_presets_and_profiled_photo_master` covers
-creation presets, cancellation, native source editing, master save/reopen and
-profiled delivery. The existing `native_document_files` check covers file-operation
-failure, cancellation, recovery and additional profiled output routes.
-
-Application file launches use GTK's `HANDLES_OPEN`/`open` delivery, including
-arguments forwarded from another process. A file list is prepared in order with
-the same signature-based Open worker and missing-profile prompt as the menu.
-Each file opens its own document window. At cold startup, a temporary progress
-window owns the read before any canvas is constructed; it does not create an
-extra blank drawing. Cancel discards the pending list and waits for the current
-reader to finish. Existing drawings and their unsaved-close flow remain intact.
-Remote files without a local path are explicitly rejected.
-
-The ignored `native_application_file_launch` test uses a separate process and
-private session bus to exercise argument forwarding into the production
-application setup, alongside native document creation and cancellation. Run it
-with the `tools/performance/gtk-raster.sh` runner after building the GTK tests.
-
-## Stage a native bundle
-
-In addition to the application build prerequisites, install Node.js, `strip`,
-`desktop-file-validate` and `cargo-about` (the same notice generator used for Web).
-Photo codecs are built into the shared Rust core; there is no separate photo
-codec build or runtime bundle:
+Model tests run with `cargo test --locked -p layer-linux`. Native tests are
+`#[ignore]`d GTK journeys in `tests.rs` and the `*_tests.rs` modules. They need a
+real Wayland display, a Vulkan GPU and injected input, so run them through the
+private-compositor runner:
 
 ```bash
-cargo install cargo-about --version 0.9.2 --features cli --locked
-node apps/layer-linux/package.mjs
-dist/capycanvas-linux/bin/capycanvas
+bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_modes
 ```
 
-Normal packaging builds pinned GTK 4.22.4 with the null-surface tablet-pad
-startup fix and the pen-entry cursor fix. Meson, Ninja, GTK development
-dependencies and `glslc` are required.
-The cache defaults to `target/gtk-runtime` (`CAPY_GTK_BUILD_DIR` overrides it).
-The package launcher selects `lib/capycanvas/gtk/libgtk-4.so.1` before executing
-`bin/capycanvas-bin`; use `bin/capycanvas` for both ordinary and file launches.
-No system GTK is replaced. Corresponding source, patch, LGPL license, a standalone
-rebuild recipe and checksums travel in `share/doc/capycanvas-gtk`. Rebuild from a
-relocated package with the command in that manifest. The build uses system GTK
-dependencies, so this remains a native bundle for compatible distributions.
+[`workspace-motion.sh`](../../tools/performance/workspace-motion.sh) builds the
+release tests, starts a private D-Bus session, headless Mutter and PipeWire, and
+prints the run directory that holds its logs, input records and fresh storage.
+It needs Mutter with headless support, GJS and PipeWire besides the build
+prerequisites. Useful settings:
 
-Staging replaces only a directory bearing the generated `.capy-package` marker.
-The output includes the executable, desktop launcher, `.capy` MIME definition,
-icon, runtime filters, GTK runtime and notices.
-JPEG/AVIF gain maps, HEIC and ordinary raster imports use the same compiled Rust
-paths as `cargo run`; moving the package needs no codec search path or environment
-variable. Accepted HEIC variant limits are recorded in the
-[shared-core migration](portable-photo-core.md).
+| Setting | Effect |
+| --- | --- |
+| `--native-test=<name>` | Runs the one test with that exact name. |
+| `--tablet` | Adds tablet-v2 pen input through a Wayland proxy. |
+| `--native-storage` | Gives the test the run's SQLite workspace directory instead of in-memory workspaces. |
+| `LAYER_NATIVE_TEST_EXECUTABLE` | Absolute path of an already built test executable; skips the rebuild. |
+| `LAYER_MOTION_VIEWPORT`, `LAYER_MOTION_SCALE` | Private monitor size (default `1600x1000`) and scale, for example `3200x2000` and `2`. |
+| `LAYER_TEST_ARTIFACTS` | Absolute directory for captures and reports, where a test writes them. |
 
-Original Rust dependency and toolchain notices are included under
-`share/doc/capycanvas/`. `LAYER_CARGO_ABOUT` can select the notice-generator binary.
-The GTK and Web packagers share `tools/build/about.toml` and require original
-license texts, including vendored dependencies. License harvesting can fetch
-missing notices from pinned upstream revisions.
+Named modes such as `--drag-pickup`, `--workspace-motion`, `--color-panel` or
+`--icons` select a fixed test; the mode list is in
+[`native-input.js`](../../apps/layer-linux/bench/native-input.js). Test-specific
+instructions live with the feature's guide under [`docs/ui/`](../ui/README.md).
+[`tools/performance/gtk-raster.sh`](../../tools/performance/gtk-raster.sh) runs an
+already built test executable on the same kind of private display, for tests
+that need no injected input, such as `native_application_file_launch`.
 
-The launcher accepts local
-file lists (`%F`) and declares the currently decoded image formats. An installer
-must register the staged desktop entry and refresh its desktop/MIME databases;
-staging does not change a user's default file associations.
-Libadwaita and GTK's dependencies remain system dependencies. The script
-does not install the application into the desktop. Distribution requirements are
-covered in the [publication guide](publication.md).
+Rules and pitfalls:
 
-The [GTK photo progress report](image-placement-gtk-progress.md#heifavif-implementation-and-open-qualification)
-records codec reference checks, native Open/Import/Paste and relocated-package
-launch evidence. To reproduce the package launch check with an empty evidence
-directory and an actual staged binary:
+- **One test per process, isolated storage.** GTK runs on one thread, and each
+  native test owns the display, input protocol and storage for its run. Pass one
+  exact name with `--exact --test-threads=1`; Cargo's filter is a substring match
+  and can start a second journey in the same process. Test builds never fall
+  back to your own settings, workspaces or recovery files. When a test needs
+  real storage, give it fresh `CAPY_WORKSPACE_DIR`, `LAYER_SETTINGS_FILE` and
+  `CAPY_RECOVERY_DIR` paths; the runners do this.
+- **Inject input only on the private display.** `native-input.js` drives
+  Mutter's RemoteDesktop API and refuses any display not named `layer-bench-*`.
+  Never point it at a desktop session.
+- **`GDK_DEBUG=color-mgmt`.** GTK 4.22 binds the Wayland color-management
+  protocol only with this flag and has no public API for it. The app adds it in
+  `main()` before GTK starts, but tests do not run `main()`. `gtk-raster.sh` sets
+  it; `workspace-motion.sh` and plain `cargo test` do not, so set it yourself for
+  tests that check display color.
+- **Tablet proxy limits.** `--tablet` pen serials cannot authorize compositor
+  drag-and-drop; use mouse and touch for those journeys. The proxy also drops its
+  connection when Quick Mask or Selection Layer rows change, so journeys through
+  those modes run without `--tablet`. It never stands in for a physical pen.
+- **Alerts.** Await `adw::AlertDialog` with `alert::choose`, not
+  `choose_future`, which in libadwaita-rs 0.9.2 keeps the dialog alive after it
+  closes.
 
-```bash
-python3 tools/validation/gtk_package_photo.py \
-  --binary /path/to/relocated/capycanvas-linux/bin/capycanvas \
-  --photo /path/to/photo.heic --photo /path/to/photo.avif \
-  --output artifacts/package-photo-check
-```
-
-This uses a private compositor, isolated settings and the existing
-`LAYER_UI_CAPTURE` diagnostic, which now also captures documents opened by file
-launch. It verifies the loaded GTK path and records captures/build hashes. Its
-four-second capture delay is not a decode-performance measurement.
-
-## Validate
-
-Run `bash tools/performance/workspace-motion.sh gtk --icons` for the complete
-shared icon bank and actual category, preset, mode, filter and toolbar controls.
-It uses the private compositor and fresh storage described below, checks both
-themes at 16/24/32 pixels, and writes native captures to
-`artifacts/icon-audit/gtk/`. Set `LAYER_MOTION_SCALE=2`,
-`LAYER_MOTION_VIEWPORT=2400x2000`, and an absolute `LAYER_TEST_ARTIFACTS` path for
-a separate high-DPI run. See the [icon audit](../ui/icon-audit.md) for paint checks
-and full-image comparison with the canonical SVGs in Chrome.
-
-The [testing guide](testing.md) lists GTK interaction and shared-engine checks.
-The [UI implementation record](../history/ui-implementation.md) and
-[Wayland feasibility record](../history/wayland-subsurface-feasibility.md) explain
-past integration decisions and measurements.
-
-### Focused UI debugging
-
-Run from the repository root in a Wayland session. Use fresh storage for each
-test process so workspace and settings tests cannot change your normal setup:
+A focused test can also run without the runner inside an existing Wayland
+session, for example to attach a debugger. Give it fresh storage:
 
 ```bash
 gtk_test_dir=$(mktemp -d)
@@ -376,156 +114,70 @@ LAYER_SETTINGS_FILE="$gtk_test_dir/settings.json" \
 GDK_BACKEND=wayland GSK_RENDERER=vulkan G_DEBUG=fatal-criticals RUST_BACKTRACE=1 \
   cargo test --locked --release -p layer-linux \
   workspace::tests::workspace_switcher_tests::native_active_workspace_delete \
-  -- --ignored --exact --test-threads=1 --nocapture >"$gtk_test_dir/test.log" 2>&1
-cat "$gtk_test_dir/test.log"
+  -- --ignored --exact --test-threads=1 --nocapture
 ```
 
-Find related cases in [tests.rs](../../apps/layer-linux/src/tests.rs) and its
-test modules, including [workspace_switcher_tests.rs](../../apps/layer-linux/src/workspace_switcher_tests.rs).
-Reuse `native_test_app`, widget lookup helpers and `pump` to exercise actual GTK
-dialogs; wait for workspace readiness and operation completion before assertions.
-Persistence cases should verify reopening as well as the visible rows.
+Reuse `native_test_app`, the widget lookup helpers and `pump` to drive real GTK
+dialogs. Wait for workspace readiness and for operations to finish before
+asserting, and check persistence by reopening, not only by reading rows.
 
-For the compact Color panel, run
-`LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/gtk" bash tools/performance/workspace-motion.sh gtk --color-panel`.
-Set `LAYER_NATIVE_TEST_EXECUTABLE` to an absolute, already-built GTK test executable
-to validate a captured build without recompiling. The driver uses that executable
-for test discovery as well as execution; omit it for the usual release build.
-This exercises native mouse/touch picking, overlapping paint swatches, the
-visible swap button and its context menu, both shape alternatives, readout
-cycles and keyboard activation. It checks 144/160/200/280/360 px panels in both
-themes, all three shapes and their two readouts (shape units or RGB), retaining
-screenshots and geometry. The entire control occupies one
-square and compresses in short docks; `native_default_workspace` covers that
-shipped layout. Four 36px tiles (144px including the panel's 8px content insets)
-is the design minimum. The compact values are read-only; tap the model label to toggle between
-the shape's units and RGB. Two bare shape
-buttons follow the upper-right arc; the swap button sits beside the overlapping
-paints. Right-click or hold either paint swatch (or use Shift+F10 while focused)
-opens **Edit Color…**, **Color Swatches…** and the swap action. Edit Color provides
-document RGB, explicitly sRGB hex, HSV/HLS and OKLCH input, independent alpha,
-preview, validation and cancel. An unchanged entry/model switch preserves the
-original color definition exactly, including colors that its 8-bit hex preview
-cannot represent. Numeric RGB uses normalized channels and names the document
-space. The readout tooltip identifies that space and preview/document gamut limits.
+## Troubleshooting
 
-Color Swatches manages named workspace palettes and saved colors. Swatches retain
-their defining RGB space and convert when used in a different document. Rename,
-remove and save controls have keyboard access; removing a palette asks before
-removing its contained swatches. Selecting a swatch changes the foreground or
-background whose menu opened the sheet. Palette changes do not alter artwork or
-brush opacity. `native_numeric_colors_and_saved_palettes` validates the dialogs,
-exact definitions, cancelled edits, name validation, palette management and
-cross-document workspace reuse through the native renderer.
-Picker coordinates are retained per paint so hue changes, drags through black,
-alpha edits, swaps and saved-state reloads do not lose powerless components.
-The circle uses a smooth elliptical projection of the full Okhsv square, with
-extra spacing between the disc and hue ring. Its
-ring rotates 24° counterclockwise to place the blue hue at the bottom. Its hue
-guide uses the smooth C/L curve from Okhsl with a 5% margin, then scales linear
-RGB so the brightest channel is one. This preserves hue and softens the colors
-without the maximum-saturation boundary jump. Actual Okhsv conversion and field
-sampling retain their full range.
-Selecting a shape always restores its units: OKLCH for circle, HSB for square,
-HLS for triangle, including when the previous readout was RGB. All readouts
-use fixed digit cells and arc positions so digit-count changes do not move the values.
-Square remains HSV and triangle remains HLS.
-Switching shapes preserves sRGB paint; each model retains powerless coordinates.
-The conversions adapt [Ottosson’s Okhsv reference](https://bottosson.github.io/posts/colorpicker/)
-with explicit neutral/black handling and a more accurate blue gamut boundary.
-OKLCH shows lightness percent, chroma to three decimal places and hue degrees
-([conversion reference](https://www.w3.org/TR/css-color-4/#oklch)). Neutral colors
-retain the picker's hue. Shape units are the default.
-Saved HSB/Lab/OKLCH preferences migrate to shape units;
-saved RGB preferences remain RGB.
+- **Startup crash with a tablet, or an arrow cursor flash on pen entry.** Upstream
+  GTK 4.22.4 dereferences a null surface when a tablet pad reports a mode change
+  before keyboard focus, and picks a cursor from stale coordinates when a pen
+  enters. The package ships a patched GTK; `run.sh` and the tests use the system
+  one. To run from source with the patches:
 
-The Okhsv field stays on the CPU. Its raster reuses an interpolated saturation
-curve and sRGB transfer table; picking keeps full-precision conversion. Hosts
-sample the smooth field at logical-pixel resolution and keep the ring, circular
-clip and markers at native resolution. Shared conversion/raster tests and the
-Web 2× interpolation comparison bound the measured color error.
+  ```bash
+  bash tools/build/gtk-runtime/build.sh target/gtk-runtime target/gtk-runtime/prefix
+  LD_LIBRARY_PATH="$PWD/target/gtk-runtime/prefix/lib" ./apps/layer-linux/run.sh
+  ```
 
-GTK retains the hue guide as a native-resolution `GdkTexture`, keyed by pixel
-size and wheel shape. Paint changes and overlapping panel motion reuse it;
-the stroke and markers remain native vectors. This avoids repeatedly rendering
-the Okhsv ring's hundreds of gradient stops into intermediate textures.
-`--color-panel` checks cache reuse, size/shape invalidation and ring colors
-against the original native gradient; repeat at display scale 2 for DPI coverage.
-`--workspace-motion` includes mouse/touch floating-panel motion over Color and
-checks texture reuse while recording native presentation timing.
+- **Canvas colors look darker than the controls.** The canvas surface describes
+  itself with the explicit piecewise sRGB transfer function (color-management v2
+  TF 14), never legacy TF 9, which Mutter treats as gamma 2.2. Check that
+  `GDK_DEBUG` reaches GTK with `color-mgmt`, and that the compositor offers the
+  protocol; without it, canvas and controls fall back to untagged sRGB together.
 
-For real pointer/hold/drag delivery, use
-`bash tools/performance/workspace-motion.sh gtk --workspace-switcher`.
-That [runner](../../tools/performance/workspace-motion.sh) provides an isolated
-D-Bus session, private Wayland runtime, temporary storage and log paths; it needs
-Mutter with headless support, GJS and PipeWire in addition to the prerequisites
-above. Its compositor setup can also wrap a focused Cargo test like the one above.
-Headless Mutter still needs a working Vulkan GPU. Keep native input injection on
-that private display; the [input driver](../../apps/layer-linux/bench/native-input.js)
-must not control an ordinary desktop session.
+## Stage a native bundle
 
-For panel dragging at workspace edges, run
-`LAYER_TEST_ARTIFACTS="$PWD/artifacts/drag-edges/gtk" bash tools/performance/workspace-motion.sh gtk --workspace-edges`.
-This checks mouse/touch floating panels, tab tear-off, footer grips, toolbars,
-column drawers and held collapsed icons in both themes. The retained preview
-keeps its size and grab offset beyond all four edges; the host clips it at the
-application surface. Lowest-slot docking, fitted floating release, measurement
-updates, cancellation and one-step undo/redo are included. `--workspace-window`
-also checks bottom overflow and release in windowed, maximized, fullscreen and
-restored windows. Use `--workspace-motion` separately for sustained presentation
-timing. Physical pen validation remains part of human review.
+Besides the build prerequisites, install Node.js, `strip`,
+`desktop-file-validate`, `cargo-about`, and GTK's own build dependencies with
+Meson, Ninja and `glslc`:
 
-Run `--workspace-drop-sizes` with the same runner for content-aware floating
-release: square Color panels at different widths, two layers, sixty layers,
-and the filter catalog. It exercises tall, squashed and usable sidebar sizes,
-existing floating sizes, footer anchoring, partial room and bottom-edge release
-with mouse/touch in both themes. Assertions check native row viewport sizes,
-square geometry, bounded scrolling, stable height after later measurements and
-one-step undo/redo. It writes captures and `drop-sizes.json`; repeat with the
-scale-2 environment above for high-DPI input/allocation coverage.
+```bash
+cargo install cargo-about --version 0.9.2 --features cli --locked
+node apps/layer-linux/package.mjs
+dist/capycanvas-linux/bin/capycanvas
+```
 
-For workspace-switching flashes or jumps, run
-`bash tools/performance/workspace-motion.sh gtk --workspace-transitions`.
-The run directory's `input/transitions.json` records canvas bounds after each GTK
-frame, editor sensitivity changes, and transient notices; `steady.png` and
-`notice.png` compare the canvas with a recovery notice. The test also checks real
-mouse, touch, and keyboard input during a pause. Routine workspace operations
-pause input without disabling/restyling the editor. Notices overlay the canvas
-so they cannot resize its viewport or GPU surface.
+The packager builds a release binary and a pinned GTK 4.22.4 with the
+[tablet patches](../../tools/build/gtk-runtime/README.md), cached in
+`target/gtk-runtime` (`CAPY_GTK_BUILD_DIR` overrides it). The `bin/capycanvas`
+launcher puts the bundled `libgtk-4.so.1` first on the library path; use it for
+ordinary and file launches. System GTK is never replaced; libadwaita and GTK's
+other dependencies stay system requirements, so this is a native bundle for
+compatible distributions. `share/doc/capycanvas-gtk` carries the GTK source,
+patches, license, checksums and a rebuild script.
 
-For the shared canvas notice, run
-`bash tools/performance/workspace-motion.sh gtk --native-test=native_notice_move_on_locked_layer`
-and `--native-test=native_notice_wand_offers_a_reference`. With real mouse input
-they check that a refusal shows the bubble again when repeated, that the next
-canvas contact and the 4 s timeout dismiss it, that its action marks the layer
-below as a reference without taking focus from the canvas, and that a disabled
-canvas-bar item shows its reason as the tooltip.
+The output holds the executable, desktop entry, `.capy` MIME definition, icon,
+runtime filters, GTK runtime and notices. Photo codecs are compiled in, so a
+moved package needs no codec path. Staging replaces only a directory carrying
+the generated `.capy-package` marker. The GTK and Web packagers share
+`tools/build/about.toml`, need original license texts including vendored
+dependencies, and accept `LAYER_CARGO_ABOUT` for the notice generator.
 
-For the selection bar's menus, run
-`bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_selection_menus --tablet`.
-With mouse, finger and pen in turn it chooses Copy to Layer, Clear ▾ › Clear
-Outside Selection and Adjust ▾ › Curves, through More when an item does not fit.
-`--native-test=native_delete_clears_pixels_unless_a_guide_is_selected` presses
-the real Delete key over a selection, then over a guide drawn with the Ruler tool.
-`--native-test=native_canvas_bar_modes` (mouse and finger) leaves Quick Mask,
-Selection Layer editing and layer-mask editing from their bars and checks that a
-notice sits above the bottom-edge bar; `--native-test=native_canvas_bar_guide
---tablet` deletes a guide from its bar with mouse, finger and pen. The tablet
-proxy drops its Wayland connection when Quick Mask or Selection Layer rows
-change, so the mode journeys run without `--tablet`.
+Staging does not install anything. An installer must register the desktop entry
+and refresh the desktop and MIME databases; the [publication guide](publication.md)
+covers distribution.
 
-For [stacked columns](../ui/stacked-columns.md), run
-`bash tools/performance/workspace-motion.sh gtk --column-stacks`.
-This uses real mouse/touch and private SQLite storage. It checks handle stacking
-and unstacking, one-step history, full-column opening, active sidebar tiles,
-ordinary width/split resizing with retained widgets, mode switching and auto-hide.
-The run directory contains both-theme captures and `resize-*.json` reports of
-painted group allocations against shared geometry. The previous `--column-groups`
-fixture and custom Group panel renderer are retired.
+To check that a relocated package opens photos with its bundled GTK, on a
+private compositor with isolated settings:
 
-For menu-bar prepend targets and the panel-body drop highlight, run
-`LAYER_TEST_ARTIFACTS="$PWD/artifacts/layout-drops/gtk" bash tools/performance/workspace-motion.sh gtk --native-test=native_layout_drop_input`.
-This checks panel, group, toolbar and column sources, both sides and themes,
-mouse/touch input, cancellation and one-step history. New column stacks open
-full columns by default; only top-level columns can collapse.
-The same run checks tab insertion from the upper body of first and lower groups.
+```bash
+python3 tools/validation/gtk_package_photo.py \
+  --binary /path/to/relocated/capycanvas-linux/bin/capycanvas \
+  --photo /path/to/photo.heic --photo /path/to/photo.avif \
+  --output artifacts/package-photo-check
+```

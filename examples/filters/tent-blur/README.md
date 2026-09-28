@@ -31,7 +31,7 @@ $env:CAPY_FILTERS_MODE='add'
 
 The Windows render-owner API `capy_load_filter_directory` supports live reload
 through the ordered native command queue. See the
-[Windows host commands](../../../apps/layer-windows/README.md#runtime-filter-packages)
+[Windows host commands](../../../docs/development/windows.md#runtime-filter-packages)
 and [runtime filters](../../../docs/reference/runtime-filters.md).
 
 These files are covered by the repository's MIT OR Apache-2.0 source license.

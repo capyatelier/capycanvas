@@ -115,9 +115,9 @@ the user's overrides. Choosing or changing a preset never touches overrides.
 Resetting one shortcut returns it to the preset's binding.
 
 The presets are Photoshop Style, Krita Style, GIMP Style, Affinity Style, Clip
-Studio Paint Style and Procreate Style. They reproduce only rows marked as sourced in the
-[shortcut audit](../history/command-input-shortcut-audit-2026-09-25.md) and map
-them to actions with the same meaning in CapyCanvas. Everything else is listed
+Studio Paint Style and Procreate Style. Each preset records its source links and
+reproduces only bindings verified against them, mapped to actions with the same
+meaning in CapyCanvas. Everything else is listed
 as a difference, for example:
 
 - Photoshop's R Rotate View tool
@@ -231,13 +231,9 @@ app. Retired fields and actions are handled by explicit migration rules. New
 settings should define their default, validation and migration behavior in Rust
 before a host adds a control.
 
-[`WorkspaceState`](../../crates/layer-ui/src/workspace.rs) has its own version and
-validation for layout. Android, Apple and web currently persist workspace state; GTK does not yet
-restore saved layouts automatically. Preferences and workspace state do not belong in a `.capy`
-project and do not count as unsaved artwork.
-
-The [platform setup pages](../development/README.md) link to implementation and
-validation records for each host. The earlier
-[settings implementation record](../history/settings-implementation-plan.md)
-contains migration history and past UI checks; it is not a separate source of
-current defaults.
+[`WorkspaceState`](../../crates/layer-ui/src/workspace.rs) has its own version
+and validation for layout. Every host stores named workspaces through
+`layer-workspace`, which saves them automatically; see the
+[workspace manager](default-workspaces.md#workspace-manager). Preferences and
+workspace state do not belong in a `.capy` project and do not count as unsaved
+artwork.

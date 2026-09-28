@@ -4,9 +4,6 @@
 > work describe the recorded checkpoint. Start with the [current technical guides](../README.md).
 
 Research date: 2026-09-09. Status: research, not an implementation specification.
-The recommendation is in [Layers initial design](layers-initial-design.md).
-The subsequent [layer context-menu audit](layers-context-menu-audit.md) inventories
-command families, implemented additions and remaining engine gaps.
 
 ## Scope and evidence
 
@@ -139,7 +136,7 @@ The initial design should be compact in its idle state and explicit about paint 
 
 ## 7. Local implementation gap
 
-At the time of inspection, [the core layer model](../../crates/layer-core/src/lib.rs) contains paint/imported-image/suggestion/background kinds, visibility, opacity, and content references. [The shared UI row model](../../crates/layer-ui/src/lib.rs) exposes basic selection/editability/visibility/opacity. [The renderer documentation](rendering-program.md) describes normal-alpha layers and GPU-resident brush/material state, not the proposed group/mask/blend/selection system.
+At the time of inspection, [the core layer model](../../crates/layer-core/src/lib.rs) contains paint/imported-image/suggestion/background kinds, visibility, opacity, and content references. [The shared UI row model](../../crates/layer-ui/src/lib.rs) exposes basic selection/editability/visibility/opacity. The renderer documentation described normal-alpha layers and GPU-resident brush/material state, not the proposed group/mask/blend/selection system.
 
 This is therefore an engine-and-workflow extension, not just additional panel buttons. Keep ownership in the existing crates and shared command catalog; do not implement separate native layer trees or flatting sequences. Existing watercolor wetness is material state and cannot double as an editable visibility mask.
 

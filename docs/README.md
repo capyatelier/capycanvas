@@ -26,18 +26,14 @@ time and link to implementation details when they become relevant.
 
 ## Build and contribute
 
-The [developer guide](development/README.md) lists the build entry points and
-explains where to make changes. Setup is documented separately for
-[Linux](development/linux.md), [web](development/web.md),
-[Android](development/android.md), [macOS and iPadOS](development/apple.md), and
-[Windows](development/windows.md). The [Apple porting guide](APPLE_PORTING_GUIDE.md)
-describes how features that land first on GTK, Web and Android reach macOS and iPadOS;
-the [Windows porting guide](WINDOWS_PORTING_GUIDE.md) does the same for Windows.
-
-[Testing](development/testing.md) covers shared tests, host checks and GPU
-measurements. [Publication](development/publication.md) covers source and binary
-distribution requirements. Contribution priorities are in the
-[root README](../README.md#contributing).
+[`AGENTS.md`](../AGENTS.md) lists the rules every change follows. The
+[developer guide](development/README.md) covers building each client, the shared
+[environment](development/environment.md) and [test devices](development/devices.md),
+[testing](development/testing.md), [writing docs](development/writing.md) and
+[publication](development/publication.md). The [commit guide](COMMIT_GUIDE.md)
+covers commits and pushing. The [Apple](APPLE_PORTING_GUIDE.md) and
+[Windows](WINDOWS_PORTING_GUIDE.md) porting guides describe how features that land
+on GTK, Web and Android reach the other clients.
 
 ## Detailed references
 
@@ -45,18 +41,15 @@ These documents assume familiarity with the concept guides above.
 
 | Area | References |
 | --- | --- |
-| Document files | [Project format](reference/project-format.md), [binary payload boundaries](development/binary-payloads.md). |
+| Document files | [Project format](reference/project-format.md), [binary payload boundaries](internals/binary-payloads.md). |
 | Brushes | [Dab layout and raster rules](brush-renderer.md), [GPU brush stages](reference/gpu-brush-engine.md), [painterly paint state](reference/painterly-paint-state.md). |
 | Input | [Stroke feedback and platform mapping](reference/instant-stroke-feedback.md). |
 | UI | [Shared UI contract](ui/shared-ui.md), [panel customization](ui/panel-customization.md), [numeric controls](ui/numeric-controls.md), [theme colors](ui/theme-colors.md). |
 | Extensions | [Runtime filters](reference/runtime-filters.md). |
 | Distribution and performance | [Performance targets](PERFORMANCE_TARGETS.md), [Web/PWA packaging](development/web-packaging.md), [GPU benchmark workloads](development/gpu-raster-benchmarks.md). |
 
-## Design and validation history
+## Design history
 
-[History](history/README.md) contains proposals, implementation checkpoints,
-research and recorded measurements. Those records explain earlier decisions;
-their completion claims and open-task lists apply to the checkpoint they describe.
-The current guides above distinguish shared capabilities from unfinished host
-integration. The [README audit](history/readme-audit.md) records the scope of this
-reorganization.
+[History](history/README.md) keeps research and design records that explain why
+the current design is the way it is. Their claims apply to when they were
+written; the guides above describe the application as it is now.

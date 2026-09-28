@@ -115,7 +115,7 @@ Read-only code inventory made by an agent against baseline `dac76c20`. It lists 
 | AVIF | rav1d; includes gain maps. |
 | OpenEXR | Flat RGB(A); no deep or multipart. |
 
-- **Absent imports:** RAW/DNG with **no camera RAW processing**, PSD, SVG, JPEG XL, PDF, KRA/ORA. These are explicitly out of scope per `docs/development/float32-hdr-scope.md`.
+- **Absent imports:** RAW/DNG with **no camera RAW processing**, PSD, SVG, JPEG XL, PDF, KRA/ORA. These are explicitly out of scope per `docs/internals/float32-hdr-scope.md`.
 - **EXIF orientation: exists.** Normalized losslessly on import (`photo/orientation.rs:7`; called from `jpeg_io.rs:59`, `raster_io.rs:126`).
 - **Metadata: mostly dropped.** Only orientation and print density are parsed (`photo/metadata.rs:1-8`). **EXIF, XMP and IPTC are not carried into exports.** Export writes the ICC profile and PPI.
 - **Open vs Import/Place: exists.**

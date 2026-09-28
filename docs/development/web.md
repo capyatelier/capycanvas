@@ -3,21 +3,21 @@
 [Developer guide](README.md) · [Platform integration](../platforms/README.md)
 
 The browser client uses DOM controls around Rust compiled to WebAssembly. WebGPU
-runs the same canvas renderer used by the native clients. The finished app can be
-served as static files and packaged as an installable, offline PWA.
+runs the same canvas renderer as the native clients. The finished app is static
+files and can be packaged as an installable, offline PWA
+([Web packaging](web-packaging.md)).
 
 ## Prerequisites
-
-Install Rust, Bash, Python 3 and the matching `wasm-bindgen` CLI:
 
 ```bash
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.128 --locked
 ```
 
-The CLI version must match `wasm-bindgen` in `Cargo.lock`; the command above matches
-the current repository. `build.sh` also reports the expected install command.
-The browser must expose hardware WebGPU on the device being tested.
+The CLI version must match `wasm-bindgen` in `Cargo.lock`; `build.sh` prints the
+install command when it is missing. The browser must expose hardware WebGPU on
+the device under test. Browser tests also need Node.js 22 or newer and Chrome or
+Chromium.
 
 ## Build and run
 
@@ -25,404 +25,133 @@ The browser must expose hardware WebGPU on the device being tested.
 ./apps/layer-web/run.sh
 ```
 
-Open `http://127.0.0.1:4173`. The launcher builds the Wasm module, generates browser
-bindings, stages runtime filters and starts a local Python server. Set
-`LAYER_WEB_PORT` to use a different port. `LAYER_WASM_BINDGEN` can select a specific
-CLI executable.
+Open `http://127.0.0.1:4173`. The launcher runs
+[`build.sh`](../../apps/layer-web/build.sh), which compiles the Wasm module with
+the `dev-perf` profile, generates the browser bindings in `apps/layer-web/pkg/`
+and the icon sprite, then serves `apps/layer-web` with Python.
+`LAYER_WEB_PORT` changes the port, `LAYER_WASM_BINDGEN` selects the CLI and
+`CAPY_RUST_PROFILE` the profile. Rebuild with `bash apps/layer-web/build.sh`
+after Rust changes; the browser tests do not build.
 
-Development uses `dev-perf`: release optimization level 3, incremental compilation,
-16 codegen units and line tables for source-level profiling. Set
-`CAPY_RUST_PROFILE=release` to compare ordinary release builds. The static packager
-explicitly selects `web-release` (ThinLTO); its profile takes precedence over the
-environment override. See [Rust build times](rust-build-times.md).
+Where to look in [`apps/layer-web`](../../apps/layer-web): `app.js` schedules
+frames on animation callbacks, routes input and applies shared UI changes to the
+DOM; `gpu.js` writes the help shown when WebGPU cannot start;
+`documents.js` connects project requests to browser file access and downloads;
+`workspace-worker.js` and `workspace-store.js` keep the workspace in IndexedDB.
+Rust owns editor behavior; JavaScript owns browser events, controls and services.
+The session runs on the browser event loop, without a worker thread or shared
+memory.
 
-## How the host works
+## Tests
 
-[`app.js`](../../apps/layer-web/app.js) schedules updates through browser animation
-callbacks and applies shared UI changes to the DOM. Rust owns editor behavior;
-JavaScript owns browser events, controls and services. The shared session runs on
-the browser event loop without requiring a worker, shared memory or a Rust server.
+Pure unit tests need no browser or GPU:
 
-Pointer Events supply pressure and other available pen data. Coalesced and predicted
-samples depend on browser support. GPU access, file pickers and installation also
-vary by browser and OS; a desktop browser test cannot establish mobile behavior.
+```bash
+node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls}.test.mjs
+```
 
-Active pen contacts use `pointerrawupdate` when delivered, with coalesced samples,
-later predictions from `pointermove`, and a per-contact move fallback. The cursor
-shares the GPU viewport pass. See the [Huion G Pen investigation](web-pen-huion-2026-09-20.md)
-for CPU fixes, 18 px device measurements, the `--pen` regression suite and the
-repeatable Web pen benchmark, including Web front-buffer API limits.
-
-GPU startup is staged so controls can appear before the complete shader catalog
-is ready. The app reports unavailable GPU access rather than switching painting
-to a CPU renderer. The [startup record](../history/web-staged-startup.md) describes
-the scheduling work and its measured limits. The later
-[tablet startup investigation](../history/web-startup-tablet-2026-09-17.md)
-separates workspace input readiness from canvas/brush readiness, records the
-startup-library input-lock fix, and records asynchronous pipeline compilation,
-storage-completion wakeups and the restored first-canvas staging boundary.
-An edit that needs a pipeline while its asynchronous compile is in flight, such
-as Deselect submitting a Fill, creates the pipeline synchronously instead of
-waiting, and the asynchronous result is dropped. Run
-`node apps/layer-web/test.mjs --headless --pipeline-takeover` for that case.
-
-The client also persists its workspace in browser storage and connects shared
-project requests to browser file access and downloads through
-[`documents.js`](../../apps/layer-web/documents.js). Browser storage and picker
-capabilities need testing on each supported device.
-
-## Package and test
-
-[Web/PWA packaging](web-packaging.md) documents the additional Node.js and license
-and icon tools, the `node apps/layer-web/package.mjs` build, service-worker behavior
-and browser checks. The resulting `dist/capycanvas/` directory can be hosted at a
-domain root or subpath. Development serving and offline-package testing are
-separate workflows.
-
-For the editor workflow against the running development server:
+The other `*.test.mjs` files are Chrome journeys that
+[`test.mjs`](../../apps/layer-web/test.mjs) imports; do not run them with
+`node --test`. Run one journey per invocation against the development server:
 
 ```bash
 node apps/layer-web/test.mjs --headless --editor
 ```
 
-Use `node apps/layer-web/test.mjs --headless --columns` for real pointer checks
-of canvas-facing divider double-clicks: normal starting widths, recursive groups,
-collapsed columns, undo/redo, and resizing after a reset.
-
-Set `CHROME` to the browser executable and `LAYER_WEB_URL` if the server uses a
-different address. For example, macOS can use
+`test.mjs` launches Chrome with a temporary profile over
+`--remote-debugging-pipe`, with no TCP debugging port or Playwright. `CHROME`
+selects the executable (default `google-chrome`); on macOS, for example,
 `CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'`.
-Linux tests select offscreen Vulkan; other hosts retain their native GPU backend.
-The editor check includes actual Navigator pointer hits and a rendered-pixel
-check that zoomed paper appears through empty header space. These checks do not
-establish complete editor parity or hardware performance.
+`LAYER_WEB_URL` changes the target (default `http://127.0.0.1:4173`). On Linux it
+selects offscreen Vulkan; other hosts keep their native GPU backend. Without
+`--headless` Chrome opens on the current Wayland display. `LAYER_TEST_VERBOSE=1`
+prints browser diagnostics, and journeys that save captures write them to
+`LAYER_TEST_ARTIFACTS`.
 
-For the shared title bar and its inline customization editor, run the two
-focused browser suites on Linux with hardware WebGPU:
-
-```bash
-LAYER_TEST_ARTIFACTS="$PWD/artifacts/title-bar/input" \
-  bash tools/performance/workspace-motion.sh web --title-bar
-LAYER_TEST_ARTIFACTS="$PWD/artifacts/title-bar/state" \
-  bash tools/performance/workspace-motion.sh web --title-bar-state
-```
-
-The first covers real mouse/touch/pen bank and item dragging, cancellation,
-keyboard/context menus, tool pickers, drawers and action feedback. The second
-covers Save/Done/Cancel, durable workspace transitions, small windows, overflow,
-themes, all sizes, true 2× backing scale, fullscreen/status, footer and full Zen.
-Use `--title-bar-feedback` for both-theme mouse/touch/pen checks of selected-tool,
-open-drawer and action-press colors and the minimal Sketch default. The Android
-device runner also accepts this selector; use a dedicated test origin.
-Use `--title-bar-overflow` to reproduce the menu-label region collapsing as the
-window narrows, then drag its hidden items with mouse, touch and pen at every
-bar size. It checks real hit targets above the component bank, stable item IDs,
-collapsed drop destinations, cancellation and workspace undo/redo.
-Use `--menu-labels` for the fixed-width growth regression: add bank items after
-Menu Labels in the left region, verify that the labels compact inside the same
-item, and drag its still-visible body/grip and following neighbors. This runs
-mouse/touch/pen in both themes at all sizes without removing Capy.
-They can also run through `node apps/layer-web/test.mjs` against a running
-development server. See the [acceptance record](title-bar-web-acceptance.md) for
-captures, shared tests, existing regressions and device limitations.
-
-For the compact Color panel, run `node apps/layer-web/test.mjs --headless --color-panel`
-for mouse/pen input, readout and shape buttons, swap, keyboard activation,
-cancellation, and both-theme captures at 144/160/200/280/360 px panel widths.
-All three shapes and their two readouts (shape units or RGB) fit one square;
-the four-tile minimum and short docks retain every control. GTK and Web use the
-same Rust allocations, coordinate memory and smooth elliptical Okhsv circle raster.
-The disc has extra spacing inside the hue ring, from the shared geometry.
-The circle's hue guide rotates 24° counterclockwise and uses Okhsl's smooth C/L
-curve with a 5% margin. Normalizing linear RGB preserves hue and softens the ring
-without the maximum-saturation boundary jump; actual Okhsv picking is unchanged.
-Selecting a shape always restores its units: OKLCH for circle (lightness %,
-chroma to three decimals, hue °), HSB for square, HLS for triangle. Tapping the
-label toggles between those units and RGB. Shape units are the default;
-saved RGB preferences remain RGB. All readouts
-use fixed digit cells and stable arc positions. The focused test checks actual
-HSB/HLS/OKLCH glyph transforms across 9/10/100 at three widths.
-Square and triangle retain their original
-color models; switching shapes preserves the selected sRGB paint. Regression cases
-include dragging through different black positions and then changing hue.
-The CPU raster reuses saturation/transfer curves and logical-pixel samples;
-ring, clip and markers retain display resolution. The focused test compares
-the interpolated field against a full 2× raster across sizes and hue cusps.
-The host retains staging canvases and the static ring, fetching hue stops only
-when rebuilding that ring. Measure both raster cost and complete DOM updates
-on the target device: a raster below 8.33 ms does not establish 120 Hz presentation.
-On Linux, use
-`LAYER_TEST_ARTIFACTS="$PWD/artifacts/color-panel/web" bash tools/performance/workspace-motion.sh web --color-panel`
-to verify mouse and touch through the private Mutter compositor, plus pen through
-CDP. Some Chrome builds deliver CDP touch contacts without compatibility clicks;
-the compositor run verifies actual touch activation of the corner buttons.
-
-For the Palettes panel, run `node apps/layer-web/test.mjs --headless --palettes`.
-It covers Paint/Photo placement and group fitting, starters, usage history,
-history expansion, adding and naming, the chooser, menus from secondary click,
-touch/pen holds and Shift+F10, immediate mouse/touch/pen reordering with
-cancellation and one-step undo/redo, imports through the file input and worker,
-exports through the save picker and download fallback, reload persistence, the
-Sketch drawer, a float, both themes and measured automatic tab names. Set
-`LAYER_PALETTE_SAMPLES` to a directory with `gpl`, `aco`, `ase`, `swatches` and
-`kpl` subdirectories to import files exported by other applications; otherwise
-the test imports its own exports. `device.test.mjs --palettes` runs the same
-scenario on a tablet; it edits the built-in workspaces of its dedicated origin.
-
-Other focused `node apps/layer-web/test.mjs --headless` modes:
-
-- `--adjustments`: filter catalog, GPU previews, properties and live telemetry.
-- `--drawer-switch`: first-click toolbar drawer switching and outside dismissal.
-- `--layers`: layer thumbnails, references, row selection, masks and docking.
-- `--ui-speed`: incremental Wasm state and Settings updates match full state.
-- `--settings-audit`: run `bash tools/performance/workspace-motion.sh gtk
-  --native-test=native_settings_typography` first; it compares every Settings
-  page with the GTK allocations and font sizes in `artifacts/ui/settings-audit`.
-
-For the canvas action bar, run `node --test apps/layer-web/canvas-bar.test.mjs`
-for its placement, overflow, hiding and menu-button rules, then
-`node apps/layer-web/test.mjs --headless --canvas-bar`. The journey uses mouse,
-touch and pen for the selection bar beside a new selection, Transform and the
-transform bar, taps that never reach the canvas, hiding during canvas drags,
-More with the transform intact, Apply and Cancel, the completion-only bar,
-Zen and the bar's glass region. It writes light and dark screenshots and stroke
-style/layout counts to `artifacts/canvas-bar/web`. `device.test.mjs --canvas-bar`
-runs the same journey on a tablet. `--image-placement` uses the bar's Original
-Size, Cancel and Apply. Disabled bar items and Tool Options actions take their
-hover text from each command's published `disabled_reason`, and a tap on a
-disabled bar item reveals the same tooltip with mouse, touch and pen.
-
-Bar menu items (Copy to Layer ▾, Clear ▾, Refine ▾, Adjust ▾) are menu buttons.
-They open the menu that the `canvas_bar_choice_menu` export serves, in the same
-popover menu as More, and every entry dispatches the `CanvasBarEdit` it
-carries. An item that does not fit is a submenu of More. With pen, touch and
-mouse, the journey copies a selection to a new layer (one undo step; the copy's
-content-framed thumbnail holds only the selection), and chooses Clear ▾ › Clear
-Outside Selection and Adjust ▾ › Tone › Curves (a masked Curves layer). In the
-1440 px window Clear and Adjust open through More; a 2560 px mouse pass opens
-all three from the bar. It then presses
-Delete over a selection, which clears it, and on the focused tab of another
-drawing, which closes that drawing and clears nothing: `keyInput` skips key
-presses that a control has already handled with `preventDefault`.
-
-The mode and guide bars need no Web code of their own: the label, the accented
-exit and per-bar item labels such as Disable/Enable come from the shared view,
-and a changed item label rebuilds the bar. With pen, touch and mouse, the
-journey enters Quick Mask, a Selection Layer and a layer mask. It checks each
-bar's label along the bottom edge and its accented exit, inverts the Quick Mask
-and the Selection Layer without leaving them, disables the mask (the button then
-reads Enable), and leaves each mode from its exit. It then presses Escape in each
-mode with no text field focused, and checks that the session handles the key
-and leaves the mode; during mask editing an open column takes the first Escape.
-Move on a locked mask shows its notice above the mode bar. Last, a guide drawn
-with the Ruler tool shows its bar below its handles, and the bar's Delete
-removes it. Fingers never draw, so the touch pass draws the lasso and the guide
-with the pen. On a tablet, `device.test.mjs --canvas-bar` also opens a bar menu
-with real pen, touch and mouse taps and closes it with a second tap, and opens
-the layer-mask bar with a real tap on Mask, then disables the mask and leaves
-with Edit Content.
-
-The shared canvas notice (see [shared UI](../ui/shared-ui.md#actions-and-observation))
-is [`notice.js`](../../apps/layer-web/notice.js): a bubble in `#workspace`,
-centred above the canvas status strip, or above a canvas action bar along the
-bottom edge. It shows each notice id once, with an action button when the core
-offers one. The button never takes focus from the canvas and the bubble is not a
-popover, so it never counts as an open popup. The bubble hides at the next
-canvas contact, and after 4 s it hides and declines the notice. `#status` keeps
-showing file and renderer errors (`host_error`), once per new error. Run
-`node --test apps/layer-web/notice.test.mjs` for showing, the action, the timeout,
-contact dismissal, replacement by a newer id and placement, then
-`node apps/layer-web/test.mjs --headless --notices`. The journey clicks the Wand
-with the Reference source and no marked reference, and checks that the canvas
-keeps rendering and that the notice's **Use *layer* as Reference** button marks
-the layer below in one undo step, with pen, touch and mouse. It also checks stale
-ids, dismissal by a navigating touch, the timeout, Move on a locked layer, and
-the reason on a disabled bar item. `device.test.mjs --notices` runs it on a tablet.
-
-The footer zoom readout (see [shared UI](../ui/shared-ui.md#actions-and-observation))
-is [`zoom-readout.js`](../../apps/layer-web/zoom-readout.js). `#view-info` is a
-button that opens an auto popover: a zoom field built from `catalog.zoom`, then
-the menu from the `zoom_menu` Wasm export. The button is out of the tab order
-and the popover cancels presses outside its text field, so opening the menu and
-choosing an item keep focus on the canvas. Typing borrows focus, and closing the
-menu hands it back. Escape closes the menu unless the field is being edited.
-Camera updates rewrite the button's text, and touch the field and the menu's
-enabled items only while the menu is open.
-
-Ctrl+1 and Ctrl+Alt+0 (Actual Pixels) reach the page, and the shared shortcut
-handler calls `preventDefault`. In Chrome that stops Ctrl+1 selecting the first
-tab: the journey below activates its tab, sends both chords, and checks that
-the tab stays in front, then shows that an unprevented Ctrl+1 does switch tabs.
-Focus emulation must be off for that check, because it keeps Chrome from
-running browser shortcuts. Firefox on Linux selects tabs with Alt+1 to 8, so
-Ctrl+1 is free there. In headless Firefox 154, both chords reached the page and
-were prevented, although WebGPU was unavailable.
-
-The export dialog lists **WebP · lossless**, and `documents.js` saves it as
-`image/webp`. `export_validate` and `export_image` check `output_extent` against
-the document, so an output over 16,384 pixels per side is refused in the dialog
-before the save picker opens or anything renders.
-
-Run `node --test apps/layer-web/zoom-readout.test.mjs apps/layer-web/export-controls.test.mjs`,
-then `node apps/layer-web/test.mjs --headless --zoom-readout`. The journey opens
-the readout with mouse, touch and pen, chooses 200%, uses Actual Pixels at a
-quarter turn, types 50 and 5000 (Zoom In then disables), and closes with
-Escape. It checks whole-pixel translations and canvas focus throughout, and
-the chords described above. It exports a stroke as WebP and compares the
-decoded pixels with an 8-bit PNG export. It then checks the size refusal
-through a saved preset that enlarges to 20,000 px. It writes light and dark
-menu captures to `artifacts/zoom-readout/web`. `device.test.mjs --zoom-readout`
-runs it on a tablet. With `CAPY_ANDROID_SERIAL` set, it also opens the readout
-and chooses 200% with real OS touch, stylus and mouse taps. It shows the footer
-if the test origin's workspace hides it, and restores the workspace afterwards.
-
-[`effects.js`](../../apps/layer-web/effects.js) draws effect properties from the
-shared `layer_properties` view. Each Color control is a labelled row. When the
-control has a `color_action`, a bucket after the swatch dispatches it to use
-the current colour. The bucket's `data-action` is the control key with dashes
-and `-bucket`, such as `paper-color-bucket`, `tint-color-bucket` or
-`mask-color-bucket`. The Solid Color and Gradient Fill generators are in the
-Adjustments picker's Fill category and in Layer › New. A new fill layer starts
-in the current colour, masked by the selection, or with a reveal-all mask.
-`--adjustments` inserts all 42 filters, including both generators, and checks
-every Color row's label and bucket.
-
-Run `node apps/layer-web/test.mjs --headless --photo-edit` for the photo-editing
-journey. With mouse, touch and pen, it makes a lasso selection and chooses
-Layer › New › Solid Color Fill. It checks the fill's mask, colour and place in
-the stack, and one undo step. Headless screenshots omit WebGPU pixels, so it
-samples the composite inside and outside the selection with the Eyedropper. It
-then inserts Black & White from the Filter menu, checks the labelled Tint color
-row, and applies the current colour with its bucket in one undo step. It writes
-light and dark captures of the row to `artifacts/photo-edit/web`.
-`device.test.mjs --photo-edit` runs it on a tablet.
-
-For clipped workspace drags and content-aware release, run
-`bash tools/performance/workspace-motion.sh web --workspace-rendering` on Linux,
-or `node apps/layer-web/test.mjs --headless --workspace-rendering` against the
-running development server. The existing rendering check covers mouse/touch/pen
-at 1×/2×, compact Color, short Layers, long Filters, squashed and usable sidebar
-heights, footer anchors, established floats, cancellation and undo/redo. It also
-checks retained native pixels and placement through model updates. Run
-`--workspace-motion` separately for sustained compositor mouse/touch timing.
-Its Color-overlap case verifies that moving a panel over the wheel reuses both
-the ring and field rasters.
-
-Run `bash tools/performance/workspace-motion.sh web --layout-drops` for menu-bar
-prepend targets, panel-body prepend/highlight, and the enlarged tab targets in
-first and lower groups. It covers panel/group/toolbar/column sources, mouse,
-touch and pen, both sides/themes and 1×/2×, cancellation and one-step history.
-Only top-level columns can collapse; new stacks open full columns by default.
-Compact-drawer fixtures explicitly enable Open individual panels. Run
-`--drawer-drag`, `--drawer-style` and `--column-stacks` for those retained views.
-
-## Debug headless Chrome
-
-Run from the repository root with the development server in another terminal,
-Node.js 22 or newer, and Chrome/Chromium:
+On Linux, the same journeys also run headed inside a private Mutter compositor,
+which builds the Wasm module first and serves it on port 4179:
 
 ```bash
-LAYER_TEST_VERBOSE=1 LAYER_TEST_ARTIFACTS=artifacts/web-debug \
-  node apps/layer-web/test.mjs --headless --column-drops
+bash tools/performance/workspace-motion.sh web --title-bar
 ```
 
-Select one scenario per run; other useful selectors are `--drawer-style`,
-`--drag-pickup`, `--workspace-manager`, `--workspace-switcher` and `--workspace-focus`. See the dispatch
-in [`test.mjs`](../../apps/layer-web/test.mjs) for the full list. It launches Chrome
-with a temporary profile, uses Chrome DevTools Protocol (CDP) over
-`--remote-debugging-pipe`, and removes the profile afterward. It does not expose a
-TCP debugging port or require Playwright. Rebuild with
-`bash apps/layer-web/build.sh` after Rust changes; the test does not build. The
-runner waits for Wasm/WebGPU and workspace readiness. Verbose mode prints browser
-diagnostics; scenario-specific screenshots go to `LAYER_TEST_ARTIFACTS` when supported.
+`--workspace-motion`, `--workspace-resize` and `--color-panel` then use real
+Mutter mouse and touch input; the other journeys use Chrome DevTools input. See
+the [Linux guide](linux.md#tests) for the runner's requirements.
 
-Follow [workspace-manager.test.mjs](../../apps/layer-web/workspace-manager.test.mjs)
-and [workspace-switcher.test.mjs](../../apps/layer-web/workspace-switcher.test.mjs)
-for DOM queries, pointer input, state checks and reload assertions. Wait for
-operations to finish and check rendered controls as well as stored state.
-Reuse the runner's `call`, `evaluate` and `settle` helpers for CDP input,
-`Runtime.evaluate` and `Page.captureScreenshot`. Useful page expressions are
-`layerApp.state()`, `JSON.parse(layerApp.app.workspace_view())` and
-`layerApp.startupTimes`; check `#gpu-notice` if startup never completes.
+Journeys by area; the dispatch in `test.mjs` lists them all:
 
-On failure the runner attempts to save `artifacts/ui/web-failure.png` and prints
-page errors and GPU diagnostics. Check those when a headless run has a blank
-canvas or cannot start WebGPU; hardware WebGPU remains required. On Linux, compare
-with headed Chrome inside an isolated Mutter compositor using
-`bash tools/performance/workspace-motion.sh web --workspace-manager`; see the
-[Linux guide](linux.md#focused-ui-debugging) for that runner's dependencies.
+| Area | Selectors |
+| --- | --- |
+| Editor smoke, drawing, pen | `--editor`, `--pen`, `--prediction`, `--raster` |
+| Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-readout` |
+| Color | `--color-panel`, `--color-picker`, `--palettes` |
+| Layers and filters | `--layers`, `--adjustments`, `--filter-drawer`, `--photo-edit` |
+| Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
+| Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--drawer-drag`, `--drawer-style` |
+| Workspaces | `--workspace-manager`, `--workspace-switcher`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
+| Settings | `--preferences`, `--settings-audit` |
 
-For workspace-dialog pixel comparisons, capture the same default workspaces at
-1440 × 1000 and scale 1 on both hosts:
+Setup that some journeys need:
+
+- `--workspace-store` checks IndexedDB against the native SQLite contract. Write
+  the fixture from current Rust first:
+  `CAPY_STORE_CONTRACT_FIXTURE="$PWD/artifacts/store-contract.json" cargo test --locked -p layer-workspace --features native browser_transactions_match_sqlite_contract`,
+  then run the journey with the same `CAPY_STORE_CONTRACT_FIXTURE`.
+- `--settings-audit` compares with GTK allocations. Run
+  `bash tools/performance/workspace-motion.sh gtk --native-test=native_settings_typography`
+  first; both write to `artifacts/ui/settings-audit`.
+- `--palettes` imports its own exports unless `LAYER_PALETTE_SAMPLES` names a
+  directory with `gpl`, `aco`, `ase`, `swatches` and `kpl` subdirectories of
+  files from other applications.
+
+The packaged app has its own browser checks; see
+[Web packaging](web-packaging.md#preview-and-test).
+
+## Tests on an Android tablet
+
+[`device.test.mjs`](../../apps/layer-web/device.test.mjs) runs a subset of the
+journeys in Chrome on a tablet over DevTools. Reserve the tablet and forward the
+development server and Chrome's DevTools socket as [devices](devices.md)
+describes, open the test URL in your own tab, then run:
 
 ```bash
-LAYER_MOTION_VIEWPORT=1440x1000 LAYER_TEST_ARTIFACTS="$PWD/artifacts/ui/workspace-modal/gtk" \
-  bash tools/performance/workspace-motion.sh gtk --workspace-manager-visual
-LAYER_TEST_ARTIFACTS="$PWD/artifacts/ui/workspace-modal/web" \
-  bash tools/performance/workspace-motion.sh web --workspace-manager-visual
+LAYER_DEVICE_CDP=http://127.0.0.1:$CAPY_CDP_PORT \
+LAYER_WEB_URL=http://127.0.0.1:$CAPY_WEB_PORT/ \
+LAYER_TEST_ARTIFACTS=artifacts/web-android \
+  node apps/layer-web/device.test.mjs --canvas-bar
 ```
 
-These fixtures use fresh storage and retain full-window PNGs plus widget/DOM
-bounds for dark/light themes and real pointer hover states. The Web scenario also
-checks GTK's dialog/row allocations, hover targets and keyboard focus. Convert
-each PNG's embedded color profile to sRGB before comparing pixels; Chrome can
-encode a different transfer curve despite forcing the sRGB color gamut. Compare
-the dialog at its recorded bounds without scaling or shifting it; surrounding
-editor controls are separate from this comparison.
+- The runner attaches to the tab whose URL equals `LAYER_WEB_URL` exactly,
+  including the trailing slash, and reloads it. Set both variables; the defaults
+  are not the development ports.
+- The tab runs in the device's real Chrome profile, and many journeys change
+  documents, workspaces or storage. Use your own origin and port, never an
+  artist's tab.
+- Check the dispatch at the end of `device.test.mjs` before choosing a flag. With
+  `CAPY_ANDROID_SERIAL` set, `--canvas-bar`, `--zoom-readout` and
+  `--image-placement` also send real OS taps through `adb`.
+- `--staged-startup` holds shader validation and checks that controls, paper and
+  painting become usable in order; `--filter-previews` checks preview pixels and
+  cache lifecycle.
+- Use `chrome://inspect/#devices` in desktop Chrome for interactive inspection.
+  Desktop headless results do not establish tablet performance.
 
-## Test and debug Web on Android
+## Troubleshooting
 
-Use the device selection and USB debugging setup in the [Android guide](android.md).
-Keep the development server running, save user work, and use a dedicated test
-origin: this harness attaches to the device's existing Chrome profile and some
-scenarios modify documents or browser storage. The example uses the default
-development port; keep the URL and forwarding ports consistent if changing it.
-
-```bash
-adb -s "$CAPY_ANDROID_SERIAL" reverse tcp:4173 tcp:4173
-adb -s "$CAPY_ANDROID_SERIAL" forward tcp:9228 localabstract:chrome_devtools_remote
-adb -s "$CAPY_ANDROID_SERIAL" shell am start -a android.intent.action.VIEW -d http://127.0.0.1:4173/ -p com.android.chrome
-curl --max-time 5 http://127.0.0.1:9228/json/list
-LAYER_DEVICE_CDP=http://127.0.0.1:9228 \
-  LAYER_WEB_URL=http://127.0.0.1:4173/ LAYER_TEST_ARTIFACTS=artifacts/web-android \
-  node apps/layer-web/device.test.mjs --drawer-style
-```
-
-Use `--staged-startup` on that dedicated origin to verify workspace input,
-mouse/touch/pen Settings activation and painting while shader validation is held.
-
-[`device.test.mjs`](../../apps/layer-web/device.test.mjs) finds the tab by its exact
-URL, including the trailing slash, connects to its CDP WebSocket and reloads it.
-It supports a subset of desktop scenarios; check its dispatch before choosing a
-flag. Android Chrome remains visible on the device; automation uses CDP rather
-than Chrome's desktop `--headless` mode. Use `chrome://inspect/#devices` in desktop
-Chrome for interactive inspection, or reuse the device runner's CDP helpers and
-the forwarded `/json/list` endpoint. Device GPU/startup results are reported by
-the harness; desktop headless results do not establish Android performance.
-
-Remove only the forwarding rules added for this session when finished:
-
-```bash
-adb -s "$CAPY_ANDROID_SERIAL" forward --remove tcp:9228
-adb -s "$CAPY_ANDROID_SERIAL" reverse --remove tcp:4173
-```
-
-The [61 MP Filters memory investigation](../history/filter-preview-tablet-memory-2026-09-17.md)
-records the shared source-probe texture reuse fix, tablet measurements, and
-remaining preview/display memory-budget work.
-
-The [shared filter preview scheduling record](../history/filter-preview-scheduling-2026-09-17.md)
-records the Rust lifecycle, 61 MP latency and drawing responsiveness measurements,
-platform handoff and remaining memory work.
-
-For preview pixels and lifecycle on an attached Android browser, use the existing
-CDP forwarding workflow and an isolated test origin, then run:
-
-```bash
-LAYER_DEVICE_CDP=http://127.0.0.1:9230 LAYER_WEB_URL=http://127.0.0.1:8136/ \
-  node apps/layer-web/device.test.mjs --filter-previews
-```
-
-This covers cached reopening, source/category changes and GPU replacement; it
-writes `web-preview-lifecycle.json` and a capture under `artifacts/filter-memory/`.
-The check modifies its test document and must not target a user's working tab.
+- **Blank or black canvas in headless Chrome.** Some NVIDIA drivers lose Chrome's
+  headless Dawn instance (`A valid external Instance reference no longer
+  exists.`), and headless screenshots can omit WebGPU pixels. Run the journey
+  headed through `workspace-motion.sh web`, which has hardware presentation.
+- **Startup never completes.** On failure the runner saves
+  `artifacts/ui/web-failure.png` and prints page errors and GPU diagnostics.
+  Check `#gpu-notice`, and in the page evaluate `layerApp.state()`,
+  `JSON.parse(layerApp.app.workspace_view())` or `layerApp.startupTimes`.
+- **Writing a journey.** Follow
+  [workspace-manager.test.mjs](../../apps/layer-web/workspace-manager.test.mjs):
+  use the runner's `call`, `evaluate` and `settle` helpers, wait for operations
+  to finish, and check the rendered controls as well as stored state.
+- **Comparing captures with GTK.** Chrome can embed a different transfer curve
+  even with `--force-color-profile=srgb`; convert each PNG's embedded profile to
+  sRGB before comparing pixels. The [visual tools](../../tools/visual/README.md)
+  do this.

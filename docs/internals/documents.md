@@ -16,6 +16,11 @@ control visibility, opacity, blending, clipping and related composition behavior
 [Layer definitions](../../crates/layer-core/src/layers.rs) also describe masks and
 selection coverage.
 
+With a filter selected, a stroke paints the first artwork layer below it in the
+same group, or its clipping base; groups, paper, locked bases and selection
+layers refuse with a reason (`Document::try_drawing_target`). Paper and the last
+layer can be deleted; an empty stack stays valid.
+
 Effect layers hold filters in the layer stack. An adjustment transforms the
 combined image below it within its group; a clipped adjustment acts on its
 clipping stack, preserving the base layer’s coverage. Multiple adjustments apply

@@ -1,9 +1,10 @@
 # Command catalog and search
 
+[Workspace and UI](README.md) · [Settings](settings.md)
+
 The command bar projects the shared `CommandSearchView` and executes through
 the existing `UiAction` dispatcher. It does not implement a second undo stack
-or tool engine. The implementation follows the
-[command and input investigation](../history/command-input-shortcut-audit-2026-09-25.md).
+or tool engine.
 
 ## Shared boundary
 
@@ -133,7 +134,7 @@ events cannot discard the parameter step. Query, move and selection events
 that arrive after the search closes (for example a native field reporting its
 final text as it resigns) are ignored rather than reported as errors.
 
-## Coverage and subsequent input work
+## Coverage
 
 | Source | Route |
 | --- | --- |
@@ -162,57 +163,22 @@ Scoped bindings and held tool overrides are described in
 [settings](settings.md#keyboard-shortcuts), and finger taps and pen side buttons in
 [settings](settings.md#touch-gestures-and-pen-buttons). Remotes and gamepads are in
 [settings](settings.md#remotes-and-gamepads), and keymap presets and files in
-[settings](settings.md#keymap-presets-import-and-export). The command bar does not create Bluetooth support or reproduce
-other editors' held-modifier behavior by itself. The bar is implemented on GTK,
-Web, Android and Windows; the Apple presentation is separate follow-up work.
+[settings](settings.md#keymap-presets-import-and-export).
 
-## Reproducible checks
+## Checks
 
 ```sh
 cargo test --locked -p layer-ui -p layer-host
 bash tools/performance/workspace-motion.sh gtk --native-test=native_command_bar_input --native-storage
-bash apps/layer-web/build.sh
-LAYER_TEST_ARTIFACTS=/tmp/command-search bash tools/performance/workspace-motion.sh web --command-bar
-```
-
-The GTK test uses an isolated compositor, real key delivery, light/dark popup
-captures, numeric entry, repeated opening, disabled actions and outside-contact
-dismissal. Native artifacts are written to the test runner's temporary directory.
-`native_command_bar_glass` paints sharp stripes behind the bar and checks
-compositor captures at Off, Low, Medium and High in both themes. Inside the bar
-the stripes must be blurred and tinted by the glass fill, and Off must be
-opaque. Where a shrinking bar or a closed bar used to be, they must be sharp:
-
-```sh
 LAYER_NATIVE_CAPTURE_DIR=/tmp/command-bar-glass \
   bash tools/performance/workspace-motion.sh gtk --native-test=native_command_bar_glass --native-storage
-```
-The Web test additionally checks native keyboard focus, ARIA selection, touch
-activation at narrow width, retained workspace DOM and query-to-frame latency.
-
-On Windows, `apps/layer-windows/scripts/exercise-command-search.ps1 -Executable
-artifacts/windows/Release/CapyCanvas.exe` checks Primary+K, placement, parameter
-entry and Back, keyboard selection, Escape, outside dismissal without painting,
-touch activation, unavailable reasons and palette focus with real input.
-
-For Android, build `:app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug`
-with the SDK setup in [Android development](../development/android.md), install
-both APKs onto the selected device, then run:
-
-```sh
-adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w \
-  -e class art.capycanvas.AndroidCommandSearchTest \
-  art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
+LAYER_TEST_ARTIFACTS=/tmp/command-search bash tools/performance/workspace-motion.sh web --command-bar
+pwsh -NoProfile -File apps/layer-windows/scripts/exercise-command-search.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
 ```
 
-For macOS and a physical iPad, run `EditorLaunchTests/testCommandSearch` from the
-`CapyCanvas-Mac` and `CapyCanvas-iPad` schemes (see
-[macOS and iPadOS development](../development/apple.md)). The journey uses real
-AppKit or hardware-keyboard and touch input for both shortcuts, the Edit menu,
-Return, arrows, disabled explanations, numeric validation, Back, row activation,
-Escape and non-painting outside dismissal.
-
-The instrumentation uses isolated workspace/recovery/color storage, real native
-windows, injected keyboard/finger/stylus events, the device IME, menu activation,
-parameter validation, retained panel identity and query-to-draw measurements.
-Captures are saved under the app's external `validation/command-search` directory.
+`native_command_bar_glass` paints sharp stripes behind the bar at every
+transparency level in both themes: inside the bar they must be blurred and
+tinted, Off must be opaque, and where a shrinking or closed bar used to be they
+must be sharp again. Android runs `art.capycanvas.AndroidCommandSearchTest`
+(see [Android development](../development/android.md)); macOS and iPad run
+`EditorLaunchTests/testCommandSearch`.

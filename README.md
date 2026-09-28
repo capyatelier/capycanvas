@@ -40,9 +40,9 @@ happen locally on your device, and the code is licensed under MIT or Apache-2.0.
 ## Overall architecture
 
 When designing Capy Canvas, we did not want to compromise on UI responsiveness.
-Controls and pen input should run at 120 frames per second on every supported
-platform, even while the drawing engine handles large brushes and hundreds of
-layers. We also need tools and documents to behave consistently across platforms,
+Controls and pen input should keep up with the display on every supported
+platform, up to 120 frames per second, even while the drawing engine handles
+large brushes and hundreds of layers. We also need tools and documents to behave consistently across platforms,
 even though each uses different UI and graphics APIs.
 
 To achieve these goals, we designed the app around a shared core written in Rust.
@@ -229,10 +229,9 @@ canvas back to the CPU.
 
 The goal is to make complex brushes substantially faster than a CPU pixel engine
 while reducing CPU overhead and memory traffic. This matters particularly on
-tablets, where battery use and heat limit sustained performance. In our
-[benchmark](docs/development/apple-port-1000px-20260922.md), an M4 iPad Pro
-completes 127 canvas updates per second while painting with a 1000-pixel G-Pen on
-a 60-megapixel photo.
+tablets, where battery use and heat limit sustained performance.
+Current measured rates are in the
+[performance targets](docs/PERFORMANCE_TARGETS.md).
 
 The [brush guide](docs/internals/brushes.md) follows a stroke from pen samples to
 GPU paint updates and explains the state used by different brush types.

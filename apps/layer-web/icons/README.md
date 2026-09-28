@@ -5,8 +5,8 @@ icons are MIT OR Apache-2.0. **Exception:** the four `layer-zen-*-symbolic.svg`
 capybara marks listed in BRANDING.md are covered only by the separate
 [branding license](../../../BRANDING.md), not either software license.
 These vector traces use the owner's four supplied screenshots. Looking up is
-the default, followed by Facing forward, Bathing and Sleeping. The canonical
-24px SVGs use square viewBoxes, centered artwork and a consistent maximum
+the default, followed by Facing forward, Bathing and Sleeping. The capybara
+SVGs use square viewBoxes, centered artwork and a consistent maximum
 extent; `currentColor` supplies light/dark tint without duplicate drawings.
 The GTK, Android and PWA build scripts derive app/launcher icons from Looking up.
 Web loads these files directly. GTK embeds the same files in its resource bank;
@@ -20,9 +20,8 @@ device size, preserving fixed swatch fills. Windows stages theme-specific copies
 for WinUI's SVG image source, replacing only `currentColor` and preserving the
 original geometry, explicit paints and opacity attributes.
 Apple builds compile vector assets from this bank, retaining foreground and
-fixed paints in SVG drawing order. The complete action mapping, reference
-research and design decisions are in the
-[cross-platform icon audit](../../../docs/ui/icon-audit.md).
+fixed paints in SVG drawing order. The icon design rules are in the
+[UI guide](../../../docs/ui/README.md#icons).
 Web-only browser-window controls load the original two-arrow fullscreen icons
 from this bank directly; no fullscreen button is added to GTK.
 Collapsed-sidebar expand buttons use `chevron-double-right` on the left and
@@ -31,7 +30,8 @@ The Color panel uses the original `color-square`, `color-triangle` and
 `color-swap` symbols: rounded geometry and consistent 1.5 px strokes, shared
 directly by GTK and Web.
 
-Keep 16×16 icon geometry (the capybara retains its own viewBox).
+Draw new icons on a 16×16 viewBox. A few older icons use 24×24, and the capybara
+marks keep their own square viewBoxes.
 Keep ordinary SVG fill/stroke attributes authoritative. Existing symbolic classes
 remain for compatibility, but GTK's production renderer reads the vectors through
 [GtkSvg](https://docs.gtk.org/gtk4/class.Svg.html), without traditional symbolic

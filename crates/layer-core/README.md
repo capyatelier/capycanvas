@@ -31,10 +31,9 @@ the decision to replace an open document belong to the host and shared UI sessio
 | [effects.rs](src/effects.rs) and [effect_catalog.rs](src/effect_catalog.rs) | Filter definitions, parameters, instances and catalog validation. |
 | [presets.rs](src/presets.rs) | Built-in brush definitions. |
 | [project.rs](src/project.rs) | Project encoding, decoding, validation and limits. |
-| [input_corrections.rs](src/input_corrections.rs) | Updates to previously estimated stroke samples. |
 
 Changes to these types can affect undo, renderer replay and project compatibility.
 Start with [documents and edits](../../docs/internals/documents.md), then the
 [project format](../../docs/reference/project-format.md) for persistence details.
-The [testing guide](../../docs/development/testing.md#shared-tests) covers the
+The [testing guide](../../docs/development/testing.md#checks-by-change-type) covers the
 shared model tests.
