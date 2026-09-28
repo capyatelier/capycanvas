@@ -12,7 +12,7 @@ fn packet(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
     }
 }
 fn pixels(r: &WgpuRasterizer) -> Vec<u8> {
-    crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap())
+    crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
 }
 fn close(actual: &[u8], reference: &[u8]) {
     assert_eq!(actual.len(), reference.len());

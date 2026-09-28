@@ -7,6 +7,7 @@ use wgpu::util::DeviceExt;
 
 mod sources;
 mod graph;
+mod effects;
 pub(crate) use sources::Sources;
 
 /// Device recipes survive level changes; display cache retirement drops pixels only.
@@ -218,8 +219,9 @@ pub(crate) fn level(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Option<u32> 
     let supported = fits && packet.layers.iter().all(|l| {
             !l.visible
                 || !l.is_artwork()
-                || (matches!(l.kind, LayerKind::Paint | LayerKind::Background | LayerKind::Group)
-                    && l.effect.is_none()
+                || (matches!(l.kind, LayerKind::Paint | LayerKind::Background | LayerKind::Group | LayerKind::Effect)
+                    && l.effect.as_ref().is_none_or(|effect| !effect.program.image_boundary()
+                        && effect.program.resolution == layer_core::EffectResolution::Display)
                     && r.paint_layers
                         .iter()
                         .find(|p| p.id == l.id)
@@ -348,6 +350,7 @@ fn coarse_level(plan: display_mips::Plan) -> u32 {
 
 fn scratch_images(layers: &[Layer]) -> u64 {
     3 + u64::from((4 * layers.len().max(1)).next_power_of_two().ilog2())
+        + layers.iter().filter(|l| l.effect.is_some() && l.mask.as_ref().is_some_and(|m| m.enabled)).count().min(crate::effects::MASK_SLOTS) as u64
 }
 
 pub(super) fn record_bytes(r: &WgpuRasterizer, extent: [u32; 2], layers: usize) -> u64 {
@@ -608,7 +611,7 @@ impl Cache {
         for region in changed.subtract(covered).into_iter().filter(|r| !r.is_empty()) {
             let [x, y, width, height] = paint_transform::texel_rect(region, side);
             self.used.fill(false);
-            let mut compositor = Reduced { cache: self, commands, sources: &scene.scale_sources, r, encoder, origin: [x, y], size: [width, height] };
+            let mut compositor = Reduced { cache: self, commands, scene, packet, r, encoder, origin: [x, y], size: [width, height] };
             let root = compositor.cache.graph.root.clone().expect("prepared composition graph");
             let output = compositor.evaluate_root(&root)?;
             let output = match output {
@@ -807,7 +810,8 @@ impl Value {
 struct Reduced<'a> {
     cache: &'a mut Cache,
     commands: &'a mut Commands,
-    sources: &'a Sources,
+    scene: &'a mut Scene,
+    packet: FramePacket<'a>,
     r: &'a mut WgpuRasterizer,
     encoder: &'a mut crate::submission::CommandEncoder,
     origin: [u32; 2],
@@ -820,7 +824,7 @@ impl Reduced<'_> {
         }
         let plan = source_plan(self.cache.plan, placement, extent)?;
         if plan.bounds.is_empty() { return Ok(Value::Color([outside; 4])); }
-        let image = &self.sources.image(id, plan.level).image;
+        let image = &self.scene.scale_sources.image(id, plan.level).image;
         let plan = image.plan;
         let view = image.view.clone();
         if placement == layer_core::Affine::IDENTITY && plan.bounds.min_x() == 0 && plan.bounds.min_y() == 0 {

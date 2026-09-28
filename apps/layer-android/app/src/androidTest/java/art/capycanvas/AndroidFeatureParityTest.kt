@@ -95,6 +95,8 @@ class AndroidFeatureParityTest {
         fun command(id: String) = state().array("commands").objects().first { it.getString("id") == id }
         fun revision() = state().getJSONObject("document_file").getLong("revision")
         fun paint(from: Offset, to: Offset) {
+            compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true || host.failure != null }
+            assertNull(host.failure)
             val before = revision()
             stroke(from, to)
             compose.waitUntil(15_000) { revision() > before || host.failure != null }

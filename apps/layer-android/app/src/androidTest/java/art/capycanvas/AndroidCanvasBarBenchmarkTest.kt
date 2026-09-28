@@ -331,6 +331,57 @@ class AndroidCanvasBarBenchmarkTest {
                 val radius = minOf(area.getDouble(2), area.getDouble(3)) * .3
                 measure("paint-strokes") { drag(center, duration) { t -> radius * sin(t * 3.2) to radius * .65 * sin(t * 4.7) } }
             }
+            if (wanted("effects")) {
+                for (chain in listOf(false, true)) {
+                    newDocument()
+                    place(photo())
+                    invoke("apply_transform")
+                    waitFor("placed photo") { state().optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") != "placement" }
+                    fun effect(op: JSONObject) = action(obj("type" to "effect", "action" to op))
+                    if (chain) {
+                        effect(obj("op" to "insert", "effect" to "levels"))
+                        effect(obj("op" to "set", "layer" to state().getJSONObject("layer_properties").getLong("layer"),
+                            "key" to "gamma", "value" to obj("kind" to "number", "value" to 1.25)))
+                        effect(obj("op" to "insert", "effect" to "vibrance"))
+                    }
+                    effect(obj("op" to "insert", "effect" to "exposure"))
+                    action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
+                    val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+                        .first { "properties" in it.array("panels").values() }.getInt("id")
+                    action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
+                    action(obj("type" to "select_panel_tab", "group" to group, "panel" to "properties"))
+                    waitFor("Exposure control") { findTag("number-slider-Exposure") != null }
+                    invoke("fit_canvas")
+                    var track = android.graphics.RectF()
+                    instrumentation.runOnMainSync {
+                        val (root, node) = findTag("number-slider-Exposure")!!
+                        val origin = IntArray(2); root.view.getLocationOnScreen(origin)
+                        node.boundsInRoot.let { track = android.graphics.RectF(it.left + origin[0], it.top + origin[1], it.right + origin[0], it.bottom + origin[1]) }
+                    }
+                    check(track.width() > 40 && track.height() > 0)
+                    fun value() = state().getJSONObject("layer_properties").array("controls").objects()
+                        .first { it.getString("key") == "exposure" }.getJSONObject("value").getDouble("value")
+                    val start = track.left + track.width() * .45 - host.surfaceOrigin.x to track.centerY() - host.surfaceOrigin.y.toDouble()
+                    val before = value()
+                    drag(start, 250) { t -> track.width() * .1 * t / .25 to 0.0 }
+                    waitFor("Exposure gesture changes its value") { kotlin.math.abs(value() - before) > .1 }
+                    waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
+                    val values = java.util.Collections.synchronizedSet(mutableSetOf<Double>())
+                    val label = if (chain) "effect-chain-exposure-drag" else "effect-exposure-drag"
+                    measure(label) {
+                        val sampler = Thread {
+                            val until = SystemClock.uptimeMillis() + duration
+                            while (SystemClock.uptimeMillis() < until) { values += value(); SystemClock.sleep(8) }
+                        }.apply { start() }
+                        drag(start, duration) { t -> track.width() * .05 * (1 - cos(2 * PI * t / 2)) to 0.0 }
+                        sampler.join()
+                    }
+                    check(values.size >= 10) { "$label changed only ${values.size} values" }
+                    val result = File(output, "$label.json")
+                    result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted())).put("slider_bounds",
+                        JSONArray(listOf(track.left, track.top, track.right, track.bottom))).toString(2))
+                }
+            }
             if (wanted("photo")) {
                 newDocument()
                 place(photo())

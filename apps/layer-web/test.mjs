@@ -5,6 +5,7 @@ import {checkCommandBar} from './command-bar.test.mjs';
 import {checkToolbarComponents} from "./toolbar-components.test.mjs";
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkFilterDrawer} from "./filter-drawer.test.mjs";
+import {checkFilterPreviews} from "./filter-previews.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
 import {checkStrokeRecording} from './stroke-recording.test.mjs';
 import {checkContactBrushes} from "./contact-brushes.test.mjs";
@@ -381,6 +382,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--filter-drawer")) {
     await checkFilterDrawer({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--filter-previews")) {
+    await checkFilterPreviews({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--tonal-selection")) {
     await checkTonalSelections({call,evaluate,settle}); assert.deepEqual(errors,[]);

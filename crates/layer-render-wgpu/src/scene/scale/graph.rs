@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
 
-type Node = Arc<Expression>;
+pub(super) type Node = Arc<Expression>;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum Expression {
@@ -9,6 +9,7 @@ pub(super) enum Expression {
     Source { id: LayerId, placement: [u32; 6], extent: [u32; 2], outside: u32 },
     Opacity { input: Node, opacity: u32 },
     Combine { front: Node, back: Node, blend: u32, flags: u32 },
+    Effect { input: Node, chain: Vec<(LayerId, u64, u32)>, masks: Vec<Option<Node>> },
 }
 impl Expression {
     fn color(value: [f32; 4]) -> Node { Arc::new(Self::Color(value.map(f32::to_bits))) }
@@ -42,6 +43,14 @@ impl Expression {
                 let (b, y) = back.cost();
                 (a + b + 1, x.max(y).max(x.min(y) + 1).max(3))
             }
+            Self::Effect { input, masks, .. } => {
+                let (work, scratch) = input.cost();
+                let (mask_work, mask_scratch, count) = masks.iter().flatten().fold((0, 0, 0), |(w, s, n), mask| {
+                    let (work, scratch) = mask.cost();
+                    (w + work, s.max(scratch), n + 1)
+                });
+                (work + 1 + mask_work, scratch.max(mask_scratch + count + 2))
+            }
         }
     }
     fn damage(&self, sources: &Sources, plan: display_mips::Plan) -> PixelRect {
@@ -55,6 +64,7 @@ impl Expression {
             }),
             Self::Opacity { input, .. } => input.damage(sources, plan),
             Self::Combine { front, back, .. } => front.damage(sources, plan).union(back.damage(sources, plan)),
+            Self::Effect { input, masks, .. } => masks.iter().flatten().fold(input.damage(sources, plan), |r, n| r.union(n.damage(sources, plan))),
         }
     }
     fn visit(node: &Node, all: &mut HashSet<Node>) {
@@ -62,6 +72,10 @@ impl Expression {
         match node.as_ref() {
             Self::Opacity { input, .. } => Self::visit(input, all),
             Self::Combine { front, back, .. } => { Self::visit(front, all); Self::visit(back, all); }
+            Self::Effect { input, masks, .. } => {
+                Self::visit(input, all);
+                for mask in masks.iter().flatten() { Self::visit(mask, all); }
+            }
             _ => {}
         }
     }
@@ -83,10 +97,20 @@ pub(super) struct Branch {
 pub(super) struct Graph {
     pub root: Option<Node>,
     branches: HashMap<Node, Branch>,
+    effects: HashMap<LayerId, (metadata::Metadata, u64)>,
+    revision: u64,
 }
 impl Graph {
     pub fn prepare(&mut self, packet: FramePacket<'_>, sources: &Sources, plan: display_mips::Plan, budget: u64) -> Result<(), GpuRasterError> {
-        let mut builder = Builder { packet, sources };
+        self.effects.retain(|id, _| packet.layers.iter().any(|l| l.id == *id && l.effect.is_some()));
+        for layer in packet.layers.iter().filter(|l| l.effect.is_some()) {
+            let metadata = metadata::Metadata::new(layer);
+            if self.effects.get(&layer.id).is_none_or(|(old, _)| *old != metadata) {
+                self.revision += 1;
+                self.effects.insert(layer.id, (metadata, self.revision));
+            }
+        }
+        let mut builder = Builder { packet, sources, effects: &self.effects };
         let output = stack::compose(&mut builder, packet.layers, None, None)?;
         let mut root = Expression::over(&output);
         for layer in packet.layers {
@@ -97,7 +121,7 @@ impl Graph {
         let mut all = HashSet::new();
         Expression::visit(&root, &mut all);
         let mut eligible: Vec<_> = all.into_iter().filter(|n| !Arc::ptr_eq(n, &root)
-            && matches!(n.as_ref(), Expression::Combine { .. })).collect();
+            && matches!(n.as_ref(), Expression::Combine { .. } | Expression::Effect { .. })).collect();
         eligible.sort_by_cached_key(|n| (n.damage(sources, plan).area(), std::cmp::Reverse(n.cost().0), n.clone()));
         eligible.truncate((budget / plan.level_bytes(plan.level)) as usize);
         let wanted: HashSet<_> = eligible.into_iter().collect();
@@ -119,6 +143,7 @@ impl Graph {
 struct Builder<'a> {
     packet: FramePacket<'a>,
     sources: &'a Sources,
+    effects: &'a HashMap<LayerId, (metadata::Metadata, u64)>,
 }
 impl Builder<'_> {
     fn source(&self, layer: &Layer, mask: bool) -> Node {
@@ -141,6 +166,8 @@ impl stack::Compositor for Builder<'_> {
         let layer = &self.packet.layers[index];
         let output = if layer.kind == LayerKind::Group {
             stack::compose(self, self.packet.layers, Some(layer.id), None)?
+        } else if layer.kind == LayerKind::Effect {
+            self.effect(&[index], Vec::new())?
         } else { vec![self.source(layer, false)] };
         if layer.mask.as_ref().is_some_and(|m| m.enabled) {
             Ok(vec![Expression::combine(Expression::over(&output), self.source(layer, true), layer_core::LayerBlend::Normal, 32)])
@@ -156,12 +183,22 @@ impl stack::Compositor for Builder<'_> {
             Ok(vec![Expression::combine(Expression::over(&front), Expression::over(&back), layer.properties.blend, if clipped { 16 } else { 0 })])
         }
     }
-    fn effect(&mut self, _: &[usize], _: Self::Image) -> Result<Self::Image, GpuRasterError> {
-        Err(GpuRasterError::Effect("Effect was not admitted at the requested scale".into()))
+    fn effect(&mut self, indices: &[usize], input: Self::Image) -> Result<Self::Image, GpuRasterError> {
+        let chain = indices.iter().map(|i| {
+            let layer = &self.packet.layers[*i];
+            let effect = layer.effect.as_ref().unwrap();
+            (layer.id, self.effects[&layer.id].1, if effect.animated() { self.packet.time_seconds.to_bits() } else { 0 })
+        }).collect();
+        let masks = indices.iter().map(|i| {
+            let layer = &self.packet.layers[*i];
+            (layer.effect.as_ref().unwrap().program.kind == layer_core::EffectKind::Adjustment
+                && layer.mask.as_ref().is_some_and(|m| m.enabled)).then(|| self.source(layer, true))
+        }).collect();
+        Ok(vec![Arc::new(Expression::Effect { input: Expression::over(&input), chain, masks })])
     }
     fn has_content(&self, index: usize) -> bool {
         let layer = &self.packet.layers[index];
-        matches!(layer.kind, LayerKind::Group | LayerKind::Paint)
+        matches!(layer.kind, LayerKind::Group | LayerKind::Paint | LayerKind::Effect)
     }
 }
 
@@ -203,6 +240,10 @@ impl Reduced<'_> {
                     (self.evaluate(front)?, back)
                 };
                 self.draw(front, back, layer_core::LayerBlend::ALL[*blend as usize], *flags, output)?
+            }
+            Expression::Effect { input, chain, masks } => {
+                let input = self.evaluate(input)?;
+                self.effect(input, chain, masks, output)?
             }
         };
         if let Some(branch) = self.cache.graph.branches.get_mut(node) {

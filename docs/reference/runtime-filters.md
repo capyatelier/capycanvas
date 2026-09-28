@@ -32,6 +32,16 @@ WGSL or an ordered array of manifest-local WGSL filenames. Modules resolve to
 shared source chunks, so fused filters include common helpers once. Serialized
 document programs contain resolved code and do not need their original package.
 
+`program.resolution` declares the input resolution permitted for interactive
+composition. The default, `"native"`, requires document-resolution evaluation.
+`"display"` permits evaluation on the compositor's reduced grid. Positions and
+`fx_extent()` remain in document pixels; the declaration never changes parameters,
+saved artwork, or exact queries and export. Nonlinear adjustments evaluated after
+reduction can differ from a reduced exact result, so display eligibility requires
+visual and numerical qualification. The current display executor accepts this
+declaration for pointwise programs without image boundaries. Spatial and timed
+programs continue to require native execution.
+
 The current filter ABI is **3**. Curves and gradients each occupy 65 vec4
 parameter records: one header plus up to 32 pairs. Curves store Hermite segments
 with interval-scaled tangents; gradients store exact positions and RGBA stops.

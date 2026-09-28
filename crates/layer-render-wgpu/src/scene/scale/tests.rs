@@ -3,6 +3,9 @@ use crate::test_support::{dab_batch, packet};
 use layer_core::color::{SampleDepth, source::*};
 use layer_core::{DefaultBrushPreset, Document};
 
+#[path = "effect_tests.rs"]
+mod effects;
+
 fn document() -> Document {
     document_at([517, 259])
 }
@@ -95,6 +98,24 @@ fn native_view_windows_reuse_overlap_and_preserve_global_sampling() {
     let overview = cache.overview.as_ref().unwrap();
     assert!(quality(&pixels(&r, overview.texture()), &oracle, overview.plan)[2] < 1e-5);
     assert_presentation_mip(&r);
+}
+
+#[test]
+fn small_placed_source_remains_visible_beyond_its_local_extent() {
+    let mut doc = document_at([256, 256]);
+    let extent = [2048, 1536];
+    doc.width = extent[0]; doc.height = extent[1];
+    doc.layers[0].properties.placement = layer_core::Affine([1., 0., 0., 1., 896., 640.]);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, extent);
+    frame.view.document_to_surface = [0.385, 0., 0., 0.385, 0., 0.];
+    r.submit(frame).unwrap();
+    let display = display_pixels(&r);
+    assert!(display.iter().any(|p| p[3] > 0.99 && p[2] > 0.05), "placed source contributes to presentation");
+    let mut exact = vec![0; (extent[0] * extent[1] * 4) as usize];
+    r.copy_rgba8_srgb(&mut exact, extent[0] as usize * 4).unwrap();
+    let center = ((768 * extent[0] + 1024) * 4) as usize;
+    assert_eq!(&exact[center..center + 4], &[42, 64, 80, 255]);
 }
 
 #[test]

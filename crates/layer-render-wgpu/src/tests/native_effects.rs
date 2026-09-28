@@ -40,7 +40,7 @@ fn frame(r: &mut WgpuRasterizer, layers: &[Layer]) -> [f32; 4] {
         ..packet(layers, [256; 2])
     })
     .unwrap();
-    let bytes = crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap());
+    let bytes = crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r));
     std::array::from_fn(|c| f32::from_le_bytes(bytes[c * 4..c * 4 + 4].try_into().unwrap()))
 }
 fn close(actual: [f32; 4], rgb: [f32; 3], alpha: f32, context: &str) {
@@ -244,7 +244,7 @@ fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
             }
             let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
             frame(&mut r, &document.layers);
-            let before = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+            let before = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
             let project = layer_core::Project { document };
             let mut archive = Vec::new();
             project.write(&mut archive).unwrap();
@@ -259,7 +259,7 @@ fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
             let mut fresh = WgpuRasterizer::new_native_headless(color).unwrap();
             frame(&mut fresh, &loaded.document.layers);
             assert_eq!(
-                crate::layer_tests::page_bytes(&fresh, fresh.composite_texture.as_ref().unwrap()),
+                crate::layer_tests::page_bytes(&fresh, crate::test_support::document_texture(&fresh)),
                 before
             );
             let exposure = loaded
@@ -275,7 +275,7 @@ fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
             );
             frame(&mut fresh, &loaded.document.layers);
             assert_ne!(
-                crate::layer_tests::page_bytes(&fresh, fresh.composite_texture.as_ref().unwrap()),
+                crate::layer_tests::page_bytes(&fresh, crate::test_support::document_texture(&fresh)),
                 before
             );
             set(
@@ -285,7 +285,7 @@ fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
             );
             frame(&mut fresh, &loaded.document.layers);
             assert_eq!(
-                crate::layer_tests::page_bytes(&fresh, fresh.composite_texture.as_ref().unwrap()),
+                crate::layer_tests::page_bytes(&fresh, crate::test_support::document_texture(&fresh)),
                 before
             );
             let source = loaded

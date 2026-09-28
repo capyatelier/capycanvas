@@ -36,7 +36,9 @@ is 4248 × 2832.
 | Marquee, Lasso or Polygon drag | 60 | | |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
-| Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 60, soft | | |
+| Pointwise adjustment slider: Exposure | 60, soft | **Not met.** Screen 49.1 presents/s, p99 33.4 ms; renderer 26.5 completed updates/s | Pointwise graph comparison below |
+| Pointwise chain: Levels, Vibrance, Exposure slider | 60, soft | **Not met.** Screen 53.7 presents/s, p99 33.3 ms; renderer 20.9 completed updates/s | Pointwise graph comparison below |
+| Other pointwise adjustment sliders | 60, soft | | |
 | Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 60, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 60, soft | | |
 | Fill layer or gradient-fill edit | 60, soft | | |
@@ -100,6 +102,31 @@ unchanged at 62.01 and 45.87. Viewport GPU medians fall from 5.60 to 5.03 ms for
 translation and 5.61 to 4.96 ms for resize. Old-main transform throughput still
 exceeds this build; these gains do not close the geometry regressions.
 
+## Pointwise filter composition
+
+Measured 2026-09-28 on the 12 MP photo at Fit, with three alternating pairs of
+warmed five-second stylus scrubs, release Rust, default glass and thermal status
+0. The harness waits for shader readiness after priming and verifies changing
+parameter values during motion. Both builds use the same camera and test APK.
+
+| Slider journey | Previous filter executor, completed updates/s | Display graph, completed updates/s | Speedup | Graph completion gap p99 |
+| --- | --- | --- | --- | --- |
+| Exposure | 1.59 | 26.53 | 16.67× | 67.0 ms |
+| Levels, Vibrance, Exposure chain | 0.99 | 20.90 | 21.01× | 65.9 ms |
+
+Neither journey meets the motion target. Screen presents include native controls
+and do not independently establish canvas presentation cadence. Renderer-owned
+storage falls from 579.8 to 306.5 MiB; this is not process RSS.
+
+The control is production `7cad88dd`, before pointwise graph admission, using APK
+SHA-256 `574bac2557e30ce43444a5657de969719052975f285e3d2639e879e3eec7a977`.
+Candidate APK SHA-256:
+`dbb61014e2722cb37240f68d8b11f6d223d6d18b1c58eeed98414bfc2c9f5016`.
+Raw results, immutable builds, source patch and harness provenance are under
+`artifacts/display-production/effect-graph-ready-*` and `effect-graph-source.patch`.
+These compare filter execution within the production branch, not against a fresh
+old-main build. Other filters and high-frequency preview quality remain unqualified.
+
 ## Sources larger than the canvas
 
 This diagnostic places the 12 MP photo at original size over a 1062 × 708 canvas
@@ -137,7 +164,7 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | Inside-photo path: 37.7 updates/s (37.5–37.8); gap p99 36.8 ms | **Not met** |
+| G-Pen (1) | Simple | 1024 px | Inside-photo path: 37.8 updates/s (37.4–37.8); gap p99 39.5 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -178,38 +205,41 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 At the 2048 px goal, the G-Pen completes 12.3 updates/s (12.3–12.4), with a gap p99 of 114.1 ms.
 
-G-Pen was remeasured on 2026-09-28 with cached composition branches and the
-validated benchmark harness. Optimized release APK SHA-256:
-`da7d5d73452abe36472b446880468ab607686975138a4fe55b7b476445055b22`.
+G-Pen was remeasured on 2026-09-28 after integrating Clone and color mixing,
+with cached composition branches and the validated benchmark harness.
+Release Rust APK SHA-256:
+`574bac2557e30ce43444a5657de969719052975f285e3d2639e879e3eec7a977`.
 The inside-photo trajectory uses 240 × 140 surface-pixel radii and three 5 s
 strokes. Both builds use the same instrumentation, with observed setup checked
-before timing. The old main `29a564eb` control was measured in the same session
-with the previous production build; the cache build follows those paired runs.
+before timing. The old main `29a564eb` control was measured earlier with the previous
+production build. The latest production measurements repeat the same workload;
+they are not new alternating pairs against current main.
 Thermal status is 0. Each stack has one opaque photo, translucent photo
 duplicates at 35% opacity, and a separate active brush layer.
 
 | Photo layers below the brush | Old completed updates/s | Production completed updates/s | Speedup | Production gap p99 |
 | --- | --- | --- | --- | --- |
-| 1 | 17.91 | 37.67 | 2.10× | 36.8 ms |
-| 4 | 1.39 | 34.47 | 24.75× | 47.7 ms |
-| 8 | 0.80 | 34.59 | 43.44× | 46.7 ms |
+| 1 | 17.91 | 37.77 | 2.11× | 39.5 ms |
+| 4 | 1.39 | 35.04 | 25.15× | 41.1 ms |
+| 8 | 0.80 | 34.67 | 43.54× | 46.7 ms |
 
 None of these cases reaches the brush target. Raw results are under
 `artifacts/display-production/validated-control-stack-{1,4,8}-12mp-fit` and
-`artifacts/display-production/stable-graph-stack-{1,4,8}-12mp-fit`.
+`artifacts/display-production/mixing-integrated-stack-{1,4,8}-12mp-fit`.
 The control APK SHA-256 is
 `4106138d62c45d5d5440816f6bc6972fb98fd434a737eb6904fcff56dcf2758f`.
 
-With 32 photos below the brush, the cache build completes 34.25 updates/s
-(34.07–34.41), gap p99 48.3 ms. The preceding production renderer at `e37176cd`
-completes 8.96 updates/s on the same setup, a 3.82× cache improvement. This is a
+With 32 photos below the brush, the integrated build completes 34.44 updates/s
+(34.24–34.69), gap p99 47.3 ms. The preceding production renderer at `e37176cd`
+completes 8.96 updates/s on the same setup, a 3.84× improvement. This is a
 separate comparison from old main. Raw data is in
-`artifacts/display-production/{stable-graph,pre-graph}-stack-32-12mp-fit`.
-Renderer-reported resident storage is 580, 649, 741 and 1030 MiB for the cache
+`artifacts/display-production/{mixing-integrated,pre-graph}-stack-32-12mp-fit`.
+Renderer-reported resident storage is 580, 649, 741 and 1030 MiB for the integrated
 build's 1, 4, 8 and 32 photo runs. This includes allocations outside the bounded
 display-composition component and is not process RSS.
-Process RSS high-water marks are 1311, 1318, 1469 and 1816 MiB respectively;
-the previous production build records 1323, 1326, 1319 and 1708 MiB. Cached
+The earlier cache build had process RSS high-water marks of 1311, 1318, 1469
+and 1816 MiB respectively, versus 1323, 1326, 1319 and 1708 MiB before caching.
+The latest run has not requalified process memory. Cached
 branches trade retained image storage for less repeated composition.
 Separate FULL-trace runs attribute 11.05 and 11.23 ms to composition at 8 and
 32 photos, respectively, with about 13.8 ms of paint and prediction work in

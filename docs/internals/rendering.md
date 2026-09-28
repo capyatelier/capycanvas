@@ -386,7 +386,12 @@ rectangle, so filter definitions describe their sampling footprint. Global effec
 layer reordering and invalidated caches can require much larger updates than a
 single brush mark. Animated effects also need updates without new pen input.
 
-The exact presentation executor remains for effects and persistent watercolor.
+Pointwise filters declaring display-resolution support use effect nodes in the
+shared region graph. These nodes reuse the same fused shaders as native tiles;
+changing a parameter invalidates the effect result while retaining unchanged
+paint inputs. Masks are sampled in the output grid and shader positions remain
+document coordinates. Exact queries evaluate document-resolution pixels.
+The exact presentation executor remains for other effects and persistent watercolor.
 Active paint transforms use the shared region graph. A transaction captures
 immutable original tiles and reduces its moving pixels and any unselected
 remainder once per input level. Whole-layer transactions can reuse a current

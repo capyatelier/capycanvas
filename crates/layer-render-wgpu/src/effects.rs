@@ -672,7 +672,7 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
     source.push_str(
         r#"
 fn effect_result(v:Vertex)->vec4<f32> {
-    let local=v.position.xy-settings.rect.xy;
+    let local=select(v.position.xy-settings.rect.xy,v.position.xy,settings.operation_linear.z>0.);
     var c=textureLoad(front,vec2<i32>(local),0);
     if settings.source_over.w>.5 {
 "#,
