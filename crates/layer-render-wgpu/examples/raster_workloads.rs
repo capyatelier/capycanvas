@@ -20,6 +20,8 @@ type Engine = CanvasEngine<WgpuRasterizer>;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[path = "raster_workloads/photo.rs"]
 mod photo;
+#[path = "raster_workloads/calibration.rs"]
+mod calibration;
 struct Canvas {
     engine: Engine,
     input: InputProducer<PenEvent>,
@@ -405,6 +407,7 @@ fn main() -> Result<()> {
     let mut photo = false;
     let mut capture_only = false;
     let mut navigation_only = false;
+    let mut calibrate = false;
     let mut output = PathBuf::from("artifacts/color-m2/final-performance/dense");
     let mut color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
     let mut arguments = args.iter();
@@ -413,6 +416,7 @@ fn main() -> Result<()> {
             "--photo" => photo = true,
             "--photo-capture" => { photo = true; capture_only = true; },
             "--photo-navigation" => navigation_only = true,
+            "--calibrate" => calibrate = true,
             "--bounded-display" => {},
             "--output-dir" => output = PathBuf::from(arguments.next().ok_or("--output-dir needs a path")?),
             "all" | "24mp" | "45mp" | "60mp" | "multiple" => selected = argument,
@@ -433,6 +437,7 @@ fn main() -> Result<()> {
     }
     println!("Source ownership: tiled copy-on-write; native {color:?}, Float32 working tiles");
     std::fs::create_dir_all(&output)?;
+    if calibrate { return calibration::run(&output); }
     if navigation_only {
         return photo::navigation::run(selected, color, &output);
     }

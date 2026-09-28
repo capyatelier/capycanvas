@@ -5,6 +5,8 @@ needs. Authoritative paint remains in exact document tiles. Presentation pixels
 never become paint, history, export, sampling, or project backing.
 
 The implementation is in `crates/layer-render-wgpu/src/scene/scale.rs`. The
+layer order, isolated groups, clipping bases and adjustment-chain boundaries
+are shared with exact composition in `scene/stack.rs`. The
 [TCL evaluation](../development/display-composition-20260927.md) records the
 measured gains, controls and remaining limits.
 
@@ -13,11 +15,12 @@ measured gains, controls and remaining limits.
 The view's largest singular value chooses a power-of-two texel footprint no
 larger than a surface pixel, capped at 16 document pixels. At the benchmark's
 7.14% zoom this is an 8 × 8 footprint. Admission bounds the reduced layer images
-and two composition targets plus the adjacent output mip against the existing
-display component budget.
+and the group-composition scratch pool plus the adjacent output mip against
+the existing display component budget.
 
-Each visible paint layer has a premultiplied float image at this level and a
-set of valid document-page coordinates. Source identity, immutable native tile
+Each visible paint layer and enabled mask has a float image at this level and a
+set of valid document-page coordinates. Paint uses premultiplied working color;
+mask images contain coverage. Source identity, immutable native tile
 captures, committed brush damage and the previous prediction footprint determine
 what must be refreshed. A changed exact page is averaged directly into its layer
 image. Empty pages write zero without reading a full page. Source decoding uses
@@ -56,8 +59,11 @@ backlog to hide from the benchmark.
 
 ## Supported contract
 
-The prototype admits native, untransformed, top-level normal paint layers and
-paper, without masks, clipping, effects or persistent watercolor state. Visible
+The prototype admits native, untransformed paint layers, isolated groups,
+clipping stacks, all layer blend modes, aligned scalar masks and paper.
+Masks reduce their exact coverage pages and participate in the same group and
+clipping operations as exact composition. Mask inspection remains presentation
+only. The prototype excludes effects and persistent watercolor state. Visible
 unsupported artwork routes the whole stack through exact composition. Fine
 views, insufficient cache admission and active transforms also use that path.
 Advanced brushes retain their exact temporary executor; only simple analytic dry

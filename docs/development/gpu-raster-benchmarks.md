@@ -56,6 +56,26 @@ distribution. The release painter record uses three repetitions per brush.
 
 ## Workloads
 
+`raster_workloads --calibrate --output-dir PATH` measures RGBA32Float copies,
+source-over blending, area reduction at 4×/8×/16× footprints and horizontal
+neighborhood kernels. It retains thirty samples after four warmups at five
+sizes, from one pixel to 4248 × 2832. `calibration.csv` separates command encoding
+and submission, queue completion, and optional GPU pass timestamps. Timestamp
+mapping and CSV output happen after the timed completion boundary.
+
+The byte column is minimum distinct input/output traffic; cache reuse means
+texture sample count is not DRAM traffic. The neighborhood kernel uses equal
+weights to calibrate sampling costs, not the application's Gaussian appearance.
+Use matching-size results to estimate a journey's fixed and per-pixel costs,
+then check held-out workloads. These serialized kernel measurements exclude
+source preparation, UI scheduling and presentation; they are not frame rates.
+Record thermal state and repeat when clock changes affect the fitted range.
+
+```sh
+cargo build --locked --release -p layer-render-wgpu --example raster_workloads
+target/release/examples/raster_workloads --calibrate --output-dir artifacts/calibration
+```
+
 The `raster_workloads` example separately exercises tiled native photos. Build
 with `cargo build -p layer-render-wgpu --example raster_workloads --release` and
 run the resulting executable with `24mp`, `45mp`, `60mp`, or `multiple`.

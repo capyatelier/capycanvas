@@ -29,6 +29,118 @@ fn document() -> Document {
     doc.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
     doc
 }
+
+#[test]
+fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
+    let extent = [33, 19];
+    let mut doc = Document::new("nested composition", extent[0], extent[1]);
+    let solid = |id, color: [u8; 4]| {
+        let mut source = SourceBuilder::new(extent, SourceInterpretation {
+            channels: SourceChannels::Rgba, depth: SampleDepth::U8,
+            profile: Default::default(), profile_assumed: false,
+        }, 1 << 20).unwrap();
+        let row = color.repeat(extent[0] as usize);
+        for _ in 0..extent[1] { source.push_row(&row).unwrap(); }
+        let mut layer = Layer::paint(LayerId(id), "solid");
+        layer.source = Some(Arc::new(source.finish().unwrap()));
+        layer
+    };
+    let mut outer = Layer::paint(LayerId(10), "outer");
+    outer.kind = LayerKind::Group;
+    outer.opacity = 0.63;
+    let mut group_mask = layer_core::LayerMask::reveal_all(LayerId(30), Default::default());
+    group_mask.default_coverage = 0.61;
+    outer.mask = Some(group_mask);
+    let mut inner = Layer::paint(LayerId(20), "inner");
+    inner.kind = LayerKind::Group;
+    inner.properties.parent = Some(outer.id);
+    inner.opacity = 0.71;
+    inner.properties.blend = layer_core::LayerBlend::Multiply;
+    let mut base = solid(4, [50, 170, 80, 117]);
+    base.properties.parent = Some(inner.id);
+    base.opacity = 0.81;
+    let mut clipped = solid(3, [230, 30, 120, 193]);
+    clipped.properties.parent = Some(inner.id);
+    clipped.properties.clipped = true;
+    clipped.opacity = 0.54;
+    let mut clip_mask = layer_core::LayerMask::reveal_all(LayerId(31), Default::default());
+    clip_mask.default_coverage = 0.42;
+    clip_mask.inverted = true;
+    clipped.mask = Some(clip_mask);
+    let mut behind = solid(1, [170, 210, 70, 230]);
+    behind.opacity = 0.79;
+    doc.layers = vec![outer, inner, clipped, base, behind, doc.layers.pop().unwrap()];
+    let mut reduced = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    for mode in layer_core::LayerBlend::ALL {
+        doc.layers[0].properties.blend = mode;
+        doc.layers[2].properties.blend = mode;
+        for state in 0..4 {
+            doc.layers[1].visible = state != 1;
+            doc.layers[2].visible = state != 2;
+            doc.layers[3].visible = state != 3;
+            doc.layers[0].mask.as_mut().unwrap().enabled = state != 2;
+            doc.layers[2].mask.as_mut().unwrap().show_area = state == 1;
+            let mut frame = packet(&doc.layers, extent);
+            frame.composite_all = false;
+            frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+            reduced.submit(frame).unwrap();
+            exact.submit(frame).unwrap();
+            let cache = reduced.scale_display.as_ref().unwrap();
+            let error = quality(&display_pixels(&reduced), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), cache.plan);
+            assert!(error[2] < 2e-5, "{mode:?} state={state}: {error:?}");
+            assert_presentation_mip(&reduced);
+            assert!(reduced.live_display.is_none() && reduced.composite_texture.is_none());
+            let work = reduced.metrics.composited_pixels;
+            reduced.submit(frame).unwrap();
+            assert_eq!(work, reduced.metrics.composited_pixels);
+        }
+    }
+}
+
+#[test]
+fn masks_refresh_coverage_properties_and_paint_without_exact_display() {
+    let mut doc = document();
+    let extent = [doc.width, doc.height];
+    let mut mask = layer_core::LayerMask::reveal_all(LayerId(40), Default::default());
+    mask.default_coverage = 0.;
+    mask.initial = Some(layer_core::Selection::polygon(vec![
+        layer_core::Point { x: 0., y: 0. }, layer_core::Point { x: 258., y: 0. },
+        layer_core::Point { x: 258., y: 259. }, layer_core::Point { x: 0., y: 259. },
+    ]).unwrap());
+    doc.layers[0].mask = Some(mask);
+    let mut reduced = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    for state in 0..7 {
+        let mask = doc.layers[0].mask.as_mut().unwrap();
+        mask.enabled = state != 3;
+        mask.inverted = state == 1;
+        mask.show_area = state == 2;
+        let mut frame = packet(&doc.layers, extent);
+        frame.composite_all = false;
+        frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+        let dab = crate::tests::test_dab([370., 129.], [1.; 4], 1.);
+        let batch = dab_batch(LayerId(40), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        if state == 5 {
+            frame.dabs = std::slice::from_ref(&dab);
+            frame.dab_batches = std::slice::from_ref(&batch);
+        }
+        reduced.submit(frame).unwrap();
+        exact.submit(frame).unwrap();
+        let cache = reduced.scale_display.as_ref().unwrap();
+        let error = quality(&display_pixels(&reduced), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), cache.plan);
+        assert!(error[0] < 0.001 && error[2] < 0.05, "mask state={state}: {error:?}");
+        assert_presentation_mip(&reduced);
+        let mut a = vec![0; (extent[0] * extent[1] * 4) as usize];
+        let mut b = a.clone();
+        reduced.copy_rgba8_srgb(&mut a, extent[0] as usize * 4).unwrap();
+        exact.copy_rgba8_srgb(&mut b, extent[0] as usize * 4).unwrap();
+        assert_eq!(a, b, "mask state={state} exact query");
+        assert!(reduced.live_display.is_none() && reduced.composite_texture.is_none());
+    }
+}
 fn pixels(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
     crate::layer_tests::page_bytes(r, texture)
         .chunks_exact(16)

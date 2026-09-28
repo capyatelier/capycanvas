@@ -21,6 +21,7 @@ struct LayerImage {
     valid: BTreeSet<[u32; 2]>,
     source: Option<Arc<layer_core::color::source::SourceImage>>,
     backing: Option<Arc<RasterData>>,
+    mask: Option<layer_core::LayerMask>,
 }
 
 /// Device recipes survive level changes; display cache retirement drops pixels only.
@@ -66,7 +67,7 @@ impl Pipelines {
         let shader = Deferred::wgsl(
             device,
             "display resolution composition",
-            include_str!("scale.wgsl"),
+            compose_wgsl(&[&working_color::shader(device), include_str!("../blend_modes.wgsl"), include_str!("scale.wgsl")]),
         );
         Self {
             records: records_layout,
@@ -92,7 +93,8 @@ impl Pipelines {
 pub(crate) struct Cache {
     pub plan: display_mips::Plan,
     layers: HashMap<LayerId, LayerImage>,
-    output: [Image; 2],
+    output: Vec<Image>,
+    used: Vec<bool>,
     next: Image,
     selected: usize,
     pub geometry: wgpu::Buffer,
@@ -110,9 +112,6 @@ pub(crate) struct Cache {
     preview: Option<(LayerId, BTreeSet<[u32; 2]>)>,
 }
 
-/// Eligibility is a quality contract, not just a shader capability check.
-/// Masks, non-normal blends, effects and transformed sources require their
-/// exact dependencies until a scale-aware implementation exists for them.
 pub(crate) fn level(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Option<u32> {
     if r.native_edit.is_none() || r.transform_preview.is_some() {
         return None;
@@ -125,14 +124,10 @@ pub(crate) fn level(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Option<u32> 
     if level == 0 {
         return None;
     }
-    let count = packet
-        .layers
-        .iter()
-        .filter(|l| l.visible && l.kind == LayerKind::Paint)
-        .count() as u64;
+    let count = source_count(packet.layers);
     let records = record_bytes(r, packet.document_extent, packet.layers.len());
     let plan = display_mips::Plan::at(packet.document_extent, level);
-    let bytes = plan.level_bytes(level) * (count + 2) + plan.level_bytes(level + 1) + records + 64;
+    let bytes = plan.level_bytes(level) * (count + scratch_images(packet.layers)) + plan.level_bytes(level + 1) + records + 64;
     if bytes > live_display::CACHE_BYTES
         || records > r.device.limits().max_buffer_size.min(u64::from(u32::MAX))
     {
@@ -141,15 +136,11 @@ pub(crate) fn level(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Option<u32> 
     let supported = packet
         .layers
         .iter()
-        .all(|l| l.mask.as_ref().is_none_or(|m| !m.enabled || !m.show_area))
+        .all(|l| l.mask.as_ref().is_none_or(|m| !m.enabled || layer_core::target_transform(packet.layers, m.id) == layer_core::Affine::IDENTITY))
         && packet.layers.iter().all(|l| {
             !l.visible
                 || !l.is_artwork()
-                || (matches!(l.kind, LayerKind::Paint | LayerKind::Background)
-                    && l.properties.parent.is_none()
-                    && !l.properties.clipped
-                    && l.properties.blend == layer_core::LayerBlend::Normal
-                    && l.mask.is_none()
+                || (matches!(l.kind, LayerKind::Paint | LayerKind::Background | LayerKind::Group)
                     && l.effect.is_none()
                     && layer_core::target_transform(packet.layers, l.id)
                         == layer_core::Affine::IDENTITY
@@ -168,6 +159,29 @@ pub(crate) fn level(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Option<u32> 
 #[cfg(test)]
 mod tests;
 
+fn source_count(layers: &[Layer]) -> u64 {
+    layers.iter().map(|l| u64::from(l.visible && l.kind == LayerKind::Paint)
+        + u64::from(l.mask.as_ref().is_some_and(|m| m.enabled))).sum()
+}
+
+impl LayerImage {
+    fn retain_backing(&mut self, backing: Option<Arc<RasterData>>, plane: RasterPlane) {
+        self.valid.retain(|&coordinate| {
+            let key = TileKey { plane, coordinate };
+            match (self.backing.as_ref().and_then(|b| b.tiles.get(&key)), backing.as_ref().and_then(|b| b.tiles.get(&key))) {
+                (Some(a), Some(b)) => a.same_capture(b),
+                (None, None) => true,
+                _ => false,
+            }
+        });
+        self.backing = backing;
+    }
+}
+
+fn scratch_images(layers: &[Layer]) -> u64 {
+    3 * (1 + layers.iter().filter(|l| l.kind == LayerKind::Group).count() as u64)
+}
+
 fn record_bytes(r: &WgpuRasterizer, extent: [u32; 2], layers: usize) -> u64 {
     let pages = extent
         .map(|n| u64::from(n.div_ceil(PAGE_SIZE)))
@@ -178,7 +192,7 @@ fn record_bytes(r: &WgpuRasterizer, extent: [u32; 2], layers: usize) -> u64 {
             .limits()
             .min_uniform_buffer_offset_alignment
             .max(64),
-    ) * ((pages + 1) * layers.max(1) as u64 + 1)
+    ) * ((2 * pages + 3) * layers.max(1) as u64 + 1)
 }
 
 impl Cache {
@@ -214,12 +228,8 @@ impl Cache {
             .map(|cache| *cache)
             .unwrap_or_else(|| Self::new(r, packet.document_extent, level, packet.layers.len()));
         next.reuse_output = unchanged && next.ready;
-        let count = packet
-            .layers
-            .iter()
-            .filter(|l| l.visible && l.kind == LayerKind::Paint)
-            .count() as u64;
-        let bound = next.plan.level_bytes(level) * (count + 2)
+        let count = source_count(packet.layers);
+        let bound = next.plan.level_bytes(level) * (count + scratch_images(packet.layers))
             + next.plan.level_bytes(level + 1)
             + next.records.size()
             + next.geometry.size();
@@ -276,7 +286,8 @@ impl Cache {
         Self {
             plan,
             layers: HashMap::new(),
-            output: [Image::new(r, plan.size), Image::new(r, plan.size)],
+            output: vec![Image::new(r, plan.size), Image::new(r, plan.size)],
+            used: vec![false; 2],
             next: Image::new(r, plan.level_size(level + 1)),
             selected: 0,
             geometry,
@@ -398,6 +409,7 @@ impl Cache {
                         valid: layer.valid.clone(),
                         source: layer.source.clone(),
                         backing: layer.backing.clone(),
+                        mask: layer.mask.clone(),
                     },
                 );
             }
@@ -408,10 +420,12 @@ impl Cache {
             .layers
             .iter()
             .rev()
-            .filter(|l| l.visible && l.kind == LayerKind::Paint && l.is_artwork())
+            .filter(|l| images::visible(packet.layers, l) && l.kind == LayerKind::Paint && l.is_artwork())
             .collect();
-        self.layers
-            .retain(|id, _| visible.iter().any(|l| l.id == *id));
+        let masks: Vec<_> = packet.layers.iter().filter(|l| {
+            l.mask.as_ref().is_some_and(|m| m.enabled && (m.show_area || images::visible(packet.layers, l)))
+        }).filter_map(|l| l.mask.as_ref()).collect();
+        self.layers.retain(|id, _| visible.iter().any(|l| l.id == *id) || masks.iter().any(|m| m.id == *id));
         if let Some((id, tiles)) = self.preview.take()
             && let Some(layer) = self.layers.get_mut(&id)
         {
@@ -424,6 +438,7 @@ impl Cache {
                 valid: BTreeSet::new(),
                 source: layer.source.clone(),
                 backing: None,
+                mask: None,
             });
             let same_source = match (&cached.source, &layer.source) {
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -434,22 +449,7 @@ impl Cache {
                 cached.valid.clear();
             }
             cached.source = layer.source.clone();
-            let backing = r.native_backing(layer.id).cloned();
-            cached.valid.retain(|&coordinate| {
-                let key = TileKey {
-                    plane: RasterPlane::Color,
-                    coordinate,
-                };
-                match (
-                    cached.backing.as_ref().and_then(|b| b.tiles.get(&key)),
-                    backing.as_ref().and_then(|b| b.tiles.get(&key)),
-                ) {
-                    (Some(a), Some(b)) => a.same_capture(b),
-                    (None, None) => true,
-                    _ => false,
-                }
-            });
-            cached.backing = backing;
+            cached.retain_backing(r.native_backing(layer.id).cloned(), RasterPlane::Color);
             for batch in packet.dab_batches.iter().filter(|b| b.layer_id == layer.id) {
                 for c in page_coordinates(batch_pixel_rect(batch, packet.document_extent)) {
                     cached.valid.remove(&c);
@@ -523,6 +523,43 @@ impl Cache {
                 self.layers.get_mut(&layer.id).unwrap().valid.extend(chunk);
             }
         }
+        for mask in masks {
+            let metadata = metadata::mask_metadata(&Some(mask.clone()));
+            let cached = self.layers.entry(mask.id).or_insert_with(|| LayerImage {
+                image: Image::new(r, self.plan.size), valid: BTreeSet::new(), source: None, backing: None, mask: None,
+            });
+            if packet.reset_layers || cached.mask != metadata { cached.valid.clear(); }
+            cached.mask = metadata;
+            cached.retain_backing(r.native_backing(mask.id).cloned(), RasterPlane::Mask);
+            for batch in packet.dab_batches.iter().filter(|b| b.layer_id == mask.id) {
+                for c in page_coordinates(batch_pixel_rect(batch, packet.document_extent)) { cached.valid.remove(&c); }
+            }
+            let output = cached.image.view.clone();
+            let missing: Vec<_> = page_coordinates(PixelRect::full(packet.document_extent)).filter(|c| !cached.valid.contains(c)).collect();
+            for tile in missing {
+                let source = r.layer_masks.pages.get(&(mask.id, tile)).map(|p| p.view.clone());
+                let valid = page_rect(tile).intersect(PixelRect::full(packet.document_extent));
+                changed = changed.union(valid);
+                let size = [valid.width(), valid.height()].map(|n| n.div_ceil(1 << self.plan.level));
+                let origin = tile.map(|n| (n * PAGE_SIZE) >> self.plan.level);
+                let mut values = [0; 16];
+                values[..8].copy_from_slice(&[
+                    origin[0], origin[1], size[0], size[1], valid.width(), valid.height(), 1 << self.plan.level,
+                    if source.is_none() { 4 } else { 32 | if mask.inverted { 64 } else { 0 } },
+                ]);
+                let default = if mask.inverted { 1. - mask.default_coverage } else { mask.default_coverage };
+                values[8..12].fill(default.to_bits());
+                let offset = self.record(r, encoder, values)?;
+                let binding = self.binding(r, source.as_ref().unwrap_or(&r.empty_view), &r.empty_view, &output);
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("reduce changed mask pages"), timestamp_writes: None });
+                pass.set_pipeline(&r.scene_pipelines.scale.reduce);
+                pass.set_bind_group(0, &self.record_binding, &[offset]);
+                pass.set_bind_group(1, &binding, &[]);
+                pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+                drop(pass);
+                self.layers.get_mut(&mask.id).unwrap().valid.insert(tile);
+            }
+        }
         if let Some(id) = r.preview_layer_id {
             self.preview = Some((
                 id,
@@ -540,43 +577,12 @@ impl Cache {
         if size.contains(&0) {
             return Ok(());
         }
-        let paper = packet.view.background_rgba_linear;
-        for index in 0..visible.len().max(1) {
-            let layer = visible.get(index);
-            let source = layer.map_or(&r.empty_view, |l| &self.layers[&l.id].image.view);
-            let target = index % 2;
-            let binding = self.binding(
-                r,
-                source,
-                &self.output[1 - target].view,
-                &self.output[target].view,
-            );
-            let mut values = [0; 16];
-            values[..8].copy_from_slice(&[
-                origin[0],
-                origin[1],
-                size[0],
-                size[1],
-                0,
-                0,
-                side,
-                if index > 0 { 2 } else { 0 },
-            ]);
-            for i in 0..4 {
-                values[8 + i] = (paper[i] * if i < 3 { paper[3] } else { 1. }).to_bits();
-            }
-            values[12] = layer.map_or(0., |l| l.opacity).to_bits();
-            let offset = self.record(r, encoder, values)?;
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("compose display region"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&r.scene_pipelines.scale.compose);
-            pass.set_bind_group(0, &self.record_binding, &[offset]);
-            pass.set_bind_group(1, &binding, &[]);
-            pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
-            self.selected = target;
-        }
+        self.used.fill(false);
+        let mut compositor = Reduced { cache: self, r, packet, encoder, origin, size };
+        let output = stack::compose(&mut compositor, packet.layers, None, None)?;
+        let output = compositor.inspect_masks(output)?;
+        let output = compositor.materialize(output)?;
+        compositor.cache.selected = output.slot.unwrap();
         r.metrics.composited_pixels += u64::from(size[0]) * u64::from(size[1]);
         // Presentation interpolates between adjacent output levels. This
         // small derived image replaces sixteen samples per screen pixel.
@@ -606,5 +612,102 @@ impl Cache {
         drop(pass);
         self.ready = true;
         Ok(())
+    }
+}
+
+struct Value {
+    view: Option<wgpu::TextureView>,
+    color: [f32; 4],
+    slot: Option<usize>,
+}
+struct Reduced<'a> {
+    cache: &'a mut Cache,
+    r: &'a mut WgpuRasterizer,
+    packet: FramePacket<'a>,
+    encoder: &'a mut crate::submission::CommandEncoder,
+    origin: [u32; 2],
+    size: [u32; 2],
+}
+impl Reduced<'_> {
+    fn source(&self, id: LayerId) -> Value {
+        Value { view: Some(self.cache.layers[&id].image.view.clone()), color: [0.; 4], slot: None }
+    }
+    fn inspect_masks(&mut self, mut output: Value) -> Result<Value, GpuRasterError> {
+        for layer in self.packet.layers {
+            if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled && m.show_area) {
+                output = self.draw(self.source(mask.id), output, 1., layer_core::LayerBlend::Normal, 64)?;
+            }
+        }
+        Ok(output)
+    }
+
+    fn materialize(&mut self, value: Value) -> Result<Value, GpuRasterError> {
+        if value.slot.is_some() { return Ok(value); }
+        if value.view.is_some() {
+            self.draw(value, Value { view: None, color: [0.; 4], slot: None }, 1., layer_core::LayerBlend::Normal, 0)
+        } else {
+            self.draw(Value { view: None, color: [0.; 4], slot: None }, value, 0., layer_core::LayerBlend::Normal, 0)
+        }
+    }
+    fn draw(&mut self, front: Value, back: Value, opacity: f32, blend: layer_core::LayerBlend, flags: u32) -> Result<Value, GpuRasterError> {
+        let slot = self.cache.used.iter().position(|used| !used).unwrap_or_else(|| {
+            self.cache.output.push(Image::new(self.r, self.cache.plan.size));
+            self.cache.used.push(false);
+            self.cache.used.len() - 1
+        });
+        self.cache.used[slot] = true;
+        let mut values = [0; 16];
+        values[..8].copy_from_slice(&[
+            self.origin[0], self.origin[1], self.size[0], self.size[1], 0, 0,
+            1 << self.cache.plan.level, if back.view.is_some() { 2 } else { 0 } | flags,
+        ]);
+        values[8..12].copy_from_slice(&back.color.map(f32::to_bits));
+        values[12] = if front.view.is_some() { opacity } else { 0. }.to_bits();
+        values[13] = (blend as u32 as f32).to_bits();
+        let offset = self.cache.record(self.r, self.encoder, values)?;
+        let view = self.cache.output[slot].view.clone();
+        let binding = self.cache.binding(self.r, front.view.as_ref().unwrap_or(&self.r.empty_view), back.view.as_ref().unwrap_or(&self.r.empty_view), &view);
+        let mut pass = self.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("compose display region"), timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.r.scene_pipelines.scale.compose);
+        pass.set_bind_group(0, &self.cache.record_binding, &[offset]);
+        pass.set_bind_group(1, &binding, &[]);
+        pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
+        drop(pass);
+        for slot in [front.slot, back.slot].into_iter().flatten() { self.cache.used[slot] = false; }
+        Ok(Value { view: Some(view), color: [0.; 4], slot: Some(slot) })
+    }
+}
+impl stack::Compositor for Reduced<'_> {
+    type Image = Value;
+    fn clear(&mut self, paper: bool) -> Value {
+        let p = if paper { self.packet.view.background_rgba_linear } else { [0.; 4] };
+        Value { view: None, color: [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]], slot: None }
+    }
+    fn discard(&mut self, value: Value) {
+        if let Some(slot) = value.slot { self.cache.used[slot] = false; }
+    }
+    fn layer(&mut self, index: usize) -> Result<Value, GpuRasterError> {
+        let layer = &self.packet.layers[index];
+        let value = if layer.kind == LayerKind::Group {
+            stack::compose(self, self.packet.layers, Some(layer.id), None)?
+        } else {
+            self.source(layer.id)
+        };
+        if let Some(mask) = layer.mask.as_ref().filter(|mask| mask.enabled) {
+            self.draw(value, self.source(mask.id), 1., layer_core::LayerBlend::Normal, 32)
+        } else { Ok(value) }
+    }
+    fn blend(&mut self, front: Value, back: Value, index: usize, clipped: bool) -> Result<Value, GpuRasterError> {
+        let layer = &self.packet.layers[index];
+        self.draw(front, back, layer.opacity, layer.properties.blend, if clipped { 16 } else { 0 })
+    }
+    fn effect(&mut self, _: &[usize], _: Value) -> Result<Value, GpuRasterError> {
+        Err(GpuRasterError::Effect("Effect was not admitted at the requested scale".into()))
+    }
+    fn has_content(&self, index: usize) -> bool {
+        let layer = &self.packet.layers[index];
+        layer.kind == LayerKind::Group || self.cache.layers.contains_key(&layer.id)
     }
 }
