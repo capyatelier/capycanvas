@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.CoroutineScope
@@ -86,19 +87,27 @@ fun ActivityScenario<MainActivity>.activity(): MainActivity {
     return result!!
 }
 
-fun launchCapy(timeout: Long = 60_000): ActivityScenario<MainActivity> =
-    ActivityScenario.launch(MainActivity::class.java).also { it.activity().host.awaitReady(timeout) }
+/** Pass the test's [compose] rule, if it has one: that rule owns the frame clock
+ * the launching window needs to compose its canvas. */
+fun launchCapy(timeout: Long = 60_000, compose: ComposeTestRule? = null): ActivityScenario<MainActivity> =
+    ActivityScenario.launch(MainActivity::class.java).also { it.activity().host.awaitReady(timeout, compose) }
 
-fun CanvasHost.awaitReady(timeout: Long = 60_000) = awaitMain("brush and workspace ready", timeout, { "$workspaceManager" }) {
-    snapshot?.optBoolean("brush_ready") == true && workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true
-}
+fun CanvasHost.awaitReady(timeout: Long = 60_000, compose: ComposeTestRule? = null) =
+    awaitMain("brush and workspace ready", timeout, { "$workspaceManager" }, compose) {
+        snapshot?.optBoolean("brush_ready") == true && workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true
+    }
 
-fun CanvasHost.awaitMain(label: String, timeout: Long = 10_000, diagnostics: () -> String = { "" }, condition: () -> Boolean) {
+fun CanvasHost.awaitMain(label: String, timeout: Long = 10_000, diagnostics: () -> String = { "" }, condition: () -> Boolean) =
+    awaitMain(label, timeout, diagnostics, null, condition)
+
+/** Polls [condition] on the main thread, advancing [compose]'s clock between polls. */
+fun CanvasHost.awaitMain(label: String, timeout: Long, diagnostics: () -> String, compose: ComposeTestRule?, condition: () -> Boolean) {
     val until = SystemClock.uptimeMillis() + timeout
     do {
         var ready = false
         instrumentation.runOnMainSync { assertNull(failure); assertNull(actionError); ready = condition() }
         if (ready) return
+        compose?.mainClock?.takeIf { it.autoAdvance }?.advanceTimeByFrame()
         SystemClock.sleep(16)
     } while (SystemClock.uptimeMillis() < until)
     fail("Timed out: $label" + diagnostics().let { if (it.isEmpty()) "" else "; $it" })

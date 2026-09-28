@@ -71,7 +71,7 @@ class AndroidPredictionTest {
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
     @Before fun ready() {
-        scenario = launchCapy()
+        scenario = launchCapy(compose = compose)
         host = scenario.activity().host
         actualSupport = if (Build.VERSION.SDK_INT >= 34) {
             val predictor = MotionPredictor(context)

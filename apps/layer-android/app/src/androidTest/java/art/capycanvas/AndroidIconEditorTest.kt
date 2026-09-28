@@ -18,7 +18,7 @@ class AndroidIconEditorTest {
 
     @Test fun allToolCategoriesModesFiltersAndToolbarIconsRender() {
         val output = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/icon-editor").apply { mkdirs() }
-        launchCapy().use { scenario ->
+        launchCapy(compose = compose).use { scenario ->
             val app = scenario.activity().host
             fun state() = app.snapshot!!.getJSONObject("state")
             val document = state().getJSONObject("document_file")

@@ -18,7 +18,7 @@ class AndroidWorkspaceManagerTest {
     private fun state() = host.snapshot!!.getJSONObject("state")
     @Before fun ready() = launch()
     private fun launch() {
-        scenario = launchCapy()
+        scenario = launchCapy(compose = compose)
         host = scenario.activity().host
         idle()
         if (state().getJSONObject("workspace").optBoolean("zen_mode")) action(obj("type" to "invoke", "command" to "zen_mode"))
