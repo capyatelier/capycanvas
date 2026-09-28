@@ -218,7 +218,7 @@ APK calls, so test-APK benchmarks use the unminified build.
   transparency (off to high) and restores it afterwards. Results appear in
   logcat under `CapyDragPerf` and `CapyResizePerf`.
 - **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
-  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,scaled,move,selection,menus,canvas_size,refine,crop,merge`,
+  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,scaled,move,selection,menus,canvas_size,refine,crop,merge,effects,spatial-effects`,
   `durationMs`, `width`, `height`, `blending` (`perceptual` or `linear`) and
   `transparency` (`off` to `high`) narrow or
   resize the run. `-e photo <readable-file>` uses a JPEG matching `width` and
@@ -228,6 +228,11 @@ APK calls, so test-APK benchmarks use the unminified build.
   logs a `CapyBarPerf` line and writes
   `canvas-bar-benchmark/<label>.json` in external files; `ui_hz` and
   `ui_interval_ms` count the distinct vsyncs the UI drew until the gestures end.
+  `effects` scrubs Exposure alone and after Levels/Vibrance; `spatial-effects`
+  scrubs Gaussian Blur at small and large radii. Both prime the actual slider,
+  wait for shader readiness and verify changing parameter values during motion.
+  `-e captureFilters true` captures the resulting filter canvas in both themes
+  after timing finishes.
   `refine` drags the Refine panel's Feather slider with the stylus on a
   2048 × 1536 document and at `width` × `height`, and logs the values sent and
   previews drawn. `-e refine grow` (or `shrink`, `border`) picks another

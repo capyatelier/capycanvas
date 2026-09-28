@@ -471,6 +471,7 @@
         "alpha": "filter",
         "entry": "capy_gaussian_blur",
         "id": "gaussian_blur",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Gaussian Blur",
         "lookups": [

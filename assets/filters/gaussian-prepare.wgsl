@@ -5,7 +5,8 @@ var<workgroup> sums: array<f32,64>;
 
 fn capy_prepare_gaussian(local:vec3<u32>, global:vec3<u32>) {
     let i=local.x;
-    let sigma=prep_parameter(0u,0u).x;
+    let side=prep_texel_size();
+    let sigma=prep_parameter(0u,0u).x/side;
     let radius=min(u32(ceil(sigma*3.)),63u);
     var w=0.;
     if i==0u { w=1.; }
@@ -32,7 +33,7 @@ fn capy_prepare_gaussian(local:vec3<u32>, global:vec3<u32>) {
         var a=weights[j];var b=0.;
         if j<radius {b=weights[j+1u];}
         var tap=vec4<f32>(0.);
-        if j<=radius && a+b>1e-20 {tap=vec4<f32>(f32(j)+b/(a+b),(a+b)/sums[0],0.,0.);}
+        if j<=radius && a+b>1e-20 {tap=vec4<f32>((f32(j)+b/(a+b))*side,(a+b)/sums[0],0.,0.);}
         prep_store(i+1u,tap);
     }
 }

@@ -36,10 +36,12 @@ is 4248 × 2832.
 | Marquee, Lasso or Polygon drag | 60 | | |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
-| Pointwise adjustment slider: Exposure | 60, soft | **Not met.** Screen 49.1 presents/s, p99 33.4 ms; renderer 26.5 completed updates/s | Pointwise graph comparison below |
-| Pointwise chain: Levels, Vibrance, Exposure slider | 60, soft | **Not met.** Screen 53.7 presents/s, p99 33.3 ms; renderer 20.9 completed updates/s | Pointwise graph comparison below |
+| Pointwise adjustment slider: Exposure | 60, soft | **Not met.** Screen 52.7 presents/s, p99 33.4 ms; renderer 30.8 completed updates/s | Pointwise graph comparison below |
+| Pointwise chain: Levels, Vibrance, Exposure slider | 60, soft | **Not met.** Screen 57.3 presents/s, p99 33.3 ms; renderer 25.1 completed updates/s, with a 13.9–31.7 range | Pointwise graph comparison below |
 | Other pointwise adjustment sliders | 60, soft | | |
-| Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 60, soft | | |
+| Gaussian Blur slider, small radius | 60, soft | **Not met.** Screen 41.6 presents/s, p99 33.5 ms; renderer 30.4 completed updates/s | Spatial graph comparison below |
+| Gaussian Blur slider, large radius | 60, soft | **Not met.** Screen 28.7 presents/s, p99 66.6 ms; renderer 17.7 completed updates/s | Spatial graph comparison below |
+| Other neighbourhood filter sliders: Unsharp Mask, Edge-Preserving Smooth | 60, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 60, soft | | |
 | Fill layer or gradient-fill edit | 60, soft | | |
 | Navigation with proof or tone guide shown | 60 | | |
@@ -132,26 +134,83 @@ frame tokens and PID match the adjacent named pan trace.
 
 Measured 2026-09-28 on the 12 MP photo at Fit, with three alternating pairs of
 warmed five-second stylus scrubs, release Rust, default glass and thermal status
-0. The harness waits for shader readiness after priming and verifies changing
-parameter values during motion. Both builds use the same camera and test APK.
+0. The harness closes panel configuration, waits for shader readiness after
+priming and verifies changing parameter values during half-second triangle
+motion. Both builds use the same camera and test APK.
 
 | Slider journey | Previous filter executor, completed updates/s | Display graph, completed updates/s | Speedup | Graph completion gap p99 |
 | --- | --- | --- | --- | --- |
-| Exposure | 1.59 | 26.53 | 16.67× | 67.0 ms |
-| Levels, Vibrance, Exposure chain | 0.99 | 20.90 | 21.01× | 65.9 ms |
+| Exposure | 1.59 | 30.84 | 19.36× | 52.6 ms |
+| Levels, Vibrance, Exposure chain | 1.19 | 25.08 | 20.99× | 70.1 ms |
 
 Neither journey meets the motion target. Screen presents include native controls
-and do not independently establish canvas presentation cadence. Renderer-owned
-storage falls from 579.8 to 306.5 MiB; this is not process RSS.
+and do not independently establish canvas presentation cadence: the chain's
+screen rate includes slider-only changes between completed canvas updates.
+Exposure ranges from 29.86 to 31.69 completed updates/s. The chain ranges from
+13.94 to 31.66, with individual completion-gap p99 values of 63.6, 285.4 and
+70.1 ms. The slow repeat remains in the results; thermal status stays zero and
+its viewport GPU cost remains comparable. Renderer-owned storage falls from
+579.8 to 306.5 MiB; this is not process RSS.
+
+A separate profile measures composition at 5.6 ms for Exposure and 7.9 ms for
+the chain, plus viewport observations of 8.2 and 8.5 ms. Normal-run traces also
+show substantial native model publication work: 419 calls consume 2.46 s in one
+chain gesture and 3.16 s in the slower repeat. GPU cost alone does not explain
+the journey rate; shared state publication and scheduling remain optimization
+work. The profiled captures verify both themes with panel configuration closed.
 
 The control is production `7cad88dd`, before pointwise graph admission, using APK
 SHA-256 `574bac2557e30ce43444a5657de969719052975f285e3d2639e879e3eec7a977`.
-Candidate APK SHA-256:
-`dbb61014e2722cb37240f68d8b11f6d223d6d18b1c58eeed98414bfc2c9f5016`.
-Raw results, immutable builds, source patch and harness provenance are under
-`artifacts/display-production/effect-graph-ready-*` and `effect-graph-source.patch`.
+Candidate is the spatial graph build based on `2de3d0ca`, APK SHA-256
+`f5dda5c758ce1e79294cb2ad86b5df7572c930d6dcc068dba80d5e5ca9d3e1e1`.
+Raw results and traces are under `artifacts/display-production/pointwise-workspace-paired`.
+Source and harness hashes are in `spatial-hardware-provenance.json` and
+`spatial-workspace-provenance.json`. Earlier pointwise runs used an expanded
+panel configuration and are superseded by this closed-panel fixture.
 These compare filter execution within the production branch, not against a fresh
 old-main build. Other filters and high-frequency preview quality remain unqualified.
+
+## Spatial filter composition
+
+Measured 2026-09-28 on the 12 MP photo at Fit, with three alternating pairs of
+warmed five-second stylus scrubs. Both builds use release Rust, the same test
+APK, default glass, zoom 0.1769915 and thermal status 0 before and after every
+run. The harness closes panel configuration, waits for shader readiness and
+records changing parameter values strictly inside the slider limits. Its
+half-second triangle motion avoids a slow gesture's numeric-step cadence limit.
+
+| Gaussian radius range | Previous executor, completed updates/s | Display graph, completed updates/s | Speedup | Graph completion gap p99 |
+| --- | --- | --- | --- | --- |
+| 2.6–4.9 document pixels | 1.21 | 30.37 | 25.08× | 56.5 ms |
+| 14.2–16.5 document pixels | 0.39 | 17.71 | 45.68× | 93.7 ms |
+
+Neither journey meets the motion target. Screen presents include native controls
+and do not independently establish canvas presentation cadence. Renderer-owned
+storage falls from 894.9 to 318.0 MiB; this is not process RSS. These compare
+filter execution within the production branch, not against a fresh main build.
+
+The graph evaluates 1062 × 708 pixels instead of 4248 × 2832, and prepares its
+separable kernel at that scale. This reduces the paired sample count by roughly
+48–55× over these radii. Two RGBA32Float passes still read and write at least
+48.1 MB, giving an optimistic copy floor of 4.8 ms at the device's calibrated
+10 GB/s. This floor excludes additional texture reads, shader arithmetic,
+composition and presentation; it is not a filter-throughput prediction.
+
+A separate profiled run gives submission-aligned composition medians of
+16.1 ms at small radius and 43.2 ms at large radius. Viewport GPU observations
+have medians of 9.5 and 9.6 ms respectively. These costs explain the frame-budget
+miss; they do not establish a hardware limit or qualify a soft-target waiver.
+
+Control is production `2de3d0ca`, APK SHA-256
+`3cd483d10defd2ffc9cd8115dc2329173dbc5b70054f9dd4ac7d99901b539d49`.
+Candidate is the spatial graph build based on that commit, APK SHA-256
+`f5dda5c758ce1e79294cb2ad86b5df7572c930d6dcc068dba80d5e5ca9d3e1e1`.
+Raw runs and traces are under `artifacts/display-production/spatial-workspace-paired`
+and `spatial-workspace-profile`. Source and harness hashes are in
+`spatial-hardware-provenance.json` and `spatial-workspace-provenance.json`;
+the operation model is `spatial-cost-model.json`. Light and dark captures verify
+the closed-panel photo fixture. Earlier runs with panel configuration expanded
+or a zero-clamped or slow cosine trajectory are diagnostic only.
 
 ## Sources larger than the canvas
 
@@ -190,7 +249,7 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | Inside-photo path: 37.8 updates/s (37.4–37.8); gap p99 39.5 ms | **Not met** |
+| G-Pen (1) | Simple | 1024 px | Inside-photo path: 38.0 updates/s (37.6–38.0); gap p99 37.1 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -229,7 +288,13 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 | Liquify Expand (38) | Very complex | 512 px | 7.1 updates/s (7.0–7.2); gap p99 239.8 ms | **Not met** |
 | Liquify Crystals (39) | Very complex | 512 px | 1.1 updates/s (1.1–1.1); gap p99 1725.1 ms | **Not met** |
 
-At the 2048 px goal, the G-Pen completes 12.3 updates/s (12.3–12.4), with a gap p99 of 114.1 ms.
+The G-Pen row uses the spatial graph build above, measured 2026-09-28 with three
+five-second strokes, 240 × 140 surface-pixel radii, 16 ms prediction and thermal
+status 0 before and after. Renderer-owned storage is 580.2 MiB. Raw data and the
+trace are under `artifacts/display-production/spatial-hardware-brush`. This
+remeasurement preserves painting throughput; it does not close the target gap.
+
+At the 2048 px goal, the earlier G-Pen build completes 12.3 updates/s (12.3–12.4), with a gap p99 of 114.1 ms.
 
 Retouch brushes measured on 2026-09-28, production `9f364292` plus shared
 stroke-finalization invalidation, on the 12 MP photo at Fit. Each tool uses three

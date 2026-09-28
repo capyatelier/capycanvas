@@ -635,7 +635,7 @@ impl Scene {
         }
         let prepared =
             self.effects
-                .prepare(r, &layers, effects::Execution::Fused, packet.time_seconds, packet.blend_space)?;
+                .prepare(r, &layers, effects::Execution::Fused, packet.time_seconds, 0, packet.blend_space)?;
         let mask =
             if indices.len() == 1 && !direct_effect_mask(packet.layers, layer) {
                 layer.mask.as_ref().filter(|m| m.enabled).map(|m| {

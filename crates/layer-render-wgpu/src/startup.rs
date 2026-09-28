@@ -389,6 +389,7 @@ impl WgpuRasterizer {
                                 &layers.iter().collect::<Vec<_>>(),
                                 execution,
                                 0.,
+                                0,
                                 blend_space,
                             )?;
                         }

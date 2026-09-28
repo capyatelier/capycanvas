@@ -38,9 +38,15 @@ composition. The default, `"native"`, requires document-resolution evaluation.
 `fx_extent()` remain in document pixels; the declaration never changes parameters,
 saved artwork, or exact queries and export. Nonlinear adjustments evaluated after
 reduction can differ from a reduced exact result, so display eligibility requires
-visual and numerical qualification. The current display executor accepts this
-declaration for pointwise programs without image boundaries. Spatial and timed
-programs continue to require native execution.
+visual and numerical qualification. Reduced composition accepts pointwise and
+image-pass programs with this declaration. Each pass expands its input request
+by its declared footprint, including reduced-grid interpolation support;
+document-wide sampling requests the complete input. Reduced input grids use
+hardware linear sampling after document-coordinate and partial-edge correction.
+Sampling weights follow the device's subtexel precision; coordinate tests allow
+the [Vulkan core minimum of four fractional bits](https://docs.vulkan.org/spec/latest/chapters/limits.html#limits-subTexelPrecisionBits),
+while native-grid tests retain their Float32 tolerance. Native views and programs
+declaring native resolution retain exact evaluation.
 
 The current filter ABI is **3**. Curves and gradients each occupy 65 vec4
 parameter records: one header plus up to 32 pairs. Curves store Hermite segments
@@ -194,6 +200,10 @@ capacity and dispatch dimensions. Authored functions read declared inputs throug
 `prep_parameter(index, element)` and write through bounded
 `prep_store(index, value)`. They may declare private/workgroup scratch, but not
 extra resources, entry points, override constants or direct shared-buffer access.
+`prep_texel_size()` supplies the evaluation texel width in document pixels: one
+for exact execution, a power of two for reduced composition. Parameters retain
+their document values. Preparation may use the footprint to build a smaller
+kernel with offsets expressed in document pixels.
 
 Limits are eight tables per effect, 4,096 vec4 records per table, 256 invocations
 per group and 256 groups. Device workgroup dimensions/storage limits are checked.
@@ -204,7 +214,9 @@ Gaussian preparation definition. It generates normalized, bilinear-paired taps;
 consuming pixels perform table lookups, not coefficient calculations. The
 standalone Tent Blur example demonstrates a different kernel using the same ABI.
 
-Every pass of an effect chain shares one persistent parameter/table buffer.
+Every pass of an effect chain at one resolution shares a persistent
+parameter/table buffer. Resolution variants retain separate buffers and reuse
+the same pipelines, so exact queries cannot overwrite a display kernel.
 Edits upload parameter prefixes, never GPU-owned tables. Preparation runs in the
 existing scene encoder before consumers, with no extra submit, readback, blocking
 wait or intermediate table copy. Pointwise prepared filters still fuse. Ordinary
@@ -241,7 +253,8 @@ apply to final output, not independently to every intermediate pass.
 - The native packager ships editable resources in
   `dist/capycanvas-linux/bin/filters`; editing those resources does not require
   rebuilding `bin/capycanvas`.
-- Web and Android ship only the built-in catalog; runtime packages load on GTK
+- Web and Android use the shared embedded catalog, without duplicate filter
+  manifests or shaders in the Web asset tree; runtime packages load on GTK
   and Windows (`CAPY_FILTERS_DIR`) and from the Apple bundle.
 
 See [the Tent Blur package](../../examples/filters/tent-blur/README.md) and

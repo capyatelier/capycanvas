@@ -162,12 +162,12 @@ impl FilterPreviews {
             // Visible rows prepare just their own preview variants. No draw or
             // readback is admitted until their asynchronous pipelines are ready.
             for effect in &request.filters {
-                self.scene.effects.prepare(r, &[&self.programs[&effect.program.id]], effects::Execution::Preview, 0., preview_space(effect, request.blend_space))?;
+                self.scene.effects.prepare(r, &[&self.programs[&effect.program.id]], effects::Execution::Preview, 0., 0, preview_space(effect, request.blend_space))?;
             }
             let source_layers = source_scope(&request.layers, request.target)
                 .map_or_else(Vec::new, |(_, layers)| layers.map(|(l, _)| l.clone()).collect());
             for (layers, execution) in scene::startup_effect_chains(&source_layers) {
-                self.source_scene.effects.prepare(r, &layers, execution, 0., request.blend_space)?;
+                self.source_scene.effects.prepare(r, &layers, execution, 0., 0, request.blend_space)?;
             }
             let mut ready = self.scene.effects.enqueue(&startup.compiler, startup::OTHER);
             ready &= self.source_scene.effects.enqueue(&startup.compiler, startup::OTHER);
@@ -487,6 +487,7 @@ impl FilterPreviews {
                 &[&self.programs[id]],
                 effects::Execution::Preview,
                 0.,
+                0,
                 space,
             )?;
             let program = self.programs[id].effect.as_ref().unwrap().program.clone();

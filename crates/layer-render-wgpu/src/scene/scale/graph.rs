@@ -9,7 +9,7 @@ pub(super) enum Expression {
     Source { id: LayerId, placement: [u32; 6], extent: [u32; 2], outside: u32 },
     Opacity { input: Node, opacity: u32 },
     Combine { front: Node, back: Node, blend: u32, flags: u32 },
-    Effect { input: Node, chain: Vec<(LayerId, u64, u32)>, masks: Vec<Option<Node>> },
+    Effect { input: Node, chain: Vec<(LayerId, u64, u32)>, masks: Vec<Option<Node>>, radius: Option<u32> },
 }
 impl Expression {
     fn color(value: [f32; 4]) -> Node { Arc::new(Self::Color(value.map(f32::to_bits))) }
@@ -53,18 +53,30 @@ impl Expression {
             }
         }
     }
-    fn damage(&self, sources: &Sources, plan: display_mips::Plan) -> PixelRect {
+    pub(super) fn damage(&self, sources: &Sources, plan: display_mips::Plan) -> PixelRect {
         match self {
             Self::Color(_) => PixelRect::EMPTY,
             Self::Source { id, placement, .. } => sources.entries.get(id).map_or(plan.bounds, |source| {
                 if source.damage.is_empty() { return PixelRect::EMPTY; }
                 let placement = layer_core::Affine(placement.map(f32::from_bits));
+                if placement == layer_core::Affine::IDENTITY { return source.damage; }
                 let local = source.damage.expand(1 << source_level(plan.level, placement), source.extent);
                 pixel_rect(placement.bounds(local.to_rect()), plan.extent)
             }),
             Self::Opacity { input, .. } => input.damage(sources, plan),
             Self::Combine { front, back, .. } => front.damage(sources, plan).union(back.damage(sources, plan)),
-            Self::Effect { input, masks, .. } => masks.iter().flatten().fold(input.damage(sources, plan), |r, n| r.union(n.damage(sources, plan))),
+            Self::Effect { input, masks, radius, .. } => masks.iter().flatten().fold(
+                crate::effects::dependency(input.damage(sources, plan), *radius, plan), |r, n| r.union(n.damage(sources, plan))),
+        }
+    }
+    pub(super) fn required(&self, region: PixelRect, plan: display_mips::Plan) -> PixelRect {
+        match self {
+            Self::Color(_) => PixelRect::EMPTY,
+            Self::Source { .. } => region,
+            Self::Opacity { input, .. } => input.required(region, plan),
+            Self::Combine { front, back, .. } => front.required(region, plan).union(back.required(region, plan)),
+            Self::Effect { input, masks, radius, .. } => masks.iter().flatten().fold(
+                input.required(crate::effects::dependency(region, *radius, plan), plan), |r, n| r.union(n.required(region, plan))),
         }
     }
     fn visit(node: &Node, all: &mut HashSet<Node>) {
@@ -110,7 +122,7 @@ impl Graph {
                 self.effects.insert(layer.id, (metadata, self.revision));
             }
         }
-        let mut builder = Builder { packet, sources, effects: &self.effects };
+        let mut builder = Builder { packet, sources, effects: &self.effects, level: plan.level };
         let output = stack::compose(&mut builder, packet.layers, None, None)?;
         let mut root = Expression::over(&output);
         for layer in packet.layers {
@@ -144,6 +156,7 @@ struct Builder<'a> {
     packet: FramePacket<'a>,
     sources: &'a Sources,
     effects: &'a HashMap<LayerId, (metadata::Metadata, u64)>,
+    level: u32,
 }
 impl Builder<'_> {
     fn source(&self, layer: &Layer, mask: bool) -> Node {
@@ -196,6 +209,8 @@ impl stack::Compositor for Builder<'_> {
         }
     }
     fn effect(&mut self, indices: &[usize], input: Self::Image) -> Result<Self::Image, GpuRasterError> {
+        let radius = indices.iter().try_fold(0u32, |radius, i| radius.checked_add(
+            crate::effects::damage_radius(self.packet.layers[*i].effect.as_ref().unwrap(), self.level)?));
         let chain = indices.iter().map(|i| {
             let layer = &self.packet.layers[*i];
             let effect = layer.effect.as_ref().unwrap();
@@ -206,7 +221,7 @@ impl stack::Compositor for Builder<'_> {
             (layer.effect.as_ref().unwrap().program.kind == layer_core::EffectKind::Adjustment
                 && layer.mask.as_ref().is_some_and(|m| m.enabled)).then(|| self.source(layer, true))
         }).collect();
-        Ok(vec![Arc::new(Expression::Effect { input: Expression::over(&input), chain, masks })])
+        Ok(vec![Arc::new(Expression::Effect { input: Expression::over(&input), chain, masks, radius })])
     }
     fn has_content(&self, index: usize) -> bool {
         let layer = &self.packet.layers[index];
@@ -253,10 +268,7 @@ impl Reduced<'_> {
                 };
                 self.draw(front, back, layer_core::LayerBlend::ALL[*blend as usize], *flags, output)?
             }
-            Expression::Effect { input, chain, masks } => {
-                let input = self.evaluate(input)?;
-                self.effect(input, chain, masks, output)?
-            }
+            Expression::Effect { input, chain, masks, .. } => self.effect(input, chain, masks, output)?,
         };
         if let Some(branch) = self.cache.graph.branches.get_mut(node) {
             branch.valid.extend(page_coordinates(region).filter(|c| page_rect(*c).intersect(self.cache.plan.bounds).intersect(region) == page_rect(*c).intersect(self.cache.plan.bounds)));

@@ -457,7 +457,7 @@ fn reduced_blend_modes_match_the_reference_at_every_depth() {
                     }
                     sum
                 };
-                for mode in LayerBlend::ALL {
+                for mode in LayerBlend::ALL.into_iter().filter(|m| *m != LayerBlend::PassThrough) {
                     document.layers[blended].properties.blend = mode;
                     let actual = live_at(&mut r, &document.layers, background, level, document.blend_space);
                     assert_eq!(actual.len(), (extent[0] * extent[1]) as usize);

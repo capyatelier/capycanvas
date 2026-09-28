@@ -51,8 +51,11 @@ export async function checkAdjustments({call,evaluate,settle}) {
   const directory="artifacts/ui/adjustments-web";
   await mkdir(directory,{recursive:true});
   const send=action=>evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);
-  const capture=async name=>{await settle();const shot=await call("Page.captureScreenshot",{format:"png"});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,"base64"));};
+  const capture=async name=>{await wait('layerApp.app.brush_ready()');await settle();const shot=await call("Page.captureScreenshot",{format:"png"});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,"base64"));};
   const wait=async(condition,timeout=120000)=>{const end=Date.now()+timeout;while(!await evaluate(condition))if(Date.now()>end)throw Error(`Timed out: ${condition}`);else await new Promise(resolve=>setTimeout(resolve,50));};
+  const histogram=()=>evaluate(`(async()=>{const control=layerApp.app.capture_control();try{
+    return JSON.parse(JSON.stringify((await layerApp.app.histogram(control)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v));
+  }finally{control.free();}})()`);
   await send({type:"set_theme",theme:"dark"});
   // Inserting above a selected clipping base must preserve the whole stack.
   await send({type:"layer",action:{op:"new",group:false,clipped:true}});
@@ -64,6 +67,8 @@ export async function checkAdjustments({call,evaluate,settle}) {
   await send({type:"select_layer",id:clip});
   await send({type:"layer",action:{op:"delete_selected"}});
   // Paint a colorful opaque fixture through the real input/renderer path.
+  await wait('layerApp.app.brush_ready()');
+  const blank=await histogram();
   await send({type:"set_brush_size",value:260});
   for(const [i,color] of [[.9,.12,.08,1],[.08,.7,.15,1],[.1,.2,.9,1]].entries()) {
     await send({type:"set_color",rgba:color});
@@ -73,6 +78,7 @@ export async function checkAdjustments({call,evaluate,settle}) {
     await call("Input.dispatchMouseEvent",{type:"mouseReleased",x:x+40,y:y+180,button:"left",buttons:0,clickCount:1});
     await settle();
   }
+  assert.notDeepEqual(await histogram(),blank,'The filter fixture contains rendered paint');
   await wait("layerApp.startupTimes.complete!==null");
   await evaluate("document.querySelector('.dock-tab[data-panel=adjustments]').click()");
   await evaluate(`new Promise((resolve,reject)=>{
@@ -125,7 +131,13 @@ export async function checkAdjustments({call,evaluate,settle}) {
       await checkCurveEditing({call,evaluate,settle});
       await send({type:"effect",action:{op:"curve_point",layer:view.layer,key:curve.key,index:null,point:[.45,.65],remove:false}});
     }
-    else if(number) await send({type:"effect",action:{op:"set",layer:view.layer,key:number.key,value:{kind:"number",value:number.kind.numeric.min}}});
+    else if(number) {
+      const value=()=>evaluate(`layerApp.state().layer_properties.controls.find(c=>c.key===${JSON.stringify(number.key)}).value.value`);
+      await send({type:"effect",action:{op:"set",layer:view.layer,key:number.key,value:{kind:"number",value:number.kind.numeric.min}}});
+      assert.equal(await value(),number.kind.numeric.min,`${effect}: numeric minimum`);
+      await send({type:"effect",action:{op:"reset",layer:view.layer,key:number.key}});
+      assert.equal(await value(),number.value.value,`${effect}: numeric default`);
+    }
     if(gradient) {
       await evaluate("document.querySelector('.gradient-ramp').click()");
       await send({type:"effect",action:{op:"gradient_stop",layer:view.layer,key:gradient.key,index:null,position:.5,color:{space:"Srgb",rgba:[.8,.2,.1,1]},remove:false}});

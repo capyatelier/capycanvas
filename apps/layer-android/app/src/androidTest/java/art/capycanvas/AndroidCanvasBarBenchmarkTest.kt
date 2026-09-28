@@ -331,55 +331,74 @@ class AndroidCanvasBarBenchmarkTest {
                 val radius = minOf(area.getDouble(2), area.getDouble(3)) * .3
                 measure("paint-strokes") { drag(center, duration) { t -> radius * sin(t * 3.2) to radius * .65 * sin(t * 4.7) } }
             }
-            if (wanted("effects")) {
-                for (chain in listOf(false, true)) {
+            if (wanted("effects") || wanted("spatial-effects")) {
+                data class Scrub(val id: String, val key: String, val title: String, val label: String, val start: Double, val chain: Boolean = false)
+                val scrubs = if (wanted("spatial-effects")) listOf(
+                    Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-small-drag", .2),
+                    Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-large-drag", .7),
+                ) else listOf(
+                    Scrub("exposure", "exposure", "Exposure", "effect-exposure-drag", .45),
+                    Scrub("exposure", "exposure", "Exposure", "effect-chain-exposure-drag", .45, true),
+                )
+                for (scrub in scrubs) {
                     newDocument()
                     place(photo())
                     invoke("apply_transform")
                     waitFor("placed photo") { state().optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") != "placement" }
                     fun effect(op: JSONObject) = action(obj("type" to "effect", "action" to op))
-                    if (chain) {
+                    if (scrub.chain) {
                         effect(obj("op" to "insert", "effect" to "levels"))
                         effect(obj("op" to "set", "layer" to state().getJSONObject("layer_properties").getLong("layer"),
                             "key" to "gamma", "value" to obj("kind" to "number", "value" to 1.25)))
                         effect(obj("op" to "insert", "effect" to "vibrance"))
                     }
-                    effect(obj("op" to "insert", "effect" to "exposure"))
+                    effect(obj("op" to "insert", "effect" to scrub.id))
                     action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
                     val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
-                        .first { "properties" in it.array("panels").values() }.getInt("id")
-                    action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
-                    action(obj("type" to "select_panel_tab", "group" to group, "panel" to "properties"))
-                    waitFor("Exposure control") { findTag("number-slider-Exposure") != null }
+                        .first { "properties" in it.array("panels").values() }
+                    action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
+                    if (group.optString("active") != "properties") action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to "properties"))
+                    action(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
+                    waitFor("panel configuration closed") { state().getJSONObject("customization").isNull("expanded") }
+                    waitFor("${scrub.title} control") { findTag("number-slider-${scrub.title}") != null }
                     invoke("fit_canvas")
                     var track = android.graphics.RectF()
                     instrumentation.runOnMainSync {
-                        val (root, node) = findTag("number-slider-Exposure")!!
+                        val (root, node) = findTag("number-slider-${scrub.title}")!!
                         val origin = IntArray(2); root.view.getLocationOnScreen(origin)
                         node.boundsInRoot.let { track = android.graphics.RectF(it.left + origin[0], it.top + origin[1], it.right + origin[0], it.bottom + origin[1]) }
                     }
                     check(track.width() > 40 && track.height() > 0)
                     fun value() = state().getJSONObject("layer_properties").array("controls").objects()
-                        .first { it.getString("key") == "exposure" }.getJSONObject("value").getDouble("value")
-                    val start = track.left + track.width() * .45 - host.surfaceOrigin.x to track.centerY() - host.surfaceOrigin.y.toDouble()
+                        .first { it.getString("key") == scrub.key }.getJSONObject("value").getDouble("value")
+                    val start = track.left + track.width() * scrub.start - host.surfaceOrigin.x to track.centerY() - host.surfaceOrigin.y.toDouble()
                     val before = value()
                     drag(start, 250) { t -> track.width() * .1 * t / .25 to 0.0 }
-                    waitFor("Exposure gesture changes its value") { kotlin.math.abs(value() - before) > .1 }
+                    waitFor("${scrub.title} gesture changes its value") { kotlin.math.abs(value() - before) > .1 }
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
                     val values = java.util.Collections.synchronizedSet(mutableSetOf<Double>())
-                    val label = if (chain) "effect-chain-exposure-drag" else "effect-exposure-drag"
+                    val label = scrub.label
                     measure(label) {
                         val sampler = Thread {
                             val until = SystemClock.uptimeMillis() + duration
                             while (SystemClock.uptimeMillis() < until) { values += value(); SystemClock.sleep(8) }
                         }.apply { start() }
-                        drag(start, duration) { t -> track.width() * .05 * (1 - cos(2 * PI * t / 2)) to 0.0 }
+                        drag(start, duration) { t -> track.width() * .1 * (1 - kotlin.math.abs(1 - (t % .5) * 4)) to 0.0 }
                         sampler.join()
                     }
-                    check(values.size >= 10) { "$label changed only ${values.size} values" }
                     val result = File(output, "$label.json")
                     result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted())).put("slider_bounds",
                         JSONArray(listOf(track.left, track.top, track.right, track.bottom))).toString(2))
+                    check(values.size > 1) { "$label did not change its value during motion" }
+                    if (scrub.id == "gaussian_blur") check(values.all { it > 0 && it < 21 }) { "$label reached a stationary slider limit" }
+                }
+                if (args.getString("captureFilters") == "true") for (theme in listOf("light", "dark")) {
+                    action(obj("type" to "set_theme", "theme" to theme))
+                    waitFor("filter canvas ready") { host.snapshot?.optBoolean("brush_ready") == true }
+                    SystemClock.sleep(300)
+                    val shot = instrumentation.uiAutomation.takeScreenshot()
+                    File(output, "filter-$theme.png").outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    shot.recycle()
                 }
             }
             if (wanted("photo")) {

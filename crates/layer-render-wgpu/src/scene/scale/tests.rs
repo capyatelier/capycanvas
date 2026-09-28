@@ -575,6 +575,28 @@ fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
 }
 
 #[test]
+fn identity_edits_recompose_only_damaged_pages() {
+    let doc = document_at([1024, 768]);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    frame.composite_all = false;
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    r.submit(frame).unwrap();
+    let mut dab = crate::tests::test_dab([125., 125.], [1., 0., 0., 1.], 1.);
+    dab.radii = [16.; 2];
+    let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+    frame.dabs = std::slice::from_ref(&dab);
+    frame.dab_batches = std::slice::from_ref(&batch);
+    let work = r.metrics.composited_pixels;
+    r.submit(frame).unwrap();
+    assert_eq!(r.metrics.composited_pixels - work, u64::from(PAGE_SIZE / 4).pow(2));
+    let incremental = display_pixels(&r);
+    r.scale_display = None;
+    r.submit(FramePacket { dabs: &[], dab_batches: &[], composite_all: true, ..frame }).unwrap();
+    assert_eq!(display_pixels(&r), incremental);
+}
+
+#[test]
 fn placed_page_edge_edits_match_rebuilding_the_entire_display() {
     let mut doc = document_at([513, 513]);
     let mut moving = doc.layers[0].clone();
@@ -962,7 +984,8 @@ fn scaled_layer_cache_tracks_stack_changes_and_odd_edges_at_each_level() {
 fn scale_retirement_and_exact_effect_fallback_recreate_their_own_pixels() {
     let mut doc = document();
     let extent = [doc.width, doc.height];
-    let effect = crate::tests::image_windows::effect(99, false, false);
+    let mut effect = crate::tests::image_windows::effect(99, false, false);
+    Arc::make_mut(&mut Arc::make_mut(effect.effect.as_mut().unwrap()).program).resolution = layer_core::EffectResolution::Native;
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     exact.test.reference = true;

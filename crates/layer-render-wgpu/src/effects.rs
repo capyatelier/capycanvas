@@ -70,6 +70,27 @@ pub(super) fn image_grid(output: display_mips::Plan, front: display_mips::Plan, 
     data
 }
 
+pub(super) fn pass_radius(pass: &layer_core::EffectPass, effect: &EffectInstance, level: u32) -> Option<u32> {
+    pass.sampling.radius(effect)?.checked_add((1 << level) - 1)
+}
+
+pub(super) fn damage_radius(effect: &EffectInstance, level: u32) -> Option<u32> {
+    effect.program.passes.iter().try_fold(0u32, |radius, pass| radius.checked_add(pass_radius(pass, effect, level)?))
+}
+
+pub(super) fn dependency(region: PixelRect, radius: Option<u32>, plan: display_mips::Plan) -> PixelRect {
+    if region.is_empty() { return region; }
+    radius.map_or(plan.bounds, |radius| region.expand(radius, plan.extent).intersect(plan.bounds))
+}
+
+pub(super) fn pass_regions(effect: &EffectInstance, output: PixelRect, plan: display_mips::Plan) -> Vec<PixelRect> {
+    let mut regions = vec![output; effect.program.passes.len().max(1) + 1];
+    for (i, pass) in effect.program.passes.iter().enumerate().rev() {
+        regions[i] = dependency(regions[i + 1], pass_radius(pass, effect, plan.level), plan);
+    }
+    regions
+}
+
 #[derive(Clone)]
 pub(super) struct PreparedEffect {
     pub pipeline: Deferred<wgpu::RenderPipeline>,
@@ -95,9 +116,9 @@ pub(super) struct Effects {
         Deferred<wgpu::RenderPipeline>,
     )>,
     // Parameters and GPU tables are shared by every pass of the same chain.
-    instances: HashMap<Vec<LayerId>, Instance>,
+    instances: HashMap<(Vec<LayerId>, u32), Instance>,
     // Reuse the lookup key; ordinary painting/animation does not repack inputs.
-    ids: Vec<LayerId>,
+    ids: (Vec<LayerId>, u32),
     preparation: preparation::Preparation,
     pub compilations: u64,
 }
@@ -172,7 +193,7 @@ impl Effects {
             pipeline_layout: self.pipeline_layout.clone(),
             pipelines: self.pipelines.clone(),
             instances: HashMap::new(),
-            ids: Vec::new(),
+            ids: (Vec::new(), 0),
             preparation: self.preparation.fork(),
             compilations: 0,
         }
@@ -234,14 +255,14 @@ impl Effects {
             pipeline_layout,
             pipelines: Vec::new(),
             instances: HashMap::new(),
-            ids: Vec::new(),
+            ids: (Vec::new(), 0),
             preparation: preparation::Preparation::new(&r.device),
             compilations: 0,
         }
     }
     pub fn retain(&mut self, layers: &[Layer]) {
         self.instances
-            .retain(|ids, _| ids.iter().all(|id| layers.iter().any(|l| l.id == *id)));
+            .retain(|(ids, _), _| ids.iter().all(|id| layers.iter().any(|l| l.id == *id)));
     }
     pub fn prepare(
         &mut self,
@@ -249,13 +270,15 @@ impl Effects {
         layers: &[&Layer],
         stage: Execution,
         time: f32,
+        level: u32,
         space: layer_core::BlendSpace,
     ) -> Result<PreparedEffect, GpuRasterError> {
         let execution = stage;
         let stage = (execution, space);
-        self.ids.clear();
-        self.ids.extend(layers.iter().map(|l| l.id));
-        if let Some(old) = self.instances.get_mut(self.ids.as_slice())
+        self.ids.0.clear();
+        self.ids.0.extend(layers.iter().map(|l| l.id));
+        self.ids.1 = level;
+        if let Some(old) = self.instances.get_mut(&self.ids)
             && old
                 .effects
                 .iter()
@@ -297,6 +320,7 @@ impl Effects {
             offsets.push(data.len() as u32);
             data.push(*properties);
             data.extend(effect.gpu_parameters(r.device().working_space()).map_err(GpuRasterError::Effect)?);
+            data[*offsets.last().unwrap() as usize + 1][2] = (1 << level) as f32;
         }
         let programs: Vec<_> = effects.iter().map(|e| e.program.clone()).collect();
         let bytes: Vec<_> = data
@@ -380,6 +404,7 @@ impl Effects {
                     .collect();
                 let key = preparation::Key {
                     definition: definition.clone(),
+                    geometry: base + 1,
                     inputs: indices.iter().map(|i| parameters[*i]).collect(),
                     output: base + 1 + data[directory + i][0] as u32,
                 };
@@ -607,7 +632,7 @@ fn fx_grid_sample(image:texture_2d<f32>,point:vec2<f32>,grid:vec4<f32>,step:f32)
     let q=(point-grid.xy)/step;let extent=grid.zw/step;
     let last=ceil(extent)-1.;let previous=last-.5;
     let adjusted=select(q,previous+(q-previous)/((extent-last+1.)*.5),q>previous);
-    return working_sample_float(image,clamp(adjusted,vec2(.5),last+.5));
+    return textureSampleLevel(image,sampling,clamp(adjusted,vec2(.5),last+.5)/vec2<f32>(textureDimensions(image)),0.);
 }
 fn fx_sample(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);

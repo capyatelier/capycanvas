@@ -220,7 +220,7 @@ pub(crate) fn level(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Option<u32> 
             !l.visible
                 || !l.is_artwork()
                 || (matches!(l.kind, LayerKind::Paint | LayerKind::Background | LayerKind::Group | LayerKind::Effect)
-                    && l.effect.as_ref().is_none_or(|effect| !effect.program.image_boundary()
+                    && l.effect.as_ref().is_none_or(|effect| (!effect.program.image_boundary() || plan.level > 0)
                         && effect.program.resolution == layer_core::EffectResolution::Display)
                     && r.paint_layers
                         .iter()
@@ -350,6 +350,7 @@ fn coarse_level(plan: display_mips::Plan) -> u32 {
 
 fn scratch_images(layers: &[Layer]) -> u64 {
     3 + u64::from((4 * layers.len().max(1)).next_power_of_two().ilog2())
+        + 2 * u64::from(layers.iter().any(|l| l.effect.as_ref().is_some_and(|e| e.program.image_boundary())))
         + layers.iter().filter(|l| l.effect.is_some() && l.mask.as_ref().is_some_and(|m| m.enabled)).count().min(crate::effects::MASK_SLOTS) as u64
 }
 
@@ -583,13 +584,16 @@ impl Cache {
             .filter(|l| images::visible(packet.layers, l) && l.kind == LayerKind::Paint && l.is_artwork() && stack::has_content(r, l))
             .collect();
         let mut changed = if self.ready && self.placed.is_none() { dirty } else { self.plan.bounds };
-        let required = if scene.scale_sources.reset { self.plan.bounds } else { changed };
+        let root = self.graph.root.clone().expect("prepared composition graph");
+        changed = changed.union(root.damage(&scene.scale_sources, self.plan));
+        let required = if scene.scale_sources.reset { self.plan.bounds } else { root.required(changed, self.plan).union(changed) };
+        let source_covered = if packet.layers.iter().any(|l| l.effect.as_ref().is_some_and(|e| !e.program.passes.is_empty())) { PixelRect::EMPTY } else { covered };
         for layer in &visible {
             if r.transforms.as_ref().is_some_and(|t| t.display_source(layer.id)) { continue; }
             let placement = layer_core::target_transform(packet.layers, layer.id);
             let extent = layer.local_extent(packet.document_extent);
             let plan = scene.scale_sources.resident_plan(layer.id, source_plan(self.plan, placement, extent)?);
-            let (needed, covered) = local_regions(required, covered, placement, extent, plan.level)?;
+            let (needed, covered) = local_regions(required, source_covered, placement, extent, plan.level)?;
             let needed = if placement == layer_core::Affine::IDENTITY { needed } else { plan.bounds };
             let updated = scene.prepare_scale_color(commands, r, packet, encoder, layer, SourceRequest { plan, required: needed, covered })?;
             if !updated.is_empty() { changed = changed.union(pixel_rect(placement.bounds(updated.to_rect()), packet.document_extent)); }
@@ -599,7 +603,7 @@ impl Cache {
                 let placement = layer_core::target_transform(packet.layers, mask.id);
                 let extent = layer.local_extent(packet.document_extent);
                 let plan = scene.scale_sources.resident_plan(mask.id, source_plan(self.plan, placement, extent)?);
-                let (needed, covered) = local_regions(required, covered, placement, extent, plan.level)?;
+                let (needed, covered) = local_regions(required, source_covered, placement, extent, plan.level)?;
                 let needed = if placement == layer_core::Affine::IDENTITY { needed } else { plan.bounds };
                 let updated = scene.prepare_scale_mask(commands, r, encoder, mask, SourceRequest { plan, required: needed, covered })?;
                 if !updated.is_empty() { changed = changed.union(pixel_rect(placement.bounds(updated.to_rect()), packet.document_extent)); }

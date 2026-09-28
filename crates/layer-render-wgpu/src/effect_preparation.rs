@@ -7,6 +7,7 @@ pub(super) struct Key {
     pub definition: EffectLookup,
     pub inputs: Vec<[u32; 2]>,
     pub output: u32,
+    pub geometry: u32,
 }
 pub(super) struct State {
     pub key: Key,
@@ -75,6 +76,7 @@ impl Preparation {
             ));
         }
         source.push_str("default:{return vec4<f32>(0.);}}}\n");
+        source.push_str(&format!("fn prep_texel_size()->f32{{return prep_data[{}u].z;}}\n", key.geometry));
         let lookup = &key.definition;
         source.push_str(&format!("fn prep_store(index:u32,value:vec4<f32>){{if index<{}u{{prep_data[{}u+index]=value;}}}}\n",lookup.values,key.output));
         for part in lookup
@@ -114,7 +116,7 @@ impl Preparation {
         // Authored functions must use the bounded helpers, not reach through
         // the shared buffer into another effect's parameters or lookup output.
         if module.functions.iter().any(|(_,f)| {
-            !matches!(f.name.as_deref(),Some("prep_parameter"|"prep_store"))
+            !matches!(f.name.as_deref(),Some("prep_parameter"|"prep_store"|"prep_texel_size"))
                 && f.expressions.iter().any(|(_,e)| matches!(e,naga::Expression::GlobalVariable(g) if module.global_variables[*g].binding.is_some()))
         }) {
             return Err(GpuRasterError::Effect("Preparation must access storage through prep_parameter/prep_store".into()));

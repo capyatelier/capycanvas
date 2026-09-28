@@ -840,6 +840,7 @@ impl Scene {
                 }
                 self.jobs.clear();
                 let count = effect.program.passes.len().max(1);
+                let regions = effects::pass_regions(effect, output_dirty, grid);
                 while self.images.scratch.len() < count.saturating_sub(1).min(2) {
                     self.images
                         .scratch
@@ -853,18 +854,7 @@ impl Scene {
                     } else {
                         self.images.scratch[pass % 2].view.clone()
                     };
-                    // Intermediate scratch is shared, so populate the halo that
-                    // later passes will read even outside the final dirty area.
-                    let region = effect
-                        .program
-                        .passes
-                        .iter()
-                        .skip(pass + 1)
-                        .try_fold(output_dirty, |rect, p| {
-                            Some(rect.expand(p.sampling.radius(effect)?, extent))
-                        })
-                        .unwrap_or(bounds)
-                        .intersect(bounds);
+                    let region = regions[pass + 1];
                     let local = region.window_local(bounds);
                     let mut data = effects::image_grid(grid, grid, cached.input.plan);
                     data[..4].copy_from_slice(&[
@@ -888,6 +878,7 @@ impl Scene {
                             &[layer],
                             effects::Execution::Image(pass),
                             packet.time_seconds,
+                            grid.level,
                             packet.blend_space,
                         )?,
                         masks,

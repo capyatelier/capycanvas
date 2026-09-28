@@ -157,3 +157,94 @@ fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
         assert!(error(&passing, &draw(&clipped)) < 2e-5, "clipped groups remain isolated");
     }
 }
+
+#[test]
+fn spatial_graph_updates_dependency_halos_and_preserves_exact_output() {
+    let mut doc = document_at([1027, 773]);
+    let extent = [doc.width, doc.height];
+    let paint = doc.layers[0].id;
+    for (id, sigma) in [(80, 9.), (81, 15.)] {
+        let mut blur = effect(id, "gaussian_blur");
+        let instance = Arc::make_mut(blur.effect.as_mut().unwrap());
+        Arc::make_mut(&mut instance.program).resolution = EffectResolution::Display;
+        instance.set("sigma", EffectValue::Number(sigma)).unwrap();
+        doc.layers.insert(0, blur);
+    }
+    doc.layers.insert(0, effect(82, "exposure"));
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    let mut frame = packet(&doc.layers, extent);
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+    assert!(r.scale_display.is_some(), "spatial programs execute in the shared graph");
+    assert!(r.live_display.is_none() && r.composite_texture.is_none());
+    assert_eq!(r.scene.as_ref().unwrap().image_cache_bytes(), 0);
+    for center in [[510., 255.], [765., 510.], [1020., 769.]] {
+        let mut dab = crate::tests::test_dab(center, [0.9, 0.1, 0.2, 1.], 1.);
+        dab.radii = [7.; 2];
+        let batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        let stroke = FramePacket { composite_all: false, dabs: std::slice::from_ref(&dab),
+            dab_batches: std::slice::from_ref(&batch), ..frame };
+        for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
+        let incremental = display_pixels(&r);
+        r.scale_display.as_mut().unwrap().graph = Default::default();
+        r.submit(frame).unwrap();
+        let full = display_pixels(&r);
+        let difference = incremental.iter().flatten().zip(full.iter().flatten())
+            .map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+        assert!(difference < 1e-5, "halo at {center:?}: {difference}");
+        let error = quality(&full, &pixels(&exact, exact.composite_texture.as_ref().unwrap()), r.scale_display.as_ref().unwrap().plan);
+        assert!(error[0] < 0.003 && error[1] < 0.03, "spatial quality at {center:?}: {error:?}");
+        assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
+    }
+}
+
+#[test]
+fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation() {
+    let mut doc = document();
+    let extent = [doc.width, doc.height];
+    let mut blur = effect(80, "gaussian_blur");
+    let mut mask = layer_core::LayerMask::reveal_all(LayerId(81), Default::default());
+    mask.default_coverage = 0.4;
+    blur.mask = Some(mask);
+    blur.opacity = 0.7;
+    doc.layers.insert(0, blur);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    for (level, sigma, clipped) in [(1, 0., false), (2, 0.5, false), (3, 3., true), (4, 21., false), (1, 21., true)] {
+        Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("sigma", EffectValue::Number(sigma)).unwrap();
+        doc.layers[0].properties.clipped = clipped;
+        let mut frame = packet(&doc.layers, extent);
+        let scale = 1. / (1 << level) as f32;
+        frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+        for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+        let plan = r.scale_display.as_ref().unwrap().plan;
+        let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), plan);
+        assert!(error[0] < 0.004 && error[1] < 0.04, "level={level} sigma={sigma} clipped={clipped}: {error:?}");
+        assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
+        let preparations = r.scene.as_ref().unwrap().effects.preparation_count();
+        let work = r.metrics.composited_pixels;
+        r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
+        assert_eq!(preparations, r.scene.as_ref().unwrap().effects.preparation_count());
+        assert_eq!(work, r.metrics.composited_pixels);
+    }
+    let instance = Arc::make_mut(doc.layers[0].effect.as_mut().unwrap());
+    let program = Arc::make_mut(&mut instance.program);
+    program.id = "global_probe".into();
+    program.wgsl = "fn global_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return fx_sample(fx_extent()-p)*.6+fx_original(p)*.4;}".into();
+    program.entry = "global_probe".into();
+    program.lookups = Arc::new([]);
+    program.passes = vec![layer_core::EffectPass { entry: program.entry.clone(), sampling: layer_core::EffectSampling::Document }].into();
+    let mut frame = packet(&doc.layers, extent);
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+    let dab = crate::tests::test_dab([73., 81.], [0.8, 0.1, 0.2, 1.], 1.);
+    let batch = dab_batch(doc.layers[1].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+    r.submit(FramePacket { composite_all: false, dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+    let incremental = display_pixels(&r);
+    r.scale_display.as_mut().unwrap().graph = Default::default();
+    r.submit(frame).unwrap();
+    assert_eq!(incremental, display_pixels(&r), "global dependencies update pixels far from paint damage");
+}

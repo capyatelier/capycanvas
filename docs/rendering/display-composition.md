@@ -141,9 +141,12 @@ backlog to hide from the benchmark.
 
 The region executor admits native paint layers, isolated groups, clipping
 stacks, all blend modes, paper, affine placements and scalar masks. Mask
-inspection remains presentation only. Pointwise effects explicitly declaring
-display-resolution support execute in the graph with document coordinates,
-layer masks and clipping. Native-resolution and image-boundary effects, along
+inspection remains presentation only. Effects explicitly declaring
+display-resolution support execute in the reduced graph with document coordinates,
+layer masks and clipping. Image passes expand dependency regions and damage by
+their sampling footprints; intermediate results populate the halo needed by
+later passes. Gaussian Blur prepares scaled kernels for the evaluation grid.
+Native-resolution effects and native views of image-boundary effects, along
 with persistent watercolor state, still use the exact presentation executor;
 these dependencies have not yet migrated. Insufficient admission also retains
 that executor. Advanced brushes keep their exact temporary evaluator; simple
