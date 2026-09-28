@@ -371,10 +371,19 @@ fn catalog_reaches_tool_variants_layer_properties_workspaces_and_paint_slots() {
     execute(&mut s, &opacity.id, Some("40"));
     let properties = |s: &UiSession<Recorder>| s.engine.document().layer(layer).unwrap().properties.clone();
     assert!((s.engine.document().layer(layer).unwrap().opacity - 0.4).abs() < 1e-4);
-    let id = find(&s, "Layer blend mode: Multiply").id;
+    let blend = |s: &UiSession<Recorder>, label: &str| {
+        s.command_catalog()
+            .into_iter()
+            .find(|d| d.label == label && d.category == "Layer › Blend Mode")
+            .unwrap_or_else(|| panic!("{label} is cataloged"))
+    };
+    assert!(s.command_catalog().iter().all(|d| !d.label.starts_with("Layer blend mode")));
+    let id = blend(&s, "Multiply").id;
+    assert!(id.contains(r#""op":"blend""#) && !id.contains(r#""id""#), "{id}");
     execute(&mut s, &id, None);
     assert_eq!(properties(&s).blend, layer_core::LayerBlend::Multiply);
-    assert!(find(&s, "Layer blend mode: Multiply").selected);
+    assert!(blend(&s, "Multiply").selected);
+    assert!(!blend(&s, "Normal").selected);
     invoke(&mut s, CommandId::Undo);
     assert_eq!(properties(&s).blend, layer_core::LayerBlend::Normal);
     assert!((s.engine.document().layer(layer).unwrap().opacity - 0.4).abs() < 1e-4);

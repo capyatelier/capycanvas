@@ -1,15 +1,26 @@
 let thumbnailRequest=0n;
 const thumbnailPending=new Map();
 // Layer widgets only. Selection, references, hierarchy and menu policy are Rust.
-export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext, contentChanged = () => {} }) {
+export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext, openMenu, contentChanged = () => {} }) {
   const send = action => dispatch({ type: "layer", action });
   const header = element("div", "layer-header"), footer = element("div", "layer-footer");
   header.dataset.control = "layer_opacity"; footer.dataset.control = "layer_actions";
-  const options = element("div", "layer-options"), blend = element("select");
-  blend.title = "Layer blend mode"; blend.setAttribute("aria-label", blend.title);
-  catalog.layer_blends.forEach((label, i) => { const option = element("option", "", label); option.value = i; blend.append(option); });
   const active = () => state().layer_tools.editing_layer;
-  blend.onchange = () => send({ op: "blend", id: active().id, value: Number(blend.value) });
+  let blendMenu = null, blendOpen = false, blendReopen = false;
+  const blend = button("", () => {
+    const skip = blendReopen; blendReopen = false;
+    const id = active()?.id;
+    if (skip || id == null) return;
+    blend.menuModel = () => app.layer_blend_menu(id);
+    const opened = openMenu(blend);
+    if (blendMenu !== opened) { blendMenu = opened; opened.addEventListener("toggle", e => { if (e.newState === "closed") blendOpen = false; }); }
+    blendOpen = true;
+  }, "layer-blend");
+  blend.addEventListener("pointerdown", () => { blendReopen = blendOpen && blendMenu?.menuOwner === blend; });
+  const blendLabel = element("span", "layer-blend-label", catalog.layer_blends[0]);
+  blend.append(blendLabel, icon("chevron-down"));
+  blend.title = "Layer blend mode"; blend.setAttribute("aria-label", blend.title); blend.setAttribute("aria-haspopup", "menu");
+  const options = element("div", "layer-options");
   const opacity = numberField(catalog.layer_opacity, "Layer opacity", value => dispatch({ type: "set_layer_opacity", opacity: value }), true);
   opacity.id = "layer-opacity"; options.append(blend, opacity); header.append(options);
   const glyphButton = (glyph, label, click, cls = "", getAction) => {
@@ -203,7 +214,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       for(const r of records.values())for(const c of [r.content.image,r.mask.image])if(c)c.width=c.width;
     }
     const view = state().layer_tools, current = view.editing_layer, controls = view.controls;
-    if (current) { opacity.update(current.opacity); blend.value = current.blend; }
+    if (current) { opacity.update(current.opacity); blendLabel.textContent = current.blend_label; }
     opacity.setDisabled(!controls.opacity); blend.disabled = !controls.blend; maskButton.disabled = !controls.mask; more.disabled = !current;
     deleteButton.disabled = !state().layer_tools.can_delete;
     for (const { b, property, capability } of toggles) {

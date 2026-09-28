@@ -14,8 +14,9 @@ select, fill and gradient variant. It also adapts the current tool's choices
 (such as picker source and sample size) and numeric settings, the active
 layer's properties, every managed workspace, the paint color slots and quick
 colors. Layer properties become numeric, choice and toggle entries, such as
-Layer opacity and Layer blend mode. The catalog also describes held pan; held
-entries are binding targets and are excluded from executable search results.
+Layer opacity; blend modes come from **Layer ▸ Blend Mode**. The catalog also
+describes held pan; held entries are binding targets and are excluded from
+executable search results.
 
 Commands use existing snake-case wire identities. Nested action identities
 include their typed arguments. Active-layer adapters omit transient layer IDs

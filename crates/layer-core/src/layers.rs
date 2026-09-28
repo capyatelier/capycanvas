@@ -376,22 +376,72 @@ mod organization_tests {
             .locked = true;
         assert!(doc.delete_layers_edit(&[LayerId(1), LayerId(3)]).is_err());
     }
+
+    #[test]
+    fn blend_codes_are_stable_and_every_mode_has_one_menu_place() {
+        let shipped = ["Normal", "Multiply", "Screen", "Add", "Overlay", "SoftLight", "Color"];
+        for (code, name) in shipped.into_iter().enumerate() {
+            let blend = LayerBlend::from_code(code as u32).unwrap();
+            assert_eq!(serde_json::to_value(blend).unwrap(), name);
+            assert_eq!(serde_json::from_value::<LayerBlend>(name.into()).unwrap(), blend);
+        }
+        for (code, blend) in LayerBlend::ALL.into_iter().enumerate() {
+            assert_eq!(blend.code(), code as u32);
+            assert_eq!(LayerBlend::from_code(blend.code()), Some(blend));
+        }
+        assert_eq!(LayerBlend::from_code(LayerBlend::ALL.len() as u32), None);
+        let menu: Vec<_> = LayerBlend::MENU.into_iter().flatten().copied().collect();
+        assert_eq!(menu.len(), LayerBlend::ALL.len());
+        assert!(LayerBlend::ALL.iter().all(|b| menu.contains(b)));
+        assert_eq!(LayerBlend::MENU[0], [LayerBlend::Normal]);
+        let float: Vec<_> = menu.iter().filter(|b| b.offered(true)).map(|b| b.label()).collect();
+        assert!(!float.contains(&"Overlay") && !float.contains(&"Hard Mix") && float.contains(&"Linear Light"));
+        assert!(menu.iter().all(|b| b.offered(false)));
+    }
 }
 
+/// How a layer combines with the pixels below it. The discriminant is the
+/// renderer's mode code and the flat `ALL` order; documents store the name.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
 pub enum LayerBlend {
     #[default]
-    Normal,
-    Multiply,
-    Screen,
-    Add,
-    Overlay,
-    SoftLight,
-    Color,
+    Normal = 0,
+    Multiply = 1,
+    Screen = 2,
+    Add = 3,
+    Overlay = 4,
+    SoftLight = 5,
+    Color = 6,
+    Darken = 7,
+    Lighten = 8,
+    ColorBurn = 9,
+    LinearBurn = 10,
+    ColorDodge = 11,
+    HardLight = 12,
+    VividLight = 13,
+    LinearLight = 14,
+    PinLight = 15,
+    HardMix = 16,
+    Difference = 17,
+    Exclusion = 18,
+    Subtract = 19,
+    Divide = 20,
+    Hue = 21,
+    Saturation = 22,
+    Luminosity = 23,
+}
+/// The operands a blend mode is defined on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlendRange {
+    /// Defined for extended float values.
+    Unbounded,
+    /// Defined on [0, 1]; operands are clamped, and float documents do not
+    /// offer the mode.
+    Unit,
 }
 impl LayerBlend {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 24] = [
         Self::Normal,
         Self::Multiply,
         Self::Screen,
@@ -399,7 +449,65 @@ impl LayerBlend {
         Self::Overlay,
         Self::SoftLight,
         Self::Color,
+        Self::Darken,
+        Self::Lighten,
+        Self::ColorBurn,
+        Self::LinearBurn,
+        Self::ColorDodge,
+        Self::HardLight,
+        Self::VividLight,
+        Self::LinearLight,
+        Self::PinLight,
+        Self::HardMix,
+        Self::Difference,
+        Self::Exclusion,
+        Self::Subtract,
+        Self::Divide,
+        Self::Hue,
+        Self::Saturation,
+        Self::Luminosity,
     ];
+    /// Menu groups in Photoshop's order: Normal, darken, lighten, contrast,
+    /// inversion and component modes.
+    pub const MENU: [&'static [Self]; 6] = [
+        &[Self::Normal],
+        &[Self::Darken, Self::Multiply, Self::ColorBurn, Self::LinearBurn],
+        &[Self::Lighten, Self::Screen, Self::ColorDodge, Self::Add],
+        &[
+            Self::Overlay,
+            Self::SoftLight,
+            Self::HardLight,
+            Self::VividLight,
+            Self::LinearLight,
+            Self::PinLight,
+            Self::HardMix,
+        ],
+        &[Self::Difference, Self::Exclusion, Self::Subtract, Self::Divide],
+        &[Self::Hue, Self::Saturation, Self::Color, Self::Luminosity],
+    ];
+    pub fn code(self) -> u32 {
+        self as u32
+    }
+    pub fn from_code(code: u32) -> Option<Self> {
+        Self::ALL.get(usize::try_from(code).ok()?).copied()
+    }
+    pub fn range(self) -> BlendRange {
+        match self {
+            Self::Overlay
+            | Self::SoftLight
+            | Self::HardLight
+            | Self::ColorBurn
+            | Self::ColorDodge
+            | Self::VividLight
+            | Self::HardMix
+            | Self::Exclusion => BlendRange::Unit,
+            _ => BlendRange::Unbounded,
+        }
+    }
+    /// Whether a document of this depth offers the mode in its menus.
+    pub fn offered(self, float: bool) -> bool {
+        !float || self.range() == BlendRange::Unbounded
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Normal => "Normal",
@@ -409,6 +517,37 @@ impl LayerBlend {
             Self::Overlay => "Overlay",
             Self::SoftLight => "Soft Light",
             Self::Color => "Color",
+            Self::Darken => "Darken",
+            Self::Lighten => "Lighten",
+            Self::ColorBurn => "Color Burn",
+            Self::LinearBurn => "Linear Burn",
+            Self::ColorDodge => "Color Dodge",
+            Self::HardLight => "Hard Light",
+            Self::VividLight => "Vivid Light",
+            Self::LinearLight => "Linear Light",
+            Self::PinLight => "Pin Light",
+            Self::HardMix => "Hard Mix",
+            Self::Difference => "Difference",
+            Self::Exclusion => "Exclusion",
+            Self::Subtract => "Subtract",
+            Self::Divide => "Divide",
+            Self::Hue => "Hue",
+            Self::Saturation => "Saturation",
+            Self::Luminosity => "Luminosity",
+        }
+    }
+}
+impl From<BrushBlendMode> for LayerBlend {
+    fn from(mode: BrushBlendMode) -> Self {
+        match mode {
+            BrushBlendMode::Normal => Self::Normal,
+            BrushBlendMode::Multiply => Self::Multiply,
+            BrushBlendMode::Screen => Self::Screen,
+            BrushBlendMode::Add => Self::Add,
+            BrushBlendMode::Subtract => Self::Subtract,
+            BrushBlendMode::Darken => Self::Darken,
+            BrushBlendMode::Lighten => Self::Lighten,
+            BrushBlendMode::Overlay => Self::Overlay,
         }
     }
 }

@@ -1209,9 +1209,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                         layer.properties.clipped = value;
                     }
                     LayerAction::Blend { value, .. } => {
-                        layer.properties.blend = *layer_core::LayerBlend::ALL
-                            .get(value as usize)
-                            .ok_or("Unknown blend mode")?
+                        let blend = layer_core::LayerBlend::from_code(value).ok_or("Unknown blend mode")?;
+                        if blend == layer.properties.blend {
+                            return Ok(());
+                        }
+                        layer.properties.blend = blend;
                     }
                     LayerAction::AddMask { replace, .. } => {
                         self.layer_interaction.tool = LayerCanvasTool::Paint;
@@ -1300,6 +1302,37 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Release the clipped layers above this base first".into());
         }
         Ok(())
+    }
+    /// The layer's blend modes in `LayerBlend::MENU` groups, as check items.
+    /// Float documents offer only modes defined above 1, plus the current one.
+    fn blend_sections(&self, layer: &Layer) -> Vec<Vec<ContextMenuItem>> {
+        let doc = self.engine.document();
+        let enabled = LayerControls::for_layer(doc, layer).blend;
+        let current = layer.properties.blend;
+        let float = doc.color.depth.is_float();
+        layer_core::LayerBlend::MENU
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .filter(|b| b.offered(float) || **b == current)
+                    .map(|b| ContextMenuItem {
+                        selected: Some(*b == current),
+                        enabled,
+                        ..ContextMenuItem::command(
+                            b.label(),
+                            UiAction::Layer { action: LayerAction::Blend { id: layer.id.0, value: b.code() } },
+                        )
+                    })
+                    .collect()
+            })
+            .filter(|items: &Vec<_>| !items.is_empty())
+            .collect()
+    }
+    /// The grouped menu that the layer header's blend control opens.
+    pub fn layer_blend_menu(&self, id: u64) -> Result<ContextMenu, String> {
+        let layer = self.engine.document().layer(LayerId(id)).ok_or("Unknown layer")?;
+        Ok(ContextMenu { title: "Blend Mode".into(), sections: self.blend_sections(layer) })
     }
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<ContextMenu, String> {
         use LayerAction as A;
@@ -1665,7 +1698,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             vec![
                 vec![ContextMenuItem::submenu("New", new)],
-                vec![ContextMenuItem::submenu("Organize", vec![organization]), ContextMenuItem::submenu("Layer Settings", vec![protection])],
+                vec![
+                    ContextMenuItem::submenu("Organize", vec![organization]),
+                    ContextMenuItem::submenu("Blend Mode", self.blend_sections(l)),
+                    ContextMenuItem::submenu("Layer Settings", vec![protection]),
+                ],
                 vec![
                     ContextMenuItem::submenu("Mask", mask_menu),
                     ContextMenuItem::submenu("Pixel Selection", selection),

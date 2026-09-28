@@ -14,10 +14,7 @@ fn composite_main(@builtin(global_invocation_id) id:vec3<u32>) {
     let src=textureLoad(moving,p,0);
     let dst=textureLoad(below,p,0);
     var color=src+dst*(1.-src.a);
-    if region.options.x!=0u {
-        let b=blend(working_unassociate(src),working_unassociate(dst),region.options.x);
-        color=vec4((1.-src.a)*dst.rgb+(1.-dst.a)*src.rgb+src.a*dst.a*b,src.a+dst.a*(1.-src.a));
-    }
+    if region.options.x!=0u {color=blend_composite(src,dst,region.options.x);}
     if region.options.y!=0u {
         let over=textureLoad(above,p,0);
         color=over+color*(1.-over.a);

@@ -1907,7 +1907,12 @@ fn layered_transforms_draw_between_static_display_layers_and_settle_exactly() {
     below.source = Some(photo(extent, 13, |_, _| 65535));
     doc.layers.insert(0, above);
     doc.layers.insert(2, below);
-    for blend in [layer_core::LayerBlend::Normal, layer_core::LayerBlend::Multiply] {
+    for blend in [
+        layer_core::LayerBlend::Normal,
+        layer_core::LayerBlend::Multiply,
+        layer_core::LayerBlend::Difference,
+        layer_core::LayerBlend::Luminosity,
+    ] {
         doc.layers[1].properties.blend = blend;
         let [mut direct, mut reference] = complete_pair(&doc);
         let v = centered_view(extent, [320, 240], 0.2, 0.);

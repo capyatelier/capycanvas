@@ -471,7 +471,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
             EffectValue::Number(layer.opacity), EffectValue::Number(1.)));
         let options = layer_core::LayerBlend::ALL.iter().map(|b| Arc::from(b.label())).collect();
         controls.push(PropertyControl::new("blend", "Blend mode", PropertyKind::Choice { options },
-            EffectValue::Choice(layer.properties.blend as u32), EffectValue::Choice(0)));
+            EffectValue::Choice(layer.properties.blend.code()), EffectValue::Choice(0)));
         String::new()
     };
     LayerPropertiesView {

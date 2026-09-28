@@ -764,7 +764,7 @@ impl Scene {
             {
                 data[8] = 1.;
                 data[9] = opacity;
-                data[10] = blend as u32 as f32;
+                data[10] = crate::blend_code(blend, &r.device) as f32;
                 if data[19] > 0.5 {
                     data[19] = 2.;
                 }
@@ -781,7 +781,7 @@ impl Scene {
             self.pool[front].view.clone(),
             Some(self.pool[back].view.clone()),
             [0., 0., 256., 256.],
-            [4., opacity, blend as u32 as f32, f32::from(clip)],
+            [4., opacity, crate::blend_code(blend, &r.device) as f32, f32::from(clip)],
             false,
         );
         self.free(front);

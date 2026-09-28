@@ -40,6 +40,8 @@ mod clipboard_tests;
 mod notice;
 #[path = "zoom_readout_tests.rs"]
 mod zoom_readout;
+#[path = "blend_menu_tests.rs"]
+mod blend_menu;
 #[path = "photo_edit_tests.rs"]
 mod photo_edit;
 #[path = "merge_tests.rs"]
@@ -9447,6 +9449,7 @@ fn native_frame_pacing() {
             match std::env::var("LAYER_PACING_PHOTO_LAYERS").as_deref() {
                 Ok("photo") => project.document.layers.retain(|layer| layer.source.is_some()),
                 Ok("layered") => native_navigation::layered(&mut project),
+                Ok("blended") => native_navigation::blended(&mut project),
                 _ => {}
             }
             let w = Workspace::with_project(&app, Some((project, None)));

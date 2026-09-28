@@ -244,7 +244,7 @@ impl Effects {
                 .properties
                 .iter()
                 .zip(layers)
-                .all(|(a, layer)| a[..3] == effect_properties(layer, time)[..3])
+                .all(|(a, layer)| a[..3] == effect_properties(r.device(), layer, time)[..3])
             && let Some(pipeline) = old.pipelines.get(&stage)
         {
             // Animation updates only one scalar per instance, never its LUTs.
@@ -269,7 +269,7 @@ impl Effects {
             .iter()
             .map(|l| l.effect.as_ref().unwrap().clone())
             .collect();
-        let properties: Vec<_> = layers.iter().map(|l| effect_properties(l, r.effect_time(l, time))).collect();
+        let properties: Vec<_> = layers.iter().map(|l| effect_properties(r.device(), l, r.effect_time(l, time))).collect();
         let mut data = Vec::new();
         let mut offsets = Vec::new();
         for (effect, properties) in effects.iter().zip(&properties) {
@@ -456,10 +456,10 @@ impl Effects {
     }
 }
 
-fn effect_properties(layer: &Layer, time: f32) -> [f32; 4] {
+fn effect_properties(device: &PipelineDevice, layer: &Layer, time: f32) -> [f32; 4] {
     [
         layer.opacity,
-        layer.properties.blend as u32 as f32,
+        crate::blend_code(layer.properties.blend, device) as f32,
         layer.mask.as_ref().filter(|m| m.enabled).map_or(1., |m| {
             if m.inverted {
                 1. - m.default_coverage
@@ -617,7 +617,7 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
             if p.alpha == layer_core::EffectAlpha::Filter {
                 source.push_str("if settings.options.y<.5 {return mix(c,vec4<f32>(rgb*adjusted.a,adjusted.a),controls.x*coverage);}");
             }
-            source.push_str("return vec4<f32>(fx_mix_rgb(c.rgb,fx_adjustment_rgb(c,adjusted,u32(controls.y)),controls.x*coverage),c.a);}");
+            source.push_str("return fx_adjustment(c,adjusted,u32(controls.y),controls.x*coverage);}");
         } else {
             source.push_str("return adjusted;}");
         }
@@ -655,12 +655,12 @@ fn effect_result(v:Vertex)->vec4<f32> {
                 let bit = 1u32 << i;
                 source.push_str(&format!("else if (u32(settings.extent.z)&{bit}u)!=0u {{let m=textureLoad(effect_mask_{i},vec2<i32>(local),0).r;coverage=select(m,1.-m,(u32(settings.extent.w)&{bit}u)!=0u);}}\n"));
             }
-            source.push_str("let rgb=fx_adjustment_rgb(c,adjusted,u32(controls.y)); c=vec4<f32>(fx_mix_rgb(c.rgb,rgb,controls.x*coverage),c.a); }\n");
+            source.push_str("c=fx_adjustment(c,adjusted,u32(controls.y),controls.x*coverage); }\n");
         } else {
             source.push_str("c=adjusted; }\n");
         }
     }
-    source.push_str("if settings.options.x>.5 {let src=c*settings.options.y;let dst=settings.backdrop;let rgb=blend(fx_unassociate(src),fx_unassociate(dst),u32(settings.options.z));c=vec4<f32>((1.-src.a)*dst.rgb+(1.-dst.a)*src.rgb+src.a*dst.a*rgb,src.a+dst.a*(1.-src.a));} return c; }\n");
+    source.push_str("if settings.options.x>.5 {c=blend_composite(c*settings.options.y,settings.backdrop,u32(settings.options.z));} return c; }\n");
     Ok(source)
 }
 

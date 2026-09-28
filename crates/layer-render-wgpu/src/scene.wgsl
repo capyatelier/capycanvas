@@ -182,13 +182,8 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     if op == 3u { return raw*mix(dst.a,1.-dst.a,settings.options.z); }
     if op == 5u { let a = (1.-raw.a)*.42; return vec4<f32>(.46,.12,.8,1.)*a; }
     let src = raw*settings.options.y;
-    let s = working_unassociate(src); let d = working_unassociate(dst);
-    let b = blend(s,d,u32(settings.options.z));
-    if settings.options.w > .5 {
-        return vec4<f32>(mix(dst.rgb,b*dst.a,src.a),dst.a);
-    }
-    let rgb = (1.-src.a)*dst.rgb + (1.-dst.a)*src.rgb + src.a*dst.a*b;
-    return vec4<f32>(rgb,src.a+dst.a*(1.-src.a));
+    if settings.options.w > .5 { return blend_clip(src,dst,u32(settings.options.z)); }
+    return blend_composite(src,dst,u32(settings.options.z));
 }
 
 fn scene_normal(raw: vec4<f32>, v: Vertex) -> vec4<f32> {

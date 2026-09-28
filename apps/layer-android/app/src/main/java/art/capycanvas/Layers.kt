@@ -147,18 +147,16 @@ internal class LayerSwipe {
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density.density }.padding(horizontal = 6.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    var blendOpen by remember { mutableStateOf(false) }
+                    var blendMenu by remember { mutableStateOf<JSONObject?>(null) }
                     Box(Modifier.weight(1f)) {
-                        Row(Modifier.fillMaxWidth().height(26.dp).background(colors.input,ControlShape)
-                            .clickable(enabled = controls.getBoolean("blend")) { blendOpen = true }.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.fillMaxWidth().height(26.dp).background(colors.input,ControlShape).testTag("layer-blend")
+                            .clickable(enabled = controls.getBoolean("blend")) {
+                                active?.let { host.query(obj("type" to "layer_blend_menu","id" to it.getLong("id"))) { menu -> blendMenu = menu as? JSONObject } }
+                            }.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(active?.getString("blend_label") ?: "Normal",Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
                             SharedIcon("chevron-down", "Layer blend mode",Modifier.size(12.dp))
                         }
-                        DropdownMenu(blendOpen,{blendOpen=false}) {
-                            host.catalog.array("layer_blends").values().forEachIndexed { i,label -> DropdownMenuItem(text={Text(label.toString())},onClick={
-                                blendOpen=false; host.layer(obj("op" to "blend","id" to active!!.getLong("id"),"value" to i))
-                            }) }
-                        }
+                        blendMenu?.let { WorkspaceMenu(host,it) { blendMenu=null } }
                     }
                     NumericSetting("Layer opacity",active?.number("opacity") ?: 1f,host.catalog.getJSONObject("layer_opacity"),Modifier.weight(1f),
                         enabled=controls.getBoolean("opacity"),inline=true) { host.dispatch(obj("type" to "set_layer_opacity","opacity" to it)) }

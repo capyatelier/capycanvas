@@ -105,7 +105,7 @@ impl ImageComposition {
     ) {
         let properties = [
             if base.visible { base.opacity } else { 0. },
-            base.properties.blend as u32 as f32,
+            crate::blend_code(base.properties.blend, &r.device) as f32,
         ];
         if properties != self.properties {
             r.queue.write_buffer(

@@ -249,6 +249,7 @@ impl SelectionPainter {
                     &update.style,
                     0,
                     update.dabs.len() as u32,
+                    &r.device,
                 )),
                 usage: wgpu::BufferUsages::UNIFORM,
             });

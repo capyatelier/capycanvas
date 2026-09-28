@@ -775,9 +775,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             let set = |key: &str, value| UiAction::Effect {
                 action: EffectAction::Set { layer: active, key: key.into(), value },
             };
-            for control in &properties.controls {
+            for control in properties.controls.iter().filter(|c| c.key != "blend") {
                 let context = format!("{} · {}", properties.title, control.label);
-                let label = if matches!(control.key.as_str(), "opacity" | "blend") {
+                let label = if control.key == "opacity" {
                     format!("Layer {}", control.label.to_lowercase())
                 } else {
                     format!("{} {}", properties.title, control.label.to_lowercase())

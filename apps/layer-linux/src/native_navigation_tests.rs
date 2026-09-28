@@ -152,6 +152,26 @@ pub(super) fn layered(project: &mut layer_core::Project) {
     document.active_layer = photo;
 }
 
+/// The layered photo under non-Normal layers: Screen strokes, a Color copy of
+/// them and a Soft Light copy of the backdrop, sharing their sources.
+pub(super) fn blended(project: &mut layer_core::Project) {
+    layered(project);
+    let document = &mut project.document;
+    let copy = |document: &mut layer_core::Document, index: usize, name: &str, blend, opacity| {
+        let mut layer = document.layers[index].clone();
+        layer.id = document.allocate_layer_id();
+        layer.name = name.into();
+        layer.properties.blend = blend;
+        layer.opacity = opacity;
+        layer
+    };
+    let tone = copy(document, 2, "tone", layer_core::LayerBlend::SoftLight, 0.6);
+    let color = copy(document, 0, "color", layer_core::LayerBlend::Color, 0.7);
+    document.layers[0].properties.blend = layer_core::LayerBlend::Screen;
+    document.layers.insert(1, tone);
+    document.layers.insert(0, color);
+}
+
 #[test]
 #[ignore = "private 120 Hz Wayland display; release hardware navigation qualification"]
 fn native_large_photo_navigation() {

@@ -113,6 +113,14 @@ software camera-request-to-presentation, not physical input delivery. The native
 source has five pointwise adjustments and 32 paint layers; unlike the offscreen
 fixture it has no painted stroke or adjustment mask.
 
+`workspace::tests::native_frame_pacing` with `LAYER_PACING_WORKSPACE=photo24`
+opens a 24 MP photo and runs the brush, Pan, Hand, Transform and Crop scenarios;
+`LAYER_PACING_BRUSH` selects one. `LAYER_PACING_PHOTO_LAYERS=photo` keeps only the
+photo, `layered` puts it between painted strokes and a second photo, and
+`blended` also makes the strokes Screen and adds a Color copy of them and a Soft
+Light copy of the second photo above the photo, so strokes on the photo
+recompose through three non-Normal layers.
+
 For the high-DPI large-photo case, set `LAYER_TEST_MONITOR=3840x2160@120` and
 `LAYER_TEST_SCALE=2`. The harness applies and verifies the private Mutter monitor's
 scale; `GDK_SCALE` alone is insufficient on Wayland. Set

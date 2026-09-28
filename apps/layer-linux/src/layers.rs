@@ -16,7 +16,9 @@ pub struct LayerPanel {
     pub list: gtk::ScrolledWindow,
     pub opacity: NumberControl,
     model: gio::ListStore,
-    blend: gtk::DropDown,
+    blend: gtk::MenuButton,
+    blend_label: gtk::Label,
+    blend_menu: gtk::PopoverMenu,
     alpha: gtk::ToggleButton,
     lock: gtk::ToggleButton,
     mask_action: gtk::Button,
@@ -370,34 +372,21 @@ impl LayerPanel {
         root.append(&header);
         let options = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         options.set_homogeneous(true);
-        let labels: Vec<_> = layer_core::LayerBlend::ALL
-            .iter()
-            .map(|b| b.label())
-            .collect();
-        let blend = gtk::DropDown::from_strings(&labels);
-        let compact = gtk::SignalListItemFactory::new();
-        compact.connect_setup(|_, item| {
-            let label = gtk::Label::new(None);
-            label.set_xalign(0.);
-            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            label.set_max_width_chars(10);
-            label.set_width_chars(1);
-            item.downcast_ref::<gtk::ListItem>()
-                .unwrap()
-                .set_child(Some(&label));
-        });
-        compact.connect_bind(|_, item| {
-            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            if let (Some(label), Some(value)) = (
-                item.child().and_downcast::<gtk::Label>(),
-                item.item().and_downcast::<gtk::StringObject>(),
-            ) {
-                label.set_text(&value.string());
-            }
-        });
-        blend.set_factory(Some(&compact));
+        let blend = gtk::MenuButton::new();
+        let blend_label = gtk::Label::new(Some(layer_core::LayerBlend::Normal.label()));
+        blend_label.set_xalign(0.);
+        blend_label.set_hexpand(true);
+        blend_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        blend_label.set_max_width_chars(10);
+        blend_label.set_width_chars(1);
+        blend.set_child(Some(&blend_label));
+        blend.set_always_show_arrow(true);
         blend.set_hexpand(true);
+        blend.set_widget_name("layer-blend");
         blend.set_tooltip_text(Some("Layer blend mode"));
+        blend.update_property(&[gtk::accessible::Property::Label("Layer blend mode")]);
+        let blend_menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        blend.set_popover(Some(&blend_menu));
         options.append(&blend);
         let opacity = NumberControl::inline(NumericControl::layer_opacity(), "Layer opacity");
         options.append(&opacity);
@@ -923,6 +912,8 @@ impl LayerPanel {
             opacity,
             model,
             blend,
+            blend_label,
+            blend_menu,
             alpha,
             lock,
             mask_action: button(
@@ -1141,18 +1132,14 @@ impl LayerPanel {
                 opacity: v.value() as f32
             })
         ));
-        self.blend.connect_selected_notify(glib::clone!(
+        w.watch_popover(self.blend_menu.upcast_ref());
+        self.blend_menu.connect_show(glib::clone!(
             #[weak]
             w,
-            move |b| {
-                if let Some(id) = active(&w) {
-                    action(
-                        &w,
-                        A::Blend {
-                            id,
-                            value: b.selected(),
-                        },
-                    );
+            move |popover| {
+                let menu = active(&w).and_then(|id| w.gpu.borrow().as_ref()?.session.layer_blend_menu(id).ok());
+                if let Some(menu) = menu {
+                    w.populate_workspace_menu(popover, menu);
                 }
             }
         ));
@@ -1257,7 +1244,7 @@ impl LayerPanel {
         }
         if let Some(l) = &state.layer_tools.editing_layer {
             self.opacity.set_value(l.opacity as f64);
-            self.blend.set_selected(l.blend);
+            self.blend_label.set_text(&l.blend_label);
             self.alpha.set_active(l.alpha_locked);
             self.lock.set_active(l.locked);
             self.clip.set_active(l.clipped);

@@ -702,6 +702,9 @@ impl NativeHost {
                 id: u64,
                 mask: bool,
             },
+            LayerBlendMenu {
+                id: u64,
+            },
             PaletteMenu {
                 target: layer_ui::PaletteMenuTarget,
             },
@@ -852,6 +855,7 @@ impl NativeHost {
             Query::CanvasBarReason { context, command } => json!(self.canvas_bar_reason(context, command)),
             Query::ZoomMenu => json!(self.session.zoom_menu()),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
+            Query::LayerBlendMenu { id } => json!(self.session.layer_blend_menu(id)?),
             Query::StrokeRecording { action } => {
                 let platform = json!(self.session.state().platform);
                 let mut recorder = self.session.stroke_recording();

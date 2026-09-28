@@ -2090,6 +2090,45 @@ class AndroidInteractionTest {
         }
         println("PASS zoom readout: shared menu levels, Actual Pixels at a quarter turn, typed zoom and Back with mouse, finger and stylus, without taking focus")
     }
+    @Test fun layerBlendMenuAcrossDevices() {
+        fun blend() = state().getJSONObject("layer_tools").getJSONObject("editing_layer").getString("blend_label")
+        fun groups() = kotlinx.coroutines.runBlocking {
+            host.withNative { JSONObject(Native.query(it, obj("type" to "layer_blend_menu", "id" to editingLayer()).toString())) }
+        }.array("sections").let { sections -> (0 until sections.length()).map { i -> sections.getJSONArray(i).objects().map { it.getString("label") } } }
+        action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
+        layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+        waitFor("the blend control shows", 5_000) { shown("layer-blend") }
+        assertEquals(listOf(listOf("Normal"), listOf("Darken", "Multiply", "Color Burn", "Linear Burn"),
+            listOf("Lighten", "Screen", "Color Dodge", "Add"),
+            listOf("Overlay", "Soft Light", "Hard Light", "Vivid Light", "Linear Light", "Pin Light", "Hard Mix"),
+            listOf("Difference", "Exclusion", "Subtract", "Divide"), listOf("Hue", "Saturation", "Color", "Luminosity")), groups())
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        popupInput = true
+        try {
+            for ((device, mode) in pointerTools.zip(listOf("Multiply", "Overlay", "Screen"))) {
+                val name = listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]
+                tool = device
+                tap(bounds("layer-blend").center)
+                waitFor("$name opens the grouped blend menu", 5_000) { popupCount() == 1 && menuText("Color Burn") != null && menuText(mode) != null }
+                if (device == MotionEvent.TOOL_TYPE_STYLUS) for (theme in listOf("light", "dark")) {
+                    action(obj("type" to "set_theme", "theme" to theme))
+                    waitFor("$name the menu stays open across themes", 3_000) { popupCount() == 1 }
+                    captureCanvasBar("blend-menu-$theme", "blend-menu")
+                }
+                settle()
+                tap(menuText(mode)!!.center)
+                waitFor("$name chooses $mode", 5_000) { popupCount() == 0 && blend() == mode }
+                waitFor("$name the control shows $mode", 3_000) { textBounds(mode) != null }
+                println("PASS layer blend menu device=$name")
+            }
+            action(obj("type" to "invoke", "command" to "undo"))
+            assertEquals("each choice is one undo step", "Overlay", blend())
+        } finally {
+            popupInput = false
+            action(obj("type" to "set_theme", "theme" to originalTheme))
+        }
+        println("PASS layer blend menu: shared groups, choices with mouse, finger and stylus, one undo step each")
+    }
     @Test fun canvasActionBarJourneysAcrossDevices() {
         fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
         fun enabled(command: String) = state().array("commands").objects().any { it.getString("id") == command && it.getBoolean("enabled") }

@@ -5297,7 +5297,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             can_drop_below: l.kind != LayerKind::Background,
             depth: self.layer_interaction.depth(doc, l),
             collapsed: self.layer_interaction.collapsed.contains(&l.id),
-            blend: l.properties.blend as u32,
+            blend: l.properties.blend.code(),
             blend_label: l.properties.blend.label().into(),
             paint_revision: l
                 .raster
@@ -5449,6 +5449,7 @@ mod tests {
     include!("image_size_tests.rs");
     include!("image_geometry_tests.rs");
     include!("clipboard_tests.rs");
+    include!("blend_menu_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

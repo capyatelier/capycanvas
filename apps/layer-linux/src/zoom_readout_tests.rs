@@ -2,7 +2,7 @@
 //! levels, Actual Pixels and the typed field, with the canvas keeping focus.
 use super::*;
 
-fn mapped_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
+pub(super) fn mapped_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
     if root.is_mapped() && root.downcast_ref::<gtk::Label>().is_some_and(|l| l.text() == text) {
         return Some(root.clone());
     }
@@ -39,14 +39,17 @@ fn open(w: &Workspace, input: &mut RemoteInput) {
     until(|| w.view_info.menu.is_visible() && w.view_info.field.is_mapped(), "the readout opens its popover and field");
 }
 
+pub(super) fn save_widget(widget: &impl IsA<gtk::Widget>, path: &std::path::Path) {
+    let snapshot = gtk::Snapshot::new();
+    gtk::WidgetPaintable::new(Some(widget)).snapshot(&snapshot, widget.width() as f64, widget.height() as f64);
+    let node = snapshot.to_node().unwrap();
+    widget.native().unwrap().renderer().unwrap().render_texture(node, None).save_to_png(path).unwrap();
+}
+
 fn capture_menu(w: &Workspace, name: &str) {
     let directory = std::path::Path::new("../../artifacts/photo-m2/zoom-readout").join(std::process::id().to_string());
     std::fs::create_dir_all(&directory).unwrap();
-    let menu = &w.view_info.menu;
-    let snapshot = gtk::Snapshot::new();
-    gtk::WidgetPaintable::new(Some(menu)).snapshot(&snapshot, menu.width() as f64, menu.height() as f64);
-    let node = snapshot.to_node().unwrap();
-    menu.native().unwrap().renderer().unwrap().render_texture(node, None).save_to_png(directory.join(name)).unwrap();
+    save_widget(&w.view_info.menu, &directory.join(name));
 }
 
 fn choose(w: &Workspace, input: &mut RemoteInput, label: &str) {

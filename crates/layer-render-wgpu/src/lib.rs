@@ -2492,7 +2492,11 @@ impl WgpuRasterizer {
         self.style_upload.clear();
         self.style_upload.resize(used, 0);
         for index in 0..packet.dab_batches.len() {
-            let record = StyleGpu::brush(self.target_extent(packet.dab_batches[index].layer_id), &packet.dab_batches[index]);
+            let record = StyleGpu::brush(
+                self.target_extent(packet.dab_batches[index].layer_id),
+                &packet.dab_batches[index],
+                &self.device,
+            );
             let offset = index * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
@@ -4845,13 +4849,19 @@ impl StyleGpu {
         result
     }
 
-    fn brush(extent: [u32; 2], batch: &DabBatch) -> Self {
-        let mut style = Self::for_brush(extent, &batch.style, batch.first_dab, batch.dab_count);
+    fn brush(extent: [u32; 2], batch: &DabBatch, device: &PipelineDevice) -> Self {
+        let mut style = Self::for_brush(extent, &batch.style, batch.first_dab, batch.dab_count, device);
         style.canvas_opacity[3] = f32::from(batch.stroke_start);
         style
     }
 
-    fn for_brush(extent: [u32; 2], style: &layer_render::DabStyle, first: u32, count: u32) -> Self {
+    fn for_brush(
+        extent: [u32; 2],
+        style: &layer_render::DabStyle,
+        first: u32,
+        count: u32,
+        device: &PipelineDevice,
+    ) -> Self {
         let plan = BrushPassPlan::for_style(style);
         let grain = style.grain.as_ref();
         let (grain_cos, grain_sin) = grain
@@ -4907,7 +4917,7 @@ impl StyleGpu {
             style.deform.momentum,
         ];
         result.render_mode = [
-            blend_mode_code(style.rendering.blend_mode),
+            blend_code(style.rendering.blend_mode.into(), device) as f32,
             f32::from(style.rendering.accumulation == BrushAccumulation::Uniform),
             f32::from(style.wet_mix.mix_space == ColorMixSpace::Oklab),
             style.deform.distortion,
@@ -4949,17 +4959,14 @@ impl StyleGpu {
     }
 }
 
-fn blend_mode_code(mode: BrushBlendMode) -> f32 {
-    match mode {
-        BrushBlendMode::Normal => 0.0,
-        BrushBlendMode::Multiply => 1.0,
-        BrushBlendMode::Screen => 2.0,
-        BrushBlendMode::Add => 3.0,
-        BrushBlendMode::Subtract => 4.0,
-        BrushBlendMode::Darken => 5.0,
-        BrushBlendMode::Lighten => 6.0,
-        BrushBlendMode::Overlay => 7.0,
+/// A blend as `blend_modes.wgsl` reads it: the `LayerBlend` code in bits 0-7
+/// and float documents in bit 9. Bit 8 is reserved for the Perceptual space.
+/// Normal needs no flags, so its code is always 0.
+pub(crate) fn blend_code(blend: layer_core::LayerBlend, device: &PipelineDevice) -> u32 {
+    if blend == layer_core::LayerBlend::Normal {
+        return 0;
     }
+    blend.code() | u32::from(device.hdr()) << 9
 }
 
 fn liquify_mode_code(mode: LiquifyMode) -> f32 {
@@ -6077,6 +6084,7 @@ mod tests {
         program
     }
     mod adjustments;
+    mod blend_modes;
     pub(crate) mod image_windows;
     mod live_windows;
     mod cold_paint;

@@ -239,7 +239,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel-check { appearance: none; flex: none; width: 16px; height: 16px; margin: 0; border: 2px solid color-mix(in srgb, var(--text) 25%, transparent); border-radius: 4px; }
 .panel-check:checked { border: 0; background: var(--accent); }
 .panel-check:checked::after { content: ""; display: block; width: 16px; height: 16px; background: var(--accent-foreground); mask: url("icons/layer-check-symbolic.svg") center / contain no-repeat; }
-.panel-context-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 180px; border: 0; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; user-select: none; -webkit-user-select: none; }
+.panel-context-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 180px; max-height: calc(100dvh - 24px); overflow-y: auto; border: 0; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; user-select: none; -webkit-user-select: none; }
 .panel-context-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; text-align: left; font-weight: 400; }
 .panel-context-menu hr { height: 1px; border: 0; margin: 6px; background: color-mix(in srgb, var(--text) 15%, transparent); }
 .zoom-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 240px; width: max-content; border: 0; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; font-size: var(--ui-text-size); user-select: none; -webkit-user-select: none; }
@@ -361,7 +361,9 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .layer-header,.layer-footer { padding: 4px 6px; flex: none; }
 .layer-header { display: flex; flex-direction: column; gap: 2px; }
 .layer-options { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 6px; align-items: center; }
-.panel .layer-options select { width: 100%; min-width: 0; height: 24px; min-height: 24px; padding: 0 6px; font-weight: 700; text-overflow: ellipsis; }
+.panel .layer-options .layer-blend { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; height: 24px; min-height: 24px; padding: 0 6px; background: var(--input); font-weight: 700; }
+.layer-blend-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
+.layer-blend svg { flex: none; width: 12px; height: 12px; }
 .layer-flags,.layer-footer { display: flex; gap: 2px; }
 .panel .layer-icon { width: 24px; height: 24px; min-height: 24px; padding: 0; flex: none; display: grid; place-items: center; border-radius: var(--control-radius); background: transparent; }
 .layer-icon svg { width: 16px; height: 16px; }

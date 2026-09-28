@@ -53,6 +53,7 @@ import { checkImagePlacement } from "./image-placement.test.mjs";
 import { checkCanvasBar } from "./canvas-bar-journey.test.mjs";
 import { checkNotices } from "./notice-journey.test.mjs";
 import { checkZoomReadout } from "./zoom-readout-journey.test.mjs";
+import { checkBlendMenu } from "./blend-menu-journey.test.mjs";
 import { checkScreenStatus } from "./screen-status-journey.test.mjs";
 import { checkPipelineTakeover } from "./pipeline-takeover.test.mjs";
 import { checkPhotoEdit } from "./photo-edit-journey.test.mjs";
@@ -214,6 +215,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--zoom-readout")) {
     await checkZoomReadout({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--blend-menu")) {
+    await checkBlendMenu({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--photo-edit")) {
     await checkPhotoEdit({call,evaluate,settle});

@@ -402,6 +402,20 @@ The camera works in physical pixels. Web uses the fractional
 renders at the widget's integer `scale_factor()`, so under fractional Wayland
 scaling the compositor rescales the canvas and 100% is not exactly 1:1.
 
+### Layer blend menu
+
+The Layers header's blend control shows the active layer's `blend_label` and
+opens `UiSession::layer_blend_menu(id)`: the modes of `LayerBlend::MENU` in its
+six groups, as check items that dispatch `LayerAction::Blend { id, value }` with
+the mode's code. The layer menu's **Blend Mode** submenu, and so **Layer ▸ Blend
+Mode**, holds the same items; command search finds each mode there. Float
+documents leave out the modes defined only on [0, 1] (see
+[blend modes](../internals/rendering.md#blend-modes)), except the layer's current
+mode. Choosing the current mode adds no undo step. GTK fills a `MenuButton`
+popover when it opens, Web reads the `layer_blend_menu` export and Android the
+`layer_blend_menu` query. `UiCatalog.layer_blends` stays a flat list in code
+order, so a host that shows a plain list sends its index as the code.
+
 ## Settings and native flows
 
 `OpenSettings { page }` (or the Preferences/Shortcuts/About commands) opens the

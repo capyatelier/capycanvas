@@ -17,7 +17,10 @@ pub(crate) fn source(space: RgbSpace) -> String {
         space,
     ));
     let space_id = RgbSpace::ALL.iter().position(|s| *s == space).unwrap();
-    shader.push_str(&format!("const WORKING_SPACE:u32={space_id}u;\n"));
+    let [r, g, b] = space.to_xyz()[1];
+    shader.push_str(&format!(
+        "const WORKING_SPACE:u32={space_id}u;\nconst WORKING_LUMA:vec3<f32>=vec3<f32>({r:.12},{g:.12},{b:.12});\n"
+    ));
     shader.push_str(include_str!("sdr_color.wgsl"));
     shader.push_str(include_str!("working_color.wgsl"));
     shader

@@ -126,8 +126,8 @@ unassociation, interpolation and perceptual conversion across scene composition,
 effects and materials. Positive alpha is divided directly; only zero coverage
 returns black. Native scene/image interpolation uses explicit Float32 texel loads.
 Ordinary source-over and the existing channel blend formulas operate in **linear
-document RGB**, independently of bit depth. Explicit Add/Subtract bounds remain
-part of their artistic formulas. Native Oklab material mixing converts through
+document RGB**, independently of bit depth. Each blend mode states its own bounds;
+see [Blend modes](#blend-modes). Native Oklab material mixing converts through
 linear sRGB/D65 (including document-white adaptation), uses signed cube roots,
 then returns to document primaries without a blanket negative-RGB clamp. Oklab
 endpoints retain the selected operand. Region tolerance uses encoded document RGB
@@ -145,6 +145,70 @@ coordinates. Surface format controls output transfer encoding. Application color
 in viewport overlays retain their sRGB definitions. Export/Navigator thumbnail
 readbacks are explicitly sRGB8; exact color samples retain document RGB. Native
 profiled delivery is a separate output conversion and is still being integrated.
+
+## Blend modes
+
+`LayerBlend` has 24 modes. Each variant's discriminant is its *code*: Normal,
+Multiply, Screen, Add, Overlay, Soft Light and Color are 0 to 6, and Darken to
+Luminosity follow from 7. Documents store the variant name, not the code.
+`LayerBlend::MENU` groups the modes as Photoshop does (Normal, darken, lighten,
+contrast, inversion and component modes) for the menus described in
+[shared UI](../ui/shared-ui.md#layer-blend-menu).
+
+[`blend_modes.wgsl`](../../crates/layer-render-wgpu/src/blend_modes.wgsl) holds every
+formula, on straight colors, and two premultiplied helpers: `blend_composite` puts
+a source over its backdrop and `blend_clip` blends a clipped source inside its
+base's coverage. They serve every place a layer's blend applies:
+- layers, groups and clipping stacks (`scene.wgsl`, op 4), including the cached
+  clipping composition of an image filter (`scene_images.rs`);
+- a clipping stack's final composite over a constant backdrop, folded into its
+  last adjustment (`effects.rs`);
+- effect layers over their input (`fx_adjustment` in `effects_color.wgsl`);
+- the layered display that places a moving layer during a transform drag
+  (`display_layers.wgsl`);
+- brushes with a blend mode other than Normal (`material_brush.wgsl`), with the
+  brush's mode mapped to the layer mode of the same name. The Normal brush keeps
+  its direct source-over form because the general expression draws dark contact
+  edges on an Adreno Vulkan driver.
+
+`blend_code` passes a blend to shaders as the mode's code in bits 0-7, the
+Perceptual blend space in bit 8 (reserved; always 0 for now) and float documents
+in bit 9. Normal is always 0.
+
+**Ranges.** Float documents clamp no result. Modes defined only on [0, 1]
+(`BlendRange::Unit`) clamp their operands to [0, 1] in every document, and float
+documents leave them out of their menus; a layer that already uses one keeps it.
+
+| Mode | 8- and 16-bit documents | Float documents |
+| --- | --- | --- |
+| Normal, Multiply, Darken, Lighten, Difference | Unbounded | Unbounded |
+| Add | At most 1 | Unbounded |
+| Subtract, Linear Burn | At least 0 | At least 0 |
+| Linear Light | Clamped to [0, 1] | At least 0 |
+| Pin Light | Clamped to [0, 1] | Unbounded |
+| Divide | `d / max(s, 2⁻¹⁴)`, at most 1; a zero source gives 1 over any color and 0 over black | `d / max(s, 2⁻¹⁴)` |
+| Screen | `s + d − s·d` | `s + d − min(s, 1)·min(d, 1)`, which keeps rising above 1 |
+| Overlay, Soft Light, Hard Light, Color Burn, Color Dodge, Vivid Light, Hard Mix, Exclusion | Unit | Unit, not offered |
+| Hue, Saturation, Color, Luminosity | W3C `ClipColor` | `ClipColor` without its upper bound |
+
+Soft Light is the W3C formula. Hard Mix is 1 where `s + d ≥ 1`, which matches
+Photoshop's threshold of Vivid Light. The component modes use W3C `SetLum`,
+`SetSat` and `ClipColor` with the luma weights of the document's primaries (the Y
+row of their XYZ matrix). Bit 8 selects Rec. 601 weights, for Photoshop parity
+on encoded values in the Perceptual space.
+
+**Existing documents.** These rules change how some saved documents look:
+- Color layers weigh luminance by the document's primaries instead of Rec. 601,
+  in every document, and no longer clip above 1 in float documents.
+- In float documents, Add no longer clamps at 1, Screen follows its extension
+  above 1, and Overlay and Soft Light clamp operands outside [0, 1].
+- Unit modes clamp operands outside [0, 1] in 8- and 16-bit documents too; there
+  only effect layers produce such values.
+
+The oracle `every_blend_mode_matches_the_reference_on_every_path_and_depth`
+checks every mode against an independent reference through each path above at
+8-bit, 16-bit, half-float and float depths, and checks that export renders the
+same composite.
 
 ## Incremental composition
 

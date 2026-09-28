@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2 and M3. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3 and M4.4. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -731,6 +731,7 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - Flatten confirms through the shared notice when it would discard hidden layers.
   - Merge Down needs a Normal, visible layer below. Merge Visible and Flatten accept any blend mode, with the paper kept separate, so a non-Normal layer can look different where the paper shows through.
 - **M3.7** on GTK, Web and Android: photos opened as documents keep their Exif, XMP and IPTC in `.capy` (version 10); exports keep camera, lens, exposure, dates, copyright and contact, with location removed by default; a Metadata row in each export dialog.
+- **M4.4** on GTK, Web and Android: 17 more blend modes (24 in all) from one shared set of formulas on every composite path and for brushes; a grouped blend menu from shared Rust; modes defined only on 0–1 hidden in float documents.
 
 **Follow-ups**
 - **Erase right after a stroke:** an Erase on a raster that is still pending, or that holds watercolor or wet state, damages the whole layer so the layer settles. Clearing right after a stroke therefore rewrites every page. It is a still-frame cost.
@@ -762,6 +763,8 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **GTK pen clipboard journey:** under `--tablet`, the proxy loses the Wayland connection at the first clipboard write, so pen is covered on Web and Android.
 - **Merging on tablets:** a 24 MP merge takes one to two seconds on the Huion's canvas thread, and the Android UI shows a 150–250 ms frame afterwards, probably the layer list. Trace it.
 - **Metadata:** writing IPTC-IIM, and Extended XMP for packets larger than one JPEG segment.
+- **Soft Light** uses the W3C formula; Photoshop's differs. Decide in M4.5 whether Perceptual documents use Photoshop's.
+- **Properties panel** still offers a flat blend choice in code order, including modes hidden from the menu in float documents.
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
 - **Apple and Windows:**

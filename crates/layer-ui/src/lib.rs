@@ -288,6 +288,7 @@ pub struct UiCatalog {
     pub opacity: NumericControl,
     pub layer_opacity: NumericControl,
     pub zoom: NumericControl,
+    /// Blend mode labels in code order, for hosts that show a flat list.
     pub layer_blends: Vec<&'static str>,
 }
 pub fn ui_catalog() -> UiCatalog {

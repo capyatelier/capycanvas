@@ -185,21 +185,6 @@ fn mix_color(a: vec3<f32>, b: vec3<f32>, amount: f32) -> vec3<f32> {
     return working_mix(a, b, amount);
 }
 
-fn blend_color(backdrop: vec3<f32>, source: vec3<f32>, mode: f32) -> vec3<f32> {
-    if mode < 0.5 { return source; }
-    if mode < 1.5 { return backdrop * source; }
-    if mode < 2.5 { return backdrop + source - backdrop * source; }
-    if mode < 3.5 { return min(backdrop + source, vec3<f32>(1.0)); }
-    if mode < 4.5 { return max(backdrop - source, vec3<f32>(0.0)); }
-    if mode < 5.5 { return min(backdrop, source); }
-    if mode < 6.5 { return max(backdrop, source); }
-    return select(
-        2.0 * backdrop * source,
-        1.0 - 2.0 * (1.0 - backdrop) * (1.0 - source),
-        backdrop >= vec3<f32>(0.5),
-    );
-}
-
 fn source_over(destination: vec4<f32>, source_color: vec3<f32>, source_alpha: f32) -> vec4<f32> {
     let da = destination.a;
     // Normal blending has no backdrop-color term. Besides avoiding an
@@ -216,7 +201,7 @@ fn source_over(destination: vec4<f32>, source_color: vec3<f32>, source_alpha: f3
         );
     }
     let backdrop = working_unassociate(destination);
-    let blended = blend_color(backdrop, source_color, style.render_mode.x);
+    let blended = blend(source_color, backdrop, u32(style.render_mode.x));
     if style.color.a > 0.5 {
         return vec4<f32>(mix(destination.rgb, blended * da, source_alpha), da);
     }
