@@ -336,7 +336,9 @@ impl WgpuRasterizer {
             required.compute.push(self.scene_pipelines.constant.2.clone());
             if self.native_edit.is_some() {
                 required.compute.push(self.scene_pipelines.scale.reduce.clone());
+                required.compute.push(self.scene_pipelines.scale.reduce_pair.clone());
                 required.compute.push(self.scene_pipelines.scale.compose.clone());
+                required.compute.extend(self.transforms.iter().map(|t| t.resample().area.clone()));
             }
             if self.native_edit.as_ref().is_some_and(|native| {
                 u64::from(document.width) * u64::from(document.height) * 16 > native.display_dense_bytes

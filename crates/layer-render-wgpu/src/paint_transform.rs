@@ -34,8 +34,8 @@ impl PaintTransforms {
     }
     /// Drag previews draw into the display with these once they are ready;
     /// they never delay input.
-    pub fn display_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 3] {
-        [self.0[0].color.display.as_ref().expect("color transform"), &self.1.pipeline, &self.2.pipeline]
+    pub fn display_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 4] {
+        [self.0[0].color.display.as_ref().expect("color transform"), &self.1.pipeline, &self.2.pipeline, &self.2.area]
     }
     pub fn begin_frame(&mut self) {
         for t in &mut self.0 {

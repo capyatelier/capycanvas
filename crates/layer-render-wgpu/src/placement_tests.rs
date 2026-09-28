@@ -259,7 +259,7 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
             }).unwrap();
             // Export intentionally uses exact source tiles. Inspect the live
             // composite instead, so this covers the cached display draw.
-            images.push(page_bytes(&r, r.composite_texture.as_ref().unwrap()));
+            images.push(page_bytes(&r, crate::test_support::document_texture(&r)));
         }
         let cache = r.scene.as_ref().unwrap().placement_cache(photo.id).unwrap();
         let work = (cache.0, cache.1, cache.2, r.metrics().source_tile_misses);
@@ -307,7 +307,7 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
                     assert!(r.metrics.composited_pixels - before < u64::from(canvas[0]) * u64::from(canvas[1]),
                         "a placed contact must not rebuild the entire canvas");
                 }
-                images.push(page_bytes(&r, r.composite_texture.as_ref().unwrap()));
+                images.push(page_bytes(&r, crate::test_support::document_texture(&r)));
             }
             let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))
                 .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
@@ -335,7 +335,7 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
                     composite_all: full,
                     ..packet(&layers, canvas)
                 }).unwrap();
-                images.push(page_bytes(&r, r.composite_texture.as_ref().unwrap()));
+                images.push(page_bytes(&r, crate::test_support::document_texture(&r)));
             }
             assert!(images[0] != baseline.unwrap(), "mask painting changes live pixels");
             let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))

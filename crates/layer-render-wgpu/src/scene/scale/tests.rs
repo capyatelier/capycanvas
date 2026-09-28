@@ -4,7 +4,9 @@ use layer_core::color::{SampleDepth, source::*};
 use layer_core::{DefaultBrushPreset, Document};
 
 fn document() -> Document {
-    let extent = [517, 259];
+    document_at([517, 259])
+}
+fn document_at(extent: [u32; 2]) -> Document {
     let mut doc = Document::new("display composition oracle", extent[0], extent[1]);
     let mut builder = SourceBuilder::new(
         extent,
@@ -28,6 +30,320 @@ fn document() -> Document {
     }
     doc.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
     doc
+}
+
+#[test]
+fn native_view_windows_reuse_overlap_and_preserve_global_sampling() {
+    let doc = document_at([2053, 1541]);
+    let extent = [doc.width, doc.height];
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    exact.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+    exact.set_complete_display_allowance(256 << 20);
+    let mut frame = packet(&doc.layers, extent);
+    exact.submit(frame).unwrap();
+    let oracle = pixels(&exact, exact.live_display.as_ref().unwrap().level_texture(0).unwrap());
+    frame.composite_all = false;
+    frame.view.width_px = 192;
+    frame.view.height_px = 128;
+    let mut presenter = crate::present::ViewportPresenter::for_surface(
+        &r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut reference_presenter = crate::present::ViewportPresenter::for_surface(
+        &exact, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let surface = |renderer: &WgpuRasterizer, presenter: &mut crate::present::ViewportPresenter, view| {
+        let (texture, target) = create_color_target(&renderer.device, [192, 128], "composition viewport oracle");
+        presenter.present(renderer, &target, view, [0.2; 4]).unwrap();
+        pixels(renderer, &texture)
+    };
+    let views = [
+        [1., 0., 0., 1., -300., -200.],
+        [1., 0., 0., 1., -310., -210.],
+        [1., 0., 0., 1., -750., -410.],
+        [0., 1., -1., 0., 900., -510.],
+        [-1.5, 0., 0., 0.75, 1700., -300.],
+        [1., 0., 0., 1., -1900., -1430.],
+    ];
+    let mut work = 0;
+    for (i, transform) in views.into_iter().enumerate() {
+        frame.view.document_to_surface = transform;
+        r.submit(frame).unwrap();
+        let cache = r.scale_display.as_ref().unwrap();
+        assert_eq!(cache.plan.level, 0);
+        assert!(cache.plan.bounds.area() < PixelRect::full(extent).area() / 2);
+        assert!(cache.overview.is_some());
+        assert!(r.live_display.is_none() && r.composite_texture.is_none());
+        assert!(quality(&display_pixels(&r), &oracle, cache.plan)[2] < 1e-6, "view={i}");
+        assert_presentation_mip(&r);
+        if i == 1 { assert_eq!(r.metrics.composited_pixels, work); }
+        if i == 2 { assert!(r.metrics.composited_pixels - work < cache.plan.bounds.area()); }
+        work = r.metrics.composited_pixels;
+        let actual = surface(&r, &mut presenter, frame.view);
+        let reference = surface(&exact, &mut reference_presenter, frame.view);
+        let error = actual.iter().flatten().zip(reference.iter().flatten()).map(|(a,b)| (a-b).abs()).fold(0., f32::max);
+        assert!(error < 0.0001, "window presentation view={i} error={error}");
+    }
+    let dab = crate::tests::test_dab([1980., 1480.], [0.9, 0.2, 0.1, 1.], 0.7);
+    let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+    frame.dabs = std::slice::from_ref(&dab);
+    frame.dab_batches = std::slice::from_ref(&batch);
+    r.submit(frame).unwrap();
+    exact.submit(frame).unwrap();
+    let cache = r.scale_display.as_ref().unwrap();
+    let oracle = pixels(&exact, exact.live_display.as_ref().unwrap().level_texture(0).unwrap());
+    assert!(quality(&display_pixels(&r), &oracle, cache.plan)[2] < 1e-6);
+    let overview = cache.overview.as_ref().unwrap();
+    assert!(quality(&pixels(&r, overview.texture()), &oracle, overview.plan)[2] < 1e-5);
+    assert_presentation_mip(&r);
+}
+
+#[test]
+fn placed_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
+    let source_extent = [517, 259];
+    let extent = [389, 277];
+    let mut doc = document_at(source_extent);
+    doc.width = extent[0];
+    doc.height = extent[1];
+    doc.layers[0].opacity = 0.71;
+    let mut mask = layer_core::LayerMask::reveal_all(LayerId(40), layer_core::Point { x: 17., y: -11. });
+    mask.default_coverage = 0.63;
+    mask.initial = Some(layer_core::Selection::polygon(vec![
+        layer_core::Point { x: 30., y: 10. }, layer_core::Point { x: 390., y: 10. },
+        layer_core::Point { x: 390., y: 200. }, layer_core::Point { x: 30., y: 200. },
+    ]).unwrap());
+    doc.layers[0].mask = Some(mask);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    for (pose, placement) in [
+        [0.5, 0., 0., 0.5, 16., 32.], [-0.5, 0., 0., 0.5, 320., 32.],
+        [0.6, 0.2, -0.1, 0.5, 30., 4.], [0.35, 0.1, 0.2, 0.75, -17., 21.],
+    ].into_iter().enumerate() {
+        doc.layers[0].properties.placement = layer_core::Affine(placement);
+        doc.layers[0].mask.as_mut().unwrap().inverted = pose % 2 != 0;
+        for enabled in [true, false] {
+            doc.layers[0].mask.as_mut().unwrap().enabled = enabled;
+            for level in [1, 2, 3] {
+                let scale = 1. / (1 << level) as f32;
+                let mut frame = packet(&doc.layers, extent);
+                frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+                r.submit(frame).unwrap();
+                exact.submit(frame).unwrap();
+                let cache = r.scale_display.as_ref().unwrap();
+                assert_eq!(cache.plan.level, level);
+                assert!(r.live_display.is_none() && r.composite_texture.is_none());
+                let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), cache.plan);
+                eprintln!("placed pose={pose} level={level} mask={enabled}: {error:?}");
+                assert!(error[0] < 0.004 && error[1] < 0.04, "pose={pose} level={level}: {error:?}");
+                assert_presentation_mip(&r);
+                let mut actual = vec![0; (extent[0] * extent[1] * 4) as usize];
+                let mut expected = actual.clone();
+                r.copy_rgba8_srgb(&mut actual, extent[0] as usize * 4).unwrap();
+                exact.copy_rgba8_srgb(&mut expected, extent[0] as usize * 4).unwrap();
+                assert!(actual == expected, "exact placed export pose={pose} level={level} mask={enabled}");
+            }
+        }
+    }
+}
+
+#[test]
+fn source_retention_reserves_images_that_composition_allocates_later() {
+    let mut doc = document_at([33, 17]);
+    doc.width = 4096; doc.height = 4096;
+    let mut front = doc.layers[0].clone();
+    front.id = LayerId(20);
+    front.opacity = 0.5;
+    doc.layers.insert(0, front);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    let cache = Cache::new(&r, display_mips::Plan::at(frame.document_extent, 2), doc.layers.len());
+    assert!(cache.output.is_empty() && cache.next.is_none());
+    let source_budget = cache.source_budget(&r, frame, &Commands::new(&r));
+    r.scale_display = Some(cache);
+    r.submit(frame).unwrap();
+    let cache = r.scale_display.as_ref().unwrap();
+    assert!(!cache.output.is_empty() && cache.next.is_some());
+    let commands = r.scene.as_ref().unwrap().scale_commands.as_ref().unwrap();
+    assert!(source_budget + cache.storage_bytes() + commands.storage_bytes() <= live_display::CACHE_BYTES);
+}
+
+#[test]
+fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
+    let mut doc = document_at([1025, 513]);
+    let extent = [641, 385];
+    doc.width = extent[0]; doc.height = extent[1];
+    doc.layers[0].opacity = 0.71;
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    let mut exact_presenter = crate::ViewportPresenter::for_surface(
+        &exact, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut presenter = crate::ViewportPresenter::for_surface(
+        &r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let render = |r: &WgpuRasterizer, presenter: &mut crate::ViewportPresenter, view: layer_render::ViewState| {
+        let (texture, target) = create_color_target(&r.device, [view.width_px, view.height_px], "deferred presentation oracle");
+        presenter.present(r, &target, view, [1.; 4]).unwrap();
+        pixels(r, &texture)
+    };
+    for placement in [[1., 0., 0., 1., -153.25, -51.5], [0.5, 0.1, -0.15, 0.6, 30., 5.], [-0.6, 0.1, 0.15, 0.5, 570., 7.]] {
+        doc.layers[0].properties.placement = layer_core::Affine(placement);
+        for camera in [[0.25, 0., 0., 0.25, 8.25, 7.5], [0.19, 0., 0., 0.19, 8.25, 7.5], [0.13, 0., 0., 0.13, 8.25, 7.5],
+            [0.17, 0.075, -0.075, 0.17, 37.5, 6.25], [0.14, -0.06, 0.02, 0.24, 8.25, 42.5]] {
+            let mut frame = packet(&doc.layers, extent);
+            frame.view.background_rgba_linear = [1.; 4];
+            frame.view.width_px = 192; frame.view.height_px = 128;
+            frame.view.document_to_surface = camera;
+            let inverse = layer_core::Affine(camera).inverse().unwrap();
+            let inside = |x, y| {
+                let p = inverse.map(layer_core::Point { x, y });
+                p.x >= 0. && p.y >= 0. && p.x < extent[0] as f32 && p.y < extent[1] as f32
+            };
+            r.submit(frame).unwrap();
+            exact.submit(frame).unwrap();
+            assert!(r.scale_display.as_ref().unwrap().output.is_empty());
+            assert!(r.scale_display.as_ref().unwrap().next.is_none());
+            let actual = render(&r, &mut presenter, frame.view);
+            let image = materialized_display(&r);
+            let mut cache = r.scale_display.take().unwrap();
+            let root = cache.placed.take().unwrap();
+            cache.output = vec![image]; cache.used = vec![false]; cache.selected = 0;
+            let mut commands = Commands::new(&r);
+            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+            cache.reduce_output(&mut r, &mut encoder, PixelRect::full(cache.plan.size), &mut commands).unwrap();
+            r.uploads.finish(&encoder); encoder.submit(&r.queue);
+            r.scale_display = Some(cache);
+            let materialized = render(&r, &mut presenter, frame.view);
+            let mut high = frame.view;
+            high.width_px *= 8; high.height_px *= 8;
+            high.document_to_surface = high.document_to_surface.map(|n| n * 8.);
+            let reference = render(&exact, &mut exact_presenter, high);
+            let point = render(&exact, &mut exact_presenter, frame.view);
+            let expected: Vec<[f32; 4]> = (0..frame.view.height_px).flat_map(|y| (0..frame.view.width_px).map(move |x| (x, y))).map(|(x, y)| {
+                if !inside(x as f32 + 0.5, y as f32 + 0.5) {
+                    return point[(y * frame.view.width_px + x) as usize];
+                }
+                let mut value = [0.; 4];
+                let mut count = 0.;
+                for yy in y * 8..(y + 1) * 8 { for xx in x * 8..(x + 1) * 8 {
+                    if !inside((xx as f32 + 0.5) / 8., (yy as f32 + 0.5) / 8.) { continue; }
+                    for c in 0..4 { value[c] += reference[(yy * high.width_px + xx) as usize][c]; }
+                    count += 1.;
+                }}
+                value.map(|c| c / count)
+            }).collect();
+            let cache = r.scale_display.as_mut().unwrap();
+            cache.placed = Some(root); cache.output.clear(); cache.used.clear(); cache.next = None;
+            let mut errors: Vec<_> = actual.iter().zip(&expected).map(|(a,b)| a.iter().zip(b).map(|(a,b)| (a-b).abs()).fold(0., f32::max)).collect();
+            errors.sort_by(f32::total_cmp);
+            let mean = errors.iter().sum::<f32>() / errors.len() as f32;
+            let p99 = errors[errors.len() * 99 / 100];
+            let mut prior: Vec<_> = materialized.iter().zip(&expected).map(|(a,b)| a.iter().zip(b).map(|(a,b)| (a-b).abs()).fold(0., f32::max)).collect();
+            prior.sort_by(f32::total_cmp);
+            eprintln!("deferred placement={placement:?} camera={camera:?}: mean={mean} p99={p99} max={}; materialized mean={} p99={}", errors.last().unwrap(), prior.iter().sum::<f32>() / prior.len() as f32, prior[prior.len() * 99 / 100]);
+            assert!(mean < 0.004 && p99 < 0.04);
+        }
+    }
+}
+
+#[test]
+fn deferred_placement_navigator_matches_supersampled_exact_artwork() {
+    let mut doc = document_at([1025, 513]);
+    doc.width = 641; doc.height = 385;
+    doc.layers[0].opacity = 0.71;
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    let overview = |r: &WgpuRasterizer, size: [u32; 2]| {
+        let mut presenter = crate::ViewportPresenter::for_overview_surface(
+            r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+        presenter.set_overviews(r, &[crate::OverviewPlacement {
+            bounds: [0., 0., size[0] as f32, size[1] as f32], clip: None,
+            work_area: [[-1000.; 2]; 4], outline_linear: [0.; 3], background_linear: [1.; 3], scale: 1., opacity: 1.,
+        }]);
+        let (texture, target) = create_color_target(&r.device, size, "placement navigator oracle");
+        presenter.present_overviews(r, &target, size).unwrap();
+        pixels(r, &texture)
+    };
+    for placement in [[1., 0., 0., 1., -153.25, -51.5], [0.5, 0.1, -0.15, 0.6, 30., 5.], [-0.6, 0.1, 0.15, 0.5, 570., 7.]] {
+        doc.layers[0].properties.placement = layer_core::Affine(placement);
+        let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+        frame.view.background_rgba_linear = [1.; 4];
+        frame.view.document_to_surface = [0.25, 0., 0., 0.25, 8.25, 7.5];
+        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        assert!(r.scale_display.as_ref().unwrap().placed.is_some());
+        for size in [[128, 77], [64, 39], [32, 19], [16, 10], [7, 4]] {
+            let actual = overview(&r, size);
+            let high = size.map(|n| n * 8);
+            let reference = overview(&exact, high);
+            let mut errors = Vec::new();
+            for y in 0..size[1] { for x in 0..size[0] {
+                let mut expected = [0.; 4];
+                for yy in y * 8..(y + 1) * 8 { for xx in x * 8..(x + 1) * 8 {
+                    for c in 0..4 { expected[c] += reference[(yy * high[0] + xx) as usize][c] / 64.; }
+                }}
+                errors.push(actual[(y * size[0] + x) as usize].iter().zip(expected).map(|(a,b)| (a-b).abs()).fold(0., f32::max));
+            }}
+            errors.sort_by(f32::total_cmp);
+            let mean = errors.iter().sum::<f32>() / errors.len() as f32;
+            let p99 = errors[errors.len() * 99 / 100];
+            assert!(mean < 0.004 && p99 < 0.04, "navigator placement={placement:?} size={size:?}: mean={mean} p99={p99}");
+        }
+    }
+}
+
+#[test]
+fn deriving_partial_sources_preserves_completed_texels_between_refreshed_regions() {
+    let doc = document_at([769, 769]);
+    let extent = [doc.width, doc.height];
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, extent);
+    frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+    r.submit(frame).unwrap();
+    let mut scene = r.scene.take().unwrap();
+    let id = doc.layers[0].id;
+    let expected = pixels(&r, &scene.scale_sources.image(id, 3).image.texture);
+    let mut commands = Commands::new(&r);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    for tile in [[0, 0], [3, 3]] {
+        scene.scale_sources.entries.get_mut(&id).unwrap().levels.get_mut(&3).unwrap().valid.remove(&tile);
+        scene.prepare_scale_color(&mut commands, &mut r, frame, &mut encoder, &doc.layers[0],
+            SourceRequest { level: 1, required: page_rect(tile), covered: PixelRect::EMPTY }).unwrap();
+    }
+    scene.scale_sources.ensure_level(&mut commands, &mut r, &mut encoder, id, 3).unwrap();
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    let actual = pixels(&r, &scene.scale_sources.image(id, 3).image.texture);
+    assert!(actual.iter().flatten().zip(expected.iter().flatten()).all(|(a,b)| (a-b).abs() < 1e-6));
+    assert_eq!(scene.scale_sources.image(id, 3).valid.len(), 16);
+}
+
+#[test]
+fn placed_compact_prediction_keeps_the_most_magnified_source_axis() {
+    let mut doc = document();
+    let extent = [doc.width, doc.height];
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    for placement in [[2., 0., 0., 1., -300., -20.], [-2., 0., 0., 0.25, 600., 80.]] {
+        doc.layers[0].properties.placement = layer_core::Affine(placement);
+        let mut frame = packet(&doc.layers, extent);
+        frame.composite_all = false;
+        frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+        r.submit(FramePacket { composite_all: true, ..frame }).unwrap();
+        let baseline = display_pixels(&r);
+        let mut dab = crate::tests::test_dab([200., 110.], [0.9, 0.02, 0.1, 1.], 1.);
+        dab.radii = [32.; 2];
+        let mut batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        batch.kind = DabBatchKind::Preview;
+        batch.style.brush_to_layer = doc.layers[0].properties.placement.inverse().unwrap();
+        r.submit(FramePacket { dabs: &[dab], dab_batches: &[batch], ..frame }).unwrap();
+        assert_eq!(r.preview_level, 1);
+        assert_ne!(display_pixels(&r), baseline);
+        r.submit(frame).unwrap();
+        let actual = display_pixels(&r);
+        let changed: Vec<_> = actual.iter().zip(&baseline).enumerate().filter(|(_, (a,b))| a != b).collect();
+        let error = actual.iter().flatten().zip(baseline.iter().flatten()).map(|(a,b)| (a-b).abs()).fold(0., f32::max);
+        assert!(changed.is_empty(), "pose={placement:?} differing={} max={error} first={:?}", changed.len(), changed.first());
+    }
 }
 
 #[test]
@@ -150,27 +466,47 @@ fn pixels(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
         .collect()
 }
 fn display_pixels(r: &WgpuRasterizer) -> Vec<[f32; 4]> {
+    pixels(r, &materialized_display(r).texture)
+}
+fn materialized_display(r: &WgpuRasterizer) -> Image {
     let cache = r.scale_display.as_ref().unwrap();
-    pixels(r, &cache.output[cache.selected].texture)
+    if let Some(root) = &cache.placed {
+        let [width, height] = cache.plan.size;
+        let texels = [0, 0, width, height];
+        let uniforms = r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("materialized display query"), contents: &root.value.record(cache.plan, texels).unwrap(),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let (texture, view) = create_color_target(&r.device, cache.plan.size, "materialized display query");
+        let pass = r.transforms.as_ref().unwrap().resample();
+        let binding = pass.binding(&r.device, &uniforms, 0, [&root.value.view, &view, &root.value.view, &r.empty_view]);
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        pass.encode(&mut encoder, &binding, texels, paint_transform::resample::Sampling::AffineArea);
+        encoder.submit(&r.queue);
+        Image { texture, view }
+    } else { Image { texture: cache.texture().clone(), view: cache.view().clone() } }
 }
 
 fn assert_presentation_mip(r: &WgpuRasterizer) {
     let cache = r.scale_display.as_ref().unwrap();
-    let input = display_pixels(r);
-    let actual = pixels(r, &cache.next.texture);
-    let size = cache.plan.level_size(cache.plan.level + 1);
-    let side = 1 << cache.plan.level;
+    let (input, actual, plan) = if let Some(root) = &cache.placed {
+        let source = &r.scene.as_ref().unwrap().scale_sources;
+        (pixels(r, &source.image(root.value.id, root.value.plan.level).image.texture),
+            pixels(r, &source.image(root.value.id, root.value.plan.level + 1).image.texture), root.value.plan)
+    } else { (display_pixels(r), pixels(r, &cache.next.as_ref().unwrap().texture), cache.plan) };
+    let size = plan.level_size(plan.level + 1);
+    let side = 1 << plan.level;
     for y in 0..size[1] {
         for x in 0..size[0] {
             let mut sum = [0.; 4];
             let mut area = 0.;
-            for yy in y * 2..((y + 1) * 2).min(cache.plan.size[1]) {
-                for xx in x * 2..((x + 1) * 2).min(cache.plan.size[0]) {
-                    let weight = (side.min(cache.plan.extent[0] - xx * side)
-                        * side.min(cache.plan.extent[1] - yy * side))
+            for yy in y * 2..((y + 1) * 2).min(plan.size[1]) {
+                for xx in x * 2..((x + 1) * 2).min(plan.size[0]) {
+                    let weight = (side.min(plan.bounds.width() - xx * side)
+                        * side.min(plan.bounds.height() - yy * side))
                         as f32;
                     for c in 0..4 {
-                        sum[c] += input[(yy * cache.plan.size[0] + xx) as usize][c] * weight;
+                        sum[c] += input[(yy * plan.size[0] + xx) as usize][c] * weight;
                     }
                     area += weight;
                 }
@@ -192,8 +528,8 @@ fn quality(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mips::Plan) ->
         for x in 0..plan.size[0] {
             let mut sum = [0.; 4];
             let mut count = 0.;
-            for yy in y * side..((y + 1) * side).min(plan.extent[1]) {
-                for xx in x * side..((x + 1) * side).min(plan.extent[0]) {
+            for yy in plan.bounds.min_y() + y * side..(plan.bounds.min_y() + (y + 1) * side).min(plan.bounds.max_y()) {
+                for xx in plan.bounds.min_x() + x * side..(plan.bounds.min_x() + (x + 1) * side).min(plan.bounds.max_x()) {
                     for c in 0..4 {
                         sum[c] += exact[(yy * plan.extent[0] + xx) as usize][c];
                     }
@@ -229,6 +565,7 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
     r.submit(p).unwrap();
     exact.submit(p).unwrap();
     assert!(r.live_display.is_none() && r.composite_texture.is_none());
+    assert!(!r.scene.as_ref().unwrap().scale_sources.entries.contains_key(&doc.layers[0].id));
     assert!(r.scale_display.as_ref().unwrap().storage_bytes() < 1 << 20);
     let mut presenter = ViewportPresenter::for_surface(
         &r,
@@ -330,8 +667,9 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
     );
     p.view.document_to_surface = [1., 0., 0., 1., 0., 0.];
     r.submit(p).unwrap();
-    assert!(r.scale_display.is_none());
-    assert!(r.composite_texture.is_some());
+    assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 0);
+    assert!(r.composite_texture.is_none());
+    assert!(quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), r.scale_display.as_ref().unwrap().plan)[2] < 1e-6);
 }
 
 #[test]
@@ -364,7 +702,7 @@ fn compact_preview_weights_partial_edge_texels_and_retires_corrections() {
         if let Some(page) = r.preview_page([2, 1]) {
             let compact = pixels(&r, &page.active().texture);
             let cache = r.scale_display.as_ref().unwrap();
-            let layer = pixels(&r, &cache.layers[&doc.layers[0].id].image.texture);
+            let layer = pixels(&r, &r.scene.as_ref().unwrap().scale_sources.image(doc.layers[0].id, cache.plan.level).image.texture);
             // The 517 × 259 document ends with a 5 × 3 block: these two
             // compact texels cover 4 × 3 and 1 × 3 original pixels.
             let last = layer.last().unwrap();

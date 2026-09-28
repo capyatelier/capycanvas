@@ -60,7 +60,11 @@ distribution. The release painter record uses three repetitions per brush.
 source-over blending, area reduction at 4×/8×/16× footprints and horizontal
 neighborhood kernels. It retains thirty samples after four warmups at five
 sizes, from one pixel to 4248 × 2832. `calibration.csv` separates command encoding
-and submission, queue completion, and optional GPU pass timestamps. Timestamp
+and submission, queue completion, and optional GPU pass timestamps. The same
+run measures the production linear and area resamplers at three output sizes,
+including the 1062 × 708 display level used by the low-tier Fit view, from
+inputs twice as wide and high. Resampler sample counts are bilinear operations;
+their byte column counts distinct input and output texels. Timestamp
 mapping and CSV output happen after the timed completion boundary.
 
 The byte column is minimum distinct input/output traffic; cache reuse means

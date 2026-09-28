@@ -352,6 +352,13 @@ The *compositor* combines paint and image layers, groups, masks, clipping and
 blend modes. Its [scene code](../../crates/layer-render-wgpu/src/scene.rs) tracks
 *damage*: regions whose previously rendered pixels are no longer valid.
 
+Eligible paint stacks use [region and scale composition](../rendering/display-composition.md).
+The scene retains local source levels across camera and placement changes. Reduced
+views compose at the requested resolution; native views fill a bounded viewport
+window and reuse its overlap while panning. A lone affine source over a constant
+backdrop can be sampled directly by the presenter and Navigator. These display
+pixels never become document, history or export backing.
+
 A simple paint update rasterizes new dabs into the relevant layer pages and
 recomposes affected regions. More complex layer structures need intermediate
 results. The renderer retains those results and tracks their dependencies so,
@@ -379,7 +386,8 @@ rectangle, so filter definitions describe their sampling footprint. Global effec
 layer reordering and invalidated caches can require much larger updates than a
 single brush mark. Animated effects also need updates without new pen input.
 
-A transform or placement drag skips both the full-resolution pages and
+The exact presentation executor remains for effects, persistent watercolor and
+active pixel transforms. In that executor, a transform or placement drag skips both the full-resolution pages and
 composition when a native document keeps a complete display pyramid and the
 moving layer is an unmasked top-level layer under normal static layers.
 [`render_display`](../../crates/layer-render-wgpu/src/paint_transform.rs) draws the
@@ -435,8 +443,8 @@ the same way, a window at a time. What draws meshes compiles in the background
 when a warp is first shown, and until then the preview keeps the frame before
 it.
 
-A [placement drag](../../crates/layer-render-wgpu/src/placement_drag.rs) is a
-frame in which only one layer's placement changed. Its layer's own pixels are
+A [placement drag](../../crates/layer-render-wgpu/src/placement_drag.rs) in that
+executor is a frame in which only one layer's placement changed. Its layer's own pixels are
 reduced once and kept between drags while they are unchanged, together with the
 static layers around it. Until that copy is complete, a lone layer over the
 paper is drawn from the display level as the drag began, within the canvas that
@@ -484,8 +492,10 @@ Bicubic or Lanczos preview draws bilinearly until it stops.
 
 Exact capture (export, snapshots and the artwork readback) draws placed photos
 through the same pass with the exact cap, and with `Bicubic` where the placement
-magnifies. The live display samples the photo's placement mips instead, and the
-fused display path stays bilinear.
+magnifies. Display composition uses the scene's reduced source levels. Affine
+display sampling accounts for the output footprint and partially covered edge
+texels; the direct Navigator subdivides footprints larger than its retained
+coarse source can represent with one sample grid.
 
 ## Filters
 

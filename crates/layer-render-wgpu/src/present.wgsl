@@ -9,6 +9,8 @@ struct Camera {
     overlay: vec4<f32>,
     crop: vec4<f32>,
     crop_offset: vec4<f32>,
+    placed_x: vec4<f32>, placed_y: vec4<f32>, placed_extent: vec4<f32>,
+    placed_options: vec4<f32>, placed_backdrop: vec4<f32>,
     composite: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -81,7 +83,8 @@ fn detail_point(p: vec2<f32>) -> vec4<f32> {
     // Retained levels are contiguous textures. The filtering unit can sample
     // these directly; only the page atlas needs explicit cross-page gathers.
     if cache.grid.z == 0u {
-        return textureSampleLevel(canvas, canvas_sampler, (q + .5) / vec2<f32>(textureDimensions(canvas)), 0.);
+        if any(q < vec2<f32>(cache.window.xy)) || any(q > vec2<f32>(cache.window.zw - 1u)) { return coarse_point(p); }
+        return textureSampleLevel(canvas, canvas_sampler, (q - vec2<f32>(cache.window.xy) + .5) / vec2<f32>(textureDimensions(canvas)), 0.);
     }
     let low = vec2<u32>(floor(q));
     let high = min(low+1u, vec2<u32>(ceil(extent / scale))-1u);
@@ -95,7 +98,33 @@ fn detail_point(p: vec2<f32>) -> vec4<f32> {
     return mix(mix(textureLoad(canvas, a, 0), textureLoad(canvas, b, 0), t.x),
         mix(textureLoad(canvas, c, 0), textureLoad(canvas, d, 0), t.x), t.y);
 }
+fn placed_at(p:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
+    let span=abs(dx)+abs(dy);
+    let low=max(p-span*.5,vec2(0.));
+    let high=min(p+span*.5,camera.offset_document.zw);
+    let fraction=(high-low)/max(span,vec2(1e-20));
+    let h=vec3((low+high)*.5,1.);
+    let center=vec2(dot(camera.placed_x.xyz,h),dot(camera.placed_y.xyz,h));
+    let u=vec2(dot(camera.placed_x.xy,dx*fraction),dot(camera.placed_y.xy,dx*fraction))*.25;
+    let v=vec2(dot(camera.placed_x.xy,dy*fraction),dot(camera.placed_y.xy,dy*fraction))*.25;
+    let footprint=max(length(u),length(v));
+    let extent=camera.placed_extent.xy;
+    let outside=camera.placed_options.z;
+    var color:vec4<f32>;
+    if footprint<=1. {
+        color=area_sample(canvas,canvas_sampler,extent,outside,center,u,v);
+    } else if footprint<=camera.placed_extent.w {
+        let ratio=camera.placed_extent.w;
+        color=area_sample(next_mip,canvas_sampler,extent/ratio,outside,center/ratio,u/ratio,v/ratio);
+    } else {
+        let ratio=camera.placed_extent.z;
+        color=area_sample(coarse,canvas_sampler,extent/ratio,outside,center/ratio,u/ratio,v/ratio);
+    }
+    let layer=color*camera.placed_options.x;
+    return layer+camera.placed_backdrop*(1.-layer.a);
+}
 fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    if camera.placed_options.y!=0. { return placed_at(p,dx,dy); }
     if cache.info.x == 0u { return textureSampleLevel(canvas, canvas_sampler, p / camera.offset_document.zw, 0.); }
     let scale = f32(select(cache.info.z, cache.info.y, cache.info.z == 0u));
     let footprint = max(length(dx), length(dy));
@@ -107,7 +136,8 @@ fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
         let next_scale = f32(cache.grid.w);
         let extent = camera.offset_document.zw;
         let q = vec2(mip_coordinate(p.x, extent.x, next_scale), mip_coordinate(p.y, extent.y, next_scale));
-        let reduced = textureSampleLevel(next_mip, canvas_sampler, (q + .5) / vec2<f32>(textureDimensions(next_mip)), 0.);
+        let origin = select(vec2<f32>(cache.window.xy), vec2(0.), cache.grid.z != 0u) * (scale / next_scale);
+        let reduced = textureSampleLevel(next_mip, canvas_sampler, (q - origin + .5) / vec2<f32>(textureDimensions(next_mip)), 0.);
         return mix(detail_point(p), reduced, clamp(log2(footprint / scale), 0., 1.));
     }
     var color = vec4(0.);
@@ -126,6 +156,22 @@ fn canvas_linear(c: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(sdr_decode(c.rgb / c.a, CANVAS_SPACE) * c.a, c.a);
 }
 fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>) -> vec4<f32> {
+    if camera.placed_options.y!=0. {
+        let extent=camera.offset_document.zw;
+        let dx=vec2(footprint.x*extent.x,0.);
+        let dy=vec2(0.,footprint.y*extent.y);
+        let u=vec2(dot(camera.placed_x.xy,dx),dot(camera.placed_y.xy,dx));
+        let v=vec2(dot(camera.placed_x.xy,dy),dot(camera.placed_y.xy,dy));
+        let grid=max(vec2(1u),vec2<u32>(ceil(vec2(length(u),length(v))/(4.*camera.placed_extent.z))));
+        if all(grid==vec2(1u)) {return placed_at(uv*extent,dx,dy);}
+        let count=vec2<f32>(grid);
+        var color=vec4(0.);
+        for(var y=0u;y<grid.y;y++) {for(var x=0u;x<grid.x;x++) {
+            let offset=(vec2(f32(x),f32(y))+.5)/count-.5;
+            color+=placed_at(uv*extent+offset.x*dx+offset.y*dy,dx/count.x,dy/count.y);
+        }}
+        return color/f32(grid.x*grid.y);
+    }
     if cache.info.x == 0u { return sample_overview(canvas, canvas_sampler, uv, footprint); }
     let extent = camera.offset_document.zw / f32(cache.info.y);
     let low = clamp((uv-footprint*.5)*extent, vec2(0.), extent);

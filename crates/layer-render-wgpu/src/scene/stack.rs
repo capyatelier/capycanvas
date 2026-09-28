@@ -12,6 +12,13 @@ pub(super) trait Compositor {
     fn checkpoint(&mut self, _parent: Option<LayerId>) -> Option<(usize, Self::Image, Option<(Self::Image, usize)>)> { None }
 }
 
+pub(super) fn has_content(r: &WgpuRasterizer, layer: &Layer) -> bool {
+    matches!(layer.kind, LayerKind::Group | LayerKind::Effect) || layer.source.is_some()
+        || r.native_color_coordinates(layer.id).next().is_some()
+        || r.paint_layers.iter().any(|l| l.id == layer.id && !l.pages.is_empty())
+        || r.preview_layer_id == Some(layer.id)
+}
+
 pub(super) fn compose<C: Compositor>(
     c: &mut C, layers: &[Layer], parent: Option<LayerId>, stop_before: Option<(usize, bool)>,
 ) -> Result<C::Image, GpuRasterError> {
@@ -99,11 +106,7 @@ impl Compositor for Tile<'_> {
         self.scene.effect(self.r, self.packet, chain, self.coordinate, input)
     }
     fn has_content(&self, index: usize) -> bool {
-        let layer = &self.packet.layers[index];
-        matches!(layer.kind, LayerKind::Group | LayerKind::Effect) || layer.source.is_some()
-            || self.r.native_color_coordinates(layer.id).next().is_some()
-            || self.r.paint_layers.iter().any(|l| l.id == layer.id && !l.pages.is_empty())
-            || self.r.preview_layer_id == Some(layer.id)
+        has_content(self.r, &self.packet.layers[index])
     }
     fn draw_normal(&mut self, index: usize, output: &usize) -> Result<bool, GpuRasterError> {
         self.scene.draw_normal_layer(self.r, self.packet, index, self.coordinate, *output)

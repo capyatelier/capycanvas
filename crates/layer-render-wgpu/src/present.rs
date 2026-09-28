@@ -3,7 +3,7 @@
 use crate::{BackdropBlurStyle, BackdropRegion, GpuRasterError, SdrSurfaceColor, Uploads, WgpuRasterizer};
 use layer_render::{CanvasRenderer, CursorSegment, ViewState};
 
-const CAMERA_SIZE: u64 = 176;
+const CAMERA_SIZE: u64 = 256;
 const SOURCE_CAMERA: u32 = 256;
 
 /// A native UI's document overview, sampled from the existing GPU image.
@@ -79,12 +79,12 @@ pub struct ViewportPresenter {
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
     uploads: Uploads,
-    camera_data: Option<[f32; 44]>,
+    camera_data: Option<[f32; 64]>,
     quarter_turns: u32,
     retained: bool,
     history: crate::present_damage::Retained,
     backdrop: Option<crate::backdrop_blur::BackdropBlur>,
-    source_camera: Option<[f32; 44]>,
+    source_camera: Option<[f32; 64]>,
     presented_area: u64,
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
@@ -418,7 +418,7 @@ impl ViewportPresenter {
                 false,
                 None,
             ),
-            crate::bindings::texture(4, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, false),
+            crate::bindings::texture(4, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
             crate::bindings::buffer(
                 5,
                 wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
@@ -479,7 +479,7 @@ impl ViewportPresenter {
                     include_str!("hdr_view.wgsl"),
                     include_str!("proof_view.wgsl"),
                     include_str!("overview_sample.wgsl"),
-                    include_str!("present.wgsl"),
+                    concat!(include_str!("area_sample.wgsl"), "\n", include_str!("present.wgsl")),
                     include_str!("present_screen.wgsl")
                 )
                 .into(),
@@ -806,10 +806,9 @@ impl ViewportPresenter {
         else {
             return Ok(());
         };
-        let coarse = renderer
-            .live_display
-            .as_ref()
-            .map_or(composite, |cache| &cache.coarse.view);
+        let coarse = renderer.scale_display.as_ref().map(|cache| cache.coarse_view())
+            .or_else(|| renderer.live_display.as_ref().map(|cache| &cache.coarse.view))
+            .unwrap_or(composite);
         let next = renderer.scale_display.as_ref().map(|cache| cache.next_view()).or_else(|| renderer
             .live_display
             .as_ref()
@@ -875,7 +874,8 @@ impl ViewportPresenter {
         let overlay_color = overlay.map_or([0.;4],|o| o.color);
         let crop = renderer.crop_overlay.filter(|c| c.to_crop.inverse().is_some());
         let [ca, cb, cc, cd, cx, cy] = crop.map_or([0.; 6], |c| c.to_crop.0);
-        let data: [f32; 44] = [
+        let mut data = [0.; 64];
+        data[..40].copy_from_slice(&[
             d / det,
             -b / det,
             -c / det,
@@ -904,19 +904,21 @@ impl ViewportPresenter {
             overlay_color[0], overlay_color[1], overlay_color[2], overlay_color[3],
             ca, cb, cc, cd,
             cx, cy, crop.map_or(0., |c| c.dim.clamp(0., 1.)), f32::from(crop.is_some()),
-            f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual), 0., 0., 0.,
-        ];
+        ]);
+        if let Some(cache) = &renderer.scale_display { data[40..60].copy_from_slice(&cache.placement_values()); }
+        data[60] = f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual);
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {
             std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(&data))
         };
         let placement = 16..24;
         let camera_changed = self.camera_data.is_none_or(|old| {
-            old[..placement.start] != data[..placement.start] || old[placement.end..] != data[placement.end..]
+            old[..placement.start] != data[..placement.start] || old[placement.end..40] != data[placement.end..40]
         });
         let selection_changed = selection_changed
             || self.camera_data.is_some_and(|old| old[placement.clone()] != data[placement]);
-        if camera_changed || selection_changed {
+        let artwork_changed = self.camera_data.is_none_or(|old| old[40..] != data[40..]);
+        if camera_changed || selection_changed || artwork_changed {
             self.uploads
                 .write(encoder, &self.uniform, bytes)?;
             self.camera_data = Some(data);

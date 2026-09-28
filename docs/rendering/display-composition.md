@@ -1,4 +1,4 @@
-# Display-resolution composition prototype
+# Region and scale composition
 
 Native presentation can compose eligible paint stacks at the resolution the view
 needs. Authoritative paint remains in exact document tiles. Presentation pixels
@@ -18,18 +18,42 @@ larger than a surface pixel, capped at 16 document pixels. At the benchmark's
 and the group-composition scratch pool plus the adjacent output mip against
 the existing display component budget.
 
-Each visible paint layer and enabled mask has a float image at this level and a
-set of valid document-page coordinates. Paint uses premultiplied working color;
-mask images contain coverage. Source identity, immutable native tile
-captures, committed brush damage and the previous prediction footprint determine
-what must be refreshed. A changed exact page is averaged directly into its layer
-image. Empty pages write zero without reading a full page. Source decoding uses
-the existing bounded cache: each batch consumes its sources before their slots
-can be reused. Composition then runs over the union of damaged regions, in layer
-order, with layer opacity applied once. Unchanged layers reuse their pixels. A
-small adjacent output mip is updated over the same damage for trilinear viewport
-sampling; it avoids the fallback sixteen samples per screen pixel and is included
-in cache accounting.
+The scene owns each layer's reduced local pixels independently of the view.
+A source can retain several levels within the display allowance; each records
+which local pages are valid. Paint uses premultiplied working color and masks
+use scalar coverage. Source identity, immutable native captures, brush damage
+and retired prediction footprints invalidate the affected pages at every level.
+One current native backing is retained per source, rather than per level.
+
+A changed exact page is averaged directly into its source image. Empty pages
+write zero without reading a full page. Decode batches consume their inputs
+before their cache slots can be reused. Coarser levels derive from valid finer
+regions; gaps in a partial finer image cannot overwrite valid coarse pixels.
+Required previews take priority over spare detail when several photos compete
+for the admitted memory. Admission reserves composition scratch and command
+capacity before retaining optional source levels, including images allocated
+later in the frame. Pose changes preserve local pixels.
+
+Reduced composition runs over damaged document regions in layer order, with
+opacity applied once. Placed sources and masks use the common transform
+resampler. Their most magnified axis determines source resolution; an additional
+level of detail and a two-by-two sample grid limit placement-edge error.
+Interior samples use the hardware linear sampler. Boundary samples account
+for partially filled source texels and the smaller final output cell. Masks retain their default coverage outside their local image.
+A normal placed layer over a constant backdrop keeps its source and transform
+until another layer needs its pixels. If it reaches the root unchanged, the
+presenter samples it directly into the surface and navigator. This avoids an
+intermediate canvas image and a second resampling step. Its neighboring source
+levels share the scene's validity and memory allowance. Other stacks materialize
+their result and derive an adjacent output mip for trilinear presentation.
+Navigator sampling subdivides footprints that span more than four coarse-source
+texels along either axis.
+
+At native or larger views, the shared tile executor fills a padded, page-aligned
+viewport window. Panning reuses its overlap and renders only newly required or
+changed pages. A full-document overview serves the navigator and pixels outside
+the window. Covered overview regions derive from completed detail; uncovered
+regions use reduced composition, avoiding duplicate exact-source work.
 
 The cache replaces the full composite, live display pyramid/detail atlas,
 transform static copies and obsolete scene image intermediates for its supported
@@ -42,8 +66,9 @@ paint compositor.
 
 Eligible temporary dry-brush tails use compact prediction pages. They share the
 existing dry material evaluator, reading averaged exact destination color and
-stroke coverage. The normal uniform camera uses the existing half-surface-pixel
-contact evaluation density, capped at 4 document pixels per prediction texel.
+stroke coverage. The combined layer placement and camera use a half-surface-pixel
+contact evaluation density along the most magnified axis, capped at four local
+pixels per prediction texel and by the source level its compositor consumes.
 At Fit this gives 64 × 64 prediction pages instead of 256 × 256 pages. No private
 full-size coverage fork is needed. Reduction weights partial edge texels by their
 actual document area. Changing or cancelling a tail invalidates its old footprint;
@@ -59,27 +84,21 @@ backlog to hide from the benchmark.
 
 ## Supported contract
 
-The prototype admits native, untransformed paint layers, isolated groups,
-clipping stacks, all layer blend modes, aligned scalar masks and paper.
-Masks reduce their exact coverage pages and participate in the same group and
-clipping operations as exact composition. Mask inspection remains presentation
-only. The prototype excludes effects and persistent watercolor state. Visible
-unsupported artwork routes the whole stack through exact composition. Fine
-views, insufficient cache admission and active transforms also use that path.
-Advanced brushes retain their exact temporary executor; only simple analytic dry
-contacts without grain, selection, alpha lock or edge effects use compact tails.
+The region executor admits native paint layers, isolated groups, clipping
+stacks, all blend modes, paper, affine placements and scalar masks. Mask
+inspection remains presentation only. Effects, persistent watercolor state and
+active pixel-transform transactions still use the exact presentation executor;
+these dependencies have not yet migrated. Insufficient admission also retains
+that executor. Advanced brushes keep their exact temporary evaluator; simple
+analytic dry contacts without grain, selection, alpha lock or edge effects can
+use compact tails.
 
-During unchanged navigation, the cache may retain one neighboring level within
-the same total component budget. Coarser levels derive from the already-reduced
-layer images, with area weighting at document edges. Returning to a retained
-level reuses its composed output. Artwork changes discard the spare immediately,
-including its references to native tile captures. A new finer level still needs
-authoritative content when it was not retained. This bounds ownership and avoids
-repeated preparation at a zoom boundary; it does not eliminate every first-view
-preparation cost. The current cache scans document page validity and composes a
-bounding rectangle rather than maintaining a second fine-grained scheduler. Region and scale are explicit inputs to the new executor,
-while effects and transforms remain future extensions with their own dependency
-and quality requirements.
+An unchanged view may retain one neighboring composed output within the same
+component budget. Returning to it reuses its pixels; artwork changes retire it.
+Source levels have independent ownership and validity, so returning through a
+native view need not reread a previously reduced photo. Unretained finer content
+still requires authoritative pixels. Composition currently uses bounded damage
+rectangles rather than a separate pixel scheduler.
 
 ## Why display composition is approximate
 
@@ -122,7 +141,10 @@ cargo test -p layer-render-wgpu --test project --offline -- --test-threads=1
 
 The scale tests compare against exact composition and exact output, exercise odd
 edges, changing prediction footprints, opacity, ordering, source removal,
-resolution changes and repeated entry/exit through the filter fallback. They
+resolution changes, window overlap, affine source and mask placement, sparse
+source derivation, prediction cancellation and entry/exit through the filter fallback. Direct
+placement presentation is compared with supersampled exact output through
+rotated and nonuniform cameras. The tests
 assert that superseded presentation allocations are absent. Project tests cover
 all brush presets, save/reopen and exact undo/redo; the source-backed test also
 compares the same committed stroke drawn at 12.5% and 100%.

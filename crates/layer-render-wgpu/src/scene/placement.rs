@@ -3,8 +3,6 @@
 use super::*;
 use paint_transform::snapshot::Splitter;
 use pixel_transform::{BatchDraw, TiledTransformRecord, TransformTile};
-mod mips;
-pub(super) use mips::Mip;
 
 #[derive(Clone)]
 pub(super) struct PlacementJob {
@@ -61,9 +59,9 @@ impl Scene {
         let extent = layer.local_extent(r.document_extent);
         let affine = layer_core::target_transform(packet.layers, layer.id);
         if self.placement_display
-            && let Some(mip) = self.placement_mips.get(&layer.id).filter(|m| m.usable)
+            && scale::placement_level(packet.layers, layer.id) > 0
+            && let Some((level, view, size)) = self.scale_sources.sample(layer.id, scale::placement_level(packet.layers, layer.id))
         {
-            let (level, view, size) = mip.image.sample(mip.sample_level);
             let scale = (1 << level) as f32;
             let view = view.clone();
             let transform = layer_core::ImageTransform::affine(

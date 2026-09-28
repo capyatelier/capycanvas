@@ -41,7 +41,7 @@ fn project(color: DocumentColor) -> Project {
 }
 fn packet(project: &Project, all: bool) -> FramePacket<'_> {
     FramePacket {
-        view: ViewState { background_rgba_linear: [0.; 4], ..test_view() },
+        view: crate::test_support::view(EXTENT),
         composite_all: all,
         ..crate::test_support::packet(&project.document.layers, EXTENT)
     }
@@ -53,7 +53,7 @@ fn renderer(project: &Project, limit: u64) -> WgpuRasterizer {
     r
 }
 fn image(r: &WgpuRasterizer) -> Vec<u8> {
-    crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap())
+    crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
 }
 fn close(a: &[u8], b: &[u8]) {
     assert_eq!(a.len(), b.len());

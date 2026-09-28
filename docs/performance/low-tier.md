@@ -6,9 +6,8 @@ Reference: TCL TAB 11 Gen 2 (9465X) with a 1200 × 1920, 60 Hz panel. The canvas
 is 4248 × 2832.
 
 - Every row targets **60 fps** unless marked soft.
-- The TCL's only transform and UI measurements are canvas-bar benchmark runs on
-  a **6000 × 4000** document, twice the tier canvas. Those numbers are
-  conservative.
+- Geometry measurements use the 12 MP photo at Fit zoom. Older UI-only rows
+  name their own canvas sizes.
 
 ## Operations
 
@@ -19,11 +18,17 @@ is 4248 × 2832.
 | Two-finger rotate | 60 | | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
-| Placed-photo drag (24 MP photo) | 60 | Renderer 141 submissions/s; GPU completion interval p50/p99 6.7/11.8 ms (6000 × 4000) | Canvas-bar `photo-handle-drag-bar-hidden`, 2026-09-27 |
-| Pixel transform handle drag: Free, Uniform, Skew or Rotate | 60 | **Not met.** Renderer 24 submissions/s; owner CPU p50 30 ms; GPU interval p99 82 ms (6000 × 4000) | Canvas-bar `photo-pixels-handle-drag`, 2026-09-27 |
-| Pixel transform: Distort or Perspective | 60 | Renderer 130 submissions/s; GPU interval p99 11.4 ms (6000 × 4000) | Canvas-bar `photo-pixels-distort-drag`, 2026-09-27 |
-| Pixel transform: Warp | 60 | | |
-| Selection transform, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
+| Placed-photo translation | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 94.8 completed updates/s | Geometry build below, `photo-translate-drag` |
+| Placed-photo corner resize | 60 | Screen 59.4 presents/s, p99 17.0 ms; renderer 84.5 completed updates/s | Geometry build below, `photo-handle-drag-bar-hidden` |
+| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 91.5 completed updates/s | Geometry build below, `photo-pixels-handle-drag` |
+| Pixel transform: Uniform, Skew or Rotate | 60 | | |
+| Pixel transform translation | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 93.9 completed updates/s | Geometry build below, `photo-pixels-translate-drag` |
+| Pixel transform: Distort | 60 | Screen 59.5 presents/s, p99 16.7 ms; renderer 91.1 completed updates/s | Geometry build below, `photo-pixels-distort-drag` |
+| Pixel transform: Perspective | 60 | | |
+| Pixel transform: Warp | 60 | **Not met.** Screen 52.2 presents/s, p99 33.4 ms; renderer 51.8 completed updates/s | Geometry build below, `photo-pixels-warp-drag` |
+| Crop corner drag | 60 | Screen 59.3 presents/s, p99 16.7 ms; renderer 113.5 completed updates/s | Geometry build below, `crop-handle-drag` |
+| Pixel resize after placing the photo at 45% size | 60 | Screen 59.5 presents/s, p99 16.9 ms; renderer 115.7 completed updates/s | Geometry build below, `scaled-photo-pixels-handle-drag` |
+| Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
 | Move tool layer drag | 60 | | |
 | Marquee, Lasso or Polygon drag | 60 | | |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
@@ -49,11 +54,29 @@ is 4248 × 2832.
 | List scrolling: layers, brushes, filters | 60 | | |
 | Menu open and close | 60 | | |
 
+Geometry build: 2026-09-28, production composition worktree based on `a4c6358e`,
+APK SHA-256 `d0b9d3ee2ab3ff8c8941cb7f4b6b16832e268f1b58923121c671dc54205c0605`.
+Release Rust with an unminified Android benchmark harness, default glass, thermal
+status 0, three warmed five-second gestures per row. Values are medians across
+runs. Screen rates use SurfaceFlinger actual-present timestamps; this device
+provides no separate SurfaceView timeline, so they do not independently establish
+canvas presentation rates. Renderer counts exclude empty updates and terminal
+polling. Raw results are in `artifacts/display-production/geometry-final-reserved-tcl`.
+
+The paired old renderer at `29a564eb` completes 96.3 placement translations/s,
+94.6 placement resizes/s, 92.7 pixel translations/s, 91.2 pixel resizes/s,
+91.7 distortions/s, 51.4 warps/s, 123.8 crops/s and 112.0 scaled-photo resizes/s.
+Placement resize and crop have regressed in renderer throughput while maintaining
+about 59 screen presents/s. Pixel transforms still use the existing executor;
+warp does not meet the target. Earlier canvas-bar handle-labelled measurements
+started inside the handle and measured translation; they do not qualify resizing
+or distortion.
+
 ## Brushes
 
 Target: **60 completed updates/s** at the guaranteed size, on the 12 MP canvas.
 
-Measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets.
+Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets.
 
 - The TCL's work area is 754 px wide, so the harness fits its 520 × 299 px
   ellipse down to 339 × 299 px, at 16.0% zoom.
@@ -61,7 +84,7 @@ Measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | 37.1 updates/s (37.1–37.4); gap p99 46.5 ms | **Not met** |
+| G-Pen (1) | Simple | 1024 px | Inside-photo path: 35.3 updates/s (35.25–35.29); gap p99 43.1 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -101,3 +124,15 @@ Measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how
 | Liquify Crystals (39) | Very complex | 512 px | 1.1 updates/s (1.1–1.1); gap p99 1725.1 ms | **Not met** |
 
 At the 2048 px goal, the G-Pen completes 12.3 updates/s (12.3–12.4), with a gap p99 of 114.1 ms.
+
+G-Pen was remeasured on 2026-09-28 with the production composition worktree,
+optimized release APK SHA-256
+`cff6f839c8fa90fe67df272408ac272b8fd01ba9e5fd631d9a475435dac7d735`.
+The inside-photo trajectory uses 240 × 140 surface-pixel radii and three 5 s
+strokes. The earlier production build completed 35.1 updates/s on that path;
+the current result is essentially unchanged. The standard larger trajectory
+partly leaves the photo at Fit and completes 69.7 updates/s (68.5–69.9), with
+gap p99 22.9 ms; it does not qualify sustained painting inside the canvas.
+Thermal status was 0. Raw results are under
+`artifacts/display-production/final-region-matched-12mp-fit` and
+`artifacts/display-production/final-region-12mp-fit`.

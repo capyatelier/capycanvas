@@ -254,7 +254,7 @@ fn frame(project: &Project) -> (WgpuRasterizer, Vec<[f32; 4]>) {
         ..packet(&project.document.layers, extent)
     })
     .unwrap();
-    let bytes = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+    let bytes = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
     let pixels = bytes
         .chunks_exact(16)
         .map(|p| {

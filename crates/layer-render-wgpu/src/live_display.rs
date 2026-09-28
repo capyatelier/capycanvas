@@ -26,50 +26,13 @@ struct Window {
 }
 impl Window {
     fn new(view: ViewState, coarse: display_mips::Plan) -> Result<Option<Self>, GpuRasterError> {
-        let [a, b, c, d, tx, ty] = view.document_to_surface.map(f64::from);
-        let determinant = a * d - b * c;
-        if ![a, b, c, d, tx, ty].into_iter().all(f64::is_finite)
-            || determinant.abs() < 1e-12
-            || view.width_px == 0
-            || view.height_px == 0
-        {
-            return Err(GpuRasterError::InvalidExtent);
-        }
         let level = display_mips::view_level(view.document_to_surface, coarse.level)
             .ok_or(GpuRasterError::InvalidExtent)?;
-        if level == coarse.level {
-            return Ok(None);
-        }
-        let mut min = [f64::INFINITY; 2];
-        let mut max = [f64::NEG_INFINITY; 2];
-        for [x, y] in [
-            [0., 0.],
-            [f64::from(view.width_px), 0.],
-            [0., f64::from(view.height_px)],
-            [f64::from(view.width_px), f64::from(view.height_px)],
-        ] {
-            let p = [
-                (d * (x - tx) - c * (y - ty)) / determinant,
-                (-b * (x - tx) + a * (y - ty)) / determinant,
-            ];
-            for i in 0..2 {
-                min[i] = min[i].min(p[i]);
-                max[i] = max[i].max(p[i]);
-            }
-        }
-        let extent = coarse.extent.map(f64::from);
-        if (0..2).any(|i| max[i] <= 0. || min[i] >= extent[i]) {
-            return Ok(None);
-        }
-        // Include neighboring samples for bilinear and footprint filtering.
-        let pad = f64::from(2u32 << level);
+        let bounds = display_mips::view_bounds(view, coarse.extent, 2 << level)?;
+        if level == coarse.level || bounds.is_empty() { return Ok(None); }
         let span = PAGE_SIZE << level;
-        let low = std::array::from_fn::<_, 2, _>(|i| {
-            (min[i] - pad).clamp(0., extent[i]).floor() as u32 / span
-        });
-        let high = std::array::from_fn::<_, 2, _>(|i| {
-            ((max[i] + pad).clamp(0., extent[i]).ceil() as u32).div_ceil(span)
-        });
+        let low = [bounds.min_x() / span, bounds.min_y() / span];
+        let high = [bounds.max_x().div_ceil(span), bounds.max_y().div_ceil(span)];
         Ok(Some(Self {
             level,
             tiles: PixelRect::new(low[0], low[1], high[0], high[1]),

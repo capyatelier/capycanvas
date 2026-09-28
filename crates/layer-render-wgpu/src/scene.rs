@@ -99,7 +99,8 @@ fn composite_color(r: &WgpuRasterizer, packet: FramePacket<'_>, [red, green, blu
 pub(super) struct Scene {
     placement: pixel_transform::PixelTransform,
     placement_display: bool,
-    placement_mips: std::collections::HashMap<LayerId, placement::Mip>,
+    scale_sources: scale::Sources,
+    scale_commands: Option<scale::Commands>,
     source_tiles: sources::DecodedTiles,
     display_source_tiles: sources::DecodedTiles,
     display_sources: bool,
@@ -182,16 +183,14 @@ impl Scene {
     }
     #[cfg(test)]
     pub fn placement_cache(&self, id: LayerId) -> Option<(wgpu::Texture, u64, u32)> {
-        let mip = self.placement_mips.get(&id)?;
-        Some((mip.image.texture.clone(), mip.updates, mip.image.plan.level))
+        self.scale_sources.cache_info(id)
     }
     pub fn scratch_bytes(&self) -> u64 {
         let mut bytes = self.pool.iter().map(PageSurface::storage_bytes).sum::<u64>()
             + (self.capacity * self.stride) as u64
             + self.effects.storage_bytes()
             + self.placement.storage_bytes()
-            + self.placement_mips.values().map(|m| m.image.storage_bytes()).sum::<u64>()
-            + self.images.storage_bytes();
+            + self.images.storage_bytes() + self.scale_sources.storage_bytes() + self.scale_commands.as_ref().map_or(0, scale::Commands::storage_bytes);
         { bytes += self.source_tiles.gpu_bytes() + self.display_source_tiles.gpu_bytes(); }
         bytes
     }
@@ -324,7 +323,8 @@ impl Scene {
         let display_source_tiles = source_tiles.split_display_cache();
         Self {
             placement_display: false,
-            placement_mips: Default::default(),
+            scale_sources: Default::default(),
+            scale_commands: None,
             placement: r.transforms.as_ref().map_or_else(
                 || pixel_transform::PixelTransform::staged(device, false).placement_pass(),
                 paint_transform::PaintTransforms::placement_pass,
@@ -988,15 +988,10 @@ impl Scene {
             return Ok(false);
         }
         let mask = layer.mask.as_ref().filter(|m| m.enabled);
-        // A completed local image is already one texture. Sample its affine
-        // directly in the ordinary source-over draw instead of materializing
-        // a transformed scratch tile and then blending that tile.
-        // prepare_placement_mips includes the current prediction and restores
-        // its previous damage. The same complete image is valid while drawing.
         if mask.is_none() && self.placement_display && self.cached_composition()
-            && let Some(mip) = self.placement_mips.get(&layer.id).filter(|m| m.usable)
+            && scale::placement_level(packet.layers, layer.id) > 0
+            && let Some((level, view, _)) = self.scale_sources.sample(layer.id, scale::placement_level(packet.layers, layer.id))
         {
-            let (level, view, _) = mip.image.sample(mip.sample_level);
             let scale = (1 << level) as f32;
             let transform = layer_core::Affine([scale, 0., 0., scale, 0., 0.])
                 .then(layer_core::target_transform(packet.layers, layer.id));
@@ -1306,7 +1301,7 @@ impl Scene {
         parent: Option<LayerId>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        if self.placement_display && !self.placement_mips.is_empty() {
+        if self.placement_display {
             self.images = images::ImageStages::default();
         }
         self.placement_display = false;
@@ -1402,22 +1397,33 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
+        self.scale_sources.prepare(r, packet);
+        let mut commands = self.scale_commands.take().unwrap_or_else(|| scale::Commands::new(r));
+        commands.begin();
         if let Some(mut cache) = r.scale_display.take() {
             // Only one presentation model owns pixels. Retire intermediates
             // from a previously supported effect/placement stack as it leaves
             // the exact path; immutable pipeline recipes remain shared.
-            self.placement_mips.clear();
             self.images.release_window_pixels();
             self.image_window = None;
-            self.pool.clear();
-            self.used.clear();
+            if cache.plan.level > 0 {
+                self.pool.clear();
+                self.used.clear();
+            }
             self.display_source_tiles.release_pixels();
             self.effects.retain(packet.layers);
-            let result = cache.render(self, r, packet, dirty, encoder);
+            self.scale_sources.retain_levels(&cache.source_levels(r, packet), cache.source_budget(r, packet, &commands));
+            let result = (|| {
+                if cache.plan.level == 0 { self.prepare_placed_sources(r, packet, encoder, &mut commands)?; }
+                cache.render(self, r, packet, dirty, &mut scale::Encoding { encoder, commands: &mut commands }, tiles)
+            })();
+            self.scale_commands = Some(commands);
             r.scale_display = Some(cache);
             return result;
         }
-        self.prepare_placement_mips(r, packet, encoder)?;
+        let result = self.prepare_placed_sources(r, packet, encoder, &mut commands);
+        self.scale_commands = Some(commands);
+        result?;
         if let Some(native) = &r.native_edit
             && let Some(plan) = windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(r, packet.layers, packet.document_extent)?)?
         {
@@ -1427,6 +1433,35 @@ impl Scene {
         self.effects.retain(packet.layers);
         let dirty = self.update_images(r, packet, dirty, encoder)?;
         self.compose_pixels(r, packet, dirty, encoder, tiles)
+    }
+
+    fn display_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, tile: [u32; 2]) -> Result<usize, GpuRasterError> {
+        let mut output = self.group(r, packet, None, tile)?;
+        for layer in packet.layers {
+            if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled && m.show_area) {
+                let m = self.mask_at(r, mask, layer_core::target_transform(packet.layers, mask.id), layer.local_extent(packet.document_extent), tile)?;
+                let tint = self.alloc(r, wgpu::Color::TRANSPARENT);
+                self.draw(
+                    r,
+                    tint,
+                    self.pool[m].view.clone(),
+                    None,
+                    [0., 0., 256., 256.],
+                    [5., 1., 0., 0.],
+                    false,
+                );
+                self.free(m);
+                output = self.combine(
+                    r,
+                    tint,
+                    output,
+                    1.,
+                    layer_core::LayerBlend::Normal,
+                    false,
+                );
+            }
+        }
+        Ok(output)
     }
 
     fn compose_pixels(
@@ -1555,33 +1590,7 @@ impl Scene {
             }
             composited += page_rect(tile).intersect(dirty).area();
             let first_job = self.jobs.len();
-            let mut output = self.group(r, packet, None, tile)?;
-            for layer in packet.layers {
-                if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled && m.show_area) {
-                    let m = self.mask_at(r, mask, layer_core::target_transform(packet.layers, mask.id), layer.local_extent(packet.document_extent), tile)?;
-                    let tint = self.alloc(r, wgpu::Color::TRANSPARENT);
-                    self.draw(
-                        r,
-                        tint,
-                        self.pool[m].view.clone(),
-                        None,
-                        [0., 0., 256., 256.],
-                        [5., 1., 0., 0.],
-                        false,
-                        Convert::layers(packet),
-                    );
-                    self.free(m);
-                    output = self.combine(
-                        r,
-                        tint,
-                        output,
-                        1.,
-                        layer_core::LayerBlend::Normal,
-                        false,
-                        packet.blend_space,
-                    );
-                }
-            }
+            let output = self.display_tile(r, packet, tile)?;
             let origin = [tile[0] * PAGE_SIZE, tile[1] * PAGE_SIZE];
             if let Some(cache) = &r.live_display {
                 let complete = cache.is_complete();

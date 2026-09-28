@@ -3959,7 +3959,7 @@ impl CanvasRenderer for WgpuRasterizer {
         let preview_level = self.scale_display.as_ref().filter(|_| new_preview_from_persistent
             && packet.dab_batches.iter().filter(|b| b.kind == DabBatchKind::Preview && b.dab_count != 0)
                 .all(|b| dry_material::display_preview_eligible(&b.style)))
-            .map_or(0, |cache| cache.plan.level.min(preview_block(packet.view.document_to_surface).ilog2()));
+            .map_or(0, |cache| new_preview_layer.map_or(0, |id| cache.preview_level(packet, id)));
         if self.preview_level != preview_level {
             self.preview_pages.clear();
             self.preview_level = preview_level;
@@ -5991,9 +5991,7 @@ fn target_bytes(target: &TargetGpu) -> &[u8] {
 }
 
 fn preview_block(document_to_surface: [f32; 6]) -> u32 {
-    let [a, b, c, d, _, _] = document_to_surface;
-    let scale = (a * d - b * c).abs().sqrt();
-    [4, 2].into_iter().find(|&block| block as f32 * scale <= 0.5).unwrap_or(1)
+    1 << display_mips::view_level(document_to_surface, 3).unwrap_or(0).saturating_sub(1).min(2)
 }
 
 fn dab_bytes(dabs: &[DabGpu]) -> &[u8] {

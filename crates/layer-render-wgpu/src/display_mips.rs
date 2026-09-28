@@ -18,9 +18,31 @@ pub(super) fn view_level(transform: [f32; 6], max: u32) -> Option<u32> {
     Some((0..=max).rev().find(|level| scale * f64::from(1u32 << level) <= unit).unwrap_or(0))
 }
 
+pub(super) fn view_bounds(view: layer_render::ViewState, extent: [u32; 2], padding: u32) -> Result<PixelRect, GpuRasterError> {
+    let [a, b, c, d, tx, ty] = view.document_to_surface.map(f64::from);
+    let determinant = a * d - b * c;
+    if ![a, b, c, d, tx, ty].into_iter().all(f64::is_finite)
+        || determinant.abs() < 1e-12 || view.width_px == 0 || view.height_px == 0 {
+        return Err(GpuRasterError::InvalidExtent);
+    }
+    let mut low = [f64::INFINITY; 2];
+    let mut high = [f64::NEG_INFINITY; 2];
+    for [x, y] in [[0., 0.], [f64::from(view.width_px), 0.],
+        [0., f64::from(view.height_px)], [f64::from(view.width_px), f64::from(view.height_px)]] {
+        let p = [(d * (x - tx) - c * (y - ty)) / determinant,
+            (-b * (x - tx) + a * (y - ty)) / determinant];
+        for i in 0..2 { low[i] = low[i].min(p[i]); high[i] = high[i].max(p[i]); }
+    }
+    if (0..2).any(|i| high[i] <= 0. || low[i] >= f64::from(extent[i])) { return Ok(PixelRect::EMPTY); }
+    let low = [0, 1].map(|i| (low[i] - f64::from(padding)).clamp(0., f64::from(extent[i])).floor() as u32);
+    let high = [0, 1].map(|i| (high[i] + f64::from(padding)).clamp(0., f64::from(extent[i])).ceil() as u32);
+    Ok(PixelRect::new(low[0], low[1], high[0], high[1]))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Plan {
     pub extent: [u32; 2],
+    pub bounds: PixelRect,
     pub size: [u32; 2],
     pub level: u32,
 }
@@ -39,10 +61,14 @@ impl Plan {
         Ok(Self::at(extent, level))
     }
     pub fn at(extent: [u32; 2], level: u32) -> Self {
-        Self { extent, size: extent.map(|v| v.div_ceil(1 << level)), level }
+        Self::window(extent, level, PixelRect::full(extent))
+    }
+    pub fn window(extent: [u32; 2], level: u32, bounds: PixelRect) -> Self {
+        let size = [bounds.width(), bounds.height()].map(|v| v.div_ceil(1 << level));
+        Self { extent, bounds, size, level }
     }
     pub fn level_size(self, level: u32) -> [u32; 2] {
-        self.extent.map(|v| v.div_ceil(1 << level))
+        [self.bounds.width(), self.bounds.height()].map(|v| v.div_ceil(1 << level))
     }
     pub fn level_bytes(self, level: u32) -> u64 {
         self.level_size(level).map(u64::from).into_iter().product::<u64>() * 16
@@ -328,19 +354,6 @@ impl Image {
                 .sum::<u64>()
     }
     pub fn last_level(&self) -> u32 { self.views.len() as u32 - 1 }
-    /// The retained image at `level`, when it has one.
-    pub fn level_texture(&self, level: u32) -> Option<&wgpu::Texture> {
-        match level.checked_sub(self.plan.level)? {
-            0 => Some(&self.texture),
-            n => self.reduced.get(n as usize - 1).map(|(texture, _)| texture),
-        }
-    }
-    pub fn sample(&self, requested: u32) -> (u32, &wgpu::TextureView, [u32; 2]) {
-        let level = requested.clamp(self.plan.level, self.last_level());
-        let view = if level == self.plan.level { &self.view }
-            else { &self.reduced[(level - self.plan.level - 1) as usize].1 };
-        (level, view, self.plan.level_size(level))
-    }
     pub fn copy_mip(
         &self,
         encoder: &mut crate::submission::CommandEncoder,

@@ -205,8 +205,13 @@ APK calls, so test-APK benchmarks use the unminified build.
   logcat under `CapyDragPerf` and `CapyResizePerf`.
 - **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
   `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,scaled,move,selection,menus,canvas_size,refine,crop,merge`,
-  `durationMs`, `width`, `height`, `transparency` (`off` to `high`) and `blending`
-  (`perceptual` or `linear`, the new document's Blending) narrow or resize the run. Each scenario logs a `CapyBarPerf` line and writes
+  `durationMs`, `width`, `height`, `blending` (`perceptual` or `linear`) and
+  `transparency` (`off` to `high`) narrow or
+  resize the run. `-e photo <readable-file>` uses a JPEG matching `width` and
+  `height`; otherwise the fixture generates an image. `-e zoomOut false` keeps
+  Fit zoom. Each scenario records the initial camera and its input window in
+  monotonic and boot clocks, separately from terminal completion polling,
+  logs a `CapyBarPerf` line and writes
   `canvas-bar-benchmark/<label>.json` in external files; `ui_hz` and
   `ui_interval_ms` count the distinct vsyncs the UI drew until the gestures end.
   `refine` drags the Refine panel's Feather slider with the stylus on a
@@ -219,6 +224,11 @@ APK calls, so test-APK benchmarks use the unminified build.
   `merge` paints eight layers over a placed photo and times Merge Visible and
   Flatten Image; its `after_mark` has the dispatch time and the GPU completions
   that follow.
+  `photo` separates body translation, corner resizing, distortion and a warp
+  node drag. Priming gestures validate their geometry, then reset the transform
+  and restore the intended mode before measurement. The output directory is
+  cleared at the beginning of each invocation, so omitted scenarios cannot
+  contribute results from an earlier run.
   Photo drags are marked by `capy-drag` trace sections; `capy.publish.native` and `capy.publish.parse`
   time each model publication; `-e composeTrace true` adds a section per
   composable, which slows the frames it attributes.
