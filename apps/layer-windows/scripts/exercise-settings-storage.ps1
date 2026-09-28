@@ -66,7 +66,7 @@ function Open-Preferences {
     $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
 }
 function Close-Preferences {
-    Invoke-Control 'Close'
+    Invoke-Control 'Close preferences'
     $script:scope=$root
     Wait-Until {!(Find 'Preferences' ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
 }

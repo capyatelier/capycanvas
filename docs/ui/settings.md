@@ -162,8 +162,9 @@ deterministic. Import is previewed before anything changes:
 - Files from a newer format version are refused.
 
 Each host provides the file chooser. GTK uses `GtkFileDialog`, Web uses a
-download link and a file input, Android uses the Storage Access Framework, and
-macOS and iPadOS use the system file exporter and importer.
+download link and a file input, Android uses the Storage Access Framework,
+Windows uses the Windows App SDK file pickers and reads or writes the file off
+the UI thread, and macOS and iPadOS use the system file exporter and importer.
 
 The binding editor shows the action's description, its keys and default, and
 any chord that a more or less specific scope resolves differently.
@@ -174,15 +175,19 @@ Keyboard-emulating remotes, foot pedals and page turners work through ordinary
 key events and can be bound like any key. That includes F13–F24 and volume or
 media keys, which hosts may report as, for example, `AudioVolumeUp` or
 `AudioRaiseVolume`. Rust stores one canonical name for each such key, such as
-`volumeup`. On Android an unbound volume or media key keeps its system meaning.
-The app claims it only while a shortcut uses it.
+`volumeup`. On Android and Windows an unbound volume or media key keeps its
+system meaning. The app claims it only while a shortcut or modifier key uses it,
+or while a shortcut is being recorded.
 
 Standard-layout gamepad buttons record and resolve as keys named `gamepad_a`,
 `gamepad_r1` and so on. Web polls the Gamepad API, Android forwards gamepad
-key events, and macOS and iPadOS read the GameController framework's extended
-gamepad and send its input to the key editor window. Gamepad buttons do not
-repeat natively, so the Web and Apple adapters repeat a held button after 500 ms
-and then every 50 ms, and only repeatable bindings act on those repeats.
+key events, Windows polls `Windows.Gaming.Input` on a worker thread while its
+window is active, and macOS and iPadOS read the GameController framework's
+extended gamepad and send its input to the key editor window. Windows reads the
+analog triggers as `gamepad_l2` and `gamepad_r2` with hysteresis; the system
+keeps the guide button. Gamepad buttons do not repeat natively, so the Web,
+Windows and Apple adapters repeat a held button after 500 ms and then every
+50 ms, and only repeatable bindings act on those repeats.
 
 Sticks send their current deflection as `axes` input:
 
@@ -192,8 +197,8 @@ Sticks send their current deflection as `axes` input:
 Rust applies a 0.15 radial dead zone and a squared response, scaled by the
 scroll pan and zoom speeds. It integrates motion on each frame, pauses it while a
 stroke or other canvas contact owns the view, and clears it on blur. A
-disconnect releases held buttons and centers the sticks on Web, Android, macOS
-and iPadOS.
+disconnect releases held buttons and centers the sticks on Web, Android,
+Windows, macOS and iPadOS; on Windows deactivating the window does the same.
 
 GTK has no gamepad adapter, because GTK itself exposes no gamepad API. A
 Bluetooth device works only when it presents one of these standard input
@@ -236,10 +241,14 @@ reports Wayland stylus buttons 2, 3 and 8, and tablet pad buttons as
 tablet buttons `KEYCODE_BUTTON_1`–`16` as the same `pad_button_N` keys. Web
 reports pointer `buttons` bits 2 and 4. Android reports the stylus primary and secondary buttons. macOS reports a
 tablet pen's right and other mouse buttons as the lower and upper buttons, and
-its eraser end. Windows and iPadOS do not show the pen button or eraser end rows
-until their hosts deliver the same input.
-iPadOS delivers finger taps with native touch timestamps and lists the tap
-rows; macOS and Windows receive no finger contacts and list no taps.
+its eraser end. Windows reports the Windows Ink barrel button as the lower
+button and the inverted pen as the eraser end, in hover and in contact. Windows
+Ink has no upper button, so Windows lists only the lower one. iPadOS does not
+show the pen button or eraser end rows until its host delivers the same input.
+iPadOS and Windows deliver finger taps with native touch timestamps and list the
+tap rows; macOS receives no finger contacts and lists no taps. Windows keeps
+three- and four-finger contacts for its own touch gestures while those are on
+in Windows Settings, so only two-finger taps reach the app by default.
 
 An Apple Pencil double-tap or squeeze follows the iPad's Apple Pencil setting.
 iPadOS sends it as `stylus_action` input when that setting switches between the

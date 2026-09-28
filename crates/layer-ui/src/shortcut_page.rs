@@ -171,6 +171,7 @@ pub(crate) fn triggers(platform: Platform) -> impl Iterator<Item = &'static Gest
         .iter()
         .filter(move |t| if t.held { platform.pen_buttons() } else { platform.touch_gestures() })
         .filter(move |t| t.id != "pen.button.tertiary" || platform == Platform::Gtk)
+        .filter(move |t| t.id != "pen.button.secondary" || platform != Platform::Windows)
 }
 
 fn action_label(all: &[(ShortcutDefinition, ShortcutSection)], id: &str, l: &Localizer) -> String {

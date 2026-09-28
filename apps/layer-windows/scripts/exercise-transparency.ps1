@@ -35,7 +35,7 @@ function Preference([int]$Index){
     Wait-Until {(Model).state.palette.glass.transparency -eq @('off','low','medium','high')[$Index]} "Transparency $Index did not apply"
     Wait-Until {$circle.Current.ItemStatus -eq 'Selected'} "Transparency $Index circle was not checked"
     $close=$dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Close'),
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'CloseButton'),
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::Button)))
     $close.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {$null -eq (Find 'Preferences' -Name -Type $ControlType::Window)} 'Preferences did not close'

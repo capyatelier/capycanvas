@@ -143,7 +143,7 @@ function Preferences {
     Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
 }
 function Close-Preferences($Dialog){
-    (Control 'Close' -Name -Within $Dialog -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    (Control 'CloseButton' -Within $Dialog).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {$null -eq (Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'drawing-canvas').Current.IsEnabled} 'Preferences did not release canvas'
 }
 try{

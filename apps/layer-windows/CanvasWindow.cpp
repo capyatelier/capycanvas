@@ -2,6 +2,7 @@
 #include "CanvasWindow.h"
 #include "CanvasPointerSample.h"
 #include "UiControls.h"
+#include "KeyNames.h"
 #include "ExternalImages.h"
 #include <microsoft.ui.xaml.media.dxinterop.h>
 #include <microsoft.ui.xaml.window.h>
@@ -211,6 +212,7 @@ void CanvasWindow::Open() {
     panel.CompositionScaleChanged([weak=weak_from_this()](auto&&,auto&&) { if(auto self=weak.lock()) self->Resize(); });
     window.Activated([weak=weak_from_this()](auto&&, WindowActivatedEventArgs const& e) {
         if(auto self=weak.lock()){
+            if(self->gamepad)self->gamepad->Active(e.WindowActivationState()!=WindowActivationState::Deactivated);
             if(e.WindowActivationState()==WindowActivationState::Deactivated){
                 // A WinUI submenu can deactivate the main HWND while focus
                 // stays inside its owned popup tree. Check after activation
@@ -427,6 +429,9 @@ bool CanvasWindow::StartPrepared(CapyLaunch* prepared) {
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock()){OutputDebugStringA(error.c_str());self->Fail(to_string(CapyUi::str(CapyUi::object(self->bootstrap,L"recovery"),L"preferences_failed")));}},
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);});
+    settings->SetWindowId(windowId);
+    gamepad=std::make_unique<GamepadInput>([weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);});
+    gamepad->Active(true);
     documents=std::make_unique<DocumentView>(
         [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);},
         model,localization,window,[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
@@ -578,8 +583,10 @@ void CanvasWindow::StartInput() {
             if(auto self=weak.lock())self->Wheel(e);
         });
         inputSource.PointerExited([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock();self&&!e.CurrentPoint().IsInContact())
+            if(auto self=weak.lock();self&&!e.CurrentPoint().IsInContact()){
+                self->PenButtons(e.CurrentPoint(),4);
                 self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});
+            }
         });
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
 }
@@ -631,6 +638,7 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
         if(auto self=weak.lock())if(!self->closing)self->canvasFocus.Focus(FocusState::Pointer);
     });
     if(phase==1&&!SyncContactModifiers(e.KeyModifiers()))return;
+    if(!PenButtons(e.CurrentPoint(),phase))return;
     uint32_t deviceFlags=0;
     auto current=e.CurrentPoint();
     if(current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen) {
@@ -643,7 +651,7 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
         auto props=point.Properties();
         auto type=point.PointerDeviceType();
         uint32_t tool=type==Microsoft::UI::Input::PointerDeviceType::Mouse?1:
-            type==Microsoft::UI::Input::PointerDeviceType::Touch?3:props.IsEraser()?2:0;
+            type==Microsoft::UI::Input::PointerDeviceType::Touch?3:props.IsEraser()||props.IsInverted()?2:0;
         auto pos=point.Position();
         auto radians=[](float degrees){return degrees*0.017453292519943295f;};
         CapyPointer p{};
@@ -653,7 +661,7 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
         p.tilt_x=radians(props.XTilt());p.tilt_y=radians(props.YTilt());p.twist=radians(props.Twist());
         p.phase=phase;p.tool=tool;
         p.button=CanvasPointerButton(tool,props.IsMiddleButtonPressed(),props.IsRightButtonPressed(),props.IsXButton1Pressed()||props.IsXButton2Pressed());
-        p.flags=deviceFlags|(predicted?1:0)|(props.IsPrimary()?2:0)|(props.IsInverted()?8:0);
+        p.flags=deviceFlags|(predicted?1:0)|(props.IsPrimary()?2:0);
         if(!PrepareCanvasPrediction(p))return true;
         latencyTrace.Input(p,arrival);
         samples.push_back(p);
@@ -710,41 +718,8 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     if(pressed&&key==VirtualKey::Escape&&workspace&&workspace->CancelGesture()){e.Handled(true);return;}
     auto focused=FocusManager::GetFocusedElement(root.XamlRoot());
 
-    std::wstring name;
-    switch(key) {
-    case VirtualKey::Shift:name=L"shift";break;
-    case VirtualKey::Control:name=L"control";break;
-    case VirtualKey::Menu:name=L"alt";break;
-    case VirtualKey::Escape:name=L"escape";break;
-    case VirtualKey::Space:name=L" ";break;
-    case VirtualKey::Enter:name=L"enter";break;
-    case VirtualKey::Tab:name=L"tab";break;
-    case VirtualKey::Back:name=L"backspace";break;
-    case VirtualKey::Delete:name=L"delete";break;
-    case VirtualKey::Insert:name=L"insert";break;
-    case VirtualKey::Home:name=L"home";break;
-    case VirtualKey::End:name=L"end";break;
-    case VirtualKey::PageUp:name=L"pageup";break;
-    case VirtualKey::PageDown:name=L"pagedown";break;
-    case VirtualKey::Left:name=L"arrowleft";break;
-    case VirtualKey::Right:name=L"arrowright";break;
-    case VirtualKey::Up:name=L"arrowup";break;
-    case VirtualKey::Down:name=L"arrowdown";break;
-    default:
-        if(key>=VirtualKey::F1&&key<=VirtualKey::F24)
-            name=L"f"+std::to_wstring(uint32_t(key)-uint32_t(VirtualKey::F1)+1);
-        else {
-            BYTE state[256]{};
-            GetKeyboardState(state);
-            // Translate the layout's printable key without Ctrl/Alt changing
-            // it into a control character. Flag 4 leaves dead-key state intact.
-            state[VK_CONTROL]=state[VK_LCONTROL]=state[VK_RCONTROL]=0;
-            state[VK_MENU]=state[VK_LMENU]=state[VK_RMENU]=0;
-            wchar_t characters[8]{};
-            int count=ToUnicodeEx(uint32_t(key),e.KeyStatus().ScanCode,state,characters,8,4,GetKeyboardLayout(0));
-            if(count>0&&characters[0]>=L' ')name.assign(characters,count);
-        }
-    }
+    std::wstring name=CapyUi::KeyName(key,e.KeyStatus().ScanCode);
+    if(CapyUi::DeviceKey(key)&&!heldKeys.contains(uint32_t(key))&&!(pressed&&ClaimsDeviceKey(name)))return;
     // Release the same key identity even when Shift/layout changes while held.
     auto held=heldKeys.find(uint32_t(key));
     if(held!=heldKeys.end())name=held->second;
@@ -783,6 +758,26 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     sentModifiers.store(((GetKeyState(VK_CONTROL)&0x8000)?1u:0u)|((GetKeyState(VK_SHIFT)&0x8000)?2u:0u)|((GetKeyState(VK_MENU)&0x8000)?4u:0u));
     Send(to_string(input.Stringify()),CanvasCommandKind::Input);
     if(!editing)e.Handled(true);
+}
+bool CanvasWindow::PenButtons(Microsoft::UI::Input::PointerPoint const& point,uint32_t phase){
+    if(point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Pen)return true;
+    return PenButtons(point.PointerId(),phase!=4&&point.Properties().IsBarrelButtonPressed());
+}
+bool CanvasWindow::PenButtons(uint32_t id,bool primary){
+    auto held=penButtons.contains(id);
+    if(held==primary)return true;
+    if(primary)penButtons.insert(id);else penButtons.erase(id);
+    return SendIndependent(CanvasCommand{CanvasCommandKind::Input,std::string(R"({"type":"pen_button","button":"primary","pressed":)")+(primary?"true}":"false}")});
+}
+bool CanvasWindow::ClaimsDeviceKey(std::wstring const& name)const{
+    using namespace CapyUi;
+    if(object(object(lastModel,L"preferences"),L"capture").Size())return true;
+    auto stored=object(object(lastModel,L"state"),L"settings");
+    for(auto hold:array(stored,L"hold_keys"))if(str(object(hold.GetObject(),L"key"),L"key")==name)return true;
+    for(auto entry:object(stored,L"shortcuts"))
+        if(entry.Value().ValueType()==JsonValueType::Array)
+            for(auto chord:entry.Value().GetArray())if(str(chord.GetObject(),L"key")==name)return true;
+    return false;
 }
 bool CanvasWindow::SyncContactModifiers(Windows::System::VirtualKeyModifiers held) {
     using Mod=Windows::System::VirtualKeyModifiers;

@@ -113,11 +113,67 @@ try {
  Wait-Until {(Camera) -ne $view} 'Mouse middle drag did not pan the canvas'
  if((Model).state.document_file.revision -ne $revision){throw 'Mouse middle drag edited the drawing'}
  Write-Output "Barrel mid-stroke $midStroke, held $held, middle drag pans"
+ (Find 'Drawing canvas' -Name).SetFocus()
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
+ Wait-Until {(Model).preferences} 'Ctrl+, did not open Preferences'
+ Invoke 'Pen & Input' -Name
+ Wait-Until {Find 'trigger-pen.button.primary'} 'Pen & Input did not list the lower pen button'
+ if(Find 'trigger-pen.button.secondary'){throw 'Windows listed an upper pen button that Windows Ink cannot report'}
+ Invoke-Id 'trigger-pen.button.primary'
+ Wait-Until {(Model).preferences.pen_button_editor -and (Find 'pen-button-action-all')} 'The lower pen button page did not open'
+ Invoke-Id 'pen-button-action-all'
+ Wait-Until {(Model).preferences.shortcut_page.picker -and (Find 'action-picker-search')} 'The pen button picker did not open'
+ (Find 'action-picker-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Pan')
+ Wait-Until {Find 'action-command.Hand'} 'The pen button picker did not offer Pan'
+ Invoke-Id 'action-command.Hand'
+ Wait-Until {!(Model).preferences.shortcut_page.picker -and "$((Model).state.settings.pen_buttons.'pen.button.primary')" -match 'command.Hand'} 'Pan was not bound to the lower pen button'
+ Invoke-Id 'CloseButton'
+ Wait-Until {!(Model).preferences -and !(Find 'CloseButton')} 'Preferences did not close';Start-Sleep -Milliseconds 300
+ [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+ $view=Camera;$revision=(Model).state.document_file.revision;$row=$y+[int](80*$density)
+ Barrel-Stroke $x $row -Held
+ Wait-Until {(Camera) -ne $view} 'A barrel bound to Pan did not pan the canvas'
+ Start-Sleep -Milliseconds 300
+ if((Model).state.document_file.revision -ne $revision){throw 'A barrel bound to Pan painted'}
+ Write-Output 'A barrel bound to Pan pans without painting'
+ function Pen-Stroke([int]$X,[int]$Y){
+  $revision=(Model).state.document_file.revision
+  [CapyRowPointer]::PenHover($X,$Y);Start-Sleep -Milliseconds 35
+  [CapyRowPointer]::Down('pen',$X,$Y)
+  for($i=1;$i -le 18;$i++){[CapyRowPointer]::Move($X+4*$i,$Y);Start-Sleep -Milliseconds 10}
+  [CapyRowPointer]::Up($true);[CapyRowPointer]::PenLeave()
+  Wait-Until {(Model).state.document_file.revision -gt $revision} 'The pen stroke did not finish'
+  Start-Sleep -Milliseconds 300
+ }
+ function Paper([double]$Across,[double]$Down){
+  $m=Model;$c=$m.state.camera;$tab=@($m.state.tabs)[0];$b=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
+  @([int]($b.X+$c.translation[0]+$tab.width*$c.zoom*$Across),[int]($b.Y+$c.translation[1]+$tab.height*$c.zoom*$Down))
+ }
+ $at=Paper .3 .3;$x=$at[0];$row=$at[1]
+ Pen-Stroke $x $row
+ if((Inked 'eraser-before' ($x+8) ($x+64) $row) -lt .9){throw 'The eraser end check did not start from ink'}
+ [CapyRowPointer]::EraserEnd($true);try{Pen-Stroke $x $row}finally{[CapyRowPointer]::EraserEnd($false)}
+ $erased=Inked 'eraser-end' ($x+8) ($x+64) $row
+ if($erased -gt .1){throw "The eraser end did not erase by default ($erased inked)"}
+ (Find 'Drawing canvas' -Name).SetFocus()
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
+ Wait-Until {(Model).preferences} 'Ctrl+, did not open Preferences'
+ Invoke 'Pen & Input' -Name
+ (Control 'Paint with transparency' -Name -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+ Wait-Until {(Model).state.settings.eraser_end.erase -eq $false} 'Paint with transparency did not turn off'
+ Invoke-Id 'CloseButton'
+ Wait-Until {!(Model).preferences -and !(Find 'CloseButton')} 'Preferences did not close';Start-Sleep -Milliseconds 300
+ [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+ $at=Paper .3 .7;$x=$at[0];$row=$at[1]
+ [CapyRowPointer]::EraserEnd($true);try{Pen-Stroke $x $row}finally{[CapyRowPointer]::EraserEnd($false)}
+ $painted=Inked 'eraser-end-paints' ($x+8) ($x+64) $row
+ if($painted -lt .9){throw "The eraser end still erased with Paint with transparency off ($painted inked)"}
+ Write-Output "Eraser end erases by default and paints ($painted) with transparency off"
  $records|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
  [CapyRowPointer]::Dispose()
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $run
  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
- [pscustomobject]@{draw_then_clear='6/6';barrel_mid_stroke='one stroke, one Undo';barrel_held='paints';middle_drag='pans';scope='OS-injected pen with continuous hover; physical Wacom acceptance remains separate';evidence=$run}|ConvertTo-Json
+ [pscustomobject]@{draw_then_clear='6/6';barrel_mid_stroke='one stroke, one Undo';barrel_held='paints';middle_drag='pans';barrel_bound_to_pan='pans without painting';eraser_end='erases by default, paints with transparency off';scope='OS-injected pen with continuous hover; physical Wacom acceptance remains separate';evidence=$run}|ConvertTo-Json
 } catch {
  $failure=$_
  if($review -and !$review.HasExited){

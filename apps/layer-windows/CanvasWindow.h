@@ -12,6 +12,7 @@
 #include "CanvasLatencyTrace.h"
 #include "CanvasSnapshotMailbox.h"
 #include "FilterPreviews.h"
+#include "GamepadInput.h"
 #include "native/include/capy_windows.h"
 #include <atomic>
 #include <condition_variable>
@@ -74,6 +75,8 @@ private:
     float inputScale=1;
     uint64_t revision=0;
     std::unordered_map<uint32_t,std::wstring> heldKeys; // UI thread
+    std::unordered_set<uint32_t> penButtons; // input thread
+    std::unique_ptr<GamepadInput> gamepad;
     bool inputDone=false;
     CapyHost* host=nullptr;
     std::unique_ptr<WorkspaceView> workspace;
@@ -145,6 +148,9 @@ private:
     bool SendIndependent(CanvasWork item);
     void Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&, bool pressed);
     bool SyncContactModifiers(winrt::Windows::System::VirtualKeyModifiers held);
+    bool ClaimsDeviceKey(std::wstring const& name)const;
+    bool PenButtons(winrt::Microsoft::UI::Input::PointerPoint const& point,uint32_t phase);
+    bool PenButtons(uint32_t id,bool primary);
     void Wheel(winrt::Microsoft::UI::Input::PointerEventArgs const&);
     // Explicit smoke fixtures; only the input dispatcher touches replayTime.
     enum class ReplayKind { Stroke, Pan, Backlog, Pen, PenBegin, PenEnd };

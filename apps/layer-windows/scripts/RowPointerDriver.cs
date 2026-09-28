@@ -49,12 +49,12 @@ public static class CapyRowPointer {
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
  static long lastInjection;public static double MaxGapMilliseconds {get;private set;}
- static uint owner,kind,penButtons;static bool active;static Point last;static IntPtr pen;
+ static uint owner,kind,penButtons;static bool active,eraserEnd;static Point last;static IntPtr pen;
  static readonly object gate=new object();static Timer pulse;static Exception failure;
  public static bool Active {get{lock(gate)return active;}}
  public static void Initialize(uint process) {
   if(active||pulse!=null||pen!=IntPtr.Zero)throw new InvalidOperationException("Dispose the previous pointer review first.");
-  failure=null;kind=0;penButtons=0;owner=process;
+  failure=null;kind=0;penButtons=0;eraserEnd=false;owner=process;
   if(Marshal.SizeOf(typeof(TouchInfo))!=144||Marshal.SizeOf(typeof(PenInfo))!=120||Marshal.SizeOf(typeof(TypeInfo))!=152)
    throw new Exception("Pointer structures require the x64 ABI.");
   if(!InitializeTouchInjection(1,3))throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -119,6 +119,7 @@ public static class CapyRowPointer {
    var point=new Point{x=x,y=y};Guard(point);kind=3;Send(point,0x20002);last=point;
   }
  }
+ public static void EraserEnd(bool on) {lock(gate){eraserEnd=on;}}
  public static void Barrel(bool held) {
   lock(gate){
    Check();if(kind!=3)throw new Exception("The barrel button needs a pen in range.");

@@ -15,6 +15,7 @@ public:
     bool IsOpen()const;
     void CommitEdits();
     void Hide();
+    void SetWindowId(uint64_t id);
 private:
     struct Impl;
     std::shared_ptr<Impl> impl;

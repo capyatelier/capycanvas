@@ -131,6 +131,17 @@ try{
  Wait-Until {(Model).state.document_file.revision -gt $revision} 'Pen stroke after touch did not finish'
  @{before_pen_revision=$revision;after_pen=(Model).state.document_file}|ConvertTo-Json -Compress|Write-Output
  Capture 'pen-after-touch';[CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
+ function Redo {((Model).state.commands|Where-Object id -eq 'redo').enabled}
+ [CapyCanvasTouch]::Initialize([uint32]$review.Id)
+ if(Redo){throw 'Redo was available before the finger taps'}
+ $tapped=Camera
+ [CapyCanvasTouch]::Down(1,($cx-80),$cy);[CapyCanvasTouch]::Down(2,($cx+80),$cy);Start-Sleep -Milliseconds 60;[CapyCanvasTouch]::Up(2);[CapyCanvasTouch]::Up(1)
+ Wait-Until {Redo} 'A two-finger tap did not undo'
+ if(!(Same-Camera (Camera) $tapped)){throw 'A two-finger tap moved the view'}
+ [CapyCanvasTouch]::Dispose()
+ Invoke 'Redo' -Name
+ Wait-Until {!(Redo)} 'Redo did not restore the pen stroke after the tap'
+ Write-Output 'two-finger tap undoes without moving the view passed'
  $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
  Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'One Undo did not leave the seed drawing'
  $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name

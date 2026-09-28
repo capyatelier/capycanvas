@@ -33,10 +33,10 @@ impl Platform {
         matches!(self, Self::Gtk | Self::Web | Self::Android)
     }
     pub fn touch_gestures(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Ios)
+        matches!(self, Self::Gtk | Self::Web | Self::Windows | Self::Android | Self::Ios)
     }
     pub fn pen_buttons(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Mac)
+        matches!(self, Self::Gtk | Self::Web | Self::Windows | Self::Android | Self::Mac)
     }
     pub fn system_accent(self) -> bool {
         matches!(self, Self::Gtk | Self::Android | Self::Windows | Self::Mac)

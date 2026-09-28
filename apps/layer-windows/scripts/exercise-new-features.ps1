@@ -73,7 +73,7 @@ function Check-InputPreferences {
     (Control 'Brush size' -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Capture 'input-preferences' -WithModel
     $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
-    (Control 'Close' -Name -Within $dialog -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    (Control 'CloseButton' -Within $dialog).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Model).preferences} 'Input preferences did not close'
     Write-Output 'PASS: All ten cursor modes, painting cursor visibility, native/shared prediction preferences'
 }
@@ -85,7 +85,7 @@ function Set-Theme([string]$Theme) {
     (Control $Theme -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Model).state.theme -eq $Theme.ToLowerInvariant()} 'Theme did not apply'
     $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
-    (Control 'Close' -Name -Within $dialog -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    (Control 'CloseButton' -Within $dialog).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find 'Color theme' -Name)} 'Preferences did not close'
     $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle);Start-Sleep -Milliseconds 200
 }

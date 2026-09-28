@@ -157,6 +157,11 @@ fn tap_bindings_are_configurable_and_validated() {
     assert_eq!(triggers(Platform::Mac), ["pen.button.primary", "pen.button.secondary"], "macOS reports tablet side buttons, not finger taps");
     assert_eq!(triggers(Platform::Ios), ["touch.tap.2", "touch.tap.3", "touch.tap.4"], "iPadOS reports finger taps, not pen buttons");
     assert_eq!(triggers(Platform::Android).len(), 5, "only Linux reports a third side button");
+    assert_eq!(
+        triggers(Platform::Windows),
+        ["touch.tap.2", "touch.tap.3", "touch.tap.4", "pen.button.primary"],
+        "Windows Ink reports one barrel button, and touchscreens report finger taps"
+    );
     assert_eq!(triggers(Platform::Gtk).len(), 6);
 }
 

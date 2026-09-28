@@ -2,6 +2,7 @@
 #include "SettingsView.h"
 #include "UiControls.h"
 #include "Checker.h"
+#include "ShortcutPage.h"
 #include "WorkspaceGeometry.h"
 #include <map>
 #include <tuple>
@@ -29,7 +30,7 @@ void edit(std::shared_ptr<WorkspaceData> const& data,hstring const& id,V const& 
     send(data,O({{L"type",S(L"edit")},{L"id",S(id)},{L"value",value}}));
 }
 TextBlock description(std::shared_ptr<WorkspaceData> const& data,hstring const& value){
-    auto text=label(data,value);text.TextWrapping(TextWrapping::Wrap);text.Opacity(.75);return text;
+    auto text=label(data,value);text.TextWrapping(TextWrapping::Wrap);text.Opacity(.55);return text;
 }
 Button actionButton(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J action){
     auto result=button(data,title,[data,action]{send(data,action);});
@@ -37,106 +38,170 @@ Button actionButton(std::shared_ptr<WorkspaceData> const& data,hstring const& ti
     result.ActualThemeChanged([data](auto const& sender,auto&&){buttonColors(data,sender.template as<Button>());});
     return result;
 }
+Button headerButton(std::shared_ptr<WorkspaceData> const& data,hstring const& name,double side,std::function<void()> action){
+    auto result=button(data,L"",std::move(action));result.Width(side);result.Height(side);result.CornerRadius({side/2,side/2,side/2,side/2});
+    result.VerticalAlignment(VerticalAlignment::Center);AutomationProperties::SetName(result,name);tooltip(result,name);
+    return result;
+}
 }
 struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
+    static constexpr double HeaderHeight=46,DialogWidth=1000,DialogHeight=744;
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
     ContentDialog dialog;
-    Grid body;
-    StackPanel sidebar,content,pages,results,shortcuts,editor;
-    TextBox search,shortcutSearch;
+    Grid frame,body,overlay;
+    Border sidebarSurface;
+    StackPanel sidebar,pages,results;
+    TextBox search;
     TextBlock title,error,empty;
+    Button searchToggle{nullptr},back{nullptr},close{nullptr};
     ScrollViewer scroller;
     Bindings bindings,commits,themeBindings;
     std::map<std::wstring,StackPanel> pageNodes;
     std::map<std::wstring,Button> tabs;
     std::map<std::wstring,FrameworkElement> rows;
+    std::unique_ptr<ShortcutPage> shortcutPage;
     Key key;
     Dispatch report;
     std::function<void()> changed;
     XamlRoot xamlRoot{nullptr};
-    hstring theme,editorKey,shortcutKey,resultsKey,revealed;
+    hstring theme,resultsKey,revealed;
     double searchFocus=-1;
-    bool showing=false,closing=false,built=false,stopping=false,showFailed=false;
+    bool showing=false,closing=false,built=false,stopping=false,showFailed=false,dismissing=false;
+    uint64_t escapes=0,escaped=0;
     void init(){
-        dialog.XamlRoot(xamlRoot);dialog.Language(data->language());dialog.Title(box_value(data->caption(L"shortcuts",L"preferences")));dialog.CloseButtonText(data->common(L"close"));
-        dialog.Resources().Insert(box_value(L"ContentDialogMaxWidth"),box_value(920.));
-        dialog.Resources().Insert(box_value(L"ContentDialogMinWidth"),box_value(0.));
+        dialog.XamlRoot(xamlRoot);inheritLanguage(dialog,data);
+        for(auto [resource,value]:{std::pair{L"ContentDialogMaxWidth",DialogWidth},std::pair{L"ContentDialogMinWidth",0.},
+            std::pair{L"ContentDialogMaxHeight",DialogHeight},std::pair{L"ContentDialogMinHeight",0.}})
+            dialog.Resources().Insert(box_value(resource),box_value(value));
+        dialog.Resources().Insert(box_value(L"ContentDialogPadding"),box_value(Thickness{0,0,0,0}));
+        AutomationProperties::SetName(dialog,data->caption(L"shortcuts",L"preferences"));
         dialog.Closing([weak=weak_from_this()](auto&&,ContentDialogClosingEventArgs const& e){
             if(auto self=weak.lock()){
                 if(self->stopping){self->closing=true;return;}
-                auto model=preferences(self->data);
-                if(object(model,L"capture").Size()){e.Cancel(true);send(self->data,O({{L"type",S(L"cancel_shortcut")}}));}
-                else if(object(model,L"shortcut_editor").Size()){e.Cancel(true);send(self->data,O({{L"type",S(L"close_shortcut_editor")}}));}
-                else {self->closing=true;if(model.Size())self->data->dispatch(O({{L"type",S(L"close_settings")}}));}
+                if(!std::exchange(self->dismissing,false)){
+                    e.Cancel(true);
+                    self->dialog.DispatcherQueue().TryEnqueue([weak]{if(auto self=weak.lock())self->escape();});
+                    return;
+                }
+                self->closing=true;if(preferences(self->data).Size())self->data->dispatch(O({{L"type",S(L"close_settings")}}));
             }
         });
         dialog.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
             if(composingKey(e))return;
-            if(auto self=weak.lock()){bool capturing=self->capturing();self->key(e,true);if(capturing)e.Handled(true);}
+            if(auto self=weak.lock()){
+                if(e.Key()==winrt::Windows::System::VirtualKey::Escape&&!e.KeyStatus().WasKeyDown)++self->escapes;
+                bool capturing=self->capturing();self->key(e,true);if(capturing)e.Handled(true);
+            }
         });
         dialog.PreviewKeyUp([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
             if(auto self=weak.lock()){bool capturing=self->capturing();self->key(e,false);if(capturing)e.Handled(true);}
         });
+        dialog.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
+            if(auto self=weak.lock();self&&e.Key()==winrt::Windows::System::VirtualKey::Escape){
+                e.Handled(true);self->escape();
+            }
+        });
+    }
+    void hide(){dismissing=true;dialog.Hide();}
+    void escape(){
+        if(escaped==escapes)return;
+        escaped=escapes;
+        if(!shortcutPage||!shortcutPage->Dismiss())hide();
     }
     bool capturing()const{return object(preferences(data),L"capture").Size()!=0;}
+    Grid header(){
+        Grid bar;bar.Height(HeaderHeight);
+        return bar;
+    }
     void build(J const& model){
-        bindings.clear();commits.clear();themeBindings.clear();pageNodes.clear();tabs.clear();rows.clear();resultsKey=L"";shortcutKey=L"";editorKey=L"";
-        body=Grid();ColumnDefinition navigation;navigation.Width({192,GridUnitType::Pixel});
+        bindings.clear();commits.clear();themeBindings.clear();pageNodes.clear();tabs.clear();rows.clear();resultsKey=L"";
+        frame=Grid();overlay=Grid();body=Grid();
+        ColumnDefinition navigation;navigation.Width({210,GridUnitType::Pixel});
         ColumnDefinition main;main.Width({1,GridUnitType::Star});body.ColumnDefinitions().Append(navigation);body.ColumnDefinitions().Append(main);
-        sidebar=StackPanel();sidebar.Spacing(6);sidebar.Margin({0,0,16,0});
-        auto toggle=actionButton(data,data->caption(L"shortcuts",L"search_preferences"),O({{L"type",S(L"toggle_search")},{L"open",B(true)}}));
-        sidebar.Children().Append(toggle);
-        bindings.emplace_back([data=data,toggle]{auto text=data->caption(L"shortcuts",L"search_preferences");toggle.Content(box_value(text));AutomationProperties::SetName(toggle,text);});
+        Grid side;RowDefinition sideHead;sideHead.Height({HeaderHeight,GridUnitType::Pixel});RowDefinition sideRest;sideRest.Height({1,GridUnitType::Star});
+        side.RowDefinitions().Append(sideHead);side.RowDefinitions().Append(sideRest);
+        auto sideTitle=label(data,data->copyCaption(L"shortcuts",L"preferences"),true);sideTitle.HorizontalAlignment(HorizontalAlignment::Center);sideTitle.VerticalAlignment(VerticalAlignment::Center);
+        side.Children().Append(sideTitle);
+        searchToggle=headerButton(data,data->caption(L"shortcuts",L"search_preferences"),34,[data=data]{
+            send(data,O({{L"type",S(L"toggle_search")},{L"open",B(!flag(preferences(data),L"searching"))}}));
+        });
+        searchToggle.HorizontalAlignment(HorizontalAlignment::Left);searchToggle.Margin({6,0,0,0});side.Children().Append(searchToggle);
+        themeBindings.emplace_back([data=data,toggle=searchToggle]{toggle.Content(icon(L"search",data->theme()));});
+        sidebar=StackPanel();sidebar.Spacing(2);sidebar.Padding({6,0,6,6});
         search=TextBox();search.PlaceholderText(data->caption(L"shortcuts",L"search_preferences"));search.Margin({0,0,0,6});
-        AutomationProperties::SetName(search,data->caption(L"shortcuts",L"search_preferences"));
+        AutomationProperties::SetName(search,data->caption(L"shortcuts",L"search_preferences"));AutomationProperties::SetAutomationId(search,L"settings-search");
         search.TextChanged([data=data](auto&& sender,auto&&){
             if(!data->updating)send(data,O({{L"type",S(L"search")},{L"query",S(sender.template as<TextBox>().Text())}}));
         });
-        search.KeyDown([data=data](auto&&,KeyRoutedEventArgs const& e){
-            if(composingKey(e))return;
-            if(e.Key()==winrt::Windows::System::VirtualKey::Escape){send(data,O({{L"type",S(L"toggle_search")},{L"open",B(false)}}));e.Handled(true);}
+        search.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){auto self=weak.lock();if(!self||composingKey(e))return;
+            if(e.Key()==winrt::Windows::System::VirtualKey::Escape){self->escaped=self->escapes;send(self->data,O({{L"type",S(L"toggle_search")},{L"open",B(false)}}));e.Handled(true);}
         });sidebar.Children().Append(search);
-        results=StackPanel();results.Spacing(4);sidebar.Children().Append(results);
-        empty=description(data,data->caption(L"shortcuts",L"no_matching_preferences"));empty.Visibility(Visibility::Collapsed);
+        results=StackPanel();results.Spacing(2);sidebar.Children().Append(results);
+        empty=description(data,data->caption(L"shortcuts",L"no_matching_preferences"));empty.Visibility(Visibility::Collapsed);empty.HorizontalAlignment(HorizontalAlignment::Center);empty.Margin({24,48,24,48});
         AutomationProperties::SetLiveSetting(empty,Automation::Peers::AutomationLiveSetting::Polite);sidebar.Children().Append(empty);
-        content=StackPanel();content.Spacing(12);Grid::SetColumn(content,1);
-        title=label(data,L"",true);content.Children().Append(title);
-        error=description(data,L"");AutomationProperties::SetLiveSetting(error,Automation::Peers::AutomationLiveSetting::Polite);content.Children().Append(error);
-        pages=StackPanel();pages.Spacing(16);editor=StackPanel();editor.Spacing(12);
-        scroller=ScrollViewer();scroller.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
-        StackPanel sections;sections.Children().Append(pages);sections.Children().Append(editor);scroller.Content(sections);
-        content.Children().Append(scroller);
+        ScrollViewer navigationScroll;navigationScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);navigationScroll.Content(sidebar);
+        Grid::SetRow(navigationScroll,1);side.Children().Append(navigationScroll);
+        sidebarSurface=Border();sidebarSurface.Child(side);sidebarSurface.BorderThickness({0,0,1,0});body.Children().Append(sidebarSurface);
+
+        Grid pane;Grid::SetColumn(pane,1);
+        for(auto height:{GridLength{HeaderHeight,GridUnitType::Pixel},GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star}}){RowDefinition row;row.Height(height);pane.RowDefinitions().Append(row);}
+        auto head=header();
+        back=headerButton(data,data->common(L"back"),34,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->shortcutPage)self->shortcutPage->Back();});
+        back.HorizontalAlignment(HorizontalAlignment::Left);back.Margin({6,0,0,0});back.Visibility(Visibility::Collapsed);
+        AutomationProperties::SetAutomationId(back,L"shortcut-category-back");head.Children().Append(back);
+        themeBindings.emplace_back([data=data,button=back]{button.Content(icon(L"go-previous",data->theme()));});
+        title=label(data,L"",true);title.HorizontalAlignment(HorizontalAlignment::Center);title.VerticalAlignment(VerticalAlignment::Center);
+        AutomationProperties::SetAutomationId(title,L"settings-title");head.Children().Append(title);
+        close=headerButton(data,data->common(L"close"),24,[weak=weak_from_this()]{if(auto self=weak.lock())self->hide();});
+        close.HorizontalAlignment(HorizontalAlignment::Right);close.VerticalAlignment(VerticalAlignment::Top);close.Margin({0,11,11,0});
+        AutomationProperties::SetAutomationId(close,L"CloseButton");head.Children().Append(close);
+        themeBindings.emplace_back([data=data,button=close]{button.Content(icon(L"window-close",data->theme()));button.Background(data->tint(L"text",26));});
+        pane.Children().Append(head);
+        error=description(data,L"");error.Opacity(1);error.Margin({18,0,18,6});Grid::SetRow(error,1);
+        AutomationProperties::SetLiveSetting(error,Automation::Peers::AutomationLiveSetting::Polite);pane.Children().Append(error);
+        pages=StackPanel();pages.Spacing(16);pages.Padding({12,24,12,24});
+        scroller=ScrollViewer();scroller.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);scroller.Content(pages);Grid::SetRow(scroller,2);
+        pane.Children().Append(scroller);body.Children().Append(pane);
+        shortcutPage=std::make_unique<ShortcutPage>(data,overlay);
         bindings.emplace_back([this]{
-            dialog.Language(data->language());dialog.Title(box_value(data->caption(L"shortcuts",L"preferences")));dialog.CloseButtonText(data->common(L"close"));
-            for(auto entry:{search,shortcutSearch}){if(entry)entry.Language(data->language());}
-            search.PlaceholderText(data->caption(L"shortcuts",L"search_preferences"));AutomationProperties::SetName(search,search.PlaceholderText());
-            shortcutSearch.PlaceholderText(data->caption(L"shortcuts",L"search_shortcuts"));AutomationProperties::SetName(shortcutSearch,shortcutSearch.PlaceholderText());
+            auto rename=[](Button const& target,hstring const& name){if(AutomationProperties::GetName(target)!=name){AutomationProperties::SetName(target,name);tooltip(target,name);}};
+            auto searchName=data->caption(L"shortcuts",L"search_preferences");
+            AutomationProperties::SetName(dialog,data->caption(L"shortcuts",L"preferences"));
+            search.PlaceholderText(searchName);AutomationProperties::SetName(search,searchName);rename(searchToggle,searchName);
+            rename(back,data->common(L"back"));rename(close,data->common(L"close"));
             empty.Text(data->caption(L"shortcuts",L"no_matching_preferences"));
         });
         for(auto pageValue:array(model,L"pages")){
             auto page=pageValue.GetObject();auto id=str(page,L"id");
-            auto tab=actionButton(data,str(page,L"title"),O({{L"type",S(L"page")},{L"page",S(id)}}));
-            StackPanel tabContent;tabContent.Orientation(Orientation::Horizontal);tabContent.Spacing(8);
+            auto tab=button(data,L"",[data=data,id]{send(data,O({{L"type",S(L"page")},{L"page",S(id)}}));});
+            tab.Height(42);tab.Padding({14,12,14,12});tab.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());tab.HorizontalAlignment(HorizontalAlignment::Stretch);tab.HorizontalContentAlignment(HorizontalAlignment::Left);
+            tab.ActualThemeChanged([data=data](auto const& sender,auto&&){buttonColors(data,sender.template as<Button>());});
+            StackPanel tabContent;tabContent.Orientation(Orientation::Horizontal);tabContent.Spacing(12);
             ContentControl tabIcon;tabIcon.IsTabStop(false);tabContent.Children().Append(tabIcon);auto tabLabel=label(data,str(page,L"title"));tabContent.Children().Append(tabLabel);
             bindings.emplace_back([data=data,id,tab,tabLabel]{auto page=find(array(preferences(data),L"pages"),L"id",id);auto text=str(page,L"title");tabLabel.Text(text);AutomationProperties::SetName(tab,text);});
             themeBindings.emplace_back([data=data,tabIcon,glyph=str(page,L"icon")]{tabIcon.Content(glyph.empty()?nullptr:icon(glyph,data->theme()));});
             tab.Content(tabContent);AutomationProperties::SetName(tab,str(page,L"title"));
-            tab.HorizontalContentAlignment(HorizontalAlignment::Left);sidebar.Children().Append(tab);tabs.emplace(id.c_str(),tab);
-            StackPanel node;node.Spacing(16);AutomationProperties::SetName(node,str(page,L"title"));
+            sidebar.Children().InsertAt(sidebar.Children().Size()-2,tab);tabs.emplace(id.c_str(),tab);
+            StackPanel node;node.Spacing(24);AutomationProperties::SetName(node,str(page,L"title"));
             pageNodes.emplace(id.c_str(),node);pages.Children().Append(node);
-            if(id==L"color")node.Children().Append(button(data,data->copyCaption(L"color",L"manage_profiles"),[data=data]{
-                data->dispatch(O({{L"type",S(L"close_settings")}}));data->document(to_string(O({{L"operation",S(L"workflow_begin")},{L"id",N(0)}}).Stringify()));
-            }));
+            auto container=shortcutPage->Container(id,node);
+            if(id==L"color"){
+                auto profiles=button(data,data->copyCaption(L"color",L"manage_profiles"),[data=data]{
+                    data->dispatch(O({{L"type",S(L"close_settings")}}));data->document(to_string(O({{L"operation",S(L"workflow_begin")},{L"id",N(0)}}).Stringify()));
+                });
+                profiles.Padding({10,5,10,5});profiles.MinHeight(34);profiles.HorizontalAlignment(HorizontalAlignment::Center);container.Children().Append(profiles);
+            }
             uint32_t sectionIndex=0;
             for(auto groupValue:array(page,L"groups")){
-                auto group=groupValue.GetObject();StackPanel section;section.Spacing(8);
-                auto groupLabel=label(data,str(group,L"title"),true);section.Children().Append(groupLabel);
-                bindings.emplace_back([data=data,pageId=id,groupIndex=sectionIndex++,groupLabel]{auto page=find(array(preferences(data),L"pages"),L"id",pageId);groupLabel.Text(str(array(page,L"groups").GetObjectAt(groupIndex),L"title"));});
-                Border card;card.Background(data->brush(L"card"));card.CornerRadius({8,8,8,8});
-                StackPanel list;card.Child(list);section.Children().Append(card);node.Children().Append(section);
+                auto group=groupValue.GetObject();StackPanel section;section.Spacing(6);section.MaxWidth(576);
+                auto heading=label(data,str(group,L"title"),true);heading.Margin({0,8,0,0});section.Children().Append(heading);
+                bindings.emplace_back([data=data,pageId=id,groupIndex=sectionIndex++,heading]{auto page=find(array(preferences(data),L"pages"),L"id",pageId);heading.Text(str(array(page,L"groups").GetObjectAt(groupIndex),L"title"));});
+                Border card;card.Background(data->brush(L"card"));card.CornerRadius({12,12,12,12});
+                StackPanel list;card.Child(list);section.Children().Append(card);container.Children().Append(section);
                 A ids;
                 for(auto rowValue:array(group,L"rows")){
                     auto row=rowValue.GetObject();ids.Append(S(str(row,L"id")));
+                    if(list.Children().Size()){Border line;line.Height(1);line.Background(data->tint(L"text",20));list.Children().Append(line);}
                     list.Children().Append(field(row));
                 }
                 bindings.emplace_back([data=data,section,ids]{
@@ -144,28 +209,21 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                     section.Visibility(visible?Visibility::Visible:Visibility::Collapsed);
                 });
             }
-            if(id==L"shortcuts"){
-                shortcutSearch=TextBox();shortcutSearch.PlaceholderText(data->caption(L"shortcuts",L"search_shortcuts"));AutomationProperties::SetName(shortcutSearch,data->caption(L"shortcuts",L"search_shortcuts"));
-                shortcutSearch.TextChanged([data=data](auto&& sender,auto&&){
-                    if(!data->updating)send(data,O({{L"type",S(L"search_shortcuts")},{L"query",S(sender.template as<TextBox>().Text())}}));
-                });node.Children().Append(shortcutSearch);
-                node.Children().Append(actionButton(data,data->caption(L"shortcuts",L"reset_all"),O({{L"type",S(L"reset_all_shortcuts")}})));
-                shortcuts=StackPanel();shortcuts.Spacing(4);node.Children().Append(shortcuts);
-            }
         }
-        ScrollViewer navigationScroll;navigationScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);navigationScroll.Content(sidebar);
-        body.Children().Append(navigationScroll);body.Children().Append(content);dialog.Content(body);built=true;
+        frame.Children().Append(body);frame.Children().Append(overlay);
+        dialog.Content(frame);built=true;
     }
     FrameworkElement field(J const& row){
         auto id=str(row,L"id"),titleText=str(row,L"title");auto kind=object(row,L"kind");auto type=str(kind,L"type");
-        Grid line;line.Margin({12,10,12,10});line.ColumnSpacing(12);
+        Grid line;line.MinHeight(54);line.Padding({14,8,14,8});line.ColumnSpacing(12);
         ColumnDefinition textColumn;textColumn.Width({1,GridUnitType::Star});
         ColumnDefinition controlColumn;controlColumn.Width({1,GridUnitType::Auto});
         line.ColumnDefinitions().Append(textColumn);line.ColumnDefinitions().Append(controlColumn);
-        StackPanel text;text.Spacing(4);auto heading=label(data,titleText);heading.TextWrapping(TextWrapping::Wrap);text.Children().Append(heading);
+        StackPanel text;text.Spacing(3);text.VerticalAlignment(VerticalAlignment::Center);
+        auto heading=label(data,titleText);heading.TextWrapping(TextWrapping::Wrap);text.Children().Append(heading);
         bindings.emplace_back([data=data,id,heading]{heading.Text(str(rowFor(data,id),L"title"));});
         if(!str(row,L"description").empty()){
-            auto detail=description(data,str(row,L"description"));text.Children().Append(detail);
+            auto detail=description(data,str(row,L"description"));detail.FontSize(data->textSize()/1.2);detail.LineHeight(15);text.Children().Append(detail);
             bindings.emplace_back([data=data,id,detail]{detail.Text(str(rowFor(data,id),L"description"));});
         }
         line.Children().Append(text);
@@ -299,7 +357,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                     else{circle.Background(clear());circle.BorderThickness({1,1,1,1});circle.BorderBrush(data->tint(L"text",64));}
                     auto foreground=swatch.GetNamedValue(L"foreground",JsonValue::CreateNullValue());
                     if(active){
-                        FontIcon check;check.Glyph(L"");check.FontSize(side*.5);
+                        FontIcon check;check.Glyph(L"");check.FontSize(side*.5);
                         check.Foreground(foreground.ValueType()==JsonValueType::String?fill(color(foreground.GetString())):data->brush(L"text"));
                         circle.Content(check);
                     }else if(auto glyph=str(swatch,L"icon");!glyph.empty())circle.Content(icon(glyph,data->theme(),side*.5));
@@ -344,61 +402,20 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         field.ContextFlyout(reset);rows.emplace(id.c_str(),field);
         bindings.emplace_back([data=data,id,field]{
             auto row=rowFor(data,id);field.Visibility(flag(row,L"visible",true)?Visibility::Visible:Visibility::Collapsed);
-            field.IsEnabled(flag(row,L"enabled",true));field.Opacity(flag(row,L"enabled",true)?1:.45);
+            field.IsEnabled(flag(row,L"enabled",true));field.Opacity(flag(row,L"enabled",true)?1:.5);
         });
         return field;
     }
-    void updateLists(J const& model){
-        auto resultsModel=array(model,L"search_results");auto resultKey=resultsModel.Stringify();
-        if(resultKey!=resultsKey){resultsKey=resultKey;results.Children().Clear();
-            for(auto value:resultsModel){
-                auto spec=value.GetObject();auto item=actionButton(data,str(spec,L"title"),object(spec,L"action"));
-                StackPanel text;text.Children().Append(label(data,str(spec,L"title")));
-                if(auto detail=str(spec,L"description");!detail.empty()){auto line=description(data,detail);line.FontSize(line.FontSize()*.9);text.Children().Append(line);}
-                item.Content(text);item.HorizontalContentAlignment(HorizontalAlignment::Left);results.Children().Append(item);
-            }
-        }
-        auto list=array(model,L"shortcuts");auto listKey=list.Stringify();
-        if(listKey!=shortcutKey){shortcutKey=listKey;shortcuts.Children().Clear();
-            for(auto value:list){auto spec=value.GetObject();if(!flag(spec,L"visible",true))continue;
-                auto item=actionButton(data,str(spec,L"label"),O({{L"type",S(L"edit_shortcut")},{L"id",S(str(spec,L"id"))}}));
-                item.HorizontalAlignment(HorizontalAlignment::Stretch);item.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-                Grid line;line.ColumnSpacing(12);ColumnDefinition textColumn;textColumn.Width({1,GridUnitType::Star});
-                ColumnDefinition bindingColumn;bindingColumn.Width({1,GridUnitType::Auto});line.ColumnDefinitions().Append(textColumn);line.ColumnDefinitions().Append(bindingColumn);
-                StackPanel text;text.Children().Append(label(data,str(spec,L"label")));text.Children().Append(description(data,str(spec,L"group")));line.Children().Append(text);
-                auto binding=label(data,str(spec,L"shortcut",data->caption(L"shortcuts",L"unassigned")));binding.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(binding,1);
-                if(flag(spec,L"modified"))binding.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
-                AutomationProperties::SetItemStatus(item,flag(spec,L"modified")?data->caption(L"shortcuts",L"modified"):L"");
-                line.Children().Append(binding);item.Content(line);shortcuts.Children().Append(item);
-            }
-        }
-        auto capture=object(model,L"capture"),editModel=object(model,L"shortcut_editor");
-        auto signature=capture.Stringify()+editModel.Stringify();
-        bool editing=capture.Size()||editModel.Size();editor.Visibility(editing?Visibility::Visible:Visibility::Collapsed);pages.Visibility(editing?Visibility::Collapsed:Visibility::Visible);
-        if(signature!=editorKey){editorKey=signature;editor.Children().Clear();
-            if(capture.Size()){
-                editor.Children().Append(label(data,data->copyCaption(L"shortcuts",L"set_shortcut"),true));editor.Children().Append(label(data,str(capture,L"label")));
-                editor.Children().Append(description(data,data->caption(L"shortcuts",L"press_shortcut")));
-                editor.Children().Append(label(data,str(capture,L"shortcut")));
-                editor.Children().Append(description(data,str(capture,L"notice")));
-                bool conflict=capture.GetNamedValue(L"conflict").ValueType()!=JsonValueType::Null;
-                auto confirm=actionButton(data,conflict?data->caption(L"shortcuts",L"replace"):data->caption(L"shortcuts",L"set_shortcut"),O({{L"type",S(L"confirm_shortcut")},{L"replace",B(conflict)}}));
-                confirm.IsEnabled(object(capture,L"chord").Size()!=0&&str(capture,L"error").empty());editor.Children().Append(confirm);
-                auto cancel=actionButton(data,data->common(L"cancel"),O({{L"type",S(L"cancel_shortcut")}}));editor.Children().Append(cancel);
-                cancel.Focus(FocusState::Programmatic);
-            }else if(editModel.Size()){
-                auto id=str(editModel,L"id");editor.Children().Append(label(data,str(editModel,L"label"),true));
-                editor.Children().Append(description(data,str(editModel,L"group")));
-                auto values=array(editModel,L"bindings");
-                for(uint32_t i=0;i<values.Size();++i){
-                    StackPanel row;row.Orientation(Orientation::Horizontal);row.Spacing(12);row.Children().Append(label(data,values.GetStringAt(i)));
-                    row.Children().Append(actionButton(data,data->common(L"remove"),O({{L"type",S(L"remove_shortcut")},{L"id",S(id)},{L"index",N(i)}})));editor.Children().Append(row);
-                }
-                editor.Children().Append(description(data,data->caption(O({{L"type",S(L"shortcut_defaults")},{L"keys",array(editModel,L"defaults")}}))));
-                auto add=actionButton(data,data->caption(L"shortcuts",L"add_shortcut"),O({{L"type",S(L"begin_shortcut")},{L"id",S(id)}}));add.IsEnabled(flag(editModel,L"can_add"));editor.Children().Append(add);
-                auto reset=actionButton(data,data->common(L"reset"),O({{L"type",S(L"reset_shortcut")},{L"id",S(id)}}));reset.IsEnabled(flag(editModel,L"modified"));editor.Children().Append(reset);
-                editor.Children().Append(actionButton(data,data->common(L"back"),O({{L"type",S(L"close_shortcut_editor")}})));
-            }
+    void updateResults(J const& model){
+        auto resultsModel=array(model,L"search_results");auto resultKey=resultsModel.Stringify()+data->theme();
+        if(resultKey==resultsKey)return;
+        resultsKey=resultKey;results.Children().Clear();
+        for(auto value:resultsModel){
+            auto spec=value.GetObject();auto item=actionButton(data,str(spec,L"title"),object(spec,L"action"));
+            item.HorizontalAlignment(HorizontalAlignment::Stretch);item.Padding({10,10,10,10});item.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());
+            StackPanel text;text.Spacing(3);text.Children().Append(label(data,str(spec,L"title")));
+            if(auto detail=str(spec,L"description");!detail.empty()){auto line=description(data,detail);line.FontSize(data->textSize()/1.2);line.LineHeight(15);text.Children().Append(line);}
+            item.Content(text);item.HorizontalContentAlignment(HorizontalAlignment::Left);results.Children().Append(item);
         }
     }
     fire_and_forget show(){
@@ -422,15 +439,17 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         data->adoptLocalization(snapshot);
         if(!snapshot.HasKey(L"state"))return;
         data->state=object(snapshot,L"state");data->refreshPalette();data->model=snapshot;auto model=preferences(data);
-        if(!model.Size()){showFailed=false;if(showing&&!closing)dialog.Hide();return;}
+        if(!model.Size()){if(shortcutPage)shortcutPage->Apply(snapshot);showFailed=false;if(showing&&!closing){dismissing=true;dialog.Hide();}return;}
         if(showFailed)return;
         data->updating=true;struct Reset{bool& value;~Reset(){value=false;}}reset{data->updating};
         // Retain native controls and their automation peers across theme changes.
         bool restyle=!built||theme!=data->theme();theme=data->theme();
         if(!built)build(model);
         dialog.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
-        auto size=xamlRoot.Size();body.Width(std::max(320.,std::min(800.,double(size.Width)-96)));
-        body.Height(std::max(200.,std::min(560.,double(size.Height)-200)));scroller.Height(std::max(140.,body.Height()-64));
+        dialog.Background(data->brush(L"settings"));sidebarSurface.Background(data->brush(L"sidebar"));sidebarSurface.BorderBrush(data->tint(L"text",30));
+        auto size=xamlRoot.Size();frame.Width(std::max(320.,std::min(DialogWidth,double(size.Width)-60)));
+        frame.Height(std::max(240.,std::min(DialogHeight,double(size.Height)-40)));
+        shortcutPage->Apply(snapshot);
         auto page=str(model,L"page"),query=str(model,L"query");
         bool opening=search.Visibility()==Visibility::Collapsed&&(flag(model,L"searching")||!query.empty());
         search.Visibility(flag(model,L"searching")||!query.empty()?Visibility::Visible:Visibility::Collapsed);
@@ -441,17 +460,19 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         empty.Visibility(flag(model,L"empty")?Visibility::Visible:Visibility::Collapsed);
         for(auto const& [id,node]:pageNodes)node.Visibility(id==page?Visibility::Visible:Visibility::Collapsed);
         for(auto const& [id,item]:tabs){
-            item.Background(id==page?selected(data):clear());item.Visibility(query.empty()?Visibility::Visible:Visibility::Collapsed);
+            item.Background(id==page?data->tint(L"text",26):clear());item.Visibility(query.empty()?Visibility::Visible:Visibility::Collapsed);
+            AutomationProperties::SetItemStatus(item,id==page?data->caption(L"search",L"selected"):hstring());
         }
-        title.Text(str(find(array(model,L"pages"),L"id",page),L"title"));
+        auto subpage=shortcutPage->Title();
+        title.Text(subpage.empty()?str(find(array(model,L"pages"),L"id",page),L"title"):subpage);
+        back.Visibility(subpage.empty()?Visibility::Collapsed:Visibility::Visible);
         auto message=str(model,L"error");
         if(message.empty())message=str(snapshot,L"error");
         if(message.empty())message=str(data->state,L"host_error");
-        error.Text(message);
+        error.Text(message);error.Foreground(fill(color(theme==L"dark"?L"#ff7b63":L"#c01c28")));
         error.Visibility(error.Text().empty()?Visibility::Collapsed:Visibility::Visible);
         for(auto const& bind:bindings)bind();
-        if(shortcutSearch.Text()!=str(model,L"shortcut_query"))shortcutSearch.Text(str(model,L"shortcut_query"));
-        updateLists(model);
+        updateResults(model);
         auto reveal=str(model,L"reveal");
         if(reveal!=revealed){revealed=reveal;auto it=rows.find(reveal.c_str());if(it!=rows.end()){
             it->second.StartBringIntoView();
@@ -469,3 +490,4 @@ void SettingsView::Apply(Json const& snapshot){impl->apply(snapshot);}
 bool SettingsView::IsOpen()const{return impl->showing;}
 void SettingsView::CommitEdits(){for(auto const& commit:impl->commits)commit();}
 void SettingsView::Hide(){impl->stopping=true;if(impl->showing)impl->dialog.Hide();}
+void SettingsView::SetWindowId(uint64_t id){impl->data->windowId=id;}

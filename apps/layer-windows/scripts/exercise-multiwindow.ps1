@@ -80,7 +80,7 @@ function Close-Preferences {
     # Wait for automation to expose the dialog after a theme update before
     # passing its scope to the child-control query.
     $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
-    Invoke 'Close' -Name -Within $dialog
+    Invoke 'CloseButton' -Within $dialog
     Wait-Until {$null -eq (Preferences) -and !(Model).state.settings_open} 'Preferences did not close'
 }
 function Close-Window($Window){

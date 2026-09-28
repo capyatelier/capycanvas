@@ -5,6 +5,10 @@
 #include "../CanvasQueryQueue.h"
 #include "../CanvasSnapshotMailbox.h"
 #include "../WorkspacePublication.h"
+#include "../GamepadState.h"
+#include <algorithm>
+#include <string>
+#include <vector>
 #include <cassert>
 #include <iostream>
 
@@ -232,4 +236,32 @@ int main() {
     for(auto expected:{"context","drawer","thumbnail","stats"})assert(queries.Take()->json==expected);
     assert(queries.Empty());
     std::cout<<"Canvas queries: menu priority, FIFO geometry/pixels, bounded retained allocation, retry ownership and disposal passed\n";
+
+    std::vector<std::string> sent;
+    GamepadState pad([&](std::string json){sent.push_back(std::move(json));});
+    auto start=GamepadState::Clock::now();
+    auto at=[&](int ms){return start+std::chrono::milliseconds(ms);};
+    auto count=[&](char const* text){return size_t(std::count_if(sent.begin(),sent.end(),[&](auto const& json){return json.find(text)!=std::string::npos;}));};
+    pad.Read(GamepadSample{},at(0));
+    assert(sent.empty());
+    pad.Read(GamepadSample{1u},at(0));
+    assert(sent.size()==1&&count(R"("key":"gamepad_a","pressed":true,"repeat":false)")==1);
+    pad.Read(GamepadSample{1u},at(499));
+    assert(sent.size()==1);
+    pad.Read(GamepadSample{1u},at(500));pad.Read(GamepadSample{1u},at(549));pad.Read(GamepadSample{1u},at(550));
+    assert(count(R"("key":"gamepad_a","pressed":true,"repeat":true)")==2);
+    pad.Read(GamepadSample{},at(560));
+    assert(count(R"("key":"gamepad_a","pressed":false)")==1);
+    sent.clear();
+    for(double value:{.49,.5,.31,.3})pad.Read(GamepadSample{0,value},at(600));
+    assert(count(R"("gamepad_l2","pressed":true)")==1&&count(R"("gamepad_l2","pressed":false)")==1&&sent.size()==2);
+    sent.clear();
+    pad.Read(GamepadSample{0,0,0,.123,-1.7,.5},at(700));pad.Read(GamepadSample{0,0,0,.1249,-1.2,.5},at(716));
+    assert(sent.size()==1&&sent[0]==R"({"type":"axes","pan":[0.12,1.00],"zoom":0.50})");
+    pad.Read(GamepadSample{1u<<13,0,0,std::numeric_limits<double>::quiet_NaN(),.004},at(720));
+    pad.Release(at(730));
+    assert(count(R"("gamepad_right","pressed":false)")==1&&count(R"({"type":"axes","pan":[0.00,0.00],"zoom":0.00})")==1&&count("-0.00")==0);
+    sent.clear();pad.Release(at(740));
+    assert(sent.empty());
+    std::cout<<"Gamepad buttons, 500/50 ms repeats, trigger hysteresis, clamped rounded axes and release passed\n";
 }
