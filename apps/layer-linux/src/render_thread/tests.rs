@@ -46,7 +46,7 @@ fn native_hdr_display_hint_before_first_frame() {
             &reply,
             &Default::default(),
             &AtomicUsize::new(0),
-            &AtomicBool::new(false),
+            &Default::default(),
             Arc::default(),
         )
     });

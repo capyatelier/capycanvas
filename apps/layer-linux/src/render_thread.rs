@@ -93,6 +93,8 @@ enum Command {
     TransformPreview(Option<layer_render::TransformPreview>),
     MovingLayer(Option<layer_core::LayerId>),
     MovingPixels(Option<(layer_core::LayerId, layer_core::Selection)>),
+    Retouch(Option<layer_render::RetouchPreparation>),
+    RetireStrokeSources,
     Startup(
         u64,
         Box<(layer_core::Document, layer_core::BrushSnapshot, bool)>,
@@ -121,6 +123,12 @@ enum Command {
     Stop,
     #[cfg(test)]
     FailNextFrame,
+}
+/// What the render thread reports after each frame for the session to read.
+#[derive(Default)]
+struct FrameReport {
+    pending_work: AtomicBool,
+    retouch_miss: std::sync::atomic::AtomicU64,
 }
 enum Reply {
     ColorAdopted(u64, HashMap<AssetId, BrushSource>, layer_render_wgpu::snapshot::SnapshotGpu, Option<layer_render_wgpu::ShaderActivity>),
@@ -197,7 +205,8 @@ pub struct RenderWorker {
     replies: mpsc::Receiver<Reply>,
     failure: Arc<std::sync::OnceLock<String>>,
     in_flight: Arc<AtomicUsize>,
-    pending_work: Arc<AtomicBool>,
+    report: Arc<FrameReport>,
+    retouch: Option<layer_render::RetouchPreparation>,
     thread: Option<JoinHandle<()>>,
     color: layer_core::color::DocumentColor,
     next_color_request: u64,
@@ -295,8 +304,8 @@ impl RenderWorker {
         let worker_clock = clock.clone();
         let in_flight = Arc::new(AtomicUsize::new(0));
         let count = in_flight.clone();
-        let pending_work = Arc::new(AtomicBool::new(false));
-        let worker_pending = pending_work.clone();
+        let report = Arc::new(FrameReport::default());
+        let worker_report = report.clone();
         let telemetry = Arc::new(std::sync::Mutex::new(
             layer_render::RendererTelemetry::default(),
         ));
@@ -323,7 +332,7 @@ impl RenderWorker {
                         &reply,
                         &worker_telemetry,
                         &count,
-                        &worker_pending,
+                        &worker_report,
                         #[cfg(test)]
                         worker_stats,
                     )
@@ -391,7 +400,8 @@ impl RenderWorker {
             replies,
             failure,
             in_flight,
-            pending_work,
+            report,
+            retouch: None,
             thread: Some(thread),
             color,
             next_color_request: 0,
@@ -601,7 +611,7 @@ impl CanvasRenderer for RenderWorker {
         self.in_flight.load(Ordering::Acquire) < 2
     }
     fn has_pending_work(&self) -> bool {
-        self.pending_work.load(Ordering::Acquire)
+        self.report.pending_work.load(Ordering::Acquire)
     }
     fn set_transform_preview(
         &mut self,
@@ -622,6 +632,18 @@ impl CanvasRenderer for RenderWorker {
         if self.moving_pixels != pixels && self.send(Command::MovingPixels(pixels.clone())).is_ok() {
             self.moving_pixels = pixels;
         }
+    }
+    fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
+        if self.retouch.as_ref() != retouch && self.send(Command::Retouch(retouch.cloned())).is_ok() {
+            self.retouch = retouch.cloned();
+        }
+    }
+    fn take_retouch_miss(&mut self) -> Option<layer_core::StrokeId> {
+        let stroke = self.report.retouch_miss.swap(0, Ordering::AcqRel);
+        (stroke != 0).then_some(layer_core::StrokeId(stroke))
+    }
+    fn retire_stroke_sources(&mut self) {
+        let _ = self.send(Command::RetireStrokeSources);
     }
     fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> {
         self.ready().map_err(|_| BackendError("Selection worker unavailable"))?;
@@ -933,7 +955,7 @@ impl Worker {
         reply: &mpsc::Sender<Reply>,
         worker_telemetry: &std::sync::Mutex<layer_render::RendererTelemetry>,
         count: &AtomicUsize,
-        pending_work: &AtomicBool,
+        report: &FrameReport,
         #[cfg(test)] worker_stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
     ) -> Result<(), String> {
         if reply.send(Reply::Initialized(self.view_color, self.renderer.snapshot_gpu(), self.renderer.shader_activity())).is_err() {
@@ -1016,7 +1038,7 @@ impl Worker {
                     )?;
                     document_drawn = true;
                     last_canvas_frame = std::time::Instant::now();
-                    self.report_pending_work(pending_work);
+                    self.report_frame(report);
                     count.fetch_sub(1, Ordering::Release);
                 }
                 if progress.complete {
@@ -1191,6 +1213,8 @@ impl Worker {
                     .map_err(error)?,
                 Command::MovingLayer(layer) => self.renderer.prepare_moving_layer(layer),
                 Command::MovingPixels(pixels) => self.renderer.prepare_moving_pixels(pixels),
+                Command::Retouch(retouch) => self.renderer.prepare_retouch(retouch.as_ref()),
+                Command::RetireStrokeSources => self.renderer.retire_stroke_sources(),
                 Command::Startup(generation, inputs) => {
                     let (document, brush, transform) = *inputs;
                     startup_input = Some((generation, document, brush, transform));
@@ -1305,7 +1329,7 @@ impl Worker {
                         pending_frames.push_back(frame);
                     } else {
                         document_drawn = true;
-                        self.report_pending_work(pending_work);
+                        self.report_frame(report);
                         count.fetch_sub(1, Ordering::Release);
                     }
                 }
@@ -1474,13 +1498,17 @@ impl Worker {
         })
     }
     /// Publish whether the renderer has work for later frames, and wake an
-    /// idle canvas when it newly does.
-    fn report_pending_work(&self, pending_work: &AtomicBool) {
+    /// idle canvas when it newly does. A retouching stroke that missed its
+    /// source is kept for the session to replay.
+    fn report_frame(&mut self, report: &FrameReport) {
+        if let Some(stroke) = self.renderer.take_retouch_miss() {
+            report.retouch_miss.store(stroke.0, Ordering::Release);
+        }
         let pending = self.renderer.has_pending_work();
-        if pending && !pending_work.swap(pending, Ordering::AcqRel) {
+        if pending && !report.pending_work.swap(pending, Ordering::AcqRel) {
             wake_canvas(&self.area);
         }
-        pending_work.store(pending, Ordering::Release);
+        report.pending_work.store(pending, Ordering::Release);
     }
     fn report_display(&self, reply: &mpsc::Sender<Reply>) -> Result<(), String> {
         reply.send(Reply::DisplayHeadroom(self.display_headroom, self.hdr_encoding)).map_err(error)?;

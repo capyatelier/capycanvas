@@ -166,6 +166,9 @@ pub struct DabStyle {
     pub transport: Option<BrushTransport>,
     pub deform: BrushDeform,
     pub contact: Option<layer_core::BrushContact>,
+    /// A retouching stroke's source. Renderers keep the target's stroke-start
+    /// pixels for it before the stroke first writes each page.
+    pub retouch: Option<layer_core::Retouch>,
 }
 impl DabStyle {
     pub fn for_brush(brush: &layer_core::BrushSnapshot, tool: layer_core::StrokeTool) -> Self {
@@ -188,8 +191,19 @@ impl DabStyle {
                 material.fibers *= (brush.diameter / 128.).max(1.);
                 material
             }),
+            retouch: None,
         }
     }
+}
+
+/// A retouching tool is ready to paint on `target`. Renderers prepare what its
+/// strokes need before pen-down, and may cache reference pixels around
+/// `points`, in document coordinates, while nothing is painting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RetouchPreparation {
+    pub target: LayerId,
+    pub retouch: layer_core::Retouch,
+    pub points: Vec<Point>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -691,6 +705,18 @@ pub trait CanvasRenderer {
     /// Move drag may move next. The renderer may prepare that drag while
     /// idle. None when no such drag is expected.
     fn prepare_moving_pixels(&mut self, _pixels: Option<(LayerId, layer_core::Selection)>) {}
+    /// A retouching tool's target, source and focus points, or None when no
+    /// retouching tool is selected. Never blocks.
+    fn prepare_retouch(&mut self, _retouch: Option<&RetouchPreparation>) {}
+    /// A retouching stroke whose source was not ready while the pen was down.
+    /// It must be replayed once, after contact ends. Each stroke is reported
+    /// once; renderers without retouch sources report none.
+    fn take_retouch_miss(&mut self) -> Option<StrokeId> {
+        None
+    }
+    /// The latest stroke can no longer be corrected, so its stroke-start
+    /// pixels may be released.
+    fn retire_stroke_sources(&mut self) {}
     /// Applied by the next submit. None restores the captured original before
     /// subsequent paint/operations. This performs no readback or blocking wait.
     fn set_transform_preview(

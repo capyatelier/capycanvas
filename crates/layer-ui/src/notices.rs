@@ -3,7 +3,7 @@
 //! after a short timeout or at the next canvas contact, and answer with
 //! `UiAction::Notice`.
 use super::*;
-use layer_core::DrawingRefusal;
+use layer_core::{DrawingRefusal, RetouchSource};
 use layer_engine::StrokeRefusal;
 use serde::Serialize;
 
@@ -55,6 +55,10 @@ fn stroke_refusal_text(refusal: StrokeRefusal) -> &'static str {
         StrokeRefusal::Target(refusal) => drawing_refusal_text(refusal),
         StrokeRefusal::AlphaLocked => "Alpha lock keeps this layer's transparency, so erasing has no effect",
         StrokeRefusal::DryMask => "Masks take dry coverage, so this brush paints without its wet or blending behavior",
+        StrokeRefusal::EmptySource(RetouchSource::Editing) => "This layer is empty, so there's nothing to copy",
+        StrokeRefusal::EmptySource(RetouchSource::References) => {
+            "This layer is empty, and there's no layer below it to copy from"
+        }
     }
 }
 
@@ -136,8 +140,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             self.notices.dry_mask = mask;
         }
-        if let Some(refusal) = refusal {
-            self.notify(stroke_refusal_text(refusal));
+        match refusal {
+            Some(StrokeRefusal::EmptySource(RetouchSource::References)) if self.reference_below().is_some() => self
+                .offer_reference_below("This layer is empty, and no reference layer below it is marked"),
+            Some(refusal) => self.notify(stroke_refusal_text(refusal)),
+            None => {}
         }
     }
 
@@ -188,12 +195,19 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Wand and Fill sampling reference layers when none is marked.
     pub(super) fn notify_missing_reference(&mut self) {
-        match self.reference_below().map(|layer| format!("Use {} as Reference", layer.name)) {
-            Some(label) => self.raise_notice(
-                "This tool samples reference layers, and none is marked".into(),
-                Some((label, UiAction::Invoke { command: CommandId::UseReferenceBelow })),
-            ),
-            None => self.notify("This tool samples reference layers. Mark one in the Layers panel first."),
+        if self.reference_below().is_some() {
+            self.offer_reference_below("This tool samples reference layers, and none is marked");
+        } else {
+            self.notify("This tool samples reference layers. Mark one in the Layers panel first.");
+        }
+    }
+
+    /// Explain `text` and offer to mark the nearest layer below as a
+    /// reference, in one undo step.
+    fn offer_reference_below(&mut self, text: &str) {
+        if let Some(layer) = self.reference_below() {
+            let label = format!("Use {} as Reference", layer.name);
+            self.raise_notice(text.into(), Some((label, UiAction::Invoke { command: CommandId::UseReferenceBelow })));
         }
     }
 }

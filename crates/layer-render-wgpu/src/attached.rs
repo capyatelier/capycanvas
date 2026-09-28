@@ -54,6 +54,19 @@ impl CanvasRenderer for AttachedRenderer {
             gpu.prepare_moving_pixels(pixels);
         }
     }
+    fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
+        if let Some(gpu) = self.0.as_mut() {
+            gpu.prepare_retouch(retouch);
+        }
+    }
+    fn take_retouch_miss(&mut self) -> Option<layer_core::StrokeId> {
+        self.0.as_mut()?.take_retouch_miss()
+    }
+    fn retire_stroke_sources(&mut self) {
+        if let Some(gpu) = self.0.as_mut() {
+            gpu.retire_stroke_sources();
+        }
+    }
 
     fn set_transform_preview(
         &mut self,

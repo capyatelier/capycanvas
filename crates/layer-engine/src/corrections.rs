@@ -107,19 +107,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     if !active.feedback.enabled || estimate.index < self.finalized_real_points {
                         self.rebuild_corrected_active();
                     }
-                } else if let Some(stroke) = self.completed_stroke.as_ref() {
-                    self.restore_rasters.push((
-                        stroke.layer_id,
-                        self.completed_before.as_ref().unwrap().clone(),
-                    ));
-                    self.editor
-                        .amend_raster(
-                            stroke.layer_id,
-                            layer_core::raster::RasterRevision::pending(),
-                        )
-                        .map_err(EngineError::Document)?;
-                    self.rebuild_completed = true;
-                    self.rebuild_all = true;
+                } else {
+                    self.replay_completed().map_err(EngineError::Document)?;
                 }
                 estimate.point = point;
                 for (_, copy) in &mut estimate.copies {

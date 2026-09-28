@@ -530,6 +530,7 @@ command_ids! {
     FlattenImage,
     StampVisible,
     MergeGroup,
+    CloneSourceArm,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -539,6 +540,11 @@ impl CommandId {
             Self::Copy | Self::Cut | Self::CopyMerged | Self::PasteInPlace | Self::PasteInto => platform.pixel_clipboard(),
             _ => true,
         }
+    }
+    /// Listed in search, shortcuts and the toolbar bank: available here, and
+    /// for a command limited to some kinds of tool, one of them is offered.
+    pub fn offered_on(self, platform: Platform) -> bool {
+        self.available_on(platform) && shortcuts::command_scope(self).offered()
     }
     /// Polygon construction spans several contacts; these follow it live.
     pub fn follows_construction(self) -> bool {
@@ -570,6 +576,7 @@ impl CommandId {
                 | Self::PreviewSdr
                 | Self::SoftProof
                 | Self::GamutWarning
+                | Self::CloneSourceArm
         )
     }
     pub fn icon(self) -> Option<&'static str> {
@@ -628,6 +635,7 @@ impl CommandId {
             Self::SelectionFromCenter => "select",
             Self::CompleteSelection => "selection-checked",
             Self::CancelSelection => "deselect",
+            Self::CloneSourceArm => "cursor-sight",
             Self::SelectionVisible => "eye",
             Self::SelectionEditing => "layers",
             Self::SelectionReference => "reference",
@@ -853,9 +861,10 @@ impl CommandId {
             Self::SelectionFromCenter => "Draw from center",
             Self::CompleteSelection => "Finish selection",
             Self::CancelSelection => "Cancel selection",
-            Self::SelectionVisible => "Sample visible artwork",
-            Self::SelectionEditing => "Sample editing layer",
-            Self::SelectionReference => "Sample reference layers",
+            Self::CloneSourceArm => "Set Source",
+            Self::SelectionVisible => "Visible artwork",
+            Self::SelectionEditing => "Editing layer",
+            Self::SelectionReference => "Reference layers",
 
             Self::Move => "Operation",
             Self::ScaleRotate => "Transform",

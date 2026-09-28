@@ -66,6 +66,39 @@ that preview. Predictions are not saved into the document.
 Replay uses the stored real samples and brush snapshot. Any brush change should
 therefore be tested both while drawing and after undo/redo or reopening a project.
 
+## Retouching sources
+
+A retouching stroke copies pixels instead of laying down a color. The engine
+fixes what it copies at pen-down, in the stroke's
+[`Retouch`](../../crates/layer-core/src/retouch.rs): the reference layers below
+the editing layer with the editing layer over them, or the editing layer alone.
+With no reference below, the editing layer alone is the source. A stroke that
+would copy nothing from an empty layer, or that would paint a mask, is refused
+with a notice.
+
+The renderer keeps the source apart from the pages the stroke paints
+([`retouch_sources.rs`](../../crates/layer-render-wgpu/src/retouch_sources.rs)):
+
+- **Stroke-start pages.** Before a stroke first writes a page of its layer, the
+  page is copied GPU to GPU into a pooled page, or recorded as empty. Reading the
+  source therefore never sees the stroke's own dabs, and the next stroke starts
+  over and sees the last. A replay starts over from the restored pages.
+- **Reference composite.** Pages of the composite of the reference layers,
+  captured by their own scene and cached, 96 at most, least recently used out
+  first. They stay valid until a member's pixels, placement or appearance change;
+  painting the editing layer keeps them. A lone untransformed layer is copied
+  rather than composed.
+- **Sampling.** Each pixel reads the editing layer at its opacity over the
+  reference composite, with bilinear taps, so whole-pixel shifts copy exactly.
+
+While a retouching tool is selected, 16 stroke-start pages and the source
+pipelines are ready before pen-down, and reference pages around the focus points
+are captured a few per still frame. While the pen is down the sources never
+upload or wait for the GPU: a reference page that would need filter images, a
+decode or a wait stays empty, and the stroke is reported as a miss. The engine
+replays it once contact ends, as it replays an end taper, and the replay stays
+one undo step.
+
 ## Performance and mobile devices
 
 The main reason to put pixel work on the GPU is the cost of brushes that interact

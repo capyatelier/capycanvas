@@ -25,6 +25,8 @@ pub mod raster;
 pub mod raster_storage;
 pub use effect_catalog::*;
 mod layers;
+mod retouch;
+pub use retouch::{Retouch, RetouchSource};
 mod selection;
 pub mod tonal;
 pub use selection::*;
@@ -1215,6 +1217,8 @@ pub struct Stroke {
     /// Immutable layer-local coverage captured at stroke start, including for
     /// mask painting. Later selection edits must not change stroke replay.
     pub selection: Option<Arc<Selection>>,
+    /// A retouching stroke's source, captured at stroke start.
+    pub retouch: Option<Retouch>,
 }
 
 impl Stroke {
@@ -1262,6 +1266,7 @@ impl Stroke {
             bounds,
             alpha_locked: false,
             selection: None,
+            retouch: None,
         })
     }
 }

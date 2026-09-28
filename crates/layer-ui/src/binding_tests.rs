@@ -284,3 +284,44 @@ fn pen_buttons_choose_hold_or_one_shot_actions_per_kind_of_tool() {
     preference(&mut s, PreferenceAction::ResetTrigger { trigger: "pen.button.primary".into() });
     assert!(s.state.settings.pen_buttons.is_empty());
 }
+
+#[test]
+fn set_source_holds_with_retouching_tools_and_stays_unlisted_until_one_exists() {
+    let definitions = crate::shortcuts::definitions(Platform::Gtk);
+    let hold = crate::shortcuts::hold_id("command.CloneSourceArm").unwrap();
+    let (held, _) = definitions.iter().find(|(d, _)| d.id == hold).unwrap();
+    assert!(matches!(held.action, crate::shortcuts::ShortcutAction::Momentary { .. }));
+    assert_eq!(held.scope, crate::shortcuts::BindingScope::Tools { categories: vec![ToolCategory::Retouching] });
+    let mut s = session(Platform::Gtk);
+    let alt = s.state.settings.hold_keys(Platform::Gtk).into_iter().find(|h| h.key.key == "alt").unwrap();
+    assert_eq!(alt.actions.get(&ToolCategory::Retouching).map(String::as_str), Some("command.CloneSourceArm"));
+    assert_eq!(alt.actions.get(&ToolCategory::Drawing).map(String::as_str), Some("command.Eyedropper"));
+    crate::shortcut_page::set_pen_button(
+        &mut s.state.settings,
+        Platform::Gtk,
+        "pen.button.primary",
+        Some(ToolCategory::Retouching),
+        "command.CloneSourceArm",
+    )
+    .unwrap();
+    s.state.settings.validate().unwrap();
+    let barrel = s.state.settings.pen_actions("pen.button.primary");
+    assert_eq!(barrel.get(&ToolCategory::Retouching).map(String::as_str), Some("command.CloneSourceArm"));
+    assert!(!barrel.contains_key(&ToolCategory::Drawing), "other tools keep the button unbound");
+
+    let set_source = s.command(CommandId::CloneSourceArm);
+    assert!(!set_source.enabled && set_source.checkable);
+    assert_eq!(s.command_disabled_reason(CommandId::CloneSourceArm).as_deref(), Some("Choose a retouching tool first"));
+    assert!(s.dispatch(UiAction::Invoke { command: CommandId::CloneSourceArm }).is_err());
+    assert!(!CommandId::CloneSourceArm.offered_on(Platform::Gtk));
+    assert!(s.command_catalog().iter().all(|d| !d.id.contains("CloneSourceArm")), "search lists no placeholder");
+    assert!(crate::customization::tool_catalog(Platform::Gtk)
+        .iter()
+        .all(|c| c.control != crate::ToolbarControl::Command { command: CommandId::CloneSourceArm }));
+    s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
+    let view = s.preferences().unwrap();
+    assert!(view.shortcuts.iter().all(|r| r.id != "command.CloneSourceArm"));
+    assert!(view.shortcut_page.contexts.iter().all(|c| c.category != Some(ToolCategory::Retouching)));
+    let pen = view.shortcut_page.triggers.iter().find(|t| t.id == "pen.button.primary").unwrap();
+    assert_eq!(pen.action, "Nothing", "a binding for retouching alone is not summarized yet");
+}

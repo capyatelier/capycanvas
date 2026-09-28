@@ -17,12 +17,13 @@ use crate::input::{
 };
 use layer_core::{
     BrushError, BrushExecution, BrushSnapshot, Document, DocumentError, DrawingRefusal, Edit,
-    Editor, LayerId, Rect, Stroke, StrokeId, StrokeTool,
+    Editor, LayerId, Rect, Retouch, RetouchSource, Stroke, StrokeId, StrokeTool,
 };
 use layer_render::{
-    CanvasRenderer, Dab, DabBatch, DabBatchKind, DabStyle, FramePacket, ViewState,
+    CanvasRenderer, Dab, DabBatch, DabBatchKind, DabStyle, FramePacket, RetouchPreparation,
+    ViewState,
 };
-use std::{collections::VecDeque, fmt};
+use std::{collections::VecDeque, fmt, sync::Arc};
 
 #[path = "corrections.rs"]
 mod corrections;
@@ -73,6 +74,9 @@ pub enum StrokeRefusal {
     /// Masks take dry coverage; the stroke paints without its wet, smudge or
     /// liquify behavior.
     DryMask,
+    /// A retouching stroke would copy nothing: its layer is empty and it
+    /// samples no reference layer below.
+    EmptySource(RetouchSource),
 }
 
 #[derive(Clone, Copy)]
@@ -98,6 +102,9 @@ struct ActiveStroke {
     committed_smudge_dabs: usize,
     material_updates: Vec<u32>,
     ruler: Option<layer_core::RulerConstraint>,
+    /// The renderer could not sample this retouching stroke's whole source
+    /// while the pen was down.
+    replay_after_contact: bool,
 }
 
 pub struct CanvasEngine<B: CanvasRenderer> {
@@ -113,6 +120,9 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     pressure: PressureCurve,
     brush: BrushSnapshot,
     tool: StrokeTool,
+    retouch: Option<RetouchSource>,
+    retouch_points: Vec<layer_core::Point>,
+    prepared_retouch: Option<(Arc<str>, layer_core::Revision, RetouchPreparation)>,
     instant_feedback: InstantFeedbackConfig,
     ruler_snapping: Option<f32>,
     builder: StrokeBuilder,
@@ -206,6 +216,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             pressure: PressureCurve::default(),
             brush: BrushSnapshot::default(),
             tool: StrokeTool::Brush,
+            retouch: None,
+            retouch_points: Vec::new(),
+            prepared_retouch: None,
             instant_feedback: InstantFeedbackConfig::default(),
             ruler_snapping: Some(12.),
             builder: StrokeBuilder::with_capacity(STROKE_POINT_CAPACITY),
@@ -315,6 +328,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.restore_rasters.clear();
         self.rebuild_all = true;
         self.composite_all = true;
+        self.prepared_retouch = None;
         Ok(std::mem::replace(&mut self.backend, backend))
     }
 
@@ -806,6 +820,91 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.tool = tool;
     }
 
+    /// Strokes copy from `source` while a retouching tool is selected; None
+    /// returns to ordinary painting. The renderer prepares before pen-down.
+    pub fn set_retouch(&mut self, source: Option<RetouchSource>) {
+        self.retouch = source;
+        self.refresh_retouch();
+    }
+
+    /// Document points a retouching stroke is likely to sample next, such as
+    /// its source and the hovering pen. The renderer may cache around them.
+    pub fn set_retouch_points(&mut self, points: &[layer_core::Point]) {
+        if self.retouch_points != points {
+            self.retouch_points = points.to_vec();
+            self.refresh_retouch();
+        }
+    }
+
+    /// Tell the renderer what the selected retouching tool will sample, when
+    /// that changed with the document, the source or the focus points.
+    fn refresh_retouch(&mut self) {
+        let document = self.editor.document();
+        let fresh = self.prepared_retouch.as_ref().is_some_and(|(id, revision, prepared)| {
+            *id == document.id && *revision == document.revision && prepared.points == self.retouch_points
+        });
+        if self.retouch.is_some() && fresh {
+            return;
+        }
+        let prepared = self.retouch.zip(document.try_drawing_content().ok()).map(|(source, target)| RetouchPreparation {
+            target,
+            retouch: Retouch::for_target(document, target, source),
+            points: self.retouch_points.clone(),
+        });
+        if prepared.as_ref() == self.prepared_retouch.as_ref().map(|(.., p)| p) {
+            return;
+        }
+        self.backend.prepare_retouch(prepared.as_ref());
+        self.prepared_retouch = prepared.map(|p| (document.id.clone(), document.revision, p));
+    }
+
+    /// The completed stroke can no longer be corrected or replayed.
+    fn end_corrections(&mut self) {
+        self.completed_stroke = None;
+        self.completed_before = None;
+        self.completed_at = None;
+        self.estimates.clear();
+        self.backend.retire_stroke_sources();
+    }
+
+    /// Replay retouching strokes whose source the renderer could not sample
+    /// during contact: the live stroke once it ends, a completed one now.
+    fn replay_retouch_misses(&mut self) -> Result<(), DocumentError> {
+        while let Some(stroke) = self.backend.take_retouch_miss() {
+            if let Some(active) = self.active_stroke.as_mut().filter(|a| a.id == stroke) {
+                active.replay_after_contact = true;
+            } else if self.completed_stroke.as_ref().is_some_and(|s| s.id == stroke) {
+                self.replay_completed()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Restore the completed stroke's layer and paint the stroke again, as a
+    /// late correction does, amending its history entry.
+    fn replay_completed(&mut self) -> Result<(), DocumentError> {
+        let Some((stroke, before)) = self.completed_stroke.as_ref().zip(self.completed_before.as_ref()) else {
+            return Ok(());
+        };
+        let layer = stroke.layer_id;
+        self.restore_rasters.push((layer, before.clone()));
+        self.editor.amend_raster(layer, layer_core::raster::RasterRevision::pending())?;
+        self.rebuild_completed = true;
+        self.rebuild_all = true;
+        Ok(())
+    }
+
+    /// Whether a retouching stroke on `target` would copy nothing.
+    fn empty_retouch_source(&self, target: LayerId) -> Option<StrokeRefusal> {
+        let source = self.retouch?;
+        let document = self.document();
+        let layer = document.layer(target)?;
+        let empty = layer.source.is_none()
+            && layer.raster.try_data().is_some_and(|data| data.is_ok_and(|data| data.tiles.is_empty()));
+        (empty && Retouch::for_target(document, target, source).references.is_empty())
+            .then_some(StrokeRefusal::EmptySource(source))
+    }
+
     /// Why a stroke that starts with `event` would not paint as configured.
     /// Pen-down in `process_event` applies the same rule.
     pub fn stroke_refusal(&self, event: &PenEvent) -> Option<StrokeRefusal> {
@@ -816,7 +915,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             {
                 Some(StrokeRefusal::DryMask)
             }
-            Ok(_) => None,
+            Ok(target) => self.empty_retouch_source(target.layer),
         }
     }
 
@@ -830,7 +929,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     fn stroke_target(&self, tool: StrokeTool) -> Result<StrokeTarget, StrokeRefusal> {
         let document = self.document();
-        let layer = document.try_drawing_target().map_err(StrokeRefusal::Target)?;
+        let layer = if self.retouch.is_some() {
+            document.try_drawing_content()
+        } else {
+            document.try_drawing_target()
+        }
+        .map_err(StrokeRefusal::Target)?;
         let owner = document
             .target_owner(layer)
             .ok_or(StrokeRefusal::Target(DrawingRefusal::NoLayer))?;
@@ -994,9 +1098,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         discard_submitted(&mut edit, self.document());
         self.flush_pending_edits()?;
-        self.completed_stroke = None;
-        self.completed_before = None;
-        self.estimates.clear();
+        self.end_corrections();
         fn prepare(edit: &mut Edit, document: &Document, batches: &mut Vec<DabBatch>) {
             let layer = match edit {
                 Edit::Batch(edits) => {
@@ -1131,10 +1233,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .completed_at
             .is_some_and(|at| at.elapsed() >= CORRECTION_WINDOW)
         {
-            self.completed_stroke = None;
-            self.completed_before = None;
-            self.completed_at = None;
-            self.estimates.clear();
+            self.end_corrections();
+        }
+        self.replay_retouch_misses().map_err(EngineError::Document)?;
+        if self.retouch.is_some() {
+            self.refresh_retouch();
         }
         if self.builder.real_points().len() >= MAX_CONTACT_POINTS {
             self.cancel_active();
@@ -1450,6 +1553,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 else {
                     return Ok(());
                 };
+                if self.empty_retouch_source(layer_id).is_some() {
+                    return Ok(());
+                }
                 let id = self.editor.allocate_stroke_id();
                 let mut brush = self.brush.clone();
                 if !matches!(
@@ -1486,6 +1592,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 style.brush_to_layer = layer_core::Affine::translation(offset)
                     .then(self.document().layer_transform(layer_id).inverse().expect("validated layer geometry"));
                 style.alpha_locked = alpha_locked;
+                style.retouch = self.retouch.map(|source| Retouch::for_target(self.document(), layer_id, source));
                 style.selection = self.document().selection.as_ref().map(|selection| {
                     std::sync::Arc::new(selection.transformed(
                         self.document().layer_transform(layer_id).inverse().expect("validated layer geometry")
@@ -1515,6 +1622,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     committed_smudge_dabs: 0,
                     material_updates: Vec::new(),
                     ruler,
+                    replay_after_contact: false,
                 };
                 self.active_stroke = Some(active);
                 self.recording.begin(
@@ -1606,10 +1714,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.flush_smudge_chunks(true);
                 self.finish_persistent_stroke();
                 self.record_material_update();
+                self.replay_retouch_misses().map_err(EngineError::Document)?;
                 let active = self.active_stroke.take().expect("checked above");
                 self.recording.end(false);
                 let points = self.builder.finish().unwrap_or_default();
-                let has_end_taper = active.brush.taper.end_distance_diameters > 0.0;
+                let replay = active.brush.taper.end_distance_diameters > 0.0 || active.replay_after_contact;
                 let alpha_locked = active.style.alpha_locked;
                 let mut stroke = Stroke::new(
                     active.id,
@@ -1622,6 +1731,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 stroke.alpha_locked = alpha_locked;
                 stroke.material_updates = active.material_updates.into();
                 stroke.selection = active.style.selection.clone();
+                stroke.retouch = active.style.retouch.clone();
                 self.completed_stroke = Some(stroke);
                 self.completed_at = Some(web_time::Instant::now());
                 self.completed_before = Some(active.before);
@@ -1640,8 +1750,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     }
                     self.used_colors.push(color);
                 }
-                if has_end_taper {
-                    // End taper depends on final stroke length. Replay after
+                if replay {
+                    // End taper depends on final stroke length, and a retouch
+                    // source missed during contact can wait now. Replay after
                     // pen-up so the stored stroke and visible result agree.
                     self.rebuild_all = true;
                     self.rebuild_completed = true;
@@ -1970,6 +2081,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .then(self.document().layer_transform(stroke.layer_id).inverse().expect("validated layer geometry"));
             style.alpha_locked = stroke.alpha_locked;
             style.selection = stroke.selection.clone();
+            style.retouch = stroke.retouch.clone();
             let mut generator = DabGenerator::new(self.document().color.space);
             generator.reset_for_replay(stroke);
             let mut started = false;
@@ -2322,6 +2434,9 @@ mod tests {
         saw_reset: bool,
         transform: Option<layer_render::TransformPreview>,
         visibility: Vec<(LayerId, bool)>,
+        retouch: Vec<Option<RetouchPreparation>>,
+        retouch_misses: Vec<StrokeId>,
+        retired_sources: usize,
     }
 
     impl CanvasRenderer for RecordingRenderer {
@@ -2342,6 +2457,15 @@ mod tests {
         }
         fn can_capture_raster(&self) -> bool {
             !self.capture_blocked
+        }
+        fn prepare_retouch(&mut self, retouch: Option<&RetouchPreparation>) {
+            self.retouch.push(retouch.cloned());
+        }
+        fn take_retouch_miss(&mut self) -> Option<StrokeId> {
+            self.retouch_misses.pop()
+        }
+        fn retire_stroke_sources(&mut self) {
+            self.retired_sources += 1;
         }
         fn set_transform_preview(
             &mut self,
@@ -2438,6 +2562,127 @@ mod tests {
             self.saw_reset |= packet.reset_layers;
             Ok(())
         }
+    }
+
+    fn retouch_document() -> Document {
+        let mut document = Document::new("retouch", 64, 64);
+        let photo = layer_core::Layer::paint(LayerId(40), "Photo");
+        document.layers.push(photo);
+        document
+    }
+
+    #[test]
+    fn retouch_strokes_capture_their_source_and_replay_with_it() {
+        let (mut input, mut engine) =
+            engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
+        let target = engine.document().active_layer;
+        engine
+            .apply_edit(Edit::SetReferences([LayerId(40)].into()))
+            .unwrap();
+        engine.set_retouch(Some(RetouchSource::References));
+        engine.set_retouch_points(&[Point { x: 8., y: 8. }]);
+        let prepared = engine.backend().retouch.last().cloned().flatten().unwrap();
+        assert_eq!(prepared.target, target);
+        assert_eq!(*prepared.retouch.references, [LayerId(40)].into());
+        assert_eq!(prepared.points, [Point { x: 8., y: 8. }]);
+        let sent = engine.backend().retouch.len();
+        engine.render_frame().unwrap();
+        assert_eq!(engine.backend().retouch.len(), sent, "an unchanged tool is prepared once");
+        for (sequence, phase, x) in [(1, PenPhase::Down, 8.), (2, PenPhase::Move, 20.), (3, PenPhase::Up, 30.)] {
+            input.push(event(sequence, phase, x)).unwrap();
+            engine.render_frame().unwrap();
+            assert!(engine.backend().styles.iter().all(|style| style.retouch == Some(prepared.retouch.clone())));
+        }
+        let stroke = engine.completed_stroke.clone().unwrap();
+        assert_eq!(stroke.retouch, Some(prepared.retouch.clone()));
+        engine.completed_stroke.as_mut().unwrap().retouch = Some(Retouch::default());
+        engine.replay_completed().unwrap();
+        engine.render_frame().unwrap();
+        assert!(!engine.backend().styles.is_empty());
+        assert!(
+            engine.backend().styles.iter().all(|style| style.retouch == Some(Retouch::default())),
+            "a replay samples what its stroke captured"
+        );
+        let retired = engine.backend().retired_sources;
+        engine.completed_at = Some(web_time::Instant::now() - CORRECTION_WINDOW);
+        engine.render_frame().unwrap();
+        assert_eq!(engine.backend().retired_sources, retired + 1);
+        engine.apply_edit(Edit::SetReferences(Default::default())).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.backend().retouch.last().cloned().flatten().unwrap().retouch.references.is_empty());
+        engine.set_retouch(None);
+        assert_eq!(engine.backend().retouch.last(), Some(&None));
+    }
+
+    #[test]
+    fn a_retouch_miss_replays_the_stroke_once_contact_ends() {
+        for late in [false, true] {
+            let (mut input, mut engine) =
+                engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
+            engine.apply_edit(Edit::SetReferences([LayerId(40)].into())).unwrap();
+            engine.set_retouch(Some(RetouchSource::References));
+            engine.render_frame().unwrap();
+            engine.backend_mut().saw_reset = false;
+            let target = engine.document().active_layer;
+            let empty = engine.document().target_raster(target).unwrap().identity();
+            input.push(event(1, PenPhase::Down, 8.)).unwrap();
+            engine.render_frame().unwrap();
+            input.push(event(2, PenPhase::Move, 20.)).unwrap();
+            engine.render_frame().unwrap();
+            let stroke = engine.active_stroke.as_ref().unwrap().id;
+            if !late {
+                engine.backend_mut().retouch_misses.push(stroke);
+            }
+            engine.render_frame().unwrap();
+            assert!(!engine.backend().saw_reset, "contact is never replayed while the pen is down");
+            let live: Vec<_> = engine.backend().persistent.clone();
+            input.push(event(3, PenPhase::Up, 30.)).unwrap();
+            engine.render_frame().unwrap();
+            if late {
+                assert!(!engine.backend().saw_reset);
+                engine.backend_mut().retouch_misses.push(stroke);
+                engine.render_frame().unwrap();
+            }
+            assert!(engine.backend().saw_reset, "late={late}");
+            let batches = &engine.backend().persistent_batches;
+            let replay = &batches[batches.iter().rposition(|b| b.1).unwrap()..];
+            assert!(replay.iter().all(|b| b.0 == stroke));
+            assert!(replay.last().unwrap().2, "the replay paints the whole stroke to its end");
+            assert!(engine.backend().persistent.starts_with(&live[..1]));
+            let replays = engine.backend().persistent_batches.len();
+            engine.render_frame().unwrap();
+            assert_eq!(engine.backend().persistent_batches.len(), replays, "a stroke replays once");
+            assert!(engine.completed_stroke.is_some());
+            engine.undo().unwrap();
+            assert_eq!(
+                engine.document().target_raster(target).unwrap().identity(),
+                empty,
+                "the replay stays one undo step"
+            );
+        }
+    }
+
+    #[test]
+    fn retouch_strokes_refuse_masks_and_empty_sources() {
+        let (_input, mut engine) =
+            engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
+        let down = event(1, PenPhase::Down, 8.);
+        assert_eq!(engine.stroke_refusal(&down), None);
+        engine.set_retouch(Some(RetouchSource::References));
+        assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::EmptySource(RetouchSource::References)));
+        engine.set_retouch(Some(RetouchSource::Editing));
+        assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::EmptySource(RetouchSource::Editing)));
+        engine.apply_edit(Edit::SetReferences([LayerId(40)].into())).unwrap();
+        assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::EmptySource(RetouchSource::Editing)));
+        engine.set_retouch(Some(RetouchSource::References));
+        assert_eq!(engine.stroke_refusal(&down), None);
+        let mut masked = engine.document().layer(engine.document().active_layer).unwrap().clone();
+        masked.mask = Some(layer_core::LayerMask::reveal_all(LayerId(41), Point::default()));
+        engine.apply_edit(Edit::ReplaceLayer(Box::new(masked))).unwrap();
+        engine.apply_edit(Edit::SetMaskTarget(true)).unwrap();
+        assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::Target(DrawingRefusal::Mask)));
+        engine.set_retouch(None);
+        assert_eq!(engine.stroke_refusal(&down), None, "ordinary brushes still paint masks");
     }
 
     #[test]

@@ -12,6 +12,24 @@ pub(super) struct Frame {
     pub time: f32,
     pub previews: Vec<DabBatch>,
 }
+/// Whether two composite snapshots draw the same pixels: the same raster,
+/// source, mask, effect, placement and appearance.
+pub(super) fn same_layer(a: &Layer, b: &Layer) -> bool {
+    a.id == b.id
+        && a.kind == b.kind
+        && a.visible == b.visible
+        && a.opacity == b.opacity
+        && a.raster == b.raster
+        && a.properties == b.properties
+        && a.mask == b.mask
+        && a.effect == b.effect
+        && match (&a.source, &b.source) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+}
+
 impl Frame {
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
     /// Source identity and raster publication catch edits without scanning pixels.
@@ -134,33 +152,16 @@ impl Capture {
         size: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<source_access::RawTile, GpuRasterError> {
-        if size.contains(&0)
-            || size[0] > PAGE_SIZE
-            || size[1] > PAGE_SIZE
-            || region.width() > size[0]
-            || region.height() > size[1]
-        {
+        if size.contains(&0) || size[0] > PAGE_SIZE || size[1] > PAGE_SIZE {
             return Err(GpuRasterError::InvalidExtent);
         }
-        let window = scene::Scene::capture_window(packet.layers, region, packet.document_extent);
-        let bytes = scene::Scene::capture_image_bound(packet.layers, window);
-        let limit = self.image_limit.unwrap_or(256 * 1024 * 1024);
-        if bytes > limit {
-            return Err(GpuRasterError::Color(format!(
-                "Artwork query requires {bytes} bytes of filter images; its limit is {limit} bytes"
-            )));
-        }
+        self.image_bytes(packet, region)?;
         let resized = self
             .target
             .as_ref()
             .is_some_and(|(t, _)| [t.width(), t.height()] != size);
-        // Retire previous image windows before replacing their storage. Exact
-        // query scheduling/cancellation will move these drains off interaction.
-        if resized || (self.window.is_some_and(|old| old != window) && self.peak_image_bytes > 0) {
-            scene::Scene::submit_chunk(r, encoder, "artwork query window")?;
-            if let Some(scene) = &mut self.scene {
-                scene.release_capture_window(window);
-            }
+        if resized {
+            scene::Scene::submit_chunk(r, encoder, "artwork query target")?;
         }
         if self.target.is_none() || resized {
             self.target = Some(create_color_target(
@@ -169,15 +170,83 @@ impl Capture {
                 "bounded artwork query",
             ));
         }
+        let (texture, view) = self.target.clone().unwrap();
+        self.region_into(r, packet, region, &texture, encoder)?;
+        Ok(source_access::RawTile { texture, view })
+    }
+    /// Capture `region` into the top-left prefix of `destination`, a working
+    /// format texture at least as large.
+    pub fn region_into(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        packet: FramePacket<'_>,
+        region: PixelRect,
+        destination: &wgpu::Texture,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        if region.width() > destination.width() || region.height() > destination.height() {
+            return Err(GpuRasterError::InvalidExtent);
+        }
+        let (window, bytes) = self.image_bytes(packet, region)?;
+        // Retire previous image windows before replacing their storage. Exact
+        // query scheduling/cancellation will move these drains off interaction.
+        if self.retires_window(window) {
+            scene::Scene::submit_chunk(r, encoder, "artwork query window")?;
+            if let Some(scene) = &mut self.scene {
+                scene.release_capture_window(window);
+            }
+        }
         let scene = self.scene.get_or_insert_with(|| query_scene(r));
-        let (texture, view) = self.target.as_ref().unwrap();
-        scene.capture_region(r, packet, texture, region, None, encoder)?;
+        scene.capture_region(r, packet, destination, region, None, encoder)?;
         self.window = Some(window);
         self.peak_image_bytes = self.peak_image_bytes.max(bytes);
-        Ok(source_access::RawTile {
-            texture: texture.clone(),
-            view: view.clone(),
-        })
+        Ok(())
+    }
+    /// The window capturing `region` reads and the filter images it needs,
+    /// refused above the image limit before anything is allocated.
+    fn image_bytes(&self, packet: FramePacket<'_>, region: PixelRect) -> Result<(PixelRect, u64), GpuRasterError> {
+        let window = scene::Scene::capture_window(packet.layers, region, packet.document_extent);
+        let bytes = scene::Scene::capture_image_bound(packet.layers, window);
+        let limit = self.image_limit.unwrap_or(256 * 1024 * 1024);
+        if bytes > limit {
+            return Err(GpuRasterError::Color(format!(
+                "Artwork query requires {bytes} bytes of filter images; its limit is {limit} bytes"
+            )));
+        }
+        Ok((window, bytes))
+    }
+    fn retires_window(&self, window: PixelRect) -> bool {
+        self.window.is_some_and(|old| old != window) && self.peak_image_bytes > 0
+    }
+    /// Whether capturing `region` now could wait for the GPU or upload source
+    /// pixels: it needs filter images, retires earlier ones, or decodes tiles.
+    pub fn would_block(&self, r: &WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect) -> bool {
+        let window = scene::Scene::capture_window(packet.layers, region, packet.document_extent);
+        scene::Scene::capture_image_bound(packet.layers, window) > 0
+            || self.retires_window(window)
+            || page_coordinates(region).any(|tile| self.decodes(r, packet.layers, tile))
+    }
+    fn decodes(&self, r: &WgpuRasterizer, layers: &[Layer], tile: [u32; 2]) -> bool {
+        let Some(scene) = &self.scene else {
+            return layers.iter().any(|l| l.visible && (l.source.is_some() || r.native_backing(l.id).is_some()));
+        };
+        let space = r.document_color().space;
+        let resident = |id: LayerId| {
+            r.paint_layers.iter().any(|l| l.id == id && l.pages.iter().any(|p| p.coordinate == tile))
+        };
+        scene.source_decodes(r, layers, tile) > 0
+            || scene.uploads_full()
+            || layers.iter().filter(|l| l.visible && l.is_artwork()).any(|l| {
+                let native = r.native_backing(l.id).is_some()
+                    || l.mask.as_ref().is_some_and(|m| r.native_backing(m.id).is_some());
+                native
+                    && (layer_core::target_transform(layers, l.id) != layer_core::Affine::IDENTITY
+                        || l.mask.is_some()
+                        || (!resident(l.id)
+                            && r.native_color_tile(l.id, tile).map_or(true, |blob| {
+                                blob.is_some_and(|blob| scene.prepared_raster_view(&blob, space).is_none())
+                            })))
+            })
     }
 }
 

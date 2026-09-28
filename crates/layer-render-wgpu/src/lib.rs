@@ -88,6 +88,7 @@ mod present_damage;
 mod present_screen;
 mod region_requests;
 mod region_sources;
+mod retouch_sources;
 mod scene;
 mod selection_clip;
 mod selection_refine;
@@ -278,6 +279,9 @@ pub struct GpuRasterMetrics {
     pub material_sample_jobs: u64,
     pub material_sample_passes: u64,
     pub material_sample_storage_bytes: u64,
+    /// Retouching stroke-start pages, the reference composite cache and its
+    /// capture scratch, excluding driver memory.
+    pub retouch_storage_bytes: u64,
     /// Latest submitted frame's elapsed CPU phases when telemetry is enabled:
     /// preparation, committed paint, native capture encoding, prediction,
     /// composition, and submission/publication. These include waits.
@@ -943,6 +947,7 @@ pub struct WgpuRasterizer {
     material_jobs: Vec<MaterialJob>,
     dry_jobs: Vec<dry_material::Job>,
     material_gather: Option<material_sources::Gather>,
+    retouch: Option<Box<retouch_sources::RetouchSources>>,
     edge_layout: wgpu::BindGroupLayout,
     watercolor_layout: wgpu::BindGroupLayout,
     transport_layout: wgpu::BindGroupLayout,
@@ -1271,6 +1276,7 @@ impl WgpuRasterizer {
             material_jobs: Vec::new(),
             dry_jobs: Vec::with_capacity(SOURCE_SLOTS),
             material_gather: None,
+            retouch: None,
             edge_layout,
             watercolor_layout,
             transport_layout,
@@ -2412,6 +2418,8 @@ impl WgpuRasterizer {
             .saturating_add(self.selection_previews.buffer.as_ref().map_or(0, |b|b.size()*2))
             .saturating_add(self.color_sampler.storage_bytes())
             .saturating_add(self.regions.as_ref().map_or(0, |r| r.storage_bytes()));
+        self.metrics.retouch_storage_bytes =
+            self.retouch.as_ref().map_or(0, |retouch| retouch.storage_bytes());
         self.metrics.composite_storage_bytes =
             self.composite_texture.as_ref().map_or(0, texture_bytes)
                 + self.live_display.as_ref().map_or(0, live_display::Cache::storage_bytes)
@@ -3399,6 +3407,18 @@ impl CanvasRenderer for WgpuRasterizer {
             || self.awaiting_meshes
             || self.recompose.is_some()
             || self.layered_display.as_ref().is_some_and(|layers| !layers.ready())
+            || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
+    }
+    fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
+        self.prepare_retouch_sources(retouch);
+    }
+    fn take_retouch_miss(&mut self) -> Option<StrokeId> {
+        self.retouch.as_mut()?.take_miss()
+    }
+    fn retire_stroke_sources(&mut self) {
+        if let Some(retouch) = &mut self.retouch {
+            retouch.retire_stroke();
+        }
     }
     fn set_transform_preview(
         &mut self,
@@ -3468,6 +3488,7 @@ impl CanvasRenderer for WgpuRasterizer {
             + self.portable_blend.byte_len()
             + 160 + self.dry_records.storage_bytes()
             + self.material_gather.as_ref().map_or(0, material_sources::Gather::storage_bytes)
+            + m.retouch_storage_bytes
             + self
                 .transforms
                 .as_ref()
@@ -3682,6 +3703,7 @@ impl CanvasRenderer for WgpuRasterizer {
         }).collect::<Result<Vec<_>, GpuRasterError>>()?;
         self.trim_native_color_cache(packet.dab_batches, &batch_tiles);
         let reset = packet.reset_layers || resized;
+        self.note_retouch_batches(packet.dab_batches, reset);
         if reset {
             self.layer_masks.pages.clear();
             if let Some(t) = &mut self.transforms {
@@ -3977,6 +3999,7 @@ impl CanvasRenderer for WgpuRasterizer {
             scene.initialize_source_paint(self, packet.layers, &mut encoder)?;
             self.scene = Some(scene);
         }
+        self.keep_stroke_start_pages(packet.dab_batches, &batch_tiles, &mut encoder);
         for layer in &mut self.paint_layers {
             for page in &mut layer.pages {
                 page.primary_needs_clear = false;
@@ -4687,6 +4710,12 @@ impl CanvasRenderer for WgpuRasterizer {
                 PixelRect::full(packet.document_extent)
             } else { dirty };
         }
+        let frame = Arc::new(artwork::Frame::new(packet, requested_view.background_rgba_linear));
+        let moving = !original_batches.is_empty()
+            || animated
+            || self.transform_preview.is_some()
+            || self.placement_drag.is_some();
+        self.prefetch_retouch(&frame, moving, &mut encoder);
         self.uploads.finish(&encoder);
         if let Some(started) = started { cpu_phases[4] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.publication");
@@ -4704,7 +4733,7 @@ impl CanvasRenderer for WgpuRasterizer {
         if (animated || packet.reset_layers || !packet.dabs.is_empty() || !packet.restore_rasters.is_empty()
             || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear)))
             && let Some(regions) = &mut self.regions { regions.raw.invalidate_tonal(); }
-        self.artwork_frame = Some(Arc::new(artwork::Frame::new(packet, requested_view.background_rgba_linear)));
+        self.artwork_frame = Some(frame);
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();
         performance_trace::counter(c"Capy renderer frames", self.metrics.submissions);
@@ -6141,6 +6170,7 @@ mod tests {
             transport: None,
             deform: BrushDeform::default(),
             contact: None,
+            retouch: None,
         }
     }
 

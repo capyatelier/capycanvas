@@ -455,14 +455,14 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
                 preview: None,
             }],
             subtools: [
-                ("Visible artwork", "eye", RegionSource::Visible),
-                ("Editing layer", "layers", RegionSource::Editing),
-                ("Reference layers", "reference", RegionSource::Reference),
+                (CommandId::SelectionVisible, RegionSource::Visible),
+                (CommandId::SelectionEditing, RegionSource::Editing),
+                (CommandId::SelectionReference, RegionSource::Reference),
             ]
             .into_iter()
-            .map(|(label, icon, item_source)| ToolSetItem {
-                label,
-                icon,
+            .map(|(command, item_source)| ToolSetItem {
+                label: command.label(),
+                icon: command.icon().unwrap(),
                 action: UiAction::Layer {
                     action: LayerAction::Tool {
                         tool: LayerCanvasTool::Region {

@@ -159,6 +159,9 @@ pub struct UiSession<R: CanvasRenderer> {
     image_size: Option<image_size::ImageSizeDraft>,
     content_bounds: image_geometry::ContentBounds,
     rulers: rulers::RulerInteraction,
+    /// Set Source is held or armed: the next pen or mouse contact of a
+    /// retouching tool sets its source instead of painting.
+    retouch_source_armed: bool,
     operation: operation::Operation,
     system_theme: Theme,
     system_accent: Option<HexColor>,
@@ -263,6 +266,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             image_size: None,
             content_bounds: Default::default(),
             rulers: Default::default(),
+            retouch_source_armed: false,
             operation: Default::default(),
             system_theme: Theme::Light,
             system_accent: None,
@@ -2204,6 +2208,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference => {
                 idle && self.layer_interaction.tool.selection_tool().is_some()
             }
+            CommandId::CloneSourceArm => {
+                idle && Self::tool_category(self.layer_interaction.tool, self.state.brush.tool) == ToolCategory::Retouching
+            }
             CommandId::Undo => idle && (self.operation.placing() || self.cropping() || self.engine.can_undo()),
             CommandId::Redo => idle && !self.cropping() && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
@@ -2349,6 +2356,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::GamutWarning && self.state.gamut_warning)
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
+            || (id == CommandId::CloneSourceArm && self.retouch_source_armed)
             || (id == CommandId::LayerMaskEnabled
                 && document.layer(document.active_layer).and_then(|l| l.mask.as_ref()).is_some_and(|m| m.enabled))
             || (id == CommandId::TransformPerspective && self.transform_mode().is_some_and(|(_, perspective)| perspective))
@@ -4314,6 +4322,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ShowRulers | CommandId::SnapRulers | CommandId::DeleteRuler => {
                 self.ruler_command(command)?;
                 Ok((BRUSH | DOCUMENT, true))
+            }
+            CommandId::CloneSourceArm => {
+                self.retouch_source_armed = !self.retouch_source_armed;
+                Ok((BRUSH, true))
             }
             CommandId::Figure => {
                 let (shape, paint) = self.layer_interaction.figure;

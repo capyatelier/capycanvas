@@ -417,6 +417,9 @@ impl Scene {
     pub fn prepared_raster_view(&self, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace) -> Option<&wgpu::TextureView> {
         self.source_tiles.prepared_raster_view(blob, space)
     }
+    pub fn uploads_full(&self) -> bool {
+        self.source_tiles.uploads_full()
+    }
     pub fn raster_tile_for_query(&mut self, r: &mut WgpuRasterizer, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace, encoder: &mut crate::submission::CommandEncoder) -> Result<crate::source_access::RawTile, GpuRasterError> {
         let (tile, pending) = self.source_tiles.plan_raster(r, blob, space, r.document_color().space)?;
         self.encode_decode(r, pending, encoder)?;

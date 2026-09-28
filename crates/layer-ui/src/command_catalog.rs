@@ -48,6 +48,7 @@ pub enum ToolCategory {
     MoveTransform,
     ColorSampling,
     Navigation,
+    Retouching,
 }
 impl ToolCategory {
     pub fn label(self) -> &'static str {
@@ -62,6 +63,7 @@ impl ToolCategory {
             Self::MoveTransform => "Move and transform",
             Self::ColorSampling => "Color sampling",
             Self::Navigation => "Navigation",
+            Self::Retouching => "Retouching",
         }
     }
 }
@@ -479,6 +481,7 @@ fn action_description(action: &UiAction) -> &'static str {
             TransformWarp => "Bend the content with a mesh of curved patches, dragging its nodes and their tangent handles.",
             WarpGridThree | WarpGridFour | WarpGridFive => "Choose how many patches the warp mesh has, keeping its current shape.",
             UseReferenceBelow => "Mark the nearest visible photo or paint layer below as a reference for Wand and Fill.",
+            CloneSourceArm => "Pick where retouching copies from: the next pen or mouse click sets the source.",
             ClearLayer => "Erase everything on the active layer. A placed photo's original is discarded too.",
             ClearSelected => "Erase the selected pixels of the active layer; soft edges erase partially. A placed photo keeps its original.",
             ClearOutside => "Erase the pixels of the active layer outside the selection.",
@@ -643,7 +646,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         // share CommandState, including selection submodes and temporary locks.
         for command in CommandId::ALL
             .into_iter()
-            .filter(|c| c.available_on(platform) && !self.proof_panel_command(*c))
+            .filter(|c| c.offered_on(platform) && !self.proof_panel_command(*c))
         {
             let state = self.command(command);
             entries.push(entry(
@@ -900,7 +903,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             !settings.keys(id).is_empty()
                 || crate::GESTURE_TRIGGERS.iter().any(|t| settings.gesture_binding(t.id) == id)
         };
-        for (definition, _) in definitions.clone() {
+        for (definition, _) in definitions.iter().filter(|(d, _)| d.scope.offered()).cloned() {
             let momentary = matches!(definition.action, crate::shortcuts::ShortcutAction::Momentary { .. });
             match definition.action {
                 crate::shortcuts::ShortcutAction::Hold { action } | crate::shortcuts::ShortcutAction::Momentary { action }
@@ -1287,6 +1290,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             C::MaskSelection => "Select an unlocked artwork layer",
             C::SelectionVisible | C::SelectionEditing | C::SelectionReference => "Choose a selection tool first",
+            C::CloneSourceArm => "Choose a retouching tool first",
             C::ZoomIn => "Already at the maximum zoom",
             C::ZoomOut => "Already at the minimum zoom",
             _ if self.operation.active() => self.operation_refusal(),

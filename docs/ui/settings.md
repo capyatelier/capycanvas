@@ -57,7 +57,9 @@ modifiers and reserved OS interactions also need native testing.
 
 Each binding has a scope: Application, Canvas, or specific tool categories.
 Canvas and tool scopes apply only while no chrome control such as a divider owns
-keyboard focus. Recording a chord that another action already uses anywhere its
+keyboard focus. The shortcuts page, pickers, command search and the toolbar bank
+list only the tool categories that have tools, and leave out bindings scoped to
+none of them. Recording a chord that another action already uses anywhere its
 scope overlaps is a conflict; Reassign moves the chord. At runtime a chord runs
 the most specific binding that is enabled, so a disabled one lets the next run:
 Delete and Backspace delete the selected guide with the Ruler and Move tools,

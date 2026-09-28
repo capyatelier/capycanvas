@@ -13,12 +13,12 @@ fn command_catalog_covers_live_commands_and_keeps_legacy_bindings() {
         let id = format!("command.{}", wire.as_str().unwrap());
         if s.proof_panel_command(command) {
             assert!(!ids.iter().any(|v| **v == id), "the Proof panel owns {command:?}");
-        } else if command.available_on(Platform::Gtk) {
+        } else if command.offered_on(Platform::Gtk) {
             let d = catalog.iter().find(|d| d.id == id).unwrap();
             assert_eq!(d.enabled, s.command(command).enabled, "{command:?}");
             assert_eq!(d.disabled_reason.is_some(), !d.enabled);
         } else {
-            assert!(!ids.iter().any(|v| **v == id), "retired {command:?}");
+            assert!(!ids.iter().any(|v| **v == id), "unlisted {command:?}");
         }
     }
     assert_eq!(
@@ -424,7 +424,8 @@ fn equivalent_menu_actions_share_command_identities_and_explain_unavailability()
     let labels: Vec<_> = catalog.iter().map(|d| d.label.to_lowercase()).collect();
     assert!(!labels.iter().any(|l| l.ends_with("panel panel") || l.ends_with("toolbar panel")));
     let unique: std::collections::BTreeSet<_> = labels.iter().collect();
-    assert_eq!(unique.len(), labels.len(), "every search result name is distinct");
+    let repeated: Vec<_> = labels.iter().filter(|l| labels.iter().filter(|m| m == l).count() > 1).collect();
+    assert_eq!(unique.len(), labels.len(), "every search result name is distinct: {repeated:?}");
     for label in ["Pencil", "Pencil brush", "Pencil filter", "Eraser", "Eraser brush"] {
         assert!(catalog.iter().any(|d| d.label == label), "{label}");
     }
@@ -451,12 +452,13 @@ fn equivalent_menu_actions_share_command_identities_and_explain_unavailability()
     .unwrap();
     assert_eq!(reason(&s, "command.clear_layer"), "The active layer is locked");
     let generic = "Unavailable in the current tool or edit target";
-    assert!(
-        s.command_catalog()
-            .iter()
-            .filter(|d| !d.enabled)
-            .all(|d| d.disabled_reason.as_deref().is_some_and(|r| !r.is_empty())),
-    );
+    let unexplained: Vec<_> = s
+        .command_catalog()
+        .into_iter()
+        .filter(|d| !d.enabled && d.disabled_reason.as_deref().is_none_or(str::is_empty))
+        .map(|d| d.id)
+        .collect();
+    assert!(unexplained.is_empty(), "{unexplained:?}");
     assert!(s.command_catalog().iter().filter(|d| d.disabled_reason.as_deref() == Some(generic)).count() < 3);
 }
 

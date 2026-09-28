@@ -815,6 +815,31 @@ impl Document {
     /// Keep original indices for renderer style records, and ancestor groups
     /// for their transforms/masks without including their unrelated children.
     pub fn reference_snapshot(&self) -> Vec<Layer> {
+        let members = self.reference_members(|_| true);
+        self.layers
+            .iter()
+            .map(|layer| {
+                let mut snapshot = layer.composite_snapshot();
+                snapshot.visible &= members.contains(&layer.id);
+                snapshot
+            })
+            .collect()
+    }
+
+    /// The reference objects a retouching stroke on `target` samples beneath
+    /// it: the members of [`Self::reference_snapshot`] that composite below
+    /// `target`, with their ancestors. Never `target` or anything above it,
+    /// so a reference adjustment above the target is ignored.
+    pub fn references_below(&self, target: LayerId) -> std::collections::BTreeSet<LayerId> {
+        let Some(index) = self.layers.iter().position(|l| l.id == target) else {
+            return Default::default();
+        };
+        self.reference_members(|id| self.layers.iter().position(|l| l.id == id).is_some_and(|i| i > index))
+    }
+
+    /// Reference objects expanded to whole clipping stacks, subtrees and
+    /// adjustment inputs, those `keep` accepts, and their ancestors.
+    fn reference_members(&self, keep: impl Fn(LayerId) -> bool) -> std::collections::BTreeSet<LayerId> {
         let mut members = self.reference_layers.clone();
         loop {
             let before = members.len();
@@ -856,6 +881,7 @@ impl Document {
                 break;
             }
         }
+        members.retain(|id| keep(*id));
         for id in members.iter().copied().collect::<Vec<_>>() {
             let mut parent = self.layer(id).and_then(|l| l.properties.parent);
             while let Some(id) = parent {
@@ -863,14 +889,7 @@ impl Document {
                 parent = self.layer(id).and_then(|l| l.properties.parent);
             }
         }
-        self.layers
-            .iter()
-            .map(|layer| {
-                let mut snapshot = layer.composite_snapshot();
-                snapshot.visible &= members.contains(&layer.id);
-                snapshot
-            })
-            .collect()
+        members
     }
 
     /// Normalize selection so a selected parent owns its descendants once.

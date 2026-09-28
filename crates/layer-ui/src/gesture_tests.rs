@@ -411,6 +411,40 @@ fn mask_strokes_explain_dry_coverage_once_per_mask_session() {
 }
 
 #[test]
+fn retouch_strokes_refuse_masks_and_offer_a_reference_for_an_empty_layer() {
+    use layer_core::RetouchSource;
+    let mut s = session(Platform::Gtk);
+    s.engine.set_retouch(Some(RetouchSource::Editing));
+    let revision = s.engine.document().revision;
+    stroke(&mut s, 1);
+    assert_eq!(notice_text(&s), Some("This layer is empty, so there's nothing to copy"));
+    s.engine.set_retouch(Some(RetouchSource::References));
+    stroke(&mut s, 10);
+    assert_eq!(notice_text(&s), Some("This layer is empty, and there's no layer below it to copy from"));
+    assert_eq!(s.engine.document().revision, revision, "refused retouch strokes paint nothing");
+
+    layer(&mut s, LayerAction::New { group: false, clipped: false });
+    stroke(&mut s, 20);
+    let notice = s.state.notice.clone().unwrap();
+    assert_eq!(notice.text, "This layer is empty, and no reference layer below it is marked");
+    assert_eq!(notice.action.as_ref().unwrap().label, "Use Current ink as Reference");
+    s.dispatch(UiAction::Notice { id: notice.id, accept: true }).unwrap();
+    assert_eq!(s.engine.document().reference_layers, [LayerId(1)].into());
+    let revision = s.engine.document().revision;
+    stroke(&mut s, 30);
+    assert_eq!(s.state.notice, None, "the reference below is the source");
+    assert_ne!(s.engine.document().revision, revision);
+
+    let top = s.engine.document().active_layer.0;
+    layer(&mut s, LayerAction::AddMask { id: top, replace: false });
+    layer(&mut s, LayerAction::Select { id: top, mask: true });
+    let revision = s.engine.document().revision;
+    stroke(&mut s, 40);
+    assert_eq!(notice_text(&s), Some("Return to the layer's artwork first"));
+    assert_eq!(s.engine.document().revision, revision, "retouching never paints a mask");
+}
+
+#[test]
 fn move_and_content_tools_explain_what_they_cannot_change() {
     let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::Move);

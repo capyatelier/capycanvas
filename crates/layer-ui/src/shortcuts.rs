@@ -288,6 +288,14 @@ impl BindingScope {
             Self::Tools { categories } => canvas.is_some_and(|c| categories.contains(&c)),
         }
     }
+    /// Whether a kind of tool this scope applies to is offered, so its
+    /// bindings are listed.
+    pub fn offered(&self) -> bool {
+        match self {
+            Self::Tools { categories } => categories.iter().any(|c| crate::shortcut_page::CONTEXTS.contains(c)),
+            _ => true,
+        }
+    }
     pub fn overlaps(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Tools { categories: a }, Self::Tools { categories: b }) => a.iter().any(|c| b.contains(c)),
@@ -339,7 +347,8 @@ pub struct HoldKey {
     pub actions: std::collections::BTreeMap<ToolCategory, String>,
 }
 /// Commands that can be switched on only while a key or button is held.
-pub const MOMENTARY_COMMANDS: [CommandId; 7] = [
+pub const MOMENTARY_COMMANDS: [CommandId; 8] = [
+    CommandId::CloneSourceArm,
     CommandId::SnapRulers,
     CommandId::ShowRulers,
     CommandId::FlipHorizontal,
@@ -541,7 +550,7 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.ExportDocument" => key("e", true, true),
         "command.CloseDocument" => key("w", true, false),
         "canvas.pan" => key(" ", false, false),
-        "hold.eyedropper" => key("alt", false, false),
+        "hold.eyedropper" | "hold.command.CloneSourceArm" => key("alt", false, false),
         "tool_setting.size.decrease" => key("[", false, false),
         "tool_setting.size.increase" => key("]", false, false),
         _ => return Vec::new(),
@@ -571,6 +580,7 @@ fn command_section(command: CommandId) -> &'static str {
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
         | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent | C::MoveLeaveCopy => "Transform",
         command if CommandId::TOOLS.contains(&command) => "Tools",
+        C::CloneSourceArm => "Painting",
         C::TonalSelect | C::QuickMask | C::ReturnToArtwork | C::NewSelectionLayer | C::SaveSelectionLayer | C::Reselect
         | C::SelectionOutline | C::MaskOverlay | C::MaskOverlayProtected | C::ResetMaskColors | C::SwapMaskColors
         | C::FillSelectionMask | C::ClearSelectionMask | C::SelectionBrushPressure | C::SelectionNew | C::SelectionAdd
@@ -597,12 +607,13 @@ fn command_section(command: CommandId) -> &'static str {
 }
 
 /// Where a command's keys apply; a more specific scope wins where it is enabled.
-fn command_scope(command: CommandId) -> BindingScope {
+pub(crate) fn command_scope(command: CommandId) -> BindingScope {
     match command {
         CommandId::DeleteRuler => BindingScope::Tools {
             categories: vec![ToolCategory::ShapesRulers, ToolCategory::MoveTransform],
         },
         CommandId::CropCycleOverlay => BindingScope::Tools { categories: vec![ToolCategory::MoveTransform] },
+        CommandId::CloneSourceArm => BindingScope::Tools { categories: vec![ToolCategory::Retouching] },
         _ => BindingScope::Application,
     }
 }
@@ -730,6 +741,11 @@ fn held(target: &ShortcutDefinition, section: &'static str) -> Option<(ShortcutD
             BindingScope::Tools { categories: vec![C::Drawing, C::Blending] },
         ),
         "hold.move" => ("Move while held".into(), ShortcutAction::Hold { action: action.clone() }, BindingScope::Canvas),
+        "hold.command.CloneSourceArm" => (
+            "Set source while held".into(),
+            ShortcutAction::Momentary { action: action.clone() },
+            command_scope(CommandId::CloneSourceArm),
+        ),
         _ => {
             let momentary = match **action {
                 UiAction::Color { action: ColorAction::ToggleTransparent } => {
