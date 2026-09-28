@@ -58,8 +58,13 @@ class AndroidCanvasBarBenchmarkTest {
             fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
             fun waitFor(label: String, condition: () -> Boolean) = host.awaitMain(label, 120_000, condition = condition)
             fun action(value: JSONObject) = host.drain(value, 30)
-            fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
             fun state() = host.snapshot!!.getJSONObject("state")
+            fun invoke(command: String) {
+                waitFor("$command is available") {
+                    state().getJSONArray("commands").objects().any { it.getString("id") == command && it.getBoolean("enabled") }
+                }
+                action(obj("type" to "invoke", "command" to command))
+            }
             var documentExtent = "${width}x$height"
             fun newDocument(extent: Pair<Int, Int> = width to height) {
                 documentExtent = "${extent.first}x${extent.second}"

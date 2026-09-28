@@ -416,6 +416,102 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
 }
 
 #[test]
+fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
+    let mut doc = document();
+    let photo = doc.layers[0].clone();
+    doc.layers = (0..32).map(|i| {
+        let mut layer = photo.clone();
+        layer.id = LayerId(100 + i);
+        layer.opacity = 0.17 + i as f32 * 0.02;
+        layer
+    }).chain(doc.layers.last().cloned()).collect();
+    doc.layers.insert(15, Layer::paint(LayerId(200), "empty paint target"));
+    let extent = [doc.width, doc.height];
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    fn frame(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
+        let mut p = packet(layers, extent);
+        p.composite_all = false;
+        p.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        p
+    }
+    r.submit(frame(&doc.layers, extent)).unwrap();
+    exact.submit(frame(&doc.layers, extent)).unwrap();
+    assert!(!r.scene.as_ref().unwrap().scale_sources.entries.contains_key(&LayerId(200)));
+    let record_bound = page_coordinates(PixelRect::full(extent)).count() as u32
+        + doc.layers.len().next_power_of_two().ilog2() + 1;
+    for (step, index) in [15, 0, 32, 15, 0].into_iter().enumerate() {
+        let mut dab = crate::tests::test_dab([30. + step as f32 * 100., 97.], [0.9, 0.02, 0.1, 0.7], 1.);
+        dab.radii = [21.; 2];
+        let batch = dab_batch(doc.layers[index].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        for kind in [DabBatchKind::Preview, DabBatchKind::Persistent] {
+            let batch = DabBatch { kind, ..batch.clone() };
+            let p = FramePacket { dabs: &[dab], dab_batches: &[batch], ..frame(&doc.layers, extent) };
+            r.submit(p).unwrap();
+            exact.submit(p).unwrap();
+            let scene = r.scene.as_ref().unwrap();
+            let records = scene.scale_commands.as_ref().unwrap().cursor;
+            assert!(records <= record_bound, "32 photos, first paint on an empty layer and end edits must reuse the other branches: step={step} {kind:?}, {records} > {record_bound}");
+            let cache = r.scale_display.as_ref().unwrap();
+            let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), cache.plan);
+            assert!(error[0] < 0.003 && error[1] < 0.025, "step={step} kind={kind:?}: {error:?}");
+            assert_presentation_mip(&r);
+            assert!(cache.storage_bytes() + scene.scale_sources.storage_bytes() + scene.scale_commands.as_ref().unwrap().storage_bytes() <= live_display::CACHE_BYTES);
+        }
+    }
+    for step in 0..4 {
+        match step {
+            0 => doc.layers[15].opacity = 0.91,
+            1 => doc.layers[0].visible = false,
+            2 => doc.layers.swap(15, 31),
+            _ => doc.layers[15].source = Some(Arc::new((**photo.source.as_ref().unwrap()).clone())),
+        }
+        r.submit(frame(&doc.layers, extent)).unwrap();
+        exact.submit(frame(&doc.layers, extent)).unwrap();
+        let cache = r.scale_display.as_ref().unwrap();
+        let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), cache.plan);
+        assert!(error[0] < 0.003 && error[1] < 0.025, "metadata step={step}: {error:?}");
+    }
+}
+
+#[test]
+fn placed_page_edge_edits_match_rebuilding_the_entire_display() {
+    let mut doc = document_at([513, 513]);
+    let mut moving = doc.layers[0].clone();
+    moving.id = LayerId(40);
+    moving.opacity = 0.71;
+    moving.properties.placement = layer_core::Affine([0.7, 0.7, -0.7, 0.7, 76.8, 77.8]);
+    let mut front = doc.layers[0].clone();
+    front.id = LayerId(41);
+    front.opacity = 0.3;
+    doc.layers.insert(0, moving);
+    doc.layers.insert(0, front);
+    let extent = [doc.width, doc.height];
+    let mut incremental = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut rebuilt = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, extent);
+    frame.composite_all = false;
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    incremental.submit(frame).unwrap();
+    rebuilt.submit(frame).unwrap();
+    let original = display_pixels(&incremental);
+    let mut dab = crate::tests::test_dab([254.5, 0.5], [1., 0., 0., 1.], 1.);
+    dab.radii = [0.45; 2];
+    let batch = dab_batch(LayerId(40), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+    frame.dabs = std::slice::from_ref(&dab);
+    frame.dab_batches = std::slice::from_ref(&batch);
+    rebuilt.scale_display = None;
+    incremental.submit(frame).unwrap();
+    rebuilt.submit(frame).unwrap();
+    let expected = display_pixels(&rebuilt);
+    let actual = display_pixels(&incremental);
+    assert_ne!(actual, original);
+    let error = actual.iter().flatten().zip(expected.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+    assert!(error < 1e-6, "a filtered source page reaches pixels beyond its mapped bounds: {error}");
+}
+
+#[test]
 fn masks_refresh_coverage_properties_and_paint_without_exact_display() {
     let mut doc = document();
     let extent = [doc.width, doc.height];

@@ -1412,6 +1412,7 @@ impl Scene {
             }
             self.display_source_tiles.release_pixels();
             self.effects.retain(packet.layers);
+            cache.prepare_graph(r, packet, &self.scale_sources, &commands)?;
             self.scale_sources.retain_levels(&cache.source_levels(r, packet), cache.source_budget(r, packet, &commands));
             let result = (|| {
                 if cache.plan.level == 0 { self.prepare_placed_sources(r, packet, encoder, &mut commands)?; }

@@ -16,6 +16,7 @@ pub(super) struct Source {
     backing: Option<Arc<RasterData>>,
     mask: Option<layer_core::LayerMask>,
     preview: BTreeSet<[u32; 2]>,
+    pub(super) damage: PixelRect,
 }
 
 #[derive(Default)]
@@ -48,6 +49,7 @@ impl Sources {
                     for level in source.levels.values_mut() { level.valid.clear(); }
                     source.watercolor = watercolor;
                     self.reset = true;
+                    source.damage = PixelRect::full(source.extent);
                 }
             }
             if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled && (visible || m.show_area)) {
@@ -64,13 +66,15 @@ impl Sources {
         } else { (layer.id, RasterPlane::Color, layer.source.clone(), None) };
         self.reset |= !self.entries.contains_key(&id);
         let source = self.entries.entry(id).or_insert_with(|| Source {
-            extent, updates: 0, raster: 0, watercolor: None, levels: BTreeMap::new(), source: None, backing: None, mask: None, preview: BTreeSet::new(),
+            extent, updates: 0, raster: 0, watercolor: None, levels: BTreeMap::new(), source: None, backing: None, mask: None, preview: BTreeSet::new(), damage: PixelRect::EMPTY,
         });
-        if source.extent != extent { source.extent = extent; source.levels.clear(); self.reset = true; }
+        let resized = source.extent != extent;
+        if resized { source.extent = extent; source.levels.clear(); self.reset = true; }
         let same_image = match (&source.source, &image) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false,
         };
-        if packet.reset_layers || !same_image || source.mask != mask {
+        let reset = resized || packet.reset_layers || !same_image || source.mask != mask;
+        if reset {
             for level in source.levels.values_mut() { level.valid.clear(); }
             self.reset = true;
         }
@@ -102,6 +106,7 @@ impl Sources {
         }
         let radius = source.watercolor.map_or(0, |w| w.radius());
         if radius > 0 { damage = damage.into_iter().flat_map(|c| page_coordinates(page_rect(c).expand(radius, extent))).collect(); }
+        source.damage = if reset { PixelRect::full(extent) } else { damage.iter().fold(PixelRect::EMPTY, |r, c| r.union(page_rect(*c).intersect(PixelRect::full(extent)))) };
         for level in source.levels.values_mut() { level.valid.retain(|c| !damage.contains(c)); }
     }
     pub fn sample(&self, id: LayerId, requested: u32) -> Option<(u32, &wgpu::TextureView, [u32; 2])> {

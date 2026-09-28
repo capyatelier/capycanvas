@@ -15,7 +15,7 @@ measured gains, controls and remaining limits.
 The view's largest singular value chooses a power-of-two texel footprint no
 larger than a surface pixel, capped at 16 document pixels. At the benchmark's
 7.14% zoom this is an 8 × 8 footprint. Admission bounds the reduced layer images
-and the group-composition scratch pool plus the adjacent output mip against
+and the expression-evaluation scratch pool plus the adjacent output mip against
 the existing display component budget.
 
 The scene owns each layer's reduced local pixels independently of the view.
@@ -34,8 +34,21 @@ for the admitted memory. Admission reserves composition scratch and command
 capacity before retaining optional source levels, including images allocated
 later in the frame. Pose changes preserve local pixels.
 
-Reduced composition runs over damaged document regions in layer order, with
-opacity applied once. Placed sources and masks use the common transform
+The shared layer traversal builds an expression tree. Normal premultiplied
+source-over runs are balanced using associativity, with each layer's opacity
+applied before regrouping. Power-of-two grouping boundaries and empty layer
+positions preserve existing branches when painting starts; transparent operands
+require no image or blend pass. Group opacity, masks, clipping and non-normal blends
+remain expression boundaries. Reusable branches retain page validity; a source
+change invalidates only dependent regions. Branch images share the display
+allowance with source levels, after reserving required sources, evaluation
+scratch, command storage and presentation mips. Large unchanged branches get
+priority. No cached expression owns original image bytes or raster history.
+
+Evaluation visits the child needing more scratch first, reuses completed
+branches, and writes changed pages into a stable root image. An edit in a
+balanced normal run needs logarithmically many composition operations when
+its unchanged branches fit the budget. Placed sources and masks use the common transform
 resampler. Their most magnified axis determines source resolution; an additional
 level of detail and a two-by-two sample grid limit placement-edge error.
 Interior samples use the hardware linear sampler. Boundary samples account
@@ -142,7 +155,9 @@ cargo test -p layer-render-wgpu --test project --offline -- --test-threads=1
 The scale tests compare against exact composition and exact output, exercise odd
 edges, changing prediction footprints, opacity, ordering, source removal,
 resolution changes, window overlap, affine source and mask placement, sparse
-source derivation, prediction cancellation and entry/exit through the filter fallback. Direct
+source derivation, prediction cancellation and entry/exit through the filter fallback.
+A 32-layer test edits the beginning, middle and end of the stack, checks exact
+output agreement and bounds the command count while preserving untouched pages. Direct
 placement presentation is compared with supersampled exact output through
 rotated and nonuniform cameras. The tests
 assert that superseded presentation allocations are absent. Project tests cover

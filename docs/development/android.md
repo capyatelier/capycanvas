@@ -226,7 +226,10 @@ APK calls, so test-APK benchmarks use the unminified build.
   that follow.
   `photo` separates body translation, corner resizing, distortion and a warp
   node drag. Priming gestures validate their geometry, then reset the transform
-  and restore the intended mode before measurement. The output directory is
+  and restore the intended mode before measurement. Commands wait for the shared
+  enabled state after injected gestures; Android input delivery can finish before
+  the renderer owner consumes the terminal sample. These waits occur outside the
+  motion measurement window. The output directory is
   cleared at the beginning of each invocation, so omitted scenarios cannot
   contribute results from an earlier run.
   Photo drags are marked by `capy-drag` trace sections; `capy.publish.native` and `capy.publish.parse`

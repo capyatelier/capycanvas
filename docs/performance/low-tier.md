@@ -18,16 +18,16 @@ is 4248 × 2832.
 | Two-finger rotate | 60 | | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
-| Placed-photo translation | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 94.8 completed updates/s | Geometry build below, `photo-translate-drag` |
-| Placed-photo corner resize | 60 | Screen 59.4 presents/s, p99 17.0 ms; renderer 84.5 completed updates/s | Geometry build below, `photo-handle-drag-bar-hidden` |
-| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 91.5 completed updates/s | Geometry build below, `photo-pixels-handle-drag` |
+| Placed-photo translation | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 94.4 completed updates/s | Geometry build below, `photo-translate-drag` |
+| Placed-photo corner resize | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 84.1 completed updates/s | Geometry build below, `photo-handle-drag-bar-hidden` |
+| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.7 ms; renderer 91.0 completed updates/s | Geometry build below, `photo-pixels-handle-drag` |
 | Pixel transform: Uniform, Skew or Rotate | 60 | | |
-| Pixel transform translation | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 93.9 completed updates/s | Geometry build below, `photo-pixels-translate-drag` |
-| Pixel transform: Distort | 60 | Screen 59.5 presents/s, p99 16.7 ms; renderer 91.1 completed updates/s | Geometry build below, `photo-pixels-distort-drag` |
+| Pixel transform translation | 60 | Screen 59.4 presents/s, p99 16.7 ms; renderer 93.0 completed updates/s | Geometry build below, `photo-pixels-translate-drag` |
+| Pixel transform: Distort | 60 | Screen 59.5 presents/s, p99 16.8 ms; renderer 91.1 completed updates/s | Geometry build below, `photo-pixels-distort-drag` |
 | Pixel transform: Perspective | 60 | | |
-| Pixel transform: Warp | 60 | **Not met.** Screen 52.2 presents/s, p99 33.4 ms; renderer 51.8 completed updates/s | Geometry build below, `photo-pixels-warp-drag` |
-| Crop corner drag | 60 | Screen 59.3 presents/s, p99 16.7 ms; renderer 113.5 completed updates/s | Geometry build below, `crop-handle-drag` |
-| Pixel resize after placing the photo at 45% size | 60 | Screen 59.5 presents/s, p99 16.9 ms; renderer 115.7 completed updates/s | Geometry build below, `scaled-photo-pixels-handle-drag` |
+| Pixel transform: Warp | 60 | **Not met.** Screen 52.4 presents/s, p99 33.4 ms; renderer 51.8 completed updates/s | Geometry build below, `photo-pixels-warp-drag` |
+| Crop corner drag | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 112.8 completed updates/s | Geometry build below, `crop-handle-drag` |
+| Pixel resize after placing the photo at 45% size | 60 | Screen 59.5 presents/s, p99 16.9 ms; renderer 112.2 completed updates/s | Geometry build below, `scaled-photo-pixels-handle-drag` |
 | Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
 | Move tool layer drag | 60 | | |
 | Marquee, Lasso or Polygon drag | 60 | | |
@@ -54,14 +54,15 @@ is 4248 × 2832.
 | List scrolling: layers, brushes, filters | 60 | | |
 | Menu open and close | 60 | | |
 
-Geometry build: 2026-09-28, production composition worktree based on `a4c6358e`,
-APK SHA-256 `d0b9d3ee2ab3ff8c8941cb7f4b6b16832e268f1b58923121c671dc54205c0605`.
+Geometry build: 2026-09-28, cached composition worktree based on `e6b361dd`,
+APK SHA-256 `3158915c6ea69e3d027a7ca3f979410460e8cbfa55b131428e1e77dacca38cd4`.
 Release Rust with an unminified Android benchmark harness, default glass, thermal
 status 0, three warmed five-second gestures per row. Values are medians across
 runs. Screen rates use SurfaceFlinger actual-present timestamps; this device
 provides no separate SurfaceView timeline, so they do not independently establish
 canvas presentation rates. Renderer counts exclude empty updates and terminal
-polling. Raw results are in `artifacts/display-production/geometry-final-reserved-tcl`.
+polling. Setup commands wait for shared command availability outside timing.
+Raw results are in `artifacts/display-production/stable-graph-geometry-ready-tcl`.
 
 The paired old renderer at `29a564eb` completes 96.3 placement translations/s,
 94.6 placement resizes/s, 92.7 pixel translations/s, 91.2 pixel resizes/s,
@@ -84,7 +85,7 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | Inside-photo path: 35.4 updates/s (35.3–36.2); gap p99 45.3 ms | **Not met** |
+| G-Pen (1) | Simple | 1024 px | Inside-photo path: 37.7 updates/s (37.5–37.8); gap p99 36.8 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -125,25 +126,42 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 At the 2048 px goal, the G-Pen completes 12.3 updates/s (12.3–12.4), with a gap p99 of 114.1 ms.
 
-G-Pen was remeasured on 2026-09-28 with production composition at `e37176cd`
-and the validated benchmark harness. Optimized release APK SHA-256:
-`35de6a87b9e4602519ad9364dc9c8a51fda46103f1a2ba3372e02b39437dbee7`.
+G-Pen was remeasured on 2026-09-28 with cached composition branches and the
+validated benchmark harness. Optimized release APK SHA-256:
+`da7d5d73452abe36472b446880468ab607686975138a4fe55b7b476445055b22`.
 The inside-photo trajectory uses 240 × 140 surface-pixel radii and three 5 s
 strokes. Both builds use the same instrumentation, with observed setup checked
-before timing. Runs alternate old main `29a564eb` and production at each layer
-count. Thermal status is 0. Each stack has one opaque photo, translucent photo
+before timing. The old main `29a564eb` control was measured in the same session
+with the previous production build; the cache build follows those paired runs.
+Thermal status is 0. Each stack has one opaque photo, translucent photo
 duplicates at 35% opacity, and a separate active brush layer.
 
 | Photo layers below the brush | Old completed updates/s | Production completed updates/s | Speedup | Production gap p99 |
 | --- | --- | --- | --- | --- |
-| 1 | 17.91 | 35.38 | 1.98× | 45.3 ms |
-| 4 | 1.39 | 29.09 | 20.88× | 58.9 ms |
-| 8 | 0.80 | 23.11 | 29.03× | 72.1 ms |
+| 1 | 17.91 | 37.67 | 2.10× | 36.8 ms |
+| 4 | 1.39 | 34.47 | 24.75× | 47.7 ms |
+| 8 | 0.80 | 34.59 | 43.44× | 46.7 ms |
 
 None of these cases reaches the brush target. Raw results are under
-`artifacts/display-production/validated-{control,production}-stack-{1,4,8}-12mp-fit`.
+`artifacts/display-production/validated-control-stack-{1,4,8}-12mp-fit` and
+`artifacts/display-production/stable-graph-stack-{1,4,8}-12mp-fit`.
 The control APK SHA-256 is
 `4106138d62c45d5d5440816f6bc6972fb98fd434a737eb6904fcff56dcf2758f`.
+
+With 32 photos below the brush, the cache build completes 34.25 updates/s
+(34.07–34.41), gap p99 48.3 ms. The preceding production renderer at `e37176cd`
+completes 8.96 updates/s on the same setup, a 3.82× cache improvement. This is a
+separate comparison from old main. Raw data is in
+`artifacts/display-production/{stable-graph,pre-graph}-stack-32-12mp-fit`.
+Renderer-reported resident storage is 580, 649, 741 and 1030 MiB for the cache
+build's 1, 4, 8 and 32 photo runs. This includes allocations outside the bounded
+display-composition component and is not process RSS.
+Process RSS high-water marks are 1311, 1318, 1469 and 1816 MiB respectively;
+the previous production build records 1323, 1326, 1319 and 1708 MiB. Cached
+branches trade retained image storage for less repeated composition.
+Separate FULL-trace runs attribute 11.05 and 11.23 ms to composition at 8 and
+32 photos, respectively, with about 13.8 ms of paint and prediction work in
+each. Those instrumentation runs establish phase cost, not target throughput.
 
 The standard larger trajectory partly leaves the photo at Fit. An earlier
 production APK (`cff6f839c8fa90fe67df272408ac272b8fd01ba9e5fd631d9a475435dac7d735`)
