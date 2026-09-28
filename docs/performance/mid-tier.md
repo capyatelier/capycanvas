@@ -43,6 +43,7 @@ canvas is 6000 × 4000.
 | Figure or ruler drag | 90 | | |
 | Layer opacity scrub | 90 | | |
 | Layer reorder drag | 90 | | |
+| Layer swipe right: alpha lock (24 MP photo) | 90 | **Not met.** Android 59.0–59.2 fps, interval p99 16.8 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | `1d251ece`, 2026-09-27; details below |
 | Navigation with 16 visible paint layers | 90 | | |
 | Drawing with 16 visible paint layers, G-Pen 1024 px | 90 | | |
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms | `cbfad9e5`, 2026-09-26 |
@@ -54,6 +55,17 @@ canvas is 6000 × 4000.
 | Tool Options or panel content change | 90 | **Not met.** UI frame p50 21.4 ms | `cbfad9e5`, 2026-09-26 |
 | List scrolling: layers, brushes, filters | 90 | | |
 | Menu open and close | 90 | | |
+
+Layer swipe measurements use the Wacom MovinkPad 11 at thermal status 0, the
+6000 × 4000 reference photo beneath one empty paint layer, Fit zoom and default
+panel glass. Each host ran a priming gesture and three five-second moving
+gestures. Android uses the benchmark APK with release Rust and native touch
+input; its frame timestamps come from `FrameMetrics`. Web uses release Rust,
+Chrome 137, injected pen input through DevTools and Chrome's
+`AnimationFrame::Presentation` timestamps. The display presents at 60 Hz.
+Raw frame data, Chrome traces and fixture details are in
+`artifacts/swipe-alpha-lock/`; Android's repeatable entry point is
+`AndroidTitleBarTest#layerSwipeFrameTiming` ([layer gesture checks](../ui/drag-and-reorder.md#required-validation-when-implementing)).
 
 ## Brushes
 

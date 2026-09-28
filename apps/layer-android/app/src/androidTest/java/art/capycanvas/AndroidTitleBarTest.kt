@@ -838,8 +838,8 @@ class AndroidTitleBarTest {
         action(obj("type" to "invoke","command" to "apply_transform"))
         for(id in listOf(1,2))action(obj("type" to "layer","action" to obj("op" to "delete","id" to id)))
         action(obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
-        action(obj("type" to "invoke","command" to "fit_canvas"))
         showSwipeLayers()
+        action(obj("type" to "invoke","command" to "fit_canvas"))
         val id=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
         val frames=java.util.Collections.synchronizedList(mutableListOf<LongArray>())
         val thread=android.os.HandlerThread("layer-swipe-frames").apply { start() }
@@ -880,7 +880,8 @@ class AndroidTitleBarTest {
                 val rows=synchronized(frames) { frames.toList() }
                 event(MotionEvent.ACTION_CANCEL);idle()
                 if(run>0) {
-                    val result=obj("run" to run,"duration_ms" to duration,"frames" to JSONArray(rows.map { JSONArray(it.toList()) }))
+                    val result=obj("run" to run,"duration_ms" to duration,"camera" to state().getJSONObject("camera"),
+                        "layers" to state().array("layers"),"frames" to JSONArray(rows.map { JSONArray(it.toList()) }))
                     java.io.File(instrumentation.targetContext.getExternalFilesDir(null),"layer-swipe-$run.json").writeText(result.toString())
                     android.util.Log.i("LayerSwipePerf","Run $run: ${rows.size} moving frames in $duration ms")
                 }
