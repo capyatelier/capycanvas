@@ -477,6 +477,11 @@ checks the default Undo and Redo taps, rebinding a tap to Nothing and Reset on a
 physical iPad. Game controllers reach the key editor window through the
 GameController framework; `tests/gamepad-input.swift` records a gamepad button
 as a shortcut, invokes it and pans and zooms with the sticks on both policies.
+Canvas refusals appear as the shared notice bubble above the canvas status;
+`EditorLaunchTests/testCanvasNotice` checks the Wand's reference offer, its
+Undo and the timeout on macOS; on iPadOS only Pencil runs the Wand. The zoom readout opens the shared zoom menu under a typed
+zoom field; `EditorLaunchTests/testZoomReadout` checks Actual Pixels and a
+typed zoom.
 The focused
 `EditorLaunchTests/testShortcutConflictAndEditorEffect` test exercises capture
 and the resulting Zen action without automating the system menu bar. The shared

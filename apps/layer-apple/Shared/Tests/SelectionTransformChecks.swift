@@ -568,7 +568,7 @@ extension XCTestCase {
         editorHistory("Undo", in: app); expectCount(initialCount); expectSamples(original)
         editorHistory("Redo", in: app); expectCount(initialCount + 1); expectSamples(original)
         workspaceActivate(rows[originalID].buttons["layer-Hide layer"]); expectSamples(original)
-        action("Clear layer"); expectInk(blank)
+        action("Clear Entire Layer"); expectInk(blank)
         history(original, samples())
         attachEditor(in: app, name: "layer-duplicate-clear-restored")
 
@@ -592,7 +592,7 @@ extension XCTestCase {
         #else
         content().press(forDuration: 0.6)
         #endif
-        let clear = revealLayerMenuAction("Clear layer", in: app)
+        let clear = revealLayerMenuAction("Clear Entire Layer", in: app)
         XCTAssertTrue(clear.waitForExistence(timeout: 5)); XCTAssertFalse(clear.isEnabled)
         workspaceActivate(revealLayerMenuAction("Lock editing", in: app))
         flag("Lock editing", false)

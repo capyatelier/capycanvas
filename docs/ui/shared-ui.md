@@ -406,9 +406,9 @@ Zoom In, Zoom Out, Fit, Actual Pixels, then 25% to 400% as
 `NumericControl::zoom()` (percent on a logarithmic track). `SetZoom` clamps to
 the camera limits, zooms about the work-area centre and rounds like Actual
 Pixels. The field takes its value from the camera, not a model, and refreshes
-only while the menu is open, so navigation updates one label. Web and Android
-read the field's control from `UiCatalog.zoom` and the menu through the Web
-`zoom_menu` export or the `zoom_menu` native query. Opening the menu or choosing
+only while the menu is open, so navigation updates one label. Web, Android,
+macOS and iPadOS read the field's control from `UiCatalog.zoom` and the menu
+through the Web `zoom_menu` export or the `zoom_menu` native query. Opening the menu or choosing
 an item never takes keyboard focus from the canvas; only typing in the field
 borrows it:
 - GTK's readout button cannot take focus, and closing its popover returns

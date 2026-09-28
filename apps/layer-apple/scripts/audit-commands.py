@@ -22,6 +22,13 @@ def signature(action):
     return json.dumps(action, sort_keys=True)
 
 
+def settled(control, edits):
+    result = next((edit["result"] for edit in edits if edit["key"] == control["key"] and edit["result"]), None)
+    if result is None:
+        return control
+    return {**control, "value": result["reset"], "modified": result["reset"] != control["default"]}
+
+
 def shared_properties(coverage, platform, model):
     scenarios = model["property_scenarios"]
     expected = ["paint", "paper", "group"] + ["filter:" + item["id"]
@@ -40,7 +47,7 @@ def shared_properties(coverage, platform, model):
         if scenario["lock_action"] is None:
             if name != "paper" or locked is not None or scenario["locked_edit"] is not None:
                 raise ValueError(f"{platform} property locking capability drift: {name}")
-        elif locked["enabled"] or locked["controls"] != view["controls"]:
+        elif locked["enabled"] or locked["controls"] != [settled(item, scenario["edits"]) for item in view["controls"]]:
             raise ValueError(f"{platform} property lock changed values/schema or remained editable: {name}")
         elif view["controls"] and (not scenario["locked_edit"]["error"] or not scenario["locked_edit"]["values_unchanged"]):
             raise ValueError(f"{platform} locked property edit was not rejected intact: {name}")

@@ -28,7 +28,7 @@ struct EditorView<Canvas: View>: View {
                 if !store.snapshot["chrome_hidden"].bool && store.state["workspace"]["layout"]["canvas_info"]["visible"].bool {
                     HStack {
                         Spacer()
-                        CameraStatus(camera: store.camera).padding(.horizontal, 10).padding(.vertical, 3)
+                        CameraStatus(store: store, camera: store.camera).padding(.horizontal, 10).padding(.vertical, 3)
                             .glassSurface(SquircleShape.tile, fill: palette.chromeSurface)
                     }.placed(store.snapshot["layout"]["status"])
                 }
@@ -190,10 +190,34 @@ private struct StorageAlert: ViewModifier {
 }
 
 private struct CameraStatus: View {
+    @ObservedObject var store: EditorStore
     @ObservedObject var camera: CameraReadout
+    @State private var menu: AppleContextMenu?
+    private func refresh() {
+        store.query(["type": "zoom_menu"]) { model in
+            guard menu != nil else { return }
+            menu = AppleContextMenu(model.replacing("title", with: JSON(""))) { store.dispatch($0) }
+        }
+    }
     var body: some View {
-        Text(verbatim: "\(Int((camera.value["zoom"].number * 100).rounded()))% · \(Int((camera.value["rotation"].number * 180 / .pi).rounded()))°")
+        Button {
+            if menu == nil { menu = AppleContextMenu(JSON()) { _ in }; refresh() } else { menu = nil }
+        } label: {
+            Text(verbatim: "\(Int((camera.value["zoom"].number * 100).rounded()))% · \(Int((camera.value["rotation"].number * 180 / .pi).rounded()))°")
+        }.buttonStyle(.plain).focusable(false).help("Canvas zoom and rotation")
             .accessibilityIdentifier("camera-status")
+            .onChange(of: camera.value["zoom"].number) { if menu != nil { refresh() } }
+            .editorPopover(isPresented: Binding(get: { menu != nil }, set: { if !$0 { menu = nil } })) {
+                VStack(alignment: .leading, spacing: 6) {
+                    NumberControl(store: store, label: "Zoom", value: camera.value["zoom"].number, control: store.catalog["zoom"],
+                        identifier: "zoom") { value, completion in
+                        store.edit(["type": "set_zoom", "zoom": value], completion: completion)
+                    }.padding(.horizontal, 10).padding(.top, 8)
+                    Divider()
+                    EditorActionMenu(model: menu ?? AppleContextMenu(JSON()) { _ in }, width: 240, identifier: "zoom-menu",
+                        rootFocusesSelection: false, capturesKeys: false) { menu = nil }
+                }.frame(width: 240)
+            }
     }
 }
 

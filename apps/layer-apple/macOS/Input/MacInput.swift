@@ -57,6 +57,7 @@ import QuartzCore
         updateModifiers(event.modifierFlags, force: phase == 1)
         if phase == 1 {
             store.layerSwipe.close(); store.palettes.focused = false; store.workspace.dismissTransients(at: nil)
+            store.notice.hide()
             guard contact == nil else { return }
             view?.window?.makeFirstResponder(view)
             nextContact &+= 1

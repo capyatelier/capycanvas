@@ -58,7 +58,7 @@ extension XCTestCase {
         XCTAssertFalse(undo.isEnabled)
         XCTAssertEqual(pixels(overview, "navigator-after-finger"), blank)
         #endif
-        let status = app.staticTexts["camera-status"]
+        let status = app.buttons["camera-status"]
         let original = text(status)
         XCTAssertFalse(original.isEmpty, "The native camera readout must be accessible")
         workspaceActivate(app.buttons["navigator-zoom_in"])

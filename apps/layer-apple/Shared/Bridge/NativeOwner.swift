@@ -623,16 +623,16 @@ final class NativeOwner: @unchecked Sendable {
                 }
             }
             succeeded = true
-            syncCanvasBarContact()
+            if !predicted { syncCanvasBarHold() }
         }
     }
-    private var canvasBarContact = false
-    var canvasBarContactChanged: (@Sendable (Bool) -> Void)?
-    private func syncCanvasBarContact() {
-        let hidden = capy_apple_canvas_bar_hidden(handle) != 0
-        guard hidden != canvasBarContact else { return }
-        canvasBarContact = hidden
-        canvasBarContactChanged?(hidden)
+    private var canvasBarHold: UInt32 = 0
+    var canvasBarHoldChanged: (@Sendable (UInt32) -> Void)?
+    private func syncCanvasBarHold() {
+        let hold = capy_apple_canvas_bar_hold(handle)
+        guard hold != canvasBarHold else { return }
+        canvasBarHold = hold
+        canvasBarHoldChanged?(hold)
     }
     func observeTick(now: UInt64, target: UInt64, admitted: Bool, denial: UInt64 = 0) {
         if let trace, trace.isRecording {
@@ -720,6 +720,7 @@ final class NativeOwner: @unchecked Sendable {
                 if wantsGpuTiming, let observation { sampleGpuClock(observation) }
                 let result = capy_apple_frame(handle, now, max(now, target), &costs)
                 try check(result)
+                syncCanvasBarHold()
                 // Always flush the final state before the display link sleeps.
                 // Throttling the pen-up frame can otherwise leave Undo/layers
                 // stale indefinitely, until an unrelated action wakes the UI.

@@ -18,7 +18,7 @@ extension XCTestCase {
         #endif
         let capture = XCTAttachment(screenshot: image)
         capture.name = "medium-labeled-toolbar"; capture.lifetime = .keepAlways; add(capture)
-        let camera = app.staticTexts["camera-status"]
+        let camera = app.buttons["camera-status"]
         let usesValue = !(camera.value as? String ?? "").isEmpty
         let previous = usesValue ? camera.value as! String : camera.label
         XCTAssertFalse(previous.isEmpty, "The camera readout must provide a visible value before testing Zoom")

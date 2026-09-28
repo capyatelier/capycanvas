@@ -120,6 +120,19 @@ extension XCTestCase {
         waitForExpectations(timeout: 10)
         #endif
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        for id in ["refine", "adjust"] {
+            let button = app.buttons["canvas-bar-menu-" + id], items = app.descendants(matching: .any)["canvas-bar-menu-items-" + id]
+            if button.exists {
+                let frame = button.frame
+                workspaceActivate(button)
+                expect(items, "exists == YES", "The \(id) menu opens from the bar")
+                XCTAssertGreaterThan(items.buttons.count, 0, "The \(id) menu lists actions")
+                press(CGPoint(x: frame.midX, y: frame.midY)); expect(items, "exists == NO")
+            } else {
+                openMore(); defer { closeMore() }
+                XCTAssertTrue(menu.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "menu-action-")).count > 0)
+            }
+        }
 
         let paper = bluePaperBounds(in: app)
         let sides = [CGPoint(x: paper.minX + paper.width * 0.05, y: paper.midY), CGPoint(x: paper.midX, y: paper.midY),
@@ -205,7 +218,8 @@ extension XCTestCase {
             width: (to.dx - from.dx) * frame.width, height: (to.dy - from.dy) * frame.height)
         XCTAssertGreaterThanOrEqual(bar.frame.minY, selection.maxY - 2, "The bar sits below the selection")
         XCTAssertLessThan(bar.frame.minY - selection.maxY, 60)
-        XCTAssertEqual(bar.frame.midX, selection.midX, accuracy: 4, "The bar centres on the selection")
+        XCTAssertTrue(bar.frame.minX <= selection.midX && selection.midX <= bar.frame.maxX,
+            "The bar centres on the selection as far as the work area allows")
         attachEditor(in: app, name: "canvas-bar-beside-selection")
         let placed = bar.frame
         editorMenu(in: app, menu: "View", id: "zoom_out", label: "Zoom out")

@@ -117,7 +117,7 @@ extension XCTestCase {
         #if os(iOS)
         // The workspace root owns tear-off gestures. Its empty regions must
         // still pass two-finger navigation through to the underlying canvas.
-        let status = app.staticTexts["camera-status"]
+        let status = app.buttons["camera-status"]
         XCTAssertTrue(status.waitForExistence(timeout: 5))
         let originalCamera = status.label
         app.otherElements["canvas"].pinch(withScale: 1.4, velocity: 0.6)

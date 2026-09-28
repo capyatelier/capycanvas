@@ -36,8 +36,16 @@ fn canvas_bar_places_edits_and_hides_during_contacts_through_the_apple_abi() {
         let toggle = menu["sections"].as_array().unwrap().last().unwrap()[0].clone();
         assert_eq!(toggle["action"]["command"], "show_canvas_action_bar", "{platform}: {menu}");
 
-        let reason = app.request(2, json!({"type": "canvas_bar_reason", "context": selection["context"], "command": "scale_rotate"})).unwrap();
-        assert!(reason.as_str().is_some_and(|reason| !reason.is_empty()), "an empty layer explains Transform: {reason}");
+        let transform = selection["items"].as_array().unwrap().iter()
+            .map(|item| &item["option"]["Action"]["state"]).find(|state| state["id"] == "scale_rotate").unwrap();
+        assert!(transform["disabled_reason"].as_str().is_some_and(|reason| !reason.is_empty()),
+            "an empty layer explains Transform: {transform}");
+        let menus: Vec<_> = selection["items"].as_array().unwrap().iter().filter_map(|item| item["menu"].as_str()).collect();
+        for id in &menus {
+            let menu = app.request(2, json!({"type": "canvas_bar_choice_menu", "context": selection["context"], "id": id})).unwrap();
+            assert!(!menu["sections"].as_array().unwrap().is_empty(), "{platform}: the {id} menu lists actions: {menu}");
+        }
+        assert!(menus.contains(&"adjust") && menus.contains(&"refine"), "{platform}: selection menus {menus:?}");
         edit(&app, &selection, "fill_selection").unwrap();
         app.draw_until_idle();
         let selection = app.state()["canvas_bar"].clone();
@@ -48,11 +56,13 @@ fn canvas_bar_places_edits_and_hides_during_contacts_through_the_apple_abi() {
         assert!(edit(&app, &selection, "invert_selection").unwrap_err().contains("previous"), "stale bar edits are refused");
         assert!(!layout(&app, &transform).is_null());
 
-        assert_eq!(unsafe { capy_apple_canvas_bar_hidden(app.0) }, 0);
+        let hold = || unsafe { capy_apple_canvas_bar_hold(app.0) };
+        let before = hold();
+        assert_eq!(before % 2, 0);
         contact(&app, [32., 32.], 1.);
-        assert_eq!(unsafe { capy_apple_canvas_bar_hidden(app.0) }, 1, "a canvas contact hides a bar beside the object");
+        assert_eq!(hold() % 2, 1, "a canvas contact hides a bar beside the object");
         contact(&app, [36., 34.], 3.);
-        assert_eq!(unsafe { capy_apple_canvas_bar_hidden(app.0) }, 0, "the bar returns when the contact ends");
+        assert_eq!(hold() % 2, 0, "the bar may return when the contact ends");
 
         app.invoke("show_canvas_action_bar");
         let completion = app.state()["canvas_bar"].clone();

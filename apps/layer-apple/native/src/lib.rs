@@ -676,8 +676,8 @@ pub unsafe extern "C" fn capy_apple_frame(
 /// # Safety
 /// Valid handle on its serial owner.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_apple_canvas_bar_hidden(app: *const CapyApple) -> i32 {
-    unsafe { app.as_ref() }.is_some_and(|a| a.host.canvas_bar_hidden) as i32
+pub unsafe extern "C" fn capy_apple_canvas_bar_hold(app: *const CapyApple) -> u32 {
+    unsafe { app.as_ref() }.map_or(0, |a| a.host.session.canvas_bar_hold())
 }
 
 /// # Safety

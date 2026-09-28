@@ -362,7 +362,7 @@ extension XCTestCase {
         // buttons to that sheet, excluding the Touch Bar's duplicate actions.
         let dialog = app.sheets.firstMatch
 
-        editorMenu(in: app, menu: "Edit", id: "clear_layer", label: "Clear layer")
+        editorMenu(in: app, menu: "Edit", id: "clear_layer", label: "Clear Entire Layer")
         expectPixels(paper, in: app)
         fileCommand("open_document", "Open…", in: app)
         chooseOpen(invalid)

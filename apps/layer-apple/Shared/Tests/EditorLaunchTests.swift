@@ -94,6 +94,14 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testSelectionAndTransform() { checkSelectionAndTransform(in: editorCaptureApplication()) }
 
     @MainActor func testCanvasActionBar() { checkCanvasActionBar(in: ignoringSavedWindows(editorCaptureApplication())) }
+    @MainActor func testCanvasNotice() throws {
+        #if os(iOS)
+        throw XCTSkip("A finger tap does not run the Wand on iPadOS, and XCTest cannot synthesize Pencil")
+        #else
+        checkCanvasNotice(in: ignoringSavedWindows(editorCaptureApplication()))
+        #endif
+    }
+    @MainActor func testZoomReadout() { checkZoomReadout(in: ignoringSavedWindows(editorCaptureApplication())) }
 
     @MainActor func testShortcutSettingsPage() { checkShortcutSettingsPage(in: ignoringSavedWindows(editorCaptureApplication())) }
 

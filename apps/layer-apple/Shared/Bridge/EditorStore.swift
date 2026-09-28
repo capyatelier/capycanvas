@@ -64,6 +64,7 @@ import SwiftUI
     lazy var palettes = PaletteController(store: self)
     lazy var strokeRecording = StrokeRecording(store: self)
     let canvasBar = CanvasBarPresence()
+    let notice = CanvasNoticePresence()
     lazy var glass = GlassRegistry(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
@@ -105,13 +106,17 @@ import SwiftUI
                 DispatchQueue.main.async { self?.receive(snapshot, failure) }
             }
             native?.submit(2, JSON(["type": "catalog"])) { [weak self] result in
-                DispatchQueue.main.async { self?.catalog = result ?? JSON() }
+                DispatchQueue.main.async {
+                    self?.catalog = result ?? JSON()
+                    self?.canvasBar.delay = (result?["canvas_bar_reappear_ms"].number ?? 0) / 1000
+                }
             }
             if usesWorkspaceLibrary, let root = storage.root {
                 workspaces = WorkspaceController(store: self, root: root, scene: scene)
             }
-            native?.canvasBarContactChanged = { [weak self] hidden in
-                DispatchQueue.main.async { self?.canvasBar.hold(.contact, hidden) }
+            notice.answer = { [weak self] id, accept in self?.dispatch(["type": "notice", "id": id, "accept": accept]) }
+            native?.canvasBarHoldChanged = { [weak self] hold in
+                DispatchQueue.main.async { self?.canvasBar.hold(hold) }
             }
             if let workload { drawingWorkload = DrawingWorkload(store: self, plan: workload) }
         } catch { failure = error.localizedDescription }
@@ -128,7 +133,7 @@ import SwiftUI
                 return
             }
             let hadRenderer = snapshot["gpu_ready"].bool
-            let documentEpoch = state["document_file"]["epoch"].uint, hand = handCursor, previousCamera = cameraRevision
+            let documentEpoch = state["document_file"]["epoch"].uint, hand = handCursor
             switch ui.receive(next) {
             case .full:
                 if hand != handCursor { cursorChanged?() }
@@ -168,8 +173,7 @@ import SwiftUI
             case .ignored: break
             }
             cameraRevision = state["camera"]["revision"].uint
-            canvasBar.hold(.workspace, ui.workspace.movingGroup)
-            if cameraRevision != previousCamera && state["canvas_bar"]["placement"].string == "near_object" { canvasBar.interrupt() }
+            notice.publish(state["notice"])
         }
         wake?()
     }

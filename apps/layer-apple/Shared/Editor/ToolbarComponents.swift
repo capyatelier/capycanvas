@@ -462,7 +462,6 @@ struct ToolOptionField: View {
     var caption: String?
     var prefix = "toolbar"
     var accent = false
-    var reason: String?
     let edit: ToolOptionEdit
     var body: some View {
         if !option["Numeric"].isNull {
@@ -479,7 +478,7 @@ struct ToolOptionField: View {
             }
         } else if !option["Action"].isNull {
             ToolOptionAction(store: store, command: option["Action"]["state"], checkable: option["Action"]["checkable"].bool,
-                iconSize: iconSize, caption: caption, prefix: prefix, accent: accent, reason: reason, edit: edit)
+                iconSize: iconSize, caption: caption, prefix: prefix, accent: accent, edit: edit)
         }
     }
 }
@@ -492,12 +491,11 @@ private struct ToolOptionAction: View {
     let caption: String?
     let prefix: String
     let accent: Bool
-    let reason: String?
     let edit: ToolOptionEdit
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         let enabled = command["enabled"].bool, highlighted = accent && enabled
-        let explanation = enabled ? nil : reason
+        let explanation = command.disabledReason
         Button { edit(["type": "invoke", "command": command["id"].raw], { _ in }) } label: {
             HStack(spacing: captionGap) {
                 SharedIcon(name: command["icon"].string, size: caption == nil ? iconSize : captionIcon)
@@ -512,6 +510,30 @@ private struct ToolOptionAction: View {
             .accessibilityLabel(command["label"].string).accessibilityHint(explanation ?? "")
             .help(explanation ?? command["tooltip"].string)
             .accessibilityIdentifier("\(prefix)-action-" + command["id"].string)
+            .modifier(DisabledExplanation(reason: explanation, identifier: "\(prefix)-reason-" + command["id"].string))
+    }
+}
+
+extension JSON {
+    var disabledReason: String? {
+        let reason = self["disabled_reason"].string
+        return self["enabled"].bool || reason.isEmpty ? nil : reason
+    }
+}
+
+struct DisabledExplanation: ViewModifier {
+    let reason: String?
+    let identifier: String
+    @State private var explaining = false
+    func body(content: Content) -> some View {
+        content.overlay {
+            if reason != nil {
+                Color.clear.contentShape(Rectangle()).onTapGesture { explaining = true }.accessibilityHidden(true)
+            }
+        }.editorPopover(isPresented: $explaining) {
+            Text(reason ?? "").fixedSize(horizontal: false, vertical: true).frame(maxWidth: 280, alignment: .leading)
+                .padding(10).accessibilityIdentifier(identifier)
+        }
     }
 }
 

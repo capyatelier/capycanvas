@@ -28,6 +28,7 @@ struct EditorActionMenu: View {
     var width: CGFloat? = 340
     var identifier = "editor-action-menu"
     var rootFocusesSelection = true
+    var capturesKeys = true
     var dismiss: () -> Void
     @State private var pages: [(item: AppleContextMenu.Item, index: Int)] = []
     @State private var focus: Int?
@@ -50,7 +51,7 @@ struct EditorActionMenu: View {
             .font(.system(size: 15))
             .accessibilityElement(children: .contain).accessibilityIdentifier(identifier)
             .onAppear { focus = initialFocus }
-            .background(ShortcutKeyCapture(captured: key).frame(width: 1, height: 1))
+            .background { if capturesKeys { ShortcutKeyCapture(captured: key).frame(width: 1, height: 1) } }
     }
     private var menuHeight: CGFloat {
         let rows = entries.count * 36

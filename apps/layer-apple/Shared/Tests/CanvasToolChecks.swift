@@ -264,10 +264,10 @@ extension XCTestCase {
             waitForExpectations(timeout: 10)
         }
         #endif
-        for (tool, presets) in [("Blend", ["Natural Blender", "Smudge"]), ("Liquify", ["Liquify Push", "Liquify Twirl"])] {
+        for (tool, presets, offered) in [("Blend", ["Natural Blender", "Smudge"], 2), ("Liquify", ["Liquify Push", "Liquify Twirl Counterclockwise"], 6)] {
             for preset in presets {
                 selectPaintPreset(tool, group: tool, preset: preset, in: app)
-                XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "brush-")).count, presets.count)
+                XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "brush-")).count, offered)
                 editPaintSize("360", in: app)
                 XCTAssertEqual(app.buttons["number-value-tool-flow"].exists, tool == "Blend")
                 XCTAssertEqual(app.buttons["number-value-tool-strength"].exists, tool == "Liquify")

@@ -8,7 +8,6 @@ import Foundation
     private(set) var modelRevision: UInt64?
     private(set) var contentRevision: UInt64?
     private(set) var revision: UInt64?
-    private(set) var movingGroup = false
     var tab: JSON { fields["tab"] }
     var tabIdentity: JSON { fields["tab_identity"] }
     var dropHint: JSON { fields["drop_hint"] }
@@ -32,7 +31,6 @@ import Foundation
         contentRevision = update["content_revision"].isNull ? nil : update["content_revision"].uint
         revision = update.isNull ? nil : update["revision"].uint
         let drag = update["drag"], group = drag["group"], tab = drag["tab"]
-        movingGroup = !group.isNull
         let identity = tab.isNull ? JSON() : JSON(["group": tab["group"].raw, "panel": tab["panel"].raw])
         let groupPositions: [String: Any] = group.isNull ? [:] : [String(group["id"].uint): group["bounds"].raw]
         var changes = positions.stage(JSON(groupPositions))

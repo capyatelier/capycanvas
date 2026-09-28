@@ -1,27 +1,18 @@
 import SwiftUI
 
 @MainActor final class CanvasBarPresence: ObservableObject {
-    enum Hold: Hashable { case contact, workspace }
     @Published private(set) var visible = true
-    private var holds: Set<Hold> = []
+    @Published var bounds: CGRect?
+    private var held: UInt32 = 0
     private var reappear: DispatchWorkItem?
-    var delay: TimeInterval = 0.18
-    func hold(_ source: Hold, _ held: Bool) {
-        guard holds.contains(source) != held else { return }
-        if held { holds.insert(source) } else { holds.remove(source) }
-        reappear?.cancel(); reappear = nil
-        if !holds.isEmpty { if visible { visible = false } } else if !visible { scheduleReturn() }
-    }
-    func interrupt() {
+    var delay: TimeInterval = 0
+    func hold(_ value: UInt32) {
+        guard value != held else { return }
+        held = value
         reappear?.cancel(); reappear = nil
         if visible { visible = false }
-        if holds.isEmpty { scheduleReturn() }
-    }
-    private func scheduleReturn() {
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.holds.isEmpty else { return }
-            self.visible = true
-        }
+        guard value % 2 == 0 else { return }
+        let work = DispatchWorkItem { [weak self] in self?.visible = true }
         reappear = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
@@ -43,8 +34,9 @@ private struct PlacedCanvasBar: View {
     let view: JSON
     @State private var placed = JSON()
     @State private var menu = JSON()
-    @State private var reasons: [String: String] = [:]
+    @State private var menus: [String: JSON] = [:]
     private static let itemHeight: CGFloat = 40, gap: CGFloat = 4, padding: CGFloat = 6, labelPadding: CGFloat = 6
+    private static let menuPadding: CGFloat = 10, menuIcon: CGFloat = 20, menuGap: CGFloat = 6, menuChevron: CGFloat = 12
     private static let preferences = JSON(["sliders": false, "text": true])
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]).glassy }
     private var textSize: CGFloat { store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3 }
@@ -52,7 +44,11 @@ private struct PlacedCanvasBar: View {
     private var completion: [JSON] { view["completion"].array }
     private var context: JSON { view["context"] }
     private func width(_ item: JSON) -> CGFloat {
-        toolOptionSize(item["option"], vertical: false, width: 0, tile: CGSize(width: Self.itemHeight, height: Self.itemHeight),
+        if !item["menu"].isNull {
+            return Self.menuPadding * 2 + Self.menuIcon + Self.menuGap * 2 + Self.menuChevron - 2
+                + ceil(toolbarTextWidth(item["label"].string, size: textSize))
+        }
+        return toolOptionSize(item["option"], vertical: false, width: 0, tile: CGSize(width: Self.itemHeight, height: Self.itemHeight),
             preferences: Self.preferences, textSize: textSize, caption: item["label"].string).width
     }
     private var labelWidth: CGFloat {
@@ -71,16 +67,16 @@ private struct PlacedCanvasBar: View {
             if !placed.isNull {
                 bar(shown: min(max(0, Int(placed["items"].uint)), items.count)).placed(placed["bounds"])
             }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).task(id: key) {
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .onChange(of: placed.stableKey, initial: true) { store.canvasBar.bounds = placed.isNull ? nil : placed["bounds"].rect }
+            .onDisappear { store.canvasBar.bounds = nil }
+            .task(id: key) {
             store.query(["type": "canvas_bar_layout", "measure": measure]) { result in
                 placed = result
                 store.query(["type": "canvas_bar_menu", "context": context.raw, "shown": result["items"].uint]) { menu = $0 }
             }
-            reasons = [:]
-            for command in (items + completion).map({ $0["option"]["Action"]["state"] }) where !command.isNull && !command["enabled"].bool {
-                store.query(["type": "canvas_bar_reason", "context": context.raw, "command": command["id"].raw]) { reply in
-                    if !reply.isNull { reasons[command["id"].string] = reply.string }
-                }
+            for id in items.map({ $0["menu"] }).filter({ !$0.isNull }) {
+                store.query(["type": "canvas_bar_choice_menu", "context": context.raw, "id": id.raw]) { menus[id.string] = $0 }
             }
         }
     }
@@ -105,11 +101,31 @@ private struct PlacedCanvasBar: View {
             .accessibilityElement(children: .contain).accessibilityIdentifier("canvas-action-bar")
             .background { OutsideShadow(shape: SquircleShape.surface, opacity: 0.16, radius: 4, y: 2).accessibilityHidden(true) }
     }
-    private func field(_ item: JSON, completion: Bool) -> some View {
-        let command = item["option"]["Action"]["state"]["id"].string
-        return ToolOptionField(store: store, option: item["option"], iconSize: 20, vertical: false, labeled: false,
-            style: "medium", preferences: Self.preferences, stacked: false, caption: item["label"].string, prefix: "canvas-bar",
-            accent: completion && ["apply_transform", "complete_selection"].contains(command), reason: reasons[command], edit: edit)
-            .frame(width: width(item), height: Self.itemHeight)
+    @ViewBuilder private func field(_ item: JSON, completion: Bool) -> some View {
+        let command = item["option"]["Action"]["state"]
+        if !item["menu"].isNull {
+            menuField(item, command: command).frame(width: width(item), height: Self.itemHeight)
+        } else {
+            ToolOptionField(store: store, option: item["option"], iconSize: 20, vertical: false, labeled: false,
+                style: "medium", preferences: Self.preferences, stacked: false, caption: item["label"].string, prefix: "canvas-bar",
+                accent: item["accent"].bool, edit: edit)
+                .frame(width: width(item), height: Self.itemHeight)
+        }
+    }
+    private func menuField(_ item: JSON, command: JSON) -> some View {
+        let id = item["menu"].string, label = item["label"].string
+        let disabled = !command.isNull && !command["enabled"].bool, reason = command.disabledReason
+        let tip = command.isNull ? label : reason ?? command["tooltip"].string
+        return EditorMenuButton(menu: { AppleContextMenu(menus[id] ?? JSON()) { store.dispatch($0) } },
+            identifier: "canvas-bar-menu-items-" + id, rootFocusesSelection: false) {
+            HStack(spacing: Self.menuGap) {
+                SharedIcon(name: item["icon"].string, size: Self.menuIcon)
+                Text(label).lineLimit(1).fixedSize()
+                SharedIcon(name: "chevron-down", size: Self.menuChevron).padding(.leading, -2)
+            }.padding(.horizontal, Self.menuPadding).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.buttonStyle(EditorControlButtonStyle(selected: false, corner: .half)).disabled(disabled)
+            .opacity(disabled ? 0.36 : 1).help(tip).accessibilityLabel(label).accessibilityHint(reason ?? "")
+            .accessibilityIdentifier("canvas-bar-menu-" + id)
+            .modifier(DisabledExplanation(reason: reason, identifier: "canvas-bar-reason-" + id))
     }
 }
