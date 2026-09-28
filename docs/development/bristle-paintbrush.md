@@ -133,58 +133,52 @@ paint or hold.
 
 ## Performance
 
-Wacom DTHA140 / Adreno 735, landscape 2880 × 1800, 9504 × 6336 photo at fit
+Wacom DTHA140 (MovinkPad 14, Adreno 735, landscape 2880 × 1800) and DTHA116
+(MovinkPad 11, Mali-G57, landscape 2200 × 1440); 9504 × 6336 photo at fit
 zoom, 200 Hz injected input, 16 ms prediction, optimized arm64 benchmark
-build. Fresh one-second strokes, undone between runs; completed nonempty
-canvas updates per input second (not display-latched FPS):
+build. Completed nonempty canvas updates per input second (not display-latched
+FPS); fresh one-second strokes undone between runs, or 10-second loops:
 
-| Stroke | Completed updates/s |
-| --- | --- |
-| Size 1000, upright, load 80% | 109, 112, 108 |
-| Size 1000, strong lean, load 80% | 99, 99, 97 |
-| Size 1000, varying pressure | 197, 129, 189 |
-| Size 460 (default), strong lean | 264, 277, 266 |
+| Stroke | MovinkPad 14 | MovinkPad 11 |
+| --- | --- | --- |
+| Size 1000, upright, fresh | 127, 136, 138 | 27, 27, 27 |
+| Size 1000, strong lean, fresh | 118, 116, 124 | 12, 15, 16 |
+| Size 460 (default), strong lean, fresh | 295, 316, 281 | |
+| Size 460, upright, 10-second loop | | 84, 83, 82 |
+| Size 460, strong lean, 10-second loop | | 88, 89, 85 |
+| Size 1000, upright, 10-second loop | 160, 163, 164 | 5.7, 6.0, 5.7 |
 
-On the Wacom DTHA116 (MovinkPad 11, Mali-G57, landscape 2200 × 1440) with the
-same photo and input:
+In the same size-1000 loops the original Paintbrush measured 126 on the
+MovinkPad 14 and 13 on the MovinkPad 11, where it measured 60 at size 460 and
+G-Pen 30 at size 1000. At size 1000 the
+brush sweeps about 26,000 document pixels a second there, more than that GPU
+can paint; frames fall behind to about half a second.
 
-| Stroke | Completed updates/s |
-| --- | --- |
-| Size 1000, upright, fresh | 21, 22, 21 |
-| Size 1000, strong lean, fresh | 9, 10, 9 |
-| Size 460, strong lean, fresh | 34, 36, 33 |
-| Size 460, upright, 10-second loop | 22, 22, 22 |
-| Size 460, strong lean, 10-second loop | 25, 26, 25 |
-| Size 1000, upright, 10-second loop | 2.3, 2.7, 2.8 |
+The Mali kernel was bound by register spills: Arm's Mali Offline Compiler
+reported all 64 work registers and 152 bytes of spill. The lift has its own
+branch, since a contact that does not move needs no path, and a span treats
+the pixel's path across the fan as straight, so one chord through the lens
+gives its pass, the pass extended for antialiasing and the look-ahead. That
+left 60 bytes of spill and took size 460 on the MovinkPad 11 from 24 to 35;
+only pixels on the ragged outline of rolling strokes changed. Most of the
+remaining time was the prediction preview, which repaints about 24 ms of
+stroke every frame: with prediction off the brush measured 145. Zoomed out,
+preview paint is evaluated once per block of document pixels (see
+[Brushes](../internals/brushes.md#feedback-and-replay)), which took it to 83.
 
-The original Paintbrush measured 52 at size 460 and 11–12 at size 1000 in
-10-second loops. At size 1000 the bristle stroke falls behind its input:
-every span evaluates the whole lens to hold coverage, so a late frame carries
-more spans and takes longer again. Frame gaps grow past 2 seconds, and the
-one-second rows already lie on that curve.
-
-At a given pressure below full, the fan is wider than when pressure also set
-most of its size, so each update paints more. The same build with the earlier
-pressure-to-size curves measured 121–131, 113–118 and 214–239 in the first
-three rows. The ragged edge costs about 5% more at size 1000: pixels near the
-contact's edge look up the hair table twice per span. Generating the edge
-from value noise and a hash instead, up to three times per pixel, cost 30%.
+Changes that only add instructions to the common path cost time on Mali even
+when they skip work: an exact bound rejecting pixels the lens cannot reach
+and an earlier margin test each made it 20–25% slower. Check a change's
+registers and spill with the offline compiler before measuring on the
+device; see **Reproduce**. On Adreno a per-pixel search of the path since
+touchdown halved the rates even when unused.
 
 Painted pixels are not culled before the contact loop, because a later pass
 may repaint them. Instead each span rejects most pixels early: those still
 inside its lens at its end, which it only holds, and those whose path through
 the span stays more than half a pixel outside the contact band. Only pixels
-the hairs leave sample the material. The preview's lift repaints the lens
-every frame, which costs about a tenth at size 1000.
-
-The shader's cost is dominated by register pressure on Adreno, and it sits at
-a cliff: a per-pixel search of the path since touchdown halved these rates
-even when unused, and adding any one of a second dryness lookup, a branch for
-the lift's leading edge or a contact fitted to the ragged edge cost about 20%.
-Per-stroke work belongs in the engine as ordinary spans; a ridge gloss and a
-slow wander of hair groups, neither visible in review, were removed to make
-room for tap dryness. The previous
-three-group model measured 79–122 at size 1000.
+the hairs leave sample the material. Per-stroke work belongs in the engine as
+ordinary spans.
 
 ## Reproduce
 
@@ -196,10 +190,21 @@ cargo build --release -p layer-bench --bin gpu-bench
 CAPY_BRUSH_PREVIEW_IDS=35 target/release/gpu-bench --brush-previews
 ```
 
+To check a kernel's registers and spill on the Mali-G57, write its SPIR-V and
+run [Arm's Mali Offline Compiler](https://developer.arm.com/Tools%20and%20Software/Mali%20Offline%20Compiler)
+from Arm Performance Studio:
+
+```sh
+CAPY_KERNEL_SPIRV=$PWD/target/kernel.comp.spv CAPY_KERNEL_PRESET=35 \
+  cargo test --release -p layer-render-wgpu --lib -- --ignored dry_material_kernel_spirv
+malioc -c Mali-G57 --vulkan --compute target/kernel.comp.spv
+```
+
 `tests/bristle.rs` paints through the engine and GPU: frame grouping and
 prediction leave the committed paint unchanged, texture scales with size, the
 band stays solid and seamless at every angle, lean and roll, a later pass
-paints over an earlier one, taps and pen-down streak as described above.
+paints over an earlier one, taps and pen-down streak as described above,
+and a zoomed-out preview commits the same paint.
 
 For device measurements, build and install the isolated
 `art.capycanvas.brushbench` package and run:

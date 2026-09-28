@@ -946,6 +946,7 @@ pub struct WgpuRasterizer {
     style_bind_group: wgpu::BindGroup,
     style_stride: u64,
     style_capacity: usize,
+    preview_block: u32,
     style_upload: Vec<u8>,
     dab_upload: Vec<DabGpu>,
     target_buffer: wgpu::Buffer,
@@ -1270,6 +1271,7 @@ impl WgpuRasterizer {
             style_bind_group,
             style_stride,
             style_capacity,
+            preview_block: 1,
             style_upload: Vec::with_capacity(style_stride as usize * style_capacity),
             dab_upload: Vec::new(),
             target_buffer,
@@ -2483,8 +2485,11 @@ impl WgpuRasterizer {
         let used = self.style_stride as usize * records;
         self.style_upload.clear();
         self.style_upload.resize(used, 0);
+        self.preview_block = preview_block(packet.view.document_to_surface);
         for index in 0..packet.dab_batches.len() {
-            let record = StyleGpu::brush(self.target_extent(packet.dab_batches[index].layer_id), &packet.dab_batches[index]);
+            let batch = &packet.dab_batches[index];
+            let block = if self.compute_dry_material(batch) { self.dry_material_block(batch) } else { 1 };
+            let record = StyleGpu::brush(self.target_extent(batch.layer_id), batch, block);
             let offset = index * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
@@ -4782,14 +4787,14 @@ impl StyleGpu {
         result
     }
 
-    fn brush(extent: [u32; 2], batch: &DabBatch) -> Self {
+    fn brush(extent: [u32; 2], batch: &DabBatch, block: u32) -> Self {
         let mut style = Self::for_brush(extent, &batch.style, batch.first_dab, batch.dab_count);
         style.canvas_opacity[3] = f32::from(batch.stroke_start);
+        style.operation[2] = block;
         style
     }
 
     fn for_brush(extent: [u32; 2], style: &layer_render::DabStyle, first: u32, count: u32) -> Self {
-        let plan = BrushPassPlan::for_style(style);
         let grain = style.grain.as_ref();
         let (grain_cos, grain_sin) = grain
             .map(|grain| (grain.rotation_radians.cos(), grain.rotation_radians.sin()))
@@ -4831,12 +4836,7 @@ impl StyleGpu {
             style.wet_mix.blur,
             style.wet_mix.wetness_jitter,
         ];
-        result.operation = [
-            first,
-            count,
-            plan.material as u32,
-            u32::from(style.mode == DabMode::Erase),
-        ];
+        result.operation = [first, count, 1, u32::from(style.mode == DabMode::Erase)];
         result.deformation = [
             liquify_mode_code(style.deform.mode),
             style.deform.strength,
@@ -5791,6 +5791,12 @@ fn target_bytes(target: &TargetGpu) -> &[u8] {
     }
 }
 
+fn preview_block(document_to_surface: [f32; 6]) -> u32 {
+    let [a, b, c, d, _, _] = document_to_surface;
+    let scale = (a * d - b * c).abs().sqrt();
+    [4, 2].into_iter().find(|&block| block as f32 * scale <= 0.5).unwrap_or(1)
+}
+
 fn dab_bytes(dabs: &[DabGpu]) -> &[u8] {
     // SAFETY: DabGpu is repr(C), has no padding, and contains only f32 fields.
     unsafe { std::slice::from_raw_parts(dabs.as_ptr().cast::<u8>(), mem::size_of_val(dabs)) }
@@ -6157,6 +6163,17 @@ mod tests {
         frame(&mut r, &layers, &[dab], &[batch]);
         let empty = preview(&mut r, 1);
         assert_eq!(empty, transparent_paper);
+    }
+
+    #[test]
+    fn zoomed_out_previews_evaluate_paint_in_blocks_under_half_a_surface_pixel() {
+        let scaled = |scale: f32| [scale, 0., 0., scale, 0., 0.];
+        assert_eq!(preview_block(scaled(1.)), 1);
+        assert_eq!(preview_block(scaled(0.3)), 1);
+        assert_eq!(preview_block(scaled(0.2)), 2);
+        assert_eq!(preview_block(scaled(0.1)), 4);
+        let (sin, cos) = 0.7_f32.sin_cos();
+        assert_eq!(preview_block([0.1 * cos, 0.1 * sin, -0.1 * sin, 0.1 * cos, 40., 9.]), 4);
     }
 
     #[test]

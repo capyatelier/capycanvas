@@ -805,18 +805,51 @@ fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOut
 // dry_material::shader supplies material_color_output and dry_original.
 @group(0) @binding(2) var material_coverage_output: texture_storage_2d<r32float, write>;
 override MATERIAL_IN_PLACE: bool = false;
+fn dry_block_result(id: vec2<u32>) -> MaterialOutput {
+    let block = style.operation.z;
+    return material_result(vec4<f32>(vec2<f32>(id * block) + 0.5 * f32(block), 0.0, 1.0));
+}
+
+fn dry_block_pixel(id: vec2<u32>, offset: vec2<u32>, result: MaterialOutput) -> MaterialOutput {
+    let block = style.operation.z;
+    let p = id * block + offset;
+    let bounds = material_sources.pages[0];
+    let centre = id * block + block / 2u;
+    if block == 1u || (all(p >= bounds.xy) && all(p < bounds.zw) && all(centre >= bounds.xy) && all(centre < bounds.zw)) {
+        return result;
+    }
+    return MaterialOutput(dry_original(vec2<i32>(p)),
+        vec4<f32>(textureLoad(stroke_coverage_texture, vec2<i32>(p), 0).r, 0.0, 0.0, 1.0), vec4<f32>(0.0));
+}
+
 @compute @workgroup_size(32, 2)
 fn compute_color(@builtin(global_invocation_id) id: vec3<u32>) {
-    let result = material_result(vec4<f32>(vec2<f32>(id.xy) + 0.5, 0.0, 1.0));
-    if !MATERIAL_IN_PLACE || any(result.color != dry_original(vec2<i32>(id.xy))) {
-        textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+    let block = style.operation.z;
+    if any(id.xy * block >= vec2<u32>(256u)) { return; }
+    let result = dry_block_result(id.xy);
+    for (var y = 0u; y < block; y += 1u) {
+        for (var x = 0u; x < block; x += 1u) {
+            let pixel = dry_block_pixel(id.xy, vec2<u32>(x, y), result);
+            let p = vec2<i32>(id.xy * block + vec2<u32>(x, y));
+            if !MATERIAL_IN_PLACE || any(pixel.color != dry_original(p)) {
+                textureStore(material_color_output, p, pixel.color);
+            }
+        }
     }
 }
 @compute @workgroup_size(32, 2)
 fn compute_coverage(@builtin(global_invocation_id) id: vec3<u32>) {
-    let result = material_result(vec4<f32>(vec2<f32>(id.xy) + 0.5, 0.0, 1.0));
-    if !MATERIAL_IN_PLACE || any(result.color != dry_original(vec2<i32>(id.xy))) {
-        textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+    let block = style.operation.z;
+    if any(id.xy * block >= vec2<u32>(256u)) { return; }
+    let result = dry_block_result(id.xy);
+    for (var y = 0u; y < block; y += 1u) {
+        for (var x = 0u; x < block; x += 1u) {
+            let pixel = dry_block_pixel(id.xy, vec2<u32>(x, y), result);
+            let p = vec2<i32>(id.xy * block + vec2<u32>(x, y));
+            if !MATERIAL_IN_PLACE || any(pixel.color != dry_original(p)) {
+                textureStore(material_color_output, p, pixel.color);
+            }
+            textureStore(material_coverage_output, p, pixel.coverage);
+        }
     }
-    textureStore(material_coverage_output, vec2<i32>(id.xy), result.coverage);
 }

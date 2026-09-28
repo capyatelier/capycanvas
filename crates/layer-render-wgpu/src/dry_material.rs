@@ -233,6 +233,10 @@ impl WgpuRasterizer {
         dry_material_compute_eligible(&batch.style)
     }
 
+    pub(super) fn dry_material_block(&self, batch: &DabBatch) -> u32 {
+        if batch.kind == DabBatchKind::Preview { self.preview_block } else { 1 }
+    }
+
     pub(super) fn encode_dry_material_jobs(
         &self,
         encoder: &mut crate::submission::CommandEncoder,
@@ -269,7 +273,8 @@ impl WgpuRasterizer {
                 &[self.layer_target_offset(batch.layer_id, *coordinate)],
             );
             pass.set_bind_group(2, source, &[*record_offset]);
-            pass.dispatch_workgroups(PAGE_SIZE.div_ceil(32), PAGE_SIZE.div_ceil(2), 1);
+            let side = PAGE_SIZE.div_ceil(self.dry_material_block(batch));
+            pass.dispatch_workgroups(side.div_ceil(32), side.div_ceil(2), 1);
         }
     }
 }
