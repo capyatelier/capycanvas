@@ -92,6 +92,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.recording = previous.engine.recording.clone();
         self.state.platform = previous.state.platform;
         self.platform_prediction_available = previous.platform_prediction_available;
+        self.interaction.touch_policy = previous.interaction.touch_policy;
         self.system_theme = previous.system_theme;
         self.system_accent = previous.system_accent;
         self.state.workspace = previous.state.workspace.clone();

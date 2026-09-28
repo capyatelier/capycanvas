@@ -229,6 +229,53 @@ fn pen_buttons_are_opt_in_and_use_the_hold_lifecycle() {
 }
 
 #[test]
+fn a_new_drawing_keeps_the_hosts_tap_timing() {
+    let mut s = painted_session();
+    s.set_touch_policy(TouchPolicy { tap_ms: 900, slop: 24. }).unwrap();
+    let mut next = painted_session();
+    next.inherit_window_state(&s).unwrap();
+    let painted = next.engine.document().clone();
+    tap(&mut next, 2, 0, 700);
+    assert_ne!(next.engine.document().layers, painted.layers, "the host's long-press time still applies");
+}
+
+#[test]
+fn stylus_actions_switch_to_the_eraser_or_the_previous_tool() {
+    let mut s = session(Platform::Ios);
+    let pen = s.state.brush.preset;
+    let stylus = |s: &mut UiSession<Recorder>, action| s.input(UiInput::StylusAction { action }).unwrap();
+    assert!(!stylus(&mut s, StylusAction::SwitchPrevious).handled, "there is no previous tool yet");
+    assert!(stylus(&mut s, StylusAction::SwitchEraser).handled);
+    assert!(s.command(CommandId::Eraser).selected);
+    stylus(&mut s, StylusAction::SwitchEraser);
+    assert!(painting_with(&s, pen), "switching again returns to the brush");
+
+    invoke(&mut s, CommandId::Lasso);
+    stylus(&mut s, StylusAction::SwitchPrevious);
+    assert!(painting_with(&s, pen));
+    stylus(&mut s, StylusAction::SwitchPrevious);
+    assert!(s.command(CommandId::Lasso).selected);
+
+    bind(&mut s, "pen.button.primary", "hold.eyedropper");
+    s.input(UiInput::PenButton { button: PenButton::Primary, pressed: true }).unwrap();
+    s.input(UiInput::PenButton { button: PenButton::Primary, pressed: false }).unwrap();
+    stylus(&mut s, StylusAction::SwitchPrevious);
+    assert!(painting_with(&s, pen), "a held tool is not the previous tool");
+
+    s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+    stylus(&mut s, StylusAction::SwitchEraser);
+    assert!(painting_with(&s, pen), "a stroke keeps its tool");
+    s.pen(event(&s, 2, PenPhase::Move, 1.)).unwrap();
+    s.pen(event(&s, 3, PenPhase::Up, 1.)).unwrap();
+    s.frame(4, 4).unwrap();
+    assert!(s.command(CommandId::Eraser).selected, "the switch follows the stroke");
+
+    s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
+    assert!(!stylus(&mut s, StylusAction::SwitchEraser).handled);
+    assert!(s.command(CommandId::Eraser).selected);
+}
+
+#[test]
 fn remote_and_gamepad_keys_share_canonical_names() {
     for (native, canonical, label) in [
         ("AudioVolumeUp", "volumeup", "Volume Up"),

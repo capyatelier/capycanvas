@@ -487,3 +487,13 @@ fn apple_stroke_recordings_capture_hover_and_contacts_and_export_compressed() {
         assert_eq!(status(json!("saved"))["label"], "Start stroke recording");
     }
 }
+
+#[test]
+fn ipad_touch_timing_and_pencil_actions_reach_the_session() {
+    let app = App::new(0);
+    app.request(2, json!({"type":"touch_policy","tap_ms":500,"slop":20.}));
+    assert!(app.try_request(2, &json!({"type":"touch_policy","tap_ms":0,"slop":20.})).is_err());
+    let reply = app.request(1, json!({"type":"stylus_action","action":"switch_eraser"})).unwrap();
+    assert_eq!(reply["handled"], true);
+    assert!(unsafe { &*app.0 }.host.session.command(layer_ui::CommandId::Eraser).selected);
+}

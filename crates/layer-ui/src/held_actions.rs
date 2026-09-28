@@ -258,6 +258,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
+    pub(super) fn note_tool(&mut self) {
+        let tool = Some((self.layer_interaction.tool, self.state.brush.preset));
+        if self.interaction.hold_base.is_none() && self.interaction.tools[0] != tool {
+            self.interaction.tools = [tool, self.interaction.tools[0]];
+        }
+    }
+
     pub(super) fn settle_holds(&mut self) -> Result<Option<UiChange>, String> {
         let target = self.interaction.holds.last().map(|(_, action)| action.clone());
         let settled = target == self.interaction.held_tool && target.as_ref().is_none_or(|a| self.hold_active(a));

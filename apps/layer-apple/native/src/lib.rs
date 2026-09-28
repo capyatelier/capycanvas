@@ -304,6 +304,12 @@ pub unsafe extern "C" fn capy_apple_request(
                     serde_json::Value::Null
                 },
                 Some("document_tabs") => a.tabs_request(value)?,
+                Some("touch_policy") => {
+                    let tap_ms = value["tap_ms"].as_u64().and_then(|ms| u32::try_from(ms).ok()).ok_or("Missing touch timing")?;
+                    let slop = value["slop"].as_f64().ok_or("Missing touch slop")? as f32;
+                    a.host.session.set_touch_policy(layer_ui::TouchPolicy { tap_ms, slop })?;
+                    serde_json::Value::Null
+                }
                 Some("screen_report") => {
                     use layer_color::screen::{Chromaticities, ScreenReport};
                     use layer_core::color::{RgbSpace, hdr::REFERENCE_WHITE_NITS};

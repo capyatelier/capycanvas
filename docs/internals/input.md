@@ -38,7 +38,9 @@ nothing until the artist binds them ([pen buttons](../ui/settings.md#touch-gestu
 Pressing or releasing one must not interrupt, finish or restart a tip or eraser
 stroke, or start mouse navigation; a bound tool change applies after the stroke
 ends. Adapters filter native button transitions before gesture arbitration and
-preserve tip and eraser identity.
+preserve tip and eraser identity. Apple Pencil double-taps and squeezes arrive
+the same way as `stylus_action` input, carrying the system's choice
+([Pencil gestures](../ui/settings.md#touch-gestures-and-pen-buttons)).
 
 Some pens, such as the Wacom Pro Pen 3 on Android, report the final up event at
 the last move's position with nonzero pressure. Adapters keep the raw values;

@@ -19,6 +19,14 @@ pub enum PointerKind {
     Touch,
 }
 
+/// The system's choice for a stylus gesture, such as an Apple Pencil double-tap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StylusAction {
+    SwitchEraser,
+    SwitchPrevious,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PenButton {
@@ -182,6 +190,9 @@ pub enum UiInput {
         button: PenButton,
         pressed: bool,
     },
+    StylusAction {
+        action: StylusAction,
+    },
     Axes {
         pan: [f32; 2],
         zoom: f32,
@@ -260,6 +271,8 @@ pub(crate) struct Interaction {
     pub suppressed: Vec<String>,
     pub spring: Option<Spring>,
     pub hold_base: Option<(crate::LayerCanvasTool, u32)>,
+    /// The current and previous tools the artist chose, ignoring holds.
+    pub tools: [Option<(crate::LayerCanvasTool, u32)>; 2],
     pub applying_hold: bool,
     pub taps: TouchTaps,
     pub touch_policy: TouchPolicy,

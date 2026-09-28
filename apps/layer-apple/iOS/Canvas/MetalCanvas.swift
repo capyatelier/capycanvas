@@ -15,6 +15,7 @@ final class CanvasView: UIView {
     let store: EditorStore
     private var displayLink: CADisplayLink?
     private var screenReport: ScreenReport?
+    private static let longPress = UILongPressGestureRecognizer()
     private lazy var frames = CanvasFrameDriver(store: store)
     private var attached = false
     private var drawableExtent = CGSize.zero
@@ -57,6 +58,7 @@ final class CanvasView: UIView {
         addGestureRecognizer(mouseHover)
         let pointer = UIPointerInteraction(delegate: self)
         addInteraction(pointer)
+        addInteraction(UIPencilInteraction(delegate: self))
         store.cursorChanged = { [weak pointer] in pointer?.invalidate() }
         installIndirectGestures()
         store.wake = { [weak self] in self?.wake() }
@@ -157,6 +159,8 @@ final class CanvasView: UIView {
             attached = true
             frames.activate()
         } else { store.native?.resize(width: width, height: height, scale: Float(contentScaleFactor)) }
+        store.native?.touchPolicy(milliseconds: UInt32(Self.longPress.minimumPressDuration * 1000),
+            slop: Float(Self.longPress.allowableMovement * contentScaleFactor))
         wake()
     }
     override func safeAreaInsetsDidChange() {

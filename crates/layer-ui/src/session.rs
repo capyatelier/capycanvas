@@ -1212,6 +1212,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             UiInput::PenButton { button, pressed } => self.pen_button(button, pressed, &mut reply)?,
+            UiInput::StylusAction { action } => self.stylus_action(action, &mut reply)?,
             UiInput::Axes { pan, zoom } => self.navigation_axes(pan, zoom, &mut reply)?,
             UiInput::Pointer {
                 id,
@@ -5193,6 +5194,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.update_shader_idle();
         self.update_toolbar_context();
+        self.note_tool();
         let regions = regions
             | if self.update_canvas_bar() { regions::CANVAS_BAR } else { 0 }
             | self.notice_regions()

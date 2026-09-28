@@ -1,5 +1,6 @@
 use super::*;
 use super::held_actions::merge_change;
+use crate::interaction::Restore;
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn set_touch_policy(&mut self, policy: TouchPolicy) -> Result<(), String> {
@@ -108,6 +109,21 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn stylus_action(&mut self, action: StylusAction, reply: &mut InputReply) -> Result<(), String> {
+        if self.state.settings_open || self.interaction.facts.popup_open || self.state.command_search.is_some() {
+            return Ok(());
+        }
+        self.note_tool();
+        let restore = match (action, self.interaction.tools[1]) {
+            (StylusAction::SwitchEraser, _) if !self.command(CommandId::Eraser).selected => Restore::Toggle(CommandId::Eraser, true),
+            (_, Some((tool, preset))) => Restore::Tool(tool, preset),
+            (_, None) => return Ok(()),
+        };
+        reply.handled = true;
+        self.interaction.restores.push(restore);
+        self.settle_holds_into(reply)
     }
 
     pub(super) fn navigation_axes(&mut self, pan: [f32; 2], zoom: f32, reply: &mut InputReply) -> Result<(), String> {

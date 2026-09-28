@@ -7,6 +7,24 @@ extension CanvasView: UIPointerInteractionDelegate {
     }
 }
 
+extension CanvasView: UIPencilInteractionDelegate {
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
+        perform(UIPencilInteraction.preferredTapAction)
+    }
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        if squeeze.phase == .ended { perform(UIPencilInteraction.preferredSqueezeAction) }
+    }
+    private func perform(_ preferred: UIPencilPreferredAction) {
+        let action: String
+        switch preferred {
+        case .switchEraser: action = "switch_eraser"
+        case .switchPrevious: action = "switch_previous"
+        default: return
+        }
+        store.input(["type": "stylus_action", "action": action])
+    }
+}
+
 struct PickerHold {
     let key: ObjectIdentifier
     let start: CGPoint

@@ -109,7 +109,8 @@ pub use customization::{
     tool_choice,
 };
 pub use interaction::{
-    ChromeEvent, ChromeFacts, InputReply, Modifiers, PenButton, PointerButton, PointerKind, TouchPolicy, UiInput,
+    ChromeEvent, ChromeFacts, InputReply, Modifiers, PenButton, PointerButton, PointerKind, StylusAction, TouchPolicy,
+    UiInput,
 };
 pub use layout::{
     Axis, Bounds, CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, OpenColumn,

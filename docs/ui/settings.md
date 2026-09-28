@@ -204,8 +204,9 @@ the tablet, and it can paint with transparency. By default it erases with the
 current brush.
 
 Hosts supply native contact timestamps, the platform long-press time and touch
-slop. The shared recognizer turns a tap into an action only when all of these
-hold:
+slop; the timing carries over to every drawing opened in the window. iPadOS
+sends UIKit's long-press duration and allowable movement. The shared recognizer
+turns a tap into an action only when all of these hold:
 
 - Two to four fingers land without lifting in between.
 - None of them moves farther than the slop.
@@ -227,6 +228,13 @@ its eraser end. Windows and iPadOS do not show the pen button or eraser end rows
 until their hosts deliver the same input.
 iPadOS delivers finger taps with native touch timestamps and lists the tap
 rows; macOS and Windows receive no finger contacts and list no taps.
+
+An Apple Pencil double-tap or squeeze follows the iPad's Apple Pencil setting.
+iPadOS sends it as `stylus_action` input when that setting switches between the
+current tool and the eraser, or the last used tool; the other choices do
+nothing. The last used tool is the last one the artist chose, never one that a
+held key or pen button selected. A switch during a stroke applies after the
+stroke ends, and none applies while Settings, a popup or command search is open.
 
 ## Saving and loading
 
