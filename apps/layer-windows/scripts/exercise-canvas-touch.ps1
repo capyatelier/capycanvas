@@ -48,7 +48,7 @@ try{
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$c=Camera;$b=(Control 'drawing-canvas').Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close for gesture space'}
- Invoke 'canvas-fit';Select-Tool 'pen';Start-Sleep -Milliseconds 200
+ Fit-Canvas;Select-Tool 'pen';Start-Sleep -Milliseconds 200
  Wait-Until {(Model).canvas_ready -and !(Model).state.document_file.busy} 'Canvas did not settle before input'
  $area=(Camera).work_area
  $bounds=(Control 'drawing-canvas').Current.BoundingRectangle
@@ -109,7 +109,7 @@ try{
  Check 'Hand permits one-finger pan' {(Matches-Gesture (Camera) $expected)}
  [CapyCanvasTouch]::Up(1);[CapyCanvasTouch]::Dispose()
  Stable 'Hand release preserves the drawing and camera' (Camera)
- Select-Tool 'pen';Invoke 'canvas-fit';Start-Sleep -Milliseconds 200
+ Select-Tool 'pen';Fit-Canvas;Start-Sleep -Milliseconds 200
  Check 'returning to Pen and Fit preserves the drawing' {$true}
  [CapyCanvasTouch]::Initialize([uint32]$review.Id)
  $resting=Camera;[CapyCanvasTouch]::Down(1,($cx-100),$cy);Start-Sleep -Milliseconds 120

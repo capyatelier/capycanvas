@@ -25,21 +25,18 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
     }
     void init(hstring const& title){
         root.Spacing(6);fields.Spacing(6);fields.Visibility(Visibility::Collapsed);
-        bool swatchOnly=object(property->model(),L"color_action").Size()!=0;
         Grid row;ColumnDefinition text;text.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(text);
-        if(!swatchOnly){
-            ColumnDefinition swatch;swatch.Width({48,GridUnitType::Pixel});row.ColumnDefinitions().Append(swatch);
-            auto name=label(property->data,title);name.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(name);
-        }
+        ColumnDefinition swatch;swatch.Width({56,GridUnitType::Pixel});row.ColumnDefinitions().Append(swatch);
+        auto name=label(property->data,title);name.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(name);
         auto weak=weak_from_this();
         auto pick=button(property->data,title,[weak]{if(auto self=weak.lock()){
             self->fields.Visibility(self->fields.Visibility()==Visibility::Visible?Visibility::Collapsed:Visibility::Visible);
         }});
-        pick.Height(swatchOnly?36:28);pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.Background(property->data->brush(L"input"));
+        pick.Height(32);pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.Background(property->data->brush(L"input"));
         Shapes::Rectangle color;color.Fill(sample);color.Margin({2,2,2,2});pick.Content(color);
         pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);pick.VerticalContentAlignment(VerticalAlignment::Stretch);
         AutomationProperties::SetAutomationId(pick,property->id()+L"-color");
-        Grid::SetColumn(pick,swatchOnly?0:1);row.Children().Append(pick);root.Children().Append(row);root.Children().Append(fields);
+        Grid::SetColumn(pick,1);row.Children().Append(pick);root.Children().Append(row);root.Children().Append(fields);
         rebuild();
     }
     void refresh(){
@@ -122,11 +119,12 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
                     if(action.Size()){
                         Grid row;row.ColumnSpacing(6);
                         ColumnDefinition fill;fill.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(fill);
-                        ColumnDefinition actionColumn;actionColumn.Width({36,GridUnitType::Pixel});row.ColumnDefinitions().Append(actionColumn);
+                        ColumnDefinition actionColumn;actionColumn.Width({40,GridUnitType::Pixel});row.ColumnDefinitions().Append(actionColumn);
                         row.Children().Append(color);
-                        auto bucket=button(data,L"Use selected color",[property,action]{if(property->current()&&!property->data->updating&&flag(property->view(),L"enabled"))property->data->dispatchDocument(action,to_hstring(uint64_t(property->epoch)));});
-                        bucket.Content(icon(L"fill",data->theme()));bucket.Height(36);bucket.VerticalAlignment(VerticalAlignment::Top);
-                        CapyUi::tooltip(bucket,L"Use selected color");AutomationProperties::SetAutomationId(bucket,L"paper-color-bucket");Grid::SetColumn(bucket,1);row.Children().Append(bucket);body.Children().Append(row);
+                        auto bucket=button(data,data->caption(L"color",L"use_selected"),[property,action]{if(property->current()&&!property->data->updating&&flag(property->view(),L"enabled"))property->data->dispatchDocument(action,to_hstring(uint64_t(property->epoch)));});
+                        bucket.Content(icon(L"fill",data->theme()));bucket.Width(40);bucket.Height(36);bucket.VerticalAlignment(VerticalAlignment::Top);
+                        std::wstring id(str(c,L"key").c_str());std::replace(id.begin(),id.end(),L'_',L'-');
+                        CapyUi::tooltip(bucket,data->caption(L"color",L"use_selected"));AutomationProperties::SetAutomationId(bucket,hstring(id+L"-bucket"));Grid::SetColumn(bucket,1);row.Children().Append(bucket);body.Children().Append(row);
                     }else body.Children().Append(color);
                 }else if(type==L"curve"){
                     curves.emplace_back(name,CurveField(property,fields));

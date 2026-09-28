@@ -88,7 +88,7 @@ try {
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 
     Switch-Workspace 'Sketch' 'builtin:workspace:painter'
-    if(Find 'canvas-fit'){Invoke 'canvas-fit'};Start-Sleep -Milliseconds 300;Canvas-Points
+    Fit-Canvas;Start-Sleep -Milliseconds 300;Canvas-Points
     $order=$null
     foreach($panel in @((Model).panels)){if(@($panel.tiles|Where-Object {$_.control.kind -eq 'brush_size_slider'}).Count){
         $order=@($panel.tiles|ForEach-Object {if($_.control.kind -eq 'command'){$_.control.command}else{$_.control.kind}})
@@ -178,7 +178,7 @@ try {
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 
     Switch-Workspace 'Paint' 'builtin:workspace:illustrator'
-    if(Find 'canvas-fit'){Invoke 'canvas-fit'};Start-Sleep -Milliseconds 300;Canvas-Points
+    Fit-Canvas;Start-Sleep -Milliseconds 300;Canvas-Points
     $category=Tile 'command' 'eyedropper';$at=Center $category
     Double-Press $at
     Wait-Until {$d=(Model).state.customization.drawer;$d -and $d.compact} 'Double press did not open the Eyedropper drawer'

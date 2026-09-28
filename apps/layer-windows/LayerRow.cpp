@@ -98,6 +98,13 @@ void LayerRow::init(){
     content.Content(contentTile);mask.Content(maskTile);
     content.CornerRadius({3,3,3,3});mask.CornerRadius({3,3,3,3});
     link=pick(data->caption(L"layers",L"link_mask"),6,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"link_mask")},{L"id",N(self->id)},{L"value",B(!flag(self->model(),L"mask_linked"))}}));});
+    actionTooltip(data,eye,[weak]{auto self=weak.lock();if(!self)return J{};
+        return O({{L"type",S(L"set_layer_visibility")},{L"id",N(self->id)},{L"visible",B(!flag(self->model(),L"visible"))}});});
+    actionTooltip(data,content,[weak]{auto self=weak.lock();if(!self)return J{};
+        auto target=flag(self->model(),L"group")?O({{L"op",S(L"collapse")},{L"id",N(self->id)}}):O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}});
+        return O({{L"type",S(L"layer")},{L"action",target}});});
+    actionTooltip(data,mask,[weak]{auto self=weak.lock();if(!self)return J{};
+        return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(true)}})}});});
     link.Content(icon(L"link",data->theme(),12));
     name=button(data,data->copyCaption(L"layers",L"layer"),[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}}));});
     name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);
@@ -187,9 +194,9 @@ void LayerRow::refresh(){
     }
     bool selectionLayer=flag(layer,L"selection_layer");
     hstring eyeName=selectionLayer?(flag(layer,L"visible")?data->caption(L"layers",L"hide_selection"):data->caption(L"layers",L"show_selection")):(flag(layer,L"visible")?data->caption(L"layers",L"hide"):data->caption(L"layers",L"show"));
-    AutomationProperties::SetName(eye,eyeName);CapyUi::tooltip(eye,eyeName);
+    if(AutomationProperties::GetName(eye)!=eyeName){AutomationProperties::SetName(eye,eyeName);CapyUi::tooltip(eye,eyeName);}
     hstring contentName=selectionLayer?data->caption(L"layers",L"edit_selection"):flag(layer,L"group")?(flag(layer,L"collapsed")?data->caption(L"layers",L"expand"):data->caption(L"layers",L"collapse")):data->caption(L"layers",L"edit_content");
-    AutomationProperties::SetName(content,contentName);CapyUi::tooltip(content,contentName);
+    if(AutomationProperties::GetName(content)!=contentName){AutomationProperties::SetName(content,contentName);CapyUi::tooltip(content,contentName);}
     load.Visibility(selectionLayer?Visibility::Visible:Visibility::Collapsed);
     body.ColumnDefinitions().GetAt(5).Width({selectionLayer?32.:0.,GridUnitType::Pixel});
     if(selectionLayer){auto tip=str(layer,L"load_selection_tooltip");AutomationProperties::SetName(load,tip);CapyUi::tooltip(load,tip);}

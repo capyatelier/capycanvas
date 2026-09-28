@@ -1215,6 +1215,7 @@ impl Settings {
                             value: localizer.text(match platform {
                                 Platform::Gtk => MessageId::SETTINGS_VULKAN_WAYLAND,
                                 Platform::Web => MessageId::SETTINGS_WEBGPU,
+                                Platform::Windows => MessageId::SETTINGS_DIRECT3D_12,
                                 _ => MessageId::SETTINGS_NATIVE_GPU,
                 })
                             .to_string(),

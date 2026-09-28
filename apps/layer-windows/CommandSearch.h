@@ -12,6 +12,8 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
     TextBox entry;
     TextBlock unit,detail,empty;
     StackPanel results;
+    ScrollViewer resultScroll;
+    uint32_t shown=UINT32_MAX;
     Button close{nullptr};
     J view;
     hstring signature,parameterId,theme,focusScope=L"canvas";
@@ -47,7 +49,10 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
             });
         });
         double inset=num(metrics,L"inset",12),gap=num(metrics,L"gap",8);
-        StackPanel body;body.Spacing(gap);
+        Grid body;body.RowSpacing(gap);
+        for(auto height:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Auto}}){
+            RowDefinition row;row.Height(height);body.RowDefinitions().Append(row);
+        }
         Grid header;header.ColumnSpacing(gap);
         for(auto width:{GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Auto}}){
             ColumnDefinition column;column.Width(width);header.ColumnDefinitions().Append(column);
@@ -63,12 +68,13 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         Grid::SetColumn(close,2);header.Children().Append(close);
         body.Children().Append(header);
         results.Spacing(2);AutomationProperties::SetAutomationId(results,L"command-results");AutomationProperties::SetName(results,data->caption(L"search",L"commands"));
-        body.Children().Append(results);
+        resultScroll.Content(results);resultScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);resultScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
+        Grid::SetRow(resultScroll,1);body.Children().Append(resultScroll);
         empty.Text(data->caption(L"search",L"no_matches"));empty.Opacity(.6);empty.Margin({0,12,0,12});empty.HorizontalAlignment(HorizontalAlignment::Center);
-        empty.Visibility(Visibility::Collapsed);body.Children().Append(empty);
+        empty.Visibility(Visibility::Collapsed);Grid::SetRow(empty,2);body.Children().Append(empty);
         detail.Opacity(.7);detail.FontSize(12);detail.Height(20);detail.Margin({inset,0,inset,0});
         detail.TextTrimming(TextTrimming::CharacterEllipsis);AutomationProperties::SetAutomationId(detail,L"command-search-detail");
-        body.Children().Append(detail);
+        Grid::SetRow(detail,3);body.Children().Append(detail);
         frame.Child(body);frame.Padding({inset,inset,inset,inset});double radius=num(metrics,L"radius",12);frame.CornerRadius({radius,radius,radius,radius});frame.BorderThickness({1,1,1,1});
         frame.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->open&&self->changed)self->changed();});
         frame.Shadow(ThemeShadow());frame.Translation({0,0,32});
@@ -159,12 +165,13 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         entry.PlaceholderText(entering?data->caption(L"search",L"enter_value"):data->caption(L"search",L"search_commands"));
         if(theme!=data->theme()){theme=data->theme();paint();signature=L"";}
         auto nextSignature=array(view,L"results").Stringify()+theme;
-        if(nextSignature!=signature){signature=nextSignature;buildRows();}
+        if(nextSignature!=signature){signature=nextSignature;shown=UINT32_MAX;buildRows();}
         auto chosen=uint32_t(num(view,L"selected"));
         for(uint32_t i=0;i<rows.size();++i){
             rows[i].Background(i==chosen?Brush(data->tint(L"text",26)):Brush(clear()));
             AutomationProperties::SetItemStatus(rows[i],i==chosen?data->caption(L"search",L"selected"):L"");
         }
+        if(chosen!=shown&&chosen<rows.size()){shown=chosen;if(open)rows[chosen].StartBringIntoView();}
         results.Visibility(entering?Visibility::Collapsed:Visibility::Visible);
         empty.Visibility(!entering&&!array(view,L"results").Size()?Visibility::Visible:Visibility::Collapsed);
         auto text=str(view,L"detail");
@@ -174,7 +181,8 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
             double width=std::clamp(host.ActualWidth()-num(style(),L"inset",12)*4,240.,num(style(),L"width",560));
             frame.Width(width);popup.XamlRoot(host.XamlRoot());
             popup.HorizontalOffset(std::max(0.,(host.ActualWidth()-width)/2));
-            popup.VerticalOffset(std::clamp(host.ActualHeight()/5,num(style(),L"top_min",48),num(style(),L"top_max",192)));
+            double top=host.ActualWidth()<=600?16.:std::clamp(host.ActualHeight()/5,num(style(),L"top_min",48),num(style(),L"top_max",192));
+            popup.VerticalOffset(top);frame.MaxHeight(std::max(0.,host.ActualHeight()-top-16));
             open=true;data->popup(true);popup.IsOpen(true);entry.Focus(FocusState::Programmatic);if(changed)changed();
         }
         updating=false;

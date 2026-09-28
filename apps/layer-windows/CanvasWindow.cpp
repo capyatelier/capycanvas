@@ -453,6 +453,8 @@ bool CanvasWindow::StartPrepared(CapyLaunch* prepared) {
     }});
     selectionDialog=std::make_unique<SelectionDialog>(send,model,localization,root.XamlRoot(),
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
+    canvasSizeDialog=std::make_unique<CanvasSizeDialog>(send,model,localization,root.XamlRoot(),
+        [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
     workspaceDialogs=std::make_unique<WorkspaceDialogs>(send,model,localization,root.XamlRoot(),
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
@@ -727,6 +729,11 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     if(pressed)heldKeys.try_emplace(uint32_t(key),name);
     else heldKeys.erase(uint32_t(key));
     bool canvas=focused&&focused==canvasFocus;
+    std::optional<uint32_t> divider;
+    if(auto element=focused.try_as<FrameworkElement>();element&&!canvas){
+        std::wstring id=Automation::AutomationProperties::GetAutomationId(element).c_str();
+        if(id.starts_with(L"divider-"))divider=uint32_t(std::stoul(id.substr(8)));
+    }
     // Ordinary buttons keep application shortcuts after a click. Their native
     // activation/navigation keys, editors and open menus retain keyboard input.
     // Releases still clear shared held state when focus moves during a gesture.
@@ -741,7 +748,8 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
         key==VirtualKey::PageUp||key==VirtualKey::PageDown||key==VirtualKey::F2||key==VirtualKey::F10||
         key==VirtualKey::Menu||((GetKeyState(VK_MENU)&0x8000)&&!(GetKeyState(VK_CONTROL)&0x8000));
     // F11 remains a window action while a toolbar button or native field has focus.
-    bool editing=key!=VirtualKey::F11&&(ownedKeys||menuOpen.load()||(!canvas&&(!button||navigation)));
+    bool arrow=key==VirtualKey::Left||key==VirtualKey::Right||key==VirtualKey::Up||key==VirtualKey::Down;
+    bool editing=key!=VirtualKey::F11&&(ownedKeys||menuOpen.load()||(divider?navigation&&!arrow:!canvas&&(!button||navigation)));
     if(key==VirtualKey::F4&&(GetKeyState(VK_MENU)&0x8000))return;
     using namespace Windows::Data::Json;
     JsonObject modifiers;
@@ -755,6 +763,7 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     input.Insert(L"repeat",JsonValue::CreateBooleanValue(pressed&&e.KeyStatus().WasKeyDown));
     input.Insert(L"editing",JsonValue::CreateBooleanValue(editing));
     input.Insert(L"modifiers",modifiers);
+    if(divider)input.Insert(L"divider",JsonValue::CreateNumberValue(*divider));
     sentModifiers.store(((GetKeyState(VK_CONTROL)&0x8000)?1u:0u)|((GetKeyState(VK_SHIFT)&0x8000)?2u:0u)|((GetKeyState(VK_MENU)&0x8000)?4u:0u));
     Send(to_string(input.Stringify()),CanvasCommandKind::Input);
     if(!editing)e.Handled(true);
@@ -1102,6 +1111,7 @@ void CanvasWindow::RequestClose() {
     Send(R"({"type":"close_settings"})");
     if(workspaceDialogs)workspaceDialogs->CancelAll();
     if(selectionDialog)selectionDialog->CancelAll();
+    if(canvasSizeDialog)canvasSizeDialog->CancelAll();
     if(workspaceManager)workspaceManager->CancelAll();
     CapyLifecycle("close_requested");
     Send(R"({"operation":"close"})",CanvasCommandKind::Document);
@@ -1115,6 +1125,7 @@ void CanvasWindow::Stop() {
     if(documents)documents->Hide();
     if(workspaceDialogs)workspaceDialogs->Hide();
     if(selectionDialog)selectionDialog->Hide();
+    if(canvasSizeDialog)canvasSizeDialog->Hide();
     if(workspaceStorage)workspaceStorage->Hide();
     if(workspaceManager)workspaceManager->Hide();
     wake.notify_all();space.notify_all();
@@ -1135,7 +1146,7 @@ void CanvasWindow::Stop() {
 }
 void CanvasWindow::Finish() {
     if(closed||finishing||!inputDone||(renderer.joinable()&&!rendererDone.load()))return;
-    if((settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(selectionDialog&&selectionDialog->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen()))return;
+    if(ModalOpen())return;
     auto lifetime=shared_from_this(); // App may release its last reference below.
     finishing=true;
     CapyLifecycle("join_renderer");
@@ -1148,7 +1159,7 @@ void CanvasWindow::Finish() {
     CapyLifecycle("host_destroyed");
     // XAML controls and their retained bindings must be released while this
     // window still owns a live XAML context, not later from App destruction.
-    settings.reset();documents.reset();workspaceDialogs.reset();selectionDialog.reset();workspaceStorage.reset();workspaceManager.reset();header.reset();workspace.reset();
+    settings.reset();documents.reset();workspaceDialogs.reset();selectionDialog.reset();canvasSizeDialog.reset();workspaceStorage.reset();workspaceManager.reset();header.reset();workspace.reset();
     textFocus.revoke();localization.reset();
     root.Children().Clear();toolbar.Children().Clear();canvasFocus.Content(nullptr);
     window.Content(nullptr);
@@ -1215,16 +1226,22 @@ void CanvasWindow::ApplyDialogs() {
         dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->Finish();});
         return;
     }
-    if(applyingDialogs||!settings||!documents||!workspaceDialogs||!selectionDialog||!workspaceStorage||!workspaceManager||!lastModel.Size())return;
+    if(applyingDialogs||!settings||!documents||!workspaceDialogs||!selectionDialog||!canvasSizeDialog||!workspaceStorage||!workspaceManager||!lastModel.Size())return;
     applyingDialogs=true;
     struct Reset{bool& flag;~Reset(){flag=false;}}reset{applyingDialogs};
-    if(!documents->IsOpen()&&!workspaceDialogs->IsOpen()&&!selectionDialog->IsOpen()&&!workspaceStorage->IsOpen()&&!workspaceManager->IsOpen())settings->Apply(lastModel);
-    workspaceDialogs->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||selectionDialog->IsOpen()||workspaceStorage->IsOpen()||workspaceManager->IsOpen());
-    selectionDialog->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceDialogs->IsOpen()||workspaceStorage->IsOpen()||workspaceManager->IsOpen());
-    documents->Apply(lastModel,settings->IsOpen()||workspaceDialogs->IsOpen()||selectionDialog->IsOpen()||workspaceStorage->IsOpen()||workspaceManager->IsOpen());
-    workspaceStorage->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceDialogs->IsOpen()||selectionDialog->IsOpen()||workspaceManager->IsOpen());
-    workspaceManager->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceDialogs->IsOpen()||selectionDialog->IsOpen()||workspaceStorage->IsOpen());
+    if(settings->IsOpen()||!ModalOpen())settings->Apply(lastModel);
+    workspaceDialogs->Apply(lastModel,!workspaceDialogs->IsOpen()&&ModalOpen());
+    selectionDialog->Apply(lastModel,!selectionDialog->IsOpen()&&ModalOpen());
+    canvasSizeDialog->Apply(lastModel,!canvasSizeDialog->IsOpen()&&ModalOpen());
+    documents->Apply(lastModel,!documents->IsOpen()&&ModalOpen());
+    workspaceStorage->Apply(lastModel,!workspaceStorage->IsOpen()&&ModalOpen());
+    workspaceManager->Apply(lastModel,!workspaceManager->IsOpen()&&ModalOpen());
     UpdatePopup();
+}
+bool CanvasWindow::ModalOpen()const {
+    return (settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||
+        (selectionDialog&&selectionDialog->IsOpen())||(canvasSizeDialog&&canvasSizeDialog->IsOpen())||
+        (workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen());
 }
 void CanvasWindow::Popup(bool open) {
     headerPopupOpen=open;UpdatePopup();
@@ -1234,7 +1251,7 @@ void CanvasWindow::UpdatePopup() {
     auto storage=CapyUi::object(lastModel,L"windows_workspace");
     bool unavailable=storage.Size()&&(!CapyUi::flag(storage,L"ready")||CapyUi::flag(storage,L"busy")||CapyUi::flag(storage,L"owner_lost")||CapyUi::flag(storage,L"closing"));
     unavailable|=CapyUi::flag(CapyUi::object(lastModel,L"windows_settings_close"),L"requested");
-    bool blocked=unavailable||(settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(selectionDialog&&selectionDialog->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen());
+    bool blocked=unavailable||ModalOpen();
     canvasFocus.IsEnabled(!blocked);
     if(workspace)workspace->Root().IsHitTestVisible(!unavailable);
     if(header){header->Root().IsHitTestVisible(!unavailable);header->SetBlocked(blocked);}

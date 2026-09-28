@@ -80,6 +80,12 @@ inline Windows::Foundation::Uri asset(std::wstring const& relative){
     auto path=std::filesystem::path(std::wstring(executable,length)).parent_path()/L"Assets"/relative;
     return Windows::Foundation::Uri(L"file:///"+path.generic_wstring());
 }
+inline void dragCursor(UIElement const& element,bool touch,bool dragging,bool held=false){
+    using namespace Microsoft::UI::Input;
+    auto target=element.as<IUIElementProtected>();
+    if(touch||(!dragging&&!held)){target.ProtectedCursor(nullptr);return;}
+    target.ProtectedCursor(InputSystemCursor::Create(dragging?InputSystemCursorShape::SizeAll:InputSystemCursorShape::Hand));
+}
 inline Image icon(hstring name,hstring theme,double size=16){
     std::wstring file=name.c_str();
     if(!file.starts_with(L"layer-"))file=L"layer-"+file;
@@ -373,4 +379,10 @@ struct NumberPresentation {
 };
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
     std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false,hstring const& identifier=L"",bool inlineTrack=false,NumberPresentation const& presentation={},NumericAdmissions* admissions=nullptr);
+inline TextBox numberEntry(UIElement const& element){
+    if(auto text=element.try_as<TextBox>())return text;
+    if(auto border=element.try_as<Border>())return border.Child()?numberEntry(border.Child()):nullptr;
+    if(auto panel=element.try_as<Panel>())for(auto const& child:panel.Children())if(auto text=numberEntry(child))return text;
+    return nullptr;
+}
 }

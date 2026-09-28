@@ -121,11 +121,11 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         }
         AutomationProperties::SetItemStatus(overlay,slide.Stringify());
     }
-    void cancel(){if(!pointer)return;pointer.reset();dragging=false;held=false;endSlide();root.ReleasePointerCaptures();
+    void cancel(){if(!pointer)return;pointer.reset();dragging=false;held=false;dragCursor(root,false,false);endSlide();root.ReleasePointerCaptures();
         if(recognizing){recognizing=false;hold.CompleteGesture();}if(tabs.contains(source))tabs.at(source).menu.Hide();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));}
     void move(PointerRoutedEventArgs const& e){if(pointer!=e.Pointer().PointerId())return;position=e.GetCurrentPoint(root).Position();
         if(recognizing)hold.ProcessMoveEvents(e.GetIntermediatePoints(root));
-        if(!dragging&&(std::abs(position.X-origin.X)>slopX||std::abs(position.Y-origin.Y)>slopY)){dragging=true;held=false;if(tabs.contains(source))tabs.at(source).menu.Hide();beginSlide();}
+        if(!dragging&&(std::abs(position.X-origin.X)>slopX||std::abs(position.Y-origin.Y)>slopY)){dragging=true;held=false;dragCursor(root,e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch,true);if(tabs.contains(source))tabs.at(source).menu.Hide();beginSlide();}
         if(dragging){updateSlide();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"dragging"));}e.Handled(true);
     }
     void activateItem(winrt::Windows::Foundation::IInspectable const& value){for(auto const& [id,row]:rows)if(value==row.item||value==row.item.Content()){select(id);return;}}

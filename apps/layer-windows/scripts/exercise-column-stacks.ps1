@@ -218,6 +218,13 @@ try {
     Check-Open 12
     if(((Control 'panel-tab-layers').GetRuntimeId() -join ':') -ne $identity){throw 'Resizing rebuilt the retained panel tabs'}
     $after=Layout;Check-History $before $after
+    if($Device -eq 'mouse'){
+        $nudged=Layout;$width=(Column 12).open.bounds.width
+        (Control $id).SetFocus();Wait-Until {(Control $id).Current.HasKeyboardFocus} 'The resize divider did not take keyboard focus'
+        [CapyRowPointer]::Key([uint32]$review.Id,[uint16]$(if($open.direction -eq 'left'){0x25}else{0x27}))
+        Wait-Until {(Column 12).open.bounds.width -gt $width} 'An arrow key did not nudge the focused divider'
+        WindowCommand 'undo_workspace';Wait-Until {(Layout) -eq $nudged} 'Undo did not restore the nudged divider'
+    }
     Tap 'column-icon-layers';Wait-Until {!(Column 12).open} 'Stack member did not close'
     foreach($divider in (Model).layout.dividers|Where-Object fixed){if(Find ('divider-'+$divider.id)){throw 'Closed stack exposed a fixed resize handle'}}
     Context 'column-grip-12';Toggle 'Open individual panels'

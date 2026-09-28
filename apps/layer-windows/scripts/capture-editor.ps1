@@ -62,10 +62,6 @@ function View-Command([string]$Id) {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
     Invoke $Id ([System.Windows.Automation.ControlType]::MenuItem) -Id
 }
-function Fit-Canvas {
-    $fit=Find 'canvas-fit' -Id
-    if($fit -and !$fit.Current.IsOffscreen){Invoke 'canvas-fit' -Id}else{View-Command 'fit_canvas'}
-}
 function Set-Theme([string]$Theme) {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
     Invoke 'Preferences' ([System.Windows.Automation.ControlType]::MenuItem)
@@ -153,7 +149,7 @@ $fixtures=@()
 foreach($theme in @('dark','light')){
     Set-Theme ((Get-Culture).TextInfo.ToTitleCase($theme))
     foreach($scenario in @('initial','canvas-under-header')){
-        Fit-Canvas
+        View-Command 'fit_canvas'
         Settle
         if($scenario -eq 'canvas-under-header'){
             for($i=0;$i -lt 4;$i++){

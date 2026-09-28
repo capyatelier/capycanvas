@@ -139,6 +139,21 @@ try {
  Closed
  $checks.palette_focus_scope='passed'
 
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width ([int](560*$scale)) -Height ([int](360*$scale))
+ Wait-Until {[Math]::Abs($root.Current.BoundingRectangle.Width/$scale-560) -lt 24} 'The window did not become compact' 10
+ (Find 'drawing-canvas').SetFocus()
+ Open-Search
+ Query 'layer'
+ Wait-Until {(Row 1)} 'Compact layer query did not show results' 5
+ $window=$root.Current.BoundingRectangle;$frame=(Find 'command-bar').Current.BoundingRectangle
+ $top=($frame.Y-$window.Y)/$scale;$bottom=($window.Bottom-$frame.Bottom)/$scale
+ if($top -lt 8 -or $top -gt 24){throw "Compact command bar opens $top DIP down, not 16"}
+ if($bottom -lt 8){throw "Compact command bar leaves only $bottom DIP below it"}
+ Capture 'compact'
+ Key 0x1B
+ Closed
+ $checks.compact_placement='passed'
+
  [CapyRowPointer]::Dispose()
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $run
  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}

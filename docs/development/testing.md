@@ -186,6 +186,11 @@ are your task, and remove an entry when you fix it.
   reads below its clipped grid screenshot on MovinkPad Pro 14.
   `AndroidIconEditorTest#allToolCategoriesModesFiltersAndToolbarIconsRender`
   expects 13 brush categories where the current catalog supplies 16.
+- Windows `exercise-tab-pickup.ps1 -Device touch`: after the Layers group is torn
+  off, the injected contact reaches neither XAML nor the canvas, so the drag never
+  finishes. Mouse passes.
+- Windows `exercise-multiwindow.ps1`: "Pin preferences did not refresh in the
+  inactive window".
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and
   `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
 - Apple Rust `apple_photo_corrections_masks_and_original_samples_remain_revisable_after_worker_reopen`

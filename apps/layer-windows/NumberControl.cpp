@@ -179,10 +179,10 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         auto entry=sender.as<TextBox>();commit(false);entry.Background(clear());
         if(!local->editing)setText(str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),L"text"));
     });
-    entry.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){
+    entry.KeyDown([commit,local](auto&&,KeyRoutedEventArgs const& e){
         if(composingKey(e))return;
         if(e.Key()==Windows::System::VirtualKey::Enter){commit(false);e.Handled(true);}
-        else if(e.Key()==Windows::System::VirtualKey::Escape){commit(true);e.Handled(true);}
+        else if(e.Key()==Windows::System::VirtualKey::Escape&&local->editing){commit(true);e.Handled(true);}
     });
     // TextBox consumes some arrow keys before the bubbling KeyDown event.
     // Numeric spin steps must take precedence over its caret navigation.

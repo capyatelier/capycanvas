@@ -8,6 +8,7 @@
 #include "PalettesView.h"
 #include "StatsView.h"
 #include "ProofPanel.h"
+#include "WorkspaceQuery.h"
 #include "ColorPair.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
@@ -26,6 +27,7 @@ Grid PanelBody::sizes(double width){
                 data->dispatch(O({{L"type",S(L"set_brush_size")},{L"value",N(value)}}));
             });
             pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.Margin(Thickness{1,2,1,2});pick.Padding(Thickness{2,2,2,2});
+            actionTooltip(data,pick,[value]{return O({{L"type",S(L"set_brush_size")},{L"value",N(value)}});});
             StackPanel content;content.Spacing(4);
             Grid dotBox;dotBox.Height(28);
             Microsoft::UI::Xaml::Shapes::Ellipse dot;double diameter=std::min(27.,2.+std::sqrt(value)*1.2);

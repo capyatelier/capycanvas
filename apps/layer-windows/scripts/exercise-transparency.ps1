@@ -71,7 +71,7 @@ try {
     $bounds=$group.bounds
     $point=@{x=[int]($client[0]+($bounds.x+$bounds.width-24)*$scale);y=[int]($client[1]+($bounds.y+$bounds.height-72)*$scale)}
     $panel=[Convert]::ToInt32((Model).state.palette.panel.Substring(3,2),16)
-    Invoke 'canvas-fit'
+    Fit-Canvas
     $surround=@{};$overPaper=@{}
     foreach($level in 0,3,2,1){
         Preference $level

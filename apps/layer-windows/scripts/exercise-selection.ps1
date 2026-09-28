@@ -119,7 +119,7 @@ try {
         Wait-Until {@((Model).panels|ForEach-Object {$_.tiles}|Where-Object {$_.control.command -eq $command}).Count -gt 0} "Photo has no $command tool"
     }
     Switch-Workspace 'Sketch' 'builtin:workspace:painter'
-    if(Find 'canvas-fit'){$revision=(Model).state.camera.revision;Invoke 'canvas-fit';Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not update the camera'};Canvas-Points
+    $revision=(Model).state.camera.revision;Fit-Canvas;Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not update the camera';Canvas-Points
     $select=Header-Id 'select'
     if(!$select -or (Header-Id 'lasso')){throw 'Sketch did not replace Lasso with the Select opener'}
     Tap (Center (Control ('header-item-'+$select)))
@@ -188,7 +188,7 @@ try {
     Wait-Until {!(Model).state.customization.drawer} 'Escape did not close the Select drawer'
 
     Switch-Workspace 'Photo' 'builtin:workspace:photographer'
-    if(Find 'canvas-fit'){$revision=(Model).state.camera.revision;Invoke 'canvas-fit';Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not update the camera'};Canvas-Points
+    $revision=(Model).state.camera.revision;Fit-Canvas;Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not update the camera';Canvas-Points
     Invoke (Tile-Id 'rectangle_select')
     Wait-Until {(Tools).tool.selection.kind -eq 'rectangle' -and (Command 'select_all').enabled} 'Photo Rectangle Select did not activate'
     if((Tools).has_selection){

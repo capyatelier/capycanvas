@@ -67,6 +67,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     hstring theme,resultsKey,revealed;
     double searchFocus=-1;
     bool showing=false,closing=false,built=false,stopping=false,showFailed=false,dismissing=false;
+    enum class ProfileReturn{None,Requested,Managing} profileReturn=ProfileReturn::None;
     uint64_t escapes=0,escaped=0;
     void init(){
         dialog.XamlRoot(xamlRoot);inheritLanguage(dialog,data);
@@ -186,9 +187,11 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             pageNodes.emplace(id.c_str(),node);pages.Children().Append(node);
             auto container=shortcutPage->Container(id,node);
             if(id==L"color"){
-                auto profiles=button(data,data->copyCaption(L"color",L"manage_profiles"),[data=data]{
+                auto profiles=button(data,data->copyCaption(L"color",L"manage_profiles"),[data=data,weak=weak_from_this()]{
+                    if(auto self=weak.lock())self->profileReturn=ProfileReturn::Requested;
                     data->dispatch(O({{L"type",S(L"close_settings")}}));data->document(to_string(O({{L"operation",S(L"workflow_begin")},{L"id",N(0)}}).Stringify()));
                 });
+                AutomationProperties::SetAutomationId(profiles,L"manage-color-profiles");
                 profiles.Padding({10,5,10,5});profiles.MinHeight(34);profiles.HorizontalAlignment(HorizontalAlignment::Center);container.Children().Append(profiles);
             }
             uint32_t sectionIndex=0;
@@ -439,6 +442,9 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         data->adoptLocalization(snapshot);
         if(!snapshot.HasKey(L"state"))return;
         data->state=object(snapshot,L"state");data->refreshPalette();data->model=snapshot;auto model=preferences(data);
+        auto document=str(object(snapshot,L"windows_document"),L"type");bool managing=document==L"workflow"||document==L"workflow_busy";
+        if(profileReturn==ProfileReturn::Requested&&managing)profileReturn=ProfileReturn::Managing;
+        else if(profileReturn==ProfileReturn::Managing&&!managing){profileReturn=ProfileReturn::None;data->dispatch(O({{L"type",S(L"open_settings")},{L"page",S(L"color")}}));}
         if(!model.Size()){if(shortcutPage)shortcutPage->Apply(snapshot);showFailed=false;if(showing&&!closing){dismissing=true;dialog.Hide();}return;}
         if(showFailed)return;
         data->updating=true;struct Reset{bool& value;~Reset(){value=false;}}reset{data->updating};

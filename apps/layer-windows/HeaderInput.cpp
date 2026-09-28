@@ -66,6 +66,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
     void clear(bool keepMenu=false){
         if(!keepMenu)hideMenu();
         release();++generation;starting=started=busy=ending=cancelled=dragging=dirty=held=false;
+        dragCursor(root,false,false);
         source=J{};beginRequest=J{};preview=J{};timer.Stop();notify();
     }
     bool cancel(hstring reason=L"cancel"){
@@ -215,7 +216,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         if(!dragging&&moved){
             if(!editing){clear();return;}
             if(!claim())return;
-            hideMenu();stopRecognition();dragging=true;starting=true;
+            hideMenu();stopRecognition();dragging=true;starting=true;dragCursor(root,device==NativeInput::PointerDeviceType::Touch,true);
         }
         if(dragging){position=next;dirty=true;pump();e.Handled(true);notify();}
     }

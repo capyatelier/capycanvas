@@ -394,7 +394,7 @@ Zoom In, Zoom Out, Fit, Actual Pixels, then 25% to 400% as
 the camera limits, zooms about the work-area centre and rounds like Actual
 Pixels. The field takes its value from the camera, not a model, and refreshes
 only while the menu is open, so navigation updates one label. Web, Android,
-macOS and iPadOS read the field's control from `UiCatalog.zoom` and the menu
+Windows, macOS and iPadOS read the field's control from `UiCatalog.zoom` and the menu
 through the Web `zoom_menu` export or the `zoom_menu` native query. Opening the menu or choosing
 an item never takes keyboard focus from the canvas; only typing in the field
 borrows it:
@@ -404,6 +404,8 @@ borrows it:
   presses that would move focus. Escape closes it and returns focus.
 - Android opens a windowless dropdown that becomes focusable only while the
   field is being typed in.
+- Windows opens a transient flyout whose readout and rows cannot take focus;
+  Escape and a second press close it.
 
 The camera works in physical pixels. Web uses the fractional
 `devicePixelRatio` and Android physical pixels, so 100% is 1:1 there. GTK
@@ -481,7 +483,7 @@ translated label. `action_tooltip_localized` formats the label and shortcut as a
 message, or returns the label
 when unbound. Command and toolbar views carry their complete tooltip; other
 action buttons request it on hover, so remapping does not leave stale hints.
-GTK/Web/Android display these strings without joining keys themselves.
+GTK/Web/Android/Windows display these strings without joining keys themselves.
 
 All application context-menu families—workspace, groups/panels, ribbons/tiles,
 Zen and layer/mask menus—pass through the same recursive shortcut annotation.

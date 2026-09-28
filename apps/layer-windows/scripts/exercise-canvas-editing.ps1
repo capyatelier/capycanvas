@@ -149,7 +149,7 @@ try{
  Wait-Until {$c=(Model).state.camera;$b=(Control 'drawing-canvas').Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close'}
  $fitRevision=(Model).state.camera.revision
- Invoke 'canvas-fit';Wait-Until {(Model).state.camera.revision -gt $fitRevision} 'Fit did not update the camera'
+ Fit-Canvas;Wait-Until {(Model).state.camera.revision -gt $fitRevision} 'Fit did not update the camera'
  $camera=(Model).state.camera;$area=$camera.work_area;$bounds=(Control 'drawing-canvas').Current.BoundingRectangle
  $cx=[int]($bounds.X+$area[0]+$area[2]/2);$cy=[int]($bounds.Y+$area[1]+$area[3]/2)
  @{camera=$camera;canvas=$bounds}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'camera.json')

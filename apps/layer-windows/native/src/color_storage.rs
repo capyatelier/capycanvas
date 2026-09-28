@@ -90,9 +90,38 @@ fn inventory(directory: &Path) -> Result<Vec<ProfileRecord>, String> {
     }
     Ok(policy::profile_inventory(entries))
 }
-pub(crate) fn list(cancel: &AtomicBool) -> Result<Vec<ProfileEntry>, String> {
+fn hidden(directory: &Path) -> Result<Vec<String>, String> {
+    let saved = match fs::read(directory.join("menus.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Value::Null,
+        Err(error) => return Err(io_error("read profile menus", error)),
+    };
+    let action: policy::ProfileLibraryAction = serde_json::from_value(
+        serde_json::json!({"type": "visibility", "hidden": saved, "id": null, "visible": null}),
+    )
+    .map_err(|e| e.to_string())?;
+    serde_json::from_value(action.execute(&[]).map_err(|reason| reason.diagnostic())?).map_err(|e| e.to_string())
+}
+fn store_hidden(directory: &Path, hidden: Vec<String>, id: &str, visible: bool, cancel: &AtomicBool) -> Result<(), ColorFeatureError> {
+    let next: Vec<String> = serde_json::from_value(
+        policy::ProfileLibraryAction::Visibility { hidden, id: Some(id.into()), visible: Some(visible) }.execute(&[])?,
+    )
+    .map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec(&next).map_err(|e| e.to_string())?;
+    atomic_write(&directory.join("menus.json"), cancel, |stream| {
+        stream
+            .write_all(&bytes)
+            .map_err(|e| io_error("save profile menus", e))
+    })
+    .map_err(Into::into)
+}
+pub(crate) fn show(id: &str, visible: bool, cancel: &AtomicBool) -> Result<(), ColorFeatureError> {
+    locked(cancel, |directory| store_hidden(directory, hidden(directory)?, id, visible, cancel))
+}
+pub(crate) fn library(cancel: &AtomicBool) -> Result<(Vec<ProfileEntry>, Vec<String>), String> {
     locked(cancel, |directory| {
-        inventory(directory)?
+        let hidden = hidden(directory)?;
+        let entries = inventory(directory)?
             .into_iter()
             .map(|record| {
                 check_cancelled(cancel)?;
@@ -109,8 +138,13 @@ pub(crate) fn list(cancel: &AtomicBool) -> Result<Vec<ProfileEntry>, String> {
                     bytes.as_deref().map_err(Clone::clone),
                 ))
             })
-            .collect()
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok((entries, hidden))
     })
+}
+pub(crate) fn list(cancel: &AtomicBool) -> Result<Vec<ProfileEntry>, String> {
+    let (entries, hidden) = library(cancel)?;
+    Ok(entries.into_iter().filter(|entry| !hidden.contains(&entry.id)).collect())
 }
 pub(crate) fn profile(id: &str, cancel: &AtomicBool, _localization: &layer_ui::Localizer) -> Result<ColorProfile, ColorFeatureError> {
     if !policy::valid_profile_id(id) {
@@ -156,7 +190,8 @@ pub(crate) fn remove(id: &str, cancel: &AtomicBool, _localization: &layer_ui::Lo
     policy::ProfileLibraryAction::Remove { id: id.into() }.execute(&[])?;
     locked(cancel, |directory| {
         fs::remove_file(directory.join(format!("{id}.icc")))
-            .map_err(|e| io_error("remove profile", e).into())
+            .map_err(|e| io_error("remove profile", e))?;
+        store_hidden(directory, hidden(directory)?, id, true, cancel)
     })
 }
 pub(crate) fn presets(
@@ -183,4 +218,37 @@ pub(crate) fn presets(
         }
         Ok(view)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "Requires an isolated CAPY_SETTINGS_DIRECTORY"]
+    fn hidden_profiles_leave_menus_until_shown_or_removed() {
+        assert!(std::env::var_os("CAPY_SETTINGS_DIRECTORY").is_some(), "use isolated storage");
+        let cancel = AtomicBool::new(false);
+        let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(layer_core::color::RgbSpace::DisplayP3)).unwrap();
+        let id = policy::profile_identity(&bytes);
+        let listed = |cancel: &AtomicBool| list(cancel).unwrap().iter().any(|p| p.id == id);
+        preserve(&bytes, &cancel, &localization).unwrap();
+        let menus = directory().unwrap().join("menus.json");
+        std::fs::write(&menus, serde_json::json!([id, 7, {"id": id}]).to_string()).unwrap();
+        assert!(!listed(&cancel));
+        std::fs::write(&menus, "not json").unwrap();
+        assert!(listed(&cancel));
+        show(&id, false, &cancel).unwrap();
+        assert!(!listed(&cancel));
+        let (entries, hidden) = library(&cancel).unwrap();
+        assert!(entries.iter().any(|p| p.id == id) && hidden.contains(&id));
+        show(&id, true, &cancel).unwrap();
+        assert!(listed(&cancel));
+        show(&id, false, &cancel).unwrap();
+        remove(&id, &cancel, &localization).unwrap();
+        preserve(&bytes, &cancel, &localization).unwrap();
+        assert!(listed(&cancel));
+        remove(&id, &cancel, &localization).unwrap();
+    }
 }

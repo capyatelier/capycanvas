@@ -40,6 +40,10 @@ pub(crate) enum Action {
     ProfileRemove {
         id: String,
     },
+    ProfileVisibility {
+        id: String,
+        visible: bool,
+    },
     ReadImages {
         paths: Vec<String>,
     },
@@ -110,6 +114,7 @@ pub(crate) struct Task {
     original_name: String,
     inspection: Option<layer_color::InspectedDocumentInfo>,
     profiles: Vec<layer_ui::profile_library::ProfileEntry>,
+    hidden: Vec<String>,
     error: Option<String>,
     error_reason: Option<FeatureFailure>,
     payload: Payload,
@@ -129,7 +134,7 @@ impl Task {
                 preset_view: Value::Null,
                 feature_copy: Self::feature_copy(session.localization()),
                 inspection: None,
-                profiles: Vec::new(),
+                profiles: Vec::new(), hidden: Vec::new(),
                 original_name: session.state().document_file.title().to_string(),
                 converted_name: layer_ui::DocumentDeliveryMessage::ConvertedName { name: session.state().document_file.title().to_string() }.message(session.localization()),
                 error: None,
@@ -289,7 +294,7 @@ impl Task {
             preset_view: Value::Null,
             feature_copy: Self::feature_copy(session.localization()),
             inspection: None,
-            profiles: Vec::new(),
+            profiles: Vec::new(), hidden: Vec::new(),
             original_name: session.state().document_file.title().to_string(),
             converted_name: layer_ui::DocumentDeliveryMessage::ConvertedName { name: session.state().document_file.title().to_string() }.message(session.localization()),
             error: None,
@@ -302,11 +307,22 @@ impl Task {
         json!({"color": DocumentColorCopy::new(localization), "export": ExportCopy::new(localization),
             "profile": ProfileCopy::new(localization), "proof": ProofCopy::new(localization)})
     }
+    fn profile_views(&self) -> Value {
+        json!(self.profiles.iter().map(|entry| {
+            let visible = !self.hidden.contains(&entry.id);
+            let mut view = entry.localized_view(&self.localization);
+            view["visible"] = json!(visible);
+            view["state"] = layer_ui::color_feature_copy::profile_visibility(&self.localization, entry.channels, visible).into();
+            view
+        }).collect::<Vec<_>>())
+    }
     fn describe(&mut self) -> Result<(), String> {
-        if matches!(self.payload, Payload::Profiles | Payload::Proof(_) | Payload::Export { .. } | Payload::Import(_) | Payload::Source(_)) {
+        if matches!(self.payload, Payload::Profiles) {
+            (self.profiles, self.hidden) = crate::color_storage::library(self.control.cancellation_flag())?;
+        } else if matches!(self.payload, Payload::Proof(_) | Payload::Export { .. } | Payload::Import(_) | Payload::Source(_)) {
             self.profiles = crate::color_storage::list(self.control.cancellation_flag())?;
         }
-        let profiles = json!(self.profiles.iter().map(|entry| entry.localized_view(&self.localization)).collect::<Vec<_>>());
+        let profiles = self.profile_views();
         self.details = match &mut self.payload {
             Payload::Profiles => {
                 json!({"profiles":profiles.clone()})
@@ -409,6 +425,10 @@ impl Task {
                 }
                 Action::ProfileRemove { id } => {
                     crate::color_storage::remove(&id, self.control.cancellation_flag(), &self.localization).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?;
+                    self.describe()
+                }
+                Action::ProfileVisibility { id, visible } => {
+                    crate::color_storage::show(&id, visible, self.control.cancellation_flag()).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?;
                     self.describe()
                 }
                 Action::ProofOptions { settings, profile_id } => {
@@ -746,7 +766,7 @@ impl Task {
             },
             _ => {},
         }
-        if self.details.get("profiles").is_some() { self.details["profiles"] = json!(self.profiles.iter().map(|entry| entry.localized_view(&self.localization)).collect::<Vec<_>>()); }
+        if self.details.get("profiles").is_some() { self.details["profiles"] = self.profile_views(); }
         self.details["feature_copy"] = self.feature_copy.clone();
         Ok(())
     }
@@ -820,12 +840,16 @@ mod tests {
             issue: Some(layer_ui::ColorFeatureError::ProfileMissing),
         };
         task.profiles.push(entry.clone());
+        task.hidden.push(entry.id.clone());
         task.details = json!({"profiles":[entry.localized_view(host.session.localization())]});
         let identity = (task.id, task.serial, task.stage);
         let japanese = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
         task.set_localization(japanese.clone()).unwrap();
         assert_eq!((task.id, task.serial, task.stage), identity);
-        assert_eq!(task.details["profiles"][0], entry.localized_view(&japanese));
+        let mut expected = entry.localized_view(&japanese);
+        expected["visible"] = json!(false);
+        expected["state"] = layer_ui::color_feature_copy::profile_visibility(&japanese, None, false).into();
+        assert_eq!(task.details["profiles"][0], expected);
         assert_eq!(task.profiles[0].name, "My literal name");
         assert_eq!(task.profiles[0].issue, entry.issue);
     }

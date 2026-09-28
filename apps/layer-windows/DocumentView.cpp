@@ -214,7 +214,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         Pickers::FileOpenPicker open(window.AppWindow().Id());
                         open.CommitButtonText(str(options,L"open_label"));
                         open.FileTypeFilter().Append(extension);
-                        for(auto ext:{L".png",L".jpg",L".jpeg",L".jpe",L".tif",L".tiff",L".webp",L".bmp",L".dib",L".gif",L".exr",L".avif",L".heic",L".heif",L".hif"})open.FileTypeFilter().Append(ext);
+                        for(auto ext:array(options,L"photo_extensions"))open.FileTypeFilter().Append(L"."+ext.GetString());
                         multiplePicker=open.PickMultipleFilesAsync();auto selected=co_await multiplePicker;multiplePicker=nullptr;
                         for(uint32_t i=0;selected&&i<selected.Size();++i){if(i)queued.Append(S(selected.GetAt(i).Path()));else path=selected.GetAt(i).Path();}
                     } else {
@@ -356,8 +356,19 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             }else if(library){
                 text(featureText(L"profile",L"library_help"));
                 auto entries=array(details,L"profiles");copyHeader(profileList,featureText(L"profile",L"library_title"));profileList.HorizontalAlignment(HorizontalAlignment::Stretch);
-                for(auto item:entries){auto entry=item.GetObject();profileList.Items().Append(box_value(str(entry,L"name")+L" · "+str(entry,L"channels")+(entry.HasKey(L"issue")?L" · "+str(entry,L"issue"):L"")));}
-                if(entries.Size())profileList.SelectedIndex(0);body.Children().Append(profileList);
+                for(auto item:entries){auto entry=item.GetObject();profileList.Items().Append(box_value(str(entry,L"name")+L" · "+str(entry,L"state")+(entry.HasKey(L"issue")?L" · "+str(entry,L"issue"):L"")));}
+                Button visibility;visibility.HorizontalAlignment(HorizontalAlignment::Left);AutomationProperties::SetAutomationId(visibility,L"profile-visibility");
+                auto label=[button=make_weak(visibility),entries,show=featureText(L"profile",L"show"),hide=featureText(L"profile",L"hide")](int32_t index){auto target=button.get();if(!target)return;
+                    bool shown=index<0||flag(entries.GetObjectAt(uint32_t(index)),L"visible",true);hstring text=shown?hide:show;
+                    target.Content(box_value(text));AutomationProperties::SetName(target,text);target.IsEnabled(index>=0);
+                };
+                profileList.SelectionChanged([label,list=make_weak(profileList)](auto&&,auto&&){if(auto box=list.get())label(box.SelectedIndex());});
+                visibility.Click([this,scripted,entries,list=make_weak(profileList)](auto&&,auto&&){
+                    auto box=list.get();auto index=box?box.SelectedIndex():-1;if(index<0)return;auto entry=entries.GetObjectAt(uint32_t(index));
+                    *scripted=O({{L"op",S(L"profile_visibility")},{L"id",S(str(entry,L"id"))},{L"visible",B(!flag(entry,L"visible",true))}});dialog.Hide();
+                });
+                if(entries.Size())profileList.SelectedIndex(0);label(profileList.SelectedIndex());
+                body.Children().Append(profileList);body.Children().Append(visibility);
                 dialog.PrimaryButtonText(profileText(L"add_profile_dialog"));dialog.SecondaryButtonText(profileText(L"remove"));dialog.IsSecondaryButtonEnabled(entries.Size()!=0);dialog.CloseButtonText(common(L"done"));
             }else if(kind==L"proof"){
                 proofForm=std::make_shared<ProofFormView>();proofForm->init(details,proofDraft,proofProfileId);body.Children().Append(proofForm->root);

@@ -36,7 +36,7 @@ try {
  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Shortcut page review did not start' 45
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
- (Control 'Drawing canvas' -Name).SetFocus()
+ (Control 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
  Wait-Until {(Prefs) -and (Shown 'CloseButton')} 'Ctrl+, did not open Preferences'
  Invoke 'Keyboard Shortcuts' -Name
@@ -134,6 +134,21 @@ try {
  Capture 'pen-button-dark'
  Press 0x1B;Wait-Until {!(Prefs).pen_button_editor -and (Prefs)} 'Escape did not return from the pen button page'
  $checks.pen_and_input_triggers='passed'
+
+ Invoke 'Color' -Name -Within (Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))
+ Wait-Until {(Prefs).page -eq 'color' -and (Shown 'manage-color-profiles')} 'The Color page did not offer Manage Color Profiles'
+ Invoke-Id 'manage-color-profiles'
+ $done=@{item=$null}
+ Wait-Until {
+  $condition=[System.Windows.Automation.AndCondition]::new(
+   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Done'),
+   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
+  $done.item=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+  !(Prefs) -and $done.item
+ } 'Manage Color Profiles did not open the profile manager'
+ $done.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {(Prefs).page -eq 'color' -and (Shown 'CloseButton')} 'Closing the profile manager did not return to the Color page'
+ $checks.profile_manager_returns_to_preferences='passed'
 
  Press 0x1B
  Wait-Until {!(Prefs)} 'Escape on the root page did not close Preferences'

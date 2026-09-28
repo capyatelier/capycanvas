@@ -58,6 +58,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
             AutomationProperties::SetAutomationId(pick,hstring(L"navigator-")+id);
             Grid::SetColumn(pick,column++);actions.Children().Append(pick);
             bindings.emplace_back([data=data,id,pick]{auto command=find(array(data->state,L"commands"),L"id",id);
+                tooltip(pick,str(command,L"tooltip",str(command,L"label")));
                 pick.IsEnabled(flag(command,L"enabled"));pick.Background(flag(command,L"selected")?selected(data):clear());
                 AutomationProperties::SetItemStatus(pick,flag(command,L"selected")?data->caption(L"search",L"selected"):L"");});
         }

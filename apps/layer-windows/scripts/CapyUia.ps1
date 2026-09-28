@@ -151,3 +151,17 @@ function Open-Project([string]$Path){
     [CapyWindowApi]::PostMessage([IntPtr]$button.Current.NativeWindowHandle,245,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null
     Wait-Until {!(Find 'Open' -Name)} 'Open did not finish' 90
 }
+function Zoom-Item([string]$Id){
+    $owned=[System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id),
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
+    [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$owned)
+}
+function Fit-Canvas{
+    if(!(Find 'canvas-view-info')){return}
+    Invoke-Id 'canvas-view-info'
+    $hit=@{item=$null}
+    Wait-Until {$hit.item=Zoom-Item 'zoom-fit_canvas';$hit.item -and $hit.item.Current.IsEnabled} 'The zoom menu did not offer Fit'
+    $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {!(Zoom-Item 'zoom-fit_canvas')} 'The zoom menu did not close after Fit'
+}

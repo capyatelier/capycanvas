@@ -41,6 +41,7 @@ settings-branding-and-dependencies-have-separate-licenses = Branding and depende
 settings-canvas-rendering = Canvas rendering
 settings-vulkan-wayland = Vulkan · Wayland
 settings-webgpu = WebGPU
+settings-direct3d-12 = Direct3D 12
 settings-native-gpu = Native GPU
 settings-show-capy-in-zen-mode = Show Capy in Zen mode
 settings-reveal-panels-near-screen-edges = Reveal panels near screen edges

@@ -42,7 +42,7 @@ try {
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
  [CapyRowPointer]::Initialize([uint32]$review.Id)
  Wait-Until {$b=(Find 'drawing-canvas').Current.BoundingRectangle;$b.Width -gt 1200} 'Maximized canvas did not settle' 10
- Invoke-Id 'canvas-fit';Start-Sleep -Milliseconds 300
+ Fit-Canvas;Start-Sleep -Milliseconds 300
  (Find 'Test stroke' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  Wait-Until {(Model).state.document_file.modified} 'Controlled drawing did not finish'
  $canvas=(Find 'drawing-canvas').Current.BoundingRectangle
@@ -62,7 +62,7 @@ try {
  foreach($device in @('touch','pen','mouse')){
   Click $device (Center (Control 'canvas-bar-scale_rotate' -Arranged))
   Wait-Until {$null -ne (Owned $hint.value ([System.Windows.Automation.ControlType]::ToolTip))} "$device tap on a disabled bar item did not reveal its reason" 5
-  Click 'mouse' (Center (Control 'canvas-fit' -Arranged))
+  Click 'mouse' (Center (Shown 'panel-tab-layers'))
   Wait-Until {$null -eq (Owned $hint.value ([System.Windows.Automation.ControlType]::ToolTip))} "The next $device contact did not hide the revealed reason" 5
  }
  if((Model).state.canvas_bar.context.kind -ne 'selection'){throw 'Tapping a disabled item changed the bar'}
@@ -122,6 +122,8 @@ try {
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
  Wait-Until {@((Model).state.layers|Where-Object reference).Count -eq 0} 'One Undo did not remove the reference mark'
  $checks.reference_action_one_undo_step='passed'
+ $lifecycle=Join-Path $run 'lifecycle.log'
+ if((Test-Path $lifecycle) -and (Select-String -Path $lifecycle -Pattern 'gpu_recovery_started' -SimpleMatch -Quiet)){throw 'A contact reached the GPU loss test control'}
 
  [CapyRowPointer]::Dispose()
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $run

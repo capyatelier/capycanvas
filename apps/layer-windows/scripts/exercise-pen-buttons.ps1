@@ -113,7 +113,7 @@ try {
  Wait-Until {(Camera) -ne $view} 'Mouse middle drag did not pan the canvas'
  if((Model).state.document_file.revision -ne $revision){throw 'Mouse middle drag edited the drawing'}
  Write-Output "Barrel mid-stroke $midStroke, held $held, middle drag pans"
- (Find 'Drawing canvas' -Name).SetFocus()
+ (Find 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
  Wait-Until {(Model).preferences} 'Ctrl+, did not open Preferences'
  Invoke 'Pen & Input' -Name
@@ -146,7 +146,7 @@ try {
   Start-Sleep -Milliseconds 300
  }
  function Paper([double]$Across,[double]$Down){
-  $m=Model;$c=$m.state.camera;$tab=@($m.state.tabs)[0];$b=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
+  $m=Model;$c=$m.state.camera;$tab=@($m.state.tabs)[0];$b=(Find 'drawing-canvas').Current.BoundingRectangle
   @([int]($b.X+$c.translation[0]+$tab.width*$c.zoom*$Across),[int]($b.Y+$c.translation[1]+$tab.height*$c.zoom*$Down))
  }
  $at=Paper .3 .3;$x=$at[0];$row=$at[1]
@@ -155,7 +155,7 @@ try {
  [CapyRowPointer]::EraserEnd($true);try{Pen-Stroke $x $row}finally{[CapyRowPointer]::EraserEnd($false)}
  $erased=Inked 'eraser-end' ($x+8) ($x+64) $row
  if($erased -gt .1){throw "The eraser end did not erase by default ($erased inked)"}
- (Find 'Drawing canvas' -Name).SetFocus()
+ (Find 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
  Wait-Until {(Model).preferences} 'Ctrl+, did not open Preferences'
  Invoke 'Pen & Input' -Name

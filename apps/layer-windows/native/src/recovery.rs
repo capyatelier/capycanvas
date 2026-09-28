@@ -454,7 +454,7 @@ impl Service {
                 self.event(session, RecoveryEvent::Resume)?;
             }
             if self.ready && !self.closing && Instant::now() >= self.next_observation {
-                self.next_observation = Instant::now() + Duration::from_secs(3);
+                self.next_observation = Instant::now() + Duration::from_secs(15);
                 self.event(
                     session,
                     RecoveryEvent::Observe {

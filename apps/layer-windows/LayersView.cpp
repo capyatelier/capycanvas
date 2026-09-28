@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "LayersView.h"
 #include "EffectControls.h"
+#include "WorkspaceQuery.h"
 #include <chrono>
 
 using namespace CapyLayers;
@@ -72,7 +73,9 @@ void LayersView::init(){
                 {L"id",layer.GetNamedValue(L"id")},{L"value",B(!flag(layer,spec.property))}}));
         }});
         pick.Width(24);pick.Height(24);pick.Content(icon(spec.icon,data->theme()));
-        AutomationProperties::SetAutomationId(pick,L"layer-"+hstring(spec.op));CapyUi::tooltip(pick,spec.label);
+        AutomationProperties::SetAutomationId(pick,L"layer-"+hstring(spec.op));
+        actionTooltip(data,pick,[weak,spec]{auto self=weak.lock();auto layer=self?self->editing():J{};if(!layer.Size())return J{};
+            return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(spec.op)},{L"id",layer.GetNamedValue(L"id")},{L"value",B(!flag(layer,spec.property))}})}});});
         tools.Children().Append(pick);controls.emplace_back([data=data,pick,spec](J layer,J capabilities){
             pick.IsEnabled(flag(capabilities,spec.capability));pick.IsChecked(flag(layer,spec.property));pick.Opacity(pick.IsEnabled()?1.:.36);pick.Background(flag(layer,spec.property)?selected(data):clear());
         });
@@ -81,11 +84,11 @@ void LayersView::init(){
     reference.Width(24);reference.Height(24);reference.Content(icon(L"reference",data->theme()));
     for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
         reference.Resources().Insert(box_value(role),data->tint(L"text",31));
-    AutomationProperties::SetAutomationId(reference,L"layer-reference");tools.Children().Append(reference);
+    AutomationProperties::SetAutomationId(reference,L"layer-reference");actionTooltip(data,reference,[]{return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"reference_selection")}})}});});tools.Children().Append(reference);
     controls.emplace_back([weak,reference](J,J){if(auto self=weak.lock()){
         auto view=self->view();reference.IsEnabled(flag(view,L"can_reference"));reference.Opacity(reference.IsEnabled()?1.:.36);
         reference.IsChecked(flag(view,L"references_selected"));reference.Background(flag(view,L"references_selected")?self->data->tint(L"text",31):clear());
-        auto text=str(view,L"reference_action_label");AutomationProperties::SetName(reference,text);CapyUi::tooltip(reference,text);
+        auto text=str(view,L"reference_action_label");if(AutomationProperties::GetName(reference)!=text){AutomationProperties::SetName(reference,text);CapyUi::tooltip(reference,text);}
     }});
     header.Children().Append(tools);root.Children().Append(header);
     auto factory=make_self<ElementFactory>();factory->owner=weak;repeater.ItemTemplate(factory.as<IElementFactory>());
@@ -99,8 +102,12 @@ void LayersView::init(){
         auto pick=button(data,text,std::move(action));pick.Width(24);pick.Height(24);pick.Content(icon(iconName,data->theme()));
         AutomationProperties::SetAutomationId(pick,id);CapyUi::tooltip(pick,text);footer.Children().Append(pick);return pick;
     };
-    footerButton(L"add-layer",L"New layer",L"layer-new",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"new")},{L"group",B(false)},{L"clipped",B(false)}}));});
-    footerButton(L"folder",L"New group",L"layer-new-group",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"new")},{L"group",B(true)},{L"clipped",B(false)}}));});
+    for(bool group:{false,true}){
+        auto create=O({{L"op",S(L"new")},{L"group",B(group)},{L"clipped",B(false)}});
+        auto pick=footerButton(group?L"folder":L"add-layer",group?data->caption(L"layers",L"new_group"):data->caption(L"layers",L"new_layer"),group?L"layer-new-group":L"layer-new",
+            [weak,create]{if(auto self=weak.lock())self->action(create);});
+        actionTooltip(data,pick,[create]{return O({{L"type",S(L"layer")},{L"action",create}});});
+    }
     auto selectionLayer=footerButton(L"selection-brush",L"New Selection Layer",L"layer-new-selection",[weak]{if(auto self=weak.lock();self&&!self->data->updating)
         self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"new_selection_layer")}}));});
     controls.emplace_back([data=data,selectionLayer](J,J){

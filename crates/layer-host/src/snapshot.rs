@@ -297,7 +297,8 @@ impl NativeHost {
             "save_label": layer_ui::DocumentRequest::ConfirmClose { title: String::new() }.accept_label(self.session.localization()),
             "open_label": layer_ui::DocumentRequest::Open.accept_label(self.session.localization()),
             "filter_label": layer_ui::DocumentRequest::Open.filter(self.session.localization()).0,
-            "extension": layer_ui::DocumentRequest::Open.filter(self.session.localization()).1}))?;
+            "extension": layer_ui::DocumentRequest::Open.filter(self.session.localization()).1,
+            "photo_extensions": layer_color::photo::extensions().collect::<Vec<_>>()}))?;
         map.serialize_entry("preferences", &self.session.preferences())?;
         map.serialize_entry("picker", &self.session.tool_picker())?;
         map.serialize_entry("workspace_menu", &self.session.workspace_menu())?;

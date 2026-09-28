@@ -167,6 +167,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
                 content.ManipulationMode(mode&~ManipulationModes::System);
             }
     }
+    void cursor(){dragCursor(root,device==NativeInput::PointerDeviceType::Touch,dragging,held);}
     void clear(bool closeMenu=true){
         contactToken=0;
         ++generation;pointer.reset();contact=nullptr;held=false;dragging=false;finishing=false;dirty=false;
@@ -175,6 +176,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         hint.Visibility(Visibility::Collapsed);timer.Stop();tabSlide->Clear();tabCapture=J{};
         releasing=true;root.ReleasePointerCaptures();releasing=false;
         restoreScrolling();action=J{};sourceTag=J{};source={};contextOnly=false;
+        cursor();
         chrome(O({{L"kind",S(L"refresh")}}));deferClick();evidence();
     }
     bool cancel(hstring reason=L"cancel",bool suppressClick=true){
@@ -228,6 +230,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         ignoreClick=true;hideMenu();stopRecognition();
         dragging=true;++generation;position=origin;
         tabCapture=tabSlide->Begin();
+        cursor();
         chrome(O({{L"kind",S(L"refresh")}}));send(L"down");evidence();
     }
     void hold(NativeInput::HoldingEventArgs const& e){
@@ -236,6 +239,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(!ownsFocus()||!current()){cancel(L"source_invalid");return;}
         if(!claim())return;
         held=true;ignoreClick=true;
+        cursor();
         chrome(O({{L"kind",S(L"refresh")}}));evidence();
         if(device!=NativeInput::PointerDeviceType::Mouse)context(object(sourceTag,L"workspace_context"),position,true);
     }

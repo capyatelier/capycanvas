@@ -2,6 +2,7 @@
 #include "ToolView.h"
 #include "RangeControl.h"
 #include "NativeMenus.h"
+#include "WorkspaceQuery.h"
 
 using namespace CapyUi;
 namespace {
@@ -74,7 +75,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             auto item=items.GetObjectAt(i);auto action=object(item,L"action");
             auto pick=button(data,str(item,L"label"),[weak,action]{if(auto self=weak.lock())self->data->dispatch(action);});
             pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-            pick.Padding({17,5,17,5});tooltip(pick,str(item,L"label"));
+            pick.Padding({17,5,17,5});actionTooltip(data,pick,[action]{return action;});
             AutomationProperties::SetAutomationId(pick,(group?L"tool-group-":L"tool-subtool-")+to_hstring(i));
             if(group&&media())AutomationProperties::SetAutomationId(pick,(panel==L"sculpt_sets"?L"sculpt-set-":L"brush-set-")+str(item,L"icon"));
             if(group&&media()){

@@ -242,7 +242,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     FrameworkElement anchorFor(hstring const& id)const{
         for(auto const& element:fields){
             if(AutomationProperties::GetAutomationId(element)==L"canvas-bar-choice-"+id)return element;
-            if(auto host=element.try_as<Grid>();host&&AutomationProperties::GetAutomationId(explained(host))==L"canvas-bar-menu-"+id)return host;
+            if(auto shell=element.try_as<Grid>();shell&&AutomationProperties::GetAutomationId(explained(shell))==L"canvas-bar-menu-"+id)return shell;
         }
         return nullptr;
     }

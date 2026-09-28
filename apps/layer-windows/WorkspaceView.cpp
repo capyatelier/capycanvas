@@ -4,6 +4,7 @@
 #include "CommandSearch.h"
 #include "CanvasActionBar.h"
 #include "CanvasNotice.h"
+#include "ZoomReadout.h"
 #include "PanelBody.h"
 #include "PanelConfiguration.h"
 #include "WorkspaceExpansion.h"
@@ -69,7 +70,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     J workspaceUpdate;
     hstring lastPresentation;
     OverviewOcclusion overviewOcclusion;
-    std::map<std::wstring,Border> handles;
+    std::map<std::wstring,ContentControl> handles;
     Dispatch overviews;
     hstring lastOverviews;
     struct Group {
@@ -105,9 +106,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::wstring popupControl;
     std::shared_ptr<uint64_t> popupGeneration=std::make_shared<uint64_t>(0);
     Bindings popupBindings;
-    TextBlock camera;
+    std::shared_ptr<ZoomReadout> zoom=std::make_shared<ZoomReadout>();
     Grid cameraSlot;
-    Button fitCamera{nullptr},zenCapy{nullptr};Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
+    Button zenCapy{nullptr};Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
     Impl(Dispatch send,J catalog,std::shared_ptr<CapyLocalization> localization,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):overviews(std::move(report)){
         data->input=std::move(input);gestures=std::make_shared<WorkspaceGestures>(data,root);
         data->document=std::move(document);
@@ -116,19 +117,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->query=previews;data->previews=CreateFilterPreviewCache(std::move(previews));
         data->localization=localization;data->send=std::move(send);data->catalog=catalog;data->glassSurfaces=true;
         AutomationProperties::SetName(root,L"Drawing workspace");
-        camera.FontSize(num(catalog,L"text_size_pt",11)*96./72.);
-        camera.FontWeight(Windows::UI::Text::FontWeights::Normal());
-        camera.IsHitTestVisible(false);
-        AutomationProperties::SetAutomationId(camera,L"canvas-camera");
     }
     void init(){
         data->strokes=std::make_shared<StrokeRecording>();data->strokes->data=data;data->strokes->start();
-        fitCamera=button(data,L"Fit canvas",[data=data]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"fit_canvas")}}));});
-        fitCamera.Content(camera);fitCamera.Padding({10,3,10,3});
-        AutomationProperties::SetAutomationId(fitCamera,L"canvas-fit");
-        tooltip(fitCamera,L"Fit canvas");
-        auto surface=cameraSurface;surface.Child(fitCamera);surface.Background(headerSurface(data));
-        surface.SizeChanged([button=fitCamera](auto&& sender,SizeChangedEventArgs const& e){
+        zoom->data=data;zoom->init();
+        auto surface=cameraSurface;surface.Child(zoom->root);surface.Background(headerSurface(data));
+        surface.SizeChanged([button=zoom->root](auto&& sender,SizeChangedEventArgs const& e){
             double r=e.NewSize().Height*.5*CornerFit;sender.template as<Border>().CornerRadius({r,r,r,r});button.CornerRadius({r,r,r,r});
         });
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
@@ -151,7 +145,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     void build(Group& group,J const& geometry,J const& panel){
         group.body.reset();group.footer=nullptr;group.tabs.clear();group.automatic.clear();group.backgroundKey=L"";
         auto groupItem=O({{L"kind",S(L"group")},{L"group",N(num(geometry,L"id"))}});
-        group.border.Background(clear());group.border.CornerRadius(CornerRadius{SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});
+        float fit=groupRadius(geometry)*CornerFit;group.border.Background(clear());group.border.CornerRadius(CornerRadius{fit,fit,fit,fit});
         if(!group.layout){
             group.layout=Grid();
             group.layout.RowDefinitions().Append(RowDefinition());
@@ -336,6 +330,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 AutomationProperties::SetAutomationId(group.frame,L"workspace-group-"+to_hstring(id));
             }
             group.geometry=geometry;group.offset={};
+            if(float fit=groupRadius(geometry)*CornerFit;group.frame.CornerRadius().TopLeft!=fit){group.frame.CornerRadius({fit,fit,fit,fit});group.border.CornerRadius({fit,fit,fit,fit});}
             // Geometry-only changes retain controls, focus, capture and scroll.
             auto structure=J::Parse(geometry.Stringify());
             for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip"})if(structure.HasKey(field))structure.Remove(field);
@@ -393,10 +388,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto status=object(layout,L"status");place(cameraSlot,status);
         updateZenCapy(snapshot);
         cameraSlot.Visibility(num(status,L"height")>0?Visibility::Visible:Visibility::Collapsed);
-        camera.Foreground(data->brush(L"text"));
-        auto fit=find(array(data->state,L"commands"),L"id",L"fit_canvas");
-        fitCamera.IsEnabled(flag(fit,L"enabled"));
-        AutomationProperties::SetName(fitCamera,str(fit,L"label",L"Fit canvas"));
+        zoom->text.Foreground(data->brush(L"text"));
         updateCamera(object(data->state,L"camera"));
         updatePopup();publishOverviews();reportTitlebar();queueMeasurements();
         applyMotion(object(update,L"drag"));tracePresentation();return true;
@@ -668,6 +660,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         if(group.presented.Size()&&group.configuration)group.configuration->AppendOverviews(slots,root,clip,order);
     }
+    static float groupRadius(J const& geometry){
+        auto tiles=object(geometry,L"tiles");
+        return tiles.Size()&&!flag(geometry,L"tabs_visible")?float(num(tiles,L"tile_corner_radius",SurfaceRadius)):SurfaceRadius;
+    }
     void backgrounds(){
         auto tabs=array(data->state,L"tabs");auto document=tabs.Size()?tabs.GetObjectAt(0):J{};
         for(auto& [id,group]:groups){
@@ -677,10 +673,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             bool expanded=group.presented.Size()!=0,tabbed=flag(group.geometry,L"tabs_visible");
             J source;for(auto value:data->drawerSources){auto anchor=object(value.GetObject(),L"anchor");
                 if(str(anchor,L"kind")==L"tile"&&str(anchor,L"panel")==str(group.geometry,L"active"))source=value.GetObject();}
-            std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
+            float radius=groupRadius(group.geometry);
+            std::array<float,4> corners{radius,radius,radius,radius};
             if(source.Size()&&!expanded){auto square=sourceCorners(data,source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
             auto key=O({{L"expansion",group.presented},{L"tabbed",B(tabbed)},{L"source",source},{L"transparent",B(data->transparent())},{L"bounds",bounds},{L"slots",slots},
-                {L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
+                {L"radius",N(radius)},{L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
             if(key==group.backgroundKey)continue;group.backgroundKey=key;
             group.corners=tabbed&&!expanded?std::array<float,4>{SurfaceRadius,SurfaceRadius,corners[2],corners[3]}:corners;
             GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);
@@ -695,13 +692,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                     for(auto layer:shell.Children())if(auto canvas=layer.try_as<Canvas>())for(auto item:canvas.Children())if(auto path=item.try_as<Microsoft::UI::Xaml::Shapes::Path>())
                         path.Fill(expanded?data->brush(L"panel"):data->glass(L"tab"));
             }
-            auto shadowKey=O({{L"expansion",group.presented},{L"width",bounds.GetNamedValue(L"width")},{L"height",bounds.GetNamedValue(L"height")}}).Stringify();
+            auto shadowKey=O({{L"expansion",group.presented},{L"radius",N(radius)},{L"width",bounds.GetNamedValue(L"width")},{L"height",bounds.GetNamedValue(L"height")}}).Stringify();
             if(shadowKey!=group.shadowKey){
                 group.shadowKey=shadowKey;
                 // WinUI geometries have one owner; retain a separate mask outline.
-                auto mask=expanded?expansionShape(group.presented):squircleRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius});
+                auto mask=expanded?expansionShape(group.presented):squircleRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{radius,radius,radius,radius});
                 group.shadow.Shape(mask,float(num(bounds,L"width")),float(num(bounds,L"height")),expanded?36.f:12.f,expanded?8.f:2.f,expanded?.4f:.16f);
-                if(expanded)group.shadow.Uncut();else group.shadow.Cut({SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius});
+                if(expanded)group.shadow.Uncut();else group.shadow.Cut({radius,radius,radius,radius});
             }
             shape.Children().Append(outline);
             for(auto value:slots){
@@ -720,7 +717,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     void resizeHandle(std::wstring const& key,J const& bounds,J const& action,int z,bool resetColumn=false){
         auto [it,added]=handles.try_emplace(key);
         auto handle=it->second;
-        if(added){handle.Background(clear());handle.RenderTransform(TranslateTransform());root.Children().Append(handle);}
+        if(added){
+            Border fill;fill.Background(clear());handle.Content(fill);handle.Padding({0,0,0,0});handle.BorderThickness({0,0,0,0});
+            handle.HorizontalContentAlignment(HorizontalAlignment::Stretch);handle.VerticalContentAlignment(VerticalAlignment::Stretch);
+            handle.IsTabStop(true);handle.UseSystemFocusVisuals(true);
+            handle.RenderTransform(TranslateTransform());root.Children().Append(handle);
+        }
         auto transform=handle.RenderTransform().as<TranslateTransform>();transform.X(0);transform.Y(0);
         place(handle,bounds);Canvas::SetZIndex(handle,z);gestures->Source(handle,action,{},resetColumn);
         if(str(action,L"type")==L"drag_divider"){
@@ -730,6 +732,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             handle.as<IUIElementProtected>().ProtectedCursor(InputSystemCursor::Create(shape));
         }
         AutomationProperties::SetAutomationId(handle,hstring(key));AutomationProperties::SetName(handle,L"Resize panel");
+        AutomationProperties::SetAutomationControlType(handle,Automation::Peers::AutomationControlType::Thumb);
         AutomationProperties::SetHelpText(handle,resetColumn?L"Drag to resize the column. Double-click to restore its default width.":L"Drag to resize the panel.");
     }
     void updateZenCapy(J const& snapshot){
@@ -775,8 +778,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void updateCamera(J const& view){
         if(double revision=num(view,L"revision",-1);revision!=cameraRevision){cameraRevision=revision;canvasBar->Defer();}
-        if(view.Size())camera.Text(to_hstring(int(std::round(num(view,L"zoom",1)*100)))+L"% · "+
-            to_hstring(int(std::round(num(view,L"rotation")*180/3.141592653589793)))+L"°");
+        zoom->Update(view);
     }
 };
 WorkspaceView::WorkspaceView(Dispatch send,Json catalog,std::shared_ptr<CapyLocalization> localization,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):impl(std::make_shared<Impl>(std::move(send),catalog,localization,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document),std::move(input))){impl->init();}

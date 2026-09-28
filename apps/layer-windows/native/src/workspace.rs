@@ -39,6 +39,8 @@ fn request(json: &str) -> Result<Value, String> {
             | "canvas_bar_layout"
             | "canvas_bar_menu"
             | "canvas_bar_choice_menu"
+            | "zoom_menu"
+            | "action_tooltip"
             | "stroke_recording",
         ) => Ok(value),
         _ => Err("Unsupported workspace query".into()),

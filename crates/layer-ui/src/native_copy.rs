@@ -106,6 +106,7 @@ copy_struct! { PaletteCopy {
 copy_struct! { HeaderCopy {
     on: SETTINGS_ON,
     off: SETTINGS_OFF,
+    zoom: MENU_ZOOM,
     this_workspace: WORKSPACE_THIS_WORKSPACE,
     saved_toolbars: WORKSPACE_SAVED_TOOLBARS,
     toolbar_actions: NATIVE_SHORTCUTS_ACTIONS,

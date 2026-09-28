@@ -41,6 +41,7 @@ settings-branding-and-dependencies-have-separate-licenses = 品牌标识和依�
 settings-canvas-rendering = 画布渲染
 settings-vulkan-wayland = Vulkan · Wayland
 settings-webgpu = WebGPU
+settings-direct3d-12 = Direct3D 12
 settings-native-gpu = 原生 GPU
 settings-show-capy-in-zen-mode = 在专注模式下显示 Capy
 settings-reveal-panels-near-screen-edges = 靠近屏幕边缘时显示面板

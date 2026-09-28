@@ -6,6 +6,7 @@
 #include "DocumentView.h"
 #include "WorkspaceDialogs.h"
 #include "SelectionDialog.h"
+#include "CanvasSizeDialog.h"
 #include "WorkspaceStorageView.h"
 #include "WorkspaceManagerView.h"
 #include "CanvasWorkBuffer.h"
@@ -85,6 +86,7 @@ private:
     std::unique_ptr<DocumentView> documents;
     std::unique_ptr<WorkspaceDialogs> workspaceDialogs;
     std::unique_ptr<SelectionDialog> selectionDialog;
+    std::unique_ptr<CanvasSizeDialog> canvasSizeDialog;
     std::unique_ptr<WorkspaceStorageView> workspaceStorage;
     std::unique_ptr<WorkspaceManagerView> workspaceManager;
     winrt::Windows::Data::Json::JsonObject lastModel;
@@ -107,6 +109,7 @@ private:
     void Popup(bool open);
     void UpdatePopup();
     void ApplyDialogs();
+    bool ModalOpen()const;
     void RequestClose();
     void ChromeMotion(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&,bool leave=false);
     void Fullscreen();
