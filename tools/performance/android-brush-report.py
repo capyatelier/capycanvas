@@ -32,6 +32,8 @@ def main():
         if not (args.directory / f"{label}-complete.json").is_file():
             continue
         info = json.loads(infofile.read_text())
+        if "repeats" not in info:  # Navigation uses its separate measurements file.
+            continue
         runs = []
         markers = []
         for i in range(info["repeats"]):

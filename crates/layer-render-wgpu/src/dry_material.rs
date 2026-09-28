@@ -4,27 +4,33 @@ use super::*;
 
 pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool, u32);
 
-fn shader_destination(in_place: bool) -> String {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Target { Exact, InPlace, Display }
+
+fn shader_destination(target: Target) -> String {
+    if target == Target::Display { return include_str!("dry_preview.wgsl").into(); }
+    let in_place = target == Target::InPlace;
     let access = if in_place { "read_write" } else { "write" };
     let original = if in_place { "material_color_output, p" } else { "source_11, p, 0" };
     format!("
         @group(0) @binding(1) var material_color_output: texture_storage_2d<rgba32float, {access}>;
-        fn dry_original(p: vec2<i32>) -> vec4<f32> {{ return textureLoad({original}); }}")
+        fn dry_original(p: vec2<i32>) -> vec4<f32> {{ return textureLoad({original}); }}
+        fn dry_coverage(p: vec2<i32>) -> f32 {{ return textureLoad(stroke_coverage_texture, p, 0).r; }}")
 }
 
-pub(super) fn shader(device: &PipelineDevice, in_place: bool) -> Deferred<wgpu::ShaderModule> {
+pub(super) fn shader(device: &PipelineDevice, target: Target) -> Deferred<wgpu::ShaderModule> {
     let device = device.clone();
     Deferred::new(move || {
         device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("layer destination brush shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_source(&device, in_place, include_str!("material_brush.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(shader_source(&device, target, include_str!("material_brush.wgsl"))),
         })
     })
 }
 
-pub(super) fn shader_source(device: &PipelineDevice, in_place: bool, material: &str) -> Cow<'static, str> {
+pub(super) fn shader_source(device: &PipelineDevice, target: Target, material: &str) -> Cow<'static, str> {
     compose_wgsl(&[
-        &working_color::shader(device), include_str!("blend_modes.wgsl"), &shader_destination(in_place), include_str!("brush_types.wgsl"), include_str!("brush_textures.wgsl"), include_str!("retouch_sample.wgsl"), material,
+        &working_color::shader(device), include_str!("blend_modes.wgsl"), &shader_destination(target), include_str!("brush_types.wgsl"), include_str!("brush_textures.wgsl"), include_str!("retouch_sample.wgsl"), material,
         include_str!("brush_footprint.wgsl"),
         include_str!("brush_geometry.wgsl"), include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
         include_str!("contact.wgsl"), include_str!("bristle.wgsl"), include_str!("selection_clip.wgsl"),
@@ -106,8 +112,9 @@ impl Pipelines {
         device: &PipelineDevice,
         shared: &PipelineLayouts<'_>,
         shader: &Deferred<wgpu::ShaderModule>,
-        in_place: bool,
+        target: Target,
     ) -> Self {
+        let in_place = target == Target::InPlace;
         let layouts = std::array::from_fn(|coverage| {
             let mut entries = vec![crate::bindings::buffer(
                 0,
@@ -146,7 +153,9 @@ impl Pipelines {
                             label: Some("dry material pages"),
                             layout: Some(&layout),
                             module: &shader,
-                            entry_point: Some(if index % 2 == 0 {
+                            entry_point: Some(if target == Target::Display {
+                                "compute_display_color"
+                            } else if index % 2 == 0 {
                                 "compute_color"
                             } else {
                                 "compute_coverage"
@@ -249,6 +258,9 @@ impl Pipelines {
 
 impl WgpuRasterizer {
     pub(super) fn dry_material_pipeline(&self, batch: &DabBatch) -> &Pipelines {
+        if batch.kind == DabBatchKind::Preview && self.preview_level > 0 {
+            return &self.pipelines.dry_display;
+        }
         match &self.pipelines.dry_in_place {
             Some(in_place) if self.in_place_dry_material(batch) => in_place,
             _ => &self.pipelines.dry_material,
@@ -267,7 +279,9 @@ impl WgpuRasterizer {
     }
 
     pub(super) fn dry_material_block(&self, batch: &DabBatch) -> u32 {
-        if batch.kind == DabBatchKind::Preview { self.preview_block } else { 1 }
+        if batch.kind == DabBatchKind::Preview {
+            if self.preview_level > 0 { 1 << self.preview_level } else { self.preview_block }
+        } else { 1 }
     }
 
     pub(super) fn encode_dry_material_jobs(
@@ -314,4 +328,12 @@ impl WgpuRasterizer {
 
 fn dry_material_compute_eligible(style: &layer_render::DabStyle) -> bool {
     pointwise(style) && style.rendering.blend_mode == BrushBlendMode::Normal
+}
+
+/// Basic analytic contacts (including G-Pen, eraser and airbrush) have no
+/// unresolved paper, fiber, bristle or texture frequencies at display scale.
+pub(super) fn display_preview_eligible(style: &layer_render::DabStyle) -> bool {
+    style.execution == BrushExecution::Dry && dry_material_compute_eligible(style) && !style.rendering.edge_after_stroke
+        && !style.alpha_locked && style.selection.is_none() && style.grain.is_none()
+        && matches!(style.tip, BrushTip::AnalyticEllipse) && contact_flags(style.contact) <= 1
 }

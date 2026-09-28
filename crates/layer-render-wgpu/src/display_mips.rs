@@ -7,6 +7,17 @@ use wgpu::util::DeviceExt;
 const MIP_COUNT: u32 = PAGE_SIZE.ilog2() + 1;
 pub(super) const MAX_SIDE: u32 = 512;
 
+/// Choose a texel footprint no wider than a surface pixel in any direction.
+/// The singular value also handles rotated, reflected and nonuniform views.
+pub(super) fn view_level(transform: [f32; 6], max: u32) -> Option<u32> {
+    let [a, b, c, d, tx, ty] = transform.map(f64::from);
+    if ![a, b, c, d, tx, ty].into_iter().all(f64::is_finite)
+        || (a * d - b * c).abs() < 1e-12 { return None; }
+    let scale = ((a + d).hypot(b - c) + (a - d).hypot(b + c)) * 0.5;
+    let unit = 1. + 4. * f64::from(f32::EPSILON);
+    Some((0..=max).rev().find(|level| scale * f64::from(1u32 << level) <= unit).unwrap_or(0))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Plan {
     pub extent: [u32; 2],

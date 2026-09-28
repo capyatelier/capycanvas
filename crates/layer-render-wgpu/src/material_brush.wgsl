@@ -399,7 +399,7 @@ fn watercolor_fragment(
         vec2<i32>(0),
         vec2<i32>(255),
     );
-    var stroke_coverage = textureLoad(stroke_coverage_texture, state_coordinate, 0).r;
+    var stroke_coverage = dry_coverage(state_coordinate);
     if style.canvas_opacity.w > 0.5 {
         stroke_coverage = 0.0;
     }
@@ -567,7 +567,7 @@ fn wet_fragment(
         vec2<i32>(0),
         vec2<i32>(255),
     );
-    var stroke_coverage = textureLoad(stroke_coverage_texture, state_coordinate, 0).r;
+    var stroke_coverage = dry_coverage(state_coordinate);
     if style.canvas_opacity.w > 0.5 {
         stroke_coverage = 0.0;
     }
@@ -690,7 +690,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         vec2<i32>(0),
         vec2<i32>(255),
     );
-    var stroke_coverage = textureLoad(stroke_coverage_texture, state_coordinate, 0).r;
+    var stroke_coverage = dry_coverage(state_coordinate);
     if style.canvas_opacity.w > 0.5 {
         stroke_coverage = 0.0;
     }
@@ -848,7 +848,7 @@ fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
         if any(p < bounds.xy) || any(p >= bounds.zw) {
             return MaterialOutput(
                 dry_original(vec2<i32>(p)),
-                vec4<f32>(textureLoad(stroke_coverage_texture, vec2<i32>(p), 0).r, 0.0, 0.0, 1.0),
+                vec4<f32>(dry_coverage(vec2<i32>(p)), 0.0, 0.0, 1.0),
                 vec4<f32>(0.0),
             );
         }
@@ -916,6 +916,13 @@ override MATERIAL_IN_PLACE: bool = false;
 fn dry_block_result(id: vec2<u32>) -> MaterialOutput {
     let block = style.operation.z;
     return material_result(vec4<f32>(vec2<f32>(id * block) + 0.5 * f32(block), 0.0, 1.0));
+}
+
+@compute @workgroup_size(32, 2)
+fn compute_display_color(@builtin(global_invocation_id) id: vec3<u32>) {
+    if any(id.xy >= textureDimensions(material_color_output)) { return; }
+    let result = dry_block_result(id.xy);
+    textureStore(material_color_output, vec2<i32>(id.xy), result.color);
 }
 
 fn dry_block_pixel(id: vec2<u32>, offset: vec2<u32>, result: MaterialOutput) -> MaterialOutput {

@@ -798,11 +798,11 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
-        let Some(composite) = renderer
+        let Some(composite) = renderer.scale_display.as_ref().map(|cache| cache.view()).or_else(|| renderer
             .live_display
             .as_ref()
             .map(|cache| cache.detail_view())
-            .or(renderer.composite_view.as_ref())
+            .or(renderer.composite_view.as_ref()))
         else {
             return Ok(());
         };
@@ -810,15 +810,15 @@ impl ViewportPresenter {
             .live_display
             .as_ref()
             .map_or(composite, |cache| &cache.coarse.view);
-        let next = renderer
+        let next = renderer.scale_display.as_ref().map(|cache| cache.next_view()).or_else(|| renderer
             .live_display
             .as_ref()
-            .and_then(|c| c.next_view())
+            .and_then(|c| c.next_view()))
             .unwrap_or(coarse);
-        let geometry = renderer
+        let geometry = renderer.scale_display.as_ref().map(|cache| &cache.geometry).unwrap_or_else(|| renderer
             .live_display
             .as_ref()
-            .map_or(&self.plain_display, |cache| &cache.geometry);
+            .map_or(&self.plain_display, |cache| &cache.geometry));
         let device = &renderer.device;
         let selection = renderer.display_selection.as_ref();
         let coverage = selection.map_or(&renderer.unclipped, |(_, buffer)| buffer);

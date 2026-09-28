@@ -12,6 +12,7 @@ const DISPLAY_JOBS_PER_SUBMISSION: usize = 256;
 mod sources;
 mod placement;
 mod bake;
+pub(crate) mod scale;
 
 /// Whether composition reached the layer it stops before.
 enum Flow {
@@ -139,6 +140,7 @@ pub(super) struct Scene {
 /// live composition, captures and recreated scenes. No canvas pixels retained.
 #[derive(Clone)]
 pub(super) struct Pipelines {
+    pub scale: scale::Pipelines,
     uniforms: wgpu::BindGroupLayout,
     layout: wgpu::BindGroupLayout,
     pub pipeline: [Deferred<wgpu::RenderPipeline>; 2],
@@ -1660,6 +1662,21 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
+        if let Some(mut cache) = r.scale_display.take() {
+            // Only one presentation model owns pixels. Retire intermediates
+            // from a previously supported effect/placement stack as it leaves
+            // the exact path; immutable pipeline recipes remain shared.
+            self.placement_mips.clear();
+            self.images.release_window_pixels();
+            self.image_window = None;
+            self.pool.clear();
+            self.used.clear();
+            self.display_source_tiles.release_pixels();
+            self.effects.retain(packet.layers);
+            let result = cache.render(self, r, packet, dirty, encoder);
+            r.scale_display = Some(cache);
+            return result;
+        }
         self.prepare_placement_mips(r, packet, encoder)?;
         if let Some(native) = &r.native_edit
             && let Some(plan) = windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(r, packet.layers, packet.document_extent)?)?
@@ -2328,6 +2345,7 @@ impl Pipelines {
             (output, inputs, pipeline)
         };
         Self {
+            scale: scale::Pipelines::new(device),
             source: sources::Pipelines::new(device, &uniforms),
             constant,
             uniforms,

@@ -13,13 +13,17 @@ type Engine = CanvasEngine<WgpuRasterizer>;
 const SIZE: [u32; 2] = [384, 256]; // Crosses raster tile boundaries.
 
 fn engine(project: &Project) -> (Engine, InputProducer<PenEvent>) {
+    engine_at_scale(project, 1.)
+}
+
+fn engine_at_scale(project: &Project, scale: f32) -> (Engine, InputProducer<PenEvent>) {
     let gpu = WgpuRasterizer::new_native_headless(project.document.color)
         .expect("physical GPU required");
     let (producer, consumer) = input_queue(64);
     let view = ViewState {
         width_px: SIZE[0],
         height_px: SIZE[1],
-        document_to_surface: Affine::IDENTITY.0,
+        document_to_surface: [scale, 0., 0., scale, 0., 0.],
         background_rgba_linear: [0.; 4],
     };
     let mut engine = CanvasEngine::new(
@@ -27,7 +31,7 @@ fn engine(project: &Project) -> (Engine, InputProducer<PenEvent>) {
         project.document.clone(),
         consumer,
         view,
-        ViewTransform::IDENTITY,
+        ViewTransform { surface_to_document: [1. / scale, 0., 0., 1. / scale, 0., 0.], ..ViewTransform::IDENTITY },
     )
     .unwrap();
     engine.render_frame_at(0).unwrap();
@@ -52,7 +56,7 @@ fn source_backed_save_reopen_preserves_original_and_edited_tiles() {
     let mut document = Document::new("retained16 source in sRGB8 working document", SIZE[0], SIZE[1]);
     document.layers[0].source = Some(source.clone());
     let project = Project { document };
-    let (mut live, mut input) = engine(&project);
+    let (mut live, mut input) = engine_at_scale(&project, 0.125);
     let original = image(&mut live, 0);
     draw(&mut live, &mut input, DefaultBrushPreset::GPen, [1., 0., 0., 0.5], 100., 1_000_000);
     let painted = image(&mut live, 100_000_000);
@@ -71,6 +75,10 @@ fn source_backed_save_reopen_preserves_original_and_edited_tiles() {
     live.redo().unwrap();
     let restored = image(&mut live, 300_000_000);
     assert_eq!(restored.iter().zip(&painted).enumerate().find(|(_, (a,b))| a != b), None);
+    // Exact paint is independent of the display level used while drawing.
+    let (mut fine, mut input) = engine(&project);
+    draw(&mut fine, &mut input, DefaultBrushPreset::GPen, [1., 0., 0., 0.5], 100., 1_000_000);
+    assert_eq!(image(&mut fine, 100_000_000), painted);
 }
 fn image(engine: &mut Engine, time: u64) -> Vec<u8> {
     engine.render_frame_at(time).unwrap();
@@ -93,6 +101,7 @@ fn draw(
     brush.diameter = 56.;
     brush.color_rgba_linear = color;
     engine.set_brush(brush).unwrap();
+    let scale = engine.view().document_to_surface[0];
     for i in 0..10 {
         let timestamp_ns = start + i * 8_000_000;
         input
@@ -102,8 +111,8 @@ fn draw(
                 timestamp_ns,
                 view_revision: 0,
                 surface_position: Point {
-                    x: 40. + i as f32 * 32.,
-                    y: y + (i as f32 * 0.8).sin() * 20.,
+                    x: (40. + i as f32 * 32.) * scale,
+                    y: (y + (i as f32 * 0.8).sin() * 20.) * scale,
                 },
                 pressure: 0.3 + i as f32 * 0.07,
                 tilt_radians: [0.2, -0.1],
@@ -204,4 +213,3 @@ fn preset_history(masked: bool) {
         before = expected;
     }
 }
-
