@@ -464,7 +464,7 @@ def sync_machine(machine):
             hashes[name] = hashlib.sha256(content).hexdigest()
     record = machine.directory / "synced.json"
     synced = json.loads(record.read_text()) if record.exists() else {}
-    full = not synced.keys() <= hashes.keys()
+    full = not synced or not synced.keys() <= hashes.keys()
     files = "".join(f"{name}\0" for name, digest in hashes.items() if full or synced.get(name) != digest)
     record.unlink(missing_ok=True)
     archive = subprocess.Popen(["tar", "--null", "--files-from=-", "--create", "--file=-"], cwd=ROOT,
