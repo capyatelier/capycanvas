@@ -12,6 +12,7 @@ fn operation(id: u64, affine: Affine, selection: Option<Selection>) -> LayerOper
         kind: LayerOperationKind::Transform(ImageTransform {
             map: TransformMap::Affine(affine),
             interpolation: Interpolation::Nearest,
+            ..Default::default()
         }),
     }
 }
@@ -166,6 +167,7 @@ fn bicubic_and_lanczos_transforms_clamp_overshoot_at_every_sample_depth() {
             transform: ImageTransform {
                 map: TransformMap::Affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])),
                 interpolation,
+                ..Default::default()
             },
         }))
         .unwrap();
@@ -203,6 +205,7 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
         transform: ImageTransform {
             map: TransformMap::Affine(affine),
             interpolation,
+            ..Default::default()
         },
     };
     let mut shown = Vec::new();
@@ -252,10 +255,10 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
     }
 }
 
-/// Previews of each map of a selection's `source` over paint and wetness
-/// match replaying it as an operation, cancelling restores the layer, and
-/// applying the last keeps its preview.
-fn live_previews_match_replay(maps: fn(Rect) -> Vec<TransformMap>) {
+/// Previews of each map of a selection's `source` over paint and wetness,
+/// cutting the source or keeping it, match replaying it as an operation,
+/// cancelling restores the layer, and applying the last keeps its preview.
+fn live_previews_match_replay(maps: fn(Rect) -> Vec<TransformMap>, keep_source: bool) {
     use layer_core::DefaultBrushPreset::*;
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -298,6 +301,7 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<TransformMap>) {
             preview.transform = ImageTransform {
                 map,
                 interpolation: Interpolation::Linear,
+                keep_source,
             };
             r.set_transform_preview(Some(&preview)).unwrap();
             frame(&mut r, layers, extent, &[], &[], false);
@@ -359,7 +363,16 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
             TransformMap::Projective(layer_core::Projective::rect_to_quad(source, quad.map(|[x, y]| Point { x, y })).unwrap())
         })
         .to_vec()
-    });
+    }, false);
+}
+
+#[test]
+fn moved_copies_that_keep_their_source_match_replay_and_commit_without_jump() {
+    live_previews_match_replay(|_| {
+        [[120., -40.], [-35., 16.], [250., 70.]]
+            .map(|[x, y]| TransformMap::Affine(Affine::translation(Point { x, y })))
+            .to_vec()
+    }, true);
 }
 
 #[test]
@@ -581,7 +594,7 @@ fn warps(source: Rect) -> Vec<layer_core::MeshMap> {
 fn live_warps_match_replay_cancel_exactly_and_commit_without_jump() {
     live_previews_match_replay(|source| {
         warps(source).into_iter().map(|mesh| TransformMap::Mesh(std::sync::Arc::new(mesh))).collect()
-    });
+    }, false);
 }
 
 #[test]
@@ -602,6 +615,7 @@ fn mask_warps_commit_and_replay_as_previewed() {
         let transform = ImageTransform {
             map: TransformMap::Mesh(std::sync::Arc::new(mesh)),
             interpolation: Interpolation::Bicubic,
+            ..Default::default()
         };
         r.set_transform_preview(Some(&layer_render::TransformPreview {
             transaction: 1,

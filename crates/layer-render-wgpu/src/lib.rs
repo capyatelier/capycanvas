@@ -886,6 +886,8 @@ pub struct WgpuRasterizer {
     /// The layer a transaction that began may move, and whether what its
     /// drags need is still being prepared.
     moving_hint: Option<LayerId>,
+    /// The layer and the selection of it a Move drag may move next.
+    moving_pixels: Option<(LayerId, layer_core::Selection)>,
     preparing_moving: bool,
     /// A warp preview waits, showing the frame before it, until what draws
     /// meshes has compiled in the background.
@@ -1214,6 +1216,7 @@ impl WgpuRasterizer {
             placement_drag: None,
             placement_copy: None,
             moving_hint: None,
+            moving_pixels: None,
             preparing_moving: false,
             awaiting_meshes: false,
             preparation,
@@ -3376,6 +3379,14 @@ impl CanvasRenderer for WgpuRasterizer {
         }
         self.moving_hint = layer;
     }
+    fn prepare_moving_pixels(&mut self, pixels: Option<(LayerId, layer_core::Selection)>) {
+        if pixels.is_none()
+            && let Some(transforms) = &mut self.transforms
+        {
+            transforms.release_standby();
+        }
+        self.moving_pixels = pixels;
+    }
     fn has_pending_work(&self) -> bool {
         self.displayed_transform.is_some()
             || self.reducing
@@ -3704,6 +3715,9 @@ impl CanvasRenderer for WgpuRasterizer {
         } else {
             Vec::new()
         };
+        if !packet.dabs.is_empty() || !packet.dab_batches.is_empty() || !packet.restore_rasters.is_empty() || reset {
+            self.transforms.as_mut().unwrap().release_standby();
+        }
         // Restore both targets before allocating or painting new pages. Cancel
         // removes disposable preview pages, which must not swallow a new stroke.
         if self.transforms.as_ref().is_some_and(|t| t.has_preview())
@@ -4448,6 +4462,23 @@ impl CanvasRenderer for WgpuRasterizer {
                 let local = paint_transform::local_level(level, placement);
                 self.preparing_moving = !self.prepare_copy(&mut encoder, packet, moving, local)?;
             }
+            if let Some((index, above, _)) = stack {
+                self.preparing_moving |= !self.prepare_layers(&mut encoder, packet, (layer, level), index, above)?;
+            }
+        }
+        if let Some((layer, selection)) = &self.moving_pixels
+            && !placing_frame
+            && !display_rebuilt
+            && self.placement_drag.is_none()
+            && self.transform_preview.is_none()
+            && dirty.is_empty()
+            && let Some((level, _, stack)) = self.display_target(&packet, *layer)
+        {
+            let (layer, selection) = (*layer, selection.clone());
+            let mut transforms = self.transforms.take().expect("retained transform renderer");
+            let standby = transforms.prepare_standby(self, &mut encoder, packet.layers, layer, &selection, level);
+            self.transforms = Some(transforms);
+            self.preparing_moving |= standby?;
             if let Some((index, above, _)) = stack {
                 self.preparing_moving |= !self.prepare_layers(&mut encoder, packet, (layer, level), index, above)?;
             }

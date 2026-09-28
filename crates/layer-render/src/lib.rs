@@ -687,6 +687,10 @@ pub trait CanvasRenderer {
     /// renderer may prepare what drawing its drag needs while idle. None
     /// when the transaction ends.
     fn prepare_moving_layer(&mut self, _layer: Option<LayerId>) {}
+    /// The layer and the selection of it, in its own pixels, whose pixels a
+    /// Move drag may move next. The renderer may prepare that drag while
+    /// idle. None when no such drag is expected.
+    fn prepare_moving_pixels(&mut self, _pixels: Option<(LayerId, layer_core::Selection)>) {}
     /// Applied by the next submit. None restores the captured original before
     /// subsequent paint/operations. This performs no readback or blocking wait.
     fn set_transform_preview(

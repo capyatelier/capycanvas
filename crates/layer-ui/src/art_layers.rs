@@ -1719,7 +1719,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. }) {
             return self.ruler_pen(event, p);
         }
-        if self.layer_interaction.tool == LayerCanvasTool::Transform {
+        if self.layer_interaction.tool == LayerCanvasTool::Transform || self.operation.moving_pixels() {
             return self.transform_pen(event, p);
         }
         if self.layer_interaction.tool == LayerCanvasTool::Crop {
@@ -1730,21 +1730,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Ok(());
         }
+        if event.phase == PenPhase::Down && self.layer_interaction.tool == LayerCanvasTool::Move {
+            if let Some(reason) = self.move_refusal() {
+                self.notify(reason);
+                return Ok(());
+            }
+            if self.moves_selected_pixels() {
+                let keep_source = self.operation.leave_copy != self.interaction.modifiers.alt;
+                return self.begin_move_transform(p, keep_source);
+            }
+        }
         match event.phase {
             PenPhase::Down => {
                 self.layer_interaction.path.clear();
                 let doc = self.engine.document();
                 let layer = doc.layer(doc.active_layer).ok_or("Unknown layer")?;
-                let controls = LayerControls::for_layer(doc, layer);
                 match self.layer_interaction.tool {
-                    LayerCanvasTool::Move if !controls.move_layer => {
-                        self.notify(if layer.kind == LayerKind::Background {
-                            "The paper can't be moved"
-                        } else {
-                            "The active layer is locked"
-                        });
-                        return Ok(());
-                    }
                     LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. } | LayerCanvasTool::Figure { .. }
                         if doc.drawing_content().is_none() && self.selection_masks.target().is_none() =>
                     {

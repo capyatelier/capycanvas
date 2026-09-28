@@ -344,7 +344,8 @@ impl PixelTransform {
                 filter_flags(transform.interpolation)
                     + 2. * f32::from(job.unmoved || identity)
                     + 4. * f32::from(self.placement)
-                    + f32::from(part as u8),
+                    + f32::from(part as u8)
+                    + 256. * f32::from(transform.keep_source),
                 background,
                 display.map(|(level, _)| level),
                 job.texels.map(|v| v as f32),

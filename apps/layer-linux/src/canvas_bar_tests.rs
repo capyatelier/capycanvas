@@ -1035,3 +1035,101 @@ fn native_canvas_bar_refine() {
         until(|| selection(&w).as_ref() == Some(&outline), "one Undo restores the outline");
     }
 }
+
+/// The document pixel at `p`, as the readback's bytes.
+fn document_pixel(image: &layer_render::ReadbackImage, p: [f32; 2]) -> [u8; 4] {
+    let at = p[1] as usize * image.stride as usize + p[0] as usize * 4;
+    image.bytes[at..at + 4].try_into().unwrap()
+}
+
+/// Journey 26: select, then drag the selected pixels with Move, with and
+/// without Leave Copy, and with Alt held at the press.
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_move_drags_selected_pixels --tablet"]
+fn native_move_drags_selected_pixels() {
+    let app = native_test_app("art.capycanvas.MoveSelection");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    w.window.maximize();
+    pump(900);
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
+    let paint = document(&w).active_layer;
+    let context = glib::MainContext::default();
+    let mut readback = 9700;
+    let mut pixels = |w: &Rc<Workspace>| {
+        readback += 1;
+        context.block_on(read_canvas_pixels(w, readback)).unwrap()
+    };
+    let mut native = remote_input();
+    let runs = [Device::Mouse, Device::Touch, Device::Pen]
+        .into_iter()
+        .flat_map(|device| [(device, false, false), (device, true, false)])
+        .chain([(Device::Mouse, false, true)]);
+    for (device, leave_copy, alt) in runs {
+        filled_selection(&w, paint.0);
+        w.dispatch(UiAction::Invoke { command: CommandId::Move });
+        until(
+            || {
+                let offered = state(&w).canvas_bar.is_some_and(|b| {
+                    b.items.iter().any(|i| matches!(&i.option, layer_ui::ToolOption::Action { state, .. } if state.id == CommandId::MoveLeaveCopy))
+                });
+                offered && shown(&w)
+            },
+            "Move offers Leave Copy on the selection bar",
+        );
+        pump(300);
+        let leave = |w: &Workspace| state(w).commands.iter().any(|c| c.id == CommandId::MoveLeaveCopy && c.selected);
+        if leave(&w) != leave_copy {
+            tap_bar(&w, &mut native, device, CommandId::MoveLeaveCopy, || leave(&w) == leave_copy, "Leave Copy toggles on the bar");
+        }
+        if let (Device::Mouse, true) = (device, leave_copy) {
+            let dir = "../../artifacts/move-selection";
+            std::fs::create_dir_all(dir).unwrap();
+            for theme in [layer_ui::Theme::Light, layer_ui::Theme::Dark] {
+                w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+                pump(300);
+                capture_reference(&w, &format!("{dir}/leave-copy-{theme:?}.png"), 1.);
+            }
+        }
+        let selection = document(&w).selection.clone().unwrap();
+        let bounds = selection.coverage_bounds();
+        let kept = [bounds.min.x + 6., bounds.min.y + 6.];
+        let original = pixels(&w);
+        let from = canvas_point(&w, [(bounds.min.x + bounds.max.x) * 0.5, (bounds.min.y + bounds.max.y) * 0.5]);
+        if alt {
+            native.perform(json!([{"key": 0xffe9, "down": true}]));
+        }
+        drag(&mut native, device, from, [from[0] + 220., from[1] + 160.]);
+        if alt {
+            native.perform(json!([{"key": 0xffe9, "down": false}]));
+        }
+        let moved = until_some(
+            || {
+                let doc = document(&w);
+                let placed = doc.selection.as_ref()?.affine;
+                (placed != selection.affine).then_some(placed)
+            },
+            &format!("{device:?}: the selection follows the dragged pixels"),
+        );
+        let [_, _, _, _, dx, dy] = moved.0;
+        assert!(dx > 50. && dy > 30. && dx.fract() == 0. && dy.fract() == 0., "{device:?}: whole pixels, {dx} {dy}");
+        assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Move, "Move stays the tool");
+        until(|| bar_kind(&w) == Some(layer_ui::CanvasBarKind::Selection) && shown(&w), "the selection bar returns beside it");
+        let after = pixels(&w);
+        let copy = [kept[0] + dx, kept[1] + dy];
+        assert_eq!(document_pixel(&after, copy), document_pixel(&original, kept), "{device:?}: the pixels arrive");
+        let keeps = leave_copy != alt;
+        assert_eq!(
+            document_pixel(&after, kept) == document_pixel(&original, kept),
+            keeps,
+            "{device:?} Leave Copy {leave_copy} Alt {alt}: the original stays only with a copy"
+        );
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        until(|| document(&w).selection.as_ref() == Some(&selection), &format!("{device:?}: one Undo restores the selection"));
+        let undone = pixels(&w);
+        for p in [kept, copy] {
+            assert_eq!(document_pixel(&undone, p), document_pixel(&original, p), "{device:?}: and the pixels");
+        }
+    }
+}

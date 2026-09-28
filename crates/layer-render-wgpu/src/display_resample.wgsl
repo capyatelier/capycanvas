@@ -4,7 +4,8 @@
 // backdrop. Rows x, y and w map a texel center to homogeneous texel
 // coordinates of the moved copy, kept_x, kept_y and kept_w to those of the
 // kept copy, and clip_x and clip_y to layer pixels, of which the layer keeps
-// only those inside its extent.
+// only those inside its extent. A transform that keeps its source (options.w)
+// also leaves the moved pixels in place.
 struct Resample {
     x:vec4<f32>, y:vec4<f32>, w:vec4<f32>,
     kept_x:vec4<f32>, kept_y:vec4<f32>, kept_w:vec4<f32>,
@@ -38,8 +39,11 @@ fn bilinear_at(image:texture_2d<f32>,q:vec2<f32>)->vec4<f32> {
 // Nothing of the layer lies outside its extent.
 fn store(t:vec2<u32>,moved_color:vec4<f32>,h:vec3<f32>,within:bool) {
     var color=moved_color;
-    if within && resample.options.y!=0. {
-        color+=bilinear(kept,resample.kept_x,resample.kept_y,resample.kept_w,h)*(1.-color.a);
+    if within {
+        var under=vec4(0.);
+        if resample.options.y!=0. {under=bilinear(kept,resample.kept_x,resample.kept_y,resample.kept_w,h);}
+        if resample.options.w!=0. {under+=bilinear(moved,resample.kept_x,resample.kept_y,resample.kept_w,h);}
+        color+=under*(1.-color.a);
     }
     let layer=color*resample.options.x;
     textureStore(level,vec2<i32>(t),layer+resample.backdrop*(1.-layer.a));

@@ -616,7 +616,7 @@ impl Document {
                     .then(Affine::translation(shift(Point::default(), world)));
                 let content = content_bounds(old, id)?;
                 let existing = raster_data(self.target_raster(id).ok_or(DocumentError::MissingLayer(id))?)?;
-                let transform = ImageTransform { map: TransformMap::Affine(map), interpolation: geometry.interpolation };
+                let transform = ImageTransform { map: TransformMap::Affine(map), interpolation: geometry.interpolation, ..Default::default() };
                 let written: BTreeSet<[u32; 2]> = if content.is_empty() {
                     existing.tiles.keys().map(|k| k.coordinate).collect()
                 } else {

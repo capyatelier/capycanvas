@@ -300,9 +300,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         Some(Plan {
             kind: CanvasBarKind::Selection,
             label: None,
-            items: vec![
+            items: [
                 command(CommandId::Deselect),
                 command(CommandId::InvertSelection),
+            ]
+            .into_iter()
+            .chain((tool == LayerCanvasTool::Move).then_some(command(CommandId::MoveLeaveCopy)))
+            .chain([
                 PlanItem::Menu(CanvasBarMenu::CopyToLayer),
                 command(CommandId::ScaleRotate),
                 PlanItem::Menu(CanvasBarMenu::Refine),
@@ -313,7 +317,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 command(CommandId::CropCanvasToSelection),
                 command(CommandId::QuickMask),
                 command(CommandId::SaveSelectionLayer),
-            ],
+            ])
+            .collect(),
             completion: Vec::new(),
             placement: edge.then_some(CanvasBarPlacement::BottomEdge),
         })
@@ -498,7 +503,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             visible,
             kind: plan.kind,
             toolbar: ToolbarContext { generation: 0, ..self.state.toolbar_context() },
-            transaction: self.operation.serial(),
+            transaction: if self.operation.active() { self.operation.serial() } else { 0 },
             guide: self.rulers.selected.filter(|_| plan.kind == CanvasBarKind::Guide),
             label: plan.label.clone(),
             anchor: self.canvas_bar_anchor(plan.kind),

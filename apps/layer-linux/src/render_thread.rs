@@ -92,6 +92,7 @@ enum Command {
     DiscardColor(u64, mpsc::Sender<()>),
     TransformPreview(Option<layer_render::TransformPreview>),
     MovingLayer(Option<layer_core::LayerId>),
+    MovingPixels(Option<(layer_core::LayerId, layer_core::Selection)>),
     Startup(
         u64,
         Box<(layer_core::Document, layer_core::BrushSnapshot, bool)>,
@@ -164,6 +165,7 @@ pub struct RenderWorker {
     hdr_view: Option<(Option<layer_core::color::hdr::SdrRendition>, bool)>,
     transform_preview: Option<layer_render::TransformPreview>,
     moving_layer: Option<layer_core::LayerId>,
+    moving_pixels: Option<(layer_core::LayerId, layer_core::Selection)>,
     initialized: bool,
     pub(crate) display_headroom: f32,
     pub(crate) display_encoding: Option<layer_render_wgpu::SdrSurfaceColor>,
@@ -356,6 +358,7 @@ impl RenderWorker {
             hdr_view: None,
             transform_preview: None,
             moving_layer: None,
+            moving_pixels: None,
             initialized: false,
             display_headroom: 1.,
             display_encoding: None,
@@ -613,6 +616,11 @@ impl CanvasRenderer for RenderWorker {
     fn prepare_moving_layer(&mut self, layer: Option<layer_core::LayerId>) {
         if self.moving_layer != layer && self.send(Command::MovingLayer(layer)).is_ok() {
             self.moving_layer = layer;
+        }
+    }
+    fn prepare_moving_pixels(&mut self, pixels: Option<(layer_core::LayerId, layer_core::Selection)>) {
+        if self.moving_pixels != pixels && self.send(Command::MovingPixels(pixels.clone())).is_ok() {
+            self.moving_pixels = pixels;
         }
     }
     fn paint_selection(&mut self, update: &layer_render::SelectionPaint) -> Result<bool,Self::Error> {
@@ -1182,6 +1190,7 @@ impl Worker {
                     .set_transform_preview(preview.as_ref())
                     .map_err(error)?,
                 Command::MovingLayer(layer) => self.renderer.prepare_moving_layer(layer),
+                Command::MovingPixels(pixels) => self.renderer.prepare_moving_pixels(pixels),
                 Command::Startup(generation, inputs) => {
                     let (document, brush, transform) = *inputs;
                     startup_input = Some((generation, document, brush, transform));

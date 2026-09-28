@@ -167,8 +167,18 @@ under its placement. It is reduced a page at a time, decoding a photo's
 original tiles as it reaches them. When the selection keeps some pixels in
 place, those are reduced apart from the pixels it moves: a page the selection
 covers or leaves out entirely is reduced whole, and one its edge crosses is
-drawn exactly. A whole placed photo is copied instead from its placement
-preview when that preview is current and holds the level.
+drawn exactly. A transform that keeps its source, as Move's Leave Copy does,
+cuts nothing: its `keep_source` flag makes
+[`pixel_transform.wgsl`](../../crates/layer-render-wgpu/src/pixel_transform.wgsl)
+leave the original under the moved pixels, and drag frames add the moved
+pixels back to the kept ones in place. A whole placed photo is copied instead
+from its placement preview when that preview is current and holds the level.
+Move opens its transaction at the press, so while Move is active over a
+selection the session names the layer and selection a press would move
+(`prepare_moving_pixels`), and idle frames capture and reduce them ahead of the
+drag; its transaction adopts them when the layer's pixels and the selection are
+unchanged, so its first frames draw at once. Paint, a restore or leaving Move
+drops them.
 Each drag frame
 [resamples](../../crates/layer-render-wgpu/src/paint_transform/resample.rs) the
 copy with one bilinear sample per texel, the moved pixels through the transform

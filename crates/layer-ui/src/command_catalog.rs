@@ -400,6 +400,9 @@ fn entry(
         UiAction::Invoke {
             command: CommandId::TransformSelectionOutline,
         } => "transform selection marquee scale rotate",
+        UiAction::Invoke {
+            command: CommandId::MoveLeaveCopy,
+        } => "duplicate keep original move selection alt",
         _ => "",
     };
     Entry {
@@ -499,6 +502,7 @@ fn action_description(action: &UiAction) -> &'static str {
             FlipImageHorizontal | FlipImageVertical => "Mirror the whole image, with its selection and guides. Pixels move without resampling.",
             Trim => "Shrink the canvas to the visible pixels, removing transparent edges. Pixels outside stay on their layers, hidden.",
             RevealAll => "Grow the canvas to show every layer's pixels, including hidden layers and pixels outside the canvas.",
+            MoveLeaveCopy => "When Move drags selected pixels, place a copy and keep the original in place. Holding Alt as the drag starts does the opposite.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",

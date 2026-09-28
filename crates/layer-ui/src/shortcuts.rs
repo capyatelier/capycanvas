@@ -563,7 +563,7 @@ fn command_section(command: CommandId) -> &'static str {
         C::ApplyTransform | C::CancelTransform | C::PlacementOriginalSize | C::ResetTransform
         | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
-        | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent => "Transform",
+        | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent | C::MoveLeaveCopy => "Transform",
         command if CommandId::TOOLS.contains(&command) => "Tools",
         C::TonalSelect | C::QuickMask | C::ReturnToArtwork | C::NewSelectionLayer | C::SaveSelectionLayer | C::Reselect
         | C::SelectionOutline | C::MaskOverlay | C::MaskOverlayProtected | C::ResetMaskColors | C::SwapMaskColors

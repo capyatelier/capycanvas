@@ -203,7 +203,7 @@ fn drag(r: &mut WgpuRasterizer, work: &Workload<'_>, cases: &[Case]) -> f64 {
             moving: true,
             layer: work.layer,
             selection: Some(selection.clone()),
-            transform: ImageTransform { map: map(0.), interpolation },
+            transform: ImageTransform { map: map(0.), interpolation, ..Default::default() },
         };
         if work.native {
             let still = layer_render::TransformPreview {

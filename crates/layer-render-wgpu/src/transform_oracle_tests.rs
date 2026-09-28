@@ -252,9 +252,11 @@ impl Oracle {
             })
             .collect()
     }
-    fn composed(&self, x: u32, y: u32, moved: [f64; 4]) -> [f64; 4] {
+    /// The moved pixel over the original, cut where the selection moved it
+    /// unless the transform keeps its source.
+    fn composed(&self, x: u32, y: u32, moved: [f64; 4], keep_source: bool) -> [f64; 4] {
         let base = self.color(x as i32, y as i32);
-        let m = self.coverage(x as i32, y as i32);
+        let m = if keep_source { 0. } else { self.coverage(x as i32, y as i32) };
         std::array::from_fn(|k| moved[k] + base[k] * (1. - m) * (1. - moved[3]))
     }
 }
@@ -345,6 +347,7 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
                     transform: ImageTransform {
                         map: map.clone(),
                         interpolation,
+                        ..Default::default()
                     },
                 };
                 r.set_transform_preview(Some(&preview)).unwrap();
@@ -362,7 +365,7 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
                     let expected: Vec<_> = oracle
                         .moved(h, interpolation, x, y)
                         .into_iter()
-                        .map(|moved| oracle.composed(x, y, moved))
+                        .map(|moved| oracle.composed(x, y, moved, false))
                         .collect();
                     assert!(
                         expected.iter().any(|e| e
@@ -370,6 +373,61 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
                             .zip(actual)
                             .all(|(e, a)| (e - f64::from(a)).abs() <= 2e-4 + e.abs() * 2e-5)),
                         "mode {mode} {interpolation:?} {map:?} at {x},{y}: {actual:?} not in {expected:?}"
+                    );
+                }
+                r.set_transform_preview(None).unwrap();
+                frame(&mut r, &layer, false);
+            }
+        }
+    }
+}
+
+#[test]
+fn transforms_that_keep_their_source_place_the_moved_copy_over_the_original() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut layer = Layer::paint(LayerId(1), "oracle");
+    layer.source = Some(source_image(straight));
+    frame(&mut r, &layer, true);
+    let maps = [
+        Affine::translation(Point { x: 37., y: -12. }),
+        Affine::translation(Point { x: -150., y: 90. }),
+        Affine::around(Point { x: 150., y: 110. }, [1.3, 0.8], 0.4, Point { x: 20.5, y: -6.25 }),
+    ];
+    let pixels = selection_pixels();
+    let mut transaction = 0;
+    for mode in 0..3 {
+        let oracle = Oracle { mode };
+        let selection = (mode != 0).then(|| Selection { inverted: mode == 2, ..Selection::pixels(pixels.clone()) });
+        for interpolation in [Interpolation::Nearest, Interpolation::Bicubic] {
+            for affine in maps {
+                transaction += 1;
+                let transform = ImageTransform {
+                    map: TransformMap::Affine(affine),
+                    interpolation,
+                    keep_source: true,
+                };
+                r.set_transform_preview(Some(&layer_render::TransformPreview {
+                    transaction,
+                    moving: false,
+                    layer: layer.id,
+                    selection: selection.clone(),
+                    transform,
+                }))
+                .unwrap();
+                frame(&mut r, &layer, false);
+                let h = Projective::from_affine(affine).0.map(f64::from);
+                for ([x, y], actual) in pages(&r) {
+                    let expected: Vec<_> = oracle
+                        .moved(h, interpolation, x, y)
+                        .into_iter()
+                        .map(|moved| oracle.composed(x, y, moved, true))
+                        .collect();
+                    assert!(
+                        expected.iter().any(|e| e
+                            .iter()
+                            .zip(actual)
+                            .all(|(e, a)| (e - f64::from(a)).abs() <= 2e-4 + e.abs() * 2e-5)),
+                        "mode {mode} {interpolation:?} {affine:?} at {x},{y}: {actual:?} not in {expected:?}"
                     );
                 }
                 r.set_transform_preview(None).unwrap();
@@ -414,6 +472,7 @@ fn minified_native_transforms_average_the_pixel_footprint() {
                         Point { x: 1.3, y: 0.7 },
                     )),
                     interpolation,
+                    ..Default::default()
                 },
             }))
             .unwrap();
@@ -449,6 +508,7 @@ fn bicubic_and_lanczos_mask_transforms_keep_scalar_coverage_within_the_unit_inte
             transform: ImageTransform {
                 map: TransformMap::Affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])),
                 interpolation,
+                ..Default::default()
             },
         }))
         .unwrap();
@@ -649,6 +709,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
                     transform: ImageTransform {
                         map: TransformMap::Mesh(Arc::new(mesh.clone())),
                         interpolation,
+                        ..Default::default()
                     },
                 }))
                 .unwrap();
@@ -660,7 +721,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
                     let expected: Vec<_> = positions
                         .iter()
                         .flat_map(|map| oracle.meshed(map, interpolation, *x, *y))
-                        .map(|moved| oracle.composed(*x, *y, moved))
+                        .map(|moved| oracle.composed(*x, *y, moved, false))
                         .collect();
                     if !expected.iter().any(|e| {
                         e.iter()
@@ -713,6 +774,7 @@ fn mask_warps_seeded_from_an_affine_match_the_affine() {
                     transform: ImageTransform {
                         map: map.clone(),
                         interpolation,
+                        ..Default::default()
                     },
                 }))
                 .unwrap();
@@ -813,6 +875,7 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     let transform = ImageTransform {
         map: TransformMap::Affine(EIGHTH),
         interpolation: Interpolation::Bicubic,
+        ..Default::default()
     };
     let reduced = |r: &WgpuRasterizer| {
         let page = r.paint_layers[0].pages.iter().find(|p| p.coordinate == [0, 0]).unwrap();

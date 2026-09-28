@@ -30,6 +30,7 @@ import {checkPhotoEdit} from "./photo-edit-journey.test.mjs";
 import {checkCanvasSize} from "./canvas-size-journey.test.mjs";
 import {checkCrop} from "./crop-journey.test.mjs";
 import {checkImageCommands} from "./image-commands-journey.test.mjs";
+import {checkMoveSelection} from "./move-selection-journey.test.mjs";
 import {checkPenRendering} from "./pen-rendering.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 // Run against an already forwarded Android Chrome endpoint. No profile reset,
@@ -174,6 +175,8 @@ try {
     await checkCrop({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--image-commands")) {
     await checkImageCommands({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--move-selection")) {
+    await checkMoveSelection({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--canvas-bar")) {
     await checkCanvasBar({call,evaluate,settle,device:true});
     assert.deepEqual(errors,[]);

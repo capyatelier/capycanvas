@@ -309,7 +309,8 @@ control; the native hosts' lazy `canvas_bar_reason` query returns the same text.
 
 Canvas gestures that would change nothing say why through `UiState.notice`,
 published under `regions::HOST`:
-- Move on a locked layer or the paper;
+- Move on a locked layer or the paper, and Move over a selection on a group,
+  an effect layer or a layer with no pixels;
 - Fill, Gradient, Figure and Lasso Fill with no paint content to act on;
 - brushes with no paint target, and erasing under alpha lock;
 - a layer-mask stroke that paints dry coverage instead of the brush's wet or

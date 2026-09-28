@@ -68,12 +68,15 @@ impl From<Projective> for TransformMap {
 pub struct ImageTransform {
     pub map: TransformMap,
     pub interpolation: Interpolation,
+    /// Place a copy of the selected pixels and leave the originals in place.
+    #[serde(default)]
+    pub keep_source: bool,
 }
 impl ImageTransform {
     pub fn affine(affine: Affine) -> Self {
         Self {
             map: TransformMap::Affine(affine),
-            interpolation: Interpolation::default(),
+            ..Default::default()
         }
     }
     pub fn as_affine(&self) -> Option<Affine> {
@@ -115,10 +118,7 @@ impl ImageTransform {
                 ..mesh.post(to)
             })),
         };
-        Some(Self {
-            map,
-            interpolation: self.interpolation,
-        })
+        Some(Self { map, interpolation: self.interpolation, keep_source: self.keep_source })
     }
     /// Bounds of the mapped source, without interpolation support. Unbounded
     /// when part of the source has no image.
@@ -140,13 +140,15 @@ impl ImageTransform {
         let [cut, placed] = self.affected_regions(source);
         cut.union(placed)
     }
-    /// Keep distant cut/placement regions separate for sparse allocation.
+    /// Keep distant cut/placement regions separate for sparse allocation. A
+    /// transform that keeps its source cuts nothing.
     pub fn affected_regions(&self, source: Rect) -> [Rect; 2] {
         if source.is_empty() || self.is_identity() {
             return [Rect::EMPTY; 2];
         }
         let support = source.outset(self.interpolation.support() as f32);
-        [source, self.forward_bounds(support)]
+        let cut = if self.keep_source { Rect::EMPTY } else { source };
+        [cut, self.forward_bounds(support)]
     }
 }
 
@@ -265,6 +267,7 @@ pub(crate) mod tests {
         let mut transform = ImageTransform {
             map: TransformMap::Affine(Affine([4., 0., 0., 2., 300., 0.])),
             interpolation: Interpolation::Nearest,
+            ..Default::default()
         };
         let [cut, moved] = transform.affected_regions(source);
         assert_eq!(cut, source);
@@ -276,6 +279,9 @@ pub(crate) mod tests {
             Rect::EMPTY
         );
         assert_eq!(transform.affected_bounds(Rect::EMPTY), Rect::EMPTY);
+        transform.keep_source = true;
+        assert_eq!(transform.affected_regions(source), [Rect::EMPTY, rect(336., 38., 424., 82.)]);
+        assert!(transform.conjugate(Affine::translation(Point { x: 3., y: 4. })).unwrap().keep_source);
     }
     #[test]
     fn every_map_kind_validates_conjugates_bounds_and_carries_selections() {
@@ -300,6 +306,7 @@ pub(crate) mod tests {
             let transform = ImageTransform {
                 map: map.clone(),
                 interpolation: Interpolation::Bicubic,
+                ..Default::default()
             };
             assert!(transform.validate().is_ok() && !transform.is_identity());
             let bounds = transform.forward_bounds(source).outset(1e-3);
@@ -346,6 +353,7 @@ pub(crate) mod tests {
         let mut transform = ImageTransform {
             map: TransformMap::Projective(Projective::rect_to_quad(source, quad).unwrap()),
             interpolation: Interpolation::Nearest,
+            ..Default::default()
         };
         let [cut, moved] = transform.affected_regions(source);
         assert_eq!(cut, source);

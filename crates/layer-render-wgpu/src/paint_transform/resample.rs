@@ -84,8 +84,9 @@ impl Reduced {
     /// Draw `texels` of the display `level` from this layer. `moved` maps
     /// reduced layer texels of the pixels that move to display texels, or
     /// with a warp mesh `positions` holds them for each texel, and `kept`
-    /// maps those of the pixels kept in place. `clip` maps display texels to
-    /// layer pixels, which the layer keeps within `extent`.
+    /// maps those of the pixels kept in place, which include the moved pixels
+    /// too when it keeps its source. `clip` maps display texels to layer
+    /// pixels, which the layer keeps within `extent`.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
@@ -117,7 +118,7 @@ impl Reduced {
         let options = display
             .backdrop
             .into_iter()
-            .chain([display.opacity, f32::from(u8::from(self.kept.is_some())), f32::from(u8::from(positions.is_some())), 0.]);
+            .chain([display.opacity, f32::from(u8::from(self.kept.is_some())), f32::from(u8::from(positions.is_some())), f32::from(u8::from(kept.keep_source))]);
         for (dst, value) in values[160..].chunks_exact_mut(4).zip(options) {
             dst.copy_from_slice(&value.to_le_bytes());
         }

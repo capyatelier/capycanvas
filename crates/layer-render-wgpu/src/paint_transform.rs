@@ -76,7 +76,9 @@ impl PaintTransforms {
         else {
             return Vec::new();
         };
-        self.discard_preview();
+        if !matches.is_empty() {
+            self.discard_preview();
+        }
         matches
     }
     pub fn cancel_preview(
@@ -98,9 +100,10 @@ impl PaintTransforms {
         layers: &[Layer],
     ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
         let companion = next.companion(layers);
-        let mut damage = self.0[0].update_preview(r, encoder, next, r.target_extent(next.layer))?;
+        let layer = layers.iter().find(|l| l.id == next.layer);
+        let mut damage = self.0[0].update_preview(r, encoder, next, layer, r.target_extent(next.layer))?;
         if let Some(companion) = companion {
-            damage.extend(self.0[1].update_preview(r, encoder, &companion, r.target_extent(companion.layer))?);
+            damage.extend(self.0[1].update_preview(r, encoder, &companion, None, r.target_extent(companion.layer))?);
         } else {
             damage.extend(self.0[1].cancel_preview(r, encoder)?);
         }
@@ -124,6 +127,35 @@ impl PaintTransforms {
         let layer = layers.iter().find(|l| l.id == next.layer);
         let extent = r.target_extent(next.layer);
         self.0[0].prepare_reduced(r, encoder, next, layer, extent, local, spares)
+    }
+    /// Capture `layer` and reduce it to display `level` while no transform
+    /// is open, as the transaction of a Move drag of its `selection`, in
+    /// layer pixels, would. That transaction adopts them, so its first drag
+    /// frames draw at once. Returns whether pages remain to reduce.
+    pub fn prepare_standby(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        layers: &[Layer],
+        layer: LayerId,
+        selection: &layer_core::Selection,
+        level: u32,
+    ) -> Result<bool, GpuRasterError> {
+        let Some(stored) = layers.iter().find(|l| l.id == layer) else {
+            return Ok(false);
+        };
+        let local = local_level(level, layer_core::target_transform(layers, layer));
+        let extent = r.target_extent(layer);
+        self.0[0].prepare_standby(r, encoder, stored, selection, extent, local)
+    }
+    /// Drop what was captured ahead of a Move drag, before paint or a
+    /// restore rewrites the pages it captured.
+    pub fn release_standby(&mut self) {
+        for t in &mut self.0 {
+            if t.preview.is_none() && t.standby.is_some() {
+                t.release_snapshot();
+            }
+        }
     }
     /// Whether `next`'s layer, captured by this transaction, still has to be
     /// reduced before its drag frames.
@@ -193,6 +225,9 @@ struct ImageTransformState {
     reduced: Option<resample::Reduced>,
     spares: PreviewPages,
     atlases: [Option<Atlas>; 2],
+    /// What the sources and reduced copy were captured for while no
+    /// transform was open.
+    standby: Option<Standby>,
     /// Mesh positions for each window of pages a warp draws.
     positions: mesh::Positions,
     /// Mesh positions for the display texels a moving warp resamples.
@@ -201,6 +236,38 @@ struct ImageTransformState {
     /// tessellated within, if any, and its geometry.
     mesh: Option<(Arc<layer_core::MeshMap>, Option<f32>, Arc<mesh::MeshGeometry>)>,
 }
+
+/// A layer's pixels, and the selection of them a Move drag may move, that a
+/// capture and reduction made before the drag's transaction began.
+#[derive(PartialEq)]
+struct Standby {
+    layer: LayerId,
+    raster: u64,
+    source: Option<usize>,
+    selection: layer_core::Selection,
+}
+impl Standby {
+    fn of(layer: &Layer, selection: &layer_core::Selection) -> Self {
+        Self {
+            layer: layer.id,
+            raster: layer.raster.identity(),
+            source: layer.source.as_ref().map(|s| Arc::as_ptr(s) as usize),
+            selection: selection.clone(),
+        }
+    }
+    /// The still preview of the transaction it is captured for.
+    fn preview(&self) -> layer_render::TransformPreview {
+        layer_render::TransformPreview {
+            transaction: STANDBY,
+            moving: false,
+            layer: self.layer,
+            selection: Some(self.selection.clone()),
+            transform: Default::default(),
+        }
+    }
+}
+/// The transaction a standby capture is made for, which no transform uses.
+const STANDBY: u64 = u64::MAX;
 
 /// Time a still frame spends allocating the spare pages a preview settles
 /// into.
@@ -278,7 +345,7 @@ pub(crate) fn resample_map(
         .into_iter()
         .try_fold(scale((1u32 << local) as f32), layer_core::Projective::then)
         .ok_or(GpuRasterError::InvalidTransform("Transform must be finite and invertible"))?;
-    Ok(layer_core::ImageTransform { map: map.into(), interpolation: layer_core::Interpolation::Linear })
+    Ok(layer_core::ImageTransform { map: map.into(), interpolation: layer_core::Interpolation::Linear, ..Default::default() })
 }
 
 /// Taps per axis a preview's pages average over a minified pixel: the exact
@@ -444,6 +511,7 @@ impl ImageTransformState {
             displayed: None,
             settling: None,
             reduced: None,
+            standby: None,
             spares: PreviewPages::default(),
             atlases: Default::default(),
             display_positions: positions.fork(),
@@ -1136,6 +1204,7 @@ impl ImageTransformState {
         self.sources = Default::default();
         self.atlases = Default::default();
         self.reduced = None;
+        self.standby = None;
         // Active copies follow the overwritten paint footprint. After the
         // transaction, retain only a small reusable pool, never every area
         // visited by unrelated transforms. Originals themselves stay tiled.
@@ -1236,6 +1305,7 @@ impl ImageTransformState {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         next: &layer_render::TransformPreview,
+        layer: Option<&Layer>,
         extent: [u32; 2],
     ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
         self.displayed = None;
@@ -1247,7 +1317,7 @@ impl ImageTransformState {
             p.transaction == next.transaction
                 && p.layer == next.layer
                 && p.selection == next.selection
-        });
+        }) || self.adopt_standby(next, layer);
         let mut damage = Vec::with_capacity(2);
         if !same_source {
             damage.extend(self.cancel_preview(r, encoder)?);
@@ -1284,10 +1354,53 @@ impl ImageTransformState {
             p.transaction == next.transaction
                 && p.layer == next.layer
                 && p.selection == next.selection
-        }) && self.background.is_none()
-            && self.sources[0].is_some()
-            && self.sources[1].is_none()
-            && self.sources[2].is_none()
+        }) && self.reducible()
+    }
+    /// Whether the captured originals are plain paint a display level can
+    /// draw.
+    fn reducible(&self) -> bool {
+        self.background.is_none() && self.sources[0].is_some() && self.sources[1].is_none() && self.sources[2].is_none()
+    }
+    /// Capture `layer` for a Move drag of its `selection`, unless that is
+    /// already captured, and reduce more of it to `level`. Returns whether
+    /// pages remain to reduce.
+    fn prepare_standby(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        layer: &Layer,
+        selection: &layer_core::Selection,
+        extent: [u32; 2],
+        level: u32,
+    ) -> Result<bool, GpuRasterError> {
+        if self.preview.is_some() {
+            return Ok(false);
+        }
+        let standby = Standby::of(layer, selection);
+        let next = standby.preview();
+        if self.standby.as_ref() != Some(&standby) {
+            self.capture_source(r, encoder, layer.id, next.selection.as_ref(), extent)?;
+            self.standby = Some(standby);
+        }
+        if !self.reducible() {
+            return Ok(false);
+        }
+        self.reduce(r, encoder, &next, Some(layer), extent, level)
+    }
+    /// Take over what was captured before `next`'s transaction began, when
+    /// that was `layer`'s pixels and `next`'s selection.
+    fn adopt_standby(&mut self, next: &layer_render::TransformPreview, layer: Option<&Layer>) -> bool {
+        let adopted = self.preview.is_none()
+            && layer.zip(next.selection.as_ref()).is_some_and(|(layer, selection)| {
+                self.standby.as_ref() == Some(&Standby::of(layer, selection))
+            });
+        if adopted {
+            self.standby = None;
+            if let Some(reduced) = &mut self.reduced {
+                reduced.transaction = next.transaction;
+            }
+        }
+        adopted
     }
     fn render_display(
         &mut self,
@@ -1347,7 +1460,10 @@ impl ImageTransformState {
                 ..display
             };
             let transform = resample_map(&next.transform, placement, local, display_level)?;
-            let kept = resample_map(&layer_core::ImageTransform::default(), placement, local, display_level)?;
+            let kept = layer_core::ImageTransform {
+                keep_source: next.transform.keep_source,
+                ..resample_map(&layer_core::ImageTransform::default(), placement, local, display_level)?
+            };
             let clip = layer_core::Affine([side as f32, 0., 0., side as f32, 0., 0.])
                 .then(placement.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid layer placement"))?);
             let positions = match &mesh {
@@ -1502,6 +1618,32 @@ impl ImageTransformState {
         if !self.displayable(next) {
             return Ok(false);
         }
+        if self.reduce(r, encoder, next, layer, extent, level)? {
+            return Ok(true);
+        }
+        self.color.reserve(&r.device, SETTLE_RECORDS);
+        let format = self.atlas_format(r, 0);
+        self.atlases[0].get_or_insert_with(|| Atlas::new(&r.device, format));
+        if spares && !next.moving && !self.displayed.as_ref().is_some_and(|(shown, _)| shown.moving) {
+            let pages = match &self.settling {
+                Some((_, _, remaining)) => remaining.clone(),
+                None => page_coordinates(self.sources[0].as_ref().unwrap().bounds).collect(),
+            };
+            self.reserve_spare_pages(r, next.layer, pages);
+        }
+        Ok(false)
+    }
+    /// Reduce more pages of the captured layer to `level` for `next`'s
+    /// transaction. Returns whether pages remain to reduce.
+    fn reduce(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        next: &layer_render::TransformPreview,
+        layer: Option<&Layer>,
+        extent: [u32; 2],
+        level: u32,
+    ) -> Result<bool, GpuRasterError> {
         if self
             .reduced
             .as_ref()
@@ -1543,20 +1685,7 @@ impl ImageTransformState {
             r.display_pipelines = Some(pipelines);
             reduced?;
         }
-        if !self.reduced.as_ref().unwrap().pending.is_empty() {
-            return Ok(true);
-        }
-        self.color.reserve(&r.device, SETTLE_RECORDS);
-        let format = self.atlas_format(r, 0);
-        self.atlases[0].get_or_insert_with(|| Atlas::new(&r.device, format));
-        if spares && !next.moving && !self.displayed.as_ref().is_some_and(|(shown, _)| shown.moving) {
-            let pages = match &self.settling {
-                Some((_, _, remaining)) => remaining.clone(),
-                None => page_coordinates(self.sources[0].as_ref().unwrap().bounds).collect(),
-            };
-            self.reserve_spare_pages(r, next.layer, pages);
-        }
-        Ok(false)
+        Ok(!self.reduced.as_ref().unwrap().pending.is_empty())
     }
     /// Reduce one page of the layer into the image of the pixels that move,
     /// or of those kept when the selection leaves the page out, or draw both

@@ -1305,7 +1305,7 @@ fn guide_bar_anchors_to_the_selected_guide_under_ruler_and_move() {
     assert!(actions(&s).is_empty(), "guide actions leave Tool Options under unrelated tools");
     invoke(&mut s, CommandId::Move);
     assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::Guide), "above the selection bar");
-    assert_eq!(actions(&s), [CommandId::ShowRulers, CommandId::SnapRulers, CommandId::DeleteRuler]);
+    assert_eq!(actions(&s), [CommandId::MoveLeaveCopy, CommandId::ShowRulers, CommandId::SnapRulers, CommandId::DeleteRuler]);
     let overlay = |s: &UiSession<Recorder>| {
         let mut segments = Vec::new();
         s.append_ruler_overlay(&mut segments);
@@ -1317,7 +1317,7 @@ fn guide_bar_anchors_to_the_selected_guide_under_ruler_and_move() {
     guide_pen(&mut s, 5, PenPhase::Up, [700., 150.]);
     assert!(s.rulers.selected.is_none(), "a Move click that misses the guide deselects it");
     assert_eq!(overlay(&s), 0);
-    assert!(actions(&s).is_empty());
+    assert_eq!(actions(&s), [CommandId::MoveLeaveCopy]);
     assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::Selection));
 
     invoke(&mut s, CommandId::Ruler);

@@ -1027,6 +1027,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::SelectionReference => "Sample layers marked as references",
 
                 CommandId::Move => "Move and transform artwork or guides",
+                CommandId::MoveLeaveCopy => "Keep the original in place when Move drags selected pixels; Alt does the opposite",
                 CommandId::ScaleRotate => "Scale or rotate the selected paint",
                 CommandId::ApplyTransform => "Keep the displayed transform",
                 CommandId::CancelTransform => "Restore the original artwork",

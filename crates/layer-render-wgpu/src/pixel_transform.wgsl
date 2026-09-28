@@ -27,6 +27,7 @@ const NO_VIEW=16u;
 const SELECTED=32u;
 const KEPT=64u;
 const LANCZOS=128u;
+const KEEP_SOURCE=256u;
 const UNCOVERED=-1e38;
 
 @vertex fn vertex_main(@builtin(vertex_index) index:u32)->@builtin(position) vec4<f32> {
@@ -223,11 +224,17 @@ fn transformed(world:vec2<f32>)->vec4<f32> {
     let dy=(transform.y.xy-s.y*transform.w.xy)/s.z;
     return filtered(world,s.xy,vec2(dx.x,dy.x),vec2(dx.y,dy.y));
 }
+// What the moved pixels leave of the original: all of it when the source is
+// kept, otherwise what lies outside the selection.
+fn remainder_selection(world:vec2<f32>)->f32 {
+    if (flags()&KEEP_SOURCE)!=0u {return 0.;}
+    return brush_selection_at(world);
+}
 // The moved pixel over what the selection leaves of the original.
 fn over_remainder(world:vec2<f32>,moved:vec4<f32>)->vec4<f32> {
     let p=vec2<i32>(floor(world));
     if (flags()&PLACEMENT)!=0u {return moved;}
-    let selection=brush_selection_at(world);
+    let selection=remainder_selection(world);
     if visibility {
         let remainder=mix(original(p).r,background(),selection);
         return vec4(moved.r+remainder*(1.-moved.a));
@@ -250,7 +257,7 @@ fn layer_pixel(world:vec2<f32>)->vec4<f32> {
 fn display_pixel(world:vec2<f32>)->vec4<f32> {
     let p=vec2<i32>(floor(world));
     if (flags()&(UNMOVED|SELECTED))==(UNMOVED|SELECTED) {return selected(p);}
-    if (flags()&(UNMOVED|KEPT))==(UNMOVED|KEPT) {return original(p)*(1.-brush_selection_at(world));}
+    if (flags()&(UNMOVED|KEPT))==(UNMOVED|KEPT) {return original(p)*(1.-remainder_selection(world));}
     return layer_pixel(world);
 }
 var<workgroup> display_pixels:array<vec4<f32>,256>;

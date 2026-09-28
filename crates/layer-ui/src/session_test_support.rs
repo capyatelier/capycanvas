@@ -28,6 +28,7 @@ pub(crate) struct Recorder {
     pub(crate) region_cancels: usize,
     pub(crate) transform: Option<layer_render::TransformPreview>,
     pub(crate) moving_layer: Option<layer_core::LayerId>,
+    pub(crate) moving_pixels: Option<(layer_core::LayerId, layer_core::Selection)>,
     pub(crate) overlay: Option<layer_render::SelectionOverlay>,
     pub(crate) filter_preview: Option<FilterPreviewRequest>,
     pub(crate) filter_preview_ready: Option<Result<FilterPreviewImage, BackendError>>,
@@ -63,6 +64,9 @@ impl CanvasRenderer for Recorder {
     }
     fn prepare_moving_layer(&mut self, layer: Option<layer_core::LayerId>) {
         self.moving_layer = layer;
+    }
+    fn prepare_moving_pixels(&mut self, pixels: Option<(layer_core::LayerId, layer_core::Selection)>) {
+        self.moving_pixels = pixels;
     }
     fn paint_selection(&mut self,update:&layer_render::SelectionPaint)->Result<bool,Self::Error> {
         self.selection_updates.push(update.clone()); Ok(!self.selection_wait)

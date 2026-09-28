@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2 and M3.1 to M3.3. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2 and M3.1 to M3.4. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -721,6 +721,7 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - Trim, Reveal All, and Fit Content on the crop bar, from CPU content bounds;
   - resampling drops the pages it empties;
   - exports of scaled-down photos no longer alias.
+- **M3.4** on GTK, Web and Android: with a selection, Move drags the selected pixels in one undo step; Leave Copy (or Alt) keeps the original.
 
 **Follow-ups**
 - **Erase right after a stroke:** an Erase on a raster that is still pending, or that holds watercolor or wet state, damages the whole layer so the layer settles. Clearing right after a stroke therefore rewrites every page. It is a still-frame cost.
@@ -745,6 +746,9 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **Android Tool Options numbers** that are not sliders need two taps: one shows the field, one focuses it.
 - **Image commands:** undo of a turn or resize does not re-centre the view, and the resampled-tile prediction can overcount by one row or column.
 - **Android Tool Set** lists Crop twice while the Crop tool is active.
+- **Moving a Select All selection:** releasing the drag on a 24 MP photo replays the commit in one still frame, long enough on tablets to delay a drag started right after. Spread the replay across frames.
+- **Leave Copy** is not remembered across sessions.
+- **Android `guideBarDeletesTheSelectedGuideAcrossDevices`** fails on the Huion (the bar sits at the bottom edge), also on `origin/main`.
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
 - **Apple and Windows:**
@@ -758,4 +762,4 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M3.4 to M3.7, and M4. M2 is complete. Record milestone completion in the research record's section 7.
+**Remaining:** M3.5 to M3.7, and M4. M2 is complete. Record milestone completion in the research record's section 7.

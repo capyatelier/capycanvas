@@ -516,6 +516,7 @@ command_ids! {
     RevealAll,
     CropFitContent,
     TransformLanczos,
+    MoveLeaveCopy,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -551,6 +552,7 @@ impl CommandId {
                 | Self::ShowRulers
                 | Self::SnapRulers
                 | Self::LayerMaskEnabled
+                | Self::MoveLeaveCopy
                 | Self::PreviewSdr
                 | Self::SoftProof
                 | Self::GamutWarning
@@ -722,6 +724,7 @@ impl CommandId {
             Self::RevealAll => "reveal-all",
             Self::CropFitContent => "fit-content",
             Self::TransformLanczos => "lanczos",
+            Self::MoveLeaveCopy => "leave-copy",
         })
     }
     pub const TOOLS: [Self; 27] = [
@@ -947,6 +950,7 @@ impl CommandId {
             Self::RevealAll => "Reveal All",
             Self::CropFitContent => "Fit Crop to Content",
             Self::TransformLanczos => "Lanczos",
+            Self::MoveLeaveCopy => "Leave Copy",
         }
     }
 }

@@ -332,6 +332,37 @@ class AndroidCanvasBarBenchmarkTest {
                 measure("scaled-photo-pixels-handle-drag") { drag(corner(), duration, wiggle) }
                 invoke("cancel_transform")
             }
+            if (wanted("move")) {
+                newDocument()
+                place(photo())
+                invoke("apply_transform")
+                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                SystemClock.sleep(3000)
+                fun surface(x: Double, y: Double): Pair<Double, Double> {
+                    val camera = state().getJSONObject("camera")
+                    val zoom = camera.getDouble("zoom"); val translation = camera.getJSONArray("translation")
+                    return x * zoom + translation.getDouble(0) to y * zoom + translation.getDouble(1)
+                }
+                val (w, h) = width.toDouble() to height.toDouble()
+                val selections = listOf<Pair<String, () -> Unit>>(
+                    "move-all" to { invoke("select_all") },
+                    "move-part" to {
+                        invoke("rectangle_select")
+                        val (x0, y0) = surface(w * .25, h * .25); val (x1, y1) = surface(w * .75, h * .75)
+                        drag(x0 to y0, 300) { t -> (x1 - x0) * t / .3 to (y1 - y0) * t / .3 }
+                    },
+                    "move-part-leave-copy" to { invoke("move_leave_copy") },
+                )
+                for ((label, select) in selections) {
+                    select()
+                    invoke("move")
+                    waitFor("$label selection bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "selection" }
+                    SystemClock.sleep(1500)
+                    measure("$label-drag") { drag(corner(), duration, wiggle) }
+                    measure("$label-drags") { drags(duration) }
+                }
+                invoke("move_leave_copy")
+            }
             if (wanted("selection")) {
                 newDocument()
                 invoke("select_all"); invoke("fill_selection"); SystemClock.sleep(1500)

@@ -41,9 +41,32 @@ holds the order.
   source as the new selection. Subtract and Intersect need a selection.
 - A command that would change nothing adds no history entry.
 
-Not yet provided: Feather…, Border… and Smooth… for an existing selection,
-moving or transforming the selection outline alone, and Crop Canvas to
-Selection. Do not add disabled placeholders for them.
+## Moving selected pixels
+
+With a selection, a Move drag moves the selected pixels of the active layer or
+mask, as Photoshop's Move tool and Clip Studio Paint's Move Layer tool do. Photo
+starts with Move, so dragging over a selection there moves its pixels. Without a
+selection, Move moves the whole layer by changing its offset, which resamples
+nothing.
+
+- **Pen and mouse** start the drag at the press, anywhere on the canvas. A
+  **finger** starts it on the selected area, the selection's bounds (outside
+  them for an inverted selection); elsewhere a finger navigates. Neither waits
+  for a hold.
+- The pixels move by whole layer pixels, so their values are exact. A linked
+  mask moves with its layer. Shift keeps the drag horizontal or vertical.
+- Releasing applies the move as one undo step, and the selection moves with the
+  pixels. Move stays the tool, and the selection bar keeps its context.
+- **Leave Copy** (`MoveLeaveCopy`), in Move's Tool Options and on the selection
+  bar while Move is active, keeps the original in place and places a copy. Alt
+  held as the drag starts does the opposite of the toggle.
+- Cancelling the contact, or losing window focus, leaves the pixels where they
+  were. A press that moves no whole pixel changes nothing.
+- Move refuses with a notice on a locked layer and on the paper. With a
+  selection it also refuses on a group or effect layer ("Choose a paint layer or
+  a mask to move selected pixels") and on a layer with no pixels.
+- Moving pixels of a placed photo paints them over its original, which Revert to
+  Original Photo brings back.
 
 ## Paint selection
 

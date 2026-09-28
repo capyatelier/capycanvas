@@ -2288,6 +2288,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::SelectionFixedRatio && self.selection_tools.options.constraint == SelectionConstraint::Ratio)
             || (id == CommandId::SelectionFixedSize && self.selection_tools.options.constraint == SelectionConstraint::Size)
             || (id == CommandId::SelectionFromCenter && self.selection_tools.options.from_center)
+            || (id == CommandId::MoveLeaveCopy && self.operation.leave_copy)
             || matches!((id, self.layer_interaction.tool.region()),
                 (CommandId::SelectionVisible, Some((false, RegionSource::Visible, _)))
                 | (CommandId::SelectionEditing, Some((false, RegionSource::Editing, _)))
@@ -4011,6 +4012,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         changed |= self.poll_content_bounds();
         self.sync_selection_overlay();
         self.sync_crop_overlay();
+        self.sync_moving_pixels();
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
@@ -4409,6 +4411,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => options.constrain_angles = !options.constrain_angles,
                 }
                 if self.tonal_active() {self.cancel_tonal();}
+                self.refresh_tools();
+                Ok((BRUSH | COMMANDS, true))
+            }
+            CommandId::MoveLeaveCopy => {
+                self.operation.leave_copy = !self.operation.leave_copy;
                 self.refresh_tools();
                 Ok((BRUSH | COMMANDS, true))
             }
@@ -4877,22 +4884,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 checkable: command.is_toggle(),
             })
             .collect()
-        } else if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
-            || (self.layer_interaction.tool == LayerCanvasTool::Move && self.selected_ruler().is_some())
-        {
-            [
-                CommandId::ShowRulers,
-                CommandId::SnapRulers,
-                CommandId::DeleteRuler,
-            ]
-            .into_iter()
-            .map(|command| ToolSettingAction {
-                command,
-                checkable: command.is_toggle(),
-            })
-            .collect()
         } else {
-            Vec::new()
+            let tool = self.layer_interaction.tool;
+            let moving = tool == LayerCanvasTool::Move;
+            let guides = matches!(tool, LayerCanvasTool::Ruler { .. }) || (moving && self.selected_ruler().is_some());
+            moving
+                .then_some(CommandId::MoveLeaveCopy)
+                .into_iter()
+                .chain(guides.then_some([CommandId::ShowRulers, CommandId::SnapRulers, CommandId::DeleteRuler]).into_iter().flatten())
+                .map(|command| ToolSettingAction {
+                    command,
+                    checkable: command.is_toggle(),
+                })
+                .collect()
         };
         self.state.tool_set = if let Some(tool) = self.layer_interaction.tool.selection_tool() {
             selection_tools::tool_set(tool)
@@ -5392,6 +5396,7 @@ mod tests {
     include!("painted_selection_tests.rs");
     include!("toolbar_component_tests.rs");
     include!("canvas_bar_tests.rs");
+    include!("move_pixels_tests.rs");
     include!("held_action_tests.rs");
     include!("gesture_tests.rs");
     include!("keymap_tests.rs");

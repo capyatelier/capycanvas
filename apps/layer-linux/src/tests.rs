@@ -9576,11 +9576,12 @@ fn native_frame_pacing() {
         ("Pan", None),
         ("Hand", None),
         ("Transform", None),
+        ("Move", None),
         ("Refine", None),
         ("Crop", None),
     ] {
         let chosen = std::env::var("LAYER_PACING_BRUSH");
-        if chosen.as_ref().is_ok_and(|s| s != name) || (name == "Refine" && chosen.is_err()) {
+        if chosen.as_ref().is_ok_and(|s| s != name) || (matches!(name, "Refine" | "Move") && chosen.is_err()) {
             continue;
         }
         if let Some(preset) = preset {
@@ -9685,6 +9686,35 @@ fn native_frame_pacing() {
             {
                 w.dispatch(UiAction::Invoke { command });
             }
+        } else if name == "Move" {
+            w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+            let (width, height) = {
+                let gpu = w.gpu.borrow();
+                let doc = gpu.as_ref().unwrap().session.engine().document();
+                (doc.width as f32, doc.height as f32)
+            };
+            if !photo {
+                w.dispatch(UiAction::Layer {
+                    action: LayerAction::Tool {
+                        tool: LayerCanvasTool::Figure {
+                            shape: layer_ui::FigureShape::Rectangle,
+                            paint: layer_ui::FigurePaint::Fill,
+                        },
+                    },
+                });
+                native_pen_path(&w, &[[width * 0.1, height * 0.1], [width * 0.9, height * 0.9]]);
+            }
+            if std::env::var("LAYER_PACING_MOVE").as_deref() == Ok("all") {
+                w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
+            } else {
+                let [x0, y0, x1, y1] = [width * 0.25, height * 0.25, width * 0.75, height * 0.75];
+                w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+                native_pen_path(&w, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]);
+            }
+            if std::env::var("LAYER_PACING_LEAVE_COPY").as_deref() == Ok("1") {
+                w.dispatch(UiAction::Invoke { command: CommandId::MoveLeaveCopy });
+            }
+            w.dispatch(UiAction::Invoke { command: CommandId::Move });
         } else if name == "Refine" {
             w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
             let (width, height) = {
@@ -9782,9 +9812,10 @@ fn native_frame_pacing() {
             .committed_strokes;
         *worker_stats.lock().unwrap() = Default::default();
         let camera = state(&w).camera;
+        let selection_before = w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.clone();
         let transform_path = match name {
-            "Transform" => {
-                let [x0, y0, x1, y1] = state(&w).canvas_bar.and_then(|b| b.anchor).expect("transform box");
+            "Transform" | "Move" => {
+                let [x0, y0, x1, y1] = state(&w).canvas_bar.and_then(|b| b.anchor).expect("transform box or selection");
                 let from = if distort { [x0, y0] } else { [(x0 + x1) * 0.5, (y0 + y1) * 0.5] };
                 Some((from, [(x1 - x0) * 0.17, (y1 - y0) * 0.13]))
             }
@@ -9943,6 +9974,14 @@ fn native_frame_pacing() {
             });
         }
         pump(150);
+        if name == "Move" {
+            assert_ne!(
+                w.gpu.borrow().as_ref().unwrap().session.engine().document().selection,
+                selection_before,
+                "pacing must move the selected pixels: {:?}",
+                state(&w).notice
+            );
+        }
         if let Some(preset) = preset {
             let gpu = w.gpu.borrow();
             let engine = gpu.as_ref().unwrap().session.engine();
@@ -10004,6 +10043,8 @@ fn native_frame_pacing() {
             "navigator_frames": stats.overview_frames,
             "transform_mask": std::env::var("LAYER_PACING_TRANSFORM_MASK").unwrap_or_default(),
             "transform_mode": if distort { "distort" } else if outline { "outline" } else { "free" },
+            "move_selection": std::env::var("LAYER_PACING_MOVE").unwrap_or_default(),
+            "leave_copy": std::env::var("LAYER_PACING_LEAVE_COPY").as_deref() == Ok("1"),
             "interpolation": interpolation,
             "input_cpu": stats.input_cpu,
             "input_handler_cpu": stats.input_handler_cpu,

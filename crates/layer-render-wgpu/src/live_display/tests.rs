@@ -1313,6 +1313,7 @@ fn preview(
         transform: layer_core::ImageTransform {
             map,
             interpolation: layer_core::Interpolation::Bicubic,
+            ..Default::default()
         },
     }
 }
@@ -1526,6 +1527,138 @@ fn a_selection_reduces_whole_the_pages_it_covers_or_leaves_out() {
     assert_eq!(direct.metrics.composited_pixels, composed, "the drag draws into the display");
     let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
     assert!(largest <= 1e-4 && mean <= 1e-7, "largest {largest}, mean {mean}");
+}
+
+#[test]
+fn a_moved_copy_that_keeps_its_source_draws_over_the_original_in_the_display() {
+    let extent = [1536, 1024];
+    let doc = document(extent);
+    let layer = doc.layers[0].id;
+    let [w, h] = extent.map(|n| n as f32);
+    let rectangle = |[x0, y0, x1, y1]: [f32; 4]| {
+        layer_core::Selection::polygon([[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|[x, y]| Point { x, y }).to_vec())
+            .unwrap()
+    };
+    for selection in [rectangle([300., 200., 1100., 800.]), rectangle([0., 0., w, h])] {
+        let keeping = |moving, offset: [f32; 2]| {
+            let mut preview = preview(
+                layer,
+                moving,
+                Some(selection.clone()),
+                layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: offset[0], y: offset[1] })),
+            );
+            preview.transform.keep_source = true;
+            preview
+        };
+        let [mut direct, mut reference] = complete_pair(&doc);
+        let v = centered_view([doc.width, doc.height], [320, 240], 0.2, 0.);
+        for r in [&mut direct, &mut reference] {
+            submit(r, &doc, v, true);
+        }
+        let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap();
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&keeping(false, [0.; 2]))).unwrap();
+            submit(r, &doc, v, false);
+        }
+        drain(&mut direct, &doc, v, 8, "the layer is reduced within a few frames");
+        assert_eq!(direct.transforms.as_ref().unwrap().reduced_level(), Some(level));
+        for (offset, largest_bound, mean_bound) in [([400., 120.], 1e-4, 1e-7), ([-37., 55.], 0.35, 5e-4)] {
+            let composed = direct.metrics.composited_pixels;
+            for r in [&mut direct, &mut reference] {
+                r.set_transform_preview(Some(&keeping(true, offset))).unwrap();
+                submit(r, &doc, v, false);
+            }
+            assert_eq!(direct.metrics.composited_pixels, composed, "the drag draws into the display");
+            let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+            assert!(largest <= largest_bound && mean <= mean_bound, "{offset:?}: largest {largest}, mean {mean}");
+        }
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&keeping(false, [-37., 55.]))).unwrap();
+            submit(r, &doc, v, false);
+        }
+        drain(&mut direct, &doc, v, 16, "the still preview settles within a few frames");
+        assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(None).unwrap();
+            submit(r, &doc, v, false);
+        }
+        assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
+    }
+}
+
+#[test]
+fn a_move_drag_adopts_the_layer_reduced_while_idle() {
+    let extent = [1536, 1024];
+    let mut doc = document(extent);
+    let layer = doc.layers[0].id;
+    let part = layer_core::Selection::polygon(
+        [[300., 200.], [1100., 200.], [1100., 800.], [300., 800.]].map(|[x, y]| Point { x, y }).to_vec(),
+    )
+    .unwrap();
+    let [mut direct, mut reference] = complete_pair(&doc);
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.2, 0.);
+    for r in [&mut direct, &mut reference] {
+        submit(r, &doc, v, true);
+    }
+    let level = direct.live_display.as_ref().unwrap().sampled_level().unwrap();
+    direct.prepare_moving_pixels(Some((layer, part.clone())));
+    submit(&mut direct, &doc, v, false);
+    drain(&mut direct, &doc, v, 8, "the layer is reduced while idle");
+    assert_eq!(direct.transforms.as_ref().unwrap().reduced_level(), Some(level), "reduced before the press");
+    let reduced = direct.test.reduced_pages.get();
+    submit(&mut direct, &doc, v, false);
+    submit(&mut direct, &doc, v, false);
+    assert_eq!(direct.test.reduced_pages.get(), reduced, "idle frames keep what was reduced");
+    for (transaction, offset) in [(7, [0., 0.]), (7, [400., 120.]), (7, [-36., 52.])] {
+        let mut drag = preview(
+            layer,
+            true,
+            Some(part.clone()),
+            layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: offset[0], y: offset[1] })),
+        );
+        drag.transaction = transaction;
+        drag.transform.keep_source = true;
+        let composed = direct.metrics.composited_pixels;
+        for r in [&mut direct, &mut reference] {
+            r.set_transform_preview(Some(&drag)).unwrap();
+            submit(r, &doc, v, false);
+        }
+        if offset != [0., 0.] {
+            assert_eq!(direct.metrics.composited_pixels, composed, "{offset:?}: the drag draws into the display at once");
+            let (largest, mean) = largest_and_mean(&display_levels(&direct, level), &display_levels(&reference, level));
+            assert!(largest <= 0.35 && mean <= 5e-4, "{offset:?}: largest {largest}, mean {mean}");
+        }
+    }
+    assert_eq!(direct.test.reduced_pages.get(), reduced, "the drag's transaction reduces nothing more");
+    for r in [&mut direct, &mut reference] {
+        r.set_transform_preview(None).unwrap();
+        submit(r, &doc, v, false);
+    }
+    drain(&mut direct, &doc, v, 16, "the cancelled drag settles");
+    assert_eq!(display_levels(&direct, 0), display_levels(&reference, 0));
+    direct.prepare_moving_pixels(None);
+    assert_eq!(direct.transforms.as_ref().unwrap().reduced_level(), None, "no longer expecting the drag drops what was captured");
+    doc.layers[0].raster = layer_core::raster::RasterRevision::pending();
+    submit(&mut direct, &doc, v, false);
+    let mut drag = preview(layer, true, Some(part), layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 64., y: 0. })));
+    drag.transaction = 8;
+    direct.set_transform_preview(Some(&drag)).unwrap();
+    submit(&mut direct, &doc, v, false);
+    submit(&mut direct, &doc, v, false);
+    assert!(direct.test.reduced_pages.get() > reduced, "a transaction on changed pixels reduces them anew");
+    direct.set_transform_preview(None).unwrap();
+    direct.prepare_moving_pixels(Some((layer, drag.selection.clone().unwrap())));
+    submit(&mut direct, &doc, v, false);
+    drain(&mut direct, &doc, v, 16, "the layer is reduced again while idle");
+    assert!(direct.transforms.as_ref().unwrap().reduced_level().is_some());
+    direct
+        .submit(FramePacket {
+            view: v,
+            restore_rasters: &[(layer, doc.layers[0].raster.clone())],
+            ..packet(&doc.layers, [doc.width, doc.height])
+        })
+        .unwrap();
+    assert_eq!(direct.transforms.as_ref().unwrap().reduced_level(), None, "a restore drops what was captured ahead");
 }
 
 #[test]

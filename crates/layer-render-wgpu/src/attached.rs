@@ -49,6 +49,11 @@ impl CanvasRenderer for AttachedRenderer {
             gpu.prepare_moving_layer(layer);
         }
     }
+    fn prepare_moving_pixels(&mut self, pixels: Option<(layer_core::LayerId, layer_core::Selection)>) {
+        if let Some(gpu) = self.0.as_mut() {
+            gpu.prepare_moving_pixels(pixels);
+        }
+    }
 
     fn set_transform_preview(
         &mut self,

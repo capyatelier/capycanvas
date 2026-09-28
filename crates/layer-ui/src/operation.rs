@@ -104,7 +104,8 @@ struct Drag {
     start: Geometry,
 }
 /// `bounds` is the source rectangle. An `outline` transaction moves only that
-/// document selection's placement, never pixels.
+/// document selection's placement, never pixels. A `pixel_move` is a Move-tool
+/// drag of the selected pixels by whole layer pixels, applied on release.
 struct Transaction {
     placement: Option<Placement>,
     request: TransformPreview,
@@ -119,6 +120,8 @@ struct Transaction {
     start: Pose,
     drag: Option<Drag>,
     outline: Option<Selection>,
+    pixel_move: bool,
+    keep_source: bool,
 }
 #[derive(Default)]
 pub(super) struct Operation {
@@ -129,14 +132,24 @@ pub(super) struct Operation {
     serial: u64,
     pub aspect: bool,
     pub interpolation: Option<Interpolation>,
+    /// Move drags of selected pixels leave the originals in place.
+    pub leave_copy: bool,
+    /// The target and layer-local selection the renderer prepares a Move
+    /// drag of.
+    moving_pixels: Option<(LayerId, Selection)>,
     pub changed: bool,
 }
 impl Operation {
+    /// A transform or crop session is open. A Move drag of selected pixels
+    /// is part of its contact instead.
     pub fn active(&self) -> bool {
-        self.current.is_some() || self.crop.is_some()
+        self.transforming() || self.crop.is_some()
     }
     pub fn transforming(&self) -> bool {
-        self.current.is_some()
+        self.current.as_ref().is_some_and(|t| !t.pixel_move)
+    }
+    pub fn moving_pixels(&self) -> bool {
+        self.current.as_ref().is_some_and(|t| t.pixel_move)
     }
     pub fn placing(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.placement.is_some())
@@ -345,6 +358,50 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return self.begin_layer_placement(None);
         }
+        let t = self.pixel_transaction()?;
+        self.operation.serial = t.request.transaction;
+        self.operation.current = Some(t);
+        self.layer_interaction.tool = LayerCanvasTool::Transform;
+        self.state.layer_tools.tool = LayerCanvasTool::Transform;
+        self.layer_interaction.changed = true;
+        self.update_transform()?;
+        Ok(())
+    }
+    /// Why a Move drag cannot move the active layer, or with a selection its
+    /// selected pixels.
+    pub(super) fn move_refusal(&self) -> Option<&'static str> {
+        let doc = self.engine.document();
+        let layer = doc.layer(doc.active_layer)?;
+        if layer.kind == LayerKind::Background {
+            Some("The paper can't be moved")
+        } else if doc.is_locked(layer.id) {
+            Some("The active layer is locked")
+        } else if !self.moves_selected_pixels() {
+            None
+        } else if !doc.active_mask && layer.kind != LayerKind::Paint {
+            Some("Choose a paint layer or a mask to move selected pixels")
+        } else if !self.can_transform() {
+            Some("This layer has no pixels to move")
+        } else {
+            None
+        }
+    }
+    /// Start dragging the selected pixels with Move from `p`, in document
+    /// pixels: a translation by whole layer pixels that keeps the Move tool,
+    /// and with `keep_source` leaves the originals in place.
+    pub(super) fn begin_move_transform(&mut self, p: Point, keep_source: bool) -> Result<(), String> {
+        let mut t = self.pixel_transaction()?;
+        let press = t.basis.inverse().ok_or("Invalid layer placement")?.map(p);
+        t.pixel_move = true;
+        t.keep_source = keep_source;
+        t.drag = Some(Drag { handle: Handle::Move, press, current: press, start: t.geometry.clone() });
+        self.operation.serial = t.request.transaction;
+        self.operation.current = Some(t);
+        self.layer_interaction.path = vec![press];
+        self.update_transform()
+    }
+    /// A transform of the active target's pixels, bounded by the selection.
+    fn pixel_transaction(&self) -> Result<Transaction, String> {
         let doc = self.engine.document();
         let target = doc.active_target();
         let basis = doc.layer_transform(target);
@@ -381,13 +438,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         bounds.max.x = bounds.max.x.max(bounds.min.x + 1.);
         bounds.max.y = bounds.max.y.max(bounds.min.y + 1.);
         t.geometry.frame = t.bounds;
-        self.operation.serial = serial;
-        self.operation.current = Some(t);
-        self.layer_interaction.tool = LayerCanvasTool::Transform;
-        self.state.layer_tools.tool = LayerCanvasTool::Transform;
-        self.layer_interaction.changed = true;
-        self.update_transform()?;
-        Ok(())
+        Ok(t)
     }
     pub(super) fn outline_refusal(&self) -> Option<&'static str> {
         if self.selection_masks.target().is_some() {
@@ -484,7 +535,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if transaction.outline.is_some() {
             self.sync_selection_overlay();
         } else {
-            self.engine.backend_mut().prepare_moving_layer(None);
+            if !transaction.pixel_move {
+                self.engine.backend_mut().prepare_moving_layer(None);
+            }
             self.engine.set_transform_preview(None).map_err(error)?;
         }
         self.layer_interaction.path.clear();
@@ -514,6 +567,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let transform = ImageTransform {
             map: t.map().ok_or("Invalid transform")?,
             interpolation: t.interpolation(chosen),
+            keep_source: t.keep_source,
         };
         if transform != t.request.transform && self.region_tools.applying_transform() {
             self.region_tools.cancel();
@@ -674,6 +728,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(t) = &mut self.operation.current else {
             return Ok(());
         };
+        let pixel_move = t.pixel_move;
         let p = t.basis.inverse().ok_or("Invalid layer placement")?.map(p);
         match event.phase {
             PenPhase::Down => {
@@ -702,6 +757,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.layer_interaction.path.clear();
                 }
                 self.update_transform()?;
+                if pixel_move && event.phase == PenPhase::Up {
+                    self.engine.commit_transform(None).map_err(error)?;
+                    self.cancel_transform()?;
+                }
+            }
+            PenPhase::Cancel if pixel_move => {
+                self.cancel_transform()?;
             }
             PenPhase::Cancel => {
                 self.cancel_transform_drag()?;
@@ -761,14 +823,45 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.update_transform()?;
         Ok(true)
     }
+    /// Whether a finger at `position` manipulates a transform: a handle or
+    /// the inside of an open transform's box, or the selected area under
+    /// Move, which drags the selected pixels.
     pub(super) fn transform_touch_hit(&self, position: [f32; 2]) -> bool {
         if self.cropping() {
             return self.crop_touch_hit(position);
         }
-        let Some(t) = self.operation.current.as_ref() else { return false; };
-        let Some(inverse) = t.basis.inverse() else { return false; };
         let p = self.state.camera.input_transform().map(Point { x: position[0], y: position[1] });
+        let Some(t) = self.operation.current.as_ref() else {
+            return self.moves_selected_pixels()
+                && self.engine.document().selection.as_ref().is_some_and(|s| {
+                    let b = s.coverage_bounds();
+                    s.inverted != (b.min.x <= p.x && p.x < b.max.x && b.min.y <= p.y && p.y < b.max.y)
+                });
+        };
+        let Some(inverse) = t.basis.inverse() else { return false; };
         t.hit(inverse.map(p), self.ruler_reach()).is_some()
+    }
+    /// Let the renderer prepare, while the canvas is idle, the Move drag of
+    /// the selected pixels that the next press would start.
+    pub(super) fn sync_moving_pixels(&mut self) {
+        let doc = self.engine.document();
+        let target = doc.active_target();
+        let next = (self.moves_selected_pixels() && self.move_refusal().is_none())
+            .then(|| {
+                let inverse = doc.layer_transform(target).inverse()?;
+                Some((target, doc.selection.as_ref()?.transformed(inverse).ok()?))
+            })
+            .flatten();
+        if self.operation.moving_pixels != next {
+            self.engine.backend_mut().prepare_moving_pixels(next.clone());
+            self.operation.moving_pixels = next;
+        }
+    }
+    /// Move drags the selected pixels rather than the whole layer.
+    pub(super) fn moves_selected_pixels(&self) -> bool {
+        self.layer_interaction.tool == LayerCanvasTool::Move
+            && self.engine.document().selection.is_some()
+            && self.selection_masks.target().is_none()
     }
     pub(super) fn update_transform_drag(&mut self) -> Result<bool, String> {
         let Some(t) = &mut self.operation.current else {
@@ -870,7 +963,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Some(t.corners().map(self.transform_surface_map(t)))
     }
     pub(super) fn append_transform_overlay(&self, segments: &mut Vec<CursorSegment>) {
-        let Some(t) = &self.operation.current else {
+        let Some(t) = self.operation.current.as_ref().filter(|t| !t.pixel_move) else {
             return;
         };
         let map = self.transform_surface_map(t);
@@ -1027,6 +1120,8 @@ impl Transaction {
             start: pose,
             drag: None,
             outline: None,
+            pixel_move: false,
+            keep_source: false,
         }
     }
     fn pose_affine(&self) -> Affine {
@@ -1036,6 +1131,10 @@ impl Transaction {
         self.geometry.mesh.as_ref().map_or(self.bounds, |mesh| mesh.bounds())
     }
     fn map(&self) -> Option<TransformMap> {
+        if self.pixel_move {
+            let offset = self.geometry.pose.offset;
+            return Some(TransformMap::Affine(Affine::translation(Point { x: offset.x.round(), y: offset.y.round() })));
+        }
         let pose = self.pose_affine();
         let outer = match self.geometry.inner {
             Some(inner) => inner.then(Projective::from_affine(pose))?.into(),
@@ -1131,6 +1230,9 @@ impl Transaction {
         }
     }
     fn interpolation(&self, chosen: Option<Interpolation>) -> Interpolation {
+        if self.pixel_move {
+            return Interpolation::Nearest;
+        }
         match (self.placement.is_some(), chosen, self.mode) {
             (true, ..) => Interpolation::Linear,
             (false, Some(chosen), _) => chosen,

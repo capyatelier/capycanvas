@@ -2369,6 +2369,66 @@ class AndroidInteractionTest {
         category.array("sections").values().any { section -> (section as JSONArray).objects().any { it.getString("label") == filter } }
     }.getString("label")
 
+    /** Journey 26: select, then drag the selected pixels with Move, with and without Leave Copy. */
+    @Test fun moveDragsSelectedPixelsAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        command("fit_canvas")
+        fun leaveCopy() = state().array("commands").objects().first { it.getString("id") == "move_leave_copy" }.getBoolean("selected")
+        fun anchor() = canvasBar()?.optJSONArray("anchor")?.let { a -> List(4) { a.getDouble(it) } }
+        for (device in pointerTools) for (leave in listOf(false, true)) {
+            val name = "${listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]}, Leave Copy $leave"
+            if (state().array("commands").objects().any { it.getString("id") == "deselect" && it.getBoolean("enabled") }) command("deselect")
+            layerStates().map { it.getLong("id") }.filter { it !in keep }.forEach { layerAction(obj("op" to "delete", "id" to it)) }
+            layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.1, .3, .9, 1))))
+            command("rectangle_select")
+            val extent = state().array("tabs").objects().first { it.getBoolean("active") }
+            val (width, height) = extent.getInt("width").toDouble() to extent.getInt("height").toDouble()
+            tool = MotionEvent.TOOL_TYPE_STYLUS
+            drag(documentPoint(width * .4, height * .35), documentPoint(width * .6, height * .55))
+            waitFor("$name: the selection", 5_000) { hasSelection() }
+            command("fill_selection")
+            command("move")
+            waitFor("$name: Move offers Leave Copy on the selection bar", 5_000) {
+                barKind() == "selection" && shown("canvas-bar-action-move_leave_copy")
+            }
+            settle()
+            tool = device
+            if (leaveCopy() != leave) {
+                tap(bounds("canvas-bar-action-move_leave_copy").center)
+                waitFor("$name: Leave Copy toggles on the bar", 5_000) { leaveCopy() == leave }
+            }
+            if (device == MotionEvent.TOOL_TYPE_MOUSE && leave) {
+                val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+                try {
+                    for (theme in listOf("light", "dark")) {
+                        action(obj("type" to "set_theme", "theme" to theme))
+                        captureCanvasBar("leave-copy-$theme", "move-selection")
+                    }
+                } finally { action(obj("type" to "set_theme", "theme" to originalTheme)) }
+            }
+            val before = anchor()!!
+            val kept = documentPoint(width * .42, height * .37)
+            val arrived = documentPoint(width * .64, height * .6)
+            awaitPixels("$name: the filled selection", listOf(kept, arrived)) { (k, a) -> blue(k) && !blue(a) }
+            var during = ""
+            drag(documentPoint(width * .5, height * .45), documentPoint(width * .7, height * .65)) {
+                during = "${barKind()} ${state().getJSONObject("layer_tools").getString("tool")}"
+            }
+            assertEquals("$name: the bar keeps the selection context and Move stays the tool", "selection move", during)
+            waitFor("$name: the selection follows the pixels", 5_000) { anchor()?.let { it[0] > before[0] + width * .15 } == true }
+            val moved = anchor()!!
+            assertTrue("$name: whole pixels $before $moved", (0..1).all { i -> (moved[i] - before[i]).let { kotlin.math.abs(it - kotlin.math.round(it)) < 1e-3 } })
+            awaitPixels("$name: the pixels arrive and the original ${if (leave) "stays" else "is cut"}", listOf(kept, arrived)) { (k, a) ->
+                blue(a) && blue(k) == leave
+            }
+            command("undo")
+            awaitPixels("$name: one undo puts the pixels back", listOf(kept, arrived)) { (k, a) -> blue(k) && !blue(a) }
+            println("PASS move selection $name")
+        }
+        println("PASS move selection: Move drags the selected pixels with mouse, finger and stylus, with and without Leave Copy, in one undo step")
+    }
+
     @Test fun canvasBarSelectionMenusAcrossDevices() {
         val keep = layerStates().map { it.getLong("id") }.toSet()
         val bands = fixture.getJSONObject("layout").array("bands").objects()
