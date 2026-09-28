@@ -34,7 +34,7 @@ impl Info {
                     target,
                     transfer,
                     reference_white: white as f32,
-                    target_peak: peak as f32,
+                    target_peak: Some(peak as f32),
                 })
             }
             _ => ScreenColor::Unreported,

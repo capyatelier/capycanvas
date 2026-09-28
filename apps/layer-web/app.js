@@ -10,6 +10,7 @@ import { createCustomization } from "./customization.js";
 import { createCanvasBar } from "./canvas-bar.js";
 import { createNotice } from "./notice.js";
 import { createZoomReadout } from "./zoom-readout.js";
+import { createScreenStatus } from "./screen-status.js";
 import { createEditorPanels } from "./editor-panels.js";
 import { createWorkspaceChrome } from "./workspace-chrome.js";
 import { createGlass } from "./glass.js";
@@ -54,7 +55,7 @@ let app,
   dragItem = null,
   statusTimer,
   shownHostError = null;
-let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout;
+let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
 let commandBar;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
@@ -871,6 +872,7 @@ function update(regions) {
   if (regions & 64) {
     documents?.refresh();
     notice?.publish(state.notice);
+    screenStatus?.refresh(state.screen);
     if (state.host_error && state.host_error !== shownHostError) message(state.host_error);
     shownHostError = state.host_error;
     // Small applied-settings snapshots only, never per-input/frame writes.
@@ -1763,6 +1765,10 @@ try {
   zoomReadout = createZoomReadout({ root: $("view-info"), workspace, canvas, element, numberField, control: catalog.zoom,
     menu: () => app.zoom_menu(), renderMenu: customization.renderMenu, refreshMenu: customization.refreshMenu,
     dispatch, camera: () => state.camera, toggled: updateZen });
+  const screenChip = element("button", "proof-status");
+  screenChip.id = "screen-status";
+  $("canvas-status").insertBefore(screenChip, $("view-info"));
+  screenStatus = createScreenStatus({ root: screenChip, workspace, canvas, element, icon, dispatch });
   performance.mark("capy.startup.controls");
   update(255);
   systemStatus.sync();

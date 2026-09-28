@@ -304,10 +304,19 @@ never during motion.
   BT.2020 PQ signal in HDR mode; it never uses an assigned ICC profile for its
   conversion. TV EDIDs that report BT.709 while accepting BT.2020 leave the HDR
   gamut unknown.
+- **Android** reports the display's name, `isWideColorGamut` (Display P3 or
+  sRGB) and whether it supports any HDR type (`ScreenReport::managed`). The
+  presenter uses an sRGB surface, so Display P3 artwork beyond sRGB is clipped by
+  the app itself. The idle count runs from the 200 ms tone-status poll.
+- **Web** reports the `color-gamut` and `dynamic-range` media queries; peak
+  brightness is never known. The canvas is sRGB, or extended sRGB for HDR, and
+  the idle count runs from the same 200 ms display poll.
 - **macOS/iPadOS** can use the screen's color space (including measured
-  profiles) and EDR headroom; **Windows** the DXGI output description; **Android**
-  the display's HDR capabilities and wide-gamut flag; **Web** only the
-  `color-gamut` and `dynamic-range` media queries.
+  profiles) and EDR headroom, and **Windows** the DXGI output description; both
+  still show their own HDR status.
+
+A new drawing in the same window keeps the screen report and the highlight
+choice, and is checked again for clipping.
 
 **8. Edit HDR and provide an intentional SDR version**
 
@@ -500,8 +509,8 @@ both the HDR10 display and the Vulkan format/encoding support it. Android choose
 brightness and tone mapping; reported headroom does not precompress the artwork
 or force an SDR preview. SDR, Print, gamut warning and appearance drafts use the
 shared SDR mapping on an sRGB surface. Older/unsupported hosts retain mapped SDR.
-The left footer button matches zoom/rotation styling and opens Display Details;
-**HDR** describes the active output route, not measured screen
+The left footer chip matches zoom/rotation styling and opens the screen details
+described above; **HDR** describes the active output route, not measured screen
 brightness. PQ output is bounded to BT.2020 and 0–10,000 cd/m² at the fixed 203
 cd/m² artwork reference white. The HDR master remains unchanged.
 The [tablet display investigation](../development/android-hdr-display.md#pq-display-validation)

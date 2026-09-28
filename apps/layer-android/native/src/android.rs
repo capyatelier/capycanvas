@@ -17,6 +17,8 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
+const SCREEN_CHECK_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
 mod surface_capture;
 
 // Allow CPU, GPU and display consumption to overlap during full-view motion.
@@ -180,6 +182,21 @@ pub extern "system" fn Java_art_capycanvas_Native_displayInfo(
     }
 }
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_screenInfo(
+    mut env: JNIEnv, _: JClass, handle: jlong, name: JString, wide: jboolean, hdr: jboolean,
+) {
+    use layer_color::screen::{Chromaticities, ScreenReport};
+    use layer_core::color::RgbSpace;
+    let a = unsafe { app(handle) };
+    let name = read(&mut env, &name).ok().filter(|n| !n.is_empty());
+    let gamut = Chromaticities::of(if wide != 0 { RgbSpace::DisplayP3 } else { RgbSpace::Srgb });
+    let hdr = hdr != 0;
+    if a.host.session.set_screen_report(ScreenReport::managed(name, gamut, hdr, Some(hdr))) {
+        a.host.dirty = true;
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct Glass {
     boxes: Vec<[f32; 8]>,
@@ -193,6 +210,27 @@ struct GlassConnection {
 }
 
 impl App {
+    pub(crate) fn screen_tick(&mut self) -> bool {
+        let clipped = {
+            let (Some(surface), Some(gpu)) = (self.surface.as_mut(), self.host.session.engine().backend().0.as_deref()) else {
+                return false;
+            };
+            let _ = gpu.device().poll(wgpu::PollType::Poll);
+            match surface.presenter.screen_check_result() {
+                Some(result) => result.ok(),
+                None => {
+                    if !self.host.dirty
+                        && surface.submitted_frames == surface.completed_frames.load(Ordering::Acquire)
+                        && self.screen_presented.elapsed() >= SCREEN_CHECK_DELAY
+                    {
+                        surface.presenter.check_screen(gpu);
+                    }
+                    return false;
+                }
+            }
+        };
+        self.host.session.set_screen_clipped(clipped)
+    }
     fn sync_hdr_display(&mut self) {
         self.host.session.set_hdr_display_available(self.hdr_capable());
     }
@@ -478,6 +516,8 @@ impl App {
         let tone = self.tone.current(&self.host);
         let presented_tone = tone.is_some().then(|| self.tone.publications());
         let hdr_output=self.hdr_output();
+        let screen = &self.host.session.state().screen;
+        let screen_check = layer_render_wgpu::ScreenCheck::for_view(&screen.assessment, layer_core::color::RgbSpace::Srgb, hdr_output, screen.show_clipped);
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         let color=if hdr_output {SdrSurfaceColor::Bt2100Pq} else {SdrSurfaceColor::Srgb};
@@ -494,6 +534,7 @@ impl App {
         self.host.compose_scene(&mut surface.presenter, &mut self.cursor, &self.navigators, &self.glass, tone, display)?;
         surface.presenter.set_surface_rotation(surface.quarter_turns);
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
+        surface.presenter.set_screen_check(gpu, screen_check);
         let trace_timings = unsafe { ndk_sys::ATrace_isEnabled() };
         if trace_timings || surface.trace_timings {
             for sample in surface.presenter.gpu_timings(gpu, trace_timings) {
@@ -570,6 +611,7 @@ impl App {
         surface.presented_hdr = Some(hdr_output);
         surface.presented_tone_publications = presented_tone;
         self.blank_presented = true;
+        self.screen_presented = std::time::Instant::now();
         self.frame_cost[3] = elapsed() - self.frame_cost[..3].iter().sum::<i64>();
         // Poll once before resource use, not again after submission. The next
         // frame/readback worker services completion; initial surface readiness

@@ -1,5 +1,4 @@
 use super::*;
-use layer_color::screen::edid::Edid;
 use layer_color::screen::{self, Basis, ScreenAssessment, ScreenReport};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -8,6 +7,8 @@ pub struct ScreenState {
     pub assessment: ScreenAssessment,
     pub clipped: Option<bool>,
     pub show_clipped: bool,
+    pub chip: Option<ScreenChip>,
+    pub details: Option<ScreenDetails>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -47,6 +48,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.screen.clipped = clipped;
         self.changed(regions::HOST, false);
         true
+    }
+
+    pub(crate) fn refresh_screen_view(&mut self) -> u32 {
+        let (chip, details) = (self.screen_chip(), self.screen_details());
+        if self.state.screen.chip == chip && self.state.screen.details == details {
+            return 0;
+        }
+        self.state.screen.chip = chip;
+        self.state.screen.details = details;
+        regions::HOST
     }
 
     pub(crate) fn show_clipped_colors(&mut self, visible: bool) -> u32 {
@@ -92,7 +103,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let (headline, body) = if clipped {
             ("Some colors can’t be shown accurately on this screen", clipped_reason(assessment))
         } else if self.screen_hdr_document() && !proofing {
-            self.hdr_view(assessment, screen.report.monitor.as_ref())
+            self.hdr_view(assessment, screen.report.hdr_capable)
         } else if proofing && let Some(caveat) = proof_caveat(assessment) {
             ("The proof may not match the print", Some(caveat))
         } else {
@@ -107,7 +118,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
 
-    fn hdr_view(&self, assessment: &ScreenAssessment, monitor: Option<&Edid>) -> (&'static str, Option<String>) {
+    fn hdr_view(&self, assessment: &ScreenAssessment, hdr_capable: Option<bool>) -> (&'static str, Option<String>) {
         const SDR: &str = "Showing the SDR version";
         if self.state.hdr_display_available && self.state.preview_sdr {
             return (SDR, Some("This is the SDR version you’ll export. Select Off in the Proof panel to see HDR.".into()));
@@ -123,9 +134,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let body = if assessment.white_at_peak() {
             Some("At your current screen brightness, regular content already uses all of this screen’s brightness, leaving nothing brighter for HDR highlights. Lower the screen brightness to see them.".into())
-        } else if monitor.is_some_and(|m| !m.pq_signal) {
+        } else if hdr_capable == Some(false) {
             Some("This screen can’t show HDR.".into())
-        } else if assessment.basis != Basis::Pending && !assessment.hdr_signal {
+        } else if hdr_capable == Some(true) && !assessment.hdr_signal {
             Some(format!("HDR is off for this screen. Turn it on in {DISPLAY_SETTINGS} to see HDR highlights."))
         } else {
             None

@@ -1,8 +1,10 @@
 fn screen_report(color: layer_color::screen::ScreenColor) -> layer_color::screen::ScreenReport {
+    let monitor = layer_color::screen::edid::parse(include_bytes!("../../layer-color/tests/fixtures/edid/cintiq-pro-27.bin")).unwrap();
     layer_color::screen::ScreenReport {
         name: Some("Cintiq Pro 27".into()),
         color,
-        monitor: Some(layer_color::screen::edid::parse(include_bytes!("../../layer-color/tests/fixtures/edid/cintiq-pro-27.bin")).unwrap()),
+        hdr_capable: Some(monitor.pq_signal),
+        monitor: Some(monitor),
     }
 }
 
@@ -13,7 +15,7 @@ fn gnome(mode: &str) -> layer_color::screen::ScreenColor {
         "native" => (screen_report(ScreenColor::Pending).monitor.unwrap().chromaticities, Transfer::Gamma(2.2), 80., 80.),
         _ => (Chromaticities::of(layer_core::color::RgbSpace::Srgb), Transfer::Gamma(2.2), 80., 80.),
     };
-    ScreenColor::Described(CompositorDescription { primaries: target, target, transfer, reference_white: white, target_peak: peak })
+    ScreenColor::Described(CompositorDescription { primaries: target, target, transfer, reference_white: white, target_peak: Some(peak) })
 }
 
 fn screen_session(space: layer_core::color::RgbSpace, depth: layer_core::color::SampleDepth) -> UiSession<Recorder> {
@@ -38,6 +40,8 @@ fn sdr_drawings_only_mention_the_screen_when_colors_are_clipped() {
     assert_eq!(chip(&s), None);
     s.set_screen_clipped(Some(true));
     assert_eq!(chip(&s), Some(("Colors clipped", true)));
+    assert_eq!(s.state.screen.chip.map(|c| c.label), Some("Colors clipped"), "hosts read the chip from state");
+    assert_eq!(s.state.screen.details, s.screen_details());
     s.state.workspace.layout.canvas_info.visible = false;
     assert_eq!(chip(&s), None, "the footer is hidden");
 }
@@ -89,7 +93,7 @@ fn hdr_drawings_keep_their_presentation_label_until_proofed() {
     if let layer_color::screen::ScreenColor::Described(d) = &mut described.color {
         d.transfer = layer_color::screen::Transfer::Pq;
         d.reference_white = 200.;
-        d.target_peak = 1000.;
+        d.target_peak = Some(1000.);
     }
     s.set_screen_report(described);
     assert_eq!(
@@ -147,4 +151,19 @@ fn clipped_colors_can_be_marked_from_the_details() {
     assert!(s.state.screen.show_clipped, "highlighting resumes if colors clip again");
     s.dispatch(UiAction::ShowClippedColors { visible: false }).unwrap();
     assert!(!s.state.screen.show_clipped);
+}
+
+#[test]
+fn a_new_drawing_in_the_window_keeps_the_screen() {
+    use layer_core::color::{RgbSpace, SampleDepth};
+    let mut s = screen_session(RgbSpace::DisplayP3, SampleDepth::U8);
+    s.set_screen_report(screen_report(gnome("default")));
+    s.set_screen_clipped(Some(true));
+    s.dispatch(UiAction::ShowClippedColors { visible: true }).unwrap();
+    let mut next = screen_session(RgbSpace::Srgb, SampleDepth::U8);
+    next.inherit_window_state(&s).unwrap();
+    assert_eq!(next.state.screen.report, s.state.screen.report);
+    assert_eq!(next.state.screen.assessment, s.state.screen.assessment);
+    assert!(next.state.screen.show_clipped);
+    assert_eq!(next.state.screen.clipped, None, "the new drawing is checked again");
 }

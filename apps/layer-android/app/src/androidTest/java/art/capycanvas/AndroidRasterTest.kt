@@ -948,6 +948,49 @@ class AndroidRasterTest {
         println("HDR PQ open; GTK picker; touch cancel/stylus SDR appearance; exact master/rendition save/reopen; HDR/SDR delivery; GPU, recovery and Activity recreation passed")
     }
 
+    @Test fun screenStatusFlagsAndHighlightsClippedColors() {
+        val output=File(activity.getExternalFilesDir(null),"screen-status").apply{mkdirs()}
+        val automation=instrumentation.uiAutomation
+        fun shot(name:String):Int {
+            refresh();SystemClock.sleep(300)
+            val bitmap=automation.takeScreenshot()!!
+            File(output,"$name.png").outputStream().use{bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)}
+            return bitmap.getPixel(bitmap.width/2,bitmap.height/2).also{bitmap.recycle()}
+        }
+        fun screen()=native{state(it).getJSONObject("screen")}
+        fun chip()=compose.onAllNodesWithTag("screen-status").fetchSemanticsNodes().firstOrNull()?.config
+            ?.getOrElseNullable(androidx.compose.ui.semantics.SemanticsProperties.Text){null}?.joinToString()
+        fun fill(rgba:List<Double>) {
+            send(obj("type" to "color","action" to obj("op" to "set_slot","slot" to "foreground",
+                "color" to obj("space" to "DisplayP3","rgba" to org.json.JSONArray(rgba)))))
+            invoke("select_all");invoke("fill_selection");invoke("deselect")
+        }
+        val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
+        try {
+            Native.projectOptions(task,obj("extent" to org.json.JSONArray(listOf(512,384)),"color" to obj("space" to "DisplayP3","depth" to "U8"),"background" to "White").toString())
+            Native.projectWork(task,-1,512,384);native{Native.projectAdopt(it,task,"null")}
+        } finally {Native.projectFree(task)}
+        invoke("fit_canvas")
+        compose.waitUntil(10_000){screen().getJSONObject("assessment").getString("basis")=="System"}
+        fill(listOf(0.0,1.0,0.0,1.0))
+        compose.waitUntil(20_000){refresh();chip()=="Colors clipped"}
+        val green=shot("clipped")
+        compose.onNodeWithTag("screen-status").performClick()
+        compose.waitUntil(5_000){compose.onAllNodesWithTag("screen-details").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Some colors can’t be shown accurately on this screen").assertExists()
+        shot("clipped-details")
+        compose.onNodeWithTag("screen-highlight").performClick()
+        compose.waitUntil(5_000){screen().getBoolean("show_clipped")}
+        tick()
+        val marked=shot("clipped-highlighted")
+        assertTrue("Clipped green is on screen: ${Integer.toHexString(green)}",android.graphics.Color.green(green)>200&&android.graphics.Color.blue(green)<100)
+        assertTrue("Highlighted pixels are blue: ${Integer.toHexString(marked)}",android.graphics.Color.blue(marked)>200&&android.graphics.Color.red(marked)<80)
+        compose.onNodeWithTag("screen-highlight").performClick()
+        compose.waitUntil(5_000){!screen().getBoolean("show_clipped")}
+        fill(listOf(0.5,0.5,0.5,1.0))
+        compose.waitUntil(20_000){refresh();screen().optBoolean("clipped",true)==false&&chip()==null}
+        shot("fits")
+    }
     @Test fun hdrDisplayNegotiation() {
         val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile") ?: throw AssumptionViolatedException("Supply -e hdrFile for the display regression")
         val automation=instrumentation.uiAutomation
@@ -1041,17 +1084,18 @@ class AndroidRasterTest {
             val restored=surfacePixels("hdr-display-restored")
             for(region in listOf("canvas","navigator"))assertEquals("Display restore preserves $region",actualPixels.getJSONObject(region).getString("digest"),restored.getJSONObject(region).getString("digest"))
             assertEquals(revision,native{state(it).getJSONObject("document_file").getLong("revision")})
-            compose.waitUntil(5_000){host.hdr.status=="HDR"}
-            compose.onNodeWithTag("hdr-status").assertTextEquals("HDR")
+            compose.waitUntil(5_000){compose.onAllNodesWithText("HDR").fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithTag("screen-status").assertTextEquals("HDR")
         }
-        val info=compose.onNodeWithTag("hdr-status").fetchSemanticsNode().boundsInRoot
+        val info=compose.onNodeWithTag("screen-status").fetchSemanticsNode().boundsInRoot
         val zoom=compose.onNodeWithTag("camera-readout").fetchSemanticsNode().boundsInRoot
-        assertTrue("Display status belongs on the left",info.right<zoom.left)
+        assertTrue("Screen status belongs on the left",info.right<zoom.left)
         assertEquals("Matching footer bubble height",zoom.height,info.height,1f)
-        compose.onNodeWithTag("hdr-status").performClick()
-        compose.onNodeWithText("Display Details").assertExists()
-        record("display-details")
-        compose.onNodeWithText("Close").performClick()
+        compose.onNodeWithTag("screen-status").performClick()
+        compose.waitUntil(5_000){compose.onAllNodesWithTag("screen-details").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText(if(supports)"Showing HDR" else "Showing the SDR version").assertExists()
+        record("screen-details")
+        compose.onNodeWithTag("screen-status").performClick()
         mode("sdr");awaitSurface(false);record("sdr-proof")
         val sdrPixels=surfacePixels("sdr-proof")
         awaitSurface(false)

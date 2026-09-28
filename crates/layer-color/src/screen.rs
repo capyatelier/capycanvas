@@ -116,7 +116,7 @@ pub struct CompositorDescription {
     pub target: Chromaticities,
     pub transfer: Transfer,
     pub reference_white: f32,
-    pub target_peak: f32,
+    pub target_peak: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
@@ -133,6 +133,24 @@ pub struct ScreenReport {
     pub name: Option<String>,
     pub color: ScreenColor,
     pub monitor: Option<edid::Edid>,
+    pub hdr_capable: Option<bool>,
+}
+
+impl ScreenReport {
+    pub fn managed(name: Option<String>, gamut: Chromaticities, hdr_on: bool, hdr_capable: Option<bool>) -> Self {
+        Self {
+            name,
+            color: ScreenColor::Described(CompositorDescription {
+                primaries: gamut,
+                target: gamut,
+                transfer: if hdr_on { Transfer::Pq } else { Transfer::Srgb },
+                reference_white: ARTWORK_WHITE,
+                target_peak: (!hdr_on).then_some(ARTWORK_WHITE),
+            }),
+            monitor: None,
+            hdr_capable,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -191,7 +209,7 @@ pub fn assess(report: &ScreenReport) -> ScreenAssessment {
     let srgb = Chromaticities::of(RgbSpace::Srgb);
     let signal_only = description.transfer == Transfer::Pq
         && description.target.near(Chromaticities::BT2020, 0.002)
-        && description.target_peak >= PQ_SIGNAL_PEAK;
+        && description.target_peak.is_some_and(|peak| peak >= PQ_SIGNAL_PEAK);
     let (gamut, basis) = if signal_only {
         match monitor.filter(|m| !(m.bt2020_signal && m.chromaticities.near(srgb, 0.004))) {
             Some(monitor) => (Some(monitor.chromaticities), Basis::Monitor),
@@ -200,15 +218,16 @@ pub fn assess(report: &ScreenReport) -> ScreenAssessment {
     } else {
         (Some(description.target), Basis::System)
     };
-    let peak = if signal_only { monitor.and_then(|m| m.max_luminance) } else { Some(description.target_peak) };
+    let peak = if signal_only { monitor.and_then(|m| m.max_luminance) } else { description.target_peak };
     let wide_monitor = monitor.is_some_and(|m| m.chromaticities.coverage(Chromaticities::of(RgbSpace::DisplayP3)) > 0.85);
     ScreenAssessment {
         gamut,
         basis,
         reference_white: Some(description.reference_white),
         peak,
-        signal_peak: Some(description.target_peak),
-        hdr_signal: description.target_peak > description.reference_white,
+        signal_peak: description.target_peak,
+        hdr_signal: matches!(description.transfer, Transfer::Pq | Transfer::Hlg)
+            || description.target_peak.is_some_and(|peak| peak > description.reference_white),
         srgb_on_wide_monitor: basis == Basis::System && description.target.near(srgb, 0.004) && wide_monitor,
     }
 }
@@ -232,7 +251,7 @@ mod tests {
             target,
             transfer,
             reference_white: white,
-            target_peak: peak,
+            target_peak: Some(peak),
         })
     }
     fn gnome_hdr() -> ScreenColor {
@@ -273,7 +292,7 @@ mod tests {
 
     #[test]
     fn hdr_signal_uses_the_monitors_gamut_and_peak() {
-        let a = assess(&ScreenReport { name: None, color: gnome_hdr(), monitor: cintiq() });
+        let a = assess(&ScreenReport { color: gnome_hdr(), monitor: cintiq(), ..Default::default() });
         assert_eq!(a.basis, Basis::Monitor);
         assert_eq!(a.gamut, Some(cintiq().unwrap().chromaticities));
         assert_eq!(a.peak, Some(400.));
@@ -285,7 +304,7 @@ mod tests {
     #[test]
     fn hdr_signal_without_monitor_data_leaves_gamut_and_peak_unknown() {
         for monitor in [None, television()] {
-            let a = assess(&ScreenReport { name: None, color: gnome_hdr(), monitor });
+            let a = assess(&ScreenReport { color: gnome_hdr(), monitor, ..Default::default() });
             assert_eq!((a.basis, a.gamut, a.peak), (Basis::Unknown, None, None));
             assert!((a.headroom() - 10_000. / 416.).abs() < 1e-3);
         }
@@ -293,11 +312,11 @@ mod tests {
 
     #[test]
     fn system_srgb_on_a_wide_gamut_monitor_is_flagged() {
-        let a = assess(&ScreenReport { name: None, color: gnome_default(), monitor: cintiq() });
+        let a = assess(&ScreenReport { color: gnome_default(), monitor: cintiq(), ..Default::default() });
         assert_eq!((a.basis, a.gamut), (Basis::System, Some(Chromaticities::of(RgbSpace::Srgb))));
         assert!(a.srgb_on_wide_monitor && a.approximate());
         assert_eq!(a.headroom(), 1.);
-        let tv = assess(&ScreenReport { name: None, color: gnome_default(), monitor: television() });
+        let tv = assess(&ScreenReport { color: gnome_default(), monitor: television(), ..Default::default() });
         assert!(!tv.srgb_on_wide_monitor && !tv.approximate());
     }
 
@@ -305,15 +324,26 @@ mod tests {
     fn native_primaries_from_the_system_are_trusted() {
         let native = cintiq().unwrap().chromaticities;
         let color = described(native, Transfer::Gamma(2.2), 80., 80.);
-        let a = assess(&ScreenReport { name: None, color, monitor: cintiq() });
+        let a = assess(&ScreenReport { color, monitor: cintiq(), ..Default::default() });
         assert_eq!((a.basis, a.gamut), (Basis::System, Some(native)));
         assert!(!a.approximate());
     }
 
     #[test]
+    fn managed_platforms_describe_gamut_and_hdr_without_a_peak() {
+        let p3 = Chromaticities::of(RgbSpace::DisplayP3);
+        let sdr = assess(&ScreenReport::managed(None, p3, false, Some(false)));
+        assert_eq!((sdr.basis, sdr.gamut, sdr.hdr_signal), (Basis::System, Some(p3), false));
+        assert_eq!(sdr.headroom(), 1.);
+        let hdr = assess(&ScreenReport::managed(None, p3, true, Some(true)));
+        assert_eq!((hdr.basis, hdr.peak, hdr.hdr_signal), (Basis::System, None, true));
+        assert!(!hdr.approximate());
+    }
+
+    #[test]
     fn unmanaged_and_unreported_screens_have_no_gamut() {
         for (color, basis) in [(ScreenColor::Unmanaged, Basis::Unmanaged), (ScreenColor::Unreported, Basis::Unknown)] {
-            let a = assess(&ScreenReport { name: None, color, monitor: cintiq() });
+            let a = assess(&ScreenReport { color, monitor: cintiq(), ..Default::default() });
             assert_eq!((a.basis, a.gamut), (basis, None));
             assert!(a.approximate());
         }

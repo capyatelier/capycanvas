@@ -97,6 +97,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.workspace_read_only = previous.workspace_read_only;
         self.managed_workspace = previous.managed_workspace.clone();
         self.state.fullscreen = previous.state.fullscreen;
+        self.state.screen = ScreenState {
+            report: previous.state.screen.report.clone(),
+            assessment: previous.state.screen.assessment,
+            show_clipped: previous.state.screen.show_clipped,
+            ..Default::default()
+        };
         self.state.customization = Default::default();
         self.state.document_file.epoch = previous.state.document_file.epoch.checked_add(1)
             .ok_or("Document activation generation exhausted")?;

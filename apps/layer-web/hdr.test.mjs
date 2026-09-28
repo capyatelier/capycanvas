@@ -44,15 +44,15 @@ export async function checkHdr({call,evaluate,settle}) {
     await checkGpuTone({call,evaluate,settle});
     let original=await hist();assert.ok(original.channels.some(c=>c.above>0));
     const hdrDisplay=await evaluate('layerApp.app.tone_status().display_hdr');
-    await wait(`document.querySelector("#hdr-status").textContent===${JSON.stringify(hdrDisplay?'HDR':'Showing SDR')}`);
+    await wait(`document.querySelector("#screen-status").textContent===${JSON.stringify(hdrDisplay?'HDR':'Showing SDR')}`);
     await output(hdrDisplay);results.hdrOutput=hdrDisplay;
     results.masterOutput=await checkHdrDisplay({evaluate},hdrDisplay);
-    const footer=await evaluate(`(()=>{const info=document.querySelector('#hdr-status'),zoom=document.querySelector('#view-info'),bar=document.querySelector('#canvas-status');const a=info.getBoundingClientRect(),b=zoom.getBoundingClientRect(),c=bar.getBoundingClientRect();const style=n=>{const s=getComputedStyle(n);return [s.fontSize,s.fontWeight,s.lineHeight,s.padding,s.borderRadius,s.backgroundColor]};return {left:a.left-c.left,right:c.right-b.right,height:[a.height,b.height],styles:[style(info),style(zoom)]}})()`);
+    const footer=await evaluate(`(()=>{const info=document.querySelector('#screen-status'),zoom=document.querySelector('#view-info'),bar=document.querySelector('#canvas-status');const a=info.getBoundingClientRect(),b=zoom.getBoundingClientRect(),c=bar.getBoundingClientRect();const style=n=>{const s=getComputedStyle(n);return [s.fontSize,s.fontWeight,s.lineHeight,s.padding,s.borderRadius,s.backgroundColor]};return {left:a.left-c.left,right:c.right-b.right,height:[a.height,b.height],styles:[style(info),style(zoom)]}})()`);
     assert.ok(Math.abs(footer.left-4)<.01);assert.ok(Math.abs(footer.right-4)<.01);assert.deepEqual(footer.height,[footer.height[0],footer.height[0]]);assert.deepEqual(footer.styles[0],footer.styles[1]);
-    await evaluate(`document.querySelector('#hdr-status').click()`);
-    await wait(`!!document.querySelector('dialog[aria-label="Display Details"][open]')`);
-    assert.ok(await evaluate(`document.querySelector('dialog[aria-label="Display Details"]').textContent.includes(${JSON.stringify(hdrDisplay?'Showing HDR':'HDR output is unavailable')})`));
-    await capture('display-details');await click('Close');
+    await evaluate(`document.querySelector('#screen-status').click()`);
+    await wait(`document.querySelector('.screen-details').matches(':popover-open')`);
+    assert.equal(await evaluate(`document.querySelector('.screen-details-headline').textContent`),hdrDisplay?'Showing HDR':'Showing the SDR version');
+    await capture('screen-details');await evaluate(`document.querySelector('.screen-details').hidePopover()`);
     mark('Independent FFmpeg PQ input opens as HDR, retains above-white samples, and completes mapped SDR analysis');
     // The GTK corner edit action, no palette footer, and HDR numeric fields.
     await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'color',visible:true}})`);

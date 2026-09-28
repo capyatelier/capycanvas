@@ -4768,7 +4768,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.update_toolbar_context();
         let regions = regions
             | if self.update_canvas_bar() { regions::CANVAS_BAR } else { 0 }
-            | self.notice_regions();
+            | self.notice_regions()
+            | self.refresh_screen_view();
         if regions & regions::CAMERA != 0 {
             self.canvas_bar_camera_moved();
         }

@@ -16,6 +16,20 @@ pub struct ScreenCheck {
 }
 
 impl ScreenCheck {
+    pub fn for_view(
+        assessment: &layer_color::screen::ScreenAssessment,
+        view: layer_core::color::RgbSpace,
+        hdr_surface: bool,
+        mark: bool,
+    ) -> Option<Self> {
+        (assessment.basis != layer_color::screen::Basis::Pending).then(|| Self {
+            from_view: assessment.from_view(view),
+            surface_clips: !hdr_surface,
+            bounded: !hdr_surface,
+            mark,
+        })
+    }
+
     pub(crate) fn uniform(check: Option<Self>) -> [f32; 16] {
         let Some(check) = check else { return [0.; 16] };
         let flag = |on: bool| if on { 1. } else { 0. };

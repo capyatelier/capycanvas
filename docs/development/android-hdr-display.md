@@ -26,10 +26,11 @@ and surface. Document adoption and GPU recovery preserve the encoding.
 GTK's linear/scRGB shoulder remains in use by GTK; it is not an obsolete
 Android experiment and is retained in the shared renderer.
 
-The left footer shows **HDR**, **SDR preview**, **Print proof**, or **Showing SDR**,
-with the zoom/rotation bubble styling. Display Details explains the current view
-and how to switch Proof. Color controls and layer thumbnails remain SDR previews.
-Web remains mapped SDR.
+The footer shows the shared screen chip (**HDR**, **SDR preview**, **Showing
+SDR**, **Colors clipped** or **May not match print**) with the zoom/rotation bubble
+styling; its popup explains the view. A separate label shows **Preparing SDR…** or
+**SDR preview unavailable** while the SDR version is analyzed. Color controls and
+layer thumbnails remain SDR previews.
 
 ## PQ display validation
 

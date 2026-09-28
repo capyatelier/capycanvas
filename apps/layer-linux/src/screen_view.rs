@@ -4,7 +4,7 @@ use crate::workspace::Workspace;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use layer_color::screen::edid::{self, Edid};
-use layer_color::screen::{Basis, ScreenReport};
+use layer_color::screen::ScreenReport;
 use layer_core::color::RgbSpace;
 use layer_ui::{ScreenChip, ScreenDetails, UiAction};
 use std::cell::{Cell, RefCell};
@@ -36,7 +36,7 @@ pub(crate) struct ScreenView {
 
 impl ScreenView {
     pub(crate) fn new() -> Rc<Self> {
-        let icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+        let icon = gtk::Image::from_icon_name("layer-warning-symbolic");
         icon.add_css_class("warning");
         let label = gtk::Label::new(None);
         let chip = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -124,19 +124,15 @@ impl ScreenView {
     pub(crate) fn sync(self: &Rc<Self>, w: &Rc<Workspace>, g: &mut GpuCanvas) {
         let (name, monitor) = self.monitor(w);
         let backend = g.session.engine().backend();
-        let report = ScreenReport { name, color: backend.screen_color, monitor };
+        let hdr_capable = monitor.as_ref().map(|m| m.pq_signal);
+        let report = ScreenReport { name, color: backend.screen_color, monitor, hdr_capable };
         #[cfg(test)]
         let report = self.forced.borrow().clone().unwrap_or(report);
         let hdr_surface = backend.display_encoding.is_some();
         let view = if hdr_surface { RgbSpace::Srgb } else { backend.view_color.space() };
         g.session.set_screen_report(report);
         let screen = &g.session.state().screen;
-        let check = (screen.assessment.basis != Basis::Pending).then(|| layer_render_wgpu::ScreenCheck {
-            from_view: screen.assessment.from_view(view),
-            surface_clips: !hdr_surface,
-            bounded: !hdr_surface,
-            mark: screen.show_clipped,
-        });
+        let check = layer_render_wgpu::ScreenCheck::for_view(&screen.assessment, view, hdr_surface, screen.show_clipped);
         let headroom = screen.assessment.headroom();
         if let Err(e) = g.session.renderer_mut().set_screen(headroom, check) {
             eprintln!("Screen check: {e}");

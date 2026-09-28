@@ -30,7 +30,7 @@ pub extern "system" fn Java_art_capycanvas_Native_toneStatus(
     handle: jlong,
 ) -> jstring {
     let a = unsafe { app(handle) };
-    let changed = a.tick_tone();
+    let changed = a.tick_tone() | a.screen_tick();
     let s = &a.host.session;
     let mut status = a.tone.status();
     for (key, value) in [

@@ -150,7 +150,8 @@ fn monitor_report(name: &str, edid: &[u8], mode: &str) -> layer_color::screen::S
     };
     ScreenReport {
         name: Some(name.into()),
-        color: ScreenColor::Described(CompositorDescription { primaries: target, target, transfer, reference_white: white, target_peak: peak }),
+        color: ScreenColor::Described(CompositorDescription { primaries: target, target, transfer, reference_white: white, target_peak: Some(peak) }),
+        hdr_capable: Some(monitor.pq_signal),
         monitor: Some(monitor),
     }
 }

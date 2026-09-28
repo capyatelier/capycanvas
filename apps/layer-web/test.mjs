@@ -52,6 +52,7 @@ import { checkImagePlacement } from "./image-placement.test.mjs";
 import { checkCanvasBar } from "./canvas-bar-journey.test.mjs";
 import { checkNotices } from "./notice-journey.test.mjs";
 import { checkZoomReadout } from "./zoom-readout-journey.test.mjs";
+import { checkScreenStatus } from "./screen-status-journey.test.mjs";
 import { checkPhotoEdit } from "./photo-edit-journey.test.mjs";
 import { checkEditor } from "./editor.test.mjs";
 import { checkColumnSizing } from "./columns.test.mjs";
@@ -194,6 +195,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--notices")) {
     await checkNotices({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--screen-status")) {
+    await checkScreenStatus({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--zoom-readout")) {
     await checkZoomReadout({call,evaluate,settle});

@@ -17,6 +17,7 @@ pub(crate) struct App {
     pub instance: Option<wgpu::Instance>,
     pub gpu_generation: u64,
     pub gpu_watch: layer_host::DeviceWatch,
+    pub screen_presented: std::time::Instant,
 }
 impl App {
     pub fn new() -> Result<Self, String> {
@@ -46,6 +47,7 @@ impl App {
             cache_directory: String::new(),
             navigators: layer_host::scene::Navigators::new(layer_host::scene::SlotUnits::Physical),
             glass: Vec::new(),
+            screen_presented: std::time::Instant::now(),
         })
     }
 }

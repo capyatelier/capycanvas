@@ -370,11 +370,15 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             }
             if (!hidden && state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")) Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
                 Row(Modifier.weight(1f),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=Alignment.Bottom) {
-                    if(host.hdr.status.isNotEmpty()) DisplayStatus(host)
                     if(host.proof.status.isNotEmpty()) Surface(Modifier.glass(TileShape),color=colors.headerSurface,shape=TileShape) {
                         Text(host.proof.status,Modifier.testTag("proof-status").clickable {host.invoke("soft_proof_setup")}
                             .padding(horizontal=10.dp,vertical=3.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
                     }
+                    if(host.hdr.status.isNotEmpty()) Surface(Modifier.glass(TileShape),color=colors.headerSurface,shape=TileShape) {
+                        Text(host.hdr.status,Modifier.testTag("tone-status").padding(horizontal=10.dp,vertical=3.dp),
+                            maxLines=1,overflow=TextOverflow.Ellipsis)
+                    }
+                    ScreenStatus(host,state.optJSONObject("screen"))
                 }
                 Surface(Modifier.glass(TileShape), color = colors.headerSurface, shape = TileShape) {
                     ZoomReadout(host)
@@ -419,16 +423,6 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         layout(((b?.number("width") ?: 0f) * density).roundToInt().coerceAtLeast(0),
             ((b?.number("height") ?: 0f) * density).roundToInt().coerceAtLeast(0)) {}
     }
-}
-
-@Composable private fun DisplayStatus(host: CanvasHost) {
-    var open by remember { mutableStateOf(false) }
-    Surface(Modifier.glass(TileShape),color=LocalPalette.current.headerSurface,shape=TileShape) {
-        Text(host.hdr.status,Modifier.testTag("hdr-status").clickable {open=true}
-            .padding(horizontal=10.dp,vertical=3.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
-    }
-    if(open) AlertDialog(onDismissRequest={open=false},title={Text("Display Details")},
-        text={Text(host.hdr.details)},confirmButton={TextButton({open=false}){Text("Close")}})
 }
 
 /** One outline/shadow for both columns, with the drawer below the tab strip. */

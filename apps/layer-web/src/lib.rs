@@ -9,6 +9,7 @@ mod source_edit;
 mod color_preferences;
 mod proof;
 mod hdr;
+mod screen;
 mod output;
 mod editor;
 mod header;
@@ -44,6 +45,7 @@ pub struct WebApp {
     overviews: std::collections::BTreeMap<u32, editor::NavigatorSurface>,
     header_drag: Option<layer_ui::HeaderDrag>,
     glass: Vec<layer_render_wgpu::BackdropRegion>,
+    screen_presented_ms: f64,
 }
 
 #[derive(Deserialize)]
@@ -327,6 +329,7 @@ impl WebApp {
             overviews: Default::default(),
             header_drag: None,
             glass: Vec::new(),
+            screen_presented_ms: 0.,
         })
     }
     pub fn gpu_ready(&self) -> bool {
@@ -1040,6 +1043,13 @@ impl WebApp {
         let hdr_output = self.hdr_output();
         let lut = self.proof.lut(&self.session);
         let (enabled, gamut) = (self.session.state().soft_proof, self.session.state().gamut_warning);
+        let screen = &self.session.state().screen;
+        let screen_check = layer_render_wgpu::ScreenCheck::for_view(
+            &screen.assessment,
+            layer_core::color::RgbSpace::Srgb,
+            hdr_output,
+            screen.show_clipped,
+        );
         self.clear_incompatible_tone()?;
         if let (Some(gpu), Some(surface)) = (self.session.engine().backend().0.as_deref(), self.surface.as_mut()) {
             let color = if hdr_output { SdrSurfaceColor::ExtendedSrgb } else { SdrSurfaceColor::Srgb };
@@ -1057,6 +1067,7 @@ impl WebApp {
                 surface.presenter_color = gpu.document_color();
             }
             surface.presenter.set_proof(gpu, lut, enabled, gamut).map_err(js)?;
+            surface.presenter.set_screen_check(gpu, screen_check);
             if hdr_output {
                 surface.presenter.set_compositor_hdr_view(gpu, rendition.unwrap()).map_err(js)?;
             } else {
@@ -1128,6 +1139,7 @@ impl WebApp {
             .map_err(js)?;
         gpu.queue().present(target);
         surface.blank_presented = true;
+        self.screen_presented_ms = now_ms;
         serialize(&change)
     }
 }
