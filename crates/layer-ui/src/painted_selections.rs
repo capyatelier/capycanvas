@@ -314,7 +314,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             return false;
         }
         self.cancel_selection_contact();
-        if self.painted_selections.gestures.is_empty() {
+        let history_waits = self.region_tools.publishing_edit()
+            && matches!(action, UiAction::Invoke { command: CommandId::Undo | CommandId::Redo });
+        if self.painted_selections.gestures.is_empty() && !history_waits {
             return false;
         }
         self.painted_selections.deferred.push_back(action.clone());
@@ -543,10 +545,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 gesture.update = None;
             }
         }
-        if self.painted_selections.gestures.is_empty() {
+        if self.painted_selections.gestures.is_empty() && !self.region_tools.publishing_edit() {
             while let Some(action) = self.painted_selections.deferred.pop_front() {
                 changed |= self.dispatch(action)?.regions;
-                if !self.painted_selections.gestures.is_empty() {
+                if !self.painted_selections.gestures.is_empty() || self.region_tools.publishing_edit() {
                     break;
                 }
             }

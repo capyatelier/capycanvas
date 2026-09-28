@@ -200,6 +200,38 @@ mod selection_tools_checks {
         assert!(s.layer_interaction.path.is_empty());
     }
     #[test]
+    fn undo_waits_for_a_completed_selection_contact_to_publish() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            invoke(&mut s, CommandId::RectangleSelect);
+            send(&mut s, PenPhase::Down, [20., 20.]);
+            send(&mut s, PenPhase::Up, [80., 80.]);
+            let rectangle = s.engine.document().selection.clone();
+            invoke(&mut s, CommandId::SelectionSubtract);
+            send(&mut s, PenPhase::Down, [40., 40.]);
+            send(&mut s, PenPhase::Up, [60., 60.]);
+            let request = s.renderer_mut().region_requests.last().unwrap().clone();
+            invoke(&mut s, CommandId::Undo);
+            assert_eq!(s.engine.document().selection, rectangle);
+            let pixels = std::sync::Arc::new(
+                layer_core::SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![0xff0000ff]).unwrap(),
+            );
+            let subtracted = Some(layer_core::Selection::pixels(pixels.clone()));
+            s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+                tonal_sample: None, placement: layer_core::Affine::IDENTITY,
+                request_id: request.request_id, pixels,
+            });
+            s.frame(2, 2).unwrap();
+            s.frame(3, 3).unwrap();
+            assert_eq!(s.engine.document().selection, rectangle);
+            invoke(&mut s, CommandId::Redo);
+            assert_eq!(s.engine.document().selection, subtracted);
+            invoke(&mut s, CommandId::Undo);
+            invoke(&mut s, CommandId::Undo);
+            assert!(s.engine.document().selection.is_none());
+        }
+    }
+    #[test]
     fn global_color_selection_uses_sources_and_rejects_stale_results() {
         let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::ColorSelect);

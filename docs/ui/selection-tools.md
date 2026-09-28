@@ -48,7 +48,9 @@ the smoothing control and produces hard edges before any requested feathering.
 
 Selection combination and feathering run once on the GPU at gesture completion,
 using the existing asynchronous region queue and stale-result checks, in the
-same bounded chunks as Refine. Unfeathered
+same bounded chunks as Refine. Undo and Redo wait for a completed contact to
+publish its edit, so an unfinished GPU result cannot make Undo remove the
+previous selection. Unfeathered
 modes skip the floating-point image intermediate. Refined masks retain 8-bit
 coverage; legacy four-sample masks remain readable. Painting, fills, layer masks,
 and affine transforms consume the same cached mask. Pooled coverage uses alpha

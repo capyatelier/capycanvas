@@ -128,6 +128,9 @@ impl RegionTools {
     pub fn busy(&self) -> bool {
         self.pending || self.queued.is_some()
     }
+    pub fn publishing_edit(&self) -> bool {
+        self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Region { .. }))
+    }
     pub fn applying_transform(&self) -> bool {
         self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform))
     }
