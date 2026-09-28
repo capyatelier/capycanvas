@@ -16,9 +16,11 @@ pub enum Tool {
     Blend,
     Liquify,
     Clone,
+    Heal,
+    SpotHeal,
 }
 impl Tool {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -28,6 +30,8 @@ impl Tool {
         Self::Blend,
         Self::Liquify,
         Self::Clone,
+        Self::Heal,
+        Self::SpotHeal,
     ];
     pub fn command(self) -> CommandId {
         match self {
@@ -40,6 +44,8 @@ impl Tool {
             Self::Blend => CommandId::Blend,
             Self::Liquify => CommandId::Liquify,
             Self::Clone => CommandId::Clone,
+            Self::Heal => CommandId::Heal,
+            Self::SpotHeal => CommandId::SpotHeal,
         }
     }
     pub fn default_preset(self) -> u32 {
@@ -69,7 +75,7 @@ impl ToolFamily {
             Self::Ink => &[CommandId::Pen, CommandId::Pencil],
             Self::Paint => &[CommandId::Brush, CommandId::Airbrush, CommandId::Decoration],
             Self::Blend => &[CommandId::Blend, CommandId::Liquify],
-            Self::Retouch => &[CommandId::Clone],
+            Self::Retouch => &[CommandId::Clone, CommandId::Heal, CommandId::SpotHeal],
         }
     }
     pub fn shortcut_id(self) -> &'static str {
@@ -112,9 +118,11 @@ pub enum ToolGroup {
     Blend,
     Liquify,
     Clone,
+    Heal,
+    SpotHeal,
 }
 impl ToolGroup {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::Pen,
         Self::Marker,
         Self::Pencil,
@@ -129,6 +137,8 @@ impl ToolGroup {
         Self::Blend,
         Self::Liquify,
         Self::Clone,
+        Self::Heal,
+        Self::SpotHeal,
     ];
     pub fn tool(self) -> Tool {
         match self {
@@ -141,6 +151,8 @@ impl ToolGroup {
             Self::Blend => Tool::Blend,
             Self::Liquify => Tool::Liquify,
             Self::Clone => Tool::Clone,
+            Self::Heal => Tool::Heal,
+            Self::SpotHeal => Tool::SpotHeal,
         }
     }
     pub fn label(self) -> &'static str {
@@ -159,6 +171,8 @@ impl ToolGroup {
             Self::Blend => "Blend",
             Self::Liquify => "Liquify",
             Self::Clone => "Clone",
+            Self::Heal => "Heal",
+            Self::SpotHeal => "Spot Heal",
         }
     }
     /// Identity of the medium, independent of its parent drawing engine.
@@ -178,6 +192,8 @@ impl ToolGroup {
             Self::Blend => "blend",
             Self::Liquify => "liquify",
             Self::Clone => "clone",
+            Self::Heal => "heal",
+            Self::SpotHeal => "spot-heal",
         }
     }
     fn default_preset(self) -> u32 {
@@ -327,6 +343,8 @@ const PRESETS: &[(DefaultBrushPreset, &str, ToolGroup)] = &[
         ToolGroup::Liquify,
     ),
     (DefaultBrushPreset::CloneStamp, "Clone Stamp", ToolGroup::Clone),
+    (DefaultBrushPreset::HealingBrush, "Healing Brush", ToolGroup::Heal),
+    (DefaultBrushPreset::SpotHealingBrush, "Spot Healing Brush", ToolGroup::SpotHeal),
 ];
 
 pub fn brush_catalog() -> impl Iterator<Item = BrushChoice> {
@@ -412,11 +430,16 @@ impl crate::UiState {
     }
 }
 pub(crate) fn is_drawing(tool: Tool) -> bool {
-    !matches!(tool, Tool::Eraser | Tool::Blend | Tool::Liquify | Tool::Clone)
+    !matches!(tool, Tool::Eraser | Tool::Blend | Tool::Liquify) && !is_retouching(tool)
 }
 
 pub(crate) fn is_sculpt(tool: Tool) -> bool {
-    matches!(tool, Tool::Blend | Tool::Liquify | Tool::Clone)
+    matches!(tool, Tool::Blend | Tool::Liquify) || is_retouching(tool)
+}
+
+/// Retouching tools paint with pixels from the image rather than a color.
+pub(crate) fn is_retouching(tool: Tool) -> bool {
+    matches!(tool, Tool::Clone | Tool::Heal | Tool::SpotHeal)
 }
 
 fn sets(brush: &BrushState, canvas_tool: LayerCanvasTool, includes: fn(Tool) -> bool) -> Vec<ToolSetItem> {
@@ -746,7 +769,7 @@ mod tests {
 
     #[test]
     fn every_brush_has_one_tool_and_group_and_every_group_is_populated() {
-        assert_eq!(PRESETS.len(), 39);
+        assert_eq!(PRESETS.len(), 41);
         let mut ids = std::collections::BTreeSet::new();
         for &(preset, _, group) in PRESETS {
             assert!(ids.insert(preset as u32));

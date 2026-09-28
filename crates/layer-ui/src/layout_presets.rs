@@ -201,7 +201,12 @@ impl WorkspacePreset {
             .and_then(|index| tiles.get(index + 1))
             .map(|tile| tile.id);
         layout
-            .insert_tools(Panel::Toolbar, after_liquify, &[ToolbarControl::Command { command: crate::CommandId::Clone }])
+            .insert_tools(
+                Panel::Toolbar,
+                after_liquify,
+                &[crate::CommandId::Clone, crate::CommandId::Heal, crate::CommandId::SpotHeal]
+                    .map(|command| ToolbarControl::Command { command }),
+            )
             .expect("retouching tools after the painting tools");
         for (before, commands) in [
             (Lasso, &[RectangleSelect, EllipseSelect][..]),

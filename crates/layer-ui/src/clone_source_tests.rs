@@ -209,3 +209,67 @@ fn clone_strokes_explain_a_turned_layer() {
     assert_eq!(s.state.notice.as_ref().map(|n| n.text.as_str()), Some("This layer is scaled or rotated, so it can't be retouched directly. Retouch on a new layer above it."));
     assert_eq!(s.engine.document().revision, revision);
 }
+
+#[test]
+fn healing_brushes_join_the_retouching_tools_and_spot_healing_needs_no_disc() {
+    let mut s = clone_session();
+    for tool in [Tool::Heal, Tool::SpotHeal, Tool::Clone] {
+        key(&mut s, "s", true, false, false);
+        key(&mut s, "s", false, false, false);
+        assert_eq!(s.state.brush.tool, tool, "S cycles the retouching tools");
+    }
+    assert_eq!(
+        s.state.tool_panels.sculpt_sets.groups.iter().map(|g| g.label).collect::<Vec<_>>(),
+        ["Blend", "Liquify", "Clone", "Heal", "Spot Heal"]
+    );
+
+    invoke(&mut s, CommandId::Heal);
+    assert_eq!(s.engine.configured_brush().execution, layer_core::BrushExecution::Heal);
+    assert_eq!(UiSession::<Recorder>::tool_category(s.layer_interaction.tool, s.state.brush.tool), ToolCategory::Retouching);
+    assert!(s.clone_disc().is_some(), "healing copies from the source disc");
+    assert_eq!(s.state.tool_actions.len(), 7);
+    held_key(&mut s, "Alt_L", true, Modifiers::default());
+    assert!(s.command(CommandId::CloneSourceArm).selected, "Alt sets the healing source");
+    held_key(&mut s, "Alt_L", false, alt());
+
+    invoke(&mut s, CommandId::SpotHeal);
+    assert_eq!(s.engine.configured_brush().execution, layer_core::BrushExecution::SpotHeal);
+    assert!(s.clone_disc().is_none(), "spot healing has no disc");
+    let actions: Vec<_> = s.state.tool_actions.iter().map(|a| a.command).collect();
+    assert_eq!(actions, [CommandId::SelectionReference, CommandId::SelectionEditing]);
+    assert!(s.command(CommandId::SelectionReference).enabled && s.command(CommandId::SelectionReference).selected);
+    for command in [CommandId::CloneSourceArm, CommandId::CloneAligned, CommandId::CloneResetOffset] {
+        assert!(!s.command(command).enabled);
+        assert_eq!(s.command_disabled_reason(command).as_deref(), Some("Spot Healing finds its own source"), "{command:?}");
+    }
+    held_key(&mut s, "Alt_L", true, Modifiers::default());
+    assert!(!s.command(CommandId::CloneSourceArm).selected, "Alt does not arm a source spot healing never uses");
+    held_key(&mut s, "Alt_L", false, alt());
+    let at = disc(&s);
+    let reply = contact(&mut s, 1, PointerKind::Pen, ContactPhase::Down, at);
+    assert!(reply.paint, "the pen paints wherever the Clone disc was");
+    contact(&mut s, 1, PointerKind::Pen, ContactPhase::Cancel, at);
+}
+
+#[test]
+fn photo_keymaps_bind_the_healing_tools() {
+    let mut settings = Settings::default();
+    for (keymap, healing) in [
+        ("photoshop", [("j", false, CommandId::SpotHeal), ("j", true, CommandId::Heal)]),
+        ("affinity", [("j", false, CommandId::SpotHeal), ("j", true, CommandId::Heal)]),
+    ] {
+        crate::keymaps::select(&mut settings, keymap).unwrap();
+        for (letter, shift, command) in healing {
+            assert_eq!(bound(&settings, &chord(letter, false, shift, false)), Some(command.shortcut_id()), "{keymap} {letter}");
+        }
+    }
+    crate::keymaps::select(&mut settings, "gimp").unwrap();
+    assert_eq!(bound(&settings, &chord("h", false, false, false)), Some(CommandId::Heal.shortcut_id()));
+    let photo = WorkspacePreset::Photographer.layout(Platform::Gtk);
+    let tools: Vec<_> = photo.panel(Panel::Toolbar).unwrap().tiles().iter().map(|t| t.control).collect();
+    let clone = tools.iter().position(|c| *c == ToolbarControl::Command { command: CommandId::Clone }).unwrap();
+    assert_eq!(
+        tools[clone..clone + 3],
+        [CommandId::Clone, CommandId::Heal, CommandId::SpotHeal].map(|command| ToolbarControl::Command { command })
+    );
+}

@@ -28,7 +28,7 @@ impl DryRecords {
 }
 
 pub(super) struct Gather {
-    fields: [(wgpu::Texture, wgpu::TextureView); 2],
+    pub(super) fields: [(wgpu::Texture, wgpu::TextureView); 2],
     pages: wgpu::Buffer,
     complete: wgpu::Buffer,
 }
@@ -385,7 +385,7 @@ impl WgpuRasterizer {
         result
     }
 
-    fn ensure_material_gather(&mut self) {
+    pub(super) fn ensure_material_gather(&mut self) {
         if self.material_gather.is_none() {
             let gather = Gather::new(&self.device);
             self.metrics.material_sample_storage_bytes = gather.storage_bytes();
@@ -393,9 +393,10 @@ impl WgpuRasterizer {
         }
     }
 
-    /// Gather what the Clone batch copies onto the `local` part of page
+    /// Gather what the retouching batch copies onto the `local` part of page
     /// `coordinate` into the first sample field, which the deposit reads from
-    /// its dirty rectangle's corner. A batch without a source copies nothing.
+    /// its dirty rectangle's corner. Spot Healing lays a translucent tint until
+    /// pen-up finds its source; a batch without a source copies nothing.
     pub(super) fn clone_source_binding(
         &mut self,
         batch: &DabBatch,
@@ -410,6 +411,9 @@ impl WgpuRasterizer {
         let [x, y] = coordinate.map(|v| v * PAGE_SIZE);
         let region = PixelRect::new(x + local.min_x(), y + local.min_y(), x + local.max_x(), y + local.max_y());
         match &batch.style.retouch {
+            _ if batch.style.execution == BrushExecution::SpotHeal => {
+                drop(encoder.color_pass("spot healing tint", &field, wgpu::LoadOp::Clear(crate::retouch_sources::SPOT_TINT)))
+            }
             Some(retouch) if !region.is_empty() => {
                 let scale = retouch.flip.map(|f| if f { -1. } else { 1. });
                 let source = crate::retouch_sources::Gather {

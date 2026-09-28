@@ -77,7 +77,7 @@ pub enum StrokeRefusal {
     /// A retouching stroke would copy nothing: its layer is empty and it
     /// samples no reference layer below.
     EmptySource(RetouchSource),
-    /// The Clone tool has no source point yet.
+    /// The Clone Stamp or Healing Brush has no source point yet.
     NoCloneSource,
     /// Retouching reads and writes the layer's own pixels, which a rotated or
     /// scaled layer does not line up with.
@@ -891,10 +891,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.prepared_retouch = prepared.map(|p| (document.id.clone(), document.revision, p));
     }
 
-    /// Map the Clone stroke starting at `first`, in brush space shifted by the
-    /// target's `offset`, to its source.
+    /// Map a stroke that copies from the source point, starting at `first` in
+    /// brush space shifted by the target's `offset`, to its source.
     fn begin_clone_stroke(&mut self, first: layer_core::Point, offset: layer_core::Point) {
-        let Some(active) = self.active_stroke.as_mut().filter(|a| a.brush.execution == BrushExecution::Clone) else {
+        let Some(active) = self.active_stroke.as_mut().filter(|a| a.brush.execution.copies_from_source()) else {
             return;
         };
         active.clone_start = Some(self.clone_source);
@@ -970,7 +970,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if [a, b, c, d] != [1., 0., 0., 1.] {
             return Some(StrokeRefusal::TransformedLayer);
         }
-        if self.brush.execution == BrushExecution::Clone && self.clone_source.point.is_none() {
+        if self.brush.execution.copies_from_source() && self.clone_source.point.is_none() {
             return Some(StrokeRefusal::NoCloneSource);
         }
         let empty = layer.source.is_none()
@@ -1675,10 +1675,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 let active = ActiveStroke {
                     paint_color: (!is_mask
                         && tool == StrokeTool::Brush
-                        && !matches!(
-                            brush.execution,
-                            BrushExecution::Smudge | BrushExecution::Liquify | BrushExecution::Clone
-                        )
+                        && !matches!(brush.execution, BrushExecution::Smudge | BrushExecution::Liquify)
+                        && !brush.execution.retouches()
                         && brush.opacity > 0.
                         && brush.flow > 0.
                         && brush.color_rgba_linear[3] > 0.)
@@ -2341,7 +2339,7 @@ fn push_batches(batches: &mut Vec<DabBatch>, dabs: &[Dab], batch: DabBatch) {
         // contacts together avoids repeated full-page color/coverage copies;
         // persistent replay keeps the fixed microbatch boundary below.
         (BrushExecution::Watercolor, DabBatchKind::Preview) => u32::MAX,
-        (BrushExecution::Dry | BrushExecution::Clone, _) => u32::MAX,
+        (BrushExecution::Dry | BrushExecution::Clone | BrushExecution::Heal | BrushExecution::SpotHeal, _) => u32::MAX,
         (BrushExecution::Wet | BrushExecution::Watercolor, _) => MAX_WET_DABS_PER_BATCH,
         (BrushExecution::Liquify, _) => 1,
         (BrushExecution::Smudge, _) => unreachable!("handled above"),
@@ -2376,7 +2374,8 @@ fn push_batches(batches: &mut Vec<DabBatch>, dabs: &[Dab], batch: DabBatch) {
 
 fn push_mergeable_batch(batches: &mut Vec<DabBatch>, dabs: &[Dab], batch: DabBatch) {
     if let Some(last) = batches.last_mut()
-        && (matches!(batch.style.execution, BrushExecution::Dry | BrushExecution::Clone)
+        && (batch.style.execution == BrushExecution::Dry
+            || batch.style.execution.retouches()
             || (matches!(
                 batch.style.execution,
                 BrushExecution::Wet | BrushExecution::Watercolor
@@ -2833,6 +2832,31 @@ mod tests {
         moved.properties.placement = layer_core::Affine([2., 0., 0., 2., 0., 0.]);
         engine.apply_edit(Edit::ReplaceLayer(Box::new(moved))).unwrap();
         assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::TransformedLayer));
+    }
+
+    #[test]
+    fn healing_maps_through_the_source_and_spot_healing_needs_none() {
+        let (mut input, mut engine) =
+            engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
+        engine.apply_edit(Edit::SetReferences([LayerId(40)].into())).unwrap();
+        engine.set_retouch(Some(RetouchSource::References));
+        let down = event(1, PenPhase::Down, 8.);
+        engine.set_brush(default_brush(DefaultBrushPreset::HealingBrush)).unwrap();
+        assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::NoCloneSource));
+        engine.set_clone_source(CloneSource { point: Some(Point { x: 40., y: 30. }), ..CloneSource::default() });
+        let healed = clone_stroke(&mut engine, &mut input, 10, 8.);
+        let start = healed.points[0].position;
+        assert_eq!(healed.retouch.unwrap().offset, [40. - start.x, 30. - start.y]);
+        assert_eq!(engine.backend().styles.last().unwrap().execution, BrushExecution::Heal);
+
+        engine.set_brush(default_brush(DefaultBrushPreset::SpotHealingBrush)).unwrap();
+        engine.set_clone_source(CloneSource::default());
+        assert_eq!(engine.stroke_refusal(&down), None, "spot healing finds its own source");
+        let spot = clone_stroke(&mut engine, &mut input, 20, 30.);
+        let retouch = spot.retouch.unwrap();
+        assert_eq!(retouch.offset, [0.; 2]);
+        assert_eq!(*retouch.references, [LayerId(40)].into());
+        assert_eq!(engine.clone_source(), CloneSource::default(), "spot healing leaves the clone source alone");
     }
 
     #[test]

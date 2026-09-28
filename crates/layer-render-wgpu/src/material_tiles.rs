@@ -152,7 +152,7 @@ impl WgpuRasterizer {
                 self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
                 compute_jobs.clear();
             }
-            let source_bind_group = if batch.style.execution == BrushExecution::Clone {
+            let source_bind_group = if batch.style.execution.retouches() {
                 self.clone_source_binding(batch, job.coordinate, job.local, preview && !from_persistent, encoder)?
             } else {
                 self.material_source_binding(

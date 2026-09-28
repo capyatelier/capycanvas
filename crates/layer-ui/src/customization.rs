@@ -1032,6 +1032,8 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::SelectionReference => "Sample layers marked as references",
                 CommandId::CloneSourceArm => "Click to choose where retouching copies from",
                 CommandId::Clone => "Paint with pixels copied from another part of the image",
+                CommandId::Heal => "Copy pixels that blend into the tone around the stroke",
+                CommandId::SpotHeal => "Remove spots with texture from nearby",
                 CommandId::CloneAligned => "Keep the source moving with the brush across strokes",
                 CommandId::CloneFlipHorizontal => "Mirror the copied pixels left to right",
                 CommandId::CloneFlipVertical => "Mirror the copied pixels top to bottom",

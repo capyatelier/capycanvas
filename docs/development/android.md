@@ -124,9 +124,9 @@ behavior and high-refresh presentation need a real tablet.
 
 - [`AndroidInteractionTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidInteractionTest.kt):
   drawers, drag geometry, panels, the canvas action bar, notices, the zoom
-  readout and effects, each with mouse, finger and stylus. It dispatches typed
-  `MotionEvent`s through the native views; `-e systemInput true` uses OS
-  injection where the device allows it.
+  readout, effects and retouching, each with mouse, finger and stylus. It
+  dispatches typed `MotionEvent`s through the native views;
+  `-e systemInput true` uses OS injection where the device allows it.
 - [`AndroidWorkspaceManagerTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidWorkspaceManagerTest.kt)
   and [`AndroidWorkspaceSwitcherTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidWorkspaceSwitcherTest.kt):
   persistence, menus and window lifecycle. `AndroidWorkspaceOwnershipTest`
@@ -253,8 +253,9 @@ size. Then
 passes `-e preset`, `-e brushSize` and `-e mode` (`constant`, `pressure`, `tilt`,
 `stationary`, `lifts`, `visual` or `pinch`); `--trace` and `--profile` add
 Perfetto and simpleperf captures. The default preset list is the dry brushes;
-`--presets` accepts every built-in preset, including wet, smudge, Liquify and
-Clone Stamp, which copies from the photo as a reference layer.
+`--presets` accepts every built-in preset, including wet, smudge, Liquify, and
+Clone Stamp, Healing Brush and Spot Healing Brush, which read the photo as a
+reference layer.
 `python3 tools/performance/android-brush-report.py OUT` summarizes completed
 canvas updates per second, the rate the performance targets use for brushes.
 Run directly, the instrumentation also accepts `-e navigationBetweenStrokes true`

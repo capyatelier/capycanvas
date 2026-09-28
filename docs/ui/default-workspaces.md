@@ -33,7 +33,7 @@ Load Layout, and workspace changes save automatically.
   and shortcut hints.
 - **Tool keys** follow [Clip Studio Paint's families](https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Tool_Shortcuts.htm):
   P Pen/Pencil, B Brush/Airbrush/Decoration, E Eraser, J Blend/Liquify, S
-  Clone Stamp, M selection, W Auto select, F Fill, G Gradient, O Move, U Figure, Shift+U Ruler,
+  Clone Stamp/Healing Brush/Spot Healing Brush, M selection, W Auto select, F Fill, G Gradient, O Move, U Figure, Shift+U Ruler,
   H Hand and I Eyedropper. Repeating a family key cycles its tools in toolbar
   order. Space pans temporarily, Tab toggles Zen, and Primary+0 fits the canvas.
 - **Tool Set and Tool** show only the active tool's groups and settings. Group
@@ -74,7 +74,7 @@ set's tools with stroke previews, and Tool holds the settings. Brush restores
 the most recently selected drawing tool; clicking it while selected opens or
 closes its drawer, and choosing a set keeps the drawer open and restores that
 set's last tool. **Sculpt** opens **Sculpting → Tools → Tool** with Blend,
-Liquify and Clone, and Eraser has a two-panel **Tools → Tool** drawer. Brush and Sculpt
+Liquify, Clone, Heal and Spot Heal, and Eraser has a two-panel **Tools → Tool** drawer. Brush and Sculpt
 each remember their own selection across workspace switches and restarts.
 Brushes, Sculpting and Tools are ordinary panels: Brushes starts 160 logical
 pixels wide, shrinks to 104, and uses rows at least 44 pixels tall (48 dp on
@@ -85,10 +85,11 @@ inserts it above the selected layer, or replaces the selected filter while
 keeping its identity, mask and clipping. Cancel deletes the selected filter and
 closes the drawer, as one undoable step.
 
-Photo adds the Crop tool after Operation, and Clone Stamp after Liquify, in the
-Tools toolbar on every host (see the [crop bar](canvas-action-bar.md#crop) and
-[retouching](../internals/brushes.md#clone-stamp)). Clone Stamp is also one of
-the sets in Sculpt's Sculpting panel, beside Blend and Liquify.
+Photo adds the Crop tool after Operation, and Clone Stamp, Healing Brush and
+Spot Healing Brush after Liquify, in the Tools toolbar on every host (see the
+[crop bar](canvas-action-bar.md#crop) and
+[retouching](../internals/brushes.md#clone-stamp)). They are also sets in
+Sculpt's Sculpting panel, beside Blend and Liquify.
 
 ## Workspace behavior
 

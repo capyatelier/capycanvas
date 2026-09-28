@@ -4576,7 +4576,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::Decoration
             | CommandId::Blend
             | CommandId::Liquify
-            | CommandId::Clone => {
+            | CommandId::Clone
+            | CommandId::Heal
+            | CommandId::SpotHeal => {
                 self.select_brush(self.tools.tool(command.paint_tool().unwrap()))?;
                 Ok((BRUSH, false))
             }
@@ -5467,7 +5469,7 @@ fn valid_viewport(viewport: [f32; 2]) -> Result<(), String> {
 /// The brush color and stroke kind `tool` paints with. A retouching tool
 /// copies pixels, so it has no color of its own and never erases.
 fn stroke_paint(tool: Tool, colors: &ColorState, space: layer_core::color::RgbSpace) -> Result<([f32; 4], StrokeTool), String> {
-    if tool == Tool::Clone {
+    if tools::is_retouching(tool) {
         return Ok(([0., 0., 0., 1.], StrokeTool::Brush));
     }
     let erases = tool == Tool::Eraser || colors.transparent();
@@ -8237,7 +8239,7 @@ mod tests {
             s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
             let drawer = s.state.customization.drawer.clone().unwrap();
             assert_eq!(drawer.columns, [vec![Panel::SculptSets], vec![Panel::Tools], vec![Panel::ToolSettings]]);
-            assert_eq!(s.state.tool_panels.sculpt_sets.groups.iter().map(|s| s.label).collect::<Vec<_>>(), ["Blend", "Liquify", "Clone"]);
+            assert_eq!(s.state.tool_panels.sculpt_sets.groups.iter().map(|s| s.label).collect::<Vec<_>>(), ["Blend", "Liquify", "Clone", "Heal", "Spot Heal"]);
             for set in s.state.tool_panels.sculpt_sets.groups.clone() {
                 s.dispatch(set.action).unwrap();
                 assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
@@ -8252,8 +8254,8 @@ mod tests {
             assert!(!s.command(CommandId::Sculpt).selected);
             assert!(!s.command(CommandId::DrawingBrush).selected);
             assert_eq!(s.command(CommandId::DrawingBrush).icon, Some("pencil"));
-            assert_eq!(s.command(CommandId::Sculpt).icon, Some("clone"));
-            assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, "clone");
+            assert_eq!(s.command(CommandId::Sculpt).icon, Some("spot-heal"));
+            assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, "spot-heal");
             let eraser = s.state.workspace.layout.header.entries().find(|e|
                 e.item == HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Eraser } }).unwrap().id;
             s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds {
@@ -8267,7 +8269,7 @@ mod tests {
             let mut restored = session(platform);
             restored.adopt_workspace(PreparedWorkspace::new(serde_json::from_str(&json).unwrap()).unwrap()).unwrap();
             assert_eq!(restored.command(CommandId::DrawingBrush).icon, Some("pencil"));
-            assert_eq!(restored.command(CommandId::Sculpt).icon, Some("clone"));
+            assert_eq!(restored.command(CommandId::Sculpt).icon, Some("spot-heal"));
             invoke(&mut restored, CommandId::DrawingBrush);
             assert_eq!((restored.state.brush.preset, restored.state.brush.diameter), (drawing, 23.));
             invoke(&mut restored, CommandId::Sculpt);

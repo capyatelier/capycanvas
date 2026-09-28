@@ -83,8 +83,9 @@ is which.
 
 Modifier keys are the first shortcut category. Holding one uses an action until
 release, chosen per tool category, so Alt samples color with drawing, blending,
-fill and gradient tools, sets the source with retouching tools, and does nothing
-with selection tools, which keep their own Alt behavior. With a tool filter, the
+fill and gradient tools, sets the source with the Clone Stamp and Healing Brush,
+and does nothing with selection tools, which keep their own Alt behavior, or
+with the Spot Healing Brush, which has no source to set. With a tool filter, the
 shortcuts page shows each modifier key's action for that kind of tool. Space
 pans. Any key or button can be a modifier key, alone or
 with Shift, Ctrl or Alt, including letters, F13–F24, gamepad and tablet pad

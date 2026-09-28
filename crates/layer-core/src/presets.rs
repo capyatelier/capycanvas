@@ -57,6 +57,8 @@ pub enum DefaultBrushPreset {
     LiquifyExpand = 38,
     LiquifyCrystals = 39,
     CloneStamp = 40,
+    HealingBrush = 41,
+    SpotHealingBrush = 42,
 }
 
 /// Returns a complete immutable preset snapshot. Callers may override color,
@@ -307,19 +309,9 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             mappings: Arc::from([BrushMapping::pressure_size()]),
             ..BrushSnapshot::default()
         },
-        DefaultBrushPreset::CloneStamp => BrushSnapshot {
-            diameter: 160.0,
-            hardness: 0.5,
-            flow: 1.0,
-            spacing: 0.08,
-            execution: BrushExecution::Clone,
-            rendering: BrushRendering {
-                accumulation: BrushAccumulation::Uniform,
-                ..BrushRendering::default()
-            },
-            mappings: Arc::from([BrushMapping::pressure_size()]),
-            ..BrushSnapshot::default()
-        },
+        DefaultBrushPreset::CloneStamp => retouching(BrushExecution::Clone, 160.0, 0.5),
+        DefaultBrushPreset::HealingBrush => retouching(BrushExecution::Heal, 120.0, 0.5),
+        DefaultBrushPreset::SpotHealingBrush => retouching(BrushExecution::SpotHeal, 60.0, 0.6),
         DefaultBrushPreset::MultiplyGlaze => BrushSnapshot {
             color_rgba_linear: [0.12, 0.28, 0.72, 1.0],
             diameter: 240.0,
@@ -556,6 +548,24 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
     }
 }
 
+/// A retouching brush: a round tip whose stroke coverage is uniform, so each
+/// pixel takes the source once however many dabs cross it.
+fn retouching(execution: BrushExecution, diameter: f32, hardness: f32) -> BrushSnapshot {
+    BrushSnapshot {
+        diameter,
+        hardness,
+        flow: 1.0,
+        spacing: 0.08,
+        execution,
+        rendering: BrushRendering {
+            accumulation: BrushAccumulation::Uniform,
+            ..BrushRendering::default()
+        },
+        mappings: Arc::from([BrushMapping::pressure_size()]),
+        ..BrushSnapshot::default()
+    }
+}
+
 struct PainterBrushSpec {
     diameter: f32,
     aspect: f32,
@@ -735,6 +745,8 @@ mod tests {
             DefaultBrushPreset::LiquifyExpand,
             DefaultBrushPreset::LiquifyCrystals,
             DefaultBrushPreset::CloneStamp,
+            DefaultBrushPreset::HealingBrush,
+            DefaultBrushPreset::SpotHealingBrush,
             DefaultBrushPreset::MultiplyGlaze,
             DefaultBrushPreset::TexturedFlat,
             DefaultBrushPreset::DryScumble,

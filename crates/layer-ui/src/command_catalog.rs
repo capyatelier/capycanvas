@@ -449,6 +449,8 @@ fn action_description(action: &UiAction) -> &'static str {
                 "Use the last brush selected in this tool family."
             }
             Clone => "Paint with pixels copied from the source disc; Set Source picks its spot. With Reference layers it copies the marked layers below the editing layer and the editing layer itself, while Wand and Fill sample every marked layer.",
+            Heal => "Paint with pixels copied from the source disc, like the Clone Stamp. When you lift the pen, the copy takes on the color and brightness around the stroke while keeping its texture.",
+            SpotHeal => "Paint over a spot or blemish. When you lift the pen, it is replaced with texture from the most similar nearby area, blended into its surroundings. It matches by proximity only; Content-Aware and Create Texture aren't available.",
             Select => "Return to the last selection tool.",
             SelectionBrush => "Paint the area that subsequent edits will affect.",
             SelectionIntersect => "Keep only the area shared by the existing and new selections.",
@@ -593,7 +595,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Tool::Eraser => ToolCategory::Erasing,
                 Tool::Blend => ToolCategory::Blending,
                 Tool::Liquify => ToolCategory::Warping,
-                Tool::Clone => ToolCategory::Retouching,
+                Tool::Clone | Tool::Heal | Tool::SpotHeal => ToolCategory::Retouching,
                 _ => ToolCategory::Drawing,
             },
             T::Hand => ToolCategory::Navigation,
@@ -1301,6 +1303,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::MaskSelection => "Select an unlocked artwork layer",
             C::SelectionVisible => "Choose a selection tool first",
             C::SelectionEditing | C::SelectionReference => "Choose a selection or retouching tool first",
+            C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical | C::CloneResetOffset
+                if self.state.brush.tool == Tool::SpotHeal && self.retouching() =>
+            {
+                "Spot Healing finds its own source"
+            }
             C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical => {
                 "Choose a retouching tool first"
             }

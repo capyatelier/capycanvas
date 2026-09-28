@@ -42,7 +42,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn press_momentary(&mut self, token: String, action: UiAction) -> Result<UiChange, String> {
-        if self.interaction.momentary.iter().any(|(t, _)| *t == token) {
+        let disabled = matches!(action, UiAction::Invoke { command } if !self.command(command).enabled);
+        if disabled || self.interaction.momentary.iter().any(|(t, _)| *t == token) {
             return Ok(UiChange::default());
         }
         let restore = match action {

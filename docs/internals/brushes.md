@@ -143,6 +143,44 @@ Aligned flag, the flips and, once an aligned stroke has started, its offset.
 
 Only translation is supported: the source is not rotated or scaled.
 
+## Healing Brush and Spot Healing Brush
+
+Both heal when the pen lifts, in the submission of the stroke's last batch
+([`heal.rs`](../../crates/layer-render-wgpu/src/heal.rs),
+[`heal.wgsl`](../../crates/layer-render-wgpu/src/heal.wgsl)). The stroke's raster
+is already pending then, so its capture, its one undo step, replays and late
+corrections all include the healed pixels.
+
+- **Healing Brush** (`BrushExecution::Heal`) paints the Clone Stamp's copy while
+  the pen is down, with the same source, disc and options. At pen-up each page
+  the stroke painted becomes `S + h` over the page as the stroke found it: `S` is
+  the copy, and `h` is a membrane that matches `D = B − S` where the stroke
+  leaves the image uncovered, `B` being the source composite at the destination.
+  The copy keeps its texture and takes on the color and brightness around the
+  stroke. Where `D` is zero, `h` is zero and the result is exactly the clone.
+- **Spot Healing Brush** (`BrushExecution::SpotHeal`) needs no source point.
+  While the pen is down it lays a translucent grey tint. At pen-up it scores 16
+  candidate sources, 8 directions at 1.25 and 2 times the stroke's extent, by the
+  squared difference of `B` against the shifted `B` over the uncovered part of a
+  window around the stroke, plus a cost for a candidate window that overlaps the
+  stroke or leaves the image. A workgroup reduction per page and one argmin pass
+  choose the candidate on the GPU, the first winning a tie, and write indirect
+  draw records, so only the chosen source is gathered, with no readback. The
+  healing blend follows. Only proximity matching is available; Content-Aware and
+  Create Texture are not.
+- **Membrane.** `h` is solved over the stroke's pages, within a window on each
+  page around the dabs plus a margin: pull-push down a pyramid whose finest
+  level keeps one tile per page, each cell weighted by `1 − coverage`, then 32
+  red-black relaxation sweeps at the finest level, eight at a time within 16 by
+  16 blocks that alternate like a checkerboard. Levels and sweeps are fixed and
+  nothing uses atomics, so replays match. Up to 4 megapixels of pages heal at
+  full resolution; larger strokes heal at half or quarter resolution and the
+  membrane is upsampled. In integer documents a healed pixel's color stays
+  within its alpha. Healing composites over the layer as the stroke found it,
+  so a transparent source, like the Clone Stamp's, never erases.
+
+The healing pipelines compile with the retouching pipelines, before pen-down.
+
 ## Performance and mobile devices
 
 The main reason to put pixel work on the GPU is the cost of brushes that interact

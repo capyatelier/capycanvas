@@ -539,6 +539,8 @@ command_ids! {
     ColorMixOklab,
     ColorMixLinear,
     ColorMixClassic,
+    Heal,
+    SpotHeal,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -644,6 +646,8 @@ impl CommandId {
             Self::CancelSelection => "deselect",
             Self::CloneSourceArm => "cursor-sight",
             Self::Clone => "clone",
+            Self::Heal => "heal",
+            Self::SpotHeal => "spot-heal",
             Self::CloneAligned => "link",
             Self::CloneFlipHorizontal => "flip-horizontal",
             Self::CloneFlipVertical => "flip-vertical",
@@ -775,7 +779,7 @@ impl CommandId {
             Self::ColorMixClassic => "color-mix-classic",
         })
     }
-    pub const TOOLS: [Self; 28] = [
+    pub const TOOLS: [Self; 30] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::Pen,
@@ -787,6 +791,8 @@ impl CommandId {
         Self::Blend,
         Self::Liquify,
         Self::Clone,
+        Self::Heal,
+        Self::SpotHeal,
         Self::Lasso,
         Self::LassoFill,
         Self::Select,
@@ -879,6 +885,8 @@ impl CommandId {
             Self::CancelSelection => "Cancel selection",
             Self::CloneSourceArm => "Set Source",
             Self::Clone => "Clone Stamp",
+            Self::Heal => "Healing Brush",
+            Self::SpotHeal => "Spot Healing Brush",
             Self::CloneAligned => "Aligned Source",
             Self::CloneFlipHorizontal => "Flip Source Horizontally",
             Self::CloneFlipVertical => "Flip Source Vertically",

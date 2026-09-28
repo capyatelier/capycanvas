@@ -477,6 +477,29 @@ pub enum BrushExecution {
     /// Copies the stroke's retouching source through its offset instead of
     /// laying down a color.
     Clone,
+    /// Clones while the pen is down; at pen-up the copy takes on the tone and
+    /// color around the stroke.
+    Heal,
+    /// Tints while the pen is down; at pen-up the stroke is replaced with
+    /// nearby pixels healed into the stroke's surroundings.
+    SpotHeal,
+}
+
+impl BrushExecution {
+    /// Retouching executions paint from the stroke's source, not a color.
+    pub fn retouches(self) -> bool {
+        matches!(self, Self::Clone | Self::Heal | Self::SpotHeal)
+    }
+
+    /// Retouching executions that copy through an offset from a source point.
+    pub fn copies_from_source(self) -> bool {
+        matches!(self, Self::Clone | Self::Heal)
+    }
+
+    /// Executions blended into the stroke's surroundings at pen-up.
+    pub fn heals(self) -> bool {
+        matches!(self, Self::Heal | Self::SpotHeal)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

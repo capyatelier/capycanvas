@@ -10,6 +10,8 @@ use layer_engine::{
 use layer_render::{RetouchPreparation, ViewState};
 #[path = "clone_tests.rs"]
 mod clone;
+#[path = "heal_tests.rs"]
+mod heal;
 
 const SIZE: [u32; 2] = [768, 512];
 const TARGET: LayerId = LayerId(1);

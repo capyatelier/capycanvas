@@ -62,7 +62,7 @@ import { checkCanvasSize } from "./canvas-size-journey.test.mjs";
 import { checkCrop } from "./crop-journey.test.mjs";
 import { checkImageCommands } from "./image-commands-journey.test.mjs";
 import { checkMoveSelection } from "./move-selection-journey.test.mjs";
-import { checkClone } from "./clone-journey.test.mjs";
+import { checkClone, checkHeal } from "./clone-journey.test.mjs";
 import { checkClipboard } from "./clipboard-journey.test.mjs";
 import { checkMerges } from "./merge-journey.test.mjs";
 import { checkEditor } from "./editor.test.mjs";
@@ -246,6 +246,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--clone")) {
     await checkClone({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--heal")) {
+    await checkHeal({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--photo-paint")) {
     await checkPhotoPaint({call,evaluate,settle});

@@ -1,5 +1,5 @@
-//! The Clone tool's source: Set Source, the source disc on the canvas, and
-//! the options its bar and Tool Options share. The document's engine keeps
+//! The Clone Stamp's and Healing Brush's source: Set Source, the source disc
+//! on the canvas, and the options its bar and Tool Options share. The document's engine keeps
 //! where strokes copy from, since strokes move an aligned source; the session
 //! keeps which layers they copy and how the disc is being handled.
 use super::*;
@@ -44,8 +44,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         Self::tool_category(self.layer_interaction.tool, self.state.brush.tool) == ToolCategory::Retouching
     }
 
+    /// A retouching tool that copies from the source disc: the Clone Stamp or
+    /// the Healing Brush.
     fn cloning(&self) -> bool {
-        self.retouching() && self.state.brush.tool == Tool::Clone && self.selection_masks.target().is_none()
+        self.retouching()
+            && matches!(self.state.brush.tool, Tool::Clone | Tool::Heal)
+            && self.selection_masks.target().is_none()
     }
 
     fn surface_to_document(&self, position: [f32; 2]) -> Point {
@@ -182,24 +186,28 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.set_retouch_points(&points);
     }
 
-    /// Clone options, in bar and Tool Options order.
+    /// Retouching options, in bar and Tool Options order. Spot Healing finds
+    /// its own source, so it offers only what it samples.
     pub(super) fn clone_actions(&self) -> Vec<tool_settings::ToolSettingAction> {
-        [
-            CommandId::CloneAligned,
-            CommandId::SelectionReference,
-            CommandId::SelectionEditing,
-            CommandId::CloneFlipHorizontal,
-            CommandId::CloneFlipVertical,
-            CommandId::CloneResetOffset,
-            CommandId::CloneSourceArm,
-        ]
-        .map(|command| tool_settings::ToolSettingAction { command, checkable: command.is_toggle() })
-        .into()
+        let commands: &[CommandId] = if self.state.brush.tool == Tool::SpotHeal {
+            &[CommandId::SelectionReference, CommandId::SelectionEditing]
+        } else {
+            &[
+                CommandId::CloneAligned,
+                CommandId::SelectionReference,
+                CommandId::SelectionEditing,
+                CommandId::CloneFlipHorizontal,
+                CommandId::CloneFlipVertical,
+                CommandId::CloneResetOffset,
+                CommandId::CloneSourceArm,
+            ]
+        };
+        commands.iter().map(|&command| tool_settings::ToolSettingAction { command, checkable: command.is_toggle() }).collect()
     }
 
     pub(super) fn clone_command_enabled(&self, command: CommandId) -> bool {
         self.require_idle().is_ok()
-            && self.retouching()
+            && self.cloning()
             && (command != CommandId::CloneResetOffset || self.engine.clone_source().offset.is_some())
     }
 
@@ -219,6 +227,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn clone_command(&mut self, command: CommandId) -> Result<(), String> {
         if !self.retouching() {
             return Err("Choose a retouching tool first".into());
+        }
+        if !self.cloning() && !matches!(command, CommandId::SelectionReference | CommandId::SelectionEditing) {
+            return Err("Spot Healing finds its own source".into());
         }
         let mut source = self.engine.clone_source();
         match command {

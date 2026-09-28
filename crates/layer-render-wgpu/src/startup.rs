@@ -235,10 +235,11 @@ impl Startup {
         })
     }
     /// Pipelines a selected tool draws with, compiled before pen-down.
-    pub fn require_brush<'a>(&mut self, pipelines: impl IntoIterator<Item = &'a Deferred<wgpu::RenderPipeline>>) {
-        let pipelines: Vec<_> = pipelines.into_iter().cloned().collect();
-        self.compiler.require(&pipelines, BRUSH);
-        self.current.render.extend(pipelines);
+    pub fn require_brush(&mut self, render: &[Deferred<wgpu::RenderPipeline>], compute: &[Deferred<wgpu::ComputePipeline>]) {
+        self.compiler.require(render, BRUSH);
+        self.compiler.require(compute, BRUSH);
+        self.current.render.extend(render.iter().cloned());
+        self.current.compute.extend(compute.iter().cloned());
     }
 }
 impl WgpuRasterizer {
@@ -435,7 +436,9 @@ impl WgpuRasterizer {
             current.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
         }
         if let Some(retouch) = self.retouch.as_ref().filter(|r| r.prepared()) {
-            current.render.extend(retouch.pipelines().into_iter().cloned());
+            let (render, compute) = retouch.pipelines();
+            current.render.extend(render);
+            current.compute.extend(compute);
         }
         current.enqueue(&startup.compiler, BRUSH);
         let transforms = self.transforms.as_ref().unwrap();

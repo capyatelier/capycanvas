@@ -733,7 +733,7 @@ impl WgpuRasterizer {
                         target.changed.extend(page_coordinates(damage));
                     }
                     if batch.stroke_end
-                        && batch.style.rendering.edge_after_stroke
+                        && revisits_stroke(&batch.style)
                         && let Some(layer) =
                             self.paint_layers.iter().find(|l| l.id == batch.layer_id)
                     {

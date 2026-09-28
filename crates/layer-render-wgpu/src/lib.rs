@@ -445,7 +445,13 @@ impl MaterialOperation {
 /// Brushes whose output pixels read only the same pixel of their destination
 /// and of per-page inputs, so tiles, dab ranges and damage stay per page.
 fn pointwise(style: &layer_render::DabStyle) -> bool {
-    matches!(style.execution, BrushExecution::Dry | BrushExecution::Clone)
+    style.execution == BrushExecution::Dry || style.execution.retouches()
+}
+
+/// Pen-up passes that revisit every page the stroke painted: a wet or burnt
+/// edge, or healing.
+fn revisits_stroke(style: &layer_render::DabStyle) -> bool {
+    style.rendering.edge_after_stroke || style.execution.heals()
 }
 
 #[repr(usize)]
@@ -551,7 +557,7 @@ impl BrushPassPlan {
             BrushExecution::Smudge => MaterialOperation::Smudge,
             BrushExecution::Wet => MaterialOperation::Wet,
             BrushExecution::Watercolor => MaterialOperation::Watercolor,
-            BrushExecution::Clone => MaterialOperation::Clone,
+            BrushExecution::Clone | BrushExecution::Heal | BrushExecution::SpotHeal => MaterialOperation::Clone,
             BrushExecution::Dry if state.coverage => MaterialOperation::Coverage,
             BrushExecution::Dry => MaterialOperation::Deposit,
         };
@@ -1996,9 +2002,9 @@ impl WgpuRasterizer {
             if !self.in_place_dry_material(batch) {
                 destination_pages.extend(tiles.iter().map(|tile| (batch.layer_id, tile.coordinate)));
             }
-            // Pen-up edges revisit the whole stroke, including companions
-            // retired since the pointer left those pages.
-            if batch.stroke_end && BrushPassPlan::for_device(&batch.style, &self.device).stroke_edge {
+            // Pen-up edges and healing revisit the whole stroke, including
+            // companions retired since the pointer left those pages.
+            if batch.stroke_end && revisits_stroke(&batch.style) {
                 destination_pages.extend(
                     self.paint_layers.iter().filter(|l| l.id == batch.layer_id)
                         .flat_map(|l| &l.coverage_pages)
@@ -3807,7 +3813,7 @@ impl CanvasRenderer for WgpuRasterizer {
             } else {
                 batch_dirty
             };
-            if batch.stroke_end && batch.style.rendering.edge_after_stroke {
+            if batch.stroke_end && revisits_stroke(&batch.style) {
                 let edge_dirty = self
                     .paint_layers
                     .iter()
@@ -4110,6 +4116,9 @@ impl CanvasRenderer for WgpuRasterizer {
             )?;
             if batch.stroke_end && BrushPassPlan::for_device(&batch.style, &self.device).stroke_edge {
                 self.encode_stroke_edge(&mut encoder, index, batch)?;
+            }
+            if batch.stroke_end && batch.style.execution.heals() {
+                self.encode_heal(batch, &mut encoder)?;
             }
         }
 

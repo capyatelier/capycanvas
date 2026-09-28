@@ -2341,20 +2341,32 @@ class AndroidInteractionTest {
         val work = bounds("workspace")
         return Offset(work.left + (x * zoom + translation.getDouble(0)).toFloat(), work.top + (y * zoom + translation.getDouble(1)).toFloat())
     }
-    private fun screenPixels(points: List<Offset>): List<Int> {
+    private fun <T> onScreen(read: (android.graphics.Bitmap, IntArray) -> T): T {
         val origin = IntArray(2)
         onMain { owner.view.getLocationOnScreen(origin) }
         val image = instrumentation.uiAutomation.takeScreenshot()
-        try { return points.map { image.getPixel((it.x + origin[0]).toInt(), (it.y + origin[1]).toInt()) } } finally { image.recycle() }
+        try { return read(image, origin) } finally { image.recycle() }
     }
-    private fun awaitPixels(label: String, points: List<Offset>, check: (List<Int>) -> Boolean) {
-        val until = SystemClock.uptimeMillis() + 5_000
-        var last = screenPixels(points)
-        while (!check(last)) {
-            if (SystemClock.uptimeMillis() > until) fail("$label: ${last.map { "#%06x".format(it and 0xffffff) }}")
-            SystemClock.sleep(100); last = screenPixels(points)
+    private fun screenPixels(points: List<Offset>): List<Int> =
+        onScreen { image, origin -> points.map { image.getPixel((it.x + origin[0]).toInt(), (it.y + origin[1]).toInt()) } }
+    /** The mean 0–1 RGB of the square of `radius` screen pixels around each point. */
+    private fun screenMeans(points: List<Offset>, radius: Int): List<List<Double>> = onScreen { image, origin ->
+        points.map { p ->
+            val (x, y) = (p.x + origin[0]).toInt() to (p.y + origin[1]).toInt()
+            val colors = (y - radius..y + radius).flatMap { row -> (x - radius..x + radius).map { image.getPixel(it, row) } }
+            listOf(16, 8, 0).map { shift -> colors.sumOf { (it shr shift and 255) / 255.0 } / colors.size }
         }
     }
+    private fun <T> awaitScreen(label: String, read: () -> T, check: (T) -> Boolean, describe: (T) -> String = { "$it" }) {
+        val until = SystemClock.uptimeMillis() + 5_000
+        var last = read()
+        while (!check(last)) {
+            if (SystemClock.uptimeMillis() > until) fail("$label: ${describe(last)}")
+            SystemClock.sleep(100); last = read()
+        }
+    }
+    private fun awaitPixels(label: String, points: List<Offset>, check: (List<Int>) -> Boolean) =
+        awaitScreen(label, { screenPixels(points) }, check) { last -> "${last.map { "#%06x".format(it and 0xffffff) }}" }
     /** An item's label in the open windowless menu, never the bar or panels beneath it. */
     private fun menuText(text: String): Rect? {
         var result: Rect? = null
@@ -3807,22 +3819,30 @@ class AndroidInteractionTest {
         println("PASS Liquify Pinch: a stylus stroke moves the striped pixels under it, leaves distant pixels, and undoes in one step")
     }
 
-    /** Clone Stamp on an empty layer over a reference, with Alt, a side button bound to Set Source, and the source disc. */
-    @Test fun cloneStampAcrossDevices() {
-        val keep = layerStates().map { it.getLong("id") }.toSet()
-        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
-        val paper = listOf(1.0, 1.0, 1.0, 1.0)
-        fun kind() = barKind() == "clone_source" && shown("canvas-action-bar")
+    /** The source disc, its bar, Set Source and the strokes of the retouching journeys, which paint `target`. */
+    private inner class Retouching(val target: Long) {
+        fun point(at: List<Double>) = documentPoint(at[0], at[1])
+        fun discBar() = barKind() == "clone_source" && shown("canvas-action-bar")
         fun disc() = canvasBar()?.takeIf { barKind() == "clone_source" }?.optJSONArray("anchor")?.let {
             listOf((it.getDouble(0) + it.getDouble(2)) / 2, (it.getDouble(1) + it.getDouble(3)) / 2)
         }
         fun near(a: List<Double>?, b: List<Double>, within: Double) = a != null && kotlin.math.abs(a[0] - b[0]) <= within && kotlin.math.abs(a[1] - b[1]) <= within
-        fun point(at: List<Double>) = documentPoint(at[0], at[1])
         fun armed() = selected("clone_source_arm")
+        fun painted() = paintRevision(target)
         fun alt(down: Boolean) {
             val now = SystemClock.uptimeMillis()
             instrumentation.sendKeySync(KeyEvent(now, now, if (down) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ALT_LEFT, 0,
                 if (down) KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON else 0, -1, 0, 0, InputDevice.SOURCE_KEYBOARD))
+        }
+        /** Alt held over a tap with the current device, which never paints. */
+        fun altTap(at: List<Double>) {
+            alt(true)
+            waitFor("Alt arms Set Source", 5_000) { armed() }
+            val before = painted()
+            tap(point(at))
+            alt(false)
+            waitFor("releasing Alt disarms Set Source", 5_000) { !armed() }
+            assertEquals("Alt and a tap paint nothing", before, painted())
         }
         fun hover(action: Int, at: Offset, buttons: Int) {
             val base = IntArray(2); val origin = IntArray(2)
@@ -3834,34 +3854,92 @@ class AndroidInteractionTest {
             try { onMain { surface.dispatchGenericMotionEvent(motion) } } finally { motion.recycle() }
             SystemClock.sleep(120)
         }
-        fun showBar(at: List<Double>, label: String): List<Double> {
+        /** The primary side button held over a stylus tap, which sets the source without painting. */
+        fun sideButtonTap(at: List<Double>) {
+            hover(MotionEvent.ACTION_HOVER_ENTER, point(at), 0)
+            hover(MotionEvent.ACTION_HOVER_MOVE, point(at), MotionEvent.BUTTON_STYLUS_PRIMARY)
+            waitFor("the side button arms Set Source", 5_000) { armed() }
+            val before = painted()
+            stylusButtons = MotionEvent.BUTTON_STYLUS_PRIMARY
             tap(point(at))
-            waitFor("$label: a tap on the disc shows its bar", 5_000) { kind() }
-            return disc()!!
-        }
-        fun hideBar(at: List<Double>) {
-            tap(point(at))
-            waitFor("a second tap on the disc hides its bar", 5_000) { barKind() != "clone_source" }
-        }
-        fun awaitDisc(at: List<Double>, within: Double, label: String) = waitFor("$label: the disc reaches $at", 5_000) { kind() && near(disc(), at, within) }
-        fun press(id: String) {
-            waitFor("the source bar offers $id", 5_000) { kind() }
-            val tag = "canvas-bar-action-$id"
-            if (shown(tag)) tap(bounds(tag).center) else viaMore(listOf(commandState(id).getString("label")))
-        }
-        fun pick(label: String) {
-            val tag = "canvas-bar-choice-selection-source"
-            waitFor("the source bar offers Source", 5_000) { kind() }
-            if (!shown(tag)) return viaMore(listOf("Source", label))
-            tap(bounds(tag).center)
-            waitFor("Source ▾ opens", 5_000) { popupCount() == 1 }
-            chooseInMenu(listOf(label))
+            stylusButtons = 0
+            hover(MotionEvent.ACTION_HOVER_MOVE, point(at), MotionEvent.BUTTON_STYLUS_PRIMARY)
+            hover(MotionEvent.ACTION_HOVER_MOVE, point(at), 0)
+            hover(MotionEvent.ACTION_HOVER_EXIT, point(at), 0)
+            waitFor("releasing the side button disarms Set Source", 5_000) { !armed() }
+            assertEquals("the side button and a tap paint nothing", before, painted())
         }
         fun clickSetting(tag: String) {
             waitFor("$tag in the settings", 5_000) { findTag(tag) != null }
             onMain { findTag(tag)!!.second.config[androidx.compose.ui.semantics.SemanticsActions.OnClick].action!!.invoke() }
             settle()
         }
+        fun bindSideButton() {
+            action(obj("type" to "open_settings", "page" to "input"))
+            clickSetting("trigger-pen.button.primary")
+            clickSetting("pen-button-same")
+            clickSetting("pen-button-action-retouching")
+            clickSetting("action-command.CloneSourceArm")
+            waitFor("the side button sets the source with retouching tools", 5_000) {
+                state().getJSONObject("settings").optJSONObject("pen_buttons")?.optJSONObject("pen.button.primary")?.optString("retouching") == "command.CloneSourceArm"
+            }
+            action(obj("type" to "close_settings"))
+        }
+        fun showBar(at: List<Double>, label: String): List<Double> {
+            tap(point(at))
+            waitFor("$label: a tap on the disc shows its bar", 5_000) { discBar() }
+            return disc()!!
+        }
+        fun hideBar(at: List<Double>) {
+            tap(point(at))
+            waitFor("a second tap on the disc hides its bar", 5_000) { barKind() != "clone_source" }
+        }
+        fun awaitDisc(at: List<Double>, within: Double, label: String) = waitFor("$label: the disc reaches $at", 5_000) { discBar() && near(disc(), at, within) }
+        fun press(id: String) {
+            waitFor("the source bar offers $id", 5_000) { discBar() }
+            val tag = "canvas-bar-action-$id"
+            if (shown(tag)) tap(bounds(tag).center) else viaMore(listOf(commandState(id).getString("label")))
+        }
+        fun pick(label: String) {
+            val tag = "canvas-bar-choice-selection-source"
+            waitFor("the source bar offers Source", 5_000) { discBar() }
+            if (!shown(tag)) return viaMore(listOf("Source", label))
+            tap(bounds(tag).center)
+            waitFor("Source ▾ opens", 5_000) { popupCount() == 1 }
+            chooseInMenu(listOf(label))
+        }
+        fun stroke(from: List<Double>, to: List<Double>, hold: () -> Unit = {}) {
+            val before = painted()
+            drag(point(from), point(to), 12, hold)
+            waitFor("the stroke paints", 10_000) { painted() != before }
+        }
+        fun dragDisc(from: List<Double>, to: List<Double>, name: String) {
+            val before = painted()
+            val view = state().getJSONObject("camera").getJSONArray("translation").toString()
+            drag(point(from), point(to), 10)
+            settle()
+            assertEquals("$name: dragging the disc paints nothing", before, painted())
+            assertEquals("$name: dragging the disc never pans the canvas", view, state().getJSONObject("camera").getJSONArray("translation").toString())
+        }
+        /** The mean color around `at` on screen, `radius` screen pixels each way. */
+        fun mean(at: List<Double>, radius: Int) = screenMeans(listOf(point(at)), radius)[0]
+        fun awaitMean(label: String, at: List<Double>, radius: Int, check: (List<Double>) -> Boolean) =
+            awaitScreen(label, { mean(at, radius) }, check) { last -> last.joinToString { "%.3f".format(it) } }
+    }
+    private fun like(expected: List<Double>, within: Double) = { rgb: List<Double> -> rgb.indices.all { kotlin.math.abs(rgb[it] - expected[it]) <= within } }
+    /** Reset the primary side button and apply the preference actions `also` in the open settings. */
+    private fun restorePreferences(vararg also: JSONObject) {
+        if (!state().getBoolean("settings_open")) host.drain(obj("type" to "open_settings", "page" to "input"), 10)
+        for (value in listOf(obj("type" to "preferences", "action" to obj("type" to "reset_trigger", "trigger" to "pen.button.primary"))) + also +
+            obj("type" to "close_settings"))
+            host.drain(value, 10)
+    }
+
+    /** Clone Stamp on an empty layer over a reference, with Alt, a side button bound to Set Source, and the source disc. */
+    @Test fun cloneStampAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        val paper = listOf(1.0, 1.0, 1.0, 1.0)
         popupInput = true
         try {
             val (width, height) = cleanDocument(keep)
@@ -3882,162 +3960,298 @@ class AndroidInteractionTest {
             action(obj("type" to "set_brush_size", "value" to 48))
             waitFor("Clone Stamp is ready", 10_000) { state().getJSONObject("brush").getString("tool") == "clone" && host.snapshot?.optBoolean("brush_ready") == true }
             assertEquals("Clone Stamp copies the reference layers, aligned", listOf(true, true, false), listOf(selected("selection_reference"), selected("clone_aligned"), selected("clone_flip_horizontal")))
-            fun painted() = paintRevision(target)
-            fun stroke(from: List<Double>, to: List<Double>) {
-                val before = painted()
-                drag(point(from), point(to), 12)
-                waitFor("the stroke paints", 10_000) { painted() != before }
-            }
-            fun dragDisc(from: List<Double>, to: List<Double>, name: String) {
-                val before = painted()
-                val view = state().getJSONObject("camera").getJSONArray("translation").toString()
-                drag(point(from), point(to), 10)
+            with(Retouching(target)) {
+                fun copied(label: String, at: List<Double>) = awaitPixels(label, listOf(point(at))) { (p) -> blue(p) }
+                fun clean(label: String, at: List<Double>) = awaitPixels(label, listOf(point(at))) { (p) -> shows(p, paper) }
+
+                tool = MotionEvent.TOOL_TYPE_MOUSE
+                val s1 = at(.15, .5)
+                altTap(s1)
+                assertTrue("Alt-click sets the source", near(showBar(s1, "mouse"), s1, 1.5))
+                assertFalse("Reset Offset waits for an offset", commandState("clone_reset_offset").getBoolean("enabled"))
+                for (theme in listOf("light", "dark")) {
+                    action(obj("type" to "set_theme", "theme" to theme))
+                    captureCanvasBar("clone-bar-$theme", "clone")
+                }
+                action(obj("type" to "set_theme", "theme" to originalTheme))
+                pick("Editing layer")
+                waitFor("Source ▾ chooses the editing layer", 5_000) { selected("selection_editing") && !selected("selection_reference") }
+                pick("Reference layers")
+                waitFor("Source ▾ chooses the reference layers again", 5_000) { selected("selection_reference") }
+                val moved = at(.17, .42); val followed = at(.27, .42)
+                dragDisc(s1, moved, "mouse")
+                awaitDisc(moved, 2.0, "the mouse drags the disc")
+                hideBar(moved)
+                stroke(at(.6, .42), at(.7, .42))
+                copied("the mouse stroke copies the reference", at(.62, .42))
+                assertTrue("an aligned source follows the mouse stroke", near(showBar(followed, "mouse after a stroke"), followed, 3.0))
+                assertTrue("an aligned stroke keeps an offset", commandState("clone_reset_offset").getBoolean("enabled"))
+                hideBar(followed)
+                history("undo")
+                clean("one undo removes the mouse stroke", at(.62, .42))
+                showBar(followed, "mouse after undo")
+                press("clone_reset_offset")
+                waitFor("Reset Offset", 5_000) { !commandState("clone_reset_offset").getBoolean("enabled") }
+                press("clone_aligned")
+                waitFor("Aligned turns off", 5_000) { !selected("clone_aligned") }
+                hideBar(followed)
+                stroke(at(.6, .62), at(.68, .62))
+                copied("a stroke that is not aligned starts copying at the disc", at(.62, .62))
+                assertTrue("a source that is not aligned stays at the disc", near(showBar(followed, "mouse after an unaligned stroke"), followed, 1.5))
+                hideBar(followed)
+                history("undo")
+                clean("one undo removes it", at(.62, .62))
+                showBar(followed, "mouse before Aligned")
+                press("clone_aligned")
+                waitFor("Aligned turns on", 5_000) { selected("clone_aligned") }
+                for (on in listOf(true, false)) {
+                    press("clone_flip_horizontal")
+                    waitFor("Flip H is $on", 5_000) { selected("clone_flip_horizontal") == on }
+                }
+                hideBar(followed)
+                println("PASS clone mouse")
+
+                tool = MotionEvent.TOOL_TYPE_FINGER
+                val touched = at(.2, .5)
+                dragDisc(followed, touched, "finger")
+                assertNotEquals("a drag is not a tap", "clone_source", barKind())
+                assertTrue("a finger drags the disc", near(showBar(touched, "finger"), touched, 2.0))
+                for (on in listOf(true, false)) {
+                    press("clone_flip_vertical")
+                    waitFor("Flip V is $on", 5_000) { selected("clone_flip_vertical") == on }
+                }
+                pick("Editing layer")
+                waitFor("a finger chooses the editing layer", 5_000) { selected("selection_editing") }
+                pick("Reference layers")
+                waitFor("a finger chooses the reference layers", 5_000) { selected("selection_reference") }
+                val untouched = painted()
+                altTap(at(.6, .3))
+                awaitDisc(touched, 1.0, "Alt with a finger never sets the source")
+                drag(point(at(.6, .3)), point(at(.7, .35)))
                 settle()
-                assertEquals("$name: dragging the disc paints nothing", before, painted())
-                assertEquals("$name: dragging the disc never pans the canvas", view, state().getJSONObject("camera").getJSONArray("translation").toString())
-            }
-            fun copied(label: String, at: List<Double>) = awaitPixels(label, listOf(point(at))) { (p) -> blue(p) }
-            fun clean(label: String, at: List<Double>) = awaitPixels(label, listOf(point(at))) { (p) -> shows(p, paper) }
+                assertEquals("a finger never paints with Clone Stamp", untouched, painted())
+                assertTrue("a finger elsewhere never moves the source", near(disc(), touched, 1.0))
+                command("fit_canvas"); SystemClock.sleep(300)
+                hideBar(touched)
+                println("PASS clone finger")
 
-            tool = MotionEvent.TOOL_TYPE_MOUSE
-            val s1 = at(.15, .5)
-            alt(true)
-            waitFor("Alt arms Set Source", 5_000) { armed() }
-            val unpainted = painted()
-            tap(point(s1))
-            alt(false)
-            waitFor("releasing Alt disarms Set Source", 5_000) { !armed() }
-            assertEquals("Alt-click paints nothing", unpainted, painted())
-            assertTrue("Alt-click sets the source", near(showBar(s1, "mouse"), s1, 1.5))
-            assertFalse("Reset Offset waits for an offset", commandState("clone_reset_offset").getBoolean("enabled"))
-            for (theme in listOf("light", "dark")) {
-                action(obj("type" to "set_theme", "theme" to theme))
-                captureCanvasBar("clone-bar-$theme", "clone")
+                tool = MotionEvent.TOOL_TYPE_STYLUS
+                bindSideButton()
+                waitFor("Clone Stamp is ready again", 10_000) { host.snapshot?.optBoolean("brush_ready") == true }
+                val s3 = at(.18, .35)
+                sideButtonTap(s3)
+                assertTrue("the side button and a stylus tap set the source", near(showBar(s3, "stylus"), s3, 1.5))
+                hideBar(s3)
+                val s4 = at(.15, .45)
+                altTap(s4)
+                assertTrue("Alt and a stylus tap set the source", near(showBar(s4, "stylus after Alt"), s4, 1.5))
+                val penMoved = at(.17, .4); val last = at(.27, .55)
+                dragDisc(s4, penMoved, "stylus")
+                awaitDisc(penMoved, 2.0, "the stylus drags the disc")
+                hideBar(penMoved)
+                for (y in listOf(.45, .6)) stroke(at(.6, y), at(.7, y))
+                awaitPixels("both stylus strokes copy the reference", listOf(point(at(.62, .45)), point(at(.62, .6)))) { pixels -> pixels.all { blue(it) } }
+                assertTrue("an aligned source follows both stylus strokes", near(showBar(last, "stylus after two strokes"), last, 3.0))
+                hideBar(last)
+                history("undo")
+                awaitPixels("undo removes only the last stylus stroke", listOf(point(at(.62, .45)), point(at(.62, .6)))) { (first, second) -> blue(first) && shows(second, paper) }
+                history("undo")
+                clean("each stylus stroke is one undo step", at(.62, .45))
+                showBar(last, "stylus after undo")
+                press("clone_reset_offset")
+                waitFor("Reset Offset", 5_000) { !commandState("clone_reset_offset").getBoolean("enabled") }
+                hideBar(last)
             }
-            action(obj("type" to "set_theme", "theme" to originalTheme))
-            pick("Editing layer")
-            waitFor("Source ▾ chooses the editing layer", 5_000) { selected("selection_editing") && !selected("selection_reference") }
-            pick("Reference layers")
-            waitFor("Source ▾ chooses the reference layers again", 5_000) { selected("selection_reference") }
-            val moved = at(.17, .42); val followed = at(.27, .42)
-            dragDisc(s1, moved, "mouse")
-            awaitDisc(moved, 2.0, "the mouse drags the disc")
-            hideBar(moved)
-            stroke(at(.6, .42), at(.7, .42))
-            copied("the mouse stroke copies the reference", at(.62, .42))
-            assertTrue("an aligned source follows the mouse stroke", near(showBar(followed, "mouse after a stroke"), followed, 3.0))
-            assertTrue("an aligned stroke keeps an offset", commandState("clone_reset_offset").getBoolean("enabled"))
-            hideBar(followed)
-            history("undo")
-            clean("one undo removes the mouse stroke", at(.62, .42))
-            showBar(followed, "mouse after undo")
-            press("clone_reset_offset")
-            waitFor("Reset Offset", 5_000) { !commandState("clone_reset_offset").getBoolean("enabled") }
-            press("clone_aligned")
-            waitFor("Aligned turns off", 5_000) { !selected("clone_aligned") }
-            hideBar(followed)
-            stroke(at(.6, .62), at(.68, .62))
-            copied("a stroke that is not aligned starts copying at the disc", at(.62, .62))
-            assertTrue("a source that is not aligned stays at the disc", near(showBar(followed, "mouse after an unaligned stroke"), followed, 1.5))
-            hideBar(followed)
-            history("undo")
-            clean("one undo removes it", at(.62, .62))
-            showBar(followed, "mouse before Aligned")
-            press("clone_aligned")
-            waitFor("Aligned turns on", 5_000) { selected("clone_aligned") }
-            for (on in listOf(true, false)) {
-                press("clone_flip_horizontal")
-                waitFor("Flip H is $on", 5_000) { selected("clone_flip_horizontal") == on }
-            }
-            hideBar(followed)
-            println("PASS clone mouse")
-
-            tool = MotionEvent.TOOL_TYPE_FINGER
-            val touched = at(.2, .5)
-            dragDisc(followed, touched, "finger")
-            assertNotEquals("a drag is not a tap", "clone_source", barKind())
-            assertTrue("a finger drags the disc", near(showBar(touched, "finger"), touched, 2.0))
-            for (on in listOf(true, false)) {
-                press("clone_flip_vertical")
-                waitFor("Flip V is $on", 5_000) { selected("clone_flip_vertical") == on }
-            }
-            pick("Editing layer")
-            waitFor("a finger chooses the editing layer", 5_000) { selected("selection_editing") }
-            pick("Reference layers")
-            waitFor("a finger chooses the reference layers", 5_000) { selected("selection_reference") }
-            val untouched = painted()
-            alt(true)
-            waitFor("Alt arms Set Source", 5_000) { armed() }
-            tap(point(at(.6, .3)))
-            alt(false)
-            waitFor("releasing Alt disarms Set Source", 5_000) { !armed() }
-            awaitDisc(touched, 1.0, "Alt with a finger never sets the source")
-            drag(point(at(.6, .3)), point(at(.7, .35)))
-            settle()
-            assertEquals("a finger never paints with Clone Stamp", untouched, painted())
-            assertTrue("a finger elsewhere never moves the source", near(disc(), touched, 1.0))
-            command("fit_canvas"); SystemClock.sleep(300)
-            hideBar(touched)
-            println("PASS clone finger")
-
-            tool = MotionEvent.TOOL_TYPE_STYLUS
-            action(obj("type" to "open_settings", "page" to "input"))
-            clickSetting("trigger-pen.button.primary")
-            clickSetting("pen-button-same")
-            clickSetting("pen-button-action-retouching")
-            clickSetting("action-command.CloneSourceArm")
-            waitFor("the side button sets the source with retouching tools", 5_000) {
-                state().getJSONObject("settings").optJSONObject("pen_buttons")?.optJSONObject("pen.button.primary")?.optString("retouching") == "command.CloneSourceArm"
-            }
-            action(obj("type" to "close_settings"))
-            waitFor("Clone Stamp is ready again", 10_000) { host.snapshot?.optBoolean("brush_ready") == true }
-            val s3 = at(.18, .35)
-            hover(MotionEvent.ACTION_HOVER_ENTER, point(s3), 0)
-            hover(MotionEvent.ACTION_HOVER_MOVE, point(s3), MotionEvent.BUTTON_STYLUS_PRIMARY)
-            waitFor("the side button arms Set Source", 5_000) { armed() }
-            val beforePen = painted()
-            stylusButtons = MotionEvent.BUTTON_STYLUS_PRIMARY
-            tap(point(s3))
-            stylusButtons = 0
-            hover(MotionEvent.ACTION_HOVER_MOVE, point(s3), MotionEvent.BUTTON_STYLUS_PRIMARY)
-            hover(MotionEvent.ACTION_HOVER_MOVE, point(s3), 0)
-            hover(MotionEvent.ACTION_HOVER_EXIT, point(s3), 0)
-            waitFor("releasing the side button disarms Set Source", 5_000) { !armed() }
-            assertEquals("the side button and a tap paint nothing", beforePen, painted())
-            assertTrue("the side button and a stylus tap set the source", near(showBar(s3, "stylus"), s3, 1.5))
-            hideBar(s3)
-            val s4 = at(.15, .45)
-            alt(true)
-            waitFor("Alt arms Set Source", 5_000) { armed() }
-            tap(point(s4))
-            alt(false)
-            waitFor("releasing Alt disarms Set Source", 5_000) { !armed() }
-            assertTrue("Alt and a stylus tap set the source", near(showBar(s4, "stylus after Alt"), s4, 1.5))
-            val penMoved = at(.17, .4); val last = at(.27, .55)
-            dragDisc(s4, penMoved, "stylus")
-            awaitDisc(penMoved, 2.0, "the stylus drags the disc")
-            hideBar(penMoved)
-            for (y in listOf(.45, .6)) stroke(at(.6, y), at(.7, y))
-            awaitPixels("both stylus strokes copy the reference", listOf(point(at(.62, .45)), point(at(.62, .6)))) { pixels -> pixels.all { blue(it) } }
-            assertTrue("an aligned source follows both stylus strokes", near(showBar(last, "stylus after two strokes"), last, 3.0))
-            hideBar(last)
-            history("undo")
-            awaitPixels("undo removes only the last stylus stroke", listOf(point(at(.62, .45)), point(at(.62, .6)))) { (first, second) -> blue(first) && shows(second, paper) }
-            history("undo")
-            clean("each stylus stroke is one undo step", at(.62, .45))
-            showBar(last, "stylus after undo")
-            press("clone_reset_offset")
-            waitFor("Reset Offset", 5_000) { !commandState("clone_reset_offset").getBoolean("enabled") }
-            hideBar(last)
             assertNull(host.actionError)
         } finally {
             popupInput = false
             stylusButtons = 0
-            if (!state().getBoolean("settings_open")) host.drain(obj("type" to "open_settings", "page" to "input"), 10)
-            for (value in listOf(obj("type" to "preferences", "action" to obj("type" to "reset_trigger", "trigger" to "pen.button.primary")),
-                obj("type" to "close_settings"), obj("type" to "set_theme", "theme" to originalTheme), obj("type" to "invoke", "command" to "brush")))
-                host.drain(value, 10)
+            restorePreferences()
+            for (value in listOf(obj("type" to "set_theme", "theme" to originalTheme), obj("type" to "invoke", "command" to "brush"))) host.drain(value, 10)
         }
         println("PASS clone: Alt and a side button bound to Set Source in the pen-button settings set the source with the mouse and stylus, never a finger; the disc drags at once with mouse, finger and stylus without painting or panning; a tap shows its bar, whose Source ▾, Aligned, Flip and Reset Offset work; aligned and unaligned strokes copy the reference in one undo step each; light and dark captures")
+    }
+
+    /** A photo the size of the canvas: a light textured area, and a darker one with a red scratch across it and a yellow dot. */
+    private fun texturedPhoto(width: Int, height: Int): File {
+        val light = listOf(199, 184, 158); val dark = listOf(107, 92, 77)
+        val noise = java.util.Random(7)
+        val pixels = IntArray(width * height) { i ->
+            val (x, y) = i % width to i / width
+            val n = (noise.nextInt(9) - 4) * 2.5
+            when {
+                x >= width * .62 && x < width * .68 && kotlin.math.abs(y - height * .45) < 6 -> android.graphics.Color.rgb(230, 64, 51)
+                kotlin.math.hypot(x - width * .8, y - height * .72) < 11 -> android.graphics.Color.rgb(242, 217, 77)
+                else -> (if (x >= width * .05 && x < width * .4 && y >= height * .15 && y < height * .85) light else dark)
+                    .map { (it + n).toInt() }.let { (r, g, b) -> android.graphics.Color.rgb(r, g, b) }
+            }
+        }
+        val file = File(instrumentation.targetContext.cacheDir, "Texture.png")
+        val bitmap = android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
+        try { file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
+        return file
+    }
+
+    /** Healing and Spot Healing in the Photo workspace over a textured photo marked as a reference, with mouse, finger and stylus. */
+    @Test fun healingAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val settings = state().getJSONObject("settings")
+        val originalTheme = settings.opt("theme") ?: JSONObject.NULL
+        val keymap = settings.optJSONObject("keymap")?.optString("id") ?: "capy"
+        fun selectKeymap(id: String) = obj("type" to "preferences", "action" to obj("type" to "select_keymap", "id" to id))
+        popupInput = true
+        try {
+            val (width, height) = cleanDocument(keep)
+            instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "switch", "id" to "builtin:workspace:photographer")) }
+            waitFor("the Photo workspace", 30_000) { host.workspaceManager?.optString("id") == "builtin:workspace:photographer" && host.workspaceManager?.optBoolean("busy") == false }
+            command("fit_canvas"); SystemClock.sleep(300)
+            fun at(x: Double, y: Double) = listOf(width * x, height * y)
+            host.importImage(texturedPhoto(width.toInt(), height.toInt()))
+            waitFor("the placement bar", 10_000) { barKind() == "placement" }
+            assertEquals("the photo covers the canvas", listOf(0.0, 0.0, width, height), canvasBar()!!.array("anchor").let { a -> (0 until 4).map { a.getDouble(it) } })
+            command("apply_transform")
+            waitFor("the photo is placed", 10_000) { canvasBar() == null }
+            val photo = editingLayer()
+            layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+            val target = editingLayer()
+            command("use_reference_below")
+            waitFor("the photo is a reference", 5_000) { layerStates().first { it.getLong("id") == photo }.getBoolean("reference") }
+            fun brush() = state().getJSONObject("brush").getString("tool")
+            fun ready(tool: String) = waitFor("$tool is ready", 10_000) { brush() == tool && host.snapshot?.optBoolean("brush_ready") == true }
+            fun choose(tool: String) {
+                val tile = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().first { it.getString("id") == "toolbar" }
+                    .getJSONObject("content").array("tiles").objects().first { it.optJSONObject("control")?.optString("command") == tool }.getInt("id")
+                tap(bounds("tile-toolbar-$tile").center)
+                ready(tool)
+            }
+            fun key(code: Int, meta: Int, tool: String, label: String) { pressKey(code, meta); waitFor(label, 5_000) { brush() == tool } }
+
+            tool = MotionEvent.TOOL_TYPE_MOUSE
+            choose("heal")
+            command("brush")
+            for (expected in listOf("clone", "heal", "spot_heal")) key(KeyEvent.KEYCODE_S, 0, expected, "S cycles to $expected")
+            for (value in listOf(obj("type" to "open_settings", "page" to "shortcuts"), selectKeymap("photoshop"), obj("type" to "close_settings"))) action(value)
+            key(KeyEvent.KEYCODE_J, 0, "spot_heal", "J chooses Spot Healing in the Photoshop keymap")
+            key(KeyEvent.KEYCODE_J, KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON, "heal", "Shift+J chooses Healing in the Photoshop keymap")
+            for (value in listOf(obj("type" to "open_settings", "page" to "shortcuts"), selectKeymap(keymap), obj("type" to "close_settings"))) action(value)
+            ready("heal")
+            action(obj("type" to "set_brush_size", "value" to 120))
+            assertEquals("Healing copies the reference layers below, aligned", listOf(true, true), listOf(selected("selection_reference"), selected("clone_aligned")))
+            with(Retouching(target)) {
+                val scratch = at(.65, .45)
+                val light = mean(at(.25, .3), 6); val dark = mean(at(.65, .33), 6)
+                assertTrue("the photo shows its light and darker areas: $light $dark", light[0] - dark[0] > .25)
+                val scratched = { rgb: List<Double> -> rgb[0] - rgb[1] > .3 }
+                fun heal(source: List<Double>): List<Double> {
+                    awaitMean("the scratch before healing", scratch, 1, scratched)
+                    ready("heal")
+                    stroke(at(.59, .45), at(.71, .45)) {
+                        SystemClock.sleep(300)
+                        val live = mean(scratch, 3)
+                        assertTrue("while the pen is down the stroke is the clone of the light area: $live against $light", like(light, .12)(live))
+                    }
+                    awaitMean("the healed stroke takes the tone of the darker area around it ($dark)", scratch, 3, like(dark, .05))
+                    return listOf(source[0] + width * .12, source[1])
+                }
+                fun undoHeal() {
+                    history("undo")
+                    awaitMean("one undo brings the scratch back", scratch, 1, scratched)
+                }
+
+                val s1 = at(.15, .45)
+                altTap(s1)
+                assertTrue("Alt-click sets the healing source", near(showBar(s1, "mouse"), s1, 1.5))
+                hideBar(s1)
+                val followed = heal(s1)
+                undoHeal()
+                assertTrue("an aligned source follows the healing stroke", near(showBar(followed, "mouse after a stroke"), followed, 3.0))
+                val moved = at(.17, .5)
+                dragDisc(followed, moved, "mouse")
+                awaitDisc(moved, 2.0, "the mouse drags the disc")
+                hideBar(moved)
+                println("PASS heal mouse")
+
+                tool = MotionEvent.TOOL_TYPE_FINGER
+                val touched = at(.2, .55)
+                dragDisc(moved, touched, "finger")
+                assertTrue("a finger drags the disc", near(showBar(touched, "finger"), touched, 2.0))
+                val untouched = painted()
+                altTap(at(.6, .25))
+                awaitDisc(touched, 1.0, "Alt with a finger never sets the source")
+                drag(point(at(.6, .25)), point(at(.7, .3)))
+                settle()
+                assertEquals("a finger never paints with Healing", untouched, painted())
+                assertTrue("a finger elsewhere never moves the source", near(disc(), touched, 1.0))
+                command("fit_canvas"); SystemClock.sleep(300)
+                hideBar(touched)
+                println("PASS heal finger")
+
+                tool = MotionEvent.TOOL_TYPE_STYLUS
+                bindSideButton()
+                ready("heal")
+                val s3 = at(.18, .35)
+                sideButtonTap(s3)
+                assertTrue("the side button and a stylus tap set the healing source", near(showBar(s3, "stylus"), s3, 1.5))
+                hideBar(s3)
+                val s4 = at(.14, .4)
+                altTap(s4)
+                assertTrue("Alt and a stylus tap set the healing source", near(showBar(s4, "stylus after Alt"), s4, 1.5))
+                val penMoved = at(.15, .45)
+                dragDisc(s4, penMoved, "stylus")
+                awaitDisc(penMoved, 2.0, "the stylus drags the disc")
+                hideBar(penMoved)
+                val penFollowed = heal(penMoved)
+                assertTrue("an aligned source follows the stylus stroke", near(showBar(penFollowed, "stylus after a stroke"), penFollowed, 3.0))
+                for (theme in listOf("light", "dark")) {
+                    action(obj("type" to "set_theme", "theme" to theme))
+                    captureCanvasBar("heal-$theme", "heal")
+                }
+                action(obj("type" to "set_theme", "theme" to originalTheme))
+                hideBar(penFollowed)
+                undoHeal()
+                println("PASS heal stylus")
+
+                tool = MotionEvent.TOOL_TYPE_FINGER
+                choose("spot_heal")
+                for (id in listOf("clone_source_arm", "clone_aligned", "clone_flip_horizontal", "clone_flip_vertical", "clone_reset_offset"))
+                    assertEquals("$id with Spot Healing", false to "Spot Healing finds its own source",
+                        commandState(id).let { it.getBoolean("enabled") to it.optString("disabled_reason") })
+                val quiet = painted()
+                alt(true)
+                SystemClock.sleep(300)
+                assertFalse("Alt does nothing with Spot Healing", armed())
+                assertTrue("and raises no notice", state().isNull("notice"))
+                assertNull(host.actionError)
+                alt(false)
+                assertEquals(quiet, painted())
+                action(obj("type" to "set_brush_size", "value" to 100))
+                val dot = at(.8, .72)
+                val beside = mean(at(.8, .62), 3); val yellow = mean(dot, 1)
+                assertTrue("the dot is yellow: $yellow", yellow[2] < yellow[0] - .3)
+                for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS)) {
+                    tool = device
+                    ready("spot_heal")
+                    stroke(listOf(dot[0] - 12, dot[1]), listOf(dot[0] + 12, dot[1]))
+                    awaitMean("one stroke heals the dot into the texture around it ($beside)", dot, 3, like(beside, .05))
+                    if (device == MotionEvent.TOOL_TYPE_STYLUS) {
+                        for (theme in listOf("light", "dark")) {
+                            action(obj("type" to "set_theme", "theme" to theme))
+                            captureCanvasBar("spot-heal-$theme", "heal")
+                        }
+                        action(obj("type" to "set_theme", "theme" to originalTheme))
+                    }
+                    history("undo")
+                    awaitMean("one undo brings the dot back", dot, 1, like(yellow, .08))
+                }
+                println("PASS spot heal")
+            }
+            assertNull(host.actionError)
+        } finally {
+            popupInput = false
+            stylusButtons = 0
+            restorePreferences(selectKeymap(keymap))
+            for (value in listOf(obj("type" to "set_theme", "theme" to originalTheme), obj("type" to "invoke", "command" to "brush"))) host.drain(value, 10)
+        }
+        println("PASS heal: the Photo toolbar, S and the Photoshop keymap's J and Shift+J choose Healing and Spot Healing; Alt and a side button bound to Set Source set the healing source with the mouse and stylus, never a finger; the disc drags with mouse, finger and stylus; a healing stroke previews as the clone and heals into the darker area around it, and Spot Healing removes a dot, with mouse and stylus, one undo step each; Spot Healing's source commands are disabled and Alt does nothing; light and dark captures")
     }
 }

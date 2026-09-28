@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3, M4.1, M4.2, M4.4 and Color mixing from M4.5. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3, M4.1–M4.4 and Color mixing from M4.5. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -731,6 +731,7 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - Flatten confirms through the shared notice when it would discard hidden layers.
   - Merge Down needs a Normal, visible layer below. Merge Visible and Flatten accept any blend mode, with the paper kept separate, so a non-Normal layer can look different where the paper shows through.
 - **M3.7** on GTK, Web and Android: photos opened as documents keep their Exif, XMP and IPTC in `.capy` (version 10); exports keep camera, lens, exposure, dates, copyright and contact, with location removed by default; a Metadata row in each export dialog.
+- **M4.3** on GTK, Web and Android: the Healing Brush (preset 41) previews as the clone and heals into its surroundings at pen-up; the Spot Healing Brush (preset 42) picks the best of 16 nearby offsets on the GPU and heals it in. S cycles the three retouching brushes; J and Shift+J choose Spot Healing and Healing in the Photoshop keys.
 - **M4.1–M4.2** on GTK, Web and Android: Clone Stamp (preset 40) with a source disc that drags with every device and a bar (Aligned, Source ▾, Flip H/V, Reset Offset, Set Source); Set Source with Alt or a bound pen side button; sources read from stroke-start pages and a cached reference composite, with no upload or wait during contact and a pen-up replay after a miss.
 - **M4.5, Color mixing** on GTK, Web and Android: a per-brush Color mixing choice (Oklab, Linear light, Classic) in the Tool Options of brushes that mix paint; Classic mixes encoded values. Smudge and Natural Blender now mix in the Oklab their presets declare.
 - **M4.4** on GTK, Web and Android: 17 more blend modes (24 in all) from one shared set of formulas on every composite path and for brushes; a grouped blend menu from shared Rust; modes defined only on 0–1 hidden in float documents.
@@ -773,6 +774,8 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **Preference actions** sent while Settings is closed are refused with no visible error.
 - **Brush previews** 10 (Smudge) and 24 (Natural Blender) still show their linear mixing; regenerating them on this machine changes every preview slightly.
 - **GTK Tool Options** put every grouped checkbox option in one radio group, which would misbehave if two groups ever showed at once.
+- **Healing on large strokes** runs in one pen-up frame: a heal of a 1 MP stroke blocks the canvas thread for about a third of a second on the Huion, and Spot Healing for about a second; long strokes take several seconds. Split the pyramid levels and sweeps across frames, holding back the raster capture until the heal finishes.
+- **Headless Web** screenshots leave out WebGPU pixels, so the Clone and Heal live-preview checks need a headed run or a tablet.
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
 - **Apple and Windows:**
@@ -786,4 +789,4 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M4.3 and M4.5–M4.7. M2 and M3 are complete. Record milestone completion in the research record's section 7.
+**Remaining:** M4.5–M4.7, and retouch speed on tablets. M2 and M3 are complete. Record milestone completion in the research record's section 7.

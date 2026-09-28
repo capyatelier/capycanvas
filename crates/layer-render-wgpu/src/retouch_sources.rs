@@ -6,6 +6,10 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "heal.rs"]
+mod heal;
+pub(crate) use heal::SPOT_TINT;
+
 /// Stroke-start pages kept ready while a retouching tool is selected.
 const POOL_PAGES: usize = 16;
 /// Cached reference pages, 1 MiB each.
@@ -31,6 +35,7 @@ pub(super) struct Pipelines {
     layout: wgpu::BindGroupLayout,
     gather: Deferred<wgpu::RenderPipeline>,
     copy: Deferred<wgpu::RenderPipeline>,
+    heal: Arc<heal::Pipelines>,
 }
 impl Pipelines {
     fn new(device: &PipelineDevice) -> Self {
@@ -56,10 +61,7 @@ impl Pipelines {
                 fullscreen_pipeline_recipe(mode, &device, &layout, &shader, entry, None, device.working_format(), "retouch sources")
             })
         };
-        Self { layout, gather: pipeline("gather_main"), copy: pipeline("copy_main") }
-    }
-    pub fn all(&self) -> [&Deferred<wgpu::RenderPipeline>; 2] {
-        [&self.gather, &self.copy]
+        Self { layout, gather: pipeline("gather_main"), copy: pipeline("copy_main"), heal: Arc::new(heal::Pipelines::new(device)) }
     }
 }
 
@@ -71,6 +73,7 @@ pub(super) struct Counts {
     pub captures: u64,
     pub blocking: u64,
     pub misses: u64,
+    pub heals: u64,
 }
 
 /// The latest retouching stroke's target pages as the stroke found them. None
@@ -80,6 +83,9 @@ struct StrokePages {
     target: LayerId,
     retouch: layer_core::Retouch,
     pages: BTreeMap<[u32; 2], Option<usize>>,
+    /// Bounds of the dabs the stroke laid down on each page, in the target's
+    /// pixels.
+    damage: BTreeMap<[u32; 2], PixelRect>,
 }
 
 /// The reference frame a cache was captured from: the member layers' raster,
@@ -243,6 +249,14 @@ pub(super) struct Gather {
     pub stroke: Option<(StrokeId, LayerId, layer_core::Retouch)>,
 }
 
+/// How a pass draws into its target: over a cleared target, or over what the
+/// target holds when an indirect record, written on the GPU, says to draw.
+#[derive(Clone, Copy)]
+enum Draw<'a> {
+    Clear,
+    Indirect(&'a wgpu::Buffer, u64),
+}
+
 pub(super) struct RetouchSources {
     pipelines: Pipelines,
     parameters: wgpu::Buffer,
@@ -258,6 +272,7 @@ pub(super) struct RetouchSources {
     reported: Option<StrokeId>,
     view: Option<layer_render::ViewState>,
     pending: bool,
+    heal: heal::Buffers,
     pub counts: Counts,
 }
 
@@ -282,12 +297,15 @@ impl RetouchSources {
             reported: None,
             view: None,
             pending: false,
+            heal: heal::Buffers::default(),
             counts: Counts::default(),
         }
     }
 
-    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 2] {
-        self.pipelines.all()
+    /// The pipelines retouching strokes draw with, from pen-down to pen-up.
+    pub fn pipelines(&self) -> (Vec<Deferred<wgpu::RenderPipeline>>, Vec<Deferred<wgpu::ComputePipeline>>) {
+        let (render, compute) = self.pipelines.heal.all();
+        ([&self.pipelines.gather, &self.pipelines.copy].into_iter().chain(render).cloned().collect(), compute.into_iter().cloned().collect())
     }
 
     pub fn prepared(&self) -> bool {
@@ -301,6 +319,7 @@ impl RetouchSources {
     pub fn storage_bytes(&self) -> u64 {
         self.pool.iter().chain(self.cache.slots.iter().map(|s| &s.page)).map(|p| texture_bytes(&p.texture)).sum::<u64>()
             + self.capture.storage_bytes()
+            + self.heal.storage_bytes()
             + PARAMETER_BYTES
     }
 
@@ -465,7 +484,7 @@ impl RetouchSources {
             Some(view) => {
                 let mut sources = [&r.empty_view; 8];
                 sources[0] = &view;
-                self.draw(r, &self.pipelines.copy, &destination, [PAGE_SIZE; 2], sources, encoder)
+                self.draw(r, &self.pipelines.copy, &destination, [PAGE_SIZE; 2], sources, Draw::Clear, encoder)
             }
             None => drop(encoder.color_pass("retouch transparent reference", &destination, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT))),
         }
@@ -473,6 +492,7 @@ impl RetouchSources {
         Ok(Some(slot))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw(
         &self,
         r: &WgpuRasterizer,
@@ -480,6 +500,7 @@ impl RetouchSources {
         destination: &wgpu::TextureView,
         size: [u32; 2],
         sources: [&wgpu::TextureView; 8],
+        draw: Draw,
         encoder: &mut crate::submission::CommandEncoder,
     ) {
         let binding = bindings::group(
@@ -491,11 +512,18 @@ impl RetouchSources {
                 .map(wgpu::BindingResource::TextureView)
                 .chain([self.parameters.as_entire_binding()]),
         );
-        let mut pass = encoder.color_pass("retouch sources", destination, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
+        let load = match draw {
+            Draw::Clear => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            Draw::Indirect(..) => wgpu::LoadOp::Load,
+        };
+        let mut pass = encoder.color_pass("retouch sources", destination, load);
         pass.set_scissor_rect(0, 0, size[0], size[1]);
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &binding, &[]);
-        pass.draw(0..3, 0..1);
+        match draw {
+            Draw::Clear => pass.draw(0..3, 0..1),
+            Draw::Indirect(buffer, offset) => pass.draw_indirect(buffer, offset),
+        }
     }
 
     /// The target page as `stroke` found it: its stroke-start copy, or the
@@ -565,6 +593,7 @@ impl RetouchSources {
         r: &mut WgpuRasterizer,
         destination: &wgpu::TextureView,
         gather: Gather,
+        draw: Draw,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<bool, GpuRasterError> {
         let (target, retouch, stroke) = match (gather.stroke.clone(), &self.stroke, &self.prepared) {
@@ -645,7 +674,7 @@ impl RetouchSources {
         let targets = targets.each_ref().map(view);
         let below = below.each_ref().map(view);
         let sources = std::array::from_fn(|i| if i < 4 { &targets[i] } else { &below[i - 4] });
-        self.draw(r, &self.pipelines.gather, destination, [region.width(), region.height()], sources, encoder);
+        self.draw(r, &self.pipelines.gather, destination, [region.width(), region.height()], sources, draw, encoder);
         Ok(self.counts.misses == misses)
     }
 
@@ -737,7 +766,8 @@ impl WgpuRasterizer {
             retouch.free.push(retouch.pool.len() - 1);
         }
         if let Some(startup) = &mut self.startup {
-            startup.require_brush(retouch.pipelines());
+            let (render, compute) = retouch.pipelines();
+            startup.require_brush(&render, &compute);
         }
         self.retouch = Some(retouch);
     }
@@ -779,11 +809,17 @@ impl WgpuRasterizer {
                 target: first.layer_id,
                 retouch: first.style.retouch.clone().unwrap(),
                 pages: BTreeMap::new(),
+                damage: BTreeMap::new(),
             });
         }
         for (batch, tiles) in retouching {
             for tile in tiles {
                 retouch.keep_page(self, batch.layer_id, tile.coordinate, encoder);
+                let [x, y] = tile.coordinate.map(|v| v * PAGE_SIZE);
+                let local = tile.local;
+                let dabs = PixelRect::new(x + local.min_x(), y + local.min_y(), x + local.max_x(), y + local.max_y());
+                let damage = retouch.stroke.as_mut().unwrap().damage.entry(tile.coordinate).or_default();
+                *damage = damage.union(dabs);
             }
         }
         self.retouch = Some(retouch);
@@ -811,7 +847,7 @@ impl WgpuRasterizer {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<bool, GpuRasterError> {
         let mut retouch = self.retouch_sources();
-        let result = retouch.encode_gather(self, destination, gather, encoder);
+        let result = retouch.encode_gather(self, destination, gather, Draw::Clear, encoder);
         self.retouch = Some(retouch);
         result
     }

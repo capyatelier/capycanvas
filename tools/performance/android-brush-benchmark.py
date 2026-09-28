@@ -23,7 +23,8 @@ PRESETS = {
     25: "pointy-pencil", 26: "shading-pencil", 27: "charcoal", 28: "rough-gpen",
     29: "calligraphy-pen", 30: "antique-pen", 31: "realistic-pen", 32: "wet-ink",
     33: "blotty-ink", 34: "brushed-ink", 36: "liquify-twirl-cw", 37: "liquify-pinch",
-    38: "liquify-expand", 39: "liquify-crystals", 40: "clone-stamp",
+    38: "liquify-expand", 39: "liquify-crystals", 40: "clone-stamp", 41: "healing-brush",
+    42: "spot-healing-brush",
 }
 DRY_PRESETS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 18, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
 
