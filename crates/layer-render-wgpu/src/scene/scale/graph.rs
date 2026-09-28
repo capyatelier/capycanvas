@@ -167,7 +167,7 @@ impl stack::Compositor for Builder<'_> {
 
 impl Reduced<'_> {
     pub(super) fn evaluate_root(&mut self, node: &Node) -> Result<Value, GpuRasterError> {
-        if node.deferred() { return self.evaluate(node); }
+        if node.deferred() && self.r.transform_preview.is_none() { return self.evaluate(node); }
         if self.cache.output.is_empty() { self.cache.allocate(self.r); }
         self.cache.used[0] = true;
         let view = self.cache.output[0].view.clone();

@@ -357,8 +357,6 @@ impl Scene {
     pub fn reduced_layer(&self, _r: &WgpuRasterizer, layer: &Layer, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
         self.scale_sources.complete_texture(layer, extent, level)
     }
-    #[cfg(test)]
-    pub fn forget_placement_mips(&mut self) { self.scale_sources = Default::default(); }
     pub(in crate::scene) fn prepare_placed_sources(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoder: &mut crate::submission::CommandEncoder, commands: &mut Commands,
     ) -> Result<(), GpuRasterError> {

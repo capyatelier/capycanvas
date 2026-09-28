@@ -1041,6 +1041,8 @@ fn native_canvas_bar_refine() {
 
 /// The document pixel at `p`, as the readback's bytes.
 fn document_pixel(image: &layer_render::ReadbackImage, p: [f32; 2]) -> [u8; 4] {
+    assert!(p[0] >= 0. && p[1] >= 0. && p[0] < image.width as f32 && p[1] < image.height as f32,
+        "pixel {p:?} outside {}×{} document", image.width, image.height);
     let at = p[1] as usize * image.stride as usize + p[0] as usize * 4;
     image.bytes[at..at + 4].try_into().unwrap()
 }
@@ -1099,11 +1101,13 @@ fn native_move_drags_selected_pixels() {
         let bounds = selection.coverage_bounds();
         let kept = [bounds.min.x + 6., bounds.min.y + 6.];
         let original = pixels(&w);
-        let from = canvas_point(&w, [(bounds.min.x + bounds.max.x) * 0.5, (bounds.min.y + bounds.max.y) * 0.5]);
+        let center = [(bounds.min.x + bounds.max.x) * 0.5, (bounds.min.y + bounds.max.y) * 0.5];
+        let from = canvas_point(&w, center);
+        let to = canvas_point(&w, [center[0] + 400., center[1] + 300.]);
         if alt {
             native.perform(json!([{"key": 0xffe9, "down": true}]));
         }
-        drag(&mut native, device, from, [from[0] + 220., from[1] + 160.]);
+        drag(&mut native, device, from, to);
         if alt {
             native.perform(json!([{"key": 0xffe9, "down": false}]));
         }

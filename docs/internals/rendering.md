@@ -386,46 +386,34 @@ rectangle, so filter definitions describe their sampling footprint. Global effec
 layer reordering and invalidated caches can require much larger updates than a
 single brush mark. Animated effects also need updates without new pen input.
 
-The exact presentation executor remains for effects, persistent watercolor and
-active pixel transforms. In that executor, a transform or placement drag skips both the full-resolution pages and
-composition when a native document keeps a complete display pyramid and the
-moving layer is an unmasked top-level layer under normal static layers.
-[`render_display`](../../crates/layer-render-wgpu/src/paint_transform.rs) draws the
-moving layer into the level the view samples, at most sixteen layer pixels per
-texel side, and the coarser levels are reduced from it. While the Transform is
-still, the layer is reduced once per transaction as the exact area mean of its
-full-resolution pixels, to the level of its own pixels that matches the display
-under its placement. It is reduced a page at a time, decoding a photo's
-original tiles as it reaches them. When the selection keeps some pixels in
-place, those are reduced apart from the pixels it moves: a page the selection
-covers or leaves out entirely is reduced whole, and one its edge crosses is
-drawn exactly. A transform that keeps its source, as Move's Leave Copy does,
-cuts nothing: its `keep_source` flag makes
-[`pixel_transform.wgsl`](../../crates/layer-render-wgpu/src/pixel_transform.wgsl)
-leave the original under the moved pixels, and drag frames add the moved
-pixels back to the kept ones in place. A whole placed photo is copied instead
-from its placement preview when that preview is current and holds the level.
-Move opens its transaction at the press, so while Move is active over a
-selection the session names the layer and selection a press would move
-(`prepare_moving_pixels`), and idle frames capture and reduce them ahead of the
-drag; its transaction adopts them when the layer's pixels and the selection are
-unchanged, so its first frames draw at once. Paint, a restore or leaving Move
-drops them.
-Each drag frame
-[resamples](../../crates/layer-render-wgpu/src/paint_transform/resample.rs) the
-copy with one bilinear sample per texel, the moved pixels through the transform
-and the placement and the kept ones through the placement alone. With content
-above or below, the
-[layered display](../../crates/layer-render-wgpu/src/paint_transform/layers.rs)
-composes the static layers once at that level, then places the moving layer
-between them with its blend. The layers above must composite as Normal over the
-document: a layer inside an isolated group may use any mode, and a layer inside
-Pass Through groups counts as the document's own. They are kept for the moving layer and level
-while nothing else changes, across drags and transactions. A drag waits for
-them and the reduced copy, and so does the frame that ends a drag that waited.
-The frame that releases a drag resamples the still preview too. Later frames
-draw the preview's pages at full resolution and then recompose what the drag
-touched a few tiles at a time, reporting pending work so hosts keep drawing.
+The exact presentation executor remains for effects and persistent watercolor.
+Active paint transforms use the shared region graph. A transaction captures
+immutable original tiles and reduces its moving pixels and any unselected
+remainder once per input level. Whole-layer transactions can reuse a current
+reduced source. The scene's [resampler](../../crates/layer-render-wgpu/src/scene/resample.rs)
+places these inputs into requested graph regions, with opacity and a constant
+backdrop folded into the same pass. Groups, masks, clipping and other blends
+use the ordinary composition rules and branch cache. Mask transactions still
+evaluate native coverage before that composition.
+
+Display reconstruction selects prefiltered source detail from the local
+transform footprint. Split selections and footprint boundaries use four samples;
+partial edge texels retain their actual centers. Mesh triangles draw color
+directly into the graph target, with later triangles replacing earlier ones
+where the mesh folds. Reconstruction remains approximate while a transform is
+active. Native views evaluate native preview pixels;
+exact queries materialize the source tiles their dependency window reads and
+retire previous query tiles. Apply evaluates the authoritative transform, and
+Cancel restores only native pixels that a preview or query changed. There is
+no separate placement-drag composite or post-release settling queue.
+
+Move's Leave Copy retains the original under the moved selection. Selected and
+unselected captures reconstruct that original without another image allocation.
+While Move is active over a selection, `prepare_moving_pixels` names the layer
+and selection for the next press. Idle frames prepare those inputs within the
+composition budget, and the transaction adopts them only while their source
+identity and selection match. Painting, restoring or leaving Move releases
+prepared inputs. There is no post-release settling work.
 
 A Warp transform is a [mesh](../../crates/layer-render-wgpu/src/paint_transform/mesh.rs)
 of Bézier patches. Its pages are drawn a window of four by four pages at a
@@ -442,36 +430,6 @@ at those positions. A pixel selection moved by a warp is resampled on the GPU
 the same way, a window at a time. What draws meshes compiles in the background
 when a warp is first shown, and until then the preview keeps the frame before
 it.
-
-A [placement drag](../../crates/layer-render-wgpu/src/placement_drag.rs) in that
-executor is a frame in which only one layer's placement changed. Its layer's own pixels are
-reduced once and kept between drags while they are unchanged, together with the
-static layers around it. Until that copy is complete, a lone layer over the
-paper is drawn from the display level as the drag began, within the canvas that
-level showed. Each drag frame resamples the copy through the new placement, and
-the frame's full recomposition is skipped. Frames in which nothing moves keep
-the drag; once the placement has stayed still for a few frames, what the drag
-drew is recomposed a few tiles at a time. What drags draw with and what
-composes placed layers compile in the background while input is quiet after
-startup, and that recomposition waits for them.
-
-[Preparation](../../crates/layer-render-wgpu/src/preparation.rs) for a drag and
-the work after one, including the layer's copy, the static layers around it, a
-still preview's settled pages and the recomposition, is spread over frames by
-the GPU time that earlier work of the same kind took, measured with timestamps.
-Each measured frame sets the next frames' units from its own cost per unit, to
-fit 10 ms of GPU time for work a drag waits for and 5 ms for work after a
-release. Timestamps arrive a few frames late, so a count never grows past twice
-what the measured frame was allowed, and late measurements do not compound. A
-frame also stops preparing once its preparation has taken 4 ms of CPU time,
-after at least one unit of each kind; without timestamps that deadline alone
-sets how much a frame prepares. A drag that starts meanwhile waits behind at
-most a frame of that work. Neither drag frames nor the frame that ends a drag
-allocate pages: once the layer is reduced, still frames reserve the pages its
-preview settles into, a few each, and settling waits for them.
-
-Drag frames and still previews until they settle resample; pages, Apply,
-commits and the settled display are exact.
 
 ### Resampling
 

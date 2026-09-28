@@ -4,7 +4,8 @@ use super::*;
 use std::collections::BTreeMap;
 use wgpu::util::DeviceExt;
 
-const MIP_COUNT: u32 = PAGE_SIZE.ilog2() + 1;
+pub(super) const MAX_LEVEL: u32 = PAGE_SIZE.ilog2();
+const MIP_COUNT: u32 = MAX_LEVEL + 1;
 pub(super) const MAX_SIDE: u32 = 512;
 
 /// Choose a texel footprint no wider than a surface pixel in any direction.
@@ -77,10 +78,15 @@ impl Plan {
         self.pixel_bytes_through(self.level)
     }
     pub fn pixel_bytes_through(self, last: u32) -> u64 {
-        let scratch = (0..=last)
+        let scratch = (0..=self.level)
             .map(|level| u64::from(PAGE_SIZE >> level).pow(2) * 16)
             .sum::<u64>();
-        scratch + (self.level..=last).map(|level| self.level_bytes(level)).sum::<u64>()
+        let size = self.pyramid_size(last);
+        scratch + (0..=last-self.level).map(|level| size.map(|n| u64::from((n >> level).max(1))).into_iter().product::<u64>() * 16).sum::<u64>()
+    }
+    fn pyramid_size(self, last: u32) -> [u32; 2] {
+        let alignment = 1 << (last-self.level);
+        self.size.map(|n| (n.div_ceil(alignment)*alignment).min(n.next_power_of_two()))
     }
 }
 
@@ -160,9 +166,8 @@ pub(super) struct CompleteUpdates {
     fused_pipeline: Deferred<wgpu::ComputePipeline>,
     columns: u32,
     stride: u32,
+    first: u32,
     pending: Vec<[u32; 2]>,
-    /// The level pending tiles were written at; coarser levels are reduced.
-    written: usize,
 }
 impl CompleteUpdates {
     pub(super) const BATCH: usize = 128;
@@ -176,14 +181,19 @@ impl CompleteUpdates {
 
     pub fn new(device: &PipelineDevice, pipelines: &Pipelines, plan: Plan,
         views: &[&wgpu::TextureView]) -> Self {
-        assert_eq!(views.len(), plan.level as usize + 1);
+        Self::from_level(device, pipelines, plan, 0, views)
+    }
+    fn from_level(device: &PipelineDevice, pipelines: &Pipelines, plan: Plan, first: u32,
+        views: &[&wgpu::TextureView]) -> Self {
+        assert_eq!(views.len(), (plan.level-first) as usize + 1);
         let stride = device.limits().min_uniform_buffer_offset_alignment.max(16);
         let columns = plan.extent[0].div_ceil(PAGE_SIZE);
-        let mut bytes = vec![0; Self::record_bytes(device, plan) as usize];
+        let count = plan.level-first;
+        let mut bytes = vec![0; (u64::from(columns) * u64::from(plan.extent[1].div_ceil(PAGE_SIZE)) * u64::from(count) * u64::from(stride)) as usize];
         for y in 0..plan.extent[1].div_ceil(PAGE_SIZE) {
             for x in 0..columns {
-                for level in 1..=plan.level {
-                    let offset = ((y * columns + x) * plan.level + level - 1) * stride;
+                for level in first+1..=plan.level {
+                    let offset = ((y * columns + x) * count + level-first-1) * stride;
                     for (i, value) in [plan.extent[0], plan.extent[1], 1 << (level - 1), x | (y << 16)]
                         .into_iter().enumerate() {
                         bytes[offset as usize + i * 4..offset as usize + i * 4 + 4]
@@ -201,7 +211,7 @@ impl CompleteUpdates {
             wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &records, offset: 0, size: NonZeroU64::new(16), }),
             wgpu::BindingResource::TextureView(pair[1]),
         ])).collect();
-        let fused_bindings = (0..plan.level as usize / 4).map(|chunk| {
+        let fused_bindings = (0..count as usize / 4).map(|chunk| {
             let first = chunk * 4;
             let mut entries = vec![
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(views[first]) },
@@ -218,7 +228,7 @@ impl CompleteUpdates {
         }).collect();
         Self { records, bindings, fused_bindings, pipeline: pipelines.reduce.clone(),
             fused_pipeline: pipelines.fused_reduce.clone(), columns, stride,
-            pending: Vec::with_capacity(Self::BATCH), written: 0 }
+            first, pending: Vec::with_capacity(Self::BATCH) }
     }
 
     pub fn storage_bytes(&self) -> u64 { self.records.size() }
@@ -230,20 +240,7 @@ impl CompleteUpdates {
         if self.pending.len() == Self::BATCH { self.flush(encoder); }
     }
 
-    /// Reduce the tiles, by level-0 coordinate, whose pixels were written
-    /// directly at `level` into every coarser level.
-    pub fn tiles_written_at(&mut self, encoder: &mut crate::submission::CommandEncoder,
-        level: usize, coordinates: &[[u32; 2]]) {
-        self.flush(encoder);
-        for chunk in coordinates.chunks(Self::BATCH) {
-            self.pending.extend_from_slice(chunk);
-            self.written = level;
-            self.flush(encoder);
-        }
-    }
-
     pub fn flush(&mut self, encoder: &mut crate::submission::CommandEncoder) {
-        let written = std::mem::take(&mut self.written);
         if self.pending.is_empty() { return; }
         let _trace = crate::performance_trace::Span::new(c"capy.mip_encode");
         // Same pixels and per-level dependency order, fewer driver commands.
@@ -252,12 +249,12 @@ impl CompleteUpdates {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("reduce retained display tiles"), timestamp_writes: None,
         });
-        let mut level = written;
+        let mut level = 0;
         while level < self.bindings.len() {
             let fused = level % 4 == 0 && level / 4 < self.fused_bindings.len();
             let binding = if fused { &self.fused_bindings[level / 4] } else { &self.bindings[level] };
             pass.set_pipeline(if fused { &self.fused_pipeline } else { &self.pipeline });
-            let side = PAGE_SIZE >> (level + 1);
+            let side = PAGE_SIZE >> (self.first as usize + level + 1);
             let mut first = 0;
             while first < self.pending.len() {
                 let [x, y] = self.pending[first];
@@ -283,7 +280,7 @@ pub(super) struct Image {
     pub view: wgpu::TextureView,
     scratch: wgpu::Texture,
     views: Vec<wgpu::TextureView>,
-    reduced: Vec<(wgpu::Texture, wgpu::TextureView)>,
+    reduced: Vec<wgpu::TextureView>,
     // An image has only four combinations of full/partial tile dimensions.
     // Immutable records preserve command order when the scratch tile is reused.
     records: BTreeMap<[u32; 2], Vec<Record>>,
@@ -292,16 +289,23 @@ impl Image {
     pub fn new(r: &WgpuRasterizer, plan: Plan) -> Self {
         Self::with_mips(r, plan, plan.level)
     }
-    /// Retain optional coarser levels from the same tile reduction. Consumers
-    /// select an existing level; source pixels and editing precision are intact.
+    /// Allocate a sampled pyramid; generate_mips derives its coarser levels.
     pub fn with_mips(r: &WgpuRasterizer, plan: Plan, last: u32) -> Self {
         assert!(last >= plan.level && last < MIP_COUNT);
-        let (texture, view) = create_target(
-            &r.device,
-            plan.size,
-            wgpu::TextureFormat::Rgba32Float,
-            "coarse display image",
-        );
+        let last = last.min(plan.level + plan.size.into_iter().max().unwrap().next_power_of_two().ilog2());
+        let size = plan.pyramid_size(last);
+        let texture = r.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("derived image pyramid"), size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+            mip_level_count: last-plan.level+1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let single = |level| texture.create_view(&wgpu::TextureViewDescriptor {
+            base_mip_level: level, mip_level_count: Some(1), ..Default::default()
+        });
+        let view = single(0);
         let scratch = r.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("reusable display mip tile"),
             size: wgpu::Extent3d {
@@ -309,7 +313,7 @@ impl Image {
                 height: PAGE_SIZE,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: last + 1,
+            mip_level_count: plan.level + 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba32Float,
@@ -320,7 +324,7 @@ impl Image {
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let views = (0..=last)
+        let views = (0..=plan.level)
             .map(|level| {
                 scratch.create_view(&wgpu::TextureViewDescriptor {
                     label: Some("single display mip"),
@@ -330,10 +334,7 @@ impl Image {
                 })
             })
             .collect();
-        let reduced = (plan.level + 1..=last).map(|level| create_target(
-            &r.device, plan.level_size(level),
-            wgpu::TextureFormat::Rgba32Float, "retained image mip",
-        )).collect();
+        let reduced = (1..=last-plan.level).map(single).collect();
         Self {
             plan,
             texture,
@@ -353,7 +354,16 @@ impl Image {
                 .map(|r| r.uniform.size())
                 .sum::<u64>()
     }
-    pub fn last_level(&self) -> u32 { self.views.len() as u32 - 1 }
+    pub fn last_level(&self) -> u32 { self.plan.level + self.texture.mip_level_count() - 1 }
+    pub fn sampling_view(&self) -> wgpu::TextureView { self.texture.create_view(&Default::default()) }
+    pub fn generate_mips(&self, device: &PipelineDevice, pipelines: &Pipelines, encoder: &mut crate::submission::CommandEncoder) {
+        if self.reduced.is_empty() { return; }
+        let views: Vec<_> = std::iter::once(&self.view).chain(&self.reduced).collect();
+        let plan = Plan::at(self.plan.extent, self.last_level());
+        let mut updates = CompleteUpdates::from_level(device, pipelines, plan, self.plan.level, &views);
+        for coordinate in page_coordinates(PixelRect::full(plan.extent)) { updates.tile(encoder, coordinate); }
+        updates.flush(encoder);
+    }
     pub fn copy_mip(
         &self,
         encoder: &mut crate::submission::CommandEncoder,
@@ -362,7 +372,7 @@ impl Image {
         destination: &wgpu::Texture,
         origin: [u32; 2],
     ) {
-        assert!(level <= self.last_level());
+        assert!(level <= self.plan.level);
         let valid: [u32; 2] = std::array::from_fn(|i| {
             (self.plan.extent[i] - coordinate[i] * PAGE_SIZE)
                 .min(PAGE_SIZE)
@@ -442,7 +452,7 @@ impl Image {
                 },
             );
         }
-        let last = self.last_level();
+        let last = self.plan.level;
         let records = self.records.entry(valid).or_insert_with(|| {
             (1..=last)
                 .map(|level| {
@@ -496,10 +506,6 @@ impl Image {
                 depth_or_array_layers: 1,
             },
         );
-        for (index, (texture, _)) in self.reduced.iter().enumerate() {
-            let level = self.plan.level + index as u32 + 1;
-            self.copy_mip(encoder, level, coordinate, texture, origin.map(|v| v >> level));
-        }
         Ok(())
     }
 }

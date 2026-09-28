@@ -18,16 +18,16 @@ is 4248 × 2832.
 | Two-finger rotate | 60 | | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
-| Placed-photo translation | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 94.4 completed updates/s | Geometry build below, `photo-translate-drag` |
-| Placed-photo corner resize | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 84.1 completed updates/s | Geometry build below, `photo-handle-drag-bar-hidden` |
-| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.7 ms; renderer 91.0 completed updates/s | Geometry build below, `photo-pixels-handle-drag` |
+| Placed-photo translation | 60 | Screen 59.4 presents/s, p99 16.7 ms; renderer 93.8 completed updates/s | Geometry build below, `photo-translate-drag` |
+| Placed-photo corner resize | 60 | Screen 59.4 presents/s, p99 16.8 ms; renderer 81.9 completed updates/s | Geometry build below, `photo-handle-drag-bar-hidden` |
+| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.7 ms; renderer 69.3 completed updates/s | Geometry build below, `photo-pixels-handle-drag` |
 | Pixel transform: Uniform, Skew or Rotate | 60 | | |
-| Pixel transform translation | 60 | Screen 59.4 presents/s, p99 16.7 ms; renderer 93.0 completed updates/s | Geometry build below, `photo-pixels-translate-drag` |
-| Pixel transform: Distort | 60 | Screen 59.5 presents/s, p99 16.8 ms; renderer 91.1 completed updates/s | Geometry build below, `photo-pixels-distort-drag` |
+| Pixel transform translation | 60 | Screen 59.5 presents/s, p99 16.8 ms; renderer 80.4 completed updates/s | Geometry build below, `photo-pixels-translate-drag` |
+| Pixel transform: Distort | 60 | **Not met.** Screen 55.6 presents/s, p99 16.9 ms; renderer 61.9 completed updates/s | Geometry build below, `photo-pixels-distort-drag` |
 | Pixel transform: Perspective | 60 | | |
-| Pixel transform: Warp | 60 | **Not met.** Screen 52.4 presents/s, p99 33.4 ms; renderer 51.8 completed updates/s | Geometry build below, `photo-pixels-warp-drag` |
-| Crop corner drag | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 112.8 completed updates/s | Geometry build below, `crop-handle-drag` |
-| Pixel resize after placing the photo at 45% size | 60 | Screen 59.5 presents/s, p99 16.9 ms; renderer 112.2 completed updates/s | Geometry build below, `scaled-photo-pixels-handle-drag` |
+| Pixel transform: Warp | 60 | **Not met.** Screen 46.7 presents/s, p99 33.4 ms; renderer 46.5 completed updates/s | Geometry build below, `photo-pixels-warp-drag` |
+| Crop corner drag | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 113.1 completed updates/s | Geometry build below, `crop-handle-drag` |
+| Pixel resize after placing the photo at 45% size | 60 | Screen 59.6 presents/s, p99 16.9 ms; renderer 115.3 completed updates/s | Geometry build below, `scaled-photo-pixels-handle-drag` |
 | Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
 | Move tool layer drag | 60 | | |
 | Marquee, Lasso or Polygon drag | 60 | | |
@@ -54,22 +54,27 @@ is 4248 × 2832.
 | List scrolling: layers, brushes, filters | 60 | | |
 | Menu open and close | 60 | | |
 
-Geometry build: 2026-09-28, cached composition worktree based on `e6b361dd`,
-APK SHA-256 `3158915c6ea69e3d027a7ca3f979410460e8cbfa55b131428e1e77dacca38cd4`.
+Geometry build: 2026-09-28, graph transform migration based on `af177ede`,
+APK SHA-256 `c872c55b455d292c4444f7c2ca42303e421fe17e1e90a4b62e1b11b9510f8554`.
 Release Rust with an unminified Android benchmark harness, default glass, thermal
 status 0, three warmed five-second gestures per row. Values are medians across
 runs. Screen rates use SurfaceFlinger actual-present timestamps; this device
 provides no separate SurfaceView timeline, so they do not independently establish
 canvas presentation rates. Renderer counts exclude empty updates and terminal
 polling. Setup commands wait for shared command availability outside timing.
-Raw results are in `artifacts/display-production/stable-graph-geometry-ready-tcl`.
+Raw results are in `artifacts/display-production/transform-final-geometry-tcl`.
 
 The paired old renderer at `29a564eb` completes 96.3 placement translations/s,
 94.6 placement resizes/s, 92.7 pixel translations/s, 91.2 pixel resizes/s,
 91.7 distortions/s, 51.4 warps/s, 123.8 crops/s and 112.0 scaled-photo resizes/s.
-Placement resize and crop have regressed in renderer throughput while maintaining
-about 59 screen presents/s. Pixel transforms still use the existing executor;
-warp does not meet the target. Earlier canvas-bar handle-labelled measurements
+Placement resize, crop and the pixel-transform journeys regress in renderer
+throughput. Distort and Warp fall below the screen-present target; other rows
+remain near 59 screen presents/s. Pixel transforms now use the shared graph,
+with prefiltered immutable inputs and direct mesh color evaluation. These
+measurements precede the selected-pixel Move integration from `a16bb1a4`.
+Separate phase traces show 6–10 ms of transform composition plus 5.5 ms of
+viewport work, rising to 12.6 ms for Warp. The matching old viewport costs
+about 3.1 ms, or 9.0 ms for Warp. Both costs remain optimization work. Earlier canvas-bar handle-labelled measurements
 started inside the handle and measured translation; they do not qualify resizing
 or distortion.
 

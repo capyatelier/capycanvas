@@ -248,7 +248,7 @@ impl WgpuRasterizer {
     /// Dab RGB values are linear coordinates in `color.space`.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new_native_headless(color: DocumentColor) -> Result<Self, GpuRasterError> {
-        let mut r = pollster::block_on(Self::headless(color.space, Initialization::Warm))?;
+        let mut r = pollster::block_on(Self::headless(color.space, Initialization::Headless))?;
         r.initialize_native(color)?;
         Ok(r)
     }

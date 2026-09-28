@@ -338,7 +338,7 @@ impl WgpuRasterizer {
                 required.compute.push(self.scene_pipelines.scale.reduce.clone());
                 required.compute.push(self.scene_pipelines.scale.reduce_pair.clone());
                 required.compute.push(self.scene_pipelines.scale.compose.clone());
-                required.compute.extend(self.transforms.iter().map(|t| t.resample().area.clone()));
+                required.compute.push(self.scene_pipelines.resample.area.clone());
             }
             if self.native_edit.as_ref().is_some_and(|native| {
                 u64::from(document.width) * u64::from(document.height) * 16 > native.display_dense_bytes
@@ -446,7 +446,13 @@ impl WgpuRasterizer {
         // Live transforms do not change document revision or brush settings.
         // They still need their own shaders before an interactive frame runs.
         if transform {
+            let mip = self.display_pipelines
+                .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
+            current.compute.extend([mip.reduce.clone(), mip.fused_reduce.clone()]);
             current.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
+            current.compute.extend(self.transforms.as_ref().unwrap().display_pipelines().into_iter().cloned());
+            current.compute.extend(self.scene_pipelines.resample.mapped.iter().cloned());
+            current.render.extend(self.scene_pipelines.resample.mesh.iter().cloned());
             current.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
         }
         if let Some(retouch) = self.retouch.as_ref().filter(|r| r.prepared()) {
@@ -458,8 +464,12 @@ impl WgpuRasterizer {
         let transforms = self.transforms.as_ref().unwrap();
         startup.compiler.require(transforms.pipelines(), OTHER);
         startup.compiler.require(self.selection_clip.pipelines(), OTHER);
-        startup.compiler.require(transforms.display_pipelines(), OTHER);
+        startup.compiler.require(transforms.display_pipelines().into_iter().chain(self.scene_pipelines.resample.mapped.iter()).chain([&self.scene_pipelines.resample.area]), OTHER);
         startup.compiler.require(transforms.mesh_pipelines(), OTHER);
+        startup.compiler.require(&self.scene_pipelines.resample.mesh, OTHER);
+        let mip = self.display_pipelines
+            .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
+        startup.compiler.require([&mip.reduce, &mip.fused_reduce], OTHER);
         startup.current = current;
         startup.brush = Some(ShaderBrushKey::new(brush));
         startup.transform = transform;

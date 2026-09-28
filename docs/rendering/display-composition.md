@@ -77,6 +77,28 @@ The original scene executor is the exact-query and unsupported-stack fallback;
 There is no runtime benchmark switch or second legacy copy of the supported
 paint compositor.
 
+Paint-transform transactions retain immutable originals and selected/unselected
+input levels. The graph evaluates a transformed source only where output is
+requested, reusing static branches and folding a constant backdrop into the
+resampling pass. Affine, perspective and mesh previews share that source
+contract. Source resolution also bounds the pixel transform’s magnification, using
+the projective Jacobian or the mesh’s derivative control hull. Admission reserves
+the same input resolution, including linked paint/mask companions. Whole-image
+selections reserve one input pyramid; split selections reserve both moved and
+kept coverage using the capture's coverage decision. Whole-image
+transforms reconstruct prefiltered color from a retained mip pyramid. Each output
+footprint selects detail from its local Jacobian; partial edge cells use their
+actual centers. Finer transaction inputs persist across scale oscillations.
+Mesh triangles rasterize color directly into the graph's target. Fragment
+derivatives choose the source footprint, and later triangles replace earlier
+ones where a mesh folds. Kept coverage and the mesh share one render pass.
+Split selections use finer
+inputs and four samples to limit moved/unmoved coverage error; edge texels
+use their actual extent. Exact queries evaluate native source tiles for their
+requested dependency window, retiring tiles from the previous window. Display
+motion has no full-layer preview or post-release settling queue. Scalar-mask
+transactions currently provide native coverage to the same graph.
+
 Eligible temporary dry-brush tails use compact prediction pages. They share the
 existing dry material evaluator, reading averaged exact destination color and
 stroke coverage. The combined layer placement and camera use a half-surface-pixel
@@ -99,8 +121,7 @@ backlog to hide from the benchmark.
 
 The region executor admits native paint layers, isolated groups, clipping
 stacks, all blend modes, paper, affine placements and scalar masks. Mask
-inspection remains presentation only. Effects, persistent watercolor state and
-active pixel-transform transactions still use the exact presentation executor;
+inspection remains presentation only. Effects and persistent watercolor state still use the exact presentation executor;
 these dependencies have not yet migrated. Insufficient admission also retains
 that executor. Advanced brushes keep their exact temporary evaluator; simple
 analytic dry contacts without grain, selection, alpha lock or edge effects can
@@ -108,7 +129,7 @@ use compact tails.
 
 An unchanged view may retain one neighboring composed output within the same
 component budget. Returning to it reuses its pixels; artwork changes retire it.
-Source levels have independent ownership and validity, so returning through a
+Transform input allocations are reserved in admission. Source levels have independent ownership and validity, so returning through a
 native view need not reread a previously reduced photo. Unretained finer content
 still requires authoritative pixels. Composition currently uses bounded damage
 rectangles rather than a separate pixel scheduler.
@@ -154,7 +175,9 @@ cargo test -p layer-render-wgpu --test project --offline -- --test-threads=1
 
 The scale tests compare against exact composition and exact output, exercise odd
 edges, changing prediction footprints, opacity, ordering, source removal,
-resolution changes, window overlap, affine source and mask placement, sparse
+resolution changes, window overlap, active pixel transforms, cancellation,
+zoom transitions, release, exact commit and linked mask/group/clipping semantics,
+bounded exact queries, affine source and mask placement, sparse
 source derivation, prediction cancellation and entry/exit through the filter fallback.
 A 32-layer test edits the beginning, middle and end of the stack, checks exact
 output agreement and bounds the command count while preserving untouched pages. Direct

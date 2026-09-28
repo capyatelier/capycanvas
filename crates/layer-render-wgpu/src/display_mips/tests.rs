@@ -66,6 +66,16 @@ fn pixels(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
         .collect()
 }
 
+fn mip_pixels(r: &WgpuRasterizer, image: &Image, level: u32) -> Vec<[f32; 4]> {
+    let size = image.plan.level_size(level);
+    let target = create_color_target(&r.device, size, "mip readback").0;
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo { mip_level: level-image.plan.level,
+        ..image.texture.as_image_copy() }, target.as_image_copy(), target.size());
+    encoder.submit(&r.queue);
+    pixels(r, &target)
+}
+
 #[test]
 fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updates() {
     let r = WgpuRasterizer::new_native_headless(DocumentColor {
@@ -100,17 +110,9 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
                 )
                 .unwrap();
         }
+        image.generate_mips(&r.device, &pipelines, &mut encoder);
         encoder.submit(&r.queue);
-        let levels: Vec<_> = std::iter::once((plan.level, &image.texture))
-            .chain(
-                image
-                    .reduced
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (texture, _))| (plan.level + i as u32 + 1, texture)),
-            )
-            .map(|(level, texture)| (level, pixels(&r, texture)))
-            .collect();
+        let levels: Vec<_> = (plan.level..=last).map(|level| (level, mip_pixels(&r, &image, level))).collect();
         for (level, actual) in &levels {
             let scale = 1 << level;
             let size = extent.map(|n| n.div_ceil(scale));
@@ -146,7 +148,7 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
         assert!(image.records.len() <= 4);
         assert_eq!(
             image.storage_bytes(),
-            plan.pixel_bytes_through(last) + image.records.len() as u64 * u64::from(last) * 16
+            plan.pixel_bytes_through(last) + image.records.len() as u64 * u64::from(plan.level) * 16
         );
 
         // A later tile update changes only that tile's derived footprint.
@@ -160,14 +162,10 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
         image
             .write_tile(&r.device, &pipelines, &mut encoder, &tile, [0; 2], [0; 2])
             .unwrap();
+        image.generate_mips(&r.device, &pipelines, &mut encoder);
         encoder.submit(&r.queue);
         for (level, actual) in &levels {
-            let texture = if *level == plan.level {
-                &image.texture
-            } else {
-                &image.reduced[(level - plan.level - 1) as usize].0
-            };
-            let updated = pixels(&r, texture);
+            let updated = mip_pixels(&r, &image, *level);
             let scale = 1 << level;
             let size = extent.map(|n| n.div_ceil(scale));
             for y in 0..size[1] {

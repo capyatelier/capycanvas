@@ -574,10 +574,10 @@ fn materialized_display(r: &WgpuRasterizer) -> Image {
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let (texture, view) = create_color_target(&r.device, cache.plan.size, "materialized display query");
-        let pass = r.transforms.as_ref().unwrap().resample();
-        let binding = pass.binding(&r.device, &uniforms, 0, [&root.value.view, &view, &root.value.view, &r.empty_view]);
+        let pass = &r.scene_pipelines.resample;
+        let binding = pass.binding(&r.device, &uniforms, 0, [&root.value.view, &view, &root.value.view]);
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        pass.encode(&mut encoder, &binding, texels, paint_transform::resample::Sampling::AffineArea);
+        pass.encode(&mut encoder, &binding, texels, scene::resample::Sampling::AffineArea);
         encoder.submit(&r.queue);
         Image { texture, view }
     } else { Image { texture: cache.texture().clone(), view: cache.view().clone() } }
@@ -1065,3 +1065,6 @@ fn unchanged_navigation_derives_and_reuses_a_bounded_neighbor_level() {
         );
     }
 }
+
+#[path = "transform_tests.rs"]
+mod transforms;

@@ -179,6 +179,20 @@ also save images under `Pictures/` through MediaStore.
 - `awaitMain` defaults to a 10 s timeout. A cold shader cache on a slow tablet
   can take longer to start; see [Devices](devices.md).
 
+To isolate a driver shader-compiler failure, build the renderer's
+`shader_compile` example with `cargo ndk -t arm64-v8a --platform 29 build
+--locked --release -p layer-render-wgpu --example shader_compile`. Copy the executable
+and the complete WGSL module to the reserved device through the device wrapper.
+Run `shader_compile FILE ENTRY...` to compile named compute entry points without
+starting the renderer or its background shader catalog. Each entry logs its
+start and successful completion separately.
+
+The shared renderer's Rust GPU tests can also be cross-built with `cargo ndk
+-t arm64-v8a --platform 29 test --locked --release -p layer-render-wgpu --lib --no-run`
+and run on the reserved device. Headless renderers compile deferred pipelines
+as their workload needs them. Timing harnesses must prime each workload before
+measuring steady motion.
+
 ## Benchmarks
 
 The `benchmark` build type inherits `release`, is not debuggable, and is signed
@@ -226,8 +240,9 @@ APK calls, so test-APK benchmarks use the unminified build.
   that follow.
   `photo` separates body translation, corner resizing, distortion and a warp
   node drag. Priming gestures validate their geometry, then reset the transform
-  and restore the intended mode before measurement. Commands wait for the shared
-  enabled state after injected gestures; Android input delivery can finish before
+  and restore the intended mode before measurement. Commands query the owner
+  for the current shared `command_reason` after injected gestures. Published
+  command state stays stable during contact; Android input delivery can finish before
   the renderer owner consumes the terminal sample. These waits occur outside the
   motion measurement window. The output directory is
   cleared at the beginning of each invocation, so omitted scenarios cannot
@@ -235,6 +250,9 @@ APK calls, so test-APK benchmarks use the unminified build.
   Photo drags are marked by `capy-drag` trace sections; `capy.publish.native` and `capy.publish.parse`
   time each model publication; `-e composeTrace true` adds a section per
   composable, which slows the frames it attributes.
+  `-e rendererProfile true` opens the Stats panel to collect renderer GPU phase
+  timestamps. Use these runs for attribution; the panel changes the workload,
+  so compare motion rates with the ordinary runs separately.
 - **Canvas navigation and drawing.** `AndroidViewportBenchmarkTest` runs with
   `-e viewportBenchmark true`. `-e motion pan|pinch` measures navigation;
   the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,

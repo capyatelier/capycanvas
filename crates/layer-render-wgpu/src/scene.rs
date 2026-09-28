@@ -13,6 +13,7 @@ const DISPLAY_JOBS_PER_SUBMISSION: usize = 256;
 mod sources;
 mod placement;
 mod bake;
+pub(crate) mod resample;
 pub(crate) mod scale;
 
 #[derive(Clone)]
@@ -137,6 +138,7 @@ pub(super) struct Scene {
 #[derive(Clone)]
 pub(super) struct Pipelines {
     pub scale: scale::Pipelines,
+    pub resample: resample::Resample,
     uniforms: wgpu::BindGroupLayout,
     layout: wgpu::BindGroupLayout,
     pub pipeline: [Deferred<wgpu::RenderPipeline>; 2],
@@ -1311,6 +1313,11 @@ impl Scene {
             return Err(GpuRasterError::InvalidExtent);
         }
         let window = images::capture_window(packet.layers, region, packet.document_extent);
+        if let Some(mut transforms) = r.transforms.take() {
+            let result = transforms.materialize_region(r, encoder, packet.layers, window);
+            r.transforms = Some(transforms);
+            result?;
+        }
         self.begin_frame();
         self.image_window = Some(window);
         self.effects.retain(packet.layers);
@@ -1328,65 +1335,6 @@ impl Scene {
         })();
         self.stop_before = None;
         result
-    }
-
-    /// Source tiles composing document `tile` would decode: visible photos
-    /// without a page there whose tile is not cached, and any placed photo.
-    pub(super) fn source_decodes(&self, r: &WgpuRasterizer, layers: &[Layer], tile: [u32; 2]) -> usize {
-        layers
-            .iter()
-            .filter(|l| l.visible && l.is_artwork())
-            .filter_map(|l| Some((l, l.source.as_ref()?)))
-            .filter(|(l, source)| {
-                if layer_core::target_transform(layers, l.id) != layer_core::Affine::IDENTITY {
-                    return true;
-                }
-                tile[0] * PAGE_SIZE < source.extent[0]
-                    && tile[1] * PAGE_SIZE < source.extent[1]
-                    && !r
-                        .paint_layers
-                        .iter()
-                        .any(|p| p.id == l.id && p.pages.iter().any(|page| page.coordinate == tile))
-                    && self.source_tiles.prepared_view(source, tile).is_none()
-            })
-            .count()
-    }
-    /// Compose document `tile` of the layers below index `stop`, or of every
-    /// layer, into `image`, which reduces it to its level.
-    pub(super) fn compose_image_tile(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        packet: FramePacket<'_>,
-        stop: Option<usize>,
-        tile: [u32; 2],
-        image: &mut display_mips::Image,
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<(), GpuRasterError> {
-        self.reduce_tile(r, tile, image, encoder, |scene, r| {
-            scene.stop_before = stop.map(|index| (index, false));
-            let output = scene.group(r, packet, None, tile);
-            scene.stop_before = None;
-            output
-        })
-    }
-    /// Write the scratch tile `render` draws into `image` at `tile`, which
-    /// reduces it to the image's level.
-    pub(super) fn reduce_tile(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        tile: [u32; 2],
-        image: &mut display_mips::Image,
-        encoder: &mut crate::submission::CommandEncoder,
-        render: impl FnOnce(&mut Self, &mut WgpuRasterizer) -> Result<usize, GpuRasterError>,
-    ) -> Result<(), GpuRasterError> {
-        self.jobs.clear();
-        self.used.fill(false);
-        let output = render(self, r)?;
-        self.encode_jobs(r, encoder)?;
-        let pipelines = r.display_pipelines.as_ref().unwrap();
-        image.write_tile(&r.device, pipelines, encoder, &self.pool[output].texture, [0; 2], tile)?;
-        self.free(output);
-        Ok(())
     }
 
     pub fn compose(
@@ -2096,6 +2044,7 @@ impl Pipelines {
         };
         Self {
             scale: scale::Pipelines::new(device),
+            resample: resample::Resample::new(device),
             source: sources::Pipelines::new(device, &uniforms),
             constant,
             uniforms,

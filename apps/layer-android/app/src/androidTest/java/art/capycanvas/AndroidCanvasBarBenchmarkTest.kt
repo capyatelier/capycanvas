@@ -60,8 +60,10 @@ class AndroidCanvasBarBenchmarkTest {
             fun action(value: JSONObject) = host.drain(value, 30)
             fun state() = host.snapshot!!.getJSONObject("state")
             fun invoke(command: String) {
-                waitFor("$command is available") {
-                    state().getJSONArray("commands").objects().any { it.getString("id") == command && it.getBoolean("enabled") }
+                val deadline = SystemClock.uptimeMillis() + 120_000
+                while (native { Native.query(it, obj("type" to "command_reason", "command" to command).toString()) } != "null") {
+                    check(SystemClock.uptimeMillis() < deadline) { "$command stayed unavailable" }
+                    SystemClock.sleep(16)
                 }
                 action(obj("type" to "invoke", "command" to command))
             }
@@ -223,7 +225,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val seconds = (ended - began) / 1e9
                 val result = obj("label" to label, "display_hz" to refreshRate, "seconds" to seconds, "transparency" to transparency,
                     "canvas" to documentExtent, "debuggable" to BuildConfig.DEBUG,
-                    "photo" to (photoPath ?: "synthetic"), "camera_before" to cameraBefore,
+                    "photo" to (photoPath ?: "synthetic"), "renderer_profile" to (args.getString("rendererProfile") == "true"), "camera_before" to cameraBefore,
                     "motion" to obj("begin_ns" to began, "end_ns" to operated,
                         "begin_boot_ns" to beganBoot, "end_boot_ns" to operatedBoot),
                     "drained_ns" to ended, "renderer_before" to rendererBefore,
@@ -266,6 +268,13 @@ class AndroidCanvasBarBenchmarkTest {
             fun wanted(name: String) = only == null || name in only
             waitFor("ready") { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
+            if (args.getString("rendererProfile") == "true") {
+                action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
+                val group = host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects()
+                    .first { "stats" in it.getJSONArray("panels").values() }.getInt("id")
+                action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
+                action(obj("type" to "select_panel_tab", "group" to group, "panel" to "stats"))
+            }
             val wiggle = { t: Double -> (60 * (cos(2 * PI * t) - 1)) to (40 * (cos(2 * PI * t) - 1)) }
             fun primeTransform(fraction: Double = 1.0, mode: String? = null) {
                 val before = state().getJSONObject("canvas_bar").getJSONArray("anchor")

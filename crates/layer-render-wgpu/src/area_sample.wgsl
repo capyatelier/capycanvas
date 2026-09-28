@@ -15,6 +15,25 @@ fn border_sample(image:texture_2d<f32>,linear_sampler:sampler,extent:vec2<f32>,o
     return mix(mix(border_tap(image,extent,outside,base),border_tap(image,extent,outside,base+vec2(1,0)),f.x),
         mix(border_tap(image,extent,outside,base+vec2(0,1)),border_tap(image,extent,outside,base+vec2(1,1)),f.x),f.y);
 }
+fn mip_sample(image:texture_2d<f32>,linear_sampler:sampler,extent:vec2<f32>,outside:f32,point:vec2<f32>,lod:u32)->vec4<f32> {
+    let scale=exp2(f32(lod));let q=point/scale;let edge=extent/scale;
+    if any(q<vec2(0.)) || any(q>=edge) {return vec4(outside);}
+    let size=vec2<f32>(textureDimensions(image,lod));
+    let last=ceil(edge)-1.;let fraction=edge-last;let previous=last-.5;
+    let adjusted=select(q,previous+(q-previous)/((fraction+1.)*.5),q>previous);
+    return textureSampleLevel(image,linear_sampler,clamp(adjusted,vec2(.5),last+.5)/size,f32(lod));
+}
+fn pyramid_sample(image:texture_2d<f32>,linear_sampler:sampler,extent:vec2<f32>,outside:f32,q:vec2<f32>,lod:f32,max_lod:f32)->vec4<f32> {
+    let level=clamp(lod,0.,max_lod);let low=u32(floor(level));let weight=fract(level);
+    if any(q<vec2(0.)) || any(q>=extent) {return vec4(outside);}
+    let side=exp2(ceil(level));
+    if all(q<=(floor(extent/side)-.5)*side) {
+        return textureSampleLevel(image,linear_sampler,q/vec2<f32>(textureDimensions(image)),level);
+    }
+    let a=mip_sample(image,linear_sampler,extent,outside,q,low);
+    if weight<0.00001 {return a;}
+    return mix(a,mip_sample(image,linear_sampler,extent,outside,q,low+1u),weight);
+}
 fn area_sample(image:texture_2d<f32>,linear_sampler:sampler,extent:vec2<f32>,outside:f32,
     center:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
     let a=center-dx-dy;let b=center+dx-dy;let c=center-dx+dy;let d=center+dx+dy;

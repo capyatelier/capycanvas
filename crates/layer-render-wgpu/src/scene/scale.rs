@@ -200,10 +200,11 @@ pub(crate) struct Cache {
     valid: BTreeSet<[u32; 2]>,
     unchanged: bool,
     graph: graph::Graph,
+    transform: Option<layer_render::TransformPreview>,
 }
 
 pub(crate) fn level(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Option<u32> {
-    if r.native_edit.is_none() || r.transform_preview.is_some() {
+    if r.native_edit.is_none() {
         return None;
     }
     #[cfg(test)]
@@ -219,7 +220,8 @@ pub(crate) fn level(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Option<u32> 
     {
         return None;
     }
-    let fits = targets(r, packet).all(|(layer, id)| {
+    let fits = transform_plans(r, plan, packet.layers).all(|(source, _)| source.size.iter()
+        .all(|size| *size <= r.device.limits().max_texture_dimension_2d)) && targets(r, packet).all(|(layer, id)| {
         let local = source_level(plan.level, layer_core::target_transform(packet.layers, id));
         plan.level == 0 || display_mips::Plan::at(layer.local_extent(plan.extent), local).size.iter()
             .all(|size| *size <= r.device.limits().max_texture_dimension_2d)
@@ -241,7 +243,7 @@ pub(crate) fn level(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Option<u32> 
     supported.then_some(plan.level)
 }
 
-fn source_level(level: u32, placement: layer_core::Affine) -> u32 {
+pub(crate) fn source_level(level: u32, placement: layer_core::Affine) -> u32 {
     paint_transform::local_level(level, placement).saturating_sub(u32::from(placement != layer_core::Affine::IDENTITY))
 }
 
@@ -296,12 +298,41 @@ fn allocation(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<
     }) };
     let records = records_for(r, plan, layers).next_power_of_two().max(
         r.scene.as_ref().and_then(|scene| scene.scale_commands.as_ref()).map_or(0, Commands::storage_bytes));
-    let own = [sources, plan.level_bytes(plan.level) * images + root_mips + plan.level_bytes(plan.level + 1) + records + 64];
+    let transform = transform_plans(r, plan, layers).map(|(source, kept)| {
+            let records = page_coordinates(PixelRect::full(source.extent)).count() as u64 * 512;
+            (source.pixel_bytes_through(display_mips::MAX_LEVEL) + records * u64::from(display_mips::MAX_LEVEL))
+                * if kept { 2 } else { 1 }
+        }).sum::<u64>();
+    let own = [sources, plan.level_bytes(plan.level) * images + root_mips + plan.level_bytes(plan.level + 1) + records + 64 + transform];
     if plan.bounds == PixelRect::full(plan.extent) { own }
     else {
         let overview = allocation(r, display_mips::Plan::new(plan.extent).unwrap(), packet);
         [own[0] + overview[0], own[1] + overview[1]]
     }
+}
+
+fn transform_plans<'a>(r: &'a WgpuRasterizer, plan: display_mips::Plan, layers: &'a [Layer])
+    -> impl Iterator<Item = (display_mips::Plan, bool)> + 'a {
+    let active = r.transform_preview.iter().filter(move |_| plan.level > 0)
+        .flat_map(|p| std::iter::once(p.clone()).chain(p.companion(layers)))
+        .filter_map(move |preview| {
+            let layer = layers.iter().find(|l| l.id == preview.layer)?;
+            let extent = layer.local_extent(plan.extent);
+            let level = paint_transform::input_level(plan.level, &preview, layer_core::target_transform(layers, layer.id), extent);
+            let (level, kept) = r.transforms.as_ref().map_or_else(
+                || (level, paint_transform::keeps_pixels(preview.selection.as_ref(), PixelRect::full(extent))),
+                |transforms| transforms.input_requirements(&preview, level, extent));
+            Some((display_mips::Plan::at(extent, level), kept))
+        });
+    let standby = r.moving_pixels.as_ref().filter(|_| r.transform_preview.is_none() && plan.level > 0)
+        .and_then(|(id, selection)| {
+            let layer = layers.iter().find(|l| l.id == *id && l.kind == LayerKind::Paint)?;
+            let extent = layer.local_extent(plan.extent);
+            let level = paint_transform::sampling::selection_level(plan.level, layer_core::target_transform(layers, *id), Some(selection), extent);
+            let (level, kept) = r.transforms.as_ref().unwrap().standby_requirements(layer, selection, level, extent);
+            Some((display_mips::Plan::at(extent, level), kept))
+        });
+    active.chain(standby)
 }
 
 #[cfg(test)]
@@ -352,6 +383,8 @@ impl Cache {
         let Some(mut old) = previous else {
             return (Self::new(r, plan, packet.layers.len()), true);
         };
+        let unchanged = unchanged && old.transform == r.transform_preview;
+        old.transform = r.transform_preview.clone();
         if !unchanged {
             old.spare = None;
         }
@@ -422,7 +455,7 @@ impl Cache {
             spare: None,
             ready: false,
             reuse_output: false,
-            overview, shifted: None, valid: BTreeSet::new(), unchanged: false, graph: Default::default(),
+            overview, shifted: None, valid: BTreeSet::new(), unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(),
         }
     }
     pub fn preview_level(&self, packet: FramePacket<'_>, id: LayerId) -> u32 {
@@ -435,7 +468,7 @@ impl Cache {
         let mut levels = BTreeSet::new();
         if self.plan.level > 0 { levels.insert(self.plan.level); }
         if let Some(overview) = &self.overview { levels.insert(overview.plan.level); }
-        let mut requested: BTreeMap<_, BTreeSet<_>> = targets(r, packet).map(|(_, id)| {
+        let mut requested: BTreeMap<_, BTreeSet<_>> = targets(r, packet).filter(|(_, id)| !r.transforms.as_ref().is_some_and(|t| t.display_source(*id))).map(|(_, id)| {
             let placement = layer_core::target_transform(packet.layers, id);
             (id, levels.iter().map(|level| source_level(*level, placement)).collect())
         }).collect();
@@ -546,6 +579,7 @@ impl Cache {
         let mut changed = if self.ready && self.placed.is_none() { dirty } else { self.plan.bounds };
         let required = if scene.scale_sources.reset { self.plan.bounds } else { changed };
         for layer in &visible {
+            if r.transforms.as_ref().is_some_and(|t| t.display_source(layer.id)) { continue; }
             let placement = layer_core::target_transform(packet.layers, layer.id);
             let level = source_level(self.plan.level, placement);
             let (needed, covered) = local_regions(required, covered, placement, layer.local_extent(packet.document_extent), level)?;
@@ -730,19 +764,22 @@ impl Placed {
     fn record(&self, output: display_mips::Plan, texels: [u32; 4]) -> Result<[u8; 224], GpuRasterError> {
         let side = 1 << output.level;
         let scale = side as f32;
-        paint_transform::resample::Resample::values(paint_transform::resample::Request {
+        scene::resample::Resample::values(scene::resample::Request {
             moved: &self.transform, kept: &self.transform,
             clip: layer_core::Affine([scale, 0., 0., scale, 0., 0.]), extent: output.extent, texels,
             display: pixel_transform::DisplayLevel { side, opacity: self.opacity, extent: output.extent, backdrop: self.backdrop },
-            keeps_pixels: false, mesh: false, source: self.plan, outside: self.outside,
+            source: self.plan, max_lod: 0, outside: self.outside, keep_source: false, identity: false,
         })
     }
 }
+
+struct TransformSource { id: LayerId, placement: layer_core::Affine, opacity: f32, backdrop: [f32; 4] }
 
 enum Value {
     Color([f32; 4]),
     Image { view: wgpu::TextureView, slot: Option<usize>, opacity: f32 },
     Placed(Placed),
+    Transform(TransformSource),
 }
 impl Value {
     fn slot(&self) -> Option<usize> { if let Self::Image { slot, .. } = self { *slot } else { None } }
@@ -754,6 +791,7 @@ impl Value {
             Self::Color(c) => *c = c.map(|v| v * amount),
             Self::Image { opacity, .. } => *opacity *= amount,
             Self::Placed(p) => { p.opacity *= amount; p.backdrop = p.backdrop.map(|v| v * amount); }
+            Self::Transform(p) => { p.opacity *= amount; p.backdrop = p.backdrop.map(|v| v * amount); }
         }
         self
     }
@@ -769,6 +807,9 @@ struct Reduced<'a> {
 }
 impl Reduced<'_> {
     fn source(&mut self, id: LayerId, placement: layer_core::Affine, extent: [u32; 2], outside: f32) -> Result<Value, GpuRasterError> {
+        if self.r.transforms.as_ref().is_some_and(|t| t.display_source(id)) {
+            return Ok(Value::Transform(TransformSource { id, placement, opacity: 1., backdrop: [0.; 4] }));
+        }
         let level = source_level(self.cache.plan.level, placement);
         let view = self.sources.image(id, level).image.view.clone();
         if placement == layer_core::Affine::IDENTITY && self.cache.plan.bounds.min_x() == 0 && self.cache.plan.bounds.min_y() == 0 {
@@ -777,19 +818,36 @@ impl Reduced<'_> {
         let transform = paint_transform::resample_map(&layer_core::ImageTransform::default(), placement, level, self.cache.plan.level)?;
         Ok(Value::Placed(Placed { id, view, transform, plan: display_mips::Plan::at(extent, level), outside, opacity: 1., backdrop: [0.; 4] }))
     }
+    fn transform(&mut self, source: TransformSource, output: Option<(wgpu::TextureView, Option<usize>)>) -> Result<Value, GpuRasterError> {
+        let (view, slot) = output.unwrap_or_else(|| {
+            let slot = self.cache.allocate(self.r);
+            (self.cache.output[slot].view.clone(), Some(slot))
+        });
+        let side = 1 << self.cache.plan.level;
+        let region = PixelRect::new(self.origin[0] * side, self.origin[1] * side,
+            (self.origin[0] + self.size[0]) * side, (self.origin[1] + self.size[1]) * side).intersect(self.cache.plan.bounds);
+        let display = pixel_transform::DisplayLevel { side, extent: self.cache.plan.extent, opacity: source.opacity, backdrop: source.backdrop };
+        let mut transforms = self.r.transforms.take().unwrap();
+        let result = transforms.render_region(self.r, self.encoder, source.id, source.placement, &view, display, region);
+        self.r.transforms = Some(transforms);
+        result?;
+        Ok(Value::Image { view, slot, opacity: 1. })
+    }
     fn resample(&mut self, value: Value) -> Result<Value, GpuRasterError> {
+        if let Value::Transform(source) = value { return self.transform(source, None); }
         let Value::Placed(placed) = value else { return Ok(value); };
         let slot = self.cache.allocate(self.r);
         let view = self.cache.output[slot].view.clone();
         let texels = [self.origin[0], self.origin[1], self.size[0], self.size[1]];
         let values = placed.record(self.cache.plan, texels)?;
         let offset = self.commands.write(self.r, self.encoder, &values)?;
-        let resample = self.r.transforms.as_ref().unwrap().resample();
-        let binding = resample.binding(&self.r.device, &self.commands.records, u64::from(offset), [&placed.view, &view, &placed.view, &self.r.empty_view]);
-        resample.encode(self.encoder, &binding, texels, paint_transform::resample::Sampling::AffineArea);
+        let resample = &self.r.scene_pipelines.resample;
+        let binding = resample.binding(&self.r.device, &self.commands.records, u64::from(offset), [&placed.view, &view, &placed.view]);
+        resample.encode(self.encoder, &binding, texels, scene::resample::Sampling::AffineArea);
         Ok(Value::Image { view, slot: Some(slot), opacity: 1. })
     }
     fn materialize(&mut self, value: Value, output: Option<(wgpu::TextureView, Option<usize>)>) -> Result<Value, GpuRasterError> {
+        if let Value::Transform(source) = value { return self.transform(source, output); }
         let value = self.resample(value)?;
         if value.slot().is_some() && value.opacity() == 1. && output.as_ref().is_none_or(|(_, slot)| *slot == value.slot()) { return Ok(value); }
         let (front, back) = if matches!(value, Value::Color(_)) { (Value::Color([0.; 4]), value) } else { (value, Value::Color([0.; 4])) };
@@ -797,6 +855,11 @@ impl Reduced<'_> {
     }
     fn draw(&mut self, front: Value, back: Value, blend: layer_core::LayerBlend, flags: u32, output: Option<(wgpu::TextureView, Option<usize>)>) -> Result<Value, GpuRasterError> {
         let (front, back) = match (front, back) {
+            (Value::Transform(mut source), Value::Color(color)) if blend == layer_core::LayerBlend::Normal && flags == 0 => {
+                let alpha = source.backdrop[3];
+                source.backdrop = std::array::from_fn(|i| source.backdrop[i] + color[i] * (1. - alpha));
+                return if output.is_some() { self.transform(source, output) } else { Ok(Value::Transform(source)) };
+            }
             (Value::Placed(mut placed), Value::Color(color))
                 if output.is_none() && blend == layer_core::LayerBlend::Normal && flags == 0 => {
                 let alpha = placed.backdrop[3];
