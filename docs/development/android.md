@@ -254,10 +254,13 @@ APK calls, so test-APK benchmarks use the unminified build.
   timestamps. Use these runs for attribution; the panel changes the workload,
   so compare motion rates with the ordinary runs separately.
 - **Canvas navigation and drawing.** `AndroidViewportBenchmarkTest` runs with
-  `-e viewportBenchmark true`. `-e motion pan|pinch` measures navigation;
+  `-e viewportBenchmark true`. `-e width 4248 -e height 2832` selects the low-tier
+  canvas; `-e canvasSize` supplies both dimensions when they are omitted.
+  `-e passThrough true` adds a Pass Through group with a Black & White adjustment
+  above a Solid Color fill. Warmup waits for shader readiness and the timed interval ends
+  with the gesture, before draining frames. `-e motion pan|pinch` measures navigation;
   the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,
-  `intervalMs`, `durationMs`, `repeats`, `blending` and `label`. `-e passThrough true` puts a
-  Black & White adjustment in a Pass Through group over a Solid Color fill. Pull
+  `intervalMs`, `durationMs`, `repeats`, `blending` and `label`. Pull
   `files/viewport-benchmark/` from the app's external storage and summarize it
   with `python3 tools/performance/android-viewport-report.py DIRECTORY`.
 - **UI startup.** With an `-PcapyOptimize` build under an isolated ID, run

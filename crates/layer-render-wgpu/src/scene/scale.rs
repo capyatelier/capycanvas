@@ -885,6 +885,7 @@ impl Reduced<'_> {
             pair => pair,
         };
         let front = self.resample(front)?;
+        let front = if matches!(front, Value::Color(c) if c != [0.; 4]) { self.materialize(front, None)? } else { front };
         let back = self.resample(back)?;
         let (view, slot) = output.unwrap_or_else(|| {
             let slot = self.cache.allocate(self.r);

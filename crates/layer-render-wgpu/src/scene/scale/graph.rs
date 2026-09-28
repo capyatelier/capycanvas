@@ -162,6 +162,18 @@ impl stack::Compositor for Builder<'_> {
         vec![Expression::color([p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]])]
     }
     fn discard(&mut self, _: Self::Image) {}
+    fn duplicate(&mut self, image: &Self::Image) -> Self::Image { image.clone() }
+    fn fade(&mut self, front: Self::Image, back: Self::Image, index: usize) -> Result<Self::Image, GpuRasterError> {
+        let layer = &self.packet.layers[index];
+        let back = Expression::over(&back);
+        let front = Expression::over(&front);
+        let (front, back) = if layer.mask.as_ref().is_some_and(|m| m.enabled) {
+            let change = Expression::combine(front, Expression::opacity(back.clone(), -1.), layer_core::LayerBlend::Normal, 128);
+            let masked = Expression::combine(change, self.source(layer, true), layer_core::LayerBlend::Normal, 32);
+            (Expression::opacity(masked, layer.opacity), back)
+        } else { (Expression::opacity(front, layer.opacity), Expression::opacity(back, 1. - layer.opacity)) };
+        Ok(vec![Expression::combine(front, back, layer_core::LayerBlend::Normal, 128)])
+    }
     fn layer(&mut self, index: usize) -> Result<Self::Image, GpuRasterError> {
         let layer = &self.packet.layers[index];
         let output = if layer.kind == LayerKind::Group {

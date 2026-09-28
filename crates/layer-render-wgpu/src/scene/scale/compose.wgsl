@@ -5,6 +5,10 @@ fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
     var below = region.paper;
     if (region.flags & 2u) != 0u { below = textureLoad(base, p, 0) * region.opacity.z; }
     var color = textureLoad(source, p, 0) * region.opacity.x;
+    if (region.flags & 128u) != 0u {
+        textureStore(output, p, color + below);
+        return;
+    }
     if (region.flags & 32u) != 0u {
         textureStore(output, p, color * below.a);
         return;

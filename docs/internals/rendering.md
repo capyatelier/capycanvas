@@ -172,7 +172,7 @@ profiled delivery is a separate output conversion and is still being integrated.
 
 ## Blend modes
 
-`LayerBlend` has 24 modes. Each variant's discriminant is its *code*: Normal,
+`LayerBlend` has 24 pixel blend modes and Pass Through for groups. Each variant's discriminant is its *code*: Normal,
 Multiply, Screen, Add, Overlay, Soft Light and Color are 0 to 6, and Darken to
 Luminosity follow from 7. Documents store the variant name, not the code.
 `LayerBlend::MENU` groups the modes as Photoshop does (Normal, darken, lighten,
@@ -188,8 +188,8 @@ base's coverage. They serve every place a layer's blend applies:
 - a clipping stack's final composite over a constant backdrop, folded into its
   last adjustment (`effects.rs`);
 - effect layers over their input (`fx_adjustment` in `effects_color.wgsl`);
-- the layered display that places a moving layer during a transform drag
-  (`display_layers.wgsl`);
+- region and scale composition, including transform previews
+  (`scene/scale/compose.wgsl`);
 - brushes with a blend mode other than Normal (`material_brush.wgsl`), with the
   brush's mode mapped to the layer mode of the same name. The Normal brush keeps
   its direct source-over form because the general expression draws dark contact
@@ -200,14 +200,15 @@ Perceptual blend space in bit 8 and float documents in bit 9. A layer's Normal i
 always 0; a brush sets bit 8 for Normal too, because its dabs lay over paint in
 the document's blend space ([brushes](#brushes-and-healing)).
 
-**Pass Through** has no formula. `Scene::group_into` composes a group's layers
+**Pass Through** has no pixel blend formula. The shared traversal in
+[`scene/stack.rs`](../../crates/layer-render-wgpu/src/scene/stack.rs) composes a group's layers
 onto a running composite, so a Pass Through group
 ([documents](documents.md#groups-and-pass-through)) continues its parent's
 composite with its own layers, and a composition that stops before a layer
 (`stop_before`) stops inside it too. At opacity below 1 or with a mask, the group
-starts from a copy of the backdrop tile and then fades to its result,
-`backdrop + opacity × mask × (result − backdrop)`, with weighted sums of two tiles
-(scene op 16) and, for a mask, a product with its coverage (op 3). A clipped Pass
+retains the backdrop and then fades to its result,
+`backdrop + opacity × mask × (result − backdrop)`. Exact tiles and reduced graph
+expressions evaluate the same weighted sums and coverage product. A clipped Pass
 Through group composites isolated, and `blend_code` passes it as Normal.
 
 **Ranges.** Float documents clamp no result. Modes defined only on [0, 1]

@@ -2139,6 +2139,7 @@ class AndroidInteractionTest {
         }.array("sections").getJSONArray(0).objects().map { it.getString("label") }
         fun preference(value: Boolean) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "pass_through_groups", "value" to value)))
         fun spread(name: String): Int {
+            waitFor("the canvas is ready for a pixel check", 120_000) { snapshot().optBoolean("shaders_ready") && snapshot().optBoolean("brush_ready") }
             var spread = 0
             captureCanvasBar(name, "pass-through") { image, origin ->
                 val center = bounds("workspace").center

@@ -1266,3 +1266,105 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
     }
 }
 
+
+#[test]
+fn pass_through_edits_and_mode_changes_match_full_recomposition() {
+    let mut doc = document([777, 533]);
+    let photo = doc.layers[0].id;
+    let layer = |doc: &mut layer_core::Document, kind, filter: Option<&str>| {
+        let mut layer = Layer::paint(doc.allocate_layer_id(), "grouped");
+        layer.kind = kind;
+        layer.effect = filter.map(|id| {
+            Arc::new(layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get(id).unwrap().program()))
+        });
+        layer
+    };
+    let mut group = layer(&mut doc, LayerKind::Group, None);
+    group.properties.blend = layer_core::LayerBlend::PassThrough;
+    let mut upper = layer(&mut doc, LayerKind::Paint, None);
+    upper.properties.blend = layer_core::LayerBlend::Multiply;
+    let desaturate = layer(&mut doc, LayerKind::Effect, Some("black_white"));
+    let blur = layer(&mut doc, LayerKind::Effect, Some("gaussian_blur"));
+    let lower = layer(&mut doc, LayerKind::Paint, None);
+    let (id, upper_id, lower_id) = (group.id, upper.id, lower.id);
+    for (i, mut child) in [upper, desaturate, blur, lower].into_iter().enumerate() {
+        child.properties.parent = Some(id);
+        doc.layers.insert(i, child);
+    }
+    doc.layers.insert(0, group);
+    let mut incremental = bounded_renderer(doc.color).unwrap();
+    let mut reference = bounded_renderer(doc.color).unwrap();
+    for r in [&mut incremental, &mut reference] {
+        r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+        r.set_complete_display_allowance(64 * 1024 * 1024);
+    }
+    let mut a = ViewportPresenter::for_surface(&incremental, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut b = ViewportPresenter::for_surface(&reference, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.4, 0.);
+    fn find(doc: &mut layer_core::Document, id: LayerId) -> &mut Layer {
+        doc.layers.iter_mut().find(|l| l.id == id).unwrap()
+    }
+    for step in 0..8 {
+        let target = match step {
+            1 | 7 => Some((photo, [300., 300.])),
+            2 => Some((lower_id, [500., 200.])),
+            3 => Some((upper_id, [650., 400.])),
+            _ => None,
+        };
+        let edited = matches!(step, 4..=6);
+        match step {
+            4 => find(&mut doc, id).properties.blend = layer_core::LayerBlend::Normal,
+            5 => find(&mut doc, id).properties.blend = layer_core::LayerBlend::PassThrough,
+            6 => {
+                let mut mask = layer_core::LayerMask::reveal_all(LayerId(999), Default::default());
+                mask.default_coverage = 0.6;
+                find(&mut doc, id).mask = Some(mask);
+                find(&mut doc, id).opacity = 0.5;
+            }
+            _ => {}
+        }
+        let dabs: Vec<_> = target.iter().map(|(_, center)| {
+            let mut dab = crate::tests::test_dab(*center, [0.9, 0.3, 0.1, 0.8], 1.);
+            dab.radii = [60.; 2];
+            dab
+        }).collect();
+        let batches: Vec<_> = target.iter().zip(&dabs).map(|((layer, _), dab)| {
+            crate::test_support::dab_batch(*layer, crate::tests::test_style(BrushExecution::Dry), dab.bounds())
+        }).collect();
+        reference.scene = None;
+        for (r, all) in [(&mut incremental, step == 0 || edited), (&mut reference, true)] {
+            r.submit(FramePacket {
+                view: v,
+                dabs: &dabs,
+                dab_batches: &batches,
+                composite_all: all,
+                ..packet(&doc.layers, [doc.width, doc.height])
+            }).unwrap();
+        }
+        close(&present(&incremental, &mut a, v), &present(&reference, &mut b, v));
+    }
+    for layer in [lower_id, photo] {
+        for moving in [true, false] {
+            let transform = layer_render::TransformPreview {
+                transaction: 1, layer, moving, selection: None,
+                transform: layer_core::ImageTransform::affine(layer_core::Affine::translation(layer_core::Point { x: 23.5, y: -11.25 })),
+            };
+            reference.scene = None;
+            for (r, all) in [(&mut incremental, false), (&mut reference, true)] {
+                r.set_transform_preview(Some(&transform)).unwrap();
+                submit(r, &doc, v, all);
+            }
+            assert!(!incremental.has_pending_work());
+            assert!(!reference.has_pending_work());
+            close(&present(&incremental, &mut a, v), &present(&reference, &mut b, v));
+        }
+        for r in [&mut incremental, &mut reference] {
+            r.set_transform_preview(None).unwrap();
+            submit(r, &doc, v, false);
+        }
+        assert!(!incremental.has_pending_work());
+        close(&present(&incremental, &mut a, v), &present(&reference, &mut b, v));
+    }
+}

@@ -13,8 +13,8 @@ is 4248 × 2832.
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
-| Pan: Hand tool, one or two fingers | 60 | | |
-| Pinch zoom | 60 | | |
+| Pan: Hand tool, one or two fingers | 60 | Generated group: screen 59.4 presents/s, p99 16.7 ms; renderer 59.8 completed updates/s. Photo coverage pending | Pass Through navigation below |
+| Pinch zoom | 60 | Generated group: screen 59.4 presents/s, p99 16.8 ms; renderer 59.8 completed updates/s. Photo coverage pending | Pass Through navigation below |
 | Two-finger rotate | 60 | | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
@@ -101,6 +101,32 @@ keeps the original, changes 72.18 to 73.32. Distort and Warp remain essentially
 unchanged at 62.01 and 45.87. Viewport GPU medians fall from 5.60 to 5.03 ms for
 translation and 5.61 to 4.96 ms for resize. Old-main transform throughput still
 exceeds this build; these gains do not close the geometry regressions.
+
+## Pass Through navigation
+
+Measured 2026-09-28 on a 4248 × 2832 generated solid-color fill with a Black &
+White adjustment inside a Pass Through group. Three warmed five-second touch
+gestures per motion use release Rust, default glass and thermal status 0 before
+and after. These measurements do not qualify photo-backed or multilayer navigation
+and have no matched old-renderer control.
+
+| Motion | Completed updates/s | Completion gap p99 | Screen presents/s | Screen gap p99 |
+| --- | --- | --- | --- | --- |
+| Pan | 59.79 | 18.9 ms | 59.39 | 16.7 ms |
+| Pinch | 59.79 | 20.6 ms | 59.39 | 16.8 ms |
+
+Screen cadence meets the 57 presents/s measurement floor for this workload.
+The screen-present accounting limits above apply. Renderer-owned storage is
+211.7 MiB for pan and 229.6 MiB for pinch; neither is process RSS. Median last
+completion after input ends is 74 ms and 29 ms respectively.
+
+Candidate is `cbcf0aec` plus the shared Pass Through traversal port, APK SHA-256
+`3cd483d10defd2ffc9cd8115dc2329173dbc5b70054f9dd4ac7d99901b539d49`.
+Raw runs, traces and source provenance are under
+`artifacts/display-production/pass-through-ready-tcl` and
+`pass-through-ready-provenance.json`. Display-frame records identify screen
+presents: the pinch trace omits the SurfaceFlinger process name, but its display
+frame tokens and PID match the adjacent named pan trace.
 
 ## Pointwise filter composition
 

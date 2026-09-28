@@ -48,7 +48,7 @@ class AndroidViewportBenchmarkTest {
                 while (!condition()) { assertNull(host.failure); check(SystemClock.uptimeMillis() - start < 120_000) { "G-pen did not settle: ${host.actionError}" }; SystemClock.sleep(20) }
             }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
-            host.newDocument(size, size)
+            host.newDocument(args.getString("width")?.toInt() ?: size, args.getString("height")?.toInt() ?: size)
             scenario.onActivity { blending?.let { host.invoke("blend_$it") }; host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
             val preset = host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() }.first { it.getString("label") == "G-Pen" }.getInt("id")
             scenario.onActivity {
@@ -144,7 +144,8 @@ class AndroidViewportBenchmarkTest {
                 send(android.view.MotionEvent.ACTION_UP, 1, end)
             }
             stroke(0, 1500); SystemClock.sleep(800)
-            val info = obj("label" to label, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
+            waitFor { host.snapshot?.optBoolean("shaders_ready") == true }
+            val info = obj("label" to label, "motion" to motion, "repeats" to repeats, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
                 "display" to native { JSONObject(Native.displayStatus(it)) })
             File(output, "$label-info.json").writeText(info.toString(2))
             assertEquals("SharedDemandRefresh", info.getJSONObject("display").getString("present_mode"))
@@ -158,10 +159,12 @@ class AndroidViewportBenchmarkTest {
                 native { Native.presentationTimings(it, true); Native.completionTimings(it, true) }
                 activePresent = present
                 val began = System.nanoTime()
+                val beganBoot = SystemClock.elapsedRealtimeNanos()
                 if (motion == "stroke") stroke(run + 1, duration) else gesture(duration)
+                val ended = System.nanoTime()
+                val endedBoot = SystemClock.elapsedRealtimeNanos()
                 activePresent = null
                 SystemClock.sleep(500)
-                val ended = System.nanoTime()
                 native { present.put(JSONArray(Native.presentationTimings(it, true))) }
                 val completions = native { JSONArray(Native.completionTimings(it, false)) }
                 val afterRevision = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("revision")
@@ -169,6 +172,7 @@ class AndroidViewportBenchmarkTest {
                 assertNull(host.actionError)
                 if (motion == "stroke") assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
                 val data = host.measurementReport(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)
+                    .put("begin_boot_ns", beganBoot).put("end_boot_ns", endedBoot)
                     .put("revision_before", beforeRevision).put("revision_after", afterRevision)
                     .put("display", native { JSONObject(Native.displayStatus(it)) })
                     .put("renderer", native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) })

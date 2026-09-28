@@ -5,7 +5,7 @@ needs. Authoritative paint remains in exact document tiles. Presentation pixels
 never become paint, history, export, sampling, or project backing.
 
 The implementation is in `crates/layer-render-wgpu/src/scene/scale.rs`. The
-layer order, isolated groups, clipping bases and adjustment-chain boundaries
+layer order, isolated and Pass Through groups, clipping bases and adjustment-chain boundaries
 are shared with exact composition in `scene/stack.rs`. The
 [TCL evaluation](../development/display-composition-20260927.md) records the
 measured gains, controls and remaining limits.
@@ -50,6 +50,10 @@ positions preserve existing branches when painting starts; transparent operands
 require no image or blend pass. Group opacity, masks, clipping and non-normal blends
 remain expression boundaries. Exact and reduced composition share blend formulas
 and document-depth flags, including clipped layers and extended float colors.
+Pass Through children continue the enclosing composite. Group opacity and masks
+interpolate between its retained backdrop and the completed children; clipped
+groups remain isolated. The same traversal serves transform previews and exact
+queries, including a query that stops inside a Pass Through group.
 Reusable branches retain page validity; a source
 change invalidates only dependent regions. Branch images share the display
 allowance with source levels, after reserving required sources, evaluation
@@ -137,7 +141,10 @@ backlog to hide from the benchmark.
 
 The region executor admits native paint layers, isolated groups, clipping
 stacks, all blend modes, paper, affine placements and scalar masks. Mask
-inspection remains presentation only. Effects and persistent watercolor state still use the exact presentation executor;
+inspection remains presentation only. Pointwise effects explicitly declaring
+display-resolution support execute in the graph with document coordinates,
+layer masks and clipping. Native-resolution and image-boundary effects, along
+with persistent watercolor state, still use the exact presentation executor;
 these dependencies have not yet migrated. Insufficient admission also retains
 that executor. Advanced brushes keep their exact temporary evaluator; simple
 analytic dry contacts without grain, selection, alpha lock or edge effects can

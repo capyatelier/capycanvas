@@ -2,6 +2,48 @@ use super::*;
 use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Point, Projective, Rect, Selection, TransformMap};
 
 #[test]
+fn pass_through_children_above_a_transform_keep_shared_display_composition() {
+    let mut doc = document();
+    let extent = [doc.width, doc.height];
+    let moving = doc.layers[0].id;
+    let mut child = doc.layers[0].clone();
+    child.id = LayerId(90);
+    child.opacity = 0.35;
+    let mut group = Layer::paint(LayerId(91), "pass through");
+    group.kind = LayerKind::Group;
+    group.properties.blend = layer_core::LayerBlend::PassThrough;
+    child.properties.parent = Some(group.id);
+    doc.layers.splice(0..0, [group, child]);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    for blend in [layer_core::LayerBlend::Normal, layer_core::LayerBlend::Multiply] {
+        doc.layers[1].properties.blend = blend;
+        let mut frame = packet(&doc.layers, extent);
+        frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        frame.composite_all = false;
+        let original = display_pixels(&r);
+        for step in 1..4 {
+            let transform = layer_render::TransformPreview { transaction: 1, layer: moving, moving: step < 3, selection: None,
+                transform: ImageTransform::affine(Affine::translation(Point { x: 8. * step as f32, y: -4. })) };
+            for renderer in [&mut r, &mut exact] {
+                renderer.set_transform_preview(Some(&transform)).unwrap(); renderer.submit(frame).unwrap();
+            }
+            assert!(r.live_display.is_none() && r.composite_texture.is_none());
+            assert!(!r.has_pending_work());
+            let cache = r.scale_display.as_ref().expect("group children stay on the display graph");
+            let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), cache.plan);
+            assert!(error[0] < 0.004 && error[1] < 0.06, "{blend:?} step={step} error={error:?}");
+        }
+        for renderer in [&mut r, &mut exact] {
+            renderer.set_transform_preview(None).unwrap(); renderer.submit(frame).unwrap();
+        }
+        assert_eq!(original, display_pixels(&r));
+    }
+}
+
+#[test]
 fn transform_sources_compose_with_the_stack_without_native_preview_or_settling() {
     let extent = [517, 259];
     let bounds = Rect { min: Point::default(), max: Point { x: 517., y: 259. } };

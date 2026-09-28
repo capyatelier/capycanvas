@@ -97,3 +97,63 @@ fn qualified_pointwise_catalog_uses_display_graph_and_keeps_native_output() {
         assert!(display_pixels(&r).iter().flatten().all(|v| v.is_finite()));
     }
 }
+
+#[test]
+fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
+    let mut doc = document();
+    let extent = [doc.width, doc.height];
+    let mut group = Layer::paint(LayerId(90), "pass through");
+    group.kind = LayerKind::Group;
+    group.properties.blend = layer_core::LayerBlend::PassThrough;
+    let mut nested = group.clone();
+    nested.id = LayerId(91);
+    nested.properties.parent = Some(group.id);
+    let mut adjustment = effect(92, "exposure");
+    Arc::make_mut(adjustment.effect.as_mut().unwrap()).set("exposure", EffectValue::Number(-1.)).unwrap();
+    adjustment.properties.parent = Some(nested.id);
+    let mut paint = doc.layers[0].clone();
+    paint.id = LayerId(93);
+    paint.opacity = 0.6;
+    paint.properties.blend = layer_core::LayerBlend::Multiply;
+    paint.properties.parent = Some(nested.id);
+    doc.layers.splice(0..0, [group, nested, adjustment, paint]);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    for level in [1, 2, 3] {
+        let mut draw = |layers: &[Layer]| {
+            let mut frame = packet(layers, extent);
+            let scale = 1. / (1 << level) as f32;
+            frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+            r.submit(frame).unwrap();
+            assert_eq!(r.scale_display.as_ref().unwrap().plan.level, level);
+            assert!(r.live_display.is_none() && r.composite_texture.is_none());
+            display_pixels(&r)
+        };
+        let mut flat = doc.layers.clone();
+        flat.retain(|l| l.kind != LayerKind::Group);
+        for layer in &mut flat { layer.properties.parent = None; }
+        let expected = draw(&flat);
+        let full = draw(&doc.layers);
+        let error = |a: &[[f32; 4]], b: &[[f32; 4]]| a.iter().flatten().zip(b.iter().flatten())
+            .map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+        assert!(error(&full, &expected) < 2e-5, "nested pass through equals ungrouping");
+        let mut hidden = doc.layers.clone(); hidden[0].visible = false;
+        let backdrop = draw(&hidden);
+        for masked in [false, true] {
+            let mut faded = doc.layers.clone();
+            faded[0].opacity = 0.4;
+            if masked {
+                let mut mask = layer_core::LayerMask::reveal_all(LayerId(94), Default::default());
+                mask.default_coverage = 0.3;
+                faded[0].mask = Some(mask);
+            }
+            let amount = if masked { 0.12 } else { 0.4 };
+            let expected: Vec<[f32; 4]> = backdrop.iter().zip(&full)
+                .map(|(back, front)| std::array::from_fn(|i| back[i] + (front[i] - back[i]) * amount)).collect();
+            assert!(error(&draw(&faded), &expected) < 2e-5, "level={level} masked={masked}");
+        }
+        let mut clipped = doc.layers.clone(); clipped[0].properties.clipped = true;
+        let passing = draw(&clipped);
+        clipped[0].properties.blend = layer_core::LayerBlend::Normal;
+        assert!(error(&passing, &draw(&clipped)) < 2e-5, "clipped groups remain isolated");
+    }
+}
