@@ -50,15 +50,15 @@ bash apps/layer-android/run.sh
 The launcher starts the configured emulator if no device is connected, builds
 the debug APK for the device's ABI, installs it with `adb install -r` and opens
 the app. It targets `CAPY_ANDROID_SERIAL`, default `emulator-5554`.
-`run.sh headless` starts the emulator without a window. The launcher always
-builds the default application ID `art.capycanvas` and cannot pass Gradle
-properties, so use Gradle directly for an [isolated install](#isolated-installs).
+`run.sh headless` starts the emulator without a window. `run.sh` and
+`run.sh headless` install the default application ID `art.capycanvas`.
 
-`run.sh test` runs `:app:connectedDebugAndroidTest`: every instrumented test,
-against `art.capycanvas`. The Gradle config does not set
-`android.injected.androidTest.leaveApksInstalledAfterRun`, so Gradle uninstalls
-the app and its test APK after the run, deleting the app's data. Use it only on
-an emulator.
+`run.sh test` runs every instrumented test through
+`:app:connectedDebugAndroidTest`. Gradle uninstalls the app and its test APK
+after the run, so `run.sh test` builds them under an
+[isolated application ID](#isolated-installs): `$CAPY_APPLICATION_ID` when set,
+otherwise `tools/devices/devices.py appid`. It never installs or removes
+`art.capycanvas`.
 
 The Gradle wrapper supplies Gradle and builds the Rust library through
 `cargo-ndk`. Direct Gradle builds default to both ABIs; use
@@ -75,8 +75,9 @@ profile/ABI changes invalidate its Rust task.
 
 `-PcapyApplicationId=<id>` builds the app under a separate package, and
 `-PcapyAppLabel=<label>` gives it its own launcher name. Its instrumentation
-package is `<id>.test`. On a shared tablet use `$CAPY_APPLICATION_ID`, which
-[`devices.py run`](devices.md) sets; the commands below write `art.capycanvas`
+package is `<id>.test`. On a shared tablet use your own ID:
+`tools/devices/devices.py appid` prints it, and [`devices.py run`](devices.md)
+exports it as `$CAPY_APPLICATION_ID`. The commands below write `art.capycanvas`
 for the single-user case.
 
 ## Device tests

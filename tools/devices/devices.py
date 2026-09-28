@@ -162,6 +162,10 @@ def release(args):
             print(f"Released {device.name}.")
 
 
+def print_application_id(args):
+    print(application_id(args.owner))
+
+
 def run(args):
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
@@ -204,6 +208,7 @@ def main():
         return subcommand
 
     command("list", list_devices, "show attached tablets with their tier, reservation and lock")
+    command("appid", print_application_id, "print this owner's Android application ID for test builds")
     reservation = command("reserve", reserve, "reserve a tablet for this owner")
     target = reservation.add_mutually_exclusive_group(required=True)
     target.add_argument("device", nargs="?", help="tablet name, model or serial")

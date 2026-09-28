@@ -101,6 +101,9 @@ class DevicesTest(unittest.TestCase):
     def test_run_returns_the_command_status(self):
         self.assertEqual(self.devices("alpha", "run", "tcl", "--", "false").returncode, 1)
 
+    def test_appid_prints_the_owner_application_id(self):
+        self.assertEqual(self.devices("capycanvas-2", "appid").stdout.strip(), "art.capycanvas.capycanvas_2")
+
     def test_application_ids_are_valid_package_names(self):
         devices = load_module()
         self.assertEqual(devices.application_id("capycanvas1"), "art.capycanvas.capycanvas1")

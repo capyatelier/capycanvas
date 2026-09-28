@@ -30,8 +30,10 @@
 - Scope every claim to its evidence: name the device, build and date for a
   measurement, and say what was not verified. Keep measurements out of guides
   except the tier tables.
-- No session narration ("the user asked", "this session"), local paths, device
-  serial numbers, dates in file names, marketing tone or emojis.
+- Name devices by brand and model, such as Wacom MovinkPad 11, never by serial
+  number.
+- No session narration ("the user asked", "this session"), local paths, dates
+  in file names, marketing tone or emojis.
 - Commands, paths, flags and test names must exist. Check them when you write
   them and when you change what they refer to.
 
@@ -66,5 +68,5 @@ every host shows the same words.
 
 A handoff prompt for another session states the goal, the key pointers into the
 docs and code, the constraints and how to tell the work is done. Keep it short,
-don't restate what the docs already say, and name a device tier rather than a
-tablet. Keep it in the prompt or a `*.local.md` file, not in a commit.
+don't restate what the docs already say, and name the tablet by brand and
+model or by tier. Keep it in the prompt or a `*.local.md` file, not in a commit.

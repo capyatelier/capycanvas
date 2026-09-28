@@ -63,14 +63,16 @@ tools/devices/devices.py release
 ## Keeping installs apart
 
 - Install experiments and test builds under your own application ID:
-  `-PcapyApplicationId=$CAPY_APPLICATION_ID -PcapyAppLabel=<label>`. The test
-  package is `<id>.test`. `apps/layer-android/run.sh` always installs
-  `art.capycanvas` and is for single-user work on an emulator or your own device.
+  `-PcapyApplicationId=$(tools/devices/devices.py appid) -PcapyAppLabel=<label>`.
+  The test package is `<id>.test`, and `devices.py run` exports the same ID as
+  `$CAPY_APPLICATION_ID`. `apps/layer-android/run.sh` installs `art.capycanvas`
+  and is for single-user work on an emulator or your own device; `run.sh test`
+  uses your own ID.
 - Never uninstall `art.capycanvas` or clear its data; it holds an artist's
   drawings. Never touch another session's application IDs.
-- `apps/layer-android/run.sh test` and any `connectedDebugAndroidTest` run
-  uninstall the tested app afterwards, deleting its data. Use them only on an
-  emulator; on a tablet, install with `adb install -r` and run `am instrument`.
+- A `connectedDebugAndroidTest` run uninstalls the tested app afterwards,
+  deleting its data. Always give it your own `-PcapyApplicationId`, as
+  `run.sh test` does.
 - Before each run, check that none of your app's processes are still running.
   At the end, uninstall your own IDs and remove your own port forwards
   (`adb forward --remove tcp:$CAPY_CDP_PORT`, `adb reverse --remove tcp:$CAPY_WEB_PORT`).

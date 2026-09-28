@@ -38,8 +38,9 @@ until [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1
 done
 capy_abi=$(adb shell getprop ro.product.cpu.abi | tr -d '\r')
 if [[ "$capy_mode" == test ]]; then
+    capy_test_id="${CAPY_APPLICATION_ID:-$(python3 "$capy_repo_dir/tools/devices/devices.py" appid)}"
     "$capy_android_dir/gradlew" -p "$capy_android_dir" :app:connectedDebugAndroidTest \
-        "-PcapyAbi=$capy_abi"
+        "-PcapyAbi=$capy_abi" "-PcapyApplicationId=$capy_test_id"
 else
     "$capy_android_dir/gradlew" -p "$capy_android_dir" :app:assembleDebug "-PcapyAbi=$capy_abi"
     adb install -r "$capy_android_dir/app/build/outputs/apk/debug/app-debug.apk"
