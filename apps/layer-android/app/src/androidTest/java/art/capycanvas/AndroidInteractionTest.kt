@@ -1889,23 +1889,29 @@ class AndroidInteractionTest {
         fun notice() = state().optJSONObject("notice")
         fun active() = state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
         fun layers() = state().array("layers").objects()
-        fun idle(label: String) = waitFor("$label: the canvas interaction finishes", 5_000) {
-            state().array("commands").objects().any { it.getString("id") == "add_layer" && it.getBoolean("enabled") }
+        fun idle(label: String) {
+            repeat(2) { host.drain() }
+            waitFor("$label: the canvas interaction finishes", 5_000) {
+                state().array("commands").objects().any { it.getString("id") == "add_layer" && it.getBoolean("enabled") }
+            }
         }
         fun modeless(label: String) = onMain {
             assertNull("$label opens no dialog", host.dialogError); assertNull("$label opens no dialog", host.hostError)
             assertTrue("$label leaves window focus with the canvas", owner.view.hasWindowFocus())
         }
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        val bands = fixture.getJSONObject("layout").array("bands").objects()
+        val wide = JSONObject(fixture.toString()).apply { getJSONObject("layout").put("bands", JSONArray(bands.filter { it.getInt("id") == 44 })) }
         try {
             for (device in pointerTools) {
                 val name = listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]
-                restore()
+                action(obj("type" to "restore_workspace", "workspace" to wide))
                 layer(obj("op" to "new", "group" to false, "clipped" to false))
                 val top = active()
                 invoke("fit_canvas")
                 val work = bounds("workspace")
-                val point = Offset(work.left + 720 * density, work.top + 300 * density)
+                val extent = state().array("tabs").objects().first { it.getBoolean("active") }
+                val point = documentPoint(extent.getInt("width") * .7, extent.getInt("height") * .3)
                 tool = device
                 val drawing = if (device == MotionEvent.TOOL_TYPE_FINGER) MotionEvent.TOOL_TYPE_STYLUS else device
                 fun onCanvas(gesture: () -> Unit) { tool = drawing; try { gesture() } finally { tool = device } }

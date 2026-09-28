@@ -9419,6 +9419,18 @@ fn refine_busy(w: &Workspace) -> bool {
 fn refine_preview_count(w: &Workspace) -> u64 {
     w.gpu.borrow().as_ref().unwrap().session.renderer_stats().selection_previews
 }
+fn finish_canvas_operation(w: &Rc<Workspace>) {
+    let open = || matches!(state(w).layer_tools.tool, LayerCanvasTool::Transform | LayerCanvasTool::Crop);
+    until(
+        || {
+            if open() {
+                w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
+            }
+            !open() && state(w).layer_tools.selection_resize.is_none()
+        },
+        "the workload leaves no transform, crop or refinement open",
+    );
+}
 
 #[test]
 #[ignore = "hardware Wayland benchmark: run separately in release with --ignored --test-threads=1"]
@@ -10028,6 +10040,8 @@ fn native_frame_pacing() {
             stats.presented.len()
         );
         reports.push(report);
+        drop(stats);
+        finish_canvas_operation(&w);
     }
     assert!(
         !reports.is_empty(),
