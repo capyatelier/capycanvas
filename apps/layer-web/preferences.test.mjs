@@ -434,7 +434,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await click('[data-modifier="Alt"]');
   assert.equal(await evaluate("document.querySelector('#settings-title').textContent"), "Alt", "a modifier key slides in instead of a popup");
   assert.equal(await evaluate("document.querySelector('#modifier-same').checked"), false, "Alt differs by tool");
-  assert.equal(await prefs("view.modifier_editor.actions.length"), 10, "one row per kind of tool");
+  assert.equal(await prefs("view.modifier_editor.actions.length"), 11, "one row per kind of tool");
   await click('#modifier-action-selection');
   assert.equal(await evaluate("document.querySelector('#action-picker').open"), true);
   assert.equal(await evaluate("document.querySelector('#action-picker h2').textContent"), "Alt · Selection tools");

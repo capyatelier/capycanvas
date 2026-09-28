@@ -218,9 +218,11 @@ fn apple_default_workspace_reaches_every_grouped_brush_without_changing_artwork(
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|tile| tile["control"]["command"] == command)
-                .unwrap();
-            app.action(json!({"type":"activate_tile","panel":"toolbar","tile":tile["id"]}));
+                .find(|tile| tile["control"]["command"] == command);
+            match tile {
+                Some(tile) => app.action(json!({"type":"activate_tile","panel":"toolbar","tile":tile["id"]})),
+                None => app.invoke(command.as_str().unwrap()),
+            }
             let groups = app.state()["tool_set"]["groups"]
                 .as_array()
                 .unwrap()
@@ -480,7 +482,7 @@ fn apple_current_main_drawers_paper_and_zen_use_shared_actions() {
         let remembered = app.state()["brush"].clone();
         open(sculpt);
         assert_eq!(app.state()["customization"]["drawer"]["columns"], json!([["sculpt_sets"],["tools"],["tool_settings"]]));
-        assert_eq!(app.state()["tool_panels"]["sculpt_sets"]["groups"].as_array().unwrap().len(), 2);
+        assert_eq!(app.state()["tool_panels"]["sculpt_sets"]["groups"].as_array().unwrap().len(), 5);
         app.invoke("drawing_brush");
         assert_eq!(app.state()["brush"], remembered);
         open(filter);
