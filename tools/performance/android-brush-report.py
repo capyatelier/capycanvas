@@ -74,11 +74,17 @@ def main():
             markerfile = args.directory / f"{label}-markers.txt"
             markerfile.write_text("\n".join(markers) + "\n")
             reportfile = args.directory / f"{label}-trace-report.json"
-            if not reportfile.exists():
-                with reportfile.open("w") as out:
-                    subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("android-pen-report.py")),
-                        str(trace), str(markerfile), "--processor", args.processor, "--package", args.package],
-                        check=True, stdout=out)
+            if not reportfile.exists() or not reportfile.stat().st_size:
+                pending = reportfile.with_suffix(".tmp")
+                try:
+                    with pending.open("w") as out:
+                        subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("android-pen-report.py")),
+                            str(trace), str(markerfile), "--processor", args.processor, "--package", args.package],
+                            check=True, stdout=out)
+                    json.loads(pending.read_text())
+                    pending.replace(reportfile)
+                finally:
+                    pending.unlink(missing_ok=True)
             trace_data = json.loads(reportfile.read_text())
         summary = {"label": label, "preset": info["preset"], "size": info["brush_size"], "mode": info["mode"],
             "prediction": info["prediction"], "speed": info["speed"], "trace": bool(trace_data),

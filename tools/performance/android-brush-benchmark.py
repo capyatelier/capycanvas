@@ -11,7 +11,7 @@ import math
 import pathlib
 import subprocess
 import time
-from android_brush_metrics import completion_window
+from android_brush_metrics import completion_window, validate_setup
 
 PRESETS = {
     1: "gpen", 2: "pencil", 3: "eraser", 4: "paintbrush", 5: "airbrush",
@@ -69,7 +69,14 @@ def main():
 
     for preset in map(int, args.presets.split(",")):
         label = f"{args.prefix}-{PRESETS[preset]}-{args.size}-{args.mode}"
+        requested = dict(preset=preset, brush_size=args.size, mode=args.mode,
+                         prediction=args.prediction == "true", speed=args.speed,
+                         duration_ms=args.duration, repeats=args.repeats,
+                         radii=[args.radius_x, args.radius_y], photo_layers=args.photo_layers,
+                         horizon=args.horizon, zoom=args.zoom)
         if (args.output / f"{label}-complete.json").exists():
+            if args.mode != "pinch":
+                validate_setup(json.loads((args.output / f"{label}-info.json").read_text()), requested)
             print(f"SKIP completed {label}", flush=True)
             continue
         print(f"START {label}", flush=True)
@@ -107,6 +114,15 @@ def main():
             if process.poll() is not None:
                 run("pull", remote, str(args.output / "failed-setup"))
                 raise RuntimeError(f"Runner exited during setup: {label}; inspect instrumentation log")
+            if args.mode != "pinch":
+                info_path = args.output / f"{label}-info.json"
+                run("pull", f"{remote}/{label}-info.json", str(info_path), stdout=subprocess.DEVNULL)
+                try:
+                    validate_setup(json.loads(info_path.read_text()), requested)
+                except (ValueError, KeyError):
+                    run("shell", "am", "force-stop", args.package)
+                    process.wait(timeout=30)
+                    raise
             if args.trace or args.presentation_trace:
                 milliseconds = args.repeats * (args.duration + 3500) + 8000
                 app_trace = (f'ftrace_events: "sched/sched_switch"\n'

@@ -149,7 +149,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             if (mode == "visual") for (layer in state().array("layers").objects().filter { it.optString("label") == "Photo" })
                 action(obj("type" to "set_layer_visibility", "id" to layer.getLong("id"), "visible" to false))
             val photoLayers = arguments.getString("photoLayers", "1")!!.toInt()
-            check(photoLayers in 1..8)
+            check(photoLayers in 1..32)
             if (photoLayers > 1) {
                 val id = state().array("layers").objects().first { it.optString("label") == "Photo" }.getLong("id")
                 action(obj("type" to "select_layer", "id" to id))
@@ -179,8 +179,10 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 check(load in 0.0..1.0)
                 action(obj("type" to "set_tool_setting", "id" to "bristle_load", "value" to load))
             }
-            for ((id, value) in listOf("feedback" to prediction, "platform_prediction" to false, "prediction_horizon" to (arguments.getString("horizon")?.toInt() ?: 16)))
-                action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
+            val settings = state().getJSONObject("settings")
+                .put("feedback", prediction).put("platform_prediction", false)
+                .put("prediction_ms", arguments.getString("horizon")?.toInt() ?: 16)
+            action(obj("type" to "restore_settings", "settings" to settings))
             SystemClock.sleep(1500)
             waitFor { host.snapshot?.optBoolean("brush_ready") == true }
             waitFor {

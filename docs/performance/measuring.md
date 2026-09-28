@@ -117,6 +117,11 @@ smudge and Liquify presets. The photo opens as a Perceptual document;
 `--blending linear` measures it in linear light. The benchmark draws a 200 Hz
 stylus ellipse at Fit zoom, three 10 s strokes, with the default 16 ms
 prediction.
+Keep the whole stroke footprint inside the photo for sustained painting tests.
+Choose `--radius-x` and `--radius-y` from the photo's displayed bounds and brush
+radius; the default work-area ellipse can leave a small Fit-view canvas. Compare
+the observed camera, radii, layer count and settings in each `*-info.json`, even
+when both invocations use identical command-line arguments.
 
 **Navigation (Android).**
 

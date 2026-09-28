@@ -84,7 +84,7 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | Inside-photo path: 35.3 updates/s (35.25–35.29); gap p99 43.1 ms | **Not met** |
+| G-Pen (1) | Simple | 1024 px | Inside-photo path: 35.4 updates/s (35.3–36.2); gap p99 45.3 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -125,14 +125,28 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 At the 2048 px goal, the G-Pen completes 12.3 updates/s (12.3–12.4), with a gap p99 of 114.1 ms.
 
-G-Pen was remeasured on 2026-09-28 with the production composition worktree,
-optimized release APK SHA-256
-`cff6f839c8fa90fe67df272408ac272b8fd01ba9e5fd631d9a475435dac7d735`.
+G-Pen was remeasured on 2026-09-28 with production composition at `e37176cd`
+and the validated benchmark harness. Optimized release APK SHA-256:
+`35de6a87b9e4602519ad9364dc9c8a51fda46103f1a2ba3372e02b39437dbee7`.
 The inside-photo trajectory uses 240 × 140 surface-pixel radii and three 5 s
-strokes. The earlier production build completed 35.1 updates/s on that path;
-the current result is essentially unchanged. The standard larger trajectory
-partly leaves the photo at Fit and completes 69.7 updates/s (68.5–69.9), with
-gap p99 22.9 ms; it does not qualify sustained painting inside the canvas.
-Thermal status was 0. Raw results are under
-`artifacts/display-production/final-region-matched-12mp-fit` and
-`artifacts/display-production/final-region-12mp-fit`.
+strokes. Both builds use the same instrumentation, with observed setup checked
+before timing. Runs alternate old main `29a564eb` and production at each layer
+count. Thermal status is 0. Each stack has one opaque photo, translucent photo
+duplicates at 35% opacity, and a separate active brush layer.
+
+| Photo layers below the brush | Old completed updates/s | Production completed updates/s | Speedup | Production gap p99 |
+| --- | --- | --- | --- | --- |
+| 1 | 17.91 | 35.38 | 1.98× | 45.3 ms |
+| 4 | 1.39 | 29.09 | 20.88× | 58.9 ms |
+| 8 | 0.80 | 23.11 | 29.03× | 72.1 ms |
+
+None of these cases reaches the brush target. Raw results are under
+`artifacts/display-production/validated-{control,production}-stack-{1,4,8}-12mp-fit`.
+The control APK SHA-256 is
+`4106138d62c45d5d5440816f6bc6972fb98fd434a737eb6904fcff56dcf2758f`.
+
+The standard larger trajectory partly leaves the photo at Fit. An earlier
+production APK (`cff6f839c8fa90fe67df272408ac272b8fd01ba9e5fd631d9a475435dac7d735`)
+completes 69.7 updates/s (68.5–69.9), with gap p99 22.9 ms on that trajectory;
+it does not qualify sustained painting inside the canvas. Its raw results are
+in `artifacts/display-production/final-region-12mp-fit`.

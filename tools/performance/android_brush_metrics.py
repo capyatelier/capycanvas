@@ -1,4 +1,37 @@
 """Account for completed, nonempty canvas updates inside the input window."""
+import math
+
+
+def validate_setup(info, requested):
+    state = info["state"]
+    camera = state["camera"]
+    expected = {key: requested[key] for key in
+                ("preset", "brush_size", "mode", "prediction", "speed", "duration_ms", "repeats")}
+    actual = {key: info.get(key) for key in expected}
+    for axis, (radius, extent) in enumerate(zip(requested["radii"], camera["work_area"][2:])):
+        expected[f"radius_{axis}"] = min(radius, extent * .45)
+        actual[f"radius_{axis}"] = info["radii"][axis]
+    expected.update(layers=requested["photo_layers"] + 2,
+                    diameter=requested["brush_size"], selected_preset=requested["preset"],
+                    feedback=requested["prediction"])
+    actual.update(layers=len(state["layers"]), diameter=state["brush"]["diameter"],
+                  selected_preset=state["brush"]["preset"],
+                  feedback=state["settings"]["feedback"])
+    if requested["prediction"]:
+        expected["horizon"] = requested["horizon"]
+        actual["horizon"] = state["settings"]["prediction_ms"]
+    if requested["zoom"] is not None:
+        expected["zoom"] = requested["zoom"]
+        actual["zoom"] = camera["zoom"]
+    mismatches = []
+    for key, value in expected.items():
+        observed = actual[key]
+        matches = (isinstance(observed, (float, int)) and math.isclose(observed, value, rel_tol=1e-5, abs_tol=1e-5)
+                   if isinstance(value, (float, int)) else observed == value)
+        if not matches:
+            mismatches.append(f"{key}: requested {value!r}, observed {observed!r}")
+    if mismatches:
+        raise ValueError("Benchmark setup mismatch: " + "; ".join(mismatches))
 
 
 def completion_window(report):

@@ -267,6 +267,14 @@ Perfetto and simpleperf captures. The default preset list is the dry brushes;
 `--presets` accepts every built-in preset, including wet, smudge, Liquify, and
 Clone Stamp, Healing Brush and Spot Healing Brush, which read the photo as a
 reference layer.
+`--radius-x` and `--radius-y` set the ellipse radii in surface pixels;
+`--photo-layers` creates 1–32 photos with translucent duplicates. The runner
+checks the observed trajectory, layer count, brush, prediction and requested
+zoom before starting the timed window, including when reusing completed output.
+Use the same instrumentation source in comparison APKs: older runners can ignore
+arguments they do not recognize. Each build and configuration needs its own
+output directory. The private benchmark restores its prediction settings
+atomically, independently of which preference controls the device enables.
 `python3 tools/performance/android-brush-report.py OUT` summarizes completed
 canvas updates per second, the rate the performance targets use for brushes.
 Run directly, the instrumentation also accepts `-e navigationBetweenStrokes true`
