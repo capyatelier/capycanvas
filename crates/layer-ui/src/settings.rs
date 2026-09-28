@@ -90,6 +90,8 @@ pub struct Settings {
     pub hide_cursor_while_drawing: bool,
     pub pan_speed: f32,
     pub zoom_speed: f32,
+    /// New groups blend Pass Through instead of Normal.
+    pub pass_through_groups: bool,
     pub feedback: bool,
     pub platform_prediction: bool,
     pub prediction_ms: f32,
@@ -130,6 +132,7 @@ impl Default for Settings {
             hide_cursor_while_drawing: true,
             pan_speed: 1.0,
             zoom_speed: 1.0,
+            pass_through_groups: false,
             feedback: true,
             platform_prediction: true,
             prediction_ms: 16.0,
@@ -313,6 +316,7 @@ pub enum PreferenceId {
     HideCursorWhileDrawing,
     PanSpeed,
     ZoomSpeed,
+    PassThroughGroups,
     Pressure,
     Feedback,
     PlatformPrediction,
@@ -345,6 +349,7 @@ impl PreferenceId {
             Self::HideCursorWhileDrawing => "hide-cursor-while-drawing",
             Self::PanSpeed => "pan-speed",
             Self::ZoomSpeed => "zoom-speed",
+            Self::PassThroughGroups => "pass-through-groups",
             Self::Pressure => "pressure",
             Self::Feedback => "feedback",
             Self::PlatformPrediction => "platform-prediction",
@@ -983,6 +988,17 @@ impl Settings {
                         ),
                     ],
                 },
+                PreferenceGroup {
+                    title: "Layers".into(),
+                    rows: vec![row(
+                        PassThroughGroups,
+                        "Use Pass Through for new groups",
+                        "Grouped layers blend with the layers below the group.",
+                        PreferenceKind::Switch {
+                            active: self.pass_through_groups,
+                        },
+                    )],
+                },
             ],
             vec![
                 PreferenceGroup {
@@ -1293,6 +1309,9 @@ impl Settings {
             Pressure => self.pressure_gamma = n,
             PanSpeed => self.pan_speed = n,
             ZoomSpeed => self.zoom_speed = n,
+            PassThroughGroups => {
+                self.pass_through_groups = matches!(value, PreferenceValue::Bool(true))
+            }
             PredictionHorizon => self.prediction_ms = n,
             Feedback => self.feedback = matches!(value, PreferenceValue::Bool(true)),
             PlatformPrediction => {
@@ -2189,6 +2208,26 @@ mod copy_tests {
                 platform,
             );
             assert!(state.error.is_none());
+            assert_eq!(settings, Settings::default());
+        }
+    }
+
+    #[test]
+    fn the_new_group_preference_sits_with_layers_on_the_canvas_page_and_resets() {
+        for platform in Platform::ALL {
+            let mut settings = Settings::default();
+            let page = settings.pages(platform).into_iter().find(|p| p.id == SettingsPage::Canvas).unwrap();
+            let group = page.groups.iter().find(|g| g.title == "Layers").unwrap();
+            assert_eq!(group.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [PreferenceId::PassThroughGroups]);
+            assert_eq!(group.rows[0].title, "Use Pass Through for new groups");
+            assert!(!settings.pass_through_groups);
+            settings.edit(PreferenceId::PassThroughGroups, PreferenceValue::Bool(true), platform).unwrap();
+            assert!(settings.pass_through_groups);
+            let restored = serde_json::from_str::<Settings>(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored, settings);
+            let mut preferences = PreferencesState::default();
+            preferences.edit(&mut settings, PreferenceAction::Reset { id: PreferenceId::PassThroughGroups }, platform);
+            assert!(preferences.error.is_none());
             assert_eq!(settings, Settings::default());
         }
     }

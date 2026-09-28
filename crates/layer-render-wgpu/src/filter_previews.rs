@@ -184,11 +184,7 @@ impl FilterPreviews {
             request.view.background_rgba_linear[3] *=
                 if paper.visible { paper.opacity } else { 0. };
         }
-        if request
-            .layers
-            .iter()
-            .any(|l| l.id == request.target && l.properties.parent.is_some())
-        {
+        if source_scope(&request.layers, request.target).is_some_and(|(scope, _)| scope.is_some()) {
             request.view.background_rgba_linear = [0.; 4];
         }
         let key = (
@@ -680,8 +676,9 @@ impl FilterPreviews {
         }))
     }
 }
-// Keep only the insertion scope and its ancestors. An excluded global
-// effect above the target must not force a full-document dependency.
+// Keep only the insertion scope and its ancestors: the target, its subtree
+// and what composites below it, through Pass Through groups. An excluded
+// global effect above the target must not force a full-document dependency.
 fn source_scope(
     layers: &[Layer],
     target: LayerId,
@@ -694,18 +691,17 @@ fn source_scope(
             .find(|l| l.id == id)
             .and_then(|l| l.properties.parent)
     };
+    let mut below = vec![false; layers.len()];
+    for i in layer_core::backdrop_layers(layers, index) {
+        below[i] = true;
+    }
     let scope = layers.iter().enumerate().filter_map(move |(i, layer)| {
         if std::iter::successors(parent, |&id| parent_of(id)).any(|id| id == layer.id) {
             return Some((layer, true));
         }
-        let mut root = i;
-        while layers[root].properties.parent != parent {
-            let id = layers[root].properties.parent?;
-            root = layers.iter().position(|l| l.id == id)?;
-        }
-        (root >= index).then_some((layer, false))
+        (i == index || below[i] || layer_core::descends_from(layers, layer, Some(target))).then_some((layer, false))
     });
-    Some((parent, scope))
+    Some((layer_core::isolated_scope(layers, parent), scope))
 }
 impl Scene {
     fn capture_filter_source(
@@ -723,6 +719,10 @@ impl Scene {
                 let mut layer = layer.clone();
                 if ancestor {
                     layer.effect = None;
+                    if layer.passes_through() {
+                        layer.opacity = 1.;
+                        layer.mask = None;
+                    }
                 }
                 layer
             })
@@ -824,6 +824,59 @@ mod tests {
         }
         panic!("preview did not complete");
     }
+    fn pattern(id: LayerId) -> Layer {
+        let mut pattern = Layer::paint(id, "source");
+        let mut program = (*fixture("exposure").program()).clone();
+        program.kind = layer_core::EffectKind::Generator;
+        program.entry = "pattern".into();
+        program.wgsl = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(p.x/fx_extent().x,p.y/fx_extent().y,.2,1.);}".into();
+        pattern.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
+        pattern.kind = LayerKind::Effect;
+        pattern
+    }
+    #[test]
+    fn a_target_in_a_pass_through_group_previews_the_layers_below_the_group() {
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let extent = [300, 200];
+        let view = layer_render::ViewState {
+            width_px: extent[0],
+            height_px: extent[1],
+            background_rgba_linear: [0.; 4],
+            document_to_surface: [1., 0., 0., 1., 0., 0.],
+        };
+        let mut group = Layer::paint(LayerId(5), "Pass Through");
+        group.kind = LayerKind::Group;
+        group.properties.blend = layer_core::LayerBlend::PassThrough;
+        group.opacity = 0.5;
+        let mut above = Layer::paint(LayerId(6), "above the target");
+        above.kind = LayerKind::Effect;
+        above.effect = Some(Arc::new(fixture("black_white").preview().unwrap()));
+        above.properties.parent = Some(group.id);
+        let mut target = Layer::paint(LayerId(7), "target");
+        target.properties.parent = Some(group.id);
+        let grouped = vec![group.clone(), above, target.clone(), pattern(LayerId(1))];
+        target.properties.parent = None;
+        let flat = vec![target, pattern(LayerId(1))];
+        group.properties.blend = layer_core::LayerBlend::Normal;
+        let isolated = [vec![group], grouped[1..].to_vec()].concat();
+        let mut preview = |layers: &[Layer], request_id| {
+            r.submit(FramePacket { view, ..crate::test_support::packet(layers, extent) }).unwrap();
+            r.request_filter_previews(FilterPreviewRequest {
+                request_id,
+                target: LayerId(7),
+                size: [120, 40],
+                extent,
+                view,
+                layers: layers.iter().map(Layer::composite_snapshot).collect(),
+                filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
+            })
+            .unwrap();
+            finish(&mut r).image.bytes
+        };
+        let passing = preview(&grouped, 1);
+        assert_eq!(passing, preview(&flat, 2), "the source is what lies below, without the group's fade");
+        assert_ne!(passing, preview(&isolated, 3), "an isolated group's source holds only its own layers");
+    }
     #[test]
     fn filter_probe_chunks_bound_sources_and_cancel_changed_documents() {
         use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
@@ -833,13 +886,7 @@ mod tests {
         })
         .unwrap();
         let extent = [2049, 513]; // 27 tiles, including partial right/bottom edges.
-        let mut pattern = Layer::paint(LayerId(1), "source");
-        let mut program = (*fixture("exposure").program()).clone();
-        program.kind = layer_core::EffectKind::Generator;
-        program.entry = "pattern".into();
-        program.wgsl = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(p.x/fx_extent().x,p.y/fx_extent().y,.2,1.);}".into();
-        pattern.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
-        pattern.kind = LayerKind::Effect;
+        let pattern = pattern(LayerId(1));
         let mut blur = Layer::paint(LayerId(2), "spatial source");
         let mut program = (*fixture("exposure").program()).clone();
         program.entry = "blur".into();

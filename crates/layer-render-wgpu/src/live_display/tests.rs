@@ -2095,6 +2095,106 @@ fn a_transform_reduces_its_layer_before_recomposing_a_placement_drag() {
 }
 
 #[test]
+fn pass_through_edits_and_mode_changes_match_full_recomposition() {
+    let mut doc = document([777, 533]);
+    let photo = doc.layers[0].id;
+    let layer = |doc: &mut layer_core::Document, kind, filter: Option<&str>| {
+        let mut layer = Layer::paint(doc.allocate_layer_id(), "grouped");
+        layer.kind = kind;
+        layer.effect = filter.map(|id| {
+            Arc::new(layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get(id).unwrap().program()))
+        });
+        layer
+    };
+    let mut group = layer(&mut doc, LayerKind::Group, None);
+    group.properties.blend = layer_core::LayerBlend::PassThrough;
+    let mut upper = layer(&mut doc, LayerKind::Paint, None);
+    upper.properties.blend = layer_core::LayerBlend::Multiply;
+    let desaturate = layer(&mut doc, LayerKind::Effect, Some("black_white"));
+    let blur = layer(&mut doc, LayerKind::Effect, Some("gaussian_blur"));
+    let lower = layer(&mut doc, LayerKind::Paint, None);
+    let (id, upper_id, lower_id) = (group.id, upper.id, lower.id);
+    for (i, mut child) in [upper, desaturate, blur, lower].into_iter().enumerate() {
+        child.properties.parent = Some(id);
+        doc.layers.insert(i, child);
+    }
+    doc.layers.insert(0, group);
+    let mut incremental = bounded_renderer(doc.color).unwrap();
+    let mut reference = bounded_renderer(doc.color).unwrap();
+    for r in [&mut incremental, &mut reference] {
+        r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+        r.set_complete_display_allowance(64 * 1024 * 1024);
+    }
+    let mut a = ViewportPresenter::for_surface(&incremental, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut b = ViewportPresenter::for_surface(&reference, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.4, 0.);
+    fn find(doc: &mut layer_core::Document, id: LayerId) -> &mut Layer {
+        doc.layers.iter_mut().find(|l| l.id == id).unwrap()
+    }
+    for step in 0..8 {
+        let target = match step {
+            1 | 7 => Some((photo, [300., 300.])),
+            2 => Some((lower_id, [500., 200.])),
+            3 => Some((upper_id, [650., 400.])),
+            _ => None,
+        };
+        let edited = matches!(step, 4..=6);
+        match step {
+            4 => find(&mut doc, id).properties.blend = layer_core::LayerBlend::Normal,
+            5 => find(&mut doc, id).properties.blend = layer_core::LayerBlend::PassThrough,
+            6 => {
+                let mut mask = layer_core::LayerMask::reveal_all(LayerId(999), Default::default());
+                mask.default_coverage = 0.6;
+                find(&mut doc, id).mask = Some(mask);
+                find(&mut doc, id).opacity = 0.5;
+            }
+            _ => {}
+        }
+        let dabs: Vec<_> = target.iter().map(|(_, center)| {
+            let mut dab = crate::tests::test_dab(*center, [0.9, 0.3, 0.1, 0.8], 1.);
+            dab.radii = [60.; 2];
+            dab
+        }).collect();
+        let batches: Vec<_> = target.iter().zip(&dabs).map(|((layer, _), dab)| {
+            crate::test_support::dab_batch(*layer, crate::tests::test_style(BrushExecution::Dry), dab.bounds())
+        }).collect();
+        reference.scene = None;
+        for (r, all) in [(&mut incremental, step == 0 || edited), (&mut reference, true)] {
+            r.submit(FramePacket {
+                view: v,
+                dabs: &dabs,
+                dab_batches: &batches,
+                composite_all: all,
+                ..packet(&doc.layers, [doc.width, doc.height])
+            }).unwrap();
+        }
+        close(&present(&incremental, &mut a, v), &present(&reference, &mut b, v));
+    }
+    for layer in [lower_id, photo] {
+        for moving in [true, false] {
+            let map = layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x: 23.5, y: -11.25 }));
+            let transform = preview(layer, moving, None, map);
+            reference.scene = None;
+            for (r, all) in [(&mut incremental, false), (&mut reference, true)] {
+                r.set_transform_preview(Some(&transform)).unwrap();
+                submit(r, &doc, v, all);
+            }
+            drain(&mut incremental, &doc, v, 256, "the transform settles");
+            drain(&mut reference, &doc, v, 256, "the reference transform settles");
+            close(&present(&incremental, &mut a, v), &present(&reference, &mut b, v));
+        }
+        for r in [&mut incremental, &mut reference] {
+            r.set_transform_preview(None).unwrap();
+            submit(r, &doc, v, false);
+        }
+        drain(&mut incremental, &doc, v, 256, "the released transform settles");
+        close(&present(&incremental, &mut a, v), &present(&reference, &mut b, v));
+    }
+}
+
+#[test]
 fn layered_display_previews_fall_back_for_effects_clips_and_blends_above() {
     let mut doc = document([1025, 769]);
     let extent = [doc.width, doc.height];
@@ -2103,9 +2203,35 @@ fn layered_display_previews_fall_back_for_effects_clips_and_blends_above() {
     above.source = Some(photo(extent, 5, |x, _| if x % 300 < 100 { 65535 } else { 0 }));
     doc.layers.insert(0, above);
     let v = centered_view(extent, [320, 240], 0.2, 0.);
-    let variants: [(&str, Box<dyn Fn(&mut layer_core::Document)>, bool); 4] = [
+    let grouped = |blend: layer_core::LayerBlend, child: layer_core::LayerBlend| {
+        move |d: &mut layer_core::Document| {
+            let mut group = Layer::paint(d.allocate_layer_id(), "group above");
+            group.kind = LayerKind::Group;
+            group.properties.blend = blend;
+            d.layers[0].properties.parent = Some(group.id);
+            d.layers[0].properties.blend = child;
+            d.layers.insert(0, group);
+        }
+    };
+    type Change = Box<dyn Fn(&mut layer_core::Document)>;
+    let variants: [(&str, Change, bool); 7] = [
         ("normal above", Box::new(|_| {}), true),
         ("multiply above", Box::new(|d| d.layers[0].properties.blend = layer_core::LayerBlend::Multiply), false),
+        (
+            "normal in a pass through group above",
+            Box::new(grouped(layer_core::LayerBlend::PassThrough, layer_core::LayerBlend::Normal)),
+            true,
+        ),
+        (
+            "multiply in a pass through group above",
+            Box::new(grouped(layer_core::LayerBlend::PassThrough, layer_core::LayerBlend::Multiply)),
+            false,
+        ),
+        (
+            "multiply in an isolated group above",
+            Box::new(grouped(layer_core::LayerBlend::Normal, layer_core::LayerBlend::Multiply)),
+            true,
+        ),
         ("clipped above", Box::new(|d| d.layers[0].properties.clipped = true), false),
         (
             "adjustment above",

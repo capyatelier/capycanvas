@@ -1649,7 +1649,8 @@ impl WgpuRasterizer {
     }
 
     /// A moving unmasked top-level layer, between static layers below and
-    /// normal static layers above, can draw straight into the display level
+    /// static layers above that composite as Normal over the document (inside
+    /// isolated groups, anything), can draw straight into the display level
     /// the view samples, at most sixteen layer pixels per texel side, rather
     /// than into full-resolution pages that are then recomposed. Returns that
     /// level, its compositing and, unless the layer is the only content over
@@ -1677,7 +1678,8 @@ impl WgpuRasterizer {
         let stackable = packet.layers[..index].iter().all(|l| {
             !l.visible
                 || (l.kind != LayerKind::Effect
-                    && (l.properties.parent.is_some() || l.properties.blend == layer_core::LayerBlend::Normal))
+                    && (matches!(l.properties.blend, layer_core::LayerBlend::Normal | layer_core::LayerBlend::PassThrough)
+                        || layer_core::isolated_scope(packet.layers, l.properties.parent).is_some()))
         }) && packet.layers[..index]
             .iter()
             .rev()
@@ -5008,9 +5010,10 @@ impl StyleGpu {
 
 /// A blend as `blend_modes.wgsl` reads it: the `LayerBlend` code in bits 0-7
 /// and float documents in bit 9. Bit 8 is reserved for the Perceptual space.
-/// Normal needs no flags, so its code is always 0.
+/// Normal needs no flags, so its code is always 0; a clipped Pass Through
+/// group composites isolated, as Normal.
 pub(crate) fn blend_code(blend: layer_core::LayerBlend, device: &PipelineDevice) -> u32 {
-    if blend == layer_core::LayerBlend::Normal {
+    if matches!(blend, layer_core::LayerBlend::Normal | layer_core::LayerBlend::PassThrough) {
         return 0;
     }
     blend.code() | u32::from(device.hdr()) << 9
@@ -6133,6 +6136,7 @@ mod tests {
     mod adjustments;
     mod blend_modes;
     pub(crate) mod image_windows;
+    mod pass_through;
     mod live_windows;
     mod cold_paint;
     mod color_picker;

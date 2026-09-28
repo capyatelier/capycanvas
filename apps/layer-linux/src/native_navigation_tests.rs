@@ -172,6 +172,29 @@ pub(super) fn blended(project: &mut layer_core::Project) {
     document.layers.insert(0, color);
 }
 
+/// The blended photo with its non-Normal layers and a Hue/Saturation
+/// adjustment in a Pass Through group, so they reach the photo below it.
+pub(super) fn pass_through(project: &mut layer_core::Project) {
+    blended(project);
+    let document = &mut project.document;
+    let mut group = layer_core::Layer::paint(document.allocate_layer_id(), "pass through");
+    group.kind = layer_core::LayerKind::Group;
+    group.properties.blend = layer_core::LayerBlend::PassThrough;
+    let mut adjustment = layer_core::Layer::paint(document.allocate_layer_id(), "hue_saturation");
+    adjustment.kind = layer_core::LayerKind::Effect;
+    let mut effect = layer_core::EffectInstance::new(
+        layer_core::bundled_effect_catalog().get("hue_saturation").unwrap().program(),
+    );
+    effect.set("saturation", layer_core::EffectValue::Number(25.)).unwrap();
+    adjustment.effect = Some(Arc::new(effect));
+    for layer in &mut document.layers[..3] {
+        layer.properties.parent = Some(group.id);
+    }
+    adjustment.properties.parent = Some(group.id);
+    document.layers.insert(0, adjustment);
+    document.layers.insert(0, group);
+}
+
 #[test]
 #[ignore = "private 120 Hz Wayland display; release hardware navigation qualification"]
 fn native_large_photo_navigation() {
@@ -186,7 +209,12 @@ fn native_large_photo_navigation() {
         _ => panic!("LAYER_NAVIGATION_PHOTO must be 24mp, 45mp, 60mp or 61mp"),
     };
     let app = native_test_app("art.capycanvas.PhotoNavigation");
-    let project = photo(extent);
+    let mut project = photo(extent);
+    match std::env::var("LAYER_NAVIGATION_LAYERS").as_deref() {
+        Ok("blended") => blended(&mut project),
+        Ok("pass_through") => pass_through(&mut project),
+        _ => {}
+    }
     let startup = Instant::now();
     let w = Workspace::with_project(&app, Some((project, None)));
     if std::env::var("LAYER_NAVIGATION_MAXIMIZE").as_deref() == Ok("0") {

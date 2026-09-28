@@ -55,6 +55,7 @@ import { checkNotices } from "./notice-journey.test.mjs";
 import { checkZoomReadout } from "./zoom-readout-journey.test.mjs";
 import { checkBlendMenu } from "./blend-menu-journey.test.mjs";
 import { checkColorMixing } from "./color-mixing-journey.test.mjs";
+import { checkPassThrough } from "./pass-through-journey.test.mjs";
 import { checkScreenStatus } from "./screen-status-journey.test.mjs";
 import { checkPipelineTakeover } from "./pipeline-takeover.test.mjs";
 import { checkPhotoEdit } from "./photo-edit-journey.test.mjs";
@@ -223,6 +224,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--color-mixing")) {
     await checkColorMixing({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--pass-through")) {
+    await checkPassThrough({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--photo-edit")) {
     await checkPhotoEdit({call,evaluate,settle});

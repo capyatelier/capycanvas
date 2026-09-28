@@ -13,6 +13,12 @@ mod sources;
 mod placement;
 mod bake;
 
+/// Whether composition reached the layer it stops before.
+enum Flow {
+    Done(usize),
+    Stopped(usize),
+}
+
 #[derive(Clone)]
 enum Job {
     Placement(Box<placement::PlacementJob>),
@@ -921,6 +927,7 @@ impl Scene {
             },
         );
         let mut stack: Option<(usize, usize)> = None;
+        let stop = self.stop_root(packet.layers, parent);
         // An image boundary already contains its full input stack, final mask
         // and layer properties. Start above the latest completed boundary.
         let checkpoint = packet.layers.iter().enumerate().find(|(i, l)| {
@@ -930,7 +937,7 @@ impl Scene {
                 && l.effect
                     .as_ref()
                     .is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
-                && self.stop_before.is_none_or(|(stop, _)| *i > stop)
+                && stop.is_none_or(|stop| *i > stop)
                 && self.images.checkpoint(*i, l).is_some()
         });
         if let Some((i, l)) = checkpoint {
@@ -945,13 +952,45 @@ impl Scene {
                 )
             });
         }
+        let (Flow::Done(output) | Flow::Stopped(output)) =
+            self.group_into(r, packet, parent, tile, output, stack, checkpoint.map(|(i, _)| i))?;
+        Ok(output)
+    }
+    /// The layer directly inside `parent` that holds the layer composition
+    /// stops before, when `parent` holds it.
+    fn stop_root(&self, layers: &[Layer], parent: Option<LayerId>) -> Option<usize> {
+        let (mut root, _) = self.stop_before?;
+        for _ in 0..layers.len() {
+            let up = layers[root].properties.parent;
+            if up == parent {
+                return Some(root);
+            }
+            root = layers.iter().position(|l| Some(l.id) == up)?;
+        }
+        None
+    }
+    /// Composite the layers of `parent` below `cut` onto `output`, with a
+    /// clipping stack `stack` still open, until the layer composition stops
+    /// before.
+    #[allow(clippy::too_many_arguments)] // The running composite and its open clipping stack.
+    fn group_into(
+        &mut self,
+        r: &WgpuRasterizer,
+        packet: FramePacket<'_>,
+        parent: Option<LayerId>,
+        tile: [u32; 2],
+        mut output: usize,
+        mut stack: Option<(usize, usize)>,
+        cut: Option<usize>,
+    ) -> Result<Flow, GpuRasterError> {
+        let stop = self.stop_root(packet.layers, parent);
         let mut siblings = packet
             .layers
             .iter()
             .enumerate()
             .rev()
             .filter(|(_, l)| l.properties.parent == parent && l.kind != LayerKind::Background && l.is_artwork())
-            .filter(|(i, _)| checkpoint.is_none_or(|(cut, _)| *i < cut))
+            .filter(|(i, _)| cut.is_none_or(|cut| *i < cut))
             .peekable();
         while let Some((i, layer)) = siblings.next() {
             if let Some((stop, clipped)) = self.stop_before
@@ -959,16 +998,16 @@ impl Scene {
             {
                 if clipped {
                     self.free(output);
-                    return Ok(stack.map_or_else(
+                    return Ok(Flow::Stopped(stack.map_or_else(
                         || self.alloc(r, wgpu::Color::TRANSPARENT),
                         |(pixels, _)| pixels,
-                    ));
+                    )));
                 }
                 if let Some((pixels, base)) = stack {
                     let b = &packet.layers[base];
                     output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false);
                 }
-                return Ok(output);
+                return Ok(Flow::Stopped(output));
             }
             if layer
                 .effect
@@ -989,7 +1028,7 @@ impl Scene {
                     && !layer.effect.as_ref().unwrap().program.image_boundary()
                 {
                     while let Some((j, _)) = siblings.peek().filter(|(j, next)| {
-                        self.stop_before.is_none_or(|(stop, _)| *j > stop)
+                        stop.is_none_or(|stop| *j > stop)
                             && fuses_after(packet.layers, layer, next, chain.len())
                     }) {
                         chain.push(*j);
@@ -1009,6 +1048,15 @@ impl Scene {
                 if let Some((pixels, base)) = stack.take() {
                     let b = &packet.layers[base];
                     output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false);
+                }
+                if layer.passes_through() {
+                    if layer.visible {
+                        match self.pass_through(r, packet, i, tile, output)? {
+                            Flow::Done(result) => output = result,
+                            stopped => return Ok(stopped),
+                        }
+                    }
+                    continue;
                 }
                 let clips_above = packet.layers[..i]
                     .iter()
@@ -1053,7 +1101,76 @@ impl Scene {
             let b = &packet.layers[base];
             output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false);
         }
-        Ok(output)
+        Ok(Flow::Done(output))
+    }
+    /// Composite a Pass Through group's layers onto `backdrop`, then fade from
+    /// the backdrop to that result by the group's opacity and mask.
+    fn pass_through(
+        &mut self,
+        r: &WgpuRasterizer,
+        packet: FramePacket<'_>,
+        index: usize,
+        tile: [u32; 2],
+        backdrop: usize,
+    ) -> Result<Flow, GpuRasterError> {
+        let group = &packet.layers[index];
+        let mask = group.mask.as_ref().filter(|m| m.enabled);
+        if group.opacity == 1. && mask.is_none() {
+            return self.group_into(r, packet, Some(group.id), tile, backdrop, None, None);
+        }
+        let start = self.reserve(r);
+        self.draw(r, start, self.pool[backdrop].view.clone(), None, [0., 0., 256., 256.], [1., 1., 0., 0.], false);
+        let result = match self.group_into(r, packet, Some(group.id), tile, start, None, None)? {
+            Flow::Done(result) => result,
+            stopped => {
+                self.free(backdrop);
+                return Ok(stopped);
+            }
+        };
+        let faded = if let Some(mask) = mask {
+            let coverage = self.mask_at(
+                r,
+                mask,
+                layer_core::target_transform(packet.layers, mask.id),
+                group.local_extent(packet.document_extent),
+                tile,
+            )?;
+            let change = self.weighted_sum(r, result, backdrop, [1., -1.]);
+            let masked = self.reserve(r);
+            self.draw(
+                r,
+                masked,
+                self.pool[change].view.clone(),
+                Some(self.pool[coverage].view.clone()),
+                [0., 0., 256., 256.],
+                [3., 1., 0., 0.],
+                false,
+            );
+            self.free(change);
+            self.free(coverage);
+            let faded = self.weighted_sum(r, masked, backdrop, [group.opacity, 1.]);
+            self.free(masked);
+            faded
+        } else {
+            self.weighted_sum(r, result, backdrop, [group.opacity, 1. - group.opacity])
+        };
+        self.free(result);
+        self.free(backdrop);
+        Ok(Flow::Done(faded))
+    }
+    /// `front · weights[0] + back · weights[1]` into a new tile.
+    fn weighted_sum(&mut self, r: &WgpuRasterizer, front: usize, back: usize, weights: [f32; 2]) -> usize {
+        let out = self.reserve(r);
+        self.draw(
+            r,
+            out,
+            self.pool[front].view.clone(),
+            Some(self.pool[back].view.clone()),
+            [0., 0., 256., 256.],
+            [16., weights[0], weights[1], 0.],
+            false,
+        );
+        out
     }
 
     // A normal paint tile with an aligned scalar mask needs one source-over

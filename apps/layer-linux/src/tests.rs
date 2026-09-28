@@ -9452,6 +9452,7 @@ fn native_frame_pacing() {
                 Ok("photo") => project.document.layers.retain(|layer| layer.source.is_some()),
                 Ok("layered") => native_navigation::layered(&mut project),
                 Ok("blended") => native_navigation::blended(&mut project),
+                Ok("pass_through") => native_navigation::pass_through(&mut project),
                 _ => {}
             }
             let w = Workspace::with_project(&app, Some((project, None)));

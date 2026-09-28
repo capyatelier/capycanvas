@@ -1349,7 +1349,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .and_then(|l| art_layers::apply_mask_refusal(l.kind));
         let reason = match action {
             UiAction::Layer { action: LayerAction::GroupSelected } => {
-                document.group_layers_edit(&roots, LayerId(0)).err().map(layer_error)
+                document.group_layers_edit(&roots, LayerId(0), layer_core::LayerBlend::Normal).err().map(layer_error)
             }
             UiAction::Layer { action: LayerAction::Ungroup { .. } } => {
                 document.ungroup_layer_edit(document.active_layer).err().map(layer_error)

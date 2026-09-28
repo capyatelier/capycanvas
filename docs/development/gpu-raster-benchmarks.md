@@ -111,7 +111,9 @@ private 1600×1000@120 display and records the actual canvas viewport. It genera
 API and GTK change/wake path, without waiting for each render. This measures
 software camera-request-to-presentation, not physical input delivery. The native
 source has five pointwise adjustments and 32 paint layers; unlike the offscreen
-fixture it has no painted stroke or adjustment mask.
+fixture it has no painted stroke or adjustment mask. `LAYER_NAVIGATION_LAYERS`
+replaces them with the `blended` or `pass_through` layers of `native_frame_pacing`
+below.
 
 `workspace::tests::native_frame_pacing` with `LAYER_PACING_WORKSPACE=photo24`
 opens a 24 MP photo and runs the brush, Pan, Hand, Transform and Crop scenarios;
@@ -119,7 +121,9 @@ opens a 24 MP photo and runs the brush, Pan, Hand, Transform and Crop scenarios;
 photo, `layered` puts it between painted strokes and a second photo, and
 `blended` also makes the strokes Screen and adds a Color copy of them and a Soft
 Light copy of the second photo above the photo, so strokes on the photo
-recompose through three non-Normal layers.
+recompose through three non-Normal layers. `pass_through` puts those three layers
+and a Hue/Saturation adjustment in a Pass Through group, so the adjustment and
+the modes act on the photos below the group.
 
 For the high-DPI large-photo case, set `LAYER_TEST_MONITOR=3840x2160@120` and
 `LAYER_TEST_SCALE=2`. The harness applies and verifies the private Mutter monitor's

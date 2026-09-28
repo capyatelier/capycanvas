@@ -84,6 +84,7 @@ fn blend(s: Rgb, d: Rgb, mode: LayerBlend, float: bool, w: Rgb) -> Rgb {
         B::Hue => set_lum(set_sat(s, sat(d)), lum(d, w), w, float),
         B::Saturation => set_lum(set_sat(d, sat(s)), lum(d, w), w, float),
         B::Luminosity => set_lum(d, lum(s, w), w, float),
+        B::PassThrough => unreachable!("only groups pass through"),
     }
 }
 
@@ -347,7 +348,7 @@ fn every_blend_mode_matches_the_reference_on_every_path_and_depth() {
             let backdrop = BACKDROP.map(f64::from);
             let backdrop = [backdrop[0] * backdrop[3], backdrop[1] * backdrop[3], backdrop[2] * backdrop[3], backdrop[3]];
             let opacity = f64::from(OPACITY);
-            for mode in LayerBlend::ALL {
+            for mode in LayerBlend::ALL.into_iter().filter(|m| *m != LayerBlend::PassThrough) {
                 document.layers[blended].properties.blend = mode;
                 let composite = live(&mut r, &document.layers, background);
                 let export = exported(&r, &document, background);

@@ -1,6 +1,6 @@
 //! Artwork commands and gestures. Native layer panels only render this model.
 use super::*;
-use layer_core::{Edit, Layer, LayerMask, Point, Selection};
+use layer_core::{Edit, Layer, LayerBlend, LayerMask, Point, Selection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -801,7 +801,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let edit = self
                     .engine
                     .document()
-                    .group_layers_edit(&roots, id)
+                    .group_layers_edit(&roots, id, self.new_group_blend())
                     .map_err(error)?;
                 self.layer_edit(edit)?;
                 self.layer_interaction.selected = BTreeSet::from([id]);
@@ -900,6 +900,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 layer.name = format!("{} {}", if group { "Group" } else { "Layer" }, id.0).into();
                 if group {
                     layer.kind = LayerKind::Group;
+                    layer.properties.blend = self.new_group_blend();
                 }
                 layer.properties.parent = parent;
                 layer.properties.clipped = clipped;
@@ -1209,7 +1210,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         layer.properties.clipped = value;
                     }
                     LayerAction::Blend { value, .. } => {
-                        let blend = layer_core::LayerBlend::from_code(value).ok_or("Unknown blend mode")?;
+                        let blend = LayerBlend::from_code(value).ok_or("Unknown blend mode")?;
                         if blend == layer.properties.blend {
                             return Ok(());
                         }
@@ -1303,19 +1304,24 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         Ok(())
     }
+    /// How a new group blends: Pass Through when the setting asks for it.
+    pub(super) fn new_group_blend(&self) -> LayerBlend {
+        if self.state.settings.pass_through_groups { LayerBlend::PassThrough } else { LayerBlend::Normal }
+    }
     /// The layer's blend modes in `LayerBlend::MENU` groups, as check items.
-    /// Float documents offer only modes defined above 1, plus the current one.
+    /// Float documents offer only modes defined above 1, and only groups offer
+    /// Pass Through, plus the current one.
     fn blend_sections(&self, layer: &Layer) -> Vec<Vec<ContextMenuItem>> {
         let doc = self.engine.document();
         let enabled = LayerControls::for_layer(doc, layer).blend;
         let current = layer.properties.blend;
         let float = doc.color.depth.is_float();
-        layer_core::LayerBlend::MENU
+        LayerBlend::MENU
             .iter()
             .map(|group| {
                 group
                     .iter()
-                    .filter(|b| b.offered(float) || **b == current)
+                    .filter(|b| b.offered(layer.kind, float) || **b == current)
                     .map(|b| ContextMenuItem {
                         selected: Some(*b == current),
                         enabled,
@@ -1354,7 +1360,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let item = |label: &str, action: A| {
             let enabled = match &action {
                 A::RepairSourceProfile { .. } | A::RasterizeSource { .. } => self.can_edit_original(l.id) && !self.state.document_file.busy,
-                A::GroupSelected => doc.group_layers_edit(&roots, LayerId(0)).is_ok(),
+                A::GroupSelected => doc.group_layers_edit(&roots, LayerId(0), LayerBlend::Normal).is_ok(),
                 A::Ungroup { .. } => doc.ungroup_layer_edit(l.id).is_ok(),
                 A::DeleteSelected => doc.can_delete_layers(&roots),
                 A::Delete { .. } => doc.can_delete_layers(&[l.id]),

@@ -188,6 +188,16 @@ base's coverage. They serve every place a layer's blend applies:
 Perceptual blend space in bit 8 (reserved; always 0 for now) and float documents
 in bit 9. Normal is always 0.
 
+**Pass Through** has no formula. `Scene::group_into` composes a group's layers
+onto a running composite, so a Pass Through group
+([documents](documents.md#groups-and-pass-through)) continues its parent's
+composite with its own layers, and a composition that stops before a layer
+(`stop_before`) stops inside it too. At opacity below 1 or with a mask, the group
+starts from a copy of the backdrop tile and then fades to its result,
+`backdrop + opacity × mask × (result − backdrop)`, with weighted sums of two tiles
+(scene op 16) and, for a mask, a product with its coverage (op 3). A clipped Pass
+Through group composites isolated, and `blend_code` passes it as Normal.
+
 **Ranges.** Float documents clamp no result. Modes defined only on [0, 1]
 (`BlendRange::Unit`) clamp their operands to [0, 1] in every document, and float
 documents leave them out of their menus; a layer that already uses one keeps it.
@@ -235,6 +245,15 @@ results. The renderer retains those results and tracks their dependencies so,
 for example, changing a clipping layer does not force unrelated source images
 to be rebuilt.
 
+An adjustment's input image, a clipping stack's backdrop and a filter preview's
+source are composed in the nearest group around the layer that is not Pass
+Through (`isolated_scope`), and their damage follows `backdrop_layers`, the layers
+composited below the layer through its Pass Through groups. Switching a group into
+or out of Pass Through is a structural change that rebuilds them. A composition
+starts above a completed image boundary (a checkpoint) only among the composed
+group's own layers, so the layers of a Pass Through group are always composed from
+below it; this is correct, and repeats the work below the group.
+
 These dependencies branch: a masked adjustment needs the original image, its
 filtered result and the mask. Other layers contribute separately to the final
 composite. The [README's tile example](../../README.md#rendering-engine) shows a
@@ -278,7 +297,9 @@ and the placement and the kept ones through the placement alone. With content
 above or below, the
 [layered display](../../crates/layer-render-wgpu/src/paint_transform/layers.rs)
 composes the static layers once at that level, then places the moving layer
-between them with its blend. They are kept for the moving layer and level
+between them with its blend. The layers above must composite as Normal over the
+document: a layer inside an isolated group may use any mode, and a layer inside
+Pass Through groups counts as the document's own. They are kept for the moving layer and level
 while nothing else changes, across drags and transactions. A drag waits for
 them and the reduced copy, and so does the frame that ends a drag that waited.
 The frame that releases a drag resamples the still preview too. Later frames

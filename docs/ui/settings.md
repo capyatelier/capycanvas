@@ -13,8 +13,8 @@ so changing one does not silently modify another.
 platform-specific availability. The frontend renders these definitions rather
 than maintaining its own copy of allowed values or defaults.
 
-The pages cover appearance, canvas navigation and cursors, pen input, keyboard
-shortcuts and application information. A preference row can describe a choice,
+The pages cover appearance, canvas navigation and cursors, layers, pen input,
+keyboard shortcuts and application information. A preference row can describe a choice,
 number, toggle or text field, together with its current value, enabled state and
 reset action. Theme colors use the shared
 [palette transformation](theme-colors.md); numeric controls use the same
@@ -44,6 +44,12 @@ This only changes cursor presentation: screenless pens retain pen input behavior
 that brush-size outlines and their center markers stay visible for the Eraser,
 transparent color, and a pen's physical eraser. None stays invisible during contact.
 The shared Rust cursor model and GPU presenter apply this behavior on every host.
+
+**Use Pass Through for new groups**, in the Canvas page's Layers group, is off by
+default: New Group and Group Selected Layers then make isolated Normal groups, as
+Clip Studio Paint, Krita and GIMP do. On, every new group is
+[Pass Through](../internals/documents.md#groups-and-pass-through), as in Photoshop
+and Affinity. It changes only groups made afterwards.
 
 ## Keyboard shortcuts
 

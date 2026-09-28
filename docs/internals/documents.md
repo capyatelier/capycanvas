@@ -28,6 +28,26 @@ in layer order, forming an effect chain. A generator effect instead produces
 content that is composited as a layer. Masks and opacity control where and how
 strongly an effect applies.
 
+### Groups and Pass Through
+
+A group is isolated by default: its layers composite over transparency, and that
+result goes over the layers below with the group's blend mode, opacity and mask.
+**Pass Through**, a blend mode only groups can use (`LayerBlend::PassThrough`),
+composites the group's layers onto the layers below it instead, as if they were
+not grouped. A non-Normal layer inside blends with the layers below the group, and
+an adjustment inside changes everything below it up to the nearest isolated group
+([`isolated_scope`, `backdrop_layers`](../../crates/layer-core/src/layers.rs)).
+The group's opacity and mask fade between what lies below and that result,
+`lerp(below, result, opacity × mask)`. A clipped Pass Through group composites
+isolated, as a Normal group.
+
+New groups, from New Group and Group Selected Layers, are isolated Normal groups
+unless the [Use Pass Through for new groups](../ui/settings.md) preference is on.
+Ungroup keeps the image, so it needs a group at full opacity, with no mask and
+not clipped, that is either Pass Through, holding any layers, or Normal, holding
+only Normal layers. A referenced adjustment inside a Pass Through group keeps what
+lies below the group in the reference composite.
+
 ### Merging layers
 
 Merge Down, Merge Group, Merge Visible, Flatten Image and Stamp Visible, in the
@@ -45,7 +65,9 @@ ordinary document pixels.
   clipped to a base. An unclipped adjustment applies to the layer below only
   (Apply Effect to Layer Below), so whatever else lies below no longer takes it.
 - **Merge Group** composites a visible group, with its mask, into one layer that
-  keeps the group's blend mode and opacity. Hidden layers inside are discarded.
+  keeps the group's blend mode and opacity. Hidden layers inside are discarded. A
+  Pass Through group is composited isolated into a Normal layer, as in Photoshop,
+  so layers inside that blended with those below can look different.
 - **Merge Visible** composites the visible layers over transparency. Hidden
   layers stay; hidden layers clipped to a merged base are released. The paper
   is not part of the composite, so a non-Normal layer can look different where

@@ -256,32 +256,40 @@ pub(super) fn capture_window(layers: &[Layer], region: PixelRect, extent: [u32; 
 }
 
 // Dependencies follow the same isolated group / clipping-stack boundaries as
-// composition. Build on structural edits only, not on every dab or frame.
+// composition, through Pass Through groups. Build on structural edits only,
+// not on every dab or frame.
 fn input_indices(layers: &[Layer], index: usize) -> Vec<usize> {
     let layer = &layers[index];
     let adjustment = layer
         .effect
         .as_ref()
         .is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment);
-    if layer.kind != LayerKind::Group && !adjustment {
+    if layer.kind == LayerKind::Group {
+        return below_indices(layers, index, Some(layer.id), layers.len());
+    }
+    if !adjustment {
         return Vec::new();
     }
-    let parent = if layer.kind == LayerKind::Group {
-        Some(layer.id)
-    } else {
-        layer.properties.parent
-    };
-    let end = if adjustment && layer.properties.clipped {
-        layers
-            .iter()
-            .enumerate()
-            .skip(index + 1)
-            .find(|(_, l)| l.properties.parent == parent && !l.properties.clipped)
-            .map_or(layers.len(), |(i, _)| i)
-    } else {
-        layers.len()
-    };
+    if !layer.properties.clipped {
+        return layer_core::backdrop_layers(layers, index);
+    }
+    let parent = layer.properties.parent;
+    let end = layers
+        .iter()
+        .enumerate()
+        .skip(index + 1)
+        .find(|(_, l)| l.properties.parent == parent && !l.properties.clipped)
+        .map_or(layers.len(), |(i, _)| i);
     below_indices(layers, index, parent, end)
+}
+/// The group a layer's input is composed in: its clipping stack's group, or
+/// the nearest group around it that does not pass through.
+fn input_scope(layers: &[Layer], layer: &Layer) -> Option<LayerId> {
+    if layer.properties.clipped {
+        layer.properties.parent
+    } else {
+        layer_core::isolated_scope(layers, layer.properties.parent)
+    }
 }
 fn below_indices(
     layers: &[Layer],
@@ -328,7 +336,7 @@ fn clip_input(layers: &[Layer], index: usize) -> Option<ClipInput> {
     Some(ClipInput {
         base,
         base_id: layers[base].id,
-        dependencies: below_indices(layers, base, parent, layers.len()),
+        dependencies: layer_core::backdrop_layers(layers, base),
         terminal,
     })
 }
@@ -377,7 +385,7 @@ impl Scene {
                 self.used.fill(false);
                 self.stop_before = Some((base_index, false));
                 for tile in page_coordinates(backdrop.damage) {
-                    let pixels = self.group(r, packet, base.properties.parent, tile)?;
+                    let pixels = self.group(r, packet, input_scope(packet.layers, base), tile)?;
                     self.capture_tile(r, pixels, &backdrop.image, tile);
                 }
                 self.stop_before = None;
@@ -592,6 +600,7 @@ impl Scene {
                         || a.effect.as_ref().map(|e| e.program.kind)
                             != b.effect.as_ref().map(|e| e.program.kind)
                         || a.properties.parent != b.properties.parent
+                        || a.passes_through() != b.passes_through()
                         || (a.kind == LayerKind::Group
                             && (a.properties.offset != b.properties.offset
                                 || a.visible != b.visible))
@@ -785,7 +794,7 @@ impl Scene {
                     ));
                 } else {
                     for tile in page_coordinates(input_dirty) {
-                        let input = self.group(r, packet, layer.properties.parent, tile)?;
+                        let input = self.group(r, packet, input_scope(packet.layers, layer), tile)?;
                         self.capture_tile(r, input, &cached.input, tile);
                     }
                 }

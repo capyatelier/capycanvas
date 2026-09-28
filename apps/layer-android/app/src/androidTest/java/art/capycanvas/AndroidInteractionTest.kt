@@ -2131,6 +2131,92 @@ class AndroidInteractionTest {
         }
         println("PASS layer blend menu: shared groups, choices with mouse, finger and stylus, one undo step each")
     }
+    @Test fun passThroughGroupAndNewGroupPreferenceAcrossDevices() {
+        fun blend() = state().getJSONObject("layer_tools").getJSONObject("editing_layer").getString("blend_label")
+        fun firstGroup() = kotlinx.coroutines.runBlocking {
+            host.withNative { JSONObject(Native.query(it, obj("type" to "layer_blend_menu", "id" to editingLayer()).toString())) }
+        }.array("sections").getJSONArray(0).objects().map { it.getString("label") }
+        fun preference(value: Boolean) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "pass_through_groups", "value" to value)))
+        fun spread(name: String): Int {
+            var spread = 0
+            captureCanvasBar(name, "pass-through") { image, origin ->
+                val center = bounds("workspace").center
+                val pixel = image.getPixel((center.x + origin.x).toInt(), (center.y + origin.y).toInt())
+                val channels = listOf(android.graphics.Color.red(pixel), android.graphics.Color.green(pixel), android.graphics.Color.blue(pixel))
+                spread = channels.max() - channels.min()
+            }
+            return spread
+        }
+        val settings = state().getJSONObject("settings")
+        val originalTheme = settings.opt("theme") ?: JSONObject.NULL
+        val originalPass = settings.getBoolean("pass_through_groups")
+        action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
+        popupInput = true
+        try {
+            preference(false)
+            action(obj("type" to "invoke", "command" to "fit_canvas"))
+            action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(0.9, 0.08, 0.05, 1.0))))
+            action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "solid_color")))
+            val fill = editingLayer()
+            layerAction(obj("op" to "new", "group" to true, "clipped" to false))
+            val group = editingLayer()
+            assertEquals("new groups are isolated by default", "Normal", blend())
+            layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+            action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "black_white")))
+            action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
+            layerAction(obj("op" to "select", "id" to group, "mask" to false))
+            waitFor("the group is active", 5_000) { editingLayer() == group && shown("layer-blend") }
+            assertTrue("inside an isolated group the adjustment leaves the red fill alone", spread("isolated") > 100)
+            assertEquals(listOf("Pass Through", "Normal"), firstGroup())
+            tool = MotionEvent.TOOL_TYPE_FINGER
+            tap(bounds("layer-blend").center)
+            waitFor("a finger opens the group's blend menu", 5_000) { popupCount() == 1 && menuText("Pass Through") != null }
+            settle()
+            tap(menuText("Pass Through")!!.center)
+            waitFor("a finger chooses Pass Through", 5_000) { popupCount() == 0 && blend() == "Pass Through" }
+            waitFor("the control shows Pass Through", 3_000) { textBounds("Pass Through") != null }
+            assertTrue("the adjustment now reaches the fill below the group", spread("passing") < 8)
+            action(obj("type" to "invoke", "command" to "undo"))
+            assertEquals("choosing Pass Through is one undo step", "Normal", blend())
+            action(obj("type" to "invoke", "command" to "redo"))
+            assertEquals("Pass Through", blend())
+            tool = MotionEvent.TOOL_TYPE_STYLUS
+            for (theme in listOf("light", "dark")) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                tap(bounds("layer-blend").center)
+                waitFor("the stylus opens the blend menu in $theme", 5_000) { popupCount() == 1 && menuText("Pass Through") != null }
+                captureCanvasBar("menu-$theme", "pass-through")
+                back()
+            }
+            layerAction(obj("op" to "select", "id" to fill, "mask" to false))
+            waitFor("the fill is active", 5_000) { editingLayer() == fill }
+            tool = MotionEvent.TOOL_TYPE_MOUSE
+            tap(bounds("layer-blend").center)
+            waitFor("the mouse opens the fill's blend menu", 5_000) { popupCount() == 1 && menuText("Normal") != null }
+            assertNull("only groups offer Pass Through", menuText("Pass Through"))
+            back()
+            action(obj("type" to "open_settings", "page" to "canvas"))
+            waitFor("the Layers preferences show", 5_000) { shown("preference-pass_through_groups") }
+            captureCanvasBar("preferences-opened", "pass-through")
+            tool = MotionEvent.TOOL_TYPE_FINGER
+            tap(bounds("preference-pass_through_groups").center)
+            waitFor("a finger turns on Use Pass Through for new groups", 5_000) {
+                state().getJSONObject("settings").getBoolean("pass_through_groups")
+            }
+            for (theme in listOf("light", "dark")) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                captureCanvasBar("preferences-$theme", "pass-through")
+            }
+            action(obj("type" to "close_settings"))
+            layerAction(obj("op" to "new", "group" to true, "clipped" to false))
+            waitFor("New Group passes through", 5_000) { editingLayer() != group && blend() == "Pass Through" }
+        } finally {
+            popupInput = false
+            preference(originalPass)
+            action(obj("type" to "set_theme", "theme" to originalTheme))
+        }
+        println("PASS pass through: a finger sets a group to Pass Through, its adjustment reaches the fill below in one undo step; only groups offer it; the preference makes New Group pass through; light and dark")
+    }
     @Test fun canvasActionBarJourneysAcrossDevices() {
         fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
         fun enabled(command: String) = state().array("commands").objects().any { it.getString("id") == command && it.getBoolean("enabled") }

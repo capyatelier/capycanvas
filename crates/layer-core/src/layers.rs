@@ -63,7 +63,72 @@ pub fn target_transform(layers: &[Layer], id: LayerId) -> Affine {
     }))
 }
 
+/// The group whose own composite holds the layers below a layer whose parent
+/// is `parent`: the nearest of those groups that does not pass through, or
+/// None for the document.
+pub fn isolated_scope(layers: &[Layer], mut parent: Option<LayerId>) -> Option<LayerId> {
+    for _ in 0..layers.len() {
+        match parent.and_then(|id| layers.iter().find(|l| l.id == id)) {
+            Some(group) if group.passes_through() => parent = group.properties.parent,
+            _ => break,
+        }
+    }
+    parent
+}
+
+/// The layers composited before `layers[index]` onto the backdrop it draws
+/// over: its later siblings and, through each Pass Through group around it,
+/// that group's later siblings, all with their subtrees. Storage order is
+/// sibling order; a group need not precede its subtree.
+pub fn backdrop_layers(layers: &[Layer], index: usize) -> Vec<usize> {
+    let position = |id: LayerId| layers.iter().position(|l| l.id == id);
+    let mut levels = vec![(layers[index].properties.parent, index)];
+    while let Some(&(Some(group), _)) = levels.last()
+        && levels.len() <= layers.len()
+        && let Some(group) = position(group).filter(|&g| layers[g].passes_through())
+    {
+        levels.push((layers[group].properties.parent, group));
+    }
+    (0..layers.len())
+        .filter(|&i| {
+            let mut root = i;
+            for _ in 0..=layers.len() {
+                let parent = layers[root].properties.parent;
+                if let Some(&(_, own)) = levels.iter().find(|(level, _)| *level == parent) {
+                    return root > own;
+                }
+                let Some(next) = parent.and_then(position) else {
+                    return false;
+                };
+                root = next;
+            }
+            false
+        })
+        .collect()
+}
+
+/// Whether `layer` lies inside `scope`, where None is the document.
+pub fn descends_from(layers: &[Layer], layer: &Layer, scope: Option<LayerId>) -> bool {
+    let Some(scope) = scope else {
+        return true;
+    };
+    let mut parent = layer.properties.parent;
+    for _ in 0..layers.len() {
+        match parent {
+            Some(id) if id == scope => return true,
+            Some(id) => parent = layers.iter().find(|l| l.id == id).and_then(|l| l.properties.parent),
+            None => return false,
+        }
+    }
+    false
+}
+
 impl Layer {
+    /// A Pass Through group composites its layers onto the layers below it;
+    /// clipped, it composites isolated like a Normal group.
+    pub fn passes_through(&self) -> bool {
+        self.kind == LayerKind::Group && self.properties.blend == LayerBlend::PassThrough && !self.properties.clipped
+    }
     /// Finite editable local extent: the canvas, the extent a canvas change
     /// left behind and a retained photo's size, whichever is larger. Pixels
     /// beyond the canvas stay hidden until the canvas grows over them again;
@@ -288,7 +353,7 @@ mod organization_tests {
         .unwrap();
         doc.layers[0].mask = Some(LayerMask::reveal_all(LayerId(99), Point { x: 7., y: 9. }));
         let roots = doc.layer_roots(&BTreeSet::from([LayerId(1), LayerId(3)]));
-        doc.apply(doc.group_layers_edit(&roots, LayerId(10)).unwrap())
+        doc.apply(doc.group_layers_edit(&roots, LayerId(10), LayerBlend::Normal).unwrap())
             .unwrap();
         assert_eq!(
             doc.layer_roots(&BTreeSet::from([LayerId(10), LayerId(3)])),
@@ -354,7 +419,7 @@ mod organization_tests {
         })
         .unwrap();
         assert!(doc.delete_layers_edit(&[LayerId(1)]).is_err());
-        assert!(doc.group_layers_edit(&[LayerId(1)], LayerId(10)).is_err());
+        assert!(doc.group_layers_edit(&[LayerId(1)], LayerId(10), LayerBlend::Normal).is_err());
         assert!(doc.delete_layers_edit(&[LayerId(1), LayerId(3)]).is_ok());
         doc.apply(Edit::InsertLayer {
             index: 0,
@@ -393,10 +458,102 @@ mod organization_tests {
         let menu: Vec<_> = LayerBlend::MENU.into_iter().flatten().copied().collect();
         assert_eq!(menu.len(), LayerBlend::ALL.len());
         assert!(LayerBlend::ALL.iter().all(|b| menu.contains(b)));
-        assert_eq!(LayerBlend::MENU[0], [LayerBlend::Normal]);
-        let float: Vec<_> = menu.iter().filter(|b| b.offered(true)).map(|b| b.label()).collect();
+        assert_eq!(LayerBlend::MENU[0], [LayerBlend::PassThrough, LayerBlend::Normal]);
+        let float: Vec<_> = menu.iter().filter(|b| b.offered(LayerKind::Paint, true)).map(|b| b.label()).collect();
         assert!(!float.contains(&"Overlay") && !float.contains(&"Hard Mix") && float.contains(&"Linear Light"));
-        assert!(menu.iter().all(|b| b.offered(false)));
+        assert!(menu.iter().all(|b| b.offered(LayerKind::Group, false)));
+        let paint: Vec<_> = menu.iter().filter(|b| b.offered(LayerKind::Paint, false)).collect();
+        assert_eq!(paint.len(), menu.len() - 1);
+        assert!(!paint.contains(&&LayerBlend::PassThrough));
+        assert!(LayerBlend::PassThrough.offered(LayerKind::Group, true));
+    }
+
+    fn pass_through_document() -> Document {
+        let mut doc = Document::new("pass through", 64, 64);
+        let mut group = Layer::paint(LayerId(10), "Group");
+        group.kind = LayerKind::Group;
+        group.properties.blend = LayerBlend::PassThrough;
+        let mut top = Layer::paint(LayerId(11), "Top");
+        top.properties.parent = Some(group.id);
+        top.properties.blend = LayerBlend::Multiply;
+        let mut adjustment = top.clone();
+        adjustment.id = LayerId(12);
+        adjustment.kind = LayerKind::Effect;
+        adjustment.properties.blend = LayerBlend::Normal;
+        adjustment.effect = Some(Arc::new(EffectInstance::new(
+            crate::bundled_effect_catalog().get("exposure").unwrap().program(),
+        )));
+        let mut inner = top.clone();
+        inner.id = LayerId(13);
+        let above = Layer::paint(LayerId(14), "Above");
+        let below = Layer::paint(LayerId(15), "Below");
+        doc.layers.splice(0..0, [above, top, adjustment, group, inner, below]);
+        for layer in &doc.layers {
+            doc.validate_layer(layer).unwrap();
+        }
+        doc
+    }
+
+    #[test]
+    fn pass_through_is_for_groups_and_is_saved_by_a_new_name() {
+        let mut doc = pass_through_document();
+        assert_eq!(serde_json::to_value(LayerBlend::PassThrough).unwrap(), "PassThrough");
+        assert_eq!(LayerBlend::PassThrough.label(), "Pass Through");
+        let mut paint = doc.layer(LayerId(14)).unwrap().clone();
+        paint.properties.blend = LayerBlend::PassThrough;
+        assert_eq!(
+            doc.apply(Edit::ReplaceLayer(Box::new(paint))).unwrap_err().to_string(),
+            "Only groups can use Pass Through"
+        );
+        let group = doc.layer(LayerId(10)).unwrap();
+        assert!(group.passes_through());
+        let mut clipped = group.clone();
+        clipped.properties.clipped = true;
+        assert!(!clipped.passes_through(), "a clipped group composites isolated");
+    }
+
+    #[test]
+    fn backdrops_widen_through_pass_through_groups_to_the_nearest_isolated_one() {
+        let mut doc = pass_through_document();
+        let index = |doc: &Document, id: u64| doc.layers.iter().position(|l| l.id == LayerId(id)).unwrap();
+        let ids = |doc: &Document, indices: Vec<usize>| indices.into_iter().map(|i| doc.layers[i].id.0).collect::<Vec<_>>();
+        assert_eq!(isolated_scope(&doc.layers, Some(LayerId(10))), None);
+        assert_eq!(ids(&doc, backdrop_layers(&doc.layers, index(&doc, 12))), [13, 15, 1, 2]);
+        assert_eq!(ids(&doc, backdrop_layers(&doc.layers, index(&doc, 11))), [12, 13, 15, 1, 2]);
+        assert_eq!(ids(&doc, backdrop_layers(&doc.layers, index(&doc, 14))), [11, 12, 10, 13, 15, 1, 2]);
+        doc.reference_layers = [LayerId(12)].into();
+        let visible: Vec<_> = doc.reference_snapshot().iter().filter(|l| l.visible).map(|l| l.id.0).collect();
+        assert_eq!(visible, [12, 10, 13, 15, 1, 2], "a referenced adjustment keeps what lies below its group");
+        let mut group = doc.layer(LayerId(10)).unwrap().clone();
+        group.properties.blend = LayerBlend::Normal;
+        doc.apply(Edit::ReplaceLayer(Box::new(group))).unwrap();
+        assert_eq!(isolated_scope(&doc.layers, Some(LayerId(10))), Some(LayerId(10)));
+        assert_eq!(ids(&doc, backdrop_layers(&doc.layers, index(&doc, 12))), [13]);
+        let visible: Vec<_> = doc.reference_snapshot().iter().filter(|l| l.visible).map(|l| l.id.0).collect();
+        assert_eq!(visible, [12, 10, 13]);
+        assert!(descends_from(&doc.layers, doc.layer(LayerId(13)).unwrap(), Some(LayerId(10))));
+        assert!(!descends_from(&doc.layers, doc.layer(LayerId(15)).unwrap(), Some(LayerId(10))));
+    }
+
+    #[test]
+    fn pass_through_groups_ungroup_with_any_layers_at_full_opacity_without_a_mask() {
+        let mut doc = pass_through_document();
+        let before = doc.clone();
+        let undo = doc.apply(doc.ungroup_layer_edit(LayerId(10)).unwrap()).unwrap();
+        assert!(doc.layers.iter().all(|l| l.properties.parent.is_none()));
+        assert_eq!(doc.layer(LayerId(11)).unwrap().properties.blend, LayerBlend::Multiply);
+        doc.apply(undo).unwrap();
+        assert_eq!(doc.layers, before.layers);
+        let refused = |change: &dyn Fn(&mut Layer)| {
+            let mut doc = before.clone();
+            let mut group = doc.layer(LayerId(10)).unwrap().clone();
+            change(&mut group);
+            doc.apply(Edit::ReplaceLayer(Box::new(group))).unwrap();
+            doc.ungroup_layer_edit(LayerId(10)).is_err()
+        };
+        assert!(refused(&|g| g.opacity = 0.5));
+        assert!(refused(&|g| g.mask = Some(LayerMask::reveal_all(LayerId(90), Point::default()))));
+        assert!(refused(&|g| g.properties.blend = LayerBlend::Normal), "an isolated group keeps its Normal-layer rule");
     }
 }
 
@@ -430,6 +587,10 @@ pub enum LayerBlend {
     Hue = 21,
     Saturation = 22,
     Luminosity = 23,
+    /// Groups only: the group's layers composite onto the layers below it, as
+    /// if they were not grouped, and its opacity and mask fade between that
+    /// result and what lies below.
+    PassThrough = 24,
 }
 /// The operands a blend mode is defined on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -441,7 +602,7 @@ pub enum BlendRange {
     Unit,
 }
 impl LayerBlend {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Normal,
         Self::Multiply,
         Self::Screen,
@@ -466,11 +627,12 @@ impl LayerBlend {
         Self::Hue,
         Self::Saturation,
         Self::Luminosity,
+        Self::PassThrough,
     ];
-    /// Menu groups in Photoshop's order: Normal, darken, lighten, contrast,
-    /// inversion and component modes.
+    /// Menu groups in Photoshop's order: Pass Through and Normal, darken,
+    /// lighten, contrast, inversion and component modes.
     pub const MENU: [&'static [Self]; 6] = [
-        &[Self::Normal],
+        &[Self::PassThrough, Self::Normal],
         &[Self::Darken, Self::Multiply, Self::ColorBurn, Self::LinearBurn],
         &[Self::Lighten, Self::Screen, Self::ColorDodge, Self::Add],
         &[
@@ -504,9 +666,10 @@ impl LayerBlend {
             _ => BlendRange::Unbounded,
         }
     }
-    /// Whether a document of this depth offers the mode in its menus.
-    pub fn offered(self, float: bool) -> bool {
-        !float || self.range() == BlendRange::Unbounded
+    /// Whether a layer of this kind, in a document of this depth, offers the
+    /// mode in its menus.
+    pub fn offered(self, kind: LayerKind, float: bool) -> bool {
+        (!float || self.range() == BlendRange::Unbounded) && (self != Self::PassThrough || kind == LayerKind::Group)
     }
     pub fn label(self) -> &'static str {
         match self {
@@ -534,6 +697,7 @@ impl LayerBlend {
             Self::Hue => "Hue",
             Self::Saturation => "Saturation",
             Self::Luminosity => "Luminosity",
+            Self::PassThrough => "Pass Through",
         }
     }
 }
@@ -811,9 +975,10 @@ impl LayerMask {
 
 impl Document {
     /// Compose reference objects without unrelated artwork. A clipping stack
-    /// is one object; a referenced adjustment also needs its input siblings.
-    /// Keep original indices for renderer style records, and ancestor groups
-    /// for their transforms/masks without including their unrelated children.
+    /// is one object; a referenced adjustment also needs the layers below it,
+    /// through the Pass Through groups around it. Keep original indices for
+    /// renderer style records, and ancestor groups for their transforms/masks
+    /// without including their unrelated children.
     pub fn reference_snapshot(&self) -> Vec<Layer> {
         let members = self.reference_members(|_| true);
         self.layers
@@ -869,12 +1034,7 @@ impl Document {
                     .is_some_and(|e| e.program.kind == EffectKind::Adjustment)
                     && !layer.properties.clipped
                 {
-                    members.extend(
-                        self.layers[i + 1..]
-                            .iter()
-                            .filter(|l| l.properties.parent == layer.properties.parent)
-                            .map(|l| l.id),
-                    );
+                    members.extend(backdrop_layers(&self.layers, i).into_iter().map(|j| self.layers[j].id));
                 }
             }
             if members.len() == before {
@@ -984,11 +1144,13 @@ impl Document {
         self.clone().apply(edit.clone())?;
         Ok(edit)
     }
-    /// Group a contiguous sibling range; keep complete clipping relationships.
+    /// Group a contiguous sibling range in a group that blends with `blend`;
+    /// keep complete clipping relationships.
     pub fn group_layers_edit(
         &self,
         roots: &[LayerId],
         group_id: LayerId,
+        blend: LayerBlend,
     ) -> Result<Edit, DocumentError> {
         let first = self
             .layer(
@@ -1041,6 +1203,7 @@ impl Document {
         let mut group = Layer::paint(group_id, "Group");
         group.kind = LayerKind::Group;
         group.properties.parent = parent;
+        group.properties.blend = blend;
         let mut edits = vec![Edit::InsertLayer {
             index: self.layers.iter().position(|l| l.id == top).unwrap(),
             layer: group,
@@ -1052,16 +1215,19 @@ impl Document {
         }
         Ok(Edit::Batch(edits))
     }
-    /// Remove a neutral group without changing its isolated compositing result.
+    /// Remove a neutral group without changing how its layers composite: a
+    /// Pass Through group with any layers, or an isolated Normal group whose
+    /// layers are Normal.
     pub fn ungroup_layer_edit(&self, id: LayerId) -> Result<Edit, DocumentError> {
         let group = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
         if self.is_locked(id) {
             return Err(DocumentError::ProtectedLayer(id));
         }
+        let passes_through = group.passes_through();
         if group.kind != LayerKind::Group
             || group.opacity != 1.
             || group.mask.is_some()
-            || group.properties.blend != LayerBlend::Normal
+            || !(passes_through || group.properties.blend == LayerBlend::Normal)
             || group.properties.clipped
         {
             return Err(DocumentError::InvalidLayerOperation(
@@ -1083,7 +1249,7 @@ impl Document {
             if self.is_locked(child.id) {
                 return Err(DocumentError::ProtectedLayer(child.id));
             }
-            if child.properties.blend != LayerBlend::Normal {
+            if !passes_through && child.properties.blend != LayerBlend::Normal {
                 return Err(DocumentError::InvalidLayerOperation(
                     "Set child layers to Normal before ungrouping",
                 ));
@@ -1286,6 +1452,9 @@ impl Document {
         }
         if let Some(mask) = &layer.mask {
             mask.validate()?;
+        }
+        if layer.properties.blend == LayerBlend::PassThrough && layer.kind != LayerKind::Group {
+            return Err(DocumentError::InvalidLayerOperation("Only groups can use Pass Through"));
         }
         if (layer.kind == LayerKind::Effect) != layer.effect.is_some() {
             return Err(DocumentError::InvalidLayerOperation("Invalid effect layer"));

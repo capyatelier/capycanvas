@@ -411,10 +411,13 @@ the mode's code. The layer menu's **Blend Mode** submenu, and so **Layer ▸ Ble
 Mode**, holds the same items; command search finds each mode there. Float
 documents leave out the modes defined only on [0, 1] (see
 [blend modes](../internals/rendering.md#blend-modes)), except the layer's current
-mode. Choosing the current mode adds no undo step. GTK fills a `MenuButton`
-popover when it opens, Web reads the `layer_blend_menu` export and Android the
-`layer_blend_menu` query. `UiCatalog.layer_blends` stays a flat list in code
-order, so a host that shows a plain list sends its index as the code.
+mode. Only groups offer **Pass Through**, first in the group with Normal, as in
+Photoshop; another layer refuses it with a reason. Choosing the current mode adds
+no undo step. GTK fills a `MenuButton` popover when it opens, Web reads the
+`layer_blend_menu` export and Android the `layer_blend_menu` query.
+`UiCatalog.layer_blends` stays a flat list in code order, so a host that shows a
+plain list sends its index as the code; Pass Through has the last code, and the
+Properties panel's list leaves it out for layers other than groups.
 
 ## Settings and native flows
 

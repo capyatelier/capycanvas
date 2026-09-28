@@ -36,6 +36,7 @@ class AndroidViewportBenchmarkTest {
         val transparency = args.getString("transparency")?.let { listOf("off", "low", "medium", "high").indexOf(it) }
         val motion = args.getString("motion", "stroke")!!
         check(motion in listOf("stroke", "pan", "pinch"))
+        val passThrough = args.getString("passThrough", "false") == "true"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var activity: MainActivity
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -55,6 +56,14 @@ class AndroidViewportBenchmarkTest {
                 host.preference(obj("type" to "edit", "id" to "feedback", "value" to prediction))
                 host.preference(obj("type" to "edit", "id" to "platform_prediction", "value" to false))
                 transparency?.let { host.preference(obj("type" to "edit", "id" to "transparency", "value" to it)) }
+                if (passThrough) {
+                    host.preference(obj("type" to "edit", "id" to "pass_through_groups", "value" to true))
+                    host.dispatch(obj("type" to "set_color", "rgba" to JSONArray(listOf(0.9, 0.3, 0.1, 1.0))))
+                    host.dispatch(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "solid_color")))
+                    host.dispatch(obj("type" to "layer", "action" to obj("op" to "new", "group" to true, "clipped" to false)))
+                    host.dispatch(obj("type" to "layer", "action" to obj("op" to "new", "group" to false, "clipped" to false)))
+                    host.dispatch(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "black_white")))
+                }
             }
             SystemClock.sleep(1500)
             assertNull(host.actionError)

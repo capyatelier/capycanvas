@@ -469,7 +469,11 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
         numeric.default_value = Some(1.);
         controls.push(PropertyControl::new("opacity", "Opacity", PropertyKind::Number { numeric },
             EffectValue::Number(layer.opacity), EffectValue::Number(1.)));
-        let options = layer_core::LayerBlend::ALL.iter().map(|b| Arc::from(b.label())).collect();
+        let options = layer_core::LayerBlend::ALL
+            .iter()
+            .filter(|b| **b != layer_core::LayerBlend::PassThrough || layer.kind == LayerKind::Group)
+            .map(|b| Arc::from(b.label()))
+            .collect();
         controls.push(PropertyControl::new("blend", "Blend mode", PropertyKind::Choice { options },
             EffectValue::Choice(layer.properties.blend.code()), EffectValue::Choice(0)));
         String::new()

@@ -372,6 +372,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 doc.group_layers_edit(
                     &doc.layer_roots(&self.layer_interaction.selected),
                     LayerId(0),
+                    layer_core::LayerBlend::Normal,
                 )
                 .is_ok(),
             ),

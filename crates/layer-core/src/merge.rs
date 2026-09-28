@@ -66,7 +66,8 @@ struct Merge<'a> {
     /// The result takes this layer's place, name and clipping; without one it
     /// goes on top of the image and keeps every member.
     anchor: Option<&'a Layer>,
-    /// A merged group keeps its blend mode and opacity instead of baking them.
+    /// A merged group keeps its blend mode and opacity instead of baking them;
+    /// a Pass Through group becomes Normal.
     group: bool,
     /// The result covers the canvas only, dropping pixels outside it.
     canvas: bool,
@@ -436,7 +437,10 @@ impl Document {
                 kind == MergeKind::Down && anchor.kind == LayerKind::Paint && anchor.properties.alpha_locked;
             if merge.group {
                 layer.opacity = anchor.opacity;
-                layer.properties.blend = anchor.properties.blend;
+                layer.properties.blend = match anchor.properties.blend {
+                    LayerBlend::PassThrough => LayerBlend::Normal,
+                    blend => blend,
+                };
             }
         }
         let removed: BTreeSet<_> = if merge.anchor.is_some() {

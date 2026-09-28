@@ -213,6 +213,18 @@ fn merge_group_keeps_the_groups_blend_and_opacity_and_bakes_its_mask() {
     activate(&mut doc, "Outside");
     assert_eq!(doc.merge_refusal(MergeKind::Group), Some(MergeRefusal::NotGroup));
 
+    let mut doc = document(&["Group", "Inside", "Outside"]);
+    nest(&mut doc, "Group", &["Inside"]);
+    layer_mut(&mut doc, "Group").properties.blend = LayerBlend::PassThrough;
+    layer_mut(&mut doc, "Group").opacity = 0.5;
+    activate(&mut doc, "Group");
+    let plan = doc.merge_plan(MergeKind::Group, LayerId(100), LayerId(101)).unwrap();
+    let LayerOperationKind::Bake { members, .. } = &plan.operation.kind else { unreachable!() };
+    assert_eq!(members[0].properties.blend, LayerBlend::Normal, "the group bakes isolated");
+    merged(&mut doc, MergeKind::Group);
+    let result = doc.layer(LayerId(100)).unwrap();
+    assert_eq!((result.opacity, result.properties.blend), (0.5, LayerBlend::Normal), "a Pass Through group merges into a Normal layer");
+
     let mut doc = document(&["Group", "Selection"]);
     nest(&mut doc, "Group", &["Selection"]);
     let selection = layer_mut(&mut doc, "Selection");
