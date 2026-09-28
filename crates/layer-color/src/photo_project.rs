@@ -1,7 +1,7 @@
 //! Shared photo-to-master policy. Original samples and metadata are retained;
 //! source file locations remain the host's separate, read-only import reference.
 use layer_core::{
-    Document, Project, ProjectLimits,
+    Document, PhotoMetadata, Project, ProjectLimits,
     color::{DocumentColor, SampleDepth, RgbSpace, source::SourceImage},
 };
 use std::sync::Arc;
@@ -20,6 +20,7 @@ pub fn assume_source_profile(
 
 pub fn photo_project(
     source: SourceImage,
+    metadata: PhotoMetadata,
     name: &str,
     depth: SampleDepth,
 ) -> Result<Project, String> {
@@ -29,6 +30,7 @@ pub fn photo_project(
         .unwrap_or(RgbSpace::ProPhoto);
     let mut document = Document::new("untitled", source.extent[0], source.extent[1]);
     document.resolution = source.resolution;
+    document.metadata = metadata;
     document.color = DocumentColor { space, depth };
     let name: String = name.chars().filter(|c| !c.is_control()).take(128).collect();
     document.layers[0].name = if name.is_empty() {

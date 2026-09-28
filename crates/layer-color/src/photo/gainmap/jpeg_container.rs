@@ -1,13 +1,12 @@
 //! JPEG gain-map interchange: MPF image offsets, ISO 21496-1 fractions and
 //! Adobe HDR gain-map XMP. Codecs operate only on the validated image slices.
-use super::super::jpeg_markers::{Segment, scan};
+use super::super::jpeg_markers::{Segment, XMP, scan};
 use super::super::jpeg_mpf::mpf_entries;
 use super::{GainMapMetadata, Metadata};
 use quick_xml::{events::Event, name::ResolveResult, reader::NsReader};
 use std::collections::BTreeMap;
 
 const ISO: &[u8] = b"urn:iso:std:iso:ts:21496:-1\0";
-const XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const HDRGM: &[u8] = b"http://ns.adobe.com/hdr-gain-map/1.0/";
 const INVALID: &str = "Invalid JPEG gain-map metadata";
 
@@ -236,7 +235,14 @@ fn xmp(description: &str) -> Result<Vec<u8>, String> {
     segment(0xe1, &[XMP, xml.as_bytes()].concat())
 }
 
-pub(super) fn assemble(base: &[u8], gain: &[u8], m: GainMapMetadata) -> Result<Vec<u8>, String> {
+/// `photo` holds the delivered photo's own `rdf:Description` elements, which
+/// join the primary image's container description.
+pub(super) fn assemble(
+    base: &[u8],
+    gain: &[u8],
+    m: GainMapMetadata,
+    photo: Option<&str>,
+) -> Result<Vec<u8>, String> {
     if scan(base)?.0 != base.len() || scan(gain)?.0 != gain.len() {
         return Err(INVALID.into());
     }
@@ -248,9 +254,11 @@ pub(super) fn assemble(base: &[u8], gain: &[u8], m: GainMapMetadata) -> Result<V
     let gain = [b"\xff\xd8".as_slice(), &iso_gain, &xmp_gain, &gain[2..]].concat();
     let iso_base = segment(0xe2, &[ISO, &[0, 0, 0, 0]].concat())?;
     let xmp_base = xmp(&format!(
-        "<rdf:Description xmlns:Container=\"http://ns.google.com/photos/1.0/container/\" xmlns:Item=\"http://ns.google.com/photos/1.0/container/item/\" xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\" hdrgm:Version=\"1.0\"><Container:Directory><rdf:Seq><rdf:li rdf:parseType=\"Resource\"><Container:Item Item:Semantic=\"Primary\" Item:Mime=\"image/jpeg\"/></rdf:li><rdf:li rdf:parseType=\"Resource\"><Container:Item Item:Semantic=\"GainMap\" Item:Mime=\"image/jpeg\" Item:Length=\"{}\"/></rdf:li></rdf:Seq></Container:Directory></rdf:Description>",
-        gain.len()
-    ))?;
+        "<rdf:Description xmlns:Container=\"http://ns.google.com/photos/1.0/container/\" xmlns:Item=\"http://ns.google.com/photos/1.0/container/item/\" xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\" hdrgm:Version=\"1.0\"><Container:Directory><rdf:Seq><rdf:li rdf:parseType=\"Resource\"><Container:Item Item:Semantic=\"Primary\" Item:Mime=\"image/jpeg\"/></rdf:li><rdf:li rdf:parseType=\"Resource\"><Container:Item Item:Semantic=\"GainMap\" Item:Mime=\"image/jpeg\" Item:Length=\"{}\"/></rdf:li></rdf:Seq></Container:Directory></rdf:Description>{}",
+        gain.len(),
+        photo.unwrap_or_default()
+    ))
+    .map_err(|_| super::super::jpeg_codec::METADATA_TOO_LARGE.to_string())?;
     let primary_len = base.len() + 90 + iso_base.len() + xmp_base.len();
     let mut mpf = b"MPF\0MM\0\x2a\0\0\0\x08\0\x03".to_vec();
     for (tag, ty, count, value) in [

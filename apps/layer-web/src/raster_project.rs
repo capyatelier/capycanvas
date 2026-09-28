@@ -31,6 +31,9 @@ struct Metadata {
     // Document's generic serde intentionally skips persisted proof metadata;
     // the native archive owns its profile table. Carry it across worker heaps.
     proof: Option<layer_core::color::ProofRecipe<ProfileReference>>,
+    /// Exif, XMP and IPTC blocks of an opened photo, which Document's serde also skips.
+    #[serde(default)]
+    photo: [Option<Vec<usize>>; 3],
     profiles: Vec<Vec<usize>>,
     selections: layer_core::ProjectSelections,
     rasters: Vec<Raster>,
@@ -108,8 +111,9 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
     let mut profile_bytes = Vec::new();
     let proof = document.proof.as_ref().map(|p| p.clone().with_profile(
         ProfileReference::detach(&p.profile, &mut profile_bytes)));
+    let photo = document.metadata.blocks().map(|block| block.clone().map(|bytes| push_bytes(bytes, &mut parts)));
     let mut metadata = Metadata {
-        document, proof, selections, profiles: Vec::new(),
+        document, proof, photo, selections, profiles: Vec::new(),
         rasters: Vec::new(),
         blobs: Vec::new(),
         originals: Vec::new(),
@@ -217,6 +221,20 @@ pub(super) async fn pack(project: Project) -> Result<JsValue, JsValue> {
     Ok(result.into())
 }
 
+/// Blocks split by `push_bytes`, rejoined within `limit` bytes.
+async fn joined(buffers: &js_sys::Array, indices: Vec<usize>, limit: usize) -> Result<Vec<u8>, JsValue> {
+    let mut bytes = Vec::new();
+    for index in indices {
+        let block = part(buffers, index)?;
+        if bytes.len() + block.len() > limit {
+            return Err(js("Oversized project block"));
+        }
+        bytes.extend_from_slice(&block);
+        documents::yield_browser().await?;
+    }
+    Ok(bytes)
+}
+
 fn part(buffers: &js_sys::Array, index: usize) -> Result<Vec<u8>, JsValue> {
     let value = buffers.get(index as u32);
     let bytes = value
@@ -250,24 +268,25 @@ pub(super) async fn unpack(
     let mut profiles = Vec::<Arc<[u8]>>::new();
     let mut profile_bytes = 0usize;
     for indices in metadata.profiles {
-        let mut bytes = Vec::new();
-        for index in indices {
-            let block = part(&buffers, index)?;
-            profile_bytes = profile_bytes.checked_add(block.len())
-                .filter(|n| *n as u64 <= budget.asset_bytes)
-                .ok_or_else(|| js("Project profile budget exceeded"))?;
-            if bytes.len() + block.len() > layer_core::color::source::MAX_PROFILE_BYTES {
-                return Err(js("Oversized project profile"));
-            }
-            bytes.extend_from_slice(&block);
-            documents::yield_browser().await?;
-        }
+        let bytes = joined(&buffers, indices, layer_core::color::source::MAX_PROFILE_BYTES).await?;
+        profile_bytes = profile_bytes.checked_add(bytes.len())
+            .filter(|n| *n as u64 <= budget.asset_bytes)
+            .ok_or_else(|| js("Project profile budget exceeded"))?;
         profiles.push(bytes.into());
     }
     project.document.proof = metadata.proof.map(|p| {
         let profile = p.profile.resolve(&profiles)?;
         Ok::<_, String>(p.with_profile(profile))
     }).transpose().map_err(js)?;
+    let mut photo = Vec::new();
+    for indices in metadata.photo {
+        photo.push(match indices {
+            Some(indices) => Some(joined(&buffers, indices, layer_core::PhotoMetadata::MAX_BYTES).await?.into()),
+            None => None,
+        });
+    }
+    let [exif, xmp, iptc]: [_; 3] = photo.try_into().unwrap();
+    project.document.metadata = layer_core::PhotoMetadata { exif, xmp, iptc };
     let mut tiles = Vec::new();
     let mut copied = 0;
     for blob in metadata.blobs {

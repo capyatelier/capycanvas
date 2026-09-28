@@ -151,12 +151,12 @@ pub fn write_hdr_png_rows(
     mut output: impl Write,
     extent: [u32; 2],
     space: RgbSpace,
-    resolution: Option<layer_core::ImageResolution>,
+    metadata: &super::DeliveryMetadata,
     map_out_of_range: bool,
     mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<crate::OutputStatistics, String> {
     validate_extent(extent, 32768)?;
-    let mut info = super::png_io::info(extent, resolution)?;
+    let mut info = super::png_io::info(extent, metadata)?;
     info.bit_depth = png::BitDepth::Sixteen;
     info.color_type = png::ColorType::Rgba;
     let mut encoder = png::Encoder::with_info(&mut output, info).map_err(err)?;
@@ -196,7 +196,7 @@ mod tests {
         let input = [[1., 1., 1., 1.], [4., 1., 0.25, 0.5], [80., -2., 4., 1.], [0.; 4]];
         let read = |_: u32, row: &mut [[f32; 4]]| { row.copy_from_slice(&input); Ok(()) };
         let mut png = Vec::new();
-        let written = write_hdr_png_rows(&mut png, [4, 1], RgbSpace::Srgb, None, true, read).unwrap();
+        let written = write_hdr_png_rows(&mut png, [4, 1], RgbSpace::Srgb, &Default::default(), true, read).unwrap();
         let mut decoder = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
         let row = decoder.next_row().unwrap().unwrap();
         let expected: Vec<[f32; 4]> = row.data().chunks_exact(8).map(|p| {
@@ -230,7 +230,7 @@ mod tests {
             [100., 0., 0., 0.],
         ];
         let mut file = Vec::new();
-        write_hdr_png_rows(&mut file, [5, 1], RgbSpace::Srgb, None, false, |_, row| {
+        write_hdr_png_rows(&mut file, [5, 1], RgbSpace::Srgb, &Default::default(), false, |_, row| {
             row.copy_from_slice(&pixels);
             Ok(())
         })
@@ -272,10 +272,10 @@ mod tests {
             Ok(())
         };
         assert!(
-            write_hdr_png_rows(Vec::new(), [1, 1], RgbSpace::Srgb, None, false, invalid).is_err()
+            write_hdr_png_rows(Vec::new(), [1, 1], RgbSpace::Srgb, &Default::default(), false, invalid).is_err()
         );
         assert!(
-            write_hdr_png_rows(Vec::new(), [1, 1], RgbSpace::Srgb, None, true, invalid)
+            write_hdr_png_rows(Vec::new(), [1, 1], RgbSpace::Srgb, &Default::default(), true, invalid)
                 .unwrap()
                 .clipped_channels
                 > 0

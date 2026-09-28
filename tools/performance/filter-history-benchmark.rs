@@ -11,7 +11,7 @@ fn historical_photo_filter() {
     )
     .unwrap();
     let project =
-        layer_color::photo_project(source, "Water", layer_core::color::SampleDepth::U8).unwrap();
+        layer_color::photo_project(source, Default::default(), "Water", layer_core::color::SampleDepth::U8).unwrap();
     let extent = [project.document.width, project.document.height];
     let mut r = WgpuRasterizer::new_native_headless(project.document.color).unwrap();
     eprintln!("adapter={:?}", r.adapter.get_info());

@@ -445,6 +445,22 @@ side, so a larger output size disables Export with that reason on GTK; the Web
 and Android dialogs show the same reason when Choose File… is pressed, before
 the save picker opens or any pixels render.
 
+**Metadata** decides which of an opened photo's descriptive metadata the copy
+keeps: **All** (the default), **Copyright & Contact** or **None**. With All,
+**Remove location** is on by default and leaves out GPS coordinates and place
+names; camera, lens, exposure, dates, artist and copyright stay. Copyright &
+Contact keeps the artist, copyright, creator, rights and contact details only.
+File paths, edit history and raw-development settings never travel, and the
+orientation, pixel dimensions and print density are written fresh for the
+delivered image. JPEG, PNG, TIFF, WebP, HDR PNG and the HDR JPEG and AVIF gain-map
+files carry the kept Exif and XMP; HDR JPEG merges the XMP into its own gain-map
+packet. OpenEXR carries none, and the dialog says so. A JPEG whose kept metadata
+does not fit one marker segment is refused with a reason that names the smaller
+choices. The row appears only for documents opened from a photo, and presets
+remember the choice. The shared view data is
+[`ExportMetadataView`](../../crates/layer-ui/src/export.rs); what is read on open
+is in the [project format](../reference/project-format.md#photo-metadata).
+
 HDR exposes its fixed PNG / BT.2020 PQ / 16-bit / retained-transparency contract.
 On a capable display, Export shows the HDR master beside the selected HDR or
 SDR output. Master viewing ignores the temporary canvas SDR/proof toggles and

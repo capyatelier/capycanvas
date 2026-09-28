@@ -10,7 +10,8 @@ impl SnapshotRenderer {
         if self.output_extent != self.extent {
             return Err("A converted copy must retain the original canvas extent".into());
         }
-        let resolution = self.output_resolution;
+        let resolution = self.output_metadata.resolution;
+        let metadata = self.output_metadata.photo.clone();
         let target = SourceInterpretation {
             channels: SourceChannels::Rgba,
             depth: color.depth,
@@ -32,7 +33,8 @@ impl SnapshotRenderer {
                 Ok(())
             },
         )?;
-        let project = project.ok_or("The converted copy is incomplete")?;
+        let mut project = project.ok_or("The converted copy is incomplete")?;
+        project.document.metadata = metadata;
         Ok(layer_color::PreparedDocumentColor {
             project,
             statistics,

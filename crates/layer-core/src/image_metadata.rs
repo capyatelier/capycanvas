@@ -1,6 +1,42 @@
 //! Physical density is metadata, independent of pixel dimensions and color.
 //! Rational values retain TIFF/Exif numbers exactly in native projects.
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+/// Descriptive metadata of the photo a document was opened from, kept as the
+/// blocks that carried it. Export builds fresh blocks from these; imports and
+/// pastes never change them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PhotoMetadata {
+    /// A little-endian TIFF block holding the image text tags and the Exif and
+    /// GPS directories, without the `Exif\0\0` prefix.
+    pub exif: Option<Arc<[u8]>>,
+    /// An XMP packet.
+    pub xmp: Option<Arc<[u8]>>,
+    /// IPTC-IIM records.
+    pub iptc: Option<Arc<[u8]>>,
+}
+impl PhotoMetadata {
+    pub const MAX_BYTES: usize = 64 * 1024 * 1024;
+    pub fn blocks(&self) -> [&Option<Arc<[u8]>>; 3] {
+        [&self.exif, &self.xmp, &self.iptc]
+    }
+    pub fn is_empty(&self) -> bool {
+        self.blocks().iter().all(|b| b.is_none())
+    }
+    pub fn byte_len(&self) -> usize {
+        self.blocks().iter().filter_map(|b| b.as_ref()).map(|b| b.len()).sum()
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        if self.blocks().iter().filter_map(|b| b.as_ref()).any(|b| b.is_empty()) {
+            return Err("Photo metadata blocks must not be empty".into());
+        }
+        if self.byte_len() > Self::MAX_BYTES {
+            return Err("Photo metadata exceeds 64 MiB".into());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResolutionUnit {

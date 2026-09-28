@@ -346,12 +346,12 @@ fn decode_item(
     result
 }
 
-/// Print density of an Exif item: a TIFF header offset, then the TIFF data.
-fn exif_resolution(payload: &[u8]) -> Result<Option<layer_core::ImageResolution>, String> {
+/// The TIFF data of an Exif item, after its header offset.
+fn exif_tiff(payload: &[u8]) -> Result<&[u8], String> {
     let mut r = Reader::new(payload);
     let offset = r.u32()? as usize;
     r.take(offset)?;
-    Ok(super::metadata::exif(r.data)?.resolution)
+    Ok(r.data)
 }
 
 pub(super) fn read(
@@ -478,18 +478,26 @@ fn read_rendition(
     } else {
         None
     };
+    let (mut exif, mut xmp) = (None, None);
     for reference in &container.references {
         if sequence.is_some() {
             break;
         }
-        if &reference.kind != b"cdsc"
-            || !reference.to.contains(&id)
-            || &container.item(reference.from)?.kind != b"Exif"
-        {
+        if &reference.kind != b"cdsc" || !reference.to.contains(&id) {
             continue;
         }
-        let payload = container.payload(reference.from, remaining.min(crate::MAX_ICC_BYTES))?;
-        resolution = exif_resolution(&payload)?;
+        let item = container.item(reference.from)?;
+        if &item.kind == b"Exif" {
+            let payload = container.payload(reference.from, remaining.min(crate::MAX_ICC_BYTES))?;
+            let tiff = exif_tiff(&payload)?;
+            resolution = super::metadata::exif(tiff)?.resolution;
+            exif = super::exif::read_block(tiff).ok();
+        } else if item.xmp && xmp.is_none() {
+            xmp = container
+                .payload(reference.from, remaining.min(layer_core::PhotoMetadata::MAX_BYTES))
+                .ok()
+                .map(|p| p.into_owned());
+        }
     }
     if properties.geometry.rotation % 2 != 0 {
         resolution = resolution.map(|v| v.swapped());
@@ -550,6 +558,7 @@ fn read_rendition(
     check_cancel(cancel)?;
     Ok(DecodedPhoto {
         source,
+        metadata: super::metadata::collect(exif, xmp, None),
         first_frame: sequence.is_some(),
         primary_image: sequence.is_none()
             && container

@@ -642,3 +642,149 @@ fn native_export_webp_to_a_prechosen_file() {
     w.window.destroy();
     pump(100);
 }
+
+/// A little-endian Exif block: descriptive IFD0 tags, then the Exif and GPS directories.
+fn camera_exif() -> Vec<u8> {
+    type Entry = (u16, u16, Vec<u8>);
+    let ascii = |tag, text: &str| (tag, 2, [text.as_bytes(), &[0]].concat());
+    let rational = |tag, [n, d]: [u32; 2]| (tag, 5, [n.to_le_bytes(), d.to_le_bytes()].concat());
+    let directories: [Vec<Entry>; 3] = [
+        vec![ascii(0x010f, "Capycam"), ascii(0x0110, "C-1"), ascii(0x013b, "Ada Painter"), ascii(0x8298, "(c) 2026 Ada Painter")],
+        vec![rational(0x829a, [1, 250]), ascii(0x9003, "2026:09:01 10:00:00"), ascii(0xa434, "Capy 35mm F1.8")],
+        vec![ascii(0x0001, "N"), ascii(0x0012, "WGS-84")],
+    ];
+    let size = |entries: &[Entry]| {
+        6 + 12 * entries.len() + entries.iter().filter(|e| e.2.len() > 4).map(|e| e.2.len().next_multiple_of(2)).sum::<usize>()
+    };
+    let exif_at = 8 + size(&directories[0]) + 24;
+    let gps_at = exif_at + size(&directories[1]);
+    let mut image = directories[0].clone();
+    image.push((0x8769, 4, (exif_at as u32).to_le_bytes().to_vec()));
+    image.push((0x8825, 4, (gps_at as u32).to_le_bytes().to_vec()));
+    let mut out = b"II\x2a\0\x08\0\0\0".to_vec();
+    for entries in [&image, &directories[1], &directories[2]] {
+        let mut data_at = out.len() + 6 + 12 * entries.len();
+        let mut data = Vec::new();
+        out.extend((entries.len() as u16).to_le_bytes());
+        for (tag, kind, value) in entries.iter() {
+            let width = if *kind == 5 { 8 } else if *kind == 4 { 4 } else { 1 };
+            out.extend(tag.to_le_bytes());
+            out.extend(kind.to_le_bytes());
+            out.extend(((value.len() / width) as u32).to_le_bytes());
+            if value.len() <= 4 {
+                out.extend(value.iter().copied().chain(std::iter::repeat(0)).take(4));
+            } else {
+                out.extend((data_at as u32).to_le_bytes());
+                data.extend(value);
+                if value.len() % 2 == 1 {
+                    data.push(0);
+                }
+                data_at += value.len().next_multiple_of(2);
+            }
+        }
+        out.extend(0u32.to_le_bytes());
+        out.extend(data);
+    }
+    assert_eq!(out.len(), gps_at + size(&directories[2]));
+    out
+}
+
+const CAMERA_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" photoshop:City="Lisbon" exif:GPSLatitude="38,42.5N" xmpMM:InstanceID="xmp.iid:1"><dc:creator><rdf:Seq><rdf:li>Ada Painter</rdf:li></rdf:Seq></dc:creator></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+#[allow(deprecated)]
+fn native_export_keeps_camera_lens_and_copyright_without_location() {
+    glib::set_prgname(Some("capy-canvas-test"));
+    let app = native_test_app("art.capycanvas.ExportMetadata");
+    let output = std::path::Path::new("../../artifacts/photo-m3/export-metadata-native")
+        .join(std::process::id().to_string());
+    std::fs::create_dir_all(&output).unwrap();
+    let output = output.canonicalize().unwrap();
+    let rgb = SourceInterpretation {
+        channels: SourceChannels::Rgb,
+        depth: SampleDepth::U8,
+        profile: ColorProfile::Builtin(RgbSpace::Srgb),
+        profile_assumed: false,
+    };
+    let camera = output.join("camera.jpg");
+    let taken = layer_color::photo::DeliveryMetadata {
+        resolution: Some(layer_core::ImageResolution::ppi(300)),
+        photo: layer_core::PhotoMetadata {
+            exif: Some(camera_exif().into()),
+            xmp: Some(CAMERA_XMP.as_bytes().into()),
+            iptc: None,
+        },
+        policy: layer_ui::ExportMetadata { keep: layer_ui::MetadataKeep::All, remove_location: false },
+    };
+    layer_color::photo::write_jpeg_rows(
+        std::fs::File::create(&camera).unwrap(), [160, 120], &rgb, &taken,
+        layer_color::photo::JpegEncodeOptions::from_memory_budget(92, layer_color::photo::PhotoMemoryBudget::current()),
+        |y, row| { for (x, p) in row.chunks_exact_mut(3).enumerate() { p.copy_from_slice(&[x as u8, y as u8 * 2, 90]); } Ok(()) },
+    )
+    .unwrap();
+    let camera_bytes = std::fs::read(&camera).unwrap();
+    assert!(camera_bytes.windows(6).any(|w| w == b"WGS-84"), "the source photo carries a location");
+    let (project, location) = crate::files::open::read(
+        &camera,
+        layer_ui::DocumentLocation { uri: gtk::gio::File::for_path(&camera).uri().into(), name: "camera.jpg".into() },
+        Default::default(),
+        Default::default(),
+    )
+    .unwrap();
+    assert!(project.document.metadata.exif.is_some() && project.document.metadata.xmp.is_some());
+    let w = Workspace::with_project(&app, Some((project, location)));
+    w.window.present();
+    ready(&w);
+    let before = snapshot(&w);
+    let exported = |format: u32, name: &str| {
+        invoke(&w, CommandId::ExportDocument);
+        combo(&w, "export-format").set_selected(format);
+        pump(100);
+        let dialog = w.window.visible_dialog().unwrap();
+        let widget = |name: &str| find_named(dialog.upcast_ref(), name).unwrap();
+        let metadata = combo(&w, "export-metadata");
+        let labels: Vec<_> = (0..metadata.model().unwrap().n_items())
+            .map(|i| metadata.model().unwrap().item(i).and_downcast::<gtk::StringObject>().unwrap().string().to_string())
+            .collect();
+        assert_eq!(labels, ["All", "Copyright & Contact", "None"]);
+        assert!(metadata.is_visible());
+        assert_eq!(metadata.selected(), 0, "all metadata is kept by default");
+        let remove_location = widget("export-remove-location").downcast::<adw::SwitchRow>().unwrap();
+        assert!(remove_location.is_visible() && remove_location.is_active(), "location is removed by default");
+        assert!(!widget("export-metadata-note").is_visible());
+        metadata.set_selected(1);
+        pump(50);
+        assert!(!remove_location.is_visible(), "Copyright & Contact never keeps a location");
+        metadata.set_selected(0);
+        pump(50);
+        assert!(remove_location.is_visible());
+        for (scheme, theme) in [(adw::ColorScheme::ForceLight, "light"), (adw::ColorScheme::ForceDark, "dark")] {
+            adw::StyleManager::default().set_color_scheme(scheme);
+            pump(200);
+            capture_ui(&w, &output, &format!("{name}-options-{theme}.png"));
+        }
+        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
+        let file = output.join(name);
+        crate::files::choose_next_save(file.clone());
+        response(&w, "export");
+        finish(&w);
+        std::fs::read(&file).unwrap()
+    };
+    for (format, name) in [(2, "copy.jpg"), (3, "copy.webp")] {
+        let bytes = exported(format, name);
+        assert!(!bytes.windows(6).any(|w| w == b"WGS-84"), "{name}: no GPS");
+        assert!(!bytes.windows(6).any(|w| w == b"Lisbon"), "{name}: no place name");
+        let photo = layer_color::photo::read_photo_detailed(std::io::Cursor::new(&bytes), Default::default()).unwrap();
+        assert_eq!(photo.source.extent, [160, 120]);
+        let exif = photo.metadata.exif.expect(name);
+        for kept in [b"Capycam".as_slice(), b"C-1", b"Capy 35mm F1.8", b"Ada Painter", b"(c) 2026 Ada Painter", b"2026:09:01 10:00:00"] {
+            assert!(exif.windows(kept.len()).any(|w| w == kept), "{name}: {}", String::from_utf8_lossy(kept));
+        }
+        let xmp = String::from_utf8(photo.metadata.xmp.expect(name).to_vec()).unwrap();
+        assert!(xmp.contains("Ada Painter") && !xmp.contains("GPSLatitude") && !xmp.contains("InstanceID"), "{name}: {xmp}");
+    }
+    assert_eq!(snapshot(&w), before, "exporting never edits the master");
+    w.window.destroy();
+    pump(100);
+}

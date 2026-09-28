@@ -104,7 +104,7 @@ pub extern "C" fn portable_avif_export() -> u32 {
             &guide,
             GainMapFormat::Avif,
             quality,
-            None,
+            &Default::default(),
             None,
             false,
             &cancel,

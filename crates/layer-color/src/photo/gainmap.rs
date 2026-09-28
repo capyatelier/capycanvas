@@ -197,7 +197,7 @@ pub fn write_gainmap_rows(
     guide: &layer_core::color::hdr::LocalToneGuide,
     format: GainMapFormat,
     options: impl Into<GainMapEncodeOptions>,
-    resolution: Option<layer_core::ImageResolution>,
+    metadata: &super::DeliveryMetadata,
     matte: Option<[f32; 3]>,
     clip: bool,
     cancelled: &AtomicBool,
@@ -205,9 +205,9 @@ pub fn write_gainmap_rows(
 ) -> Result<crate::OutputStatistics, String> {
     let options = options.into();
     let (bytes, stats) = if format == GainMapFormat::Jpeg {
-        jpeg::encode(extent, space, rendition, guide, options.quality, resolution, matte, clip, options.memory, cancelled, read)
+        jpeg::encode(extent, space, rendition, guide, options.quality, metadata, matte, clip, options.memory, cancelled, read)
     } else {
-        super::avif_io::encode(extent, space, rendition, guide, options.quality, resolution, matte,
+        super::avif_io::encode(extent, space, rendition, guide, options.quality, metadata, matte,
             clip, options.memory.encode_bytes, cancelled, read)
     }?;
     for chunk in bytes.chunks(65536) {
@@ -277,7 +277,7 @@ mod tests {
             let mut reads = 0;
             let result = write_gainmap_rows(
                 Vec::new(), extent, RgbSpace::Srgb, Default::default(), &guide, format,
-                GainMapEncodeOptions::from_memory_budget(90, memory), None, None, false,
+                GainMapEncodeOptions::from_memory_budget(90, memory), &Default::default(), None, false,
                 &cancel, |_, row| { reads += 1; row.fill([2., 0.5, 0.25, 1.]); Ok(()) },
             );
             assert!(result.unwrap_err().contains("memory budget"));
@@ -317,7 +317,7 @@ mod tests {
         let read = |y, row: &mut [[f32; 4]]| { for (x,p) in row.iter_mut().enumerate() { *p = pixel(x as u32,y); } Ok(()) };
         let mut encoded = Vec::new();
         write_gainmap_rows(&mut encoded, extent, RgbSpace::Srgb, SdrRendition::default(),
-            &test_guide(extent, read), GainMapFormat::Avif, quality, Some(layer_core::ImageResolution::ppi(300)), None, false, &cancel, read).unwrap();
+            &test_guide(extent, read), GainMapFormat::Avif, quality, &super::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))), None, false, &cancel, read).unwrap();
         let encode_time = started.elapsed();
         let encoded_bytes = encoded.len();
         if let Some(directory) = std::env::var_os("LAYER_AVIF_OUTPUT") {
@@ -475,7 +475,7 @@ mod tests {
                         &guide,
                         format,
                         90,
-                        None,
+                        &Default::default(),
                         None,
                         false,
                         &cancel,
@@ -551,7 +551,7 @@ mod tests {
                 &test_guide(extent, |y, r| row(y, r, transparent)),
                 format,
                 100,
-                Some(layer_core::ImageResolution::ppi(300)),
+                &crate::photo::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))),
                 None,
                 false,
                 &AtomicBool::new(false),

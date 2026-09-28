@@ -53,6 +53,8 @@ parameters and metadata and remain editable after reopening.
 
 The project also retains dimensions, layer/group order and properties, source
 images, masks, selection, rulers, references, allocators and the edit target.
+A document opened from a photo keeps that photo's descriptive metadata (see
+[Photo metadata](#photo-metadata)).
 The canvas is a window over each layer's local extent. A layer may store the
 extent a canvas crop left behind (`properties.extent`), so tiles outside the canvas
 are saved and reappear when the canvas grows; they count toward the tile limit.
@@ -62,12 +64,13 @@ live edge settings are committed because they affect composition and later paint
 
 ## Container and validation
 
-The header is the twelve bytes `CAPYRASTER\x09\0`, followed by a little-endian
+The header is the twelve bytes `CAPYRASTER\x0a\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
 blobs and image roles/interpretations. Payload offsets are relative to the payload start.
 Readers accept version 8 and every later version, including recovery files.
 Version 9 adds the optional stored layer extent; a version 8 file reads with none.
+Version 10 adds photo metadata payloads; earlier files read with none.
 Version 8 fixes the tile encoding to one lossless LZ4 block per tile, without a
 frame header or prepended size. The pixel descriptor determines the exact decoded
 size, bounded to 1 MiB; the library's compression bound caps stored bytes. Painted
@@ -99,6 +102,26 @@ Default decoded limits are 64 MiB metadata, 512 MiB sources, 1 GiB raster data,
 16384 tile instances, 32768 pixels per axis and 4096 layers. Repeated references
 to one compressed blob still count as separate physical tile instances. Device
 limits and shader/resource preparation remain separate checks during opening.
+
+## Photo metadata
+
+Opening a photo reads its descriptive metadata into the document:
+
+- **Exif:** IFD0's description, make, model, software, date, artist and
+  copyright, the Exif directory (camera settings, lens, dates) and the GPS
+  directory. It is stored as one little-endian TIFF block. Orientation and
+  print density are applied on open, and maker notes, interoperability data,
+  thumbnails and stale pixel dimensions are left out.
+- **XMP:** the packet from JPEG APP1, PNG iTXt, TIFF tag 700, WebP, and AVIF or
+  HEIF `mime` items. An unreadable packet is left out.
+- **IPTC-IIM:** the records from JPEG APP13 or TIFF tag 33723. Export does not
+  write them.
+
+The three blocks share a 64 MiB allowance; a block that does not fit is left
+out, and none of them stops a photo from opening. Imports, pastes and new
+drawings never change a document's metadata. The manifest's optional
+`metadata` index records each block's offset, size and SHA-256 digest; the
+blocks follow the source profiles in the payload and are verified on reading.
 
 ## Submission, recovery and durability
 

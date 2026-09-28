@@ -6,9 +6,10 @@ pub(super) fn read_jpeg_with_cancel(
     input: impl Read,
     limits: DecodeLimits,
     cancelled: &std::sync::atomic::AtomicBool,
-) -> Result<SourceImage, String> {
+) -> Result<(SourceImage, layer_core::PhotoMetadata), String> {
     let bytes = jpeg_codec::read_bounded(input, limits.codec_bytes)?;
-    let metadata = super::jpeg_markers::read_source(&bytes)?;
+    let mut metadata = super::jpeg_markers::read_source(&bytes)?;
+    let photo = std::mem::take(&mut metadata.photo);
     let source = if metadata.gain_map {
         super::gainmap::read_jpeg(&bytes, bytes.capacity(), limits, cancelled)?
     } else {
@@ -43,12 +44,13 @@ pub(super) fn read_jpeg_with_cancel(
         }
         builder.finish()?
     };
-    super::orientation::normalize(
+    let source = super::orientation::normalize(
         source,
         metadata.resolution,
         metadata.orientation.unwrap_or(1),
         limits.source_bytes,
-    )
+    )?;
+    Ok((source, photo))
 }
 
 /// JPEG output admission settings. Hosts can pass their current process memory
@@ -74,7 +76,7 @@ pub fn write_jpeg(output: impl Write, source: &SourceImage, quality: u8) -> Resu
         output,
         source.extent,
         &source.interpretation,
-        source.resolution,
+        &DeliveryMetadata::resolution(source.resolution),
         JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::current()),
         |y, row| rows.read(y, row),
     )
@@ -88,7 +90,7 @@ pub fn write_jpeg_rows(
     mut output: impl Write,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
-    resolution: Option<layer_core::ImageResolution>,
+    metadata: &DeliveryMetadata,
     options: JpegEncodeOptions,
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -109,16 +111,15 @@ pub fn write_jpeg_rows(
         _ => return Err("Unsupported JPEG color encoding".into()),
     };
     let icc = delivery_icc(interpretation)?;
-    let exif = resolution
-        .map(|resolution| {
-            resolution.jfif_density()?;
-            super::metadata::exif_output(resolution)
-        })
-        .transpose()?;
+    if let Some(resolution) = metadata.resolution {
+        resolution.jfif_density()?;
+    }
+    let exif = metadata.exif(extent)?;
+    let xmp = metadata.xmp()?;
     let len = jpeg_codec::admit(
         extent,
         interpretation.channels.count(),
-        icc.len() + exif.as_ref().map_or(0, Vec::len),
+        icc.len() + exif.as_ref().map_or(0, Vec::len) + xmp.as_ref().map_or(0, Vec::len),
         options.codec_bytes,
     )?;
     let mut pixels = Vec::new();
@@ -140,8 +141,8 @@ pub fn write_jpeg_rows(
         format,
         options.quality,
         &icc,
-        exif.as_deref(),
-        resolution,
+        jpeg_codec::Markers { exif: exif.as_deref(), xmp: xmp.as_deref() },
+        metadata.resolution,
     )?;
     output.write_all(&bytes).map_err(err)
 }

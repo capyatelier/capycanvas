@@ -223,10 +223,10 @@ impl ExportTask {
         let recipe = self.recipe.clone();
         let document = self.document();
         let extent = recipe.output_extent([document.width, document.height])?;
-        let resolution = recipe.output_resolution(document.resolution)?;
+        let metadata = recipe.delivery_metadata(document)?;
         let renderer = self.renderer(control)?;
         renderer.set_output_extent(extent)?;
-        renderer.set_output_resolution(resolution)?;
+        renderer.set_output_metadata(metadata)?;
         let mut output = BufWriter::new(stream);
         let statistics = write_recipe(renderer, &mut output, &recipe)?;
         output.flush().map_err(|e| e.to_string())?;
@@ -326,6 +326,14 @@ mod tests {
     fn webp_export_writes_lossless_rgba_and_refuses_encoder_limits() {
         let mut document = layer_core::Document::new("Export", 8, 6);
         document.resolution = Some(layer_core::ImageResolution::ppi(240));
+        let artist_and_gps = [
+            b"II\x2a\0\x08\0\0\0\x02\0".as_slice(),
+            b"\x3b\x01\x02\0\x04\0\0\0Ada\0",
+            b"\x25\x88\x04\0\x01\0\0\0\x26\0\0\0\0\0\0\0",
+            b"\x01\0\x01\0\x02\0\x02\0\0\0N\0\0\0\0\0\0\0",
+        ]
+        .concat();
+        document.metadata.exif = Some(artist_and_gps.into());
         for paper in document.layers.iter_mut().filter(|l| l.kind == layer_core::LayerKind::Background) {
             paper.visible = false;
         }
@@ -355,11 +363,20 @@ mod tests {
         assert_eq!(task.details().unwrap()["format_name"], "WebP · lossless");
         let bytes = written(&mut task).unwrap();
         assert_eq!(&bytes[8..12], b"WEBP");
-        let photo = layer_color::photo::read_photo(Cursor::new(bytes), Default::default()).unwrap();
+        let photo = layer_color::photo::read_photo(Cursor::new(&bytes), Default::default()).unwrap();
         assert_eq!(photo.extent, [8, 6]);
         assert_eq!(photo.interpretation.channels, SourceChannels::Rgba);
         assert_eq!(photo.interpretation.depth, SampleDepth::U8);
         assert_eq!(photo.resolution, Some(layer_core::ImageResolution::ppi(240)));
+        let kept = layer_color::photo::read_photo_detailed(Cursor::new(&bytes), Default::default()).unwrap().metadata;
+        let exif = kept.exif.expect("the artist is kept");
+        assert!(exif.windows(4).any(|w| w == b"Ada\0"));
+        assert!(!exif.windows(2).any(|w| w == b"N\0"), "location is removed by default");
+        let none = ExportRecipe { metadata: layer_ui::ExportMetadata { keep: layer_ui::MetadataKeep::None, remove_location: true }, ..webp.clone() };
+        task.configure(none).unwrap();
+        let stripped = written(&mut task).unwrap();
+        assert!(layer_color::photo::read_photo_detailed(Cursor::new(stripped), Default::default()).unwrap().metadata.is_empty());
+        task.configure(webp.clone()).unwrap();
         let mut rows = photo.rows();
         let mut row = vec![0; photo.row_bytes()];
         for y in 0..6 {

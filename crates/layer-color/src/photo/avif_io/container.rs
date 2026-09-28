@@ -162,6 +162,8 @@ pub(super) struct Item {
     pub kind: [u8; 4],
     pub hidden: bool,
     pub protected: bool,
+    /// A `mime` item holding an XMP packet.
+    pub xmp: bool,
 }
 #[derive(Debug)]
 struct Location {
@@ -385,15 +387,18 @@ impl<'a> Container<'a> {
             }
             let id = if v == 2 { r.u16()? as u32 } else { r.u32()? };
             let protected = r.u16()? != 0;
-            let kind = r.take(4)?.try_into().unwrap();
+            let kind: [u8; 4] = r.take(4)?.try_into().unwrap();
             if !r.data.contains(&0) {
                 return Err("Invalid AVIF item name".into());
             }
+            let xmp = &kind == b"mime"
+                && r.data.split(|b| *b == 0).nth(1) == Some(super::mux::XMP_TYPE.as_bytes());
             self.items.push(Item {
                 id,
                 kind,
                 hidden: flags & 1 != 0,
                 protected,
+                xmp,
             });
         }
         if self.items.len() != count {

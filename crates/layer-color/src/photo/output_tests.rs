@@ -14,9 +14,9 @@ fn invalid_output_is_rejected_before_writing_and_provider_failure_stops_rows() {
             let mut output = Cursor::new(Vec::new());
             let provider = |_, _: &mut [u8]| panic!("invalid output called provider");
             let result = if tiff {
-                write_tiff_rows(&mut output, extent, &interpretation, None, provider)
+                write_tiff_rows(&mut output, extent, &interpretation, &Default::default(), provider)
             } else {
-                write_png_rows(&mut output, extent, &interpretation, None, provider)
+                write_png_rows(&mut output, extent, &interpretation, &Default::default(), provider)
             };
             assert!(result.is_err());
             assert!(output.into_inner().is_empty());
@@ -32,9 +32,9 @@ fn invalid_output_is_rejected_before_writing_and_provider_failure_stops_rows() {
         };
         let mut output = Cursor::new(Vec::new());
         let result = if tiff {
-            write_tiff_rows(&mut output, [513, 257], &interpretation, None, provider)
+            write_tiff_rows(&mut output, [513, 257], &interpretation, &Default::default(), provider)
         } else {
-            write_png_rows(&mut output, [513, 257], &interpretation, None, provider)
+            write_png_rows(&mut output, [513, 257], &interpretation, &Default::default(), provider)
         };
         assert_eq!(result.unwrap_err(), "cancelled row provider");
         assert_eq!(calls, 4);
@@ -80,7 +80,7 @@ fn lossless_webp_round_trips_pixels_alpha_profile_and_resolution() {
             .map(|i| (i * 37 % 251 + i / row_bytes * 3) as u8)
             .collect();
         let mut output = Vec::new();
-        write_webp_rows(&mut output, extent, &interpretation, Some(resolution), webp_options(1 << 30), |y, row| {
+        write_webp_rows(&mut output, extent, &interpretation, &crate::photo::DeliveryMetadata::resolution(Some(resolution)), webp_options(1 << 30), |y, row| {
             row.copy_from_slice(&expected[y as usize * row_bytes..][..row_bytes]);
             Ok(())
         })
@@ -104,7 +104,7 @@ fn lossless_webp_round_trips_pixels_alpha_profile_and_resolution() {
         assert_eq!(photo.source.resolution, Some(resolution));
         assert_eq!(super::test_support::rows(&photo.source).concat(), expected);
         let mut bare = Vec::new();
-        write_webp_rows(&mut bare, [1, 1], &interpretation, None, webp_options(1 << 30), |_, row| {
+        write_webp_rows(&mut bare, [1, 1], &interpretation, &Default::default(), webp_options(1 << 30), |_, row| {
             row.fill(200);
             Ok(())
         })
@@ -125,7 +125,7 @@ fn webp_refuses_oversize_unsupported_over_budget_and_cancelled_output() {
         ([64, 64], rgba.clone(), 1024, "memory budget"),
     ] {
         let mut output = Vec::new();
-        let error = write_webp_rows(&mut output, extent, &interpretation, None, webp_options(available), |_, _| {
+        let error = write_webp_rows(&mut output, extent, &interpretation, &Default::default(), webp_options(available), |_, _| {
             panic!("a refused export requested pixels")
         })
         .unwrap_err();
@@ -134,7 +134,7 @@ fn webp_refuses_oversize_unsupported_over_budget_and_cancelled_output() {
     }
     let admitted = 64 * 64 * 12 + profile_bytes(&rgba.profile).unwrap().len();
     let fits = |available: usize| {
-        write_webp_rows(Vec::new(), [64, 64], &rgba, None, WebpEncodeOptions { codec_bytes: available }, |_, row| {
+        write_webp_rows(Vec::new(), [64, 64], &rgba, &Default::default(), WebpEncodeOptions { codec_bytes: available }, |_, row| {
             row.fill(9);
             Ok(())
         })
@@ -143,7 +143,7 @@ fn webp_refuses_oversize_unsupported_over_budget_and_cancelled_output() {
     assert!(fits(admitted - 1).unwrap_err().contains("memory budget"));
     let mut calls = 0;
     let mut output = Vec::new();
-    let error = write_webp_rows(&mut output, [513, 257], &rgba, None, webp_options(1 << 30), |y, row| {
+    let error = write_webp_rows(&mut output, [513, 257], &rgba, &Default::default(), webp_options(1 << 30), |y, row| {
         calls += 1;
         if y == 3 {
             return Err("Export cancelled".into());

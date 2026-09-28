@@ -148,7 +148,7 @@ fn unsupported_tiff_layouts_and_classic_output_overflow_fail_explicitly() {
         &mut output,
         [32768, 32768],
         &interpretation,
-        None,
+        &Default::default(),
         |_, _| panic!("overflow requested pixels"),
     )
     .unwrap_err();

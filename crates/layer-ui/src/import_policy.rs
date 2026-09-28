@@ -49,9 +49,14 @@ impl PhotoOpenPolicy {
     pub fn needs_interpretation(self, source: &SourceImage) -> bool {
         source.interpretation.profile_assumed && self.missing_profile == MissingProfilePolicy::Ask
     }
-    pub fn photo_project(self, source: SourceImage, name: &str) -> Result<Project, String> {
+    pub fn photo_project(
+        self,
+        source: SourceImage,
+        metadata: layer_core::PhotoMetadata,
+        name: &str,
+    ) -> Result<Project, String> {
         let depth = self.editing_depth(source.interpretation.depth);
-        layer_color::photo_project(source, name, depth)
+        layer_color::photo_project(source, metadata, name, depth)
     }
 }
 pub struct ImportedDocument {
@@ -82,8 +87,13 @@ impl ImportedDocument {
             .ok_or("Photo source unavailable")?;
         let source = layer.source.as_ref().ok_or("Photo source unavailable")?;
         let source = layer_color::assume_source_profile((**source).clone(), profile)?;
-        self.project =
-            layer_color::photo_project(source, &layer.name, self.project.document.color.depth)?;
+        let metadata = self.project.document.metadata.clone();
+        self.project = layer_color::photo_project(
+            source,
+            metadata,
+            &layer.name,
+            self.project.document.color.depth,
+        )?;
         Ok(())
     }
 }
@@ -113,7 +123,7 @@ pub fn read_import(
             )?;
             let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
             let name = photo.display_name(stem);
-            policy.photo_project(photo.source, &name)?
+            policy.photo_project(photo.source, photo.metadata, &name)?
         }
     };
     if cancelled.load(std::sync::atomic::Ordering::Acquire) {
@@ -288,7 +298,7 @@ mod tests {
             missing_profile: MissingProfilePolicy::Ask,
         };
         let mut photo = ImportedDocument {
-            project: policy.photo_project(source.clone(), "photo").unwrap(),
+            project: policy.photo_project(source.clone(), Default::default(), "photo").unwrap(),
             source: ImportSource::Photo,
         };
         assert!(photo.interpretation_required(policy).is_some());
@@ -384,6 +394,31 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn an_opened_photo_keeps_its_metadata_through_interpretation_and_saving() {
+        let artist = [b"II\x2a\0\x08\0\0\0\x01\0\x3b\x01\x02\0\x04\0\0\0Ada\0".as_slice(), &[0; 4]].concat();
+        let delivery = layer_color::photo::DeliveryMetadata {
+            photo: layer_core::PhotoMetadata { exif: Some(artist.into()), ..Default::default() },
+            ..Default::default()
+        };
+        let source = source();
+        let mut png = Vec::new();
+        let mut rows = source.rows();
+        layer_color::photo::write_png_rows(&mut png, source.extent, &source.interpretation, &delivery, |y, row| rows.read(y, row)).unwrap();
+        let policy = PhotoOpenPolicy { promote_to_16: false, missing_profile: MissingProfilePolicy::Ask };
+        let open = |intent| read_import(std::io::Cursor::new(&png), intent, policy, "photo.png", Default::default(), Default::default(), &Default::default());
+        let mut photo = open(ImportIntent::Open).unwrap();
+        let kept = photo.project.document.metadata.clone();
+        assert!(kept.exif.as_ref().unwrap().windows(4).any(|w| w == b"Ada\0"));
+        photo.interpret(ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
+        assert_eq!(photo.project.document.metadata, kept, "choosing an interpretation keeps the metadata");
+        let mut native = Vec::new();
+        photo.project.write(&mut native).unwrap();
+        assert_eq!(Project::read(native.as_slice(), Default::default()).unwrap().document.metadata, kept);
+        let mut batch = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, Default::default());
+        batch.read(std::io::Cursor::new(&png), "placed", &Default::default()).unwrap();
+        assert_eq!(batch.take_sources(false).unwrap().len(), 1, "imports carry only their pixels");
     }
     #[test]
     fn batch_budget_interpretation_and_cancellation_never_publish_a_partial_batch() {

@@ -1,12 +1,27 @@
+use super::exif::Entry;
 use super::*;
+use std::borrow::Cow;
 use tiff::{
     ColorType,
     decoder::{ChunkType, DecodingResult},
-    encoder::colortype,
-    tags::Tag,
+    encoder::{TiffValue, colortype},
+    tags::{Tag, Type},
 };
 
-pub(super) fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<SourceImage, String> {
+/// The descriptive metadata of a TIFF file's first directory.
+fn photo_metadata(input: &mut (impl Read + Seek)) -> Result<layer_core::PhotoMetadata, String> {
+    let origin = input.stream_position().map_err(err)?;
+    let end = input.seek(std::io::SeekFrom::End(0)).map_err(err)?;
+    let found = super::exif::read(input, origin, end - origin).ok();
+    input.seek(std::io::SeekFrom::Start(origin)).map_err(err)?;
+    Ok(super::metadata::collect(found, None, None))
+}
+
+pub(super) fn read_tiff(
+    mut input: impl Read + Seek,
+    limits: DecodeLimits,
+) -> Result<(SourceImage, layer_core::PhotoMetadata), String> {
+    let photo = photo_metadata(&mut input)?;
     let mut codec_limits = tiff::decoder::Limits::default();
     codec_limits.decoding_buffer_size = limits.codec_bytes;
     codec_limits.intermediate_buffer_size = limits.codec_bytes;
@@ -149,7 +164,47 @@ pub(super) fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result
             builder.push_row(row)?;
         }
     }
-    super::orientation::normalize(builder.finish()?, resolution, orientation, limits.source_bytes)
+    let source = super::orientation::normalize(builder.finish()?, resolution, orientation, limits.source_bytes)?;
+    Ok((source, photo))
+}
+
+/// A directory entry written with its own TIFF type.
+macro_rules! entry_values {
+    ($($name:ident = $ty:ident, $len:literal;)*) => {
+        $(
+            struct $name<'a>(&'a Entry);
+            impl TiffValue for $name<'_> {
+                const BYTE_LEN: u8 = $len;
+                const FIELD_TYPE: Type = Type::$ty;
+                fn count(&self) -> usize {
+                    self.0.count as usize
+                }
+                fn bytes(&self) -> usize {
+                    self.0.value.len()
+                }
+                fn data(&self) -> Cow<'_, [u8]> {
+                    Cow::Borrowed(&self.0.value)
+                }
+            }
+        )*
+        fn write_entry<W: Write + Seek>(
+            directory: &mut tiff::encoder::DirectoryEncoder<'_, W, tiff::encoder::TiffKindStandard>,
+            entry: &Entry,
+        ) -> Result<(), String> {
+            let tag = Tag::from_u16_exhaustive(entry.tag);
+            match entry.kind {
+                $(k if k == Type::$ty.to_u16() => directory.write_tag(tag, $name(entry)),)*
+                _ => return Err("Unsupported Exif entry type".into()),
+            }
+            .map_err(err)
+        }
+    };
+}
+entry_values! {
+    Bytes = BYTE, 1; Ascii = ASCII, 1; Shorts = SHORT, 2; Longs = LONG, 4;
+    Rationals = RATIONAL, 8; SignedBytes = SBYTE, 1; Undefined = UNDEFINED, 1;
+    SignedShorts = SSHORT, 2; SignedLongs = SLONG, 4; SignedRationals = SRATIONAL, 8;
+    Floats = FLOAT, 4; Doubles = DOUBLE, 8;
 }
 
 // The pinned TIFF encoder exposes RGB alpha types but no gray-alpha types.
@@ -186,7 +241,7 @@ pub fn write_tiff(output: impl Write + Seek, source: &SourceImage) -> Result<(),
         output,
         source.extent,
         &source.interpretation,
-        source.resolution,
+        &DeliveryMetadata::resolution(source.resolution),
         |y, row| rows.read(y, row),
     )
 }
@@ -197,21 +252,44 @@ pub fn write_tiff_rows(
     mut output: impl Write + Seek,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
-    resolution: Option<layer_core::ImageResolution>,
+    metadata: &DeliveryMetadata,
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
     let icc = delivery_icc(interpretation)?;
-    let density = resolution
+    let density = metadata
+        .resolution
         .map(layer_core::ImageResolution::tiff_density)
         .transpose()?;
+    let directories = metadata.directories(extent)?;
+    let xmp = metadata.xmp()?;
+    let metadata_bytes = [&directories.image, &directories.exif, &directories.gps]
+        .into_iter()
+        .flatten()
+        .map(|e| e.value.len() + 12)
+        .sum::<usize>()
+        + xmp.as_ref().map_or(0, Vec::len);
     // Classic TIFF uses 32-bit offsets. Bound uncompressed payload, per-row
     // strip tables/alignment, ICC and fixed tags before requesting any pixels.
-    let bound = u64::from(extent[1]) * (row_bytes as u64 + 16) + icc.len() as u64 + 4096;
+    let bound = u64::from(extent[1]) * (row_bytes as u64 + 16)
+        + icc.len() as u64
+        + metadata_bytes as u64
+        + 4096;
     if bound > u64::from(u32::MAX) {
         return Err("This image exceeds classic TIFF's 4 GiB file limit. Choose PNG or smaller output dimensions; BigTIFF export is not supported.".into());
     }
     let mut encoder = tiff::encoder::TiffEncoder::new(&mut output).map_err(err)?;
+    let mut pointers = Vec::new();
+    for (tag, entries) in [(Tag::ExifDirectory, &directories.exif), (Tag::GpsDirectory, &directories.gps)] {
+        if entries.is_empty() {
+            continue;
+        }
+        let mut directory = encoder.extra_directory().map_err(err)?;
+        for entry in entries {
+            write_entry(&mut directory, entry)?;
+        }
+        pointers.push((tag, directory.finish_with_offsets().map_err(err)?.offset));
+    }
     let mut codes = Vec::<u16>::new();
     macro_rules! write {
         ($ty:ty, $u16:tt) => {{
@@ -237,6 +315,15 @@ pub fn write_tiff_rows(
                 .encoder()
                 .write_tag(Tag::IccProfile, icc.as_slice())
                 .map_err(err)?;
+            for entry in &directories.image {
+                write_entry(image.encoder(), entry)?;
+            }
+            for (tag, offset) in &pointers {
+                image.encoder().write_tag(tag.clone(), *offset).map_err(err)?;
+            }
+            if let Some(xmp) = &xmp {
+                image.encoder().write_tag(Tag::Unknown(700), xmp.as_slice()).map_err(err)?;
+            }
             if interpretation.channels.has_alpha() {
                 image
                     .encoder()

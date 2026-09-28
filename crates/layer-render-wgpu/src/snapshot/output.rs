@@ -15,7 +15,7 @@ impl SnapshotRenderer {
             .sdr_rendition
             .ok_or("Gain-map delivery requires an HDR document")?;
         let control = self.control.clone();
-        let resolution = self.output_resolution;
+        let metadata = self.output_metadata.clone();
         let guide = self.local_tone_guide()?;
         self.hdr_rows(|extent, space, read| {
             layer_color::photo::write_gainmap_rows(
@@ -26,7 +26,7 @@ impl SnapshotRenderer {
                 &guide,
                 format,
                 quality,
-                resolution,
+                &metadata,
                 matte,
                 clip,
                 control.cancellation_flag(),
@@ -35,7 +35,7 @@ impl SnapshotRenderer {
         })
     }
     pub fn write_exr(&mut self, output: impl std::io::Write + std::io::Seek) -> Result<layer_color::OutputStatistics, String> {
-        let resolution = self.output_resolution;
+        let resolution = self.output_metadata.resolution;
         self.hdr_rows(|extent, space, read| layer_color::photo::write_exr_rows(output, extent, space, resolution, read).map(|_| Default::default()))?;
         Ok(Default::default())
     }
@@ -44,9 +44,9 @@ impl SnapshotRenderer {
         output: impl std::io::Write,
         clip: bool,
     ) -> Result<layer_color::OutputStatistics, String> {
-        let resolution = self.output_resolution;
+        let metadata = self.output_metadata.clone();
         self.hdr_rows(|extent, space, read| {
-            layer_color::photo::write_hdr_png_rows(output, extent, space, resolution, clip, read)
+            layer_color::photo::write_hdr_png_rows(output, extent, space, &metadata, clip, read)
         })
     }
 
@@ -126,14 +126,16 @@ impl SnapshotRenderer {
         })
     }
 
-    pub fn set_output_resolution(
+    /// The print density and photo metadata the writers embed.
+    pub fn set_output_metadata(
         &mut self,
-        resolution: Option<layer_core::ImageResolution>,
+        metadata: layer_color::photo::DeliveryMetadata,
     ) -> Result<(), String> {
-        if let Some(resolution) = resolution {
+        if let Some(resolution) = metadata.resolution {
             resolution.validate()?;
         }
-        self.output_resolution = resolution;
+        metadata.photo.validate()?;
+        self.output_metadata = metadata;
         Ok(())
     }
     pub fn set_output_extent(&mut self, extent: [u32; 2]) -> Result<(), String> {
@@ -152,9 +154,9 @@ impl SnapshotRenderer {
         options: layer_core::color::OutputEncoding,
         matte: Option<[f32; 3]>,
     ) -> Result<layer_color::OutputStatistics, String> {
-        let resolution = self.output_resolution;
+        let metadata = self.output_metadata.clone();
         self.write_rows(target, options, matte, |extent, target, row| {
-            layer_color::photo::write_png_rows(output, extent, target, resolution, row)
+            layer_color::photo::write_png_rows(output, extent, target, &metadata, row)
         })
     }
     pub fn write_tiff(
@@ -164,9 +166,9 @@ impl SnapshotRenderer {
         options: layer_core::color::OutputEncoding,
         matte: Option<[f32; 3]>,
     ) -> Result<layer_color::OutputStatistics, String> {
-        let resolution = self.output_resolution;
+        let metadata = self.output_metadata.clone();
         self.write_rows(target, options, matte, |extent, target, row| {
-            layer_color::photo::write_tiff_rows(output, extent, target, resolution, row)
+            layer_color::photo::write_tiff_rows(output, extent, target, &metadata, row)
         })
     }
     pub fn write_jpeg(
@@ -177,13 +179,13 @@ impl SnapshotRenderer {
         matte: [f32; 3],
         quality: u8,
     ) -> Result<layer_color::OutputStatistics, String> {
-        let resolution = self.output_resolution;
+        let metadata = self.output_metadata.clone();
         self.write_rows(target, options, Some(matte), |extent, target, row| {
             layer_color::photo::write_jpeg_rows(
                 output,
                 extent,
                 target,
-                resolution,
+                &metadata,
                 layer_color::photo::JpegEncodeOptions::from_memory_budget(
                     quality,
                     layer_color::photo::PhotoMemoryBudget::current(),
@@ -199,13 +201,13 @@ impl SnapshotRenderer {
         options: layer_core::color::OutputEncoding,
         matte: Option<[f32; 3]>,
     ) -> Result<layer_color::OutputStatistics, String> {
-        let resolution = self.output_resolution;
+        let metadata = self.output_metadata.clone();
         self.write_rows(target, options, matte, |extent, target, row| {
             layer_color::photo::write_webp_rows(
                 output,
                 extent,
                 target,
-                resolution,
+                &metadata,
                 layer_color::photo::WebpEncodeOptions::from_memory_budget(
                     layer_color::photo::PhotoMemoryBudget::current(),
                 ),

@@ -117,7 +117,7 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
                 &mut bytes,
                 source.extent,
                 &target,
-                None,
+                &Default::default(),
                 JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::current()),
                 |_, _| panic!("invalid output requested pixels")
             )
@@ -131,7 +131,7 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
         &mut bytes,
         source.extent,
         &source.interpretation,
-        None,
+        &Default::default(),
         JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::current()),
         |y, row| {
             assert_eq!(y, calls);
@@ -175,7 +175,7 @@ fn baseline_60mp_jpeg_checks_full_image_memory_before_decoding() {
         &mut bytes,
         extent,
         &interpretation,
-        None,
+        &Default::default(),
         JpegEncodeOptions {
             quality: 100,
             codec_bytes: 2 * 1024 * 1024 * 1024,
@@ -333,7 +333,7 @@ fn export_budget_rejects_before_requesting_rows_or_writing_output() {
         &mut output,
         source.extent,
         &source.interpretation,
-        None,
+        &Default::default(),
         options,
         |_, _| panic!("over-budget export requested pixels"),
     )

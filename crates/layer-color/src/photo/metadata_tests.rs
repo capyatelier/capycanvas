@@ -78,7 +78,7 @@ fn png_density_precedes_exif_and_orientation_swaps_density_axes() {
         unit: ResolutionUnit::Inch,
         density: [[300, 1], [150, 1]],
     };
-    let mut exif = super::metadata::exif_output(density).unwrap();
+    let mut exif = super::test_support::exif_output(density).unwrap();
     exif[24..26].copy_from_slice(&6u16.to_le_bytes());
     let mut info = png::Info::with_size(3, 2);
     info.color_type = png::ColorType::Rgb;

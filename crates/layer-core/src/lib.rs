@@ -14,7 +14,7 @@ pub use cancellable::Cancellable;
 pub mod color;
 pub mod binary_payload;
 mod image_metadata;
-pub use image_metadata::{ImageResolution, ResolutionUnit};
+pub use image_metadata::{ImageResolution, PhotoMetadata, ResolutionUnit};
 mod contact;
 pub use contact::BrushContact;
 mod contact_presets;
@@ -1277,6 +1277,9 @@ pub struct Document {
     /// by the project source/profile index. Temporary view toggles live in UI.
     #[serde(skip)]
     pub proof: Option<color::ProofRecipe>,
+    /// Photo metadata of an opened photo, saved as project payloads.
+    #[serde(skip)]
+    pub metadata: PhotoMetadata,
     /// Authored delivery mapping. Display capability and preview toggles are view state.
     pub sdr_rendition: color::hdr::SdrRendition,
     /// Front-to-back display order.
@@ -1320,6 +1323,7 @@ impl Document {
             color: color::DocumentColor::default(),
             resolution: None,
             proof: None,
+            metadata: PhotoMetadata::default(),
             sdr_rendition: Default::default(),
             layers: vec![
                 Layer::paint(paint_id, "Current ink"),

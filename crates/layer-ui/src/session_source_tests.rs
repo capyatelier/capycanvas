@@ -49,8 +49,10 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     let source = |extent| Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [255; 4]));
     let first = source([600, 400]);
     let second = source([100, 300]);
+    let mut photo = Document::new("batch", 200, 150);
+    photo.metadata.xmp = Some(b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".as_slice().into());
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("batch", 200, 150), [800, 600], Platform::Gtk).unwrap();
+        photo, [800, 600], Platform::Gtk).unwrap();
     session.layer_interaction.selected = std::collections::BTreeSet::from([LayerId(1), LayerId(2)]);
     let selected = session.layer_interaction.selected.clone();
     let original = session.engine.document().clone();
@@ -97,6 +99,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     session.capture_project_recovery().unwrap().write(&mut bytes).unwrap();
     let restored = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
     assert_eq!(restored.document.layers, committed);
+    assert_eq!(restored.document.metadata, original.metadata, "placing photos keeps the document's own metadata");
 }
 
 #[test]

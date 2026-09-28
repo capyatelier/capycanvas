@@ -45,7 +45,7 @@ pub(super) fn encode(
     rendition: SdrRendition,
     guide: &hdr::LocalToneGuide,
     quality: u8,
-    resolution: Option<layer_core::ImageResolution>,
+    delivery: &DeliveryMetadata,
     matte: Option<[f32; 3]>,
     clip: bool,
     budget: PhotoMemoryBudget,
@@ -76,17 +76,16 @@ pub(super) fn encode(
         },
     )?;
     check_cancel(cancel)?;
-    let exif = resolution
-        .map(super::super::metadata::exif_output)
-        .transpose()?;
+    let exif = delivery.exif(extent)?;
+    let descriptions = delivery.xmp_descriptions()?;
     let encoded_base = jpeg_codec::encode(
         &base,
         extent,
         PixelFormat::Rgb,
         quality,
         &icc,
-        exif.as_deref(),
-        resolution,
+        jpeg_codec::Markers { exif: exif.as_deref(), xmp: None },
+        delivery.resolution,
     )?;
     check_cancel(cancel)?;
     drop(base);
@@ -133,7 +132,7 @@ pub(super) fn encode(
     .encode()
     .map_err(err)?;
     check_cancel(cancel)?;
-    let bytes = super::jpeg_container::assemble(&encoded_base, &gain, metadata)?;
+    let bytes = super::jpeg_container::assemble(&encoded_base, &gain, metadata, descriptions.as_deref())?;
     check_cancel(cancel)?;
     Ok((bytes, stats))
 }
@@ -283,7 +282,7 @@ pub(super) fn preview(
 > {
     let options = options.into();
     let (bytes, stats) = encode(
-        extent, space, rendition, guide, options.quality, None, matte, true, options.memory, cancel, read,
+        extent, space, rendition, guide, options.quality, &Default::default(), matte, true, options.memory, cancel, read,
     )?;
     let mut limits = DecodeLimits::from_memory_budget(options.memory);
     // Both rendition accumulators and their finished outputs coexist with the
@@ -339,7 +338,7 @@ mod tests {
             &test_guide(EXTENT, rows),
             GainMapFormat::Jpeg,
             quality,
-            Some(layer_core::ImageResolution::ppi(300)),
+            &crate::photo::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))),
             None,
             false,
             &AtomicBool::new(false),
@@ -443,7 +442,7 @@ mod tests {
                 &guide,
                 GainMapFormat::Jpeg,
                 90,
-                None,
+                &Default::default(),
                 matte,
                 false,
                 c,
@@ -489,7 +488,7 @@ mod tests {
             offset: 0.,
             headroom: 2.,
         };
-        let bytes = super::super::jpeg_container::assemble(&base, &gain, meta).unwrap();
+        let bytes = super::super::jpeg_container::assemble(&base, &gain, meta, None).unwrap();
         assert_eq!(
             read_photo(std::io::Cursor::new(&bytes), Default::default())
                 .unwrap()

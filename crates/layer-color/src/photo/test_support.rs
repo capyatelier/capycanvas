@@ -47,3 +47,10 @@ pub(crate) fn assert_rgba16_reference(source: &SourceImage, expected: &[u8], nam
         );
     }
 }
+
+/// An `Exif\0\0` APP1 payload holding only orientation 1 and this density,
+/// with orientation as the first IFD0 entry.
+pub(crate) fn exif_output(resolution: layer_core::ImageResolution) -> Result<Vec<u8>, String> {
+    let block = super::DeliveryMetadata::resolution(Some(resolution)).exif([1, 1])?.unwrap();
+    Ok([b"Exif\0\0".as_slice(), &block].concat())
+}

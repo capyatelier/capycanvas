@@ -274,7 +274,7 @@ fn webp_retains_profile_and_normalizes_exif_once_including_density_axes() {
         unit: layer_core::ResolutionUnit::Inch,
         density: [[72, 1], [144, 1]],
     };
-    let mut exif = super::metadata::exif_output(resolution).unwrap();
+    let mut exif = super::test_support::exif_output(resolution).unwrap();
     // The existing EXIF writer emits orientation first in IFD0.
     exif[24..26].copy_from_slice(&6u16.to_le_bytes());
     let file = webp_file(Some(&icc), Some(&exif));

@@ -25,15 +25,15 @@ impl WebpEncodeOptions {
     }
 }
 
-/// Encodes straight 8-bit RGB or RGBA rows as lossless VP8L, with an ICC chunk
-/// and EXIF resolution. The encoder needs the whole frame: rows are gathered
+/// Encodes straight 8-bit RGB or RGBA rows as lossless VP8L, with ICC, Exif and
+/// XMP chunks. The encoder needs the whole frame: rows are gathered
 /// first, so provider errors (a cancelled capture) stop before encoding, but
 /// the encode itself runs to completion once started.
 pub fn write_webp_rows(
     mut output: impl Write,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
-    resolution: Option<layer_core::ImageResolution>,
+    metadata: &DeliveryMetadata,
     options: WebpEncodeOptions,
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -50,13 +50,11 @@ pub fn write_webp_rows(
         return Err(WEBP_SIZE_LIMIT.into());
     }
     let icc = delivery_icc(interpretation)?;
-    let exif = resolution
-        .map(super::metadata::exif_tiff_output)
-        .transpose()?
-        .unwrap_or_default();
+    let exif = metadata.exif(extent)?.unwrap_or_default();
+    let xmp = metadata.xmp()?.unwrap_or_default();
     let admission = (extent[0] as usize * extent[1] as usize)
         .checked_mul(WEBP_ENCODE_BYTES_PER_PIXEL)
-        .and_then(|bytes| bytes.checked_add(icc.len() + exif.len()));
+        .and_then(|bytes| bytes.checked_add(icc.len() + exif.len() + xmp.len()));
     if admission.is_none_or(|bytes| bytes > options.codec_bytes) {
         return Err(MEMORY_ERROR.into());
     }
@@ -70,6 +68,7 @@ pub fn write_webp_rows(
     let mut encoder = image_webp::WebPEncoder::new(&mut output);
     encoder.set_icc_profile(icc);
     encoder.set_exif_metadata(exif);
+    encoder.set_xmp_metadata(xmp);
     encoder.encode(&pixels, extent[0], extent[1], color).map_err(err)
 }
 
@@ -105,13 +104,22 @@ pub(super) fn read(
     if info.icc != icc.is_some() {
         return Err("The WebP declares an unreadable ICC profile".into());
     }
-    let metadata = decoder
-        .exif_metadata()
-        .map_err(err)?
+    let exif = decoder.exif_metadata().map_err(err)?;
+    let metadata = exif
         .as_deref()
         .map(super::metadata::exif)
         .transpose()?
         .unwrap_or_default();
+    let xmp = if info.xmp {
+        decoder.xmp_metadata().ok().flatten()
+    } else {
+        None
+    };
+    let photo = super::metadata::collect(
+        exif.as_deref().and_then(|e| super::exif::read_block(e).ok()),
+        xmp,
+        None,
+    );
     let first_frame = decoder.is_animated();
     if first_frame {
         decoder.set_background_color(info.background).map_err(err)?;
@@ -149,6 +157,7 @@ pub(super) fn read(
     let source = raster_io::source(&pixels, extent, interpretation, metadata, limits)?;
     Ok(DecodedPhoto {
         source,
+        metadata: photo,
         first_frame,
         primary_image: false,
     })
@@ -158,6 +167,7 @@ pub(super) fn read(
 struct Info {
     extent: [u32; 2],
     icc: bool,
+    xmp: bool,
     first_rect: Option<[u32; 4]>,
     background: [u8; 4],
 }
@@ -239,6 +249,9 @@ fn inspect(input: &mut Input<impl BufRead + Seek>, limits: DecodeLimits) -> Resu
                     return Err("Invalid WebP EXIF chunk".into());
                 }
                 exif = true;
+            }
+            b"XMP " => {
+                info.xmp = size <= layer_core::PhotoMetadata::MAX_BYTES as u64;
             }
             b"ANIM" => {
                 if size != 6 || flags.is_none_or(|f| f & 2 == 0) {

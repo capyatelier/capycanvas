@@ -2,6 +2,8 @@
 use super::*;
 use crate::photo::GainMapMetadata;
 
+pub(super) const XMP_TYPE: &str = "application/rdf+xml";
+
 pub(super) struct Grid {
     pub extent: [u32; 2],
     pub tile_extent: [u32; 2],
@@ -59,6 +61,7 @@ impl Writer {
 struct Item<'a> {
     kind: [u8; 4],
     hidden: bool,
+    content_type: Option<&'static str>,
     data: Cow<'a, [u8]>,
     properties: Vec<u8>,
 }
@@ -80,6 +83,7 @@ impl<'a> Builder<'a> {
         self.items.push(Item {
             kind: *kind,
             hidden,
+            content_type: None,
             data,
             properties: Vec::new(),
         });
@@ -200,7 +204,7 @@ pub(super) fn assemble(
     alpha: Option<&Grid>,
     gain: &Grid,
     metadata: GainMapMetadata,
-    resolution: Option<layer_core::ImageResolution>,
+    delivery: &DeliveryMetadata,
     budget: usize,
     cancel: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
@@ -246,11 +250,11 @@ pub(super) fn assemble(
         from: tmap_id,
         to: vec![base_id, gain_id],
     });
-    if let Some(resolution) = resolution {
-        let exif = super::super::metadata::exif_output(resolution)?;
-        let mut data = vec![0; 4];
-        data.extend_from_slice(&exif[6..]);
-        let id = b.item(b"Exif", true, Cow::Owned(data))?;
+    let exif = delivery.exif(base.extent)?.map(|exif| [vec![0; 4], exif].concat());
+    for (kind, content_type, data) in [(b"Exif", None, exif), (b"mime", Some(XMP_TYPE), delivery.xmp()?)] {
+        let Some(data) = data else { continue };
+        let id = b.item(kind, true, Cow::Owned(data))?;
+        b.items[id as usize - 1].content_type = content_type;
         // The tone-map derives its source metadata from the base. A single
         // content-description target also works with readers that store only
         // one metadata association per item (including libavif).
@@ -291,7 +295,14 @@ pub(super) fn assemble(
                     w.u16(index as u16 + 1)?;
                     w.u16(0)?;
                     w.put(&item.kind)?;
-                    w.u8(0)
+                    w.u8(0)?;
+                    match item.content_type {
+                        Some(content_type) => {
+                            w.put(content_type.as_bytes())?;
+                            w.u8(0)
+                        }
+                        None => Ok(()),
+                    }
                 })?;
             }
             Ok(())

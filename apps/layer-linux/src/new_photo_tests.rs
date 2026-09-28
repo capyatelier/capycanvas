@@ -226,7 +226,7 @@ fn native_open_cancellation_releases_request_and_preserves_current_document() {
     .unwrap();
     let hdr = directory.join("hdr-pq.png");
     layer_color::photo::write_hdr_png_rows(std::fs::File::create(&hdr).unwrap(), [513, 257],
-        layer_core::color::RgbSpace::Srgb, None, false, |_, row| {
+        layer_core::color::RgbSpace::Srgb, &Default::default(), false, |_, row| {
             row.fill([4., 2., 1., 1.]); Ok(())
         }).unwrap();
     let native = directory.join("master.capy");

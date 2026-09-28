@@ -3,6 +3,7 @@ use layer_core::color::source::{SourceChannels, SourceInterpretation};
 use layer_core::color::{
     ColorProfile, DocumentColor, SampleDepth, OutputEncoding, ProfileChannels, RgbSpace,
 };
+use layer_color::photo::{DeliveryMetadata, ExportMetadata, MetadataKeep};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +165,8 @@ pub struct ExportRecipe<P = ExportProfile> {
     pub encoding: OutputEncoding,
     pub size: ExportSize,
     pub resolution: ExportResolution,
+    #[serde(default)]
+    pub metadata: ExportMetadata,
 }
 impl<P> ExportRecipe<P> {
     /// Storage can intern large ICC profiles without duplicating delivery policy.
@@ -177,6 +180,7 @@ impl<P> ExportRecipe<P> {
             encoding: self.encoding,
             size: self.size,
             resolution: self.resolution,
+            metadata: self.metadata,
         }
     }
 }
@@ -220,6 +224,7 @@ impl ExportRecipe {
             encoding: Default::default(),
             size: ExportSize::Original,
             resolution: ExportResolution::Master,
+            metadata: ExportMetadata::default(),
         }
     }
     pub fn wide_color() -> Self {
@@ -238,6 +243,7 @@ impl ExportRecipe {
             encoding: Default::default(),
             size: ExportSize::Original,
             resolution: ExportResolution::Master,
+            metadata: ExportMetadata::default(),
         }
     }
     pub fn for_color(self, color: DocumentColor) -> Self {
@@ -254,6 +260,7 @@ impl ExportRecipe {
             jpeg_quality: self.jpeg_quality,
             size: self.size,
             resolution: self.resolution,
+            metadata: self.metadata,
             ..base
         }
         .draft(ExportDraftAction::Format(format))
@@ -323,6 +330,14 @@ impl ExportRecipe {
         }
         Ok(value)
     }
+    /// The resolution and photo metadata this recipe writes for `document`.
+    pub fn delivery_metadata(&self, document: &layer_core::Document) -> Result<DeliveryMetadata, String> {
+        Ok(DeliveryMetadata {
+            resolution: self.output_resolution(document.resolution)?,
+            photo: document.metadata.clone(),
+            policy: self.metadata,
+        })
+    }
 }
 
 /// Product-dependent draft transitions, shared by all native/browser forms.
@@ -336,6 +351,41 @@ pub enum ExportDraftAction {
     Depth(SampleDepth),
     Background(ExportBackground),
     Encoding(OutputEncoding),
+    Metadata(ExportMetadata),
+}
+#[derive(Serialize)]
+pub struct MetadataChoice {
+    pub value: MetadataKeep,
+    pub label: &'static str,
+}
+/// The export dialog's Metadata row.
+#[derive(Serialize)]
+pub struct ExportMetadataView {
+    pub label: &'static str,
+    pub choices: Vec<MetadataChoice>,
+    pub remove_location: &'static str,
+    /// Remove location applies only when everything else is kept.
+    pub location: bool,
+    /// Whether the format carries photo metadata at all.
+    pub available: bool,
+    pub note: Option<&'static str>,
+}
+impl ExportMetadataView {
+    fn new(recipe: &ExportRecipe) -> Self {
+        let available = recipe.format != ExportFormat::Exr;
+        Self {
+            label: "Metadata",
+            choices: MetadataKeep::ALL
+                .into_iter()
+                .map(|value| MetadataChoice { value, label: value.label() })
+                .collect(),
+            remove_location: "Remove location",
+            location: available && recipe.metadata.keep == MetadataKeep::All,
+            available,
+            note: (!available)
+                .then_some("OpenEXR keeps no camera or copyright details. Choose another format to keep them."),
+        }
+    }
 }
 #[derive(Serialize)]
 pub struct ExportDraft {
@@ -347,6 +397,7 @@ pub struct ExportDraft {
     pub depths: Vec<SampleDepth>,
     pub backgrounds: Vec<ExportBackground>,
     pub dithers: Vec<layer_core::color::OutputDither>,
+    pub metadata: ExportMetadataView,
 }
 impl ExportRecipe {
     pub fn draft_for_color(self, color: DocumentColor, action: ExportDraftAction) -> ExportDraft {
@@ -371,6 +422,7 @@ impl ExportRecipe {
             ExportDraftAction::Depth(v) => self.depth = v,
             ExportDraftAction::Background(v) => self.background = v,
             ExportDraftAction::Encoding(v) => self.encoding = v,
+            ExportDraftAction::Metadata(v) => self.metadata = v,
         }
         if self.format == ExportFormat::Exr {
             if !matches!(self.profile.profile, ColorProfile::Builtin(_)) { self.profile = ExportProfile::builtin(RgbSpace::Srgb); }
@@ -400,6 +452,7 @@ impl ExportRecipe {
             depths: if self.format == ExportFormat::Exr { vec![SampleDepth::F32] } else if self.format.is_hdr() { vec![SampleDepth::U16] } else if eight_bit { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] },
             backgrounds: if self.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg) { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] } else if self.format.is_hdr() { vec![ExportBackground::Preserve] } else if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] },
             dithers: if self.depth == SampleDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] },
+            metadata: ExportMetadataView::new(&self),
             recipe: self,
         }
     }
@@ -409,6 +462,8 @@ impl ExportRecipe {
 pub struct ExportForm {
     pub profiles: Vec<ExportProfile>,
     pub extent: [u32; 2],
+    /// The document keeps metadata from an opened photo, so the Metadata row applies.
+    pub metadata: bool,
 }
 impl ExportForm {
     pub fn new(document: &layer_core::Document) -> Self {
@@ -437,6 +492,7 @@ impl ExportForm {
         Self {
             profiles,
             extent: [document.width, document.height],
+            metadata: !document.metadata.is_empty(),
         }
     }
 }
@@ -704,6 +760,56 @@ mod tests {
             let integer=ExportRecipe::web_share().draft_for_color(DocumentColor{space,depth:SampleDepth::U8},ExportDraftAction::Refresh);
             assert!(integer.formats.iter().all(|f|!f.is_hdr()));
         }
+    }
+    #[test]
+    fn metadata_defaults_to_all_without_location_and_drafts_through_the_shared_view() {
+        let recipe = ExportRecipe::web_share();
+        assert_eq!(recipe.metadata, ExportMetadata { keep: MetadataKeep::All, remove_location: true });
+        let mut json = serde_json::to_value(&recipe).unwrap();
+        assert_eq!(json["metadata"], serde_json::json!({"keep": "All", "remove_location": true}));
+        json.as_object_mut().unwrap().remove("metadata");
+        assert_eq!(serde_json::from_value::<ExportRecipe>(json.clone()).unwrap(), recipe, "recipes saved before metadata read as the default");
+        json["metadata"] = serde_json::json!({"keep": "CopyrightContact"});
+        assert_eq!(serde_json::from_value::<ExportRecipe>(json).unwrap().metadata, ExportMetadata { keep: MetadataKeep::CopyrightContact, remove_location: true });
+
+        let draft = recipe.clone().draft(ExportDraftAction::Refresh);
+        let view = serde_json::to_value(&draft.metadata).unwrap();
+        assert_eq!(view["label"], "Metadata");
+        assert_eq!(view["choices"], serde_json::json!([
+            {"value": "All", "label": "All"},
+            {"value": "CopyrightContact", "label": "Copyright & Contact"},
+            {"value": "None", "label": "None"},
+        ]));
+        assert_eq!((view["remove_location"].as_str(), view["location"].as_bool(), view["available"].as_bool()), (Some("Remove location"), Some(true), Some(true)));
+        assert!(view["note"].is_null());
+        let action: ExportDraftAction = serde_json::from_value(serde_json::json!({"type": "metadata", "value": {"keep": "CopyrightContact", "remove_location": false}})).unwrap();
+        let rights = recipe.clone().draft(action);
+        assert_eq!(rights.recipe.metadata, ExportMetadata { keep: MetadataKeep::CopyrightContact, remove_location: false });
+        assert!(!rights.metadata.location, "Remove location applies only when everything is kept");
+        rights.recipe.validate().unwrap();
+        for format in [ExportFormat::Tiff, ExportFormat::Jpeg, ExportFormat::Webp] {
+            let draft = rights.recipe.clone().draft(ExportDraftAction::Format(format));
+            assert_eq!(draft.recipe.metadata, rights.recipe.metadata, "{format:?} keeps the choice");
+            assert!(draft.metadata.available);
+        }
+        let exr = rights.recipe.clone().draft(ExportDraftAction::Format(ExportFormat::Exr));
+        assert!(!exr.metadata.available && !exr.metadata.location);
+        assert!(exr.metadata.note.unwrap().starts_with("OpenEXR keeps no camera or copyright details."));
+        let back = exr.recipe.draft_for_color(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F32 }, ExportDraftAction::Format(ExportFormat::Png));
+        assert_eq!(back.recipe.metadata, rights.recipe.metadata);
+        let sdr = ExportRecipe { metadata: rights.recipe.metadata, ..ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::JpegHdr)).recipe }
+            .for_color(DocumentColor::default());
+        assert_eq!(sdr.metadata, rights.recipe.metadata, "an SDR fallback keeps the choice");
+
+        let mut document = layer_core::Document::new("Photo", 40, 30);
+        assert!(!ExportForm::new(&document).metadata, "a new drawing has no photo metadata");
+        document.metadata.exif = Some(vec![1, 2, 3].into());
+        document.resolution = Some(layer_core::ImageResolution::ppi(300));
+        assert!(ExportForm::new(&document).metadata);
+        let delivery = ExportRecipe { resolution: ExportResolution::Ppi(72), ..rights.recipe }.delivery_metadata(&document).unwrap();
+        assert_eq!(delivery.resolution, Some(layer_core::ImageResolution::ppi(72)));
+        assert_eq!(delivery.photo, document.metadata);
+        assert_eq!(delivery.policy, rights.recipe.metadata);
     }
     #[test]
     fn exr_validates_for_any_document_primaries() {

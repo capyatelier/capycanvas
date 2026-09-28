@@ -23,17 +23,25 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     const size=select("Pixel size",[["Original","Original"],["Fit","Fit within bounds"]]);
     const width=number("Maximum width",2048,1,32768),height=number("Maximum height",2048,1,32768);
     const resolution=select("Resolution metadata",[["Master","Keep original"],["Ppi","Pixels per inch"],["Omit","Omit"]]),ppi=number("Pixels per inch",300,1,65535);
+    let metadataView=app.export_draft(recipe,{type:"refresh"}).metadata;
+    const metadata=select(metadataView.label,metadataView.choices.map(c=>[c.value,c.label]));
+    const removeLocation=field(metadataView.remove_location,element("input"));removeLocation.type="checkbox";
+    const metadataNote=element("p","export-metadata-note");form.append(metadataNote);
+    const readMetadata=()=>({keep:metadata.value,remove_location:removeLocation.checked});
     const rangeFormat=()=>range.value==="exr"?"Exr":range.value==="sdr"?format.value:({hdr:"PngHdr",jpeg:"JpegHdr",avif:"AvifHdr"}[range.value]+(clip.checked?"Mapped":""));
-    const visible=()=>{const hdr=range.value!=="sdr";clip.closest("label").hidden=!["hdr","jpeg","avif"].includes(range.value);for(const n of[format,profile,depth,intent,dither])n.closest("label").hidden=hdr;background.closest("label").hidden=hdr&&range.value!=="jpeg";quality.closest("label").hidden=!["jpeg","avif"].includes(range.value)&&!(range.value==="sdr"&&format.value==="Jpeg");for(const f of[width,height])f.closest("label").hidden=size.value!=="Fit";ppi.closest("label").hidden=resolution.value!=="Ppi";};
+    const visible=()=>{const hdr=range.value!=="sdr";clip.closest("label").hidden=!["hdr","jpeg","avif"].includes(range.value);for(const n of[format,profile,depth,intent,dither])n.closest("label").hidden=hdr;background.closest("label").hidden=hdr&&range.value!=="jpeg";quality.closest("label").hidden=!["jpeg","avif"].includes(range.value)&&!(range.value==="sdr"&&format.value==="Jpeg");for(const f of[width,height])f.closest("label").hidden=size.value!=="Fit";ppi.closest("label").hidden=resolution.value!=="Ppi";
+      metadata.closest("label").hidden=!model.metadata||!metadataView.available;removeLocation.closest("label").hidden=!model.metadata||!metadataView.location;
+      metadataNote.textContent=metadataView.note??"";metadataNote.hidden=!model.metadata||!metadataView.note;};
     const load=()=>{
       if(!model.profiles.some(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))){model.profiles.push(recipe.profile);const option=element("option","",recipe.profile.name);option.value=model.profiles.length-1;profile.append(option);}
       range.value=recipe.format==="Exr"?"exr":recipe.format.startsWith("PngHdr")?"hdr":recipe.format.startsWith("JpegHdr")?"jpeg":recipe.format.startsWith("AvifHdr")?"avif":"sdr";clip.checked=recipe.format.endsWith("Mapped");format.value=range.value!=="sdr"?"Png":recipe.format;profile.value=String(Math.max(0,model.profiles.findIndex(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))));depth.value=recipe.depth;background.value=recipe.background;
       intent.value=recipe.encoding.conversion.intent;dither.value=recipe.encoding.dither;quality.value=recipe.jpeg_quality;size.value=recipe.size.Fit?"Fit":"Original";
-      if(recipe.size.Fit)[width.value,height.value]=recipe.size.Fit.bounds;resolution.value=recipe.resolution.Ppi?"Ppi":recipe.resolution;if(recipe.resolution.Ppi)ppi.value=recipe.resolution.Ppi;visible();
+      if(recipe.size.Fit)[width.value,height.value]=recipe.size.Fit.bounds;resolution.value=recipe.resolution.Ppi?"Ppi":recipe.resolution;if(recipe.resolution.Ppi)ppi.value=recipe.resolution.Ppi;
+      metadata.value=recipe.metadata.keep;removeLocation.checked=recipe.metadata.remove_location;visible();
     };
     destination.onchange=()=>preference({type:"get",index:Number(destination.value)});
     const updateDraft=action=>{
-      const draft=app.export_draft(readRecipe(),action);recipe=draft.recipe;
+      const draft=app.export_draft(readRecipe(),action);recipe=draft.recipe;metadataView=draft.metadata;
       for(const[node,allowed]of[[format,draft.formats],[depth,draft.depths],[background,draft.backgrounds],[dither,draft.dithers]]) {
         for(const option of node.options)option.disabled=!allowed.includes(option.value);
       }
@@ -45,6 +53,7 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     profile.onchange=()=>updateDraft({type:"profile",value:model.profiles[Number(profile.value)]});
     depth.onchange=()=>updateDraft({type:"depth",value:depth.value});
     background.onchange=()=>updateDraft({type:"background",value:background.value});
+    metadata.onchange=removeLocation.onchange=()=>updateDraft({type:"metadata",value:readMetadata()});
     size.onchange=resolution.onchange=visible;load();
     const error=element("p","error-message");form.append(error);
     form.append(button("Import ICC Profile…",async()=>{
@@ -55,7 +64,7 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     const readRecipe=()=>({format:rangeFormat(),profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
       encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:Number(quality.value),
       size:size.value==="Original"?"Original":{Fit:{bounds:[Number(width.value),Number(height.value)],enlarge:recipe.size.Fit?.enlarge??false}},
-      resolution:resolution.value==="Ppi"?{Ppi:Number(ppi.value)}:resolution.value});
+      resolution:resolution.value==="Ppi"?{Ppi:Number(ppi.value)}:resolution.value,metadata:readMetadata()});
     const selected=()=>app.export_validate(app.export_draft(readRecipe(),{type:"refresh"}).recipe);
     updateDraft({type:"refresh"});
     const presetName=field("Preset name",element("input"));presetName.maxLength=80;

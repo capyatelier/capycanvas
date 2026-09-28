@@ -9,12 +9,15 @@ mod sources;
 use sources::SourceIndex;
 mod selections;
 pub use selections::SelectionIndex;
+mod photo_metadata;
+use photo_metadata::MetadataIndex;
 #[cfg(test)]
 mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x09\0";
-/// Version 8 has no stored layer extents; its layers read with none.
-const READABLE: [&[u8; 12]; 2] = [b"CAPYRASTER\x08\0", MAGIC];
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x0a\0";
+/// Version 8 has no stored layer extents and versions before 10 no photo
+/// metadata; those files read with none.
+const READABLE: [&[u8; 12]; 3] = [b"CAPYRASTER\x08\0", b"CAPYRASTER\x09\0", MAGIC];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,6 +49,8 @@ struct Manifest<D = Document> {
     blobs: Vec<BlobRecord>,
     tiled_sources: SourceIndex,
     selections: SelectionIndex,
+    #[serde(default, skip_serializing_if = "MetadataIndex::is_empty")]
+    metadata: MetadataIndex,
 }
 
 pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), String> {
@@ -117,6 +122,8 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
         })
         .collect();
     tiled_sources.index_profiles(&profiles, &mut offset);
+    let (metadata_index, metadata_blocks) =
+        MetadataIndex::collect(&project.document.metadata, &mut offset);
     let manifest = Manifest {
         document: &document,
         tile_size: TILE_SIZE,
@@ -124,6 +131,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
         blobs: records,
         tiled_sources,
         selections,
+        metadata: metadata_index,
     };
     let json = metadata(&manifest, limits.metadata_bytes)?;
     output.write_all(MAGIC).map_err(io_error)?;
@@ -135,8 +143,8 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     for blob in blobs {
         output.write_all(&blob.compressed()?).map_err(io_error)?;
     }
-    for profile in profiles {
-        output.write_all(&profile).map_err(io_error)?;
+    for block in profiles.iter().chain(&metadata_blocks) {
+        output.write_all(block).map_err(io_error)?;
     }
     Ok(())
 }
@@ -193,6 +201,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         &mut tile_count,
     )?;
     manifest.selections.validate(&manifest.document, &manifest.blobs, limits, &mut referenced, &mut tile_count)?;
+    manifest.metadata.validate(&mut offset)?;
     let mut target_ids = BTreeSet::new();
     let expected_targets: BTreeMap<_, _> = manifest
         .document
@@ -250,6 +259,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
     manifest
         .tiled_sources
         .read(&mut input, &tiles, &mut manifest.document)?;
+    manifest.metadata.read(&mut input, &mut manifest.document)?;
     manifest.selections.restore(&tiles, &mut manifest.document)?;
     for raster in manifest.rasters {
         let mask = manifest
@@ -464,8 +474,49 @@ mod tests {
         assert!(read(&sources).is_err());
         bytes[10] = 7;
         assert!(read(&bytes).is_err());
-        bytes[10] = 10;
+        bytes[10] = 11;
         assert!(read(&bytes).is_err());
+    }
+
+    #[test]
+    fn photo_metadata_round_trips_as_payloads_and_version_9_reads_without_it() {
+        let mut project = source_fixture();
+        let block = |n: usize, seed: u8| -> Arc<[u8]> { (0..n).map(|i| (i as u8) ^ seed).collect::<Vec<_>>().into() };
+        project.document.metadata = PhotoMetadata { exif: Some(block(300, 1)), xmp: Some(block(5000, 2)), iptc: None };
+        let mut bytes = Vec::new();
+        project.write(&mut bytes).unwrap();
+        assert_eq!(&bytes[..12], b"CAPYRASTER\x0a\0");
+        let loaded = Project::read(bytes.as_slice(), Default::default()).unwrap();
+        assert_eq!(loaded.document.metadata, project.document.metadata);
+        let mut again = Vec::new();
+        loaded.write(&mut again).unwrap();
+        assert_eq!(bytes, again);
+
+        let end = bytes.len();
+        let mut corrupt = bytes.clone();
+        corrupt[end - 1] ^= 1;
+        assert!(Project::read(corrupt.as_slice(), Default::default()).unwrap_err().contains("metadata integrity"));
+        for mutate in [
+            |v: &mut serde_json::Value| v["metadata"]["xmp"]["offset"] = 0.into(),
+            |v: &mut serde_json::Value| v["metadata"]["exif"]["size"] = 0.into(),
+            |v: &mut serde_json::Value| v["metadata"]["xmp"]["size"] = (PhotoMetadata::MAX_BYTES as u64).into(),
+            |v: &mut serde_json::Value| v["metadata"]["thumbnail"] = serde_json::json!({}),
+        ] {
+            let changed = rewrite_manifest(&bytes, mutate);
+            let length = u64::from_le_bytes(changed[12..20].try_into().unwrap()) as usize;
+            let error = Project::read(&changed[..52 + length], Default::default()).unwrap_err();
+            assert!(!error.contains("incomplete") && !error.contains("I/O"), "{error}");
+        }
+
+        project.document.metadata = PhotoMetadata::default();
+        let mut plain = Vec::new();
+        project.write(&mut plain).unwrap();
+        assert!(!String::from_utf8_lossy(&plain).contains("\"metadata\""));
+        let mut version_9 = plain;
+        version_9[10] = 9;
+        let loaded = Project::read(version_9.as_slice(), Default::default()).unwrap();
+        assert!(loaded.document.metadata.is_empty());
+        assert_eq!(loaded.document.layers[0].source, project.document.layers[0].source);
     }
 
     #[test]
@@ -473,7 +524,7 @@ mod tests {
         let mut project = fixture();
         let mut bytes = Vec::new();
         project.write(&mut bytes).unwrap();
-        assert_eq!(&bytes[..12], b"CAPYRASTER\x09\0");
+        assert_eq!(&bytes[..12], MAGIC);
         let mut version_8 = bytes.clone();
         version_8[10] = 8;
         assert!(!String::from_utf8_lossy(&version_8).contains("\"extent\""));

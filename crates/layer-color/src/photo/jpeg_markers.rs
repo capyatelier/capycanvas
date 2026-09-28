@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 const INVALID: &str = "Invalid JPEG marker stream";
+pub(super) const XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 
 #[derive(Default)]
 pub(super) struct Metadata {
@@ -11,6 +12,7 @@ pub(super) struct Metadata {
     pub profile: Option<Vec<u8>>,
     pub orientation: Option<u16>,
     pub resolution: Option<layer_core::ImageResolution>,
+    pub photo: layer_core::PhotoMetadata,
 }
 
 pub(super) struct Segment<'a> {
@@ -90,12 +92,20 @@ pub(super) fn read_source(bytes: &[u8]) -> Result<Metadata, String> {
     let mut result = Metadata::default();
     let mut jfif_resolution = None;
     let mut mpf_error = None;
+    let mut exif = None;
+    let mut xmp = None;
+    let mut photoshop = Vec::new();
     for Segment {
         marker,
         bytes: segment,
         ..
     } in segments
     {
+        if marker == 0xe1
+            && let Some(packet) = segment.strip_prefix(XMP)
+        {
+            xmp.get_or_insert_with(|| packet.to_vec());
+        }
         if marker == 0xee && segment.starts_with(b"Adobe") {
             if segment.len() < 12 {
                 return Err("Incomplete JPEG Adobe marker".into());
@@ -134,6 +144,9 @@ pub(super) fn read_source(bytes: &[u8]) -> Result<Metadata, String> {
                 );
             }
         } else if marker == 0xe1 && segment.starts_with(b"Exif\0\0") {
+            if exif.is_none() {
+                exif = super::exif::read_block(segment).ok();
+            }
             let metadata = super::metadata::exif(segment)?;
             let orientation = metadata.orientation;
             if result.orientation.is_some_and(|v| v != orientation) {
@@ -158,8 +171,11 @@ pub(super) fn read_source(bytes: &[u8]) -> Result<Metadata, String> {
             result.gain_map = true;
         } else if marker == 0xe2 && segment.starts_with(b"MPF\0") {
             mpf_error = super::jpeg_mpf::validate_previews(segment).err();
+        } else if let Some(resources) = segment.strip_prefix(b"Photoshop 3.0\0").filter(|_| marker == 0xed) {
+            photoshop.extend_from_slice(resources);
         }
     }
+    result.photo = super::metadata::collect(exif, xmp, super::metadata::photoshop_iptc(&photoshop));
     if !result.gain_map
         && let Some(error) = mpf_error
     {

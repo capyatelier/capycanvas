@@ -16,9 +16,14 @@ mod gainmap;
 mod hdr_png;
 mod exr_io;
 pub use exr_io::write_exr_rows;
+mod exif;
 mod metadata;
+pub use metadata::{DeliveryMetadata, ExportMetadata, MetadataKeep};
+#[cfg(test)]
+mod delivery_tests;
 #[cfg(test)]
 mod metadata_tests;
+mod xmp;
 mod orientation;
 mod png_io;
 pub(crate) use gainmap::GainMapMetadata;
@@ -104,6 +109,7 @@ pub fn format_names() -> String {
 /// preparation must disclose that choice in the resulting image/layer name.
 pub struct DecodedPhoto {
     pub source: SourceImage,
+    pub metadata: layer_core::PhotoMetadata,
     pub first_frame: bool,
     pub primary_image: bool,
 }
@@ -183,10 +189,10 @@ fn read_photo_impl(
     let mut signature = [0; 8];
     input.read_exact(&mut signature).map_err(err)?;
     input.seek(std::io::SeekFrom::Start(origin)).map_err(err)?;
-    let source = if signature == *b"\x89PNG\r\n\x1a\n" {
+    let (source, metadata) = if signature == *b"\x89PNG\r\n\x1a\n" {
         png_io::read_with_cancel(input, limits, cancelled)
     } else if signature[..4] == [0x76, 0x2f, 0x31, 0x01] {
-        exr_io::read_exr(input, limits, cancelled)
+        exr_io::read_exr(input, limits, cancelled).map(|source| (source, Default::default()))
     } else if signature[..2] == [0xff, 0xd8] {
         jpeg_io::read_jpeg_with_cancel(input, limits, cancelled)
     } else if matches!(
@@ -199,7 +205,7 @@ fn read_photo_impl(
     } else if matches!(&signature[..6], b"GIF87a" | b"GIF89a") {
         return gif_io::read(input, limits);
     } else if &signature[..2] == b"BM" || bmp_io::dib_signature(&signature) {
-        bmp_io::read(input, limits)
+        bmp_io::read(input, limits).map(|source| (source, Default::default()))
     } else if &signature[4..8] == b"ftyp" {
         return avif_io::read(input, limits, cancelled);
     } else {
@@ -207,6 +213,7 @@ fn read_photo_impl(
     }?;
     Ok(DecodedPhoto {
         source,
+        metadata,
         first_frame: false,
         primary_image: false,
     })

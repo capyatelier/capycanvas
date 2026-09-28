@@ -4,7 +4,7 @@ pub(super) fn read_with_cancel(
     mut input: impl BufRead + Seek,
     limits: DecodeLimits,
     cancelled: &std::sync::atomic::AtomicBool,
-) -> Result<SourceImage, String> {
+) -> Result<(SourceImage, layer_core::PhotoMetadata), String> {
     let has_icc = profile_chunk_present(&mut input, limits)?;
     let mut decoder = png::Decoder::new_with_limits(
         input,
@@ -27,6 +27,16 @@ pub(super) fn read_with_cancel(
         .map(super::metadata::exif)
         .transpose()?
         .unwrap_or_default();
+    let xmp = info.utf8_text.iter().find(|t| t.keyword == XMP_KEYWORD).and_then(|chunk| {
+        let mut chunk = chunk.clone();
+        chunk.decompress_text_with_limit(layer_core::PhotoMetadata::MAX_BYTES).ok()?;
+        chunk.get_text().ok().map(String::into_bytes)
+    });
+    let photo = super::metadata::collect(
+        info.exif_metadata.as_deref().and_then(|e| super::exif::read_block(e).ok()),
+        xmp,
+        None,
+    );
     // Explicit PNG physical dimensions take precedence over duplicate Exif data.
     let resolution = match info.pixel_dims {
         Some(p) if p.unit == png::Unit::Meter && p.xppu > 0 && p.yppu > 0 => {
@@ -45,7 +55,8 @@ pub(super) fn read_with_cancel(
     if let Some(cicp) = info.coding_independent_code_points
         && matches!(cicp.transfer_function, 16 | 18) {
         let source = super::hdr_png::read(reader, limits, cancelled)?;
-        return super::orientation::normalize(source, resolution, metadata.orientation, limits.source_bytes);
+        let source = super::orientation::normalize(source, resolution, metadata.orientation, limits.source_bytes)?;
+        return Ok((source, photo));
     }
     let (color, depth) = reader.output_color_type();
     let channels = match color {
@@ -100,22 +111,31 @@ pub(super) fn read_with_cancel(
         }
     }
     reader.finish().map_err(err)?;
-    super::orientation::normalize(builder.finish()?, resolution, metadata.orientation, limits.source_bytes)
+    let source = super::orientation::normalize(builder.finish()?, resolution, metadata.orientation, limits.source_bytes)?;
+    Ok((source, photo))
 }
 
-/// A PNG header with pHYs print density in pixels per metre.
+const XMP_KEYWORD: &str = "XML:com.adobe.xmp";
+
+/// A PNG header with pHYs print density in pixels per metre, and eXIf and
+/// XMP chunks.
 pub(super) fn info(
     extent: [u32; 2],
-    resolution: Option<layer_core::ImageResolution>,
+    metadata: &DeliveryMetadata,
 ) -> Result<png::Info<'static>, String> {
     let mut info = png::Info::with_size(extent[0], extent[1]);
-    if let Some(resolution) = resolution {
+    if let Some(resolution) = metadata.resolution {
         let [xppu, yppu] = resolution.png_density()?;
         info.pixel_dims = Some(png::PixelDimensions {
             xppu,
             yppu,
             unit: png::Unit::Meter,
         });
+    }
+    info.exif_metadata = metadata.exif(extent)?.map(Into::into);
+    if let Some(packet) = metadata.xmp()? {
+        let text = String::from_utf8(packet).map_err(|_| "Invalid XMP metadata")?;
+        info.utf8_text.push(png::text_metadata::ITXtChunk::new(XMP_KEYWORD, text));
     }
     Ok(info)
 }
@@ -217,7 +237,7 @@ pub fn write_png(output: impl Write, source: &SourceImage) -> Result<(), String>
         output,
         source.extent,
         &source.interpretation,
-        source.resolution,
+        &DeliveryMetadata::resolution(source.resolution),
         |y, row| rows.read(y, row),
     )
 }
@@ -229,11 +249,11 @@ pub fn write_png_rows(
     mut output: impl Write,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
-    resolution: Option<layer_core::ImageResolution>,
+    metadata: &DeliveryMetadata,
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
-    let mut info = info(extent, resolution)?;
+    let mut info = info(extent, metadata)?;
     info.bit_depth = match interpretation.depth {
         SampleDepth::U8 => png::BitDepth::Eight,
         SampleDepth::U16 => png::BitDepth::Sixteen,

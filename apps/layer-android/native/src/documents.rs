@@ -21,6 +21,7 @@ struct Environment {
     source_name: String,
     working_space: layer_core::color::RgbSpace,
     pending_photo: Option<layer_core::color::source::SourceImage>,
+    pending_metadata: layer_core::PhotoMetadata,
 }
 enum Payload {
     Save(Option<Project>),
@@ -102,6 +103,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                     environment: Some(Environment {
                         open: OpenEnvironment::capture(session, admission, options)?,
                         pending_photo: None,
+                        pending_metadata: Default::default(),
                         working_space: session.engine().document().color.space,
                         source_name: serde_json::from_str::<Option<DocumentLocation>>(&read(
                             &mut env, &location,
@@ -168,6 +170,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
             if let Some(source) = imported.interpretation_required(e.open.photo_policy) {
                 e.source_name = imported.project.document.layers[0].name.to_string();
                 e.pending_photo = Some(source.clone());
+                e.pending_metadata = imported.project.document.metadata.clone();
                 *environment = Some(e);
                 return Ok(());
             }
@@ -179,7 +182,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
                 if e.open.photo_policy.needs_interpretation(&source) {
                     return Err("Choose an image interpretation before opening".into());
                 }
-                e.open.photo_policy.photo_project(source, &e.source_name)?
+                e.open.photo_policy.photo_project(source, std::mem::take(&mut e.pending_metadata), &e.source_name)?
             } else {
                 layer_ui::NewDocumentOptions {
                     extent: [width, height],
@@ -543,6 +546,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
                     source_name: "Recovered drawing".into(),
                     working_space: session.engine().document().color.space,
                     pending_photo: None,
+                    pending_metadata: Default::default(),
                 }),
                 candidate: None,
             }

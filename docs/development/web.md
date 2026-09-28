@@ -88,6 +88,7 @@ Journeys by area; the dispatch in `test.mjs` lists them all:
 | Color | `--color-panel`, `--color-picker`, `--palettes` |
 | Layers and filters | `--layers`, `--adjustments`, `--filter-drawer`, `--photo-edit`, `--merges` |
 | Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |
+| Photo files and export | `--portable-photo`, `--export-metadata` |
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
 | Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--drawer-drag`, `--drawer-style` |
 | Workspaces | `--workspace-manager`, `--workspace-switcher`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |

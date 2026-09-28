@@ -103,15 +103,23 @@ pub(super) fn admit(
     Ok(len)
 }
 
-/// Baseline, full-chroma coding of packed 8-bit samples. `exif` is a complete
-/// `Exif\0\0` APP1 payload.
+/// APP1 payloads: an Exif TIFF block and an XMP packet, without identifiers.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Markers<'a> {
+    pub exif: Option<&'a [u8]>,
+    pub xmp: Option<&'a [u8]>,
+}
+pub(super) const METADATA_TOO_LARGE: &str =
+    "This photo's metadata is too large for JPEG. Choose Copyright & Contact or None under Metadata.";
+
+/// Baseline, full-chroma coding of packed 8-bit samples.
 pub(super) fn encode(
     pixels: &[u8],
     extent: [u32; 2],
     format: PixelFormat,
     quality: u8,
     icc: &[u8],
-    exif: Option<&[u8]>,
+    markers: Markers<'_>,
     resolution: Option<layer_core::ImageResolution>,
 ) -> Result<Vec<u8>, String> {
     let [width, height] = extent.map(|v| v as usize);
@@ -126,12 +134,16 @@ pub(super) fn encode(
         .subsampling(Subsampling::S444)
         .force_baseline(true)
         .icc_profile(icc);
-    if let Some(exif) = exif {
-        encoder = encoder.exif_data(
-            exif.strip_prefix(b"Exif\0\0")
-                .filter(|_| exif.len() <= 65533)
-                .ok_or("Unsupported JPEG output marker")?,
-        );
+    for (payload, identifier) in [(markers.exif, 6), (markers.xmp, super::jpeg_markers::XMP.len())] {
+        if payload.is_some_and(|p| p.len() + identifier > 65533) {
+            return Err(METADATA_TOO_LARGE.into());
+        }
+    }
+    if let Some(exif) = markers.exif {
+        encoder = encoder.exif_data(exif);
+    }
+    if let Some(xmp) = markers.xmp {
+        encoder = encoder.xmp_data(xmp);
     }
     if let Some(resolution) = resolution {
         let (unit, [x, y]) = resolution.jfif_density()?;

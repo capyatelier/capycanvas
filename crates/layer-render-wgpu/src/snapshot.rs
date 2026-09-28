@@ -142,7 +142,7 @@ pub struct SnapshotRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     output_extent: [u32; 2],
     #[cfg(not(target_arch = "wasm32"))]
-    output_resolution: Option<layer_core::ImageResolution>,
+    output_metadata: layer_color::photo::DeliveryMetadata,
     background: [f32; 4],
     time: f32,
     planned_pixel_bytes: u64,
@@ -218,7 +218,11 @@ impl SnapshotRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             output_extent: extent,
             #[cfg(not(target_arch = "wasm32"))]
-            output_resolution: project.document.resolution,
+            output_metadata: layer_color::photo::DeliveryMetadata {
+                resolution: project.document.resolution,
+                photo: project.document.metadata.clone(),
+                policy: Default::default(),
+            },
             background,
             time,
             planned_pixel_bytes: PLANNED_PIXEL_BYTES,

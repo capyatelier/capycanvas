@@ -329,6 +329,37 @@ mod tests {
         );
     }
     #[test]
+    fn metadata_choices_round_trip_through_presets_and_older_presets_read_the_default() {
+        use crate::{ExportMetadata, MetadataKeep};
+        let document = DocumentColor::default();
+        let mut library = ExportPresets::default();
+        let mut rights = ExportRecipe::web_share();
+        rights.metadata = ExportMetadata { keep: MetadataKeep::CopyrightContact, remove_location: false };
+        let mut located = ExportRecipe::wide_color();
+        located.metadata.remove_location = false;
+        let named = library.save("Client proofs", rights.clone()).unwrap();
+        library.remember(1, located.clone()).unwrap();
+        let bytes = library.encode().unwrap();
+        let restored = ExportPresets::decode(&bytes).unwrap();
+        assert_eq!(restored, library);
+        assert_eq!(restored.recipe(named, document).unwrap().metadata, rights.metadata);
+        assert_eq!(restored.recipe(1, document).unwrap().metadata, located.metadata);
+        assert_eq!(restored.recipe(0, document).unwrap().metadata, ExportMetadata::default());
+
+        let (mut metadata, blocks): (serde_json::Value, _) =
+            binary_payload::decode(b"CAPYPRESETS\x01", &bytes, ExportPresets::MAX_FILE_BYTES).unwrap();
+        metadata["named"][0]["recipe"].as_object_mut().unwrap().remove("metadata");
+        let older = binary_payload::encode(b"CAPYPRESETS\x01", &metadata, &blocks, ExportPresets::MAX_FILE_BYTES).unwrap();
+        let older = ExportPresets::decode(&older).unwrap();
+        assert_eq!(older.recipe(named, document).unwrap().metadata, ExportMetadata::default());
+        let hdr = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 };
+        let mut hdr_jpeg = ExportRecipe::web_share().draft(crate::ExportDraftAction::Format(crate::ExportFormat::JpegHdr)).recipe;
+        hdr_jpeg.metadata = rights.metadata;
+        library.remember(0, hdr_jpeg).unwrap();
+        assert_eq!(library.recipe(0, document).unwrap().metadata, rights.metadata, "the SDR fallback of an HDR preset keeps its metadata");
+        assert_eq!(library.recipe(0, hdr).unwrap().metadata, rights.metadata);
+    }
+    #[test]
     fn hdr_recipes_resolve_to_sdr_delivery_for_sdr_documents() {
         use crate::{ExportBackground, ExportDraftAction, ExportFormat, ExportSize};
         let hdr = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 };

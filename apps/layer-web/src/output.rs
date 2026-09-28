@@ -46,6 +46,9 @@ struct OutputMetadata {
     guide: Option<GuideMetadata>,
     #[serde(default)]
     clip: Option<ClipMetadata>,
+    /// Buffers holding the document's Exif, XMP and IPTC blocks.
+    #[serde(default)]
+    photo: [Option<u32>; 3],
 }
 
 /// A clipboard copy of `extent` document pixels at `origin`.
@@ -77,6 +80,7 @@ pub(super) fn clip_metadata(
         flatten: None,
         guide: guide.map(|(extent, peak)| GuideMetadata { extent, peak, buffer: 0 }),
         clip: Some(clip),
+        photo: [None; 3],
     })
     .unwrap()
 }
@@ -185,7 +189,9 @@ pub(super) async fn render_output(
         flatten,
         guide: None,
         clip: None,
+        photo: [None; 3],
     };
+    let photo = snapshot.project.document.metadata.clone();
     let mut capture = gpu
         .capture(
             snapshot.project,
@@ -210,7 +216,7 @@ pub(super) async fn render_output(
     )).flatten();
     let buffers = if let Some(original) = original {
         let project =
-            layer_color::photo_project((*original).clone(), "Original", metadata.color.depth)
+            layer_color::photo_project((*original).clone(), Default::default(), "Original", metadata.color.depth)
                 .map_err(js)?;
         let packed = raster_project::pack(project).await?;
         metadata.original = Some(
@@ -222,6 +228,12 @@ pub(super) async fn render_output(
     } else {
         js_sys::Array::new()
     };
+    for (index, block) in metadata.photo.iter_mut().zip(photo.blocks()) {
+        if let Some(bytes) = block {
+            *index = Some(buffers.length());
+            buffers.push(&js_sys::Uint8Array::from(bytes.as_ref()));
+        }
+    }
     // Codecs consume pixels on their file worker, but illumination analysis is
     // always the shared GPU algorithm. Only its bounded guide crosses to CPU.
     if metadata.rendition.is_some() && (preview || metadata.recipe.format.gainmap().is_some() ||
@@ -363,6 +375,15 @@ pub async fn raster_worker_output(
     }).transpose()?;
     let recipe = &metadata.recipe;
     recipe.validate().map_err(js)?;
+    let [exif, xmp, iptc] = metadata.photo.map(|index| {
+        index.map(|index| std::sync::Arc::<[u8]>::from(js_sys::Uint8Array::new(&buffers.get(index)).to_vec()))
+    });
+    let delivery = layer_color::photo::DeliveryMetadata {
+        resolution: metadata.resolution,
+        photo: layer_core::PhotoMetadata { exif, xmp, iptc },
+        policy: recipe.metadata,
+    };
+    delivery.photo.validate().map_err(js)?;
     let target = recipe.interpretation();
     let extent = recipe.output_extent(metadata.extent).map_err(js)?;
     let output = WorkerFile {
@@ -463,7 +484,7 @@ pub async fn raster_worker_output(
             }
             let stats = layer_color::photo::write_gainmap_rows(
                 output, extent, metadata.color.space, rendition, guide, format,
-                options, metadata.resolution, recipe.background.matte(),
+                options, &delivery, recipe.background.matte(),
                 recipe.format.maps_hdr_range(), &cancel, rows,
             ).map_err(js)?;
             return serialize(&serde_json::json!({"clipped_channels": stats.clipped_channels, "extent": extent}));
@@ -490,7 +511,7 @@ pub async fn raster_worker_output(
             }
             (Some(layer_render_wgpu::snapshot::SnapshotPreview {extent:size,pixels,space:layer_core::color::RgbSpace::Srgb}),stats)
         } else {
-            (None,layer_color::photo::write_hdr_png_rows(output,extent,metadata.color.space,metadata.resolution,recipe.format.maps_hdr_range(),rows).map_err(js)?)
+            (None,layer_color::photo::write_hdr_png_rows(output,extent,metadata.color.space,&delivery,recipe.format.maps_hdr_range(),rows).map_err(js)?)
         };
         let result=serialize(&serde_json::json!({"clipped_channels":stats.clipped_channels,"extent":extent}))?;
         if let Some(after)=preview { let values=js_sys::Array::new(); values.push(&preview_value(&before.unwrap())?);values.push(&preview_value(&after)?);js_sys::Reflect::set(&result,&js("previews"),&values)?; }
@@ -531,21 +552,21 @@ pub async fn raster_worker_output(
                 output,
                 extent,
                 target,
-                metadata.resolution,
+                &delivery,
                 rows,
             ),
             ExportFormat::Tiff => layer_color::photo::write_tiff_rows(
                 output,
                 extent,
                 target,
-                metadata.resolution,
+                &delivery,
                 rows,
             ),
             ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows(
                 output,
                 extent,
                 target,
-                metadata.resolution,
+                &delivery,
                 layer_color::photo::JpegEncodeOptions::from_memory_budget(recipe.jpeg_quality, raster_project::photo_memory_budget()),
                 rows,
             ),
@@ -553,7 +574,7 @@ pub async fn raster_worker_output(
                 output,
                 extent,
                 target,
-                metadata.resolution,
+                &delivery,
                 layer_color::photo::WebpEncodeOptions::from_memory_budget(raster_project::photo_memory_budget()),
                 rows,
             ),
@@ -593,7 +614,8 @@ pub async fn raster_worker_output(
         .map_err(js)?
         .clipped_channels
     };
-    if let Some(project) = flattened {
+    if let Some(mut project) = flattened {
+        project.document.metadata = delivery.photo;
         let wire = raster_project::pack(project).await?;
         js_sys::Reflect::set(&wire, &js("clipped"), &JsValue::from_f64(clipped as f64))?;
         return Ok(wire);

@@ -254,7 +254,7 @@ fn rust_heif_retains_print_density_and_applies_container_rotation_once() {
     };
     let mut tile = item(1, "flat_red_64");
     tile.props.push((true, tb::irot(1)));
-    let exif = super::super::metadata::exif_output(density).unwrap();
+    let exif = super::super::test_support::exif_output(density).unwrap();
     let mut payload = vec![0; 4];
     payload.extend_from_slice(&exif[6..]);
     let metadata = tb::TestItem {

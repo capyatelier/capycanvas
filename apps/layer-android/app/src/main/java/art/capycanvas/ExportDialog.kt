@@ -138,6 +138,20 @@ import org.json.JSONObject
                     if (fit) { OutlinedTextField(width, { width = it }, label = { Text("Maximum width") }, singleLine = true); OutlinedTextField(height, { height = it }, label = { Text("Maximum height") }, singleLine = true) }
                     ColorChoice("Resolution metadata", listOf("Master" to "Keep original", "Ppi" to "Pixels per inch", "Omit" to "Omit"), resolution) { resolution = it }
                     if (resolution == "Ppi") OutlinedTextField(ppi, { ppi = it }, label = { Text("Pixels per inch") }, singleLine = true)
+                    val metadata = draft?.optJSONObject("metadata")
+                    if (model.optBoolean("metadata") && metadata != null) {
+                        val kept = value.getJSONObject("metadata")
+                        if (metadata.getBoolean("available")) {
+                            ColorChoice(metadata.getString("label"), metadata.getJSONArray("choices").objects().map { it.getString("value") to it.getString("label") }, kept.getString("keep")) {
+                                change("metadata", JSONObject(kept.toString()).put("keep", it))
+                            }
+                        }
+                        if (metadata.getBoolean("location")) Row {
+                            Checkbox(kept.getBoolean("remove_location"), { change("metadata", JSONObject(kept.toString()).put("remove_location", it)) }, Modifier.testTag("export-remove-location"))
+                            Text(metadata.getString("remove_location"))
+                        }
+                        if (!metadata.isNull("note")) Text(metadata.getString("note"), Modifier.testTag("export-metadata-note"))
+                    }
                     OutlinedTextField(presetName,{presetName=it.take(80)},label={Text("Preset name")},singleLine=true)
                     fun store(type:String)=scope.launch{try{preference(obj("type" to type,"index" to destination.toInt(),"name" to presetName,"recipe" to selectedRecipe()).apply{if(type!="save")remove("name");if(type=="save")remove("index");if(type=="remove"||type=="reset")remove("recipe")})}catch(e:Exception){error=e.message}}
                     Row {TextButton({store("save")}){Text("Save Preset")};TextButton({store("update")},enabled=destination.toInt()>=4){Text("Update Preset")}}

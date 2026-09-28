@@ -122,7 +122,7 @@ impl<'a> Sequence<'a> {
                 item.id,
                 crate::MAX_ICC_BYTES.min(budget.saturating_sub(metadata.metadata_bytes)),
             )?;
-            result = super::exif_resolution(&payload)?;
+            result = crate::photo::metadata::exif(super::exif_tiff(&payload)?)?.resolution;
         }
         Ok(result)
     }

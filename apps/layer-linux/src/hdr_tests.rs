@@ -106,7 +106,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
                 std::fs::File::create(&path).unwrap(),
                 [512, 384],
                 RgbSpace::Srgb,
-                None,
+                &Default::default(),
                 false,
                 |y, row| {
                     for (x, p) in row.iter_mut().enumerate() {

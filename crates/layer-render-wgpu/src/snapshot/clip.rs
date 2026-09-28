@@ -19,7 +19,7 @@ impl SnapshotRenderer {
             extent: [crop[2], crop[3]],
             origin: [crop[0], crop[1]],
             color: self.color(),
-            resolution: self.output_resolution,
+            resolution: self.output_metadata.resolution,
             rendition: self.sdr_rendition.zip(guide.as_deref()),
             source,
             limit,

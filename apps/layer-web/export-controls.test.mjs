@@ -31,24 +31,31 @@ const WEBP_LIMIT = "WebP export is limited to 16,384 pixels per side. Fit the si
 const base = {
   format: "Png", profile: { name: "sRGB", profile: { Builtin: "Srgb" } }, depth: "U16", background: "Preserve",
   encoding: { conversion: { intent: "RelativeColorimetric", black_point_compensation: false }, dither: "None" },
-  jpeg_quality: 90, size: "Original", resolution: "Master",
+  jpeg_quality: 90, size: "Original", resolution: "Master", metadata: { keep: "All", remove_location: true },
 };
+const METADATA_CHOICES = [["All", "All"], ["CopyrightContact", "Copyright & Contact"], ["None", "None"]];
 
-function fakeApp({ extent = [20000, 400] } = {}) {
+function fakeApp({ extent = [20000, 400], photo = false } = {}) {
   const calls = { drafts: [], validated: [], rendered: 0 };
   const draft = (recipe, action) => {
     const format = action.type === "format" ? action.value : recipe.format;
-    const webp = format === "Webp";
+    const metadata = action.type === "metadata" ? action.value : recipe.metadata;
+    const webp = format === "Webp", exr = format === "Exr";
     calls.drafts.push(action);
     return {
-      recipe: { ...recipe, format, depth: webp ? "U8" : recipe.depth },
+      recipe: { ...recipe, format, metadata, depth: webp ? "U8" : recipe.depth },
       formats: ["Png", "Tiff", "Jpeg", "Webp"], depths: webp ? ["U8"] : ["U8", "U16"],
       backgrounds: ["Preserve", "White", "Black"], dithers: ["None", "Stochastic8"],
+      metadata: {
+        label: "Metadata", choices: METADATA_CHOICES.map(([value, label]) => ({ value, label })),
+        remove_location: "Remove location", location: !exr && metadata.keep === "All", available: !exr,
+        note: exr ? "OpenEXR keeps no camera or copyright details. Choose another format to keep them." : null,
+      },
     };
   };
   return {
     calls,
-    export_form: () => ({ profiles: [base.profile] }),
+    export_form: () => ({ profiles: [base.profile], metadata: photo }),
     export_presets: async () => ({ names: ["Web", "Print", "Archive", "Last"], recipe: base, index: 0 }),
     document_color: () => ({ space: "Srgb", depth: "U8" }),
     export_draft: draft,
@@ -112,4 +119,46 @@ test("a WebP too large for its encoder is refused before any rendering", async (
   const choice = await dialog.result;
   assert.deepEqual(choice.recipe.size, { Fit: { bounds: [2048, 2048], enlarge: false } });
   assert.ok(app.calls.validated.filter(f => f === "Webp").length >= 3);
+});
+
+test("a photo's Metadata row drafts the kept fields and location through the shared recipe", async () => {
+  const app = fakeApp({ extent: [800, 600], photo: true });
+  const dialog = await openDialog(app);
+  const metadata = dialog.labelled("Metadata"), location = dialog.labelled("Remove location");
+  const note = dialog.form.children.find(n => n.className === "export-metadata-note");
+  assert.deepEqual(metadata.options.map(o => [o.value, o.textContent]), METADATA_CHOICES, "labels come from the shared view");
+  assert.equal(metadata.value, "All");
+  assert.equal(location.checked, true, "location is removed by default");
+  assert.equal(metadata.closest("label").hidden, false);
+  assert.equal(location.closest("label").hidden, false);
+  assert.equal(note.hidden, true);
+  metadata.value = "CopyrightContact"; metadata.onchange();
+  assert.deepEqual(app.calls.drafts.at(-1), { type: "metadata", value: { keep: "CopyrightContact", remove_location: true } });
+  assert.equal(location.closest("label").hidden, true, "Copyright & Contact never keeps a location");
+  metadata.value = "All"; metadata.onchange();
+  location.checked = false; location.onchange();
+  assert.deepEqual(app.calls.drafts.at(-1), { type: "metadata", value: { keep: "All", remove_location: false } });
+  const format = dialog.labelled("Format");
+  format.value = "Jpeg"; format.onchange();
+  assert.equal(location.checked, false, "a format change keeps the metadata choice");
+  dialog.pressed("Choose File…").click();
+  const choice = await dialog.result;
+  assert.deepEqual(choice.recipe.metadata, { keep: "All", remove_location: false });
+});
+
+test("OpenEXR explains that it keeps no metadata, and drawings show no Metadata row", async () => {
+  const app = fakeApp({ extent: [800, 600], photo: true });
+  app.document_color = () => ({ space: "Srgb", depth: "F32" });
+  const dialog = await openDialog(app);
+  const range = dialog.labelled("Dynamic range");
+  range.value = "exr"; range.onchange();
+  const note = dialog.form.children.find(n => n.className === "export-metadata-note");
+  assert.equal(dialog.labelled("Metadata").closest("label").hidden, true);
+  assert.equal(dialog.labelled("Remove location").closest("label").hidden, true);
+  assert.equal(note.hidden, false);
+  assert.match(note.textContent, /^OpenEXR keeps no camera or copyright details\./);
+  const drawing = await openDialog(fakeApp({ extent: [800, 600] }));
+  assert.equal(drawing.labelled("Metadata").closest("label").hidden, true, "a new drawing has no photo metadata");
+  assert.equal(drawing.labelled("Remove location").closest("label").hidden, true);
+  assert.equal(drawing.form.children.find(n => n.className === "export-metadata-note").hidden, true);
 });

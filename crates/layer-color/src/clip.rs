@@ -57,7 +57,7 @@ pub fn write_clip_rows(
     let mut png = vec![0; png_bytes * BAND_ROWS];
     let mut band = 0..0;
     let mut bytes = Vec::new();
-    crate::photo::write_png_rows(&mut bytes, clip.extent, &srgb_png_interpretation(), None, |y, output| {
+    crate::photo::write_png_rows(&mut bytes, clip.extent, &srgb_png_interpretation(), &Default::default(), |y, output| {
         if !band.contains(&y) {
             band = y..(y + BAND_ROWS as u32).min(clip.extent[1]);
             let rows = band.len();

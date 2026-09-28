@@ -284,6 +284,92 @@ class AndroidRasterTest {
         }
     }
 
+    @Test fun photoMetadataExportKeepsCameraLensAndCopyrightWithoutLocation() {
+        fun idle(){compose.waitUntil(120_000){!host.documents.working&&!native{state(it).getJSONObject("document_file").getBoolean("busy")}};assertNull(host.failure);assertNull(host.actionError)}
+        fun choice(label:String,text:String){
+            compose.waitUntil(30_000){compose.onAllNodes(hasTestTag("color-choice-$label") and isEnabled()).fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithTag("color-choice-$label").performScrollTo().performClick()
+            compose.onAllNodesWithText(text).onLast().performClick();compose.waitForIdle()
+        }
+        val camera=File(files,"camera-${System.nanoTime()}.jpg")
+        val bitmap=android.graphics.Bitmap.createBitmap(160,120,android.graphics.Bitmap.Config.ARGB_8888).apply{eraseColor(android.graphics.Color.rgb(40,90,160))}
+        camera.outputStream().use{bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,92,it)};bitmap.recycle()
+        fun text(value:String)=value.toByteArray()+byteArrayOf(0)
+        fun u16(n:Int)=byteArrayOf((n and 255).toByte(),(n shr 8).toByte())
+        fun u32(n:Int)=byteArrayOf((n and 255).toByte(),((n shr 8) and 255).toByte(),((n shr 16) and 255).toByte(),(n ushr 24).toByte())
+        val directories=listOf(
+            mutableListOf(Triple(0x010f,2,text("Capycam")),Triple(0x0110,2,text("C-1")),Triple(0x013b,2,text("Ada Painter")),Triple(0x8298,2,text("(c) 2026 Ada Painter"))),
+            mutableListOf(Triple(0x829a,5,u32(1)+u32(250)),Triple(0x9003,2,text("2026:09:01 10:00:00")),Triple(0xa434,2,text("Capy 35mm F1.8"))),
+            mutableListOf(Triple(0x0001,2,text("N")),Triple(0x0002,5,u32(38)+u32(1)+u32(42)+u32(1)+u32(30)+u32(1)),Triple(0x0012,2,text("WGS-84"))))
+        fun size(entries:List<Triple<Int,Int,ByteArray>>)=6+12*entries.size+entries.filter{it.third.size>4}.sumOf{it.third.size+it.third.size%2}
+        val exifAt=8+size(directories[0])+24
+        directories[0].add(Triple(0x8769,4,u32(exifAt)));directories[0].add(Triple(0x8825,4,u32(exifAt+size(directories[1]))))
+        val tiff=java.io.ByteArrayOutputStream().apply{write(byteArrayOf(0x49,0x49,0x2a,0,8,0,0,0))}
+        for(entries in directories){
+            var dataAt=tiff.size()+6+12*entries.size;val data=java.io.ByteArrayOutputStream()
+            tiff.write(u16(entries.size))
+            for((tag,kind,value) in entries){
+                val width=when(kind){5->8;4->4;else->1}
+                tiff.write(u16(tag));tiff.write(u16(kind));tiff.write(u32(value.size/width))
+                if(value.size<=4)tiff.write(value.copyOf(4)) else {tiff.write(u32(dataAt));data.write(value);if(value.size%2==1)data.write(0);dataAt+=value.size+value.size%2}
+            }
+            tiff.write(u32(0));tiff.write(data.toByteArray())
+        }
+        fun segment(payload:ByteArray)=byteArrayOf(0xff.toByte(),0xe1.toByte(),((payload.size+2) shr 8).toByte(),((payload.size+2) and 255).toByte())+payload
+        val xmp="<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\" photoshop:City=\"Lisbon\"><dc:creator><rdf:Seq><rdf:li>Ada Painter</rdf:li></rdf:Seq></dc:creator></rdf:Description></rdf:RDF></x:xmpmeta>"
+        val jpeg=camera.readBytes()
+        camera.writeBytes(jpeg.copyOfRange(0,2)+segment("Exif".toByteArray()+byteArrayOf(0,0)+tiff.toByteArray())+segment(text("http://ns.adobe.com/xap/1.0/")+xmp.toByteArray())+jpeg.copyOfRange(2,jpeg.size))
+        fun contains(bytes:ByteArray,text:String)=bytes.decodeToString(throwOnInvalidSequence=false).contains(text)
+        assertTrue("The source photo carries a location",contains(camera.readBytes(),"WGS-84")&&contains(camera.readBytes(),"Lisbon"))
+        open(camera)
+        assertTrue("The opened photo keeps its metadata",native{JSONObject(Native.query(it,obj("type" to "export_form").toString()))}.getBoolean("metadata"))
+        val picked=java.util.concurrent.atomic.AtomicReference<File>()
+        val monitor=object:android.app.Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent:android.content.Intent):android.app.Instrumentation.ActivityResult? {
+                if(intent.action!=android.content.Intent.ACTION_CREATE_DOCUMENT)return null
+                val target=File(activity.getExternalFilesDir(null),"metadata-${System.nanoTime()}-${intent.getStringExtra(android.content.Intent.EXTRA_TITLE)}")
+                picked.set(target)
+                return android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK,android.content.Intent().setData(android.net.Uri.fromFile(target)))
+            }
+        }
+        instrumentation.addMonitor(monitor)
+        try {
+            DocumentController.nativeFileJobsForTest=false
+            for((format,label) in listOf("jpg" to "JPEG","webp" to "WebP · lossless")) {
+                picked.set(null)
+                compose.runOnUiThread{host.invoke("export_document")}
+                fun metadata(kept:String,location:Boolean){
+                    compose.waitUntil(30_000){compose.onAllNodes(hasTestTag("color-choice-Metadata") and hasText(kept) and isEnabled()).fetchSemanticsNodes().isNotEmpty()}
+                    assertEquals("Remove location with $kept",location,compose.onAllNodesWithTag("export-remove-location").fetchSemanticsNodes().isNotEmpty())
+                    if(location)compose.onNodeWithTag("export-remove-location").performScrollTo().assertIsOn()
+                }
+                choice("Format",label)
+                metadata("All",true)
+                choice("Metadata","Copyright & Contact")
+                metadata("Copyright & Contact",false)
+                choice("Metadata","All")
+                metadata("All",true)
+                compose.onNodeWithTag("export-choose-file").performClick()
+                compose.waitUntil(120_000){picked.get()?.let{it.length()>0}==true&&!host.documents.working&&!native{state(it).getJSONObject("document_file").getBoolean("busy")}}
+                idle()
+                val bytes=picked.get().readBytes()
+                assertTrue(picked.get().name.endsWith(".$format"))
+                for(kept in listOf("Capycam","C-1","Capy 35mm F1.8","Ada Painter","(c) 2026 Ada Painter","2026:09:01 10:00:00"))assertTrue("$format keeps $kept",contains(bytes,kept))
+                for(location in listOf("WGS-84","Lisbon"))assertFalse("$format leaves out $location",contains(bytes,location))
+                val exported=android.media.ExifInterface(java.io.ByteArrayInputStream(bytes))
+                assertFalse("$format has no GPS",exported.getLatLong(FloatArray(2)))
+                assertEquals("Capycam",exported.getAttribute(android.media.ExifInterface.TAG_MAKE))
+                assertEquals(1,exported.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION,0))
+                picked.get().delete()
+                println("PASS metadata export: ${bytes.size} bytes $format keeps camera, lens and copyright without location")
+            }
+        } finally {
+            instrumentation.removeMonitor(monitor)
+            DocumentController.nativeFileJobsForTest=true
+            camera.delete()
+        }
+    }
+
     @Test fun selectionToolsRenderAndCombineOnDevice() {
         fun selection() = native { state(it).getJSONObject("layer_tools").getBoolean("has_selection") }
         fun waitSelection() = compose.waitUntil(30_000) { tick(); selection() }

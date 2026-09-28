@@ -12,6 +12,7 @@ import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
 import {measureHdr} from "./hdr-performance.test.mjs";
 import {checkPortablePhoto} from "./portable-photo.test.mjs";
+import {checkExportMetadata} from "./export-metadata-journey.test.mjs";
 import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
 import {checkHdr} from "./hdr.test.mjs";
 import {checkProof} from "./proof.test.mjs";
@@ -95,7 +96,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--contact-brushes","--filter-drawer","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo","--filter-investigation","--pipeline-takeover"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--contact-brushes","--filter-drawer","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo","--export-metadata","--filter-investigation","--pipeline-takeover"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -189,6 +190,8 @@ try {
     await checkDrawingTabs({call,evaluate,settle});checkRasterErrors();
   } else if (process.argv.includes("--portable-photo")) {
     await checkPortablePhoto({call,evaluate,settle});checkRasterErrors();
+  } else if (process.argv.includes("--export-metadata")) {
+    await checkExportMetadata({call,evaluate,settle});checkRasterErrors();
   } else if (process.argv.includes("--hdr-performance")) {
     await measureHdr({call,evaluate,settle});checkRasterErrors();
   } else if (process.argv.includes("--hdr")) {

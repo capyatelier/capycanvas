@@ -88,7 +88,7 @@ pub(crate) fn write_snapshot(
             snapshot.project.document.width,
             snapshot.project.document.height,
         ])?;
-        let resolution = recipe.output_resolution(snapshot.project.document.resolution)?;
+        let metadata = recipe.delivery_metadata(&snapshot.project.document)?;
         let mut renderer = gpu.capture(
             snapshot.project,
             snapshot.background,
@@ -97,7 +97,7 @@ pub(crate) fn write_snapshot(
         )
         .map_err(|e| e.to_string())?;
         renderer.set_output_extent(extent)?;
-        renderer.set_output_resolution(resolution)?;
+        renderer.set_output_metadata(metadata)?;
         let mut clipped = 0;
         layer_core::atomic_write_checked(
             path,
@@ -380,6 +380,24 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     quality.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
     quality.set_visible(false);
     delivery_group.add(&quality);
+    let photo_metadata = !snapshot.project.document.metadata.is_empty();
+    let metadata_view = ExportRecipe::web_share().draft(ExportDraftAction::Refresh).metadata;
+    let metadata_choices: Rc<Vec<MetadataKeep>> = Rc::new(metadata_view.choices.iter().map(|c| c.value).collect());
+    let metadata = combo(&delivery_group, metadata_view.label, "export-metadata",
+        &metadata_view.choices.iter().map(|c| c.label).collect::<Vec<_>>());
+    let remove_location = adw::SwitchRow::builder().title(metadata_view.remove_location).active(true).build();
+    remove_location.set_widget_name("export-remove-location");
+    delivery_group.add(&remove_location);
+    let metadata_note = gtk::Label::builder().wrap(true).xalign(0.).visible(false).build();
+    metadata_note.set_widget_name("export-metadata-note");
+    metadata_note.add_css_class("dim-label");
+    let read_metadata: Rc<dyn Fn() -> ExportMetadata> = Rc::new(glib::clone!(
+        #[weak] metadata, #[weak] remove_location, #[strong] metadata_choices, #[upgrade_or_default]
+        move || ExportMetadata {
+            keep: metadata_choices.get(metadata.selected() as usize).copied().unwrap_or_default(),
+            remove_location: remove_location.is_active(),
+        }
+    ));
     let advanced_group = adw::PreferencesGroup::new();
     let advanced = adw::ExpanderRow::builder().title("Color conversion").build();
     let clip_hdr = adw::SwitchRow::builder().title("Clip out-of-range colors").subtitle("May lose highlight or color detail in the exported copy.").visible(false).build();
@@ -482,6 +500,29 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     ));
     for row in [&range, &format] { let sync = sync_range.clone(); row.connect_selected_notify(move |_| sync()); }
     sync_range();
+    let read_output_format: Rc<dyn Fn() -> ExportFormat> = Rc::new(glib::clone!(
+        #[weak] range, #[weak] clip_hdr, #[strong] read_format, #[upgrade_or] ExportFormat::Png,
+        move || match (range.selected(), clip_hdr.is_active()) {
+            (v, _) if v == exr_index => ExportFormat::Exr,
+            (1, false) => ExportFormat::PngHdr, (1, true) => ExportFormat::PngHdrMapped,
+            (2, false) => ExportFormat::JpegHdr, (2, true) => ExportFormat::JpegHdrMapped,
+            (3, false) => ExportFormat::AvifHdr, (3, true) => ExportFormat::AvifHdrMapped,
+            _ => read_format(),
+        }
+    ));
+    let sync_metadata: Rc<dyn Fn()> = Rc::new(glib::clone!(
+        #[weak] metadata, #[weak] remove_location, #[weak] metadata_note, #[strong] read_output_format, #[strong] read_metadata,
+        move || {
+            let recipe = ExportRecipe { format: read_output_format(), metadata: read_metadata(), ..ExportRecipe::web_share() };
+            let view = recipe.draft(ExportDraftAction::Refresh).metadata;
+            metadata.set_visible(photo_metadata && view.available);
+            remove_location.set_visible(photo_metadata && view.location);
+            metadata_note.set_label(view.note.unwrap_or_default());
+            metadata_note.set_visible(photo_metadata && view.note.is_some());
+        }
+    ));
+    for row in [&range, &format, &metadata] { let sync = sync_metadata.clone(); row.connect_selected_notify(move |_| sync()); }
+    sync_metadata();
     let validation = gtk::Label::builder()
         .wrap(true)
         .xalign(0.)
@@ -548,8 +589,13 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             #[strong]
             updating,
             #[strong] apply_background,
+            #[weak] metadata,
+            #[weak] remove_location,
+            #[strong] metadata_choices,
             move |recipe: &ExportRecipe| {
                 updating.set(true);
+                metadata.set_selected(metadata_choices.iter().position(|k| *k == recipe.metadata.keep).unwrap_or(0) as u32);
+                remove_location.set_active(recipe.metadata.remove_location);
                 range.set_selected(if recipe.format == ExportFormat::Exr { exr_index } else { match recipe.format.gainmap(){Some(layer_color::photo::GainMapFormat::Jpeg)=>2,Some(layer_color::photo::GainMapFormat::Avif)=>3,None=>u32::from(recipe.format.is_hdr())}});
                 flatten.set_active(recipe.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg)&&recipe.background!=ExportBackground::Preserve);
                 clip_hdr.set_active(recipe.format.maps_hdr_range());
@@ -620,6 +666,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         &intent,
         &size,
         &resolution,
+        &metadata,
     ] {
         row.connect_selected_notify(glib::clone!(
             #[weak]
@@ -638,7 +685,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     space.connect_subtitle_notify(glib::clone!(#[weak] preset, #[strong] updating, move |_| {
         if !updating.get() { updating.set(true); preset.set_selected(3); updating.set(false); }
     }));
-    for row in [&dither, &enlarge, &clip_hdr, &flatten] {
+    for row in [&dither, &enlarge, &clip_hdr, &flatten, &remove_location] {
         row.connect_active_notify(glib::clone!(
             #[weak]
             preset,
@@ -697,12 +744,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         }
     ));
     let read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, String>> = Rc::new(glib::clone!(
-        #[strong]
-        read_format,
         #[weak]
         range,
-        #[weak]
-        clip_hdr,
         #[weak]
         flatten,
         #[weak]
@@ -720,19 +763,16 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         #[strong]
         chosen_resolution,
         #[strong] read_background,
+        #[strong] read_output_format,
+        #[strong] read_metadata,
         #[upgrade_or]
         Err("Export options closed".into()),
         move || {
             let recipe = ExportRecipe {
                 size: output_size(),
                 resolution: chosen_resolution(),
-                format: match (range.selected(),clip_hdr.is_active()) {
-                    (v,_) if v == exr_index => ExportFormat::Exr,
-                    (1,false)=>ExportFormat::PngHdr,(1,true)=>ExportFormat::PngHdrMapped,
-                    (2,false)=>ExportFormat::JpegHdr,(2,true)=>ExportFormat::JpegHdrMapped,
-                    (3,false)=>ExportFormat::AvifHdr,(3,true)=>ExportFormat::AvifHdrMapped,
-                    _=>read_format(),
-                },
+                format: read_output_format(),
+                metadata: read_metadata(),
                 profile: if range.selected() == exr_index { ExportProfile::builtin(document.space) } else if range.selected() != 0 { ExportProfile::builtin(layer_core::color::RgbSpace::Srgb) } else { selected_profile()? },
                 depth: if depth.selected() == 0 {
                     SampleDepth::U8
@@ -823,6 +863,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         &intent,
         &size,
         &resolution,
+        &metadata,
     ] {
         row.connect_selected_notify({
             let validate = validate.clone();
@@ -830,7 +871,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         });
     }
     space.connect_subtitle_notify({ let validate = validate.clone(); move |_| validate() });
-    for row in [&dither, &enlarge, &clip_hdr, &flatten] {
+    for row in [&dither, &enlarge, &clip_hdr, &flatten, &remove_location] {
         row.connect_active_notify({
             let validate = validate.clone();
             move |_| validate()
@@ -921,6 +962,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     // One draft survives Back navigation; only the main page delivers it.
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.append(&delivery_group);
+    content.append(&metadata_note);
     content.append(&comparison.widget);
     content.append(&rendition_view);
     content.append(&compression_note);

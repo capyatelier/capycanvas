@@ -28,9 +28,10 @@ pub(super) async fn prepare(
     if !window.is_visible() { return Ok(None); }
     if location.is_none() {
         let source = Arc::unwrap_or_clone(project.document.layers[0].source.take().ok_or("Photo source unavailable")?);
+        let metadata = std::mem::take(&mut project.document.metadata);
         let Some(source) = interpret_window(window, source, policy, working).await? else { return Ok(None); };
         let name = project.document.layers[0].name.to_string();
-        project = gio::spawn_blocking(move || policy.photo_project(source, &name))
+        project = gio::spawn_blocking(move || policy.photo_project(source, metadata, &name))
             .await.map_err(|_| "Profile reader failed")??;
     }
     Ok(window.is_visible().then_some((project, location)))
