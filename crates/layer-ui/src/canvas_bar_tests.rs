@@ -649,7 +649,7 @@ fn interpolation_follows_the_mode_until_chosen_and_stays_chosen() {
     assert_eq!(preview(&mut s), Interpolation::Linear);
     assert_eq!(
         interpolation_choice(&s),
-        Some((false, vec![("Nearest", false), ("Bilinear", true), ("Bicubic", false)]))
+        Some((false, vec![("Nearest", false), ("Bilinear", true), ("Bicubic", false), ("Lanczos", false)]))
     );
     invoke(&mut s, CommandId::TransformDistort);
     s.frame(3, 3).unwrap();
@@ -667,8 +667,12 @@ fn interpolation_follows_the_mode_until_chosen_and_stays_chosen() {
     let menu = s.canvas_bar_choice_menu(bar.context, "transform-interpolation").unwrap();
     assert_eq!(
         menu.sections[0].iter().map(|i| (i.label.as_str(), i.selected)).collect::<Vec<_>>(),
-        [("Nearest", Some(false)), ("Bilinear", Some(false)), ("Bicubic", Some(true))]
+        [("Nearest", Some(false)), ("Bilinear", Some(false)), ("Bicubic", Some(true)), ("Lanczos", Some(false))]
     );
+    s.dispatch(menu.sections[0][3].action.clone().unwrap()).unwrap();
+    s.frame(6, 6).unwrap();
+    assert_eq!(preview(&mut s), Interpolation::Lanczos);
+    assert!(s.command(CommandId::TransformLanczos).selected);
     s.dispatch(menu.sections[0][0].action.clone().unwrap()).unwrap();
     s.frame(6, 6).unwrap();
     assert_eq!(preview(&mut s), Interpolation::Nearest);

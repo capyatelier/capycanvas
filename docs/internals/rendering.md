@@ -47,10 +47,21 @@ Canvas geometry commands build one batch in
   a layer with hidden pixels, and never writes past the layer's extent within an
   edge page, so growing the canvas shows transparency there. Brush dabs past the
   canvas edge may write hidden pixels, as they already do on photo layers.
-- A turned canvas (Straighten) is a `linear` map in the plan. Paint layers and
-  masks without a source get a pending `Transform` operation into a new local
-  frame that holds the whole turned extent; photos turn their placement, and the
-  selection, Selection Layers and guides are transformed as metadata.
+- A turned, flipped or resized canvas (Straighten, Rotate and Flip Image, Image
+  Size) is a `linear` map in the plan. Paint layers and masks without a source get
+  a pending `Transform` operation into a new local frame that holds the whole
+  moved extent; photos move their placement, and the selection, Selection Layers
+  and guides are transformed as metadata. Flips and quarter turns sample with
+  `Nearest`, so they move pixels exactly. Source and destination share one tile
+  grid while the operation runs, so a quarter turn of a non-square layer draws
+  into a square extent.
+- A `Transform` whose selection takes every pixel its target holds (no
+  selection, or a rectangle around all of its pages) leaves the pages outside its
+  forward bounds empty. The renderer drops them, in every plane, from the GPU and
+  from the data the next publication copies, so a reduction or turn publishes no
+  transparent tiles and they don't count toward the tile limit. A photo keeps its
+  pages, since they cover its original. A mask's transform creates the pages it
+  draws, so its source is only the pages the mask held.
 - Delete Cropped Pixels trims each paint layer and mask to the tiles its window
   touches, rebases them to the smallest tile-aligned extent, and erases the edges
   of paint layers with up to four bounded `Erase` operations, so only edge tiles
@@ -217,6 +228,28 @@ preview settles into, a few each, and settling waits for them.
 
 Drag frames and still previews until they settle resample; pages, Apply,
 commits and the settled display are exact.
+
+### Resampling
+
+The [transform pass](../../crates/layer-render-wgpu/src/pixel_transform.wgsl)
+samples premultiplied linear pixels and their selection together. `Nearest`
+takes the pixel under the sample. `Linear` is bilinear. `Bicubic` is
+Catmull-Rom over 4 × 4 taps and `Lanczos` is Lanczos-3 over 6 × 6 taps with
+normalized weights; both clamp their overshoot to the range of the four nearest
+taps, keep colour at most alpha times the brightest straight colour among them,
+and clamp scalar planes to [0, 1], so neither rings past the edges it sharpens.
+Where the map minifies, a destination pixel instead averages a grid of bilinear
+taps spread over its footprint, as many per axis as source pixels it spans. Each
+record carries a cap on that count: drag previews use at most four, and commits,
+still previews that Apply may keep, and exact capture use up to sixteen, derived
+from the map's Jacobian. A reduction to an eighth therefore averages every
+source pixel, as an area reduction would, instead of aliasing. A moving
+Bicubic or Lanczos preview draws bilinearly until it stops.
+
+Exact capture (export, snapshots and the artwork readback) draws placed photos
+through the same pass with the exact cap, and with `Bicubic` where the placement
+magnifies. The live display samples the photo's placement mips instead, and the
+fused display path stays bilinear.
 
 ## Filters
 

@@ -76,6 +76,7 @@ pub struct LayersView {
     pub mask_editing: Option<MaskEditingView>,
     pub selection_resize: Option<super::selection_refine::SelectionRefineView>,
     pub canvas_size: Option<super::canvas_size::CanvasSizeView>,
+    pub image_size: Option<super::image_size::ImageSizeView>,
     pub can_reference: bool,
     pub can_delete: bool,
     pub references_selected: bool,

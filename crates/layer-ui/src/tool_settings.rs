@@ -61,7 +61,7 @@ impl ToolSettingAction {
             }
             TransformFree | TransformUniform | TransformDistort | TransformWarp => Some(ToolActionGroup::TransformMode),
             WarpGridThree | WarpGridFour | WarpGridFive => Some(ToolActionGroup::TransformWarpGrid),
-            TransformNearest | TransformBilinear | TransformBicubic => Some(ToolActionGroup::TransformInterpolation),
+            TransformNearest | TransformBilinear | TransformBicubic | TransformLanczos => Some(ToolActionGroup::TransformInterpolation),
             CropRatioFree | CropRatioOriginal | CropRatioSquare | CropRatioFourFive | CropRatioTwoThree
             | CropRatioFiveSeven | CropRatioSixteenNine => Some(ToolActionGroup::CropRatio),
             CropOverlayThirds | CropOverlayGrid | CropOverlayDiagonal | CropOverlayGolden => {

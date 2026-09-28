@@ -6,6 +6,11 @@ use super::{Deferred, PipelineDevice, Uploads};
 use layer_core::{ImageTransform, Interpolation, Projective};
 
 pub(super) const TRANSFORM_SLOTS: usize = 16;
+/// Taps per axis a minified pixel averages in drag previews.
+pub(super) const PREVIEW_TAPS: u32 = 4;
+/// Taps per axis a minified pixel averages at most in exact passes: commits
+/// and capture.
+pub(super) const EXACT_TAPS: u32 = 16;
 /// Mesh source positions per attachment pixel, bound in the last source slot;
 /// uncovered pixels hold UNCOVERED.
 pub(super) const POSITIONS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
@@ -301,7 +306,8 @@ impl PixelTransform {
         }
     }
     /// Upload one record per job and return the offset of the first. A part
-    /// other than the whole layer draws only into a display level.
+    /// other than the whole layer draws only into a display level. A minified
+    /// pixel averages at most `taps` taps per axis.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_tiled(
         &mut self,
@@ -311,6 +317,7 @@ impl PixelTransform {
         bounds: [i32; 4],
         background: f32,
         transform: &ImageTransform,
+        taps: u32,
         jobs: &[TiledTransformRecord<'_>],
         display: Option<(DisplayLevel, Part)>,
     ) -> Result<u32, &'static str> {
@@ -332,6 +339,7 @@ impl PixelTransform {
         for (job, record) in jobs.iter().zip(self.records.chunks_exact_mut(stride as usize)) {
             let values = region_record(
                 rows,
+                taps,
                 job.target.map(|v| (v * super::PAGE_SIZE) as f32),
                 filter_flags(transform.interpolation)
                     + 2. * f32::from(job.unmoved || identity)
@@ -427,7 +435,20 @@ fn filter_flags(interpolation: Interpolation) -> f32 {
         Interpolation::Nearest => 0.,
         Interpolation::Linear => 1.,
         Interpolation::Bicubic => 9.,
+        Interpolation::Lanczos => 129.,
     }
+}
+
+/// The taps per axis an exact pass averages over a minified pixel: enough
+/// for the largest source step of an affine map, and the most allowed for
+/// a perspective or mesh, whose steps vary.
+pub(super) fn exact_taps(transform: &ImageTransform) -> u32 {
+    let Some(affine) = transform.as_affine().and_then(|a| a.inverse()) else {
+        return EXACT_TAPS;
+    };
+    let [a, b, c, d, _, _] = affine.0;
+    let step = a.hypot(b).max(c.hypot(d));
+    ((step + 0.501).floor() as u32).clamp(1, EXACT_TAPS)
 }
 
 /// Rows mapping a destination pixel to homogeneous source coordinates. A mesh
@@ -447,6 +468,7 @@ pub(super) fn inverse_rows(transform: &ImageTransform) -> Result<[[f32; 3]; 3], 
 /// `target` in layer pixels.
 fn region_record(
     [x, y, w]: [[f32; 3]; 3],
+    taps: u32,
     target: [f32; 2],
     flags: f32,
     background: f32,
@@ -461,7 +483,7 @@ fn region_record(
     });
     let [r, g, b, a] = level.backdrop;
     [
-        x[0], x[1], x[2], 0., y[0], y[1], y[2], 0., w[0], w[1], w[2], 0., target[0], target[1],
+        x[0], x[1], x[2], taps as f32, y[0], y[1], y[2], 0., w[0], w[1], w[2], 0., target[0], target[1],
         flags, background, level.side as f32, level.opacity, level.extent[0] as f32,
         level.extent[1] as f32, texels[0], texels[1], texels[2], texels[3], r, g, b, a,
     ]

@@ -120,7 +120,7 @@ pub(super) struct CanvasSizeDraft {
     view: CanvasSizeView,
 }
 
-fn number(min: f64, max: f64, digits: u32, unit: &str) -> NumericControl {
+pub(super) fn number(min: f64, max: f64, digits: u32, unit: &str) -> NumericControl {
     NumericControl {
         kind: NumericKind::Number,
         ..NumericControl::number(min, max.max(min), 1., digits).unit(unit)
@@ -312,7 +312,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 let size = draft.size().ok_or_else(|| layer_core::CanvasGeometryError::Empty.to_string())?;
                 let rect = draft.rect(size);
-                self.apply_canvas_rect(rect)?;
+                self.apply_canvas_geometry(&CanvasGeometry::crop(rect), Vec::new()).map_err(|e| e.to_string())?;
                 self.canvas_size = None;
                 self.refresh_tools();
                 return Ok(());
@@ -346,23 +346,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if origin == [0; 2] && size == [doc.width, doc.height] {
             return Err("The selection already covers the whole canvas".into());
         }
-        self.apply_canvas_rect(CanvasRect { origin, size })
-    }
-
-    /// Move the canvas in one undo step, keeping the image still on screen.
-    fn apply_canvas_rect(&mut self, rect: CanvasRect) -> Result<(), String> {
-        if self.operation.placing() {
-            return Err("Apply or cancel the photo placement first".into());
-        }
-        self.engine
-            .apply_canvas_geometry(&CanvasGeometry::crop(rect))
-            .map_err(|e| e.to_string())?;
-        let delta = layer_core::Point { x: -rect.origin[0] as f32, y: -rect.origin[1] as f32 };
-        if let Some(reselect) = &mut self.selection_masks.reselect {
-            *reselect = reselect.translated(delta);
-        }
-        self.follow_canvas_origin(rect.origin);
-        Ok(())
+        self.apply_canvas_geometry(&CanvasGeometry::crop(CanvasRect { origin, size }), Vec::new()).map_err(|e| e.to_string())
     }
 
     /// Keep the image where it was on screen after the canvas origin moves.

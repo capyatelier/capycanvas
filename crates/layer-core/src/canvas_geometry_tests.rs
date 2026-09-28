@@ -428,3 +428,202 @@ fn straightening_with_deleted_pixels_frames_the_canvas_and_erases_beyond_it() {
     let tight = GeometryLimits { project: ProjectLimits { tiles: 20, ..Default::default() }, ..limits() };
     assert_eq!(doc.canvas_geometry_plan(&geometry, tight).unwrap_err(), CanvasGeometryError::TooManyTiles { limit: 20 });
 }
+
+const ORIENTATIONS: [ImageOrientation; 5] = [
+    ImageOrientation::FlipHorizontal,
+    ImageOrientation::FlipVertical,
+    ImageOrientation::RotateLeft,
+    ImageOrientation::RotateRight,
+    ImageOrientation::Rotate180,
+];
+
+/// The fixture with a placed photo on top.
+fn with_photo() -> (Document, LayerId) {
+    let mut doc = fixture();
+    let photo = doc.allocate_layer_id();
+    let mut layer = Layer::paint(photo, "Photo");
+    layer.source = Some(Arc::new(photo_source([300, 200])));
+    layer.properties.offset = Point { x: 20., y: 10. };
+    doc.layers.insert(0, layer);
+    (doc, photo)
+}
+
+fn transforms(plan: &CanvasGeometryPlan) -> Vec<(LayerId, ImageTransform)> {
+    plan.operations
+        .iter()
+        .map(|(id, op)| match &op.kind {
+            LayerOperationKind::Transform(transform) => (*id, transform.clone()),
+            kind => panic!("a resample, not {kind:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn flips_and_turns_move_pixel_centres_onto_pixel_centres_in_one_step() {
+    let (doc, photo) = with_photo();
+    for orientation in ORIENTATIONS {
+        let geometry = CanvasGeometry::orient([doc.width, doc.height], orientation);
+        let quarter = matches!(orientation, ImageOrientation::RotateLeft | ImageOrientation::RotateRight);
+        let to_canvas = geometry.to_canvas();
+        let plan = doc.canvas_geometry_plan(&geometry, limits()).unwrap();
+        let mut editor = Editor::new(doc.clone());
+        editor.perform(Edit::Batch(plan.edits.clone())).unwrap();
+        let result = editor.document();
+        assert!(result.extents_cover_canvas());
+        assert_eq!([result.width, result.height], if quarter { [256, 512] } else { [512, 256] });
+        let resampled = transforms(&plan);
+        assert_eq!(resampled.len(), 3, "the child, the paint layer and its mask");
+        for (id, transform) in resampled {
+            assert_eq!(transform.interpolation, Interpolation::Nearest);
+            let map = transform.as_affine().unwrap();
+            assert!(map.0.iter().all(|v| v.fract() == 0.), "{orientation:?} {map:?}");
+            let extent = result.target_extent(id);
+            if quarter && id == doc.layers[4].id {
+                assert_eq!(extent, [512, 512], "a square scratch extent holds both orientations");
+            }
+            for p in [Point { x: 0.5, y: 0.5 }, Point { x: 511.5, y: 255.5 }, Point { x: 100.5, y: 7.5 }] {
+                let q = map.map(p);
+                assert_eq!([q.x.fract(), q.y.fract()], [0.5, 0.5]);
+                assert!(q.x > 0. && q.y > 0. && q.x < extent[0] as f32 && q.y < extent[1] as f32);
+                near(result.layer_transform(id).map(q), to_canvas.map(doc.layer_transform(id).map(p)));
+            }
+        }
+        for p in [Point { x: 0., y: 0. }, Point { x: 300., y: 200. }] {
+            near(result.layer_transform(photo).map(p), to_canvas.map(doc.layer_transform(photo).map(p)));
+        }
+        assert!(result.layer(photo).unwrap().raster == doc.layer(photo).unwrap().raster, "photos only move");
+        assert_eq!(result.selection, Some(doc.selection.as_ref().unwrap().transformed(to_canvas).unwrap()));
+        assert_eq!(result.rulers[0].geometry, doc.rulers[0].geometry.transformed(to_canvas));
+        assert!(editor.undo().unwrap());
+        same_state(editor.document(), &doc);
+    }
+}
+
+#[test]
+fn turning_four_times_or_flipping_twice_puts_every_pixel_back() {
+    let (doc, photo) = with_photo();
+    for (orientation, times) in [
+        (ImageOrientation::RotateRight, 4),
+        (ImageOrientation::RotateLeft, 4),
+        (ImageOrientation::Rotate180, 2),
+        (ImageOrientation::FlipHorizontal, 2),
+        (ImageOrientation::FlipVertical, 2),
+    ] {
+        let mut editor = Editor::new(doc.clone());
+        let paint = doc.layers[4].id;
+        let mask = doc.layers[4].mask.as_ref().unwrap().id;
+        let samples = [Point { x: 0.5, y: 0.5 }, Point { x: 300.5, y: 200.5 }];
+        let mut tracked: Vec<(LayerId, Point)> = [paint, mask].into_iter().flat_map(|id| samples.map(|p| (id, p))).collect();
+        for _ in 0..times {
+            let current = editor.document().clone();
+            let plan = current.canvas_geometry_plan(&CanvasGeometry::orient([current.width, current.height], orientation), limits()).unwrap();
+            let maps: BTreeMap<_, _> = transforms(&plan).into_iter().map(|(id, t)| (id, t.as_affine().unwrap())).collect();
+            for (id, p) in &mut tracked {
+                *p = maps[id].map(*p);
+            }
+            editor.perform(Edit::Batch(plan.edits)).unwrap();
+        }
+        let result = editor.document();
+        assert_eq!([result.width, result.height], [doc.width, doc.height]);
+        for (id, p) in tracked.iter().zip(samples.iter().cycle()).map(|((id, p), start)| (*id, (*p, *start))) {
+            near(result.layer_transform(id).map(p.0), doc.layer_transform(id).map(p.1));
+        }
+        for p in [Point { x: 0., y: 0. }, Point { x: 300., y: 200. }] {
+            near(result.layer_transform(photo).map(p), doc.layer_transform(photo).map(p));
+        }
+        let selection = result.selection.as_ref().unwrap();
+        for p in [Point { x: 100., y: 100. }, Point { x: 200., y: 200. }] {
+            near(selection.affine.map(p), doc.selection.as_ref().unwrap().affine.map(p));
+        }
+        let (start, end) = result.rulers[0].geometry.handles();
+        let (was_start, was_end) = doc.rulers[0].geometry.handles();
+        near(start, was_start);
+        near(end.unwrap(), was_end.unwrap());
+    }
+}
+
+#[test]
+fn a_quarter_turn_swaps_the_resolution_and_a_flip_keeps_it() {
+    let mut doc = fixture();
+    doc.resolution = Some(ImageResolution { unit: ResolutionUnit::Inch, density: [[300, 1], [150, 1]] });
+    let turn = doc.canvas_geometry_plan(&CanvasGeometry::orient([512, 256], ImageOrientation::RotateLeft), limits()).unwrap();
+    let mut editor = Editor::new(doc.clone());
+    editor.perform(Edit::Batch(turn.edits)).unwrap();
+    assert_eq!(editor.document().resolution.unwrap().density, [[150, 1], [300, 1]]);
+    assert!(editor.undo().unwrap());
+    assert_eq!(editor.document().resolution, doc.resolution);
+    let flip = doc.canvas_geometry_plan(&CanvasGeometry::orient([512, 256], ImageOrientation::FlipVertical), limits()).unwrap();
+    assert!(!flip.edits.iter().any(|e| matches!(e, Edit::SetResolution(_))));
+}
+
+#[test]
+fn setting_the_resolution_is_one_undoable_metadata_edit() {
+    let doc = fixture();
+    let mut editor = Editor::new(doc.clone());
+    let resolution = ImageResolution::ppi(240);
+    let edit = Edit::SetResolution(Some(resolution));
+    assert!(!edit.changes_image());
+    editor.perform(edit).unwrap();
+    assert_eq!(editor.document().resolution, Some(resolution));
+    assert!(editor.undo().unwrap());
+    assert_eq!(editor.document().resolution, None);
+    let invalid = ImageResolution { unit: ResolutionUnit::Inch, density: [[0, 1], [72, 1]] };
+    assert!(editor.perform(Edit::SetResolution(Some(invalid))).is_err());
+}
+
+#[test]
+fn image_size_scales_layers_placements_selections_guides_and_pixel_distances() {
+    let (mut doc, photo) = with_photo();
+    let effect = doc.allocate_layer_id();
+    let mut blur = EffectInstance::new(bundled_effect_catalog().get("gaussian_blur").unwrap().program());
+    blur.set("sigma", EffectValue::Number(3.)).unwrap();
+    let mut layer = Layer::paint(effect, "Blur");
+    layer.kind = LayerKind::Effect;
+    layer.effect = Some(Arc::new(blur));
+    doc.layers.insert(0, layer);
+    let sigma = |doc: &Document| match doc.layer(effect).unwrap().effect.as_ref().unwrap().value("sigma") {
+        Some(EffectValue::Number(v)) => *v,
+        _ => panic!("a number"),
+    };
+    for (size, expected) in [([256, 128], 1.5), ([2048, 1024], 12.), ([5120, 2560], 21.)] {
+        let geometry = CanvasGeometry::resize([512, 256], size, Interpolation::Lanczos);
+        let to_canvas = geometry.to_canvas();
+        let plan = doc.canvas_geometry_plan(&geometry, limits()).unwrap();
+        let mut editor = Editor::new(doc.clone());
+        editor.perform(Edit::Batch(plan.edits.clone())).unwrap();
+        let result = editor.document();
+        assert_eq!([result.width, result.height], size);
+        assert!(result.extents_cover_canvas());
+        assert_eq!(sigma(result), expected, "clamped to the parameter's range");
+        for (id, transform) in transforms(&plan) {
+            assert_eq!(transform.interpolation, Interpolation::Lanczos);
+            for p in [Point { x: 0., y: 0. }, Point { x: 256., y: 256. }] {
+                near(result.layer_transform(id).map(transform.as_affine().unwrap().map(p)), to_canvas.map(doc.layer_transform(id).map(p)));
+            }
+        }
+        for p in [Point { x: 0., y: 0. }, Point { x: 300., y: 200. }] {
+            near(result.layer_transform(photo).map(p), to_canvas.map(doc.layer_transform(photo).map(p)));
+        }
+        assert_eq!(result.selection, Some(doc.selection.as_ref().unwrap().transformed(to_canvas).unwrap()));
+        assert_eq!(result.rulers[0].geometry, doc.rulers[0].geometry.transformed(to_canvas));
+        assert_eq!(result.resolution, doc.resolution);
+        assert!(editor.undo().unwrap());
+        assert_eq!(sigma(editor.document()), 3.);
+        same_state(editor.document(), &doc);
+    }
+}
+
+#[test]
+fn resampled_tile_predictions_count_only_the_result() {
+    let doc = tiled();
+    let limits_with = |tiles| GeometryLimits { project: ProjectLimits { tiles, ..Default::default() }, ..limits() };
+    let half = CanvasGeometry::resize([1024, 768], [512, 384], Interpolation::Bicubic);
+    doc.canvas_geometry_plan(&half, limits_with(12)).unwrap();
+    assert_eq!(doc.canvas_geometry_plan(&half, limits_with(11)).unwrap_err(), CanvasGeometryError::TooManyTiles { limit: 11 });
+    let double = CanvasGeometry::resize([1024, 768], [2048, 1536], Interpolation::Bicubic);
+    assert_eq!(doc.canvas_geometry_plan(&double, limits_with(95)).unwrap_err(), CanvasGeometryError::TooManyTiles { limit: 95 });
+    doc.canvas_geometry_plan(&double, limits_with(96)).unwrap();
+    let bytes = |megabytes: u64| GeometryLimits { project: ProjectLimits { raster_bytes: megabytes << 20, ..Default::default() }, ..limits() };
+    assert_eq!(doc.canvas_geometry_plan(&double, bytes(14)).unwrap_err(), CanvasGeometryError::RasterTooLarge);
+    doc.canvas_geometry_plan(&double, bytes(15)).unwrap();
+}

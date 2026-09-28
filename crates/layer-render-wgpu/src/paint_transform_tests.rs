@@ -105,10 +105,13 @@ fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pix
 }
 
 #[test]
-fn bicubic_transforms_clamp_overshoot_at_every_sample_depth() {
+fn bicubic_and_lanczos_transforms_clamp_overshoot_at_every_sample_depth() {
     use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth, source::*};
     let extent = [256, 256];
-    for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+    for (depth, interpolation) in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32]
+        .into_iter()
+        .flat_map(|depth| [Interpolation::Bicubic, Interpolation::Lanczos].map(|i| (depth, i)))
+    {
         let peak = if matches!(depth, SampleDepth::F16 | SampleDepth::F32) { 8. } else { 1. };
         let mut builder = SourceBuilder::new(
             [64, 64],
@@ -162,7 +165,7 @@ fn bicubic_transforms_clamp_overshoot_at_every_sample_depth() {
             selection: None,
             transform: ImageTransform {
                 map: TransformMap::Affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])),
-                interpolation: Interpolation::Bicubic,
+                interpolation,
             },
         }))
         .unwrap();
@@ -172,13 +175,13 @@ fn bicubic_transforms_clamp_overshoot_at_every_sample_depth() {
             let bytes = page_bytes(&r, &page.active().texture);
             for texel in bytes.chunks_exact(16) {
                 let v: [f32; 4] = std::array::from_fn(|k| f32::from_le_bytes(texel[k * 4..k * 4 + 4].try_into().unwrap()));
-                assert!(v.iter().all(|c| c.is_finite() && *c >= 0.), "{depth:?}: negative lobe {v:?}");
-                assert!(v[3] <= 1., "{depth:?}: coverage overshoot {v:?}");
-                assert!(v[..3].iter().all(|c| *c <= peak * v[3] + 1e-5), "{depth:?}: color overshoot {v:?}");
+                assert!(v.iter().all(|c| c.is_finite() && *c >= 0.), "{depth:?} {interpolation:?}: negative lobe {v:?}");
+                assert!(v[3] <= 1., "{depth:?} {interpolation:?}: coverage overshoot {v:?}");
+                assert!(v[..3].iter().all(|c| *c <= peak * v[3] + 1e-5), "{depth:?} {interpolation:?}: color overshoot {v:?}");
                 brightest = brightest.max(v[0]);
             }
         }
-        assert!(brightest > peak * 0.99, "{depth:?}: bright texels survive, {brightest}");
+        assert!(brightest > peak * 0.99, "{depth:?} {interpolation:?}: bright texels survive, {brightest}");
     }
 }
 

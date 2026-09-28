@@ -137,7 +137,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 vec![command(CommandId::PasteImage)],
                 [CommandId::RasterizeSource, CommandId::RevertToOriginal, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer].map(command).into(),
                 vec![command(CommandId::ScaleRotate)],
-                vec![ContextMenuItem::submenu("Image", vec![[CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize].map(command).into()])],
+                vec![ContextMenuItem::submenu("Image", vec![
+                    [CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize, CommandId::ImageSize].map(command).into(),
+                    [CommandId::RotateImageLeft, CommandId::RotateImageRight, CommandId::RotateImage180].map(command).into(),
+                    [CommandId::FlipImageHorizontal, CommandId::FlipImageVertical].map(command).into(),
+                    [CommandId::Trim, CommandId::RevealAll].map(command).into(),
+                ])],
                 [CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth].map(command).into(),
                 vec![command(CommandId::Settings)],
             ] },

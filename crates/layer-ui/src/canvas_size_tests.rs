@@ -168,11 +168,14 @@ fn edit_image_submenu_holds_the_geometry_commands_and_photo_keymaps_bind_canvas_
     let edit = s.application_menu(ApplicationMenu::Edit);
     let mut seen = Vec::new();
     let image = edit.sections.iter().flatten().find(|i| i.label == "Image").expect("Edit ▸ Image");
-    let image: Vec<_> = image.sections.iter().flatten().map(|i| i.action.clone()).collect();
-    assert_eq!(
-        image,
-        [CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize].map(|command| Some(UiAction::Invoke { command }))
-    );
+    let image: Vec<Vec<_>> = image.sections.iter().map(|s| s.iter().map(|i| i.action.clone()).collect()).collect();
+    let invoke = |commands: &[CommandId]| commands.iter().map(|&command| Some(UiAction::Invoke { command })).collect::<Vec<_>>();
+    assert_eq!(image, [
+        invoke(&[CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize, CommandId::ImageSize]),
+        invoke(&[CommandId::RotateImageLeft, CommandId::RotateImageRight, CommandId::RotateImage180]),
+        invoke(&[CommandId::FlipImageHorizontal, CommandId::FlipImageVertical]),
+        invoke(&[CommandId::Trim, CommandId::RevealAll]),
+    ]);
     for item in edit.sections.iter().flatten() {
         assert!(!seen.contains(&item.action), "{}", item.label);
         seen.push(item.action.clone());

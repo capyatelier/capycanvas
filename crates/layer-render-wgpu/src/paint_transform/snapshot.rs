@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn perspective_jobs_bind_every_sampled_page_within_the_view_limit() {
         use layer_core::Interpolation::*;
-        for interpolation in [Nearest, Linear, Bicubic] {
+        for interpolation in [Nearest, Linear, Bicubic, Lanczos] {
             let keystone = check(
                 [[300., 200.], [5700., 400.], [5900., 3900.], [100., 3700.]],
                 interpolation,

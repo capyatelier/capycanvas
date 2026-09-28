@@ -6,13 +6,13 @@ use super::*;
 use serde_json::json;
 
 #[derive(Clone, Copy, Debug)]
-enum Device {
+pub(super) enum Device {
     Mouse,
     Touch,
     Pen,
 }
 
-fn tap(input: &mut RemoteInput, device: Device, at: [f32; 2]) {
+pub(super) fn tap(input: &mut RemoteInput, device: Device, at: [f32; 2]) {
     match device {
         Device::Mouse => input.click(at),
         Device::Touch => input.perform(json!([{"touch": "down", "point": at}, {"wait_ms": 40}, {"touch": "up"}])),
@@ -22,7 +22,7 @@ fn tap(input: &mut RemoteInput, device: Device, at: [f32; 2]) {
     }
 }
 
-fn drag(input: &mut RemoteInput, device: Device, from: [f32; 2], to: [f32; 2]) {
+pub(super) fn drag(input: &mut RemoteInput, device: Device, from: [f32; 2], to: [f32; 2]) {
     let points: Vec<_> = (1..=10)
         .map(|i| {
             let t = i as f32 / 10.;
@@ -65,12 +65,12 @@ fn menu_action(model: &gtk::gio::MenuModel, label: &str) -> Option<String> {
     })
 }
 
-fn center(w: &Workspace, widget: &gtk::Widget) -> [f32; 2] {
+pub(super) fn center(w: &Workspace, widget: &gtk::Widget) -> [f32; 2] {
     let b = widget.compute_bounds(&w.window).expect("mapped widget");
     [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]
 }
 
-fn bar_widget(w: &Workspace, name: &str) -> gtk::Widget {
+pub(super) fn bar_widget(w: &Workspace, name: &str) -> gtk::Widget {
     let mut found = None;
     until(
         || {
@@ -92,24 +92,32 @@ fn selected(w: &Workspace, command: CommandId) -> bool {
     state(w).commands.iter().any(|c| c.id == command && c.selected)
 }
 
-fn setting(w: &Workspace, id: &str) -> f32 {
+pub(super) fn setting(w: &Workspace, id: &str) -> f32 {
     state(w).tool_settings.iter().find(|c| c.id == id).map_or(f32::NAN, |c| c.value)
+}
+
+/// Fill a rectangle given as fractions of the canvas, x0, y0, x1, y1, with
+/// blue on the active layer, and return that layer.
+pub(super) fn fill_rect(w: &Rc<Workspace>, [x0, y0, x1, y1]: [f32; 4]) -> layer_core::LayerId {
+    w.dispatch(UiAction::SetColor { rgba: [0.1, 0.3, 0.8, 1.] });
+    let doc = document(w);
+    let [width, height] = [doc.width as f32, doc.height as f32];
+    let paint = doc.active_layer;
+    let before = doc.layer(paint).unwrap().raster.clone();
+    w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+    let [x0, y0, x1, y1] = [width * x0, height * y0, width * x1, height * y1];
+    native_pen_path(w, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]);
+    w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
+    until(|| document(w).layer(paint).unwrap().raster.try_data().is_some_and(|_| document(w).layer(paint).unwrap().raster != before), "the fill paints the selection");
+    w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
+    paint
 }
 
 /// A filled rectangle over the middle of the canvas, then the Crop tool from
 /// Edit › Image.
-fn crop_ready(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
+pub(super) fn crop_ready(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
     let (app, w, mut input) = start(id);
-    w.dispatch(UiAction::SetColor { rgba: [0.1, 0.3, 0.8, 1.] });
-    let doc = document(&w);
-    let [width, height] = [doc.width as f32, doc.height as f32];
-    let paint = doc.active_layer;
-    w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
-    let [x0, y0, x1, y1] = [width * 0.2, height * 0.2, width * 0.8, height * 0.8];
-    native_pen_path(&w, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]);
-    w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
-    until(|| !document(&w).layer(paint).unwrap().raster.is_empty(), "the fill paints the selection");
-    w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
+    fill_rect(&w, [0.2, 0.2, 0.8, 0.8]);
     choose(&w, &mut input, "Edit", &["Image", "Crop"]);
     until(|| cropping(&w), "Edit › Image › Crop opens the crop bar");
     (app, w, input)

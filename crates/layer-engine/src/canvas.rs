@@ -718,11 +718,21 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         &mut self,
         geometry: &layer_core::CanvasGeometry,
     ) -> Result<(), layer_core::CanvasGeometryError> {
+        self.apply_canvas_geometry_with(geometry, Vec::new())
+    }
+
+    /// `apply_canvas_geometry` with `then` applied in the same undo step.
+    pub fn apply_canvas_geometry_with(
+        &mut self,
+        geometry: &layer_core::CanvasGeometry,
+        then: Vec<Edit>,
+    ) -> Result<(), layer_core::CanvasGeometryError> {
         self.flush_pending_edits()?;
         if self.has_active_stroke() {
             return Err(DocumentError::InvalidLayerOperation("Finish the stroke first").into());
         }
         let mut plan = self.document().canvas_geometry_plan(geometry, self.geometry_limits())?;
+        plan.edits.extend(then);
         if plan.operations.is_empty() {
             self.apply_edit(Edit::Batch(plan.edits))?;
         } else {

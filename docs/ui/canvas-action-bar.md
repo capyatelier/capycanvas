@@ -14,7 +14,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 | Transform | Transform is open on paint, a mask or selected pixels | Mode (Free, Uniform, Distort, Warp), Perspective while distorting, Grid while warping, Flip H/V, Rotate 90° left/right, Reset, Interpolation · Cancel, Apply | Beside the transform box |
 | Transform, labelled **Transform Outline** | Transform Outline is moving the selection outline | Mode (Free, Uniform), Flip H/V, Rotate 90° left/right, Reset · Cancel, Apply | Beside the outline's box |
 | Polygon | A polygon selection is under construction | Remove Last Point · Cancel, Finish | Bottom edge |
-| Crop | The Crop tool is active | Ratio ▾ (Free, Original, 1:1, 4:5, 2:3, 5:7, 16:9), Swap Orientation, Overlay ▾ (Thirds, Grid, Diagonal, Golden Ratio), Straighten, Delete Cropped Pixels, Reset · Cancel, Apply | Bottom edge |
+| Crop | The Crop tool is active | Ratio ▾ (Free, Original, 1:1, 4:5, 2:3, 5:7, 16:9), Swap Orientation, Fit Content, Overlay ▾ (Thirds, Grid, Diagonal, Golden Ratio), Straighten, Delete Cropped Pixels, Reset · Cancel, Apply | Bottom edge |
 | Guide | A guide is selected with the Ruler or Move tool and guides are shown | Delete, Snap, Guides, and Straighten for a straight guide | Beside the guide's handles |
 | Quick Mask | Quick Mask is on | "Quick Mask" · Invert, Fill, Clear, Refine ▾, Save as Selection Layer · Exit | Bottom edge |
 | Selection Layer | A Selection Layer is being edited | "Editing *name*" · Load, Invert · Return to Artwork | Bottom edge |
@@ -45,7 +45,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 - **More:** lists the items that did not fit, then the context's own menu (the full Select menu for selections), then the bar toggle.
 - **Distort on photo placements:** refused with the route that works: select all, then transform the pixels.
 - **Crop:** Crop Canvas to Selection crops the canvas to the bounds of the selection's coverage, as metadata: pixels outside stay on their layers and reappear when the canvas grows. It is disabled, with a reason, for an inverted selection.
-- **Not on the bar:** Canvas Size… (Edit › Image) and Layer › New › Solid Color Fill and Gradient Fill (which also take the selection as their mask) and Revert to Original Photo have no bar item; menus and command search reach them.
+- **Not on the bar:** Canvas Size…, Image Size…, the Rotate and Flip Image commands, Trim and Reveal All (Edit › Image; see [image commands](image-commands.md)) and Layer › New › Solid Color Fill and Gradient Fill (which also take the selection as their mask) and Revert to Original Photo have no bar item; menus and command search reach them.
 
 ## Placement
 
@@ -87,10 +87,10 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 - **Applying a distorted pixel selection:** a soft or painted selection cannot follow a perspective map as metadata, so Apply first resamples its coverage on the GPU.
   - The transform stays open, and Apply reads "Applying the transform" until the coverage returns; the result is one undo step.
   - Cancel discards the pending coverage, and any further edit to the transform supersedes it.
-- **Interpolation:** Nearest neighbor, Bilinear or Bicubic, on the bar and in Tool Options.
+- **Interpolation:** Nearest neighbor, Bilinear, Bicubic or Lanczos, on the bar and in Tool Options.
   - Until one is chosen, Free and Uniform resample bilinearly and Distort bicubically.
   - A chosen filter stays for later transforms in the session.
-  - Previews draw a moving bicubic transform bilinearly; the still preview and Apply use the chosen filter.
+  - Previews draw a moving Bicubic or Lanczos transform bilinearly; the still preview and Apply use the chosen filter.
   - Placed photos keep their original pixels, so placements do not offer it.
 - **Touch:** a finger inside the box or on a handle manipulates the transform; elsewhere it navigates.
 
@@ -119,6 +119,7 @@ The Crop tool (C; Shift+C in the GIMP keys) is in the Tools toolbar of the Photo
 
 - **Frame:** it starts as the whole canvas. Its eight handles drag immediately with every device; a finger on a handle drags it, and a finger elsewhere navigates. The mouse or pen inside the frame moves it. Shift keeps the frame's proportions and Alt resizes about its centre.
 - **Ratio ▾:** a ratio fits the largest frame of that shape in the canvas, in the frame's current orientation. Original is the canvas's own ratio. Swap Orientation turns landscape into portrait and back.
+- **Fit Content:** sets the frame, upright and with a free ratio, to the bounds of the visible pixels, including pixels hidden beyond the canvas, so Apply trims transparent edges or grows the canvas to show them. On a large drawing the frame moves once the bounds are found.
 - **Beyond the canvas:** a frame dragged past the canvas adds canvas, which is transparent.
 - **Shield:** outside the frame the canvas is dimmed; where the frame reaches past the canvas the transparency checkerboard shows. Pixels hidden beyond the canvas are not shown. The guides and handles are drawn over it.
 - **Overlay ▾:** Thirds (the default), Grid, Diagonal or Golden Ratio guides. O cycles them while the Crop tool is active; elsewhere O keeps its own binding.

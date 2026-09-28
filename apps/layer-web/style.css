@@ -799,18 +799,19 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .document-dialog form { display:flex; flex-direction:column; gap:14px; }
 .document-dialog h2 { margin:0; font-size:1.15em; }
 .document-dialog footer { display:flex; gap:8px; justify-content:flex-end; }
-.canvas-size-dialog { width:min(380px,90vw); height:fit-content; }
-.canvas-size-dialog h2:focus { outline:none; }
-.canvas-size-fields { display:flex; flex-direction:column; gap:10px; }
-.canvas-size-dialog .number-spin .number-entry { width:96px; }
-.canvas-size-options, .canvas-size-anchor { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.canvas-size-unit { flex:1; background:color-mix(in srgb,var(--text) 8%,transparent); }
-.canvas-size-relative { display:flex; align-items:center; gap:6px; min-height:34px; }
+.size-dialog { width:min(380px,90vw); height:fit-content; }
+.size-dialog h2:focus { outline:none; }
+.size-dialog-fields { display:flex; flex-direction:column; gap:10px; }
+.size-dialog .number-spin .number-entry { width:96px; }
+.size-dialog-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.size-dialog-select { flex:1; background:color-mix(in srgb,var(--text) 8%,transparent); }
+.size-dialog-row > span + .size-dialog-select { flex:0 1 auto; min-width:50%; }
+.size-dialog-check { display:flex; align-items:center; gap:6px; min-height:34px; }
 .canvas-anchor { display:grid; grid-template-columns:repeat(3,36px); gap:2px; }
 .canvas-anchor-cell { display:grid; place-items:center; width:36px; min-height:36px; height:36px; padding:0; background:color-mix(in srgb,var(--text) 8%,transparent); }
 .canvas-anchor-cell svg { visibility:hidden; }
 .canvas-anchor-cell.selected svg { visibility:visible; }
-.canvas-size-message { margin:0; min-height:1.3em; opacity:.72; }
+.size-dialog-message { margin:0; min-height:1.3em; opacity:.72; }
 @media(max-width:850px) {
   #header { --header-item-gap:0px; --header-text-padding:6px; }
   .header-menu > summary { font-size:12px; }

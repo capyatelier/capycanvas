@@ -153,11 +153,11 @@ export async function checkCanvasSize({call,evaluate,settle,device=false}) {
       assert.equal(await evaluate(`document.querySelector('${dialog} footer .suggested-action').disabled`),true,`${kind}: Apply is disabled at the current size`);
       let values=[width,height];
       if(kind==='touch') {
-        await tap(await middle(`${dialog} .canvas-size-relative input`),kind);
+        await tap(await middle(`${dialog} .size-dialog-check input`),kind);
         await wait(`layerApp.state().layer_tools.canvas_size.relative`);
         values=[width-cropped[0],height-cropped[1]];
       } else if(kind==='pen') {
-        await evaluate(`(s=>{s.value='percent';s.dispatchEvent(new Event('change',{bubbles:true}));})(document.querySelector('${dialog} .canvas-size-unit'))`);await settle();
+        await evaluate(`(s=>{s.value='percent';s.dispatchEvent(new Event('change',{bubbles:true}));})(document.querySelector('${dialog} .size-dialog-select'))`);await settle();
         await wait(`layerApp.state().layer_tools.canvas_size.unit==='percent'`);
         values=[width/cropped[0]*100,height/cropped[1]*100].map(v=>Math.round(v*100)/100);
       }

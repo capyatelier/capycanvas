@@ -450,6 +450,21 @@ impl EffectInstance {
         self.values[i] = value;
         Ok(())
     }
+    /// Distances declared in pixels scaled with the image, rounded to their
+    /// decimals and clamped to their range; None when nothing changes or the
+    /// scaled values would break the effect's constraints.
+    pub fn scaled_px(&self, factor: f32) -> Option<Self> {
+        let mut scaled = self.clone();
+        for (parameter, value) in self.program.parameters.iter().zip(&mut scaled.values) {
+            if let (EffectParameterKind::Number { min, max, decimals, unit, .. }, EffectValue::Number(v)) = (&parameter.kind, value)
+                && &**unit == "px"
+            {
+                let places = 10f32.powi(i32::from(*decimals));
+                *v = ((*v * factor * places).round() / places).clamp(*min, *max);
+            }
+        }
+        (scaled.values != self.values && scaled.validate().is_ok()).then_some(scaled)
+    }
     /// Small parameter upload, never image processing. Curves/gradients retain
     /// exact control data; shaders find the segment with a bounded binary search.
     pub fn gpu_parameters(&self, space: RgbSpace) -> Result<Vec<[f32; 4]>, String> {

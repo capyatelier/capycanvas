@@ -43,6 +43,8 @@ mod zoom_readout;
 mod photo_edit;
 #[path = "crop_tests.rs"]
 mod crop;
+#[path = "image_tests.rs"]
+mod image;
 #[path = "file_launch_tests.rs"]
 mod file_launch;
 #[path = "document_tab_tests.rs"]

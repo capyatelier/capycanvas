@@ -129,6 +129,7 @@ pub use numeric::{
 pub use session::{Notice, NoticeAction};
 pub use session::{ScreenChip, ScreenDetails, ScreenState};
 pub use session::{CanvasAnchor, CanvasAnchorChoice, CanvasSizeAction, CanvasSizeUnit, CanvasSizeView, CanvasUnitChoice};
+pub use session::{ImageResample, ImageResampleChoice, ImageSizeAction, ImageSizeView};
 pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionMenu, SelectionAction, RefineKind, SelectionRefineView, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
     ChoicePresentation, HostRequest, HostRequestKind, Platform,
@@ -505,6 +506,16 @@ command_ids! {
     CropStraighten,
     CropDeleteCroppedPixels,
     StraightenToGuide,
+    ImageSize,
+    RotateImageLeft,
+    RotateImageRight,
+    RotateImage180,
+    FlipImageHorizontal,
+    FlipImageVertical,
+    Trim,
+    RevealAll,
+    CropFitContent,
+    TransformLanczos,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -530,7 +541,7 @@ impl CommandId {
                 | Self::CropOverlayThirds | Self::CropOverlayGrid | Self::CropOverlayDiagonal | Self::CropOverlayGolden
                 | Self::CropStraighten | Self::CropDeleteCroppedPixels
                 | Self::TransformFree | Self::TransformUniform | Self::TransformDistort | Self::TransformPerspective
-                | Self::TransformNearest | Self::TransformBilinear | Self::TransformBicubic
+                | Self::TransformNearest | Self::TransformBilinear | Self::TransformBicubic | Self::TransformLanczos
                 | Self::TransformWarp | Self::WarpGridThree | Self::WarpGridFour | Self::WarpGridFive
                 | Self::ZenMode
                 | Self::Fullscreen
@@ -701,6 +712,16 @@ impl CommandId {
             | Self::CropCycleOverlay => "crop-guides",
             Self::CropStraighten | Self::StraightenToGuide => "straighten",
             Self::CropDeleteCroppedPixels => "crop-delete",
+            Self::ImageSize => "image-size",
+            Self::RotateImageLeft => "image-rotate-left",
+            Self::RotateImageRight => "image-rotate-right",
+            Self::RotateImage180 => "image-rotate-180",
+            Self::FlipImageHorizontal => "image-flip-horizontal",
+            Self::FlipImageVertical => "image-flip-vertical",
+            Self::Trim => "trim",
+            Self::RevealAll => "reveal-all",
+            Self::CropFitContent => "fit-content",
+            Self::TransformLanczos => "lanczos",
         })
     }
     pub const TOOLS: [Self; 27] = [
@@ -916,6 +937,16 @@ impl CommandId {
             Self::CropStraighten => "Straighten",
             Self::CropDeleteCroppedPixels => "Delete Cropped Pixels",
             Self::StraightenToGuide => "Straighten Image to Guide",
+            Self::ImageSize => "Image Size…",
+            Self::RotateImageLeft => "Rotate Image 90° Left",
+            Self::RotateImageRight => "Rotate Image 90° Right",
+            Self::RotateImage180 => "Rotate Image 180°",
+            Self::FlipImageHorizontal => "Flip Image Horizontally",
+            Self::FlipImageVertical => "Flip Image Vertically",
+            Self::Trim => "Trim",
+            Self::RevealAll => "Reveal All",
+            Self::CropFitContent => "Fit Crop to Content",
+            Self::TransformLanczos => "Lanczos",
         }
     }
 }
@@ -1059,6 +1090,7 @@ pub enum UiAction {
     CommandSearch { action: CommandSearchAction },
     Selection { action: SelectionAction },
     CanvasSize { action: CanvasSizeAction },
+    ImageSize { action: ImageSizeAction },
     Tonal { action: TonalAction },
     ActivateHeaderItem {
         id: u32,
@@ -1430,6 +1462,12 @@ mod icon_tests {
             &[CommandId::GrowSelection, CommandId::ShrinkSelection, CommandId::FeatherSelection, CommandId::BorderSelection, CommandId::SmoothSelection],
             &[CommandId::Fill, CommandId::FillSelection],
             &[CommandId::Undo, CommandId::CancelTransform],
+            &[CommandId::RotateLeft, CommandId::RotateImageLeft],
+            &[CommandId::RotateRight, CommandId::RotateImageRight],
+            &[CommandId::FlipHorizontal, CommandId::FlipImageHorizontal],
+            &[CommandId::FlipVertical, CommandId::FlipImageVertical],
+            &[CommandId::CanvasSize, CommandId::ImageSize, CommandId::CropFitContent, CommandId::FitCanvas],
+            &[CommandId::TransformNearest, CommandId::TransformBilinear, CommandId::TransformBicubic, CommandId::TransformLanczos],
         ] {
             let icons: std::collections::BTreeSet<_> = commands.iter().map(|c| c.icon()).collect();
             assert_eq!(

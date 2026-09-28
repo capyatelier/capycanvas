@@ -2831,9 +2831,76 @@ class AndroidInteractionTest {
         for (text in if (labelled) path else listOf(label) + path) {
             waitFor("$text in the $label menu", 5_000) { menuText(text) != null }
             settle()
-            tap(menuText(text)!!.center)
+            var at: Rect? = null
+            waitFor("$text stays in the $label menu", 5_000) { menuText(text).also { at = it } != null }
+            tap(at!!.center)
         }
         waitFor("the $label menu closes", 5_000) { popupCount() == 0 }
+    }
+    private fun size() = state().array("tabs").objects().first { it.getBoolean("active") }.let { it.getInt("width") to it.getInt("height") }
+    private fun setting(id: String) = state().array("tool_settings").objects().firstOrNull { it.getString("id") == id }?.getDouble("value") ?: Double.NaN
+    private fun commandState(id: String) = state().array("commands").objects().first { it.getString("id") == id }
+    private fun selected(id: String) = commandState(id).getBoolean("selected")
+    private fun canvasTool() = state().getJSONObject("layer_tools").get("tool").toString()
+    private fun cropping() = canvasTool() == "crop" && barKind() == "crop" && shown("canvas-action-bar")
+    private fun history(id: String) { waitFor("$id is available", 10_000) { commandState(id).getBoolean("enabled") }; command(id) }
+    /** Choose `path` in the open windowless menu. */
+    private fun chooseInMenu(path: List<String>) {
+        for (text in path) {
+            waitFor("$text in the menu", 5_000) { menuText(text) != null }
+            settle(); tap(menuText(text)!!.center)
+        }
+        waitFor("the menu closes", 5_000) { popupCount() == 0 }
+    }
+    private fun viaMore(path: List<String>) {
+        tap(bounds("canvas-bar-more").center)
+        waitFor("More opens", 5_000) { popupCount() == 1 }
+        chooseInMenu(path)
+    }
+    /** Press a crop bar command, through More when the bar has no room for it. */
+    private fun pressBar(id: String) {
+        val tag = "canvas-bar-action-$id"
+        waitFor("the crop bar offers $id", 5_000) { cropping() }
+        if (shown(tag)) tap(bounds(tag).center) else viaMore(listOf(commandState(id).getString("label")))
+    }
+    /** The Crop tool: C with the mouse, Edit › Image › Crop with the others. */
+    private fun openCrop(device: Int) {
+        if (device == MotionEvent.TOOL_TYPE_MOUSE) instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_C)
+        else chooseFromApplicationMenu("edit", listOf("Image", "Crop"))
+        waitFor("the crop bar", 5_000) { cropping() }
+        settle()
+    }
+    private fun applyCrop(name: String) {
+        pressBar("apply_transform")
+        waitFor("$name: Apply finishes the crop", 5_000) { canvasTool() != "crop" && barKind() != "crop" }
+        assertNull(host.actionError)
+    }
+    private fun keyboard(): Boolean {
+        var visible = false
+        onMain { visible = ViewCompat.getRootWindowInsets(owner.view)?.isVisible(WindowInsetsCompat.Type.ime()) == true }
+        return visible
+    }
+    /** A control's bounds once it stops moving with the keyboard. */
+    private fun settledBounds(tag: String): Rect {
+        val end = SystemClock.uptimeMillis() + 5_000
+        var last = bounds(tag)
+        var since = SystemClock.uptimeMillis()
+        while (SystemClock.uptimeMillis() < end) {
+            SystemClock.sleep(40)
+            val next = bounds(tag)
+            val still = SystemClock.uptimeMillis() - since
+            if (next != last) { last = next; since = SystemClock.uptimeMillis() }
+            else if (still >= 300 && (keyboard() == host.editingText || still >= 1_500)) return last
+        }
+        error("$tag keeps moving with the keyboard")
+    }
+    /** Replace a settings number field's text with [text], leaving it being edited. */
+    private fun typeNumber(tag: String, text: String) {
+        tap(settledBounds(tag).center)
+        waitFor("$tag takes the keys", 5_000) { host.editingText && tagged(tag)?.second?.config?.getOrNull(SemanticsProperties.Focused) == true }
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_MOVE_END)
+        repeat(16) { instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DEL) }
+        instrumentation.sendStringSync(text)
     }
     /** Remove the layers a journey added and return the document's extent. */
     private fun cleanDocument(keep: Set<Long>): Pair<Double, Double> {
@@ -2899,36 +2966,7 @@ class AndroidInteractionTest {
         val keep = layerStates().map { it.getLong("id") }.toSet()
         val corners = listOf("bottom_right", "top_left", "bottom_left")
         val colors = listOf(listOf(.85, .08, .05, 1.0), listOf(.05, .6, .1, 1.0), listOf(.1, .2, .85, 1.0))
-        fun size() = state().array("tabs").objects().first { it.getBoolean("active") }.let { it.getInt("width") to it.getInt("height") }
         fun panel() = state().getJSONObject("layer_tools").optJSONObject("canvas_size")
-        fun enabled(id: String) = state().array("commands").objects().first { it.getString("id") == id }.getBoolean("enabled")
-        fun history(id: String) { waitFor("$id is available", 10_000) { enabled(id) }; command(id) }
-        fun keyboard(): Boolean {
-            var visible = false
-            onMain { visible = ViewCompat.getRootWindowInsets(owner.view)?.isVisible(WindowInsetsCompat.Type.ime()) == true }
-            return visible
-        }
-        fun settled(tag: String): Rect {
-            val end = SystemClock.uptimeMillis() + 5_000
-            var last = bounds(tag)
-            var since = SystemClock.uptimeMillis()
-            while (SystemClock.uptimeMillis() < end) {
-                SystemClock.sleep(40)
-                val next = bounds(tag)
-                val still = SystemClock.uptimeMillis() - since
-                if (next != last) { last = next; since = SystemClock.uptimeMillis() }
-                else if (still >= 300 && (keyboard() == host.editingText || still >= 1_500)) return last
-            }
-            error("$tag keeps moving with the keyboard")
-        }
-        fun type(field: String, text: String) {
-            val tag = "setting-number-canvas-size-$field"
-            tap(settled(tag).center)
-            waitFor("$field takes the keys", 5_000) { host.editingText && tagged(tag)?.second?.config?.getOrNull(SemanticsProperties.Focused) == true }
-            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_MOVE_END)
-            repeat(16) { instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DEL) }
-            instrumentation.sendStringSync(text)
-        }
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         var original = 0 to 0
         popupInput = true
@@ -2996,9 +3034,9 @@ class AndroidInteractionTest {
                     }
                 }
                 fun text(value: Double) = if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()
-                type("width", text(values[0]))
-                type("height", text(values[1]))
-                tap(settled("canvas-size-anchor-$corner").center)
+                typeNumber("setting-number-canvas-size-width", text(values[0]))
+                typeNumber("setting-number-canvas-size-height", text(values[1]))
+                tap(settledBounds("canvas-size-anchor-$corner").center)
                 waitFor("$name: typed values are committed before the anchor changes", 5_000) {
                     val view = panel()!!
                     view.getString("anchor") == corner && !host.editingText &&
@@ -3011,7 +3049,7 @@ class AndroidInteractionTest {
                     action(obj("type" to "set_theme", "theme" to theme))
                     captureCanvasBar("canvas-size-$theme", "canvas-size")
                 }
-                tap(settled("canvas-size-apply").center)
+                tap(settledBounds("canvas-size-apply").center)
                 waitFor("$name: Apply restores the original size and closes the panel", 5_000) { panel() == null && size() == original && !exists("canvas-size-panel") }
                 awaitPixels("$name: the hidden stroke reappears in place", listOf(hiddenPoint, insidePoint)) { (h, i) -> shows(h, rgba) && shows(i, rgba) }
                 history("undo")
@@ -3041,31 +3079,7 @@ class AndroidInteractionTest {
         val keep = layerStates().map { it.getLong("id") }.toSet()
         val blueFill = listOf(.1, .3, .8, 1.0)
         val paper = listOf(1.0, 1.0, 1.0, 1.0)
-        fun size() = state().array("tabs").objects().first { it.getBoolean("active") }.let { it.getInt("width") to it.getInt("height") }
-        fun setting(id: String) = state().array("tool_settings").objects().firstOrNull { it.getString("id") == id }?.getDouble("value") ?: Double.NaN
-        fun commandState(id: String) = state().array("commands").objects().first { it.getString("id") == id }
-        fun selected(id: String) = commandState(id).getBoolean("selected")
-        fun tool() = state().getJSONObject("layer_tools").get("tool").toString()
-        fun cropping() = tool() == "crop" && barKind() == "crop" && shown("canvas-action-bar")
         fun translation() = state().getJSONObject("camera").getJSONArray("translation").let { it.getDouble(0) to it.getDouble(1) }
-        fun history(id: String) { waitFor("$id is available", 10_000) { commandState(id).getBoolean("enabled") }; command(id) }
-        fun chooseInMenu(path: List<String>) {
-            for (text in path) {
-                waitFor("$text in the menu", 5_000) { menuText(text) != null }
-                settle(); tap(menuText(text)!!.center)
-            }
-            waitFor("the menu closes", 5_000) { popupCount() == 0 }
-        }
-        fun viaMore(path: List<String>) {
-            tap(bounds("canvas-bar-more").center)
-            waitFor("More opens", 5_000) { popupCount() == 1 }
-            chooseInMenu(path)
-        }
-        fun pressBar(id: String) {
-            val tag = "canvas-bar-action-$id"
-            waitFor("the crop bar offers $id", 5_000) { cropping() }
-            if (shown(tag)) tap(bounds(tag).center) else viaMore(listOf(commandState(id).getString("label")))
-        }
         fun pick(group: String, label: String) {
             val tag = "canvas-bar-choice-$group"
             if (!shown(tag)) {
@@ -3076,17 +3090,6 @@ class AndroidInteractionTest {
             waitFor("the $group dropdown opens", 5_000) { popupCount() == 1 }
             onMain { assertTrue("the $group dropdown leaves window focus with the canvas", owner.view.hasWindowFocus()) }
             chooseInMenu(listOf(label))
-        }
-        fun openCrop(device: Int) {
-            if (device == MotionEvent.TOOL_TYPE_MOUSE) instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_C)
-            else chooseFromApplicationMenu("edit", listOf("Image", "Crop"))
-            waitFor("the crop bar", 5_000) { cropping() }
-            settle()
-        }
-        fun apply(name: String) {
-            pressBar("apply_transform")
-            waitFor("$name: Apply finishes the crop", 5_000) { tool() != "crop" && barKind() != "crop" }
-            assertNull(host.actionError)
         }
         fun twoFingers(from: Offset, by: Offset) {
             fun send(action: Int, points: List<Offset>) {
@@ -3170,7 +3173,7 @@ class AndroidInteractionTest {
                     } else println("Tool Options is not shown in this workspace; its width is set through the session")
                     action(obj("type" to "set_tool_setting", "id" to "crop_width", "value" to cropped))
                 }
-                apply(name)
+                applyCrop(name)
                 val square = size()
                 assertTrue("$name: Apply crops to the square frame: $square for $cropped", square.first == square.second && kotlin.math.abs(square.first - cropped) <= 1)
                 awaitPixels("$name: the fill stays in place after the crop", listOf(center)) { (c) -> shows(c, blueFill) }
@@ -3195,7 +3198,7 @@ class AndroidInteractionTest {
                 waitFor("$name: the line levels the crop", 5_000) { !selected("crop_straighten") }
                 assertEquals("$name: the frame turns to the line", angle, setting("crop_angle"), .01)
                 val (w, h) = setting("crop_width") to setting("crop_height")
-                apply(name)
+                applyCrop(name)
                 val straight = size()
                 assertTrue("$name: Apply cuts the turned frame: $straight for $w × $h", kotlin.math.abs(straight.first - w) <= 1 && kotlin.math.abs(straight.second - h) <= 1)
                 fun around(x: Double, y: Double) = documentPoint(straight.first / 2 + x, straight.second / 2 + y)
@@ -3211,7 +3214,7 @@ class AndroidInteractionTest {
                 waitFor("$name: Delete Cropped Pixels turns on", 5_000) { selected("crop_delete_cropped_pixels") }
                 drag(documentPoint(0.0, 0.0), documentPoint(width * .4, height * .4))
                 waitFor("$name: the top-left handle moves", 5_000) { setting("crop_width") < width * .7 }
-                apply(name)
+                applyCrop(name)
                 val kept = size()
                 val origin = listOf(width - kept.first, height - kept.second)
                 command("canvas_size")
@@ -3242,17 +3245,192 @@ class AndroidInteractionTest {
             assertEquals("Two fingers pan the view, not the frame", listOf(width, height), listOf(setting("crop_width"), setting("crop_height")))
             pressBar("crop_delete_cropped_pixels")
             waitFor("Delete Cropped Pixels turns off", 5_000) { !selected("crop_delete_cropped_pixels") }
-            apply("finger")
+            applyCrop("finger")
             assertEquals("The frame never moved, so Apply leaves the drawing and the view", listOf(width.toInt() to height.toInt(), panned), listOf(size(), translation()))
             openCrop(MotionEvent.TOOL_TYPE_MOUSE)
             instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE)
-            waitFor("Escape cancels the crop", 5_000) { tool() != "crop" && size() == (width.toInt() to height.toInt()) }
+            waitFor("Escape cancels the crop", 5_000) { canvasTool() != "crop" && size() == (width.toInt() to height.toInt()) }
         } finally {
             popupInput = false
-            if (tool() == "crop") command("cancel_transform")
+            if (canvasTool() == "crop") command("cancel_transform")
             action(obj("type" to "set_theme", "theme" to originalTheme))
         }
         println("PASS crop: with mouse, finger and stylus, Ratio ▾ 1:1, a handle drag and Apply crop in one undo step with the image in place; Straighten by a drawn line turns the image; Delete Cropped Pixels leaves nothing for Canvas Size to reveal; a finger on a handle drags it, one finger inside the frame leaves it and two pan the view; C, O, the Overlay dropdown and Tool Options; light and dark captures")
+    }
+
+    @Test fun imageCommandsAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val blueFill = listOf(.1, .3, .8, 1.0)
+        val paper = listOf(1.0, 1.0, 1.0, 1.0)
+        val fill = listOf(.2, .2, .6, .8)
+        fun panel() = state().getJSONObject("layer_tools").optJSONObject("image_size")
+        fun notice() = state().optJSONObject("notice")?.getString("text")
+        fun paperLayer() = layerStates().first { it.optString("content_icon") == "layer-paper-symbolic" }
+        fun showPaper(shown: Boolean) {
+            layerAction(obj("op" to "visibility", "id" to paperLayer().getLong("id"), "value" to shown))
+            waitFor("the paper is ${if (shown) "shown" else "hidden"}", 5_000) { paperLayer().getBoolean("visible") == shown }
+        }
+        fun near(label: String, value: Int, expected: Double, tolerance: Int) = assertTrue("$label: $value vs $expected", kotlin.math.abs(value - expected) <= tolerance)
+        fun type(field: String, text: String) = typeNumber("setting-number-image-size-$field", text)
+        fun image(path: String) = chooseFromApplicationMenu("edit", listOf("Image", path))
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        popupInput = true
+        try {
+            val (width, height) = cleanDocument(keep)
+            val original = width.toInt() to height.toInt()
+            assertNotEquals("a non-square canvas", original.first, original.second)
+            command("zoom_out"); SystemClock.sleep(300)
+            layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+            action(obj("type" to "set_color", "rgba" to JSONArray(blueFill)))
+            command("rectangle_select")
+            tool = MotionEvent.TOOL_TYPE_STYLUS
+            drag(documentPoint(width * fill[0], height * fill[1]), documentPoint(width * fill[2], height * fill[3]))
+            waitFor("the selection", 5_000) { hasSelection() }
+            command("fill_selection"); command("deselect")
+            awaitPixels("the fill paints left of the middle", listOf(documentPoint(width * .5, height * .5))) { (c) -> shows(c, blueFill) }
+            val filled = (fill[2] - fill[0]) * width to (fill[3] - fill[1]) * height
+            for ((index, device) in pointerTools.withIndex()) {
+                val name = listOf("mouse", "finger", "stylus")[index]
+                tool = device
+
+                image("Image Size…")
+                waitFor("$name: the Image Size panel", 5_000) { panel() != null && shown("image-size-panel") }
+                onMain { assertTrue("$name: the panel leaves window focus with the canvas", owner.view.hasWindowFocus()) }
+                assertFalse("$name: no field is edited when the panel opens", host.editingText)
+                assertTrue("$name: Constrain proportions starts on", panel()!!.getBoolean("constrain"))
+                assertFalse("$name: Apply is disabled at the current size", panel()!!.getBoolean("can_apply"))
+                val half = original.first / 2 to original.second / 2
+                fun values() = panel()!!.getJSONArray("values").let { it.getDouble(0) to it.getDouble(1) }
+                when (device) {
+                    MotionEvent.TOOL_TYPE_FINGER -> {
+                        tap(settledBounds("image-size-constrain").center)
+                        waitFor("$name: Constrain proportions turns off", 5_000) { !panel()!!.getBoolean("constrain") }
+                        type("width", half.first.toString())
+                        waitFor("$name: without Constrain the height stays", 5_000) { values() == half.first.toDouble() to height }
+                        tap(settledBounds("image-size-constrain").center)
+                        waitFor("$name: Constrain proportions makes the height follow", 5_000) {
+                            panel()!!.getBoolean("constrain") && !host.editingText && values() == half.first.toDouble() to half.second.toDouble()
+                        }
+                    }
+                    else -> {
+                        tap(settledBounds("image-size-unit-percent").center)
+                        waitFor("$name: Percent", 5_000) { panel()!!.getString("unit") == "percent" }
+                        type(if (device == MotionEvent.TOOL_TYPE_STYLUS) "height" else "width", "50")
+                        waitFor("$name: Constrain proportions makes the other side follow", 5_000) { values() == 50.0 to 50.0 }
+                        if (device == MotionEvent.TOOL_TYPE_MOUSE) {
+                            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ENTER)
+                            waitFor("$name: Enter ends typing", 5_000) { !host.editingText }
+                            onMain { assertTrue("$name: the canvas has window focus again", owner.view.hasWindowFocus()) }
+                        }
+                        if (device == MotionEvent.TOOL_TYPE_STYLUS) {
+                            tap(settledBounds("image-size-resample").center)
+                            waitFor("$name: the Resample menu opens", 5_000) { popupCount() == 1 }
+                            onMain { assertTrue("$name: the Resample menu leaves window focus with the canvas", owner.view.hasWindowFocus()) }
+                            assertFalse("$name: opening the menu ends typing", host.editingText)
+                            chooseInMenu(listOf("Bicubic"))
+                            waitFor("$name: Resample Bicubic", 5_000) { panel()!!.getString("resample") == "bicubic" && values() == 50.0 to 50.0 }
+                        }
+                    }
+                }
+                assertEquals("New size: ${half.first} × ${half.second} px", panel()!!.getString("message"))
+                assertTrue(panel()!!.getBoolean("can_apply"))
+                if (index == 0) {
+                    for (theme in listOf("light", "dark")) {
+                        action(obj("type" to "set_theme", "theme" to theme))
+                        captureCanvasBar("image-size-$theme", "image-commands")
+                    }
+                    action(obj("type" to "set_theme", "theme" to originalTheme))
+                }
+                tap(settledBounds("image-size-apply").center)
+                waitFor("$name: Apply scales the image and closes the panel", 10_000) { panel() == null && size() == half && !exists("image-size-panel") }
+                assertNull(host.actionError)
+                command("fit_canvas")
+                awaitPixels("$name: the fill scales with the image", listOf(documentPoint(half.first / 2.0, half.second / 2.0), documentPoint(width * .4, half.second / 2.0))) { (f, p) ->
+                    shows(f, blueFill) && shows(p, paper)
+                }
+                history("undo")
+                waitFor("$name: one undo step restores the size", 10_000) { size() == original }
+                println("PASS image size $name")
+
+                image("Rotate Image 90° Right")
+                waitFor("$name: the canvas turns", 10_000) { size() == original.second to original.first }
+                command("fit_canvas")
+                awaitPixels("$name: the fill left of the middle turns to above it", listOf(documentPoint(height * .5, width * .3), documentPoint(height * .5, width * .75))) { (f, p) ->
+                    shows(f, blueFill) && shows(p, paper)
+                }
+                history("undo")
+                waitFor("$name: one undo step turns it back", 10_000) { size() == original }
+                println("PASS rotate image $name")
+
+                command("fit_canvas"); command("zoom_out"); SystemClock.sleep(300)
+                openCrop(device)
+                if (!selected("crop_ratio_free")) command("crop_ratio_free")
+                if (selected("crop_delete_cropped_pixels")) command("crop_delete_cropped_pixels")
+                drag(documentPoint(0.0, 0.0), documentPoint(width * .4, height * .4))
+                waitFor("$name: the top-left handle moves into the fill", 5_000) { setting("crop_width") < width * .7 }
+                applyCrop(name)
+                val cropped = size()
+                assertTrue("$name: the crop hides the fill's left part: $cropped", cropped.first < width * .7 && cropped.second < height * .7)
+                image("Reveal All")
+                waitFor("$name: Reveal All grows the canvas", 10_000) { size().first > cropped.first }
+                val revealed = size()
+                near("$name: Reveal All reaches the fill's hidden left edge", revealed.first, width * (1 - fill[0]), 2)
+                near("$name: Reveal All reaches the fill's hidden top edge", revealed.second, height * (1 - fill[1]), 2)
+                command("fit_canvas")
+                awaitPixels("$name: the hidden fill shows again at the new top left", listOf(documentPoint(6.0, 6.0))) { (f) -> shows(f, blueFill) }
+                history("undo")
+                waitFor("$name: one undo step returns to the crop", 10_000) { size() == cropped }
+                history("undo")
+                waitFor("$name: another returns to the whole drawing", 10_000) { size() == original }
+                println("PASS reveal all $name")
+
+                image("Trim")
+                waitFor("$name: with the paper showing, Trim explains that nothing changes", 10_000) { notice() == "The visible pixels already reach every edge of the canvas" }
+                assertEquals(original, size())
+                showPaper(false)
+                image("Trim")
+                waitFor("$name: Trim shrinks the canvas", 10_000) { size().first < original.first }
+                val trimmed = size()
+                near("$name: Trim fits the width to the fill", trimmed.first, filled.first, 2)
+                near("$name: Trim fits the height to the fill", trimmed.second, filled.second, 2)
+                command("fit_canvas")
+                awaitPixels("$name: the fill reaches the trimmed edges", listOf(documentPoint(3.0, 3.0), documentPoint(trimmed.first - 4.0, trimmed.second - 4.0))) { (a, b) ->
+                    shows(a, blueFill) && shows(b, blueFill)
+                }
+                history("undo")
+                waitFor("$name: one undo step", 10_000) { size() == original }
+                println("PASS trim $name")
+
+                command("fit_canvas"); command("zoom_out"); SystemClock.sleep(300)
+                openCrop(device)
+                assertTrue("$name: Fit Content on the crop bar", barCaption("crop_fit_content", "Fit Content") || !shown("canvas-bar-action-crop_fit_content"))
+                pressBar("crop_fit_content")
+                waitFor("$name: Fit Content frames the fill", 10_000) { setting("crop_width") < width * .7 }
+                near("$name: the frame's width", setting("crop_width").toInt(), filled.first, 3)
+                near("$name: the frame's height", setting("crop_height").toInt(), filled.second, 3)
+                if (index == 0) {
+                    for (theme in listOf("light", "dark")) {
+                        action(obj("type" to "set_theme", "theme" to theme))
+                        captureCanvasBar("crop-fit-content-$theme", "image-commands")
+                    }
+                    action(obj("type" to "set_theme", "theme" to originalTheme))
+                }
+                applyCrop(name)
+                near("$name: Apply crops to the fill's width", size().first, filled.first, 3)
+                near("$name: Apply crops to the fill's height", size().second, filled.second, 3)
+                history("undo")
+                waitFor("$name: one undo step", 10_000) { size() == original }
+                showPaper(true)
+                println("PASS fit content $name")
+            }
+        } finally {
+            popupInput = false
+            if (panel() != null) action(obj("type" to "image_size", "action" to obj("op" to "cancel")))
+            if (canvasTool() == "crop") command("cancel_transform")
+            if (!paperLayer().getBoolean("visible")) showPaper(true)
+            action(obj("type" to "set_theme", "theme" to originalTheme))
+        }
+        println("PASS image commands: with mouse, finger and stylus, Image Size to 50% with Constrain proportions, Rotate Image 90° Right on a non-square canvas, a crop then Reveal All, Trim and Fit Content on the crop bar each change the canvas in one undo step; the panel and its menu leave window focus with the canvas; light and dark captures")
     }
 
     @Test fun blackWhiteTintRowAppliesTheCurrentColorAcrossDevices() {

@@ -47,7 +47,7 @@ memory.
 Pure unit tests need no browser or GPU:
 
 ```bash
-node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls}.test.mjs
+node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog}.test.mjs
 ```
 
 The other `*.test.mjs` files are Chrome journeys that
@@ -87,7 +87,7 @@ Journeys by area; the dispatch in `test.mjs` lists them all:
 | Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-readout` |
 | Color | `--color-panel`, `--color-picker`, `--palettes` |
 | Layers and filters | `--layers`, `--adjustments`, `--filter-drawer`, `--photo-edit` |
-| Canvas size and crop | `--canvas-size`, `--crop` |
+| Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
 | Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--drawer-drag`, `--drawer-style` |
 | Workspaces | `--workspace-manager`, `--workspace-switcher`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |

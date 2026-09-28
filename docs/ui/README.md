@@ -39,7 +39,8 @@ while file dialogs, focus and accessibility follow the platform.
   [compact toolbar edges](compact-toolbar-edges.md) and
   [stacked columns](stacked-columns.md).
 - [Drag and reorder](drag-and-reorder.md): the required pickup rules.
-- [Canvas action bar](canvas-action-bar.md), [command search](command-search.md),
+- [Canvas action bar](canvas-action-bar.md), [image commands](image-commands.md),
+  [command search](command-search.md),
   [selections](selections.md) with the [selection tools](selection-tools.md) and
   [tonal range](tonal-selection.md), [open and import](open-and-import.md), and
   [GTK drawing tabs](gtk-document-tabs.md).

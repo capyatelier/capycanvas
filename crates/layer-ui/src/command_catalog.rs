@@ -324,6 +324,13 @@ fn entry(
                 | CommandId::LayerMaskEnabled
                 | CommandId::ApplyLayerMask
                 | CommandId::CropCanvasToSelection
+                | CommandId::RotateImageLeft
+                | CommandId::RotateImageRight
+                | CommandId::RotateImage180
+                | CommandId::FlipImageHorizontal
+                | CommandId::FlipImageVertical
+                | CommandId::Trim
+                | CommandId::RevealAll
                 | CommandId::SelectAll
                 | CommandId::Deselect
                 | CommandId::InvertSelection,
@@ -454,7 +461,7 @@ fn action_description(action: &UiAction) -> &'static str {
             TransformFree | TransformUniform => "Transform with box handles; Uniform keeps proportions.",
             TransformDistort => "Pin each corner of the transform box independently, including perspective.",
             TransformPerspective => "While distorting, mirror each corner drag onto its neighbour for symmetric perspective.",
-            TransformNearest | TransformBilinear | TransformBicubic => "Choose how transformed pixels are resampled: hard-edged, smooth, or smooth and sharp.",
+            TransformNearest | TransformBilinear | TransformBicubic | TransformLanczos => "Choose how transformed pixels are resampled: hard-edged, smooth, smooth and sharp, or with the most detail.",
             TransformWarp => "Bend the content with a mesh of curved patches, dragging its nodes and their tangent handles.",
             WarpGridThree | WarpGridFour | WarpGridFive => "Choose how many patches the warp mesh has, keeping its current shape.",
             UseReferenceBelow => "Mark the nearest visible photo or paint layer below as a reference for Wand and Fill.",
@@ -486,6 +493,12 @@ fn action_description(action: &UiAction) -> &'static str {
             CropStraighten => "Draw a line along something that should be level or upright; the crop turns to match.",
             CropDeleteCroppedPixels => "Discard the pixels outside the crop when it is applied, instead of keeping them hidden. Placed photos keep their original.",
             StraightenToGuide => "Start a crop turned level with the selected straight guide.",
+            CropFitContent => "Set the crop to the bounds of the visible pixels, including those beyond the canvas.",
+            ImageSize => "Scale the whole image to a new size in pixels or percent, or change only its resolution. Paint layers are resampled; placed photos keep their original pixels.",
+            RotateImageLeft | RotateImageRight | RotateImage180 => "Turn the whole image, with its selection and guides. Pixels move without resampling.",
+            FlipImageHorizontal | FlipImageVertical => "Mirror the whole image, with its selection and guides. Pixels move without resampling.",
+            Trim => "Shrink the canvas to the visible pixels, removing transparent edges. Pixels outside stay on their layers, hidden.",
+            RevealAll => "Grow the canvas to show every layer's pixels, including hidden layers and pixels outside the canvas.",
             _ => "",
         },
         UiAction::CycleTool { .. } => "Cycle through tools in this family.",
@@ -1047,7 +1060,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::FeatherSelection
             | C::BorderSelection
             | C::SmoothSelection
-            | C::TransformSelectionOutline => self.require_document_idle(),
+            | C::TransformSelectionOutline
+            | C::ImageSize
+            | C::RotateImageLeft
+            | C::RotateImageRight
+            | C::RotateImage180
+            | C::FlipImageHorizontal
+            | C::FlipImageVertical
+            | C::Trim
+            | C::RevealAll => self.require_document_idle(),
             C::SaveDocument | C::SaveDocumentAs => self.require_raster_snapshot(),
             C::CloseDocument => self.require_document_snapshot_idle(),
             C::ResetLayout if self.managed_workspace.is_some() => self.require_workspace_idle(),
@@ -1160,10 +1181,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::TransformDistort | C::TransformWarp if self.operation.placing() => crate::session::operation::DISTORT_PLACEMENT,
             C::TransformWarp => "Start a transform first",
             C::WarpGridThree | C::WarpGridFour | C::WarpGridFive => "Choose Warp first",
-            C::TransformNearest | C::TransformBilinear | C::TransformBicubic if self.operation.placing() => {
+            C::TransformNearest | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos if self.operation.placing() => {
                 "Placed photos keep their original pixels"
             }
-            C::TransformNearest | C::TransformBilinear | C::TransformBicubic => "Start a transform first",
+            C::TransformNearest | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos => "Start a transform first",
             C::TransformDistort => "Start a transform first",
             C::SnapRulers => "Show rulers first",
             C::DeleteRuler => "Select a ruler first",
@@ -1182,7 +1203,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_to_layer_refusal(command == C::CutSelectionToLayer).unwrap_or(UNAVAILABLE)
             }
             C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or(UNAVAILABLE),
-            C::CanvasSize => self.canvas_geometry_refusal().unwrap_or(UNAVAILABLE),
+            C::CanvasSize
+            | C::ImageSize
+            | C::RotateImageLeft
+            | C::RotateImageRight
+            | C::RotateImage180
+            | C::FlipImageHorizontal
+            | C::FlipImageVertical
+            | C::Trim
+            | C::RevealAll => self.canvas_geometry_refusal().unwrap_or(UNAVAILABLE),
             C::Crop if self.operation.transforming() => "Apply or cancel the transform first",
             C::Crop => self.canvas_geometry_refusal().unwrap_or(UNAVAILABLE),
             C::CropRatioFree
@@ -1199,7 +1228,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::CropOverlayGolden
             | C::CropCycleOverlay
             | C::CropStraighten
-            | C::CropDeleteCroppedPixels => "Choose the Crop tool first",
+            | C::CropDeleteCroppedPixels
+            | C::CropFitContent => "Choose the Crop tool first",
             C::StraightenToGuide => self.straighten_to_guide_refusal().unwrap_or(UNAVAILABLE),
             C::CropCanvasToSelection => self.crop_to_selection_refusal().unwrap_or(UNAVAILABLE),
             C::GrowSelection | C::ShrinkSelection | C::FeatherSelection | C::BorderSelection | C::SmoothSelection => {

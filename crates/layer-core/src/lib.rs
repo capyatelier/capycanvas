@@ -43,7 +43,9 @@ mod warp;
 pub use warp::{MeshMap, Tessellation};
 mod project;
 mod canvas_geometry;
-pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits};
+pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits, ImageOrientation};
+mod content_bounds;
+pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope, ScanBudget};
 mod project_storage;
 pub use project_storage::SelectionIndex as ProjectSelections;
 mod history_budget;
@@ -195,6 +197,15 @@ impl Rect {
                 y: self.max.y,
             },
         ]
+    }
+
+    /// The overlap of both, or empty when they don't overlap.
+    pub fn intersect(self, other: Self) -> Self {
+        let overlap = Self {
+            min: Point { x: self.min.x.max(other.min.x), y: self.min.y.max(other.min.y) },
+            max: Point { x: self.max.x.min(other.max.x), y: self.max.y.min(other.max.y) },
+        };
+        if overlap.is_empty() { Self::EMPTY } else { overlap }
     }
 
     pub fn union(self, other: Self) -> Self {
@@ -1385,6 +1396,12 @@ impl Document {
                     origin: origin.map(|v| -v),
                 }
             }
+            Edit::SetResolution(resolution) => {
+                if let Some(resolution) = resolution {
+                    resolution.validate().map_err(|_| DocumentError::InvalidLayerOperation("Invalid image resolution"))?;
+                }
+                Edit::SetResolution(std::mem::replace(&mut self.resolution, resolution))
+            }
             Edit::SetRaster { target, revision } => {
                 let raster = self
                     .target_raster_mut(target)
@@ -1631,6 +1648,8 @@ pub enum Edit {
         target: LayerId,
         revision: raster::RasterRevision,
     },
+    /// Pixels per unit for print and export; no pixels change.
+    SetResolution(Option<ImageResolution>),
     /// The canvas becomes `size` pixels, and the point `origin` of the old
     /// canvas becomes the new top-left. Layers move in the same batch.
     SetCanvasSize {
@@ -1774,7 +1793,7 @@ impl Edit {
     /// Guide-only edits affect presentation, never committed raster pixels.
     pub fn changes_image(&self) -> bool {
         match self {
-            Self::SetRulers(_) | Self::SetProof(_) | Self::SetSdrRendition(_)
+            Self::SetRulers(_) | Self::SetProof(_) | Self::SetSdrRendition(_) | Self::SetResolution(_)
                 | Self::SetSavedSelection { .. } => false,
             Self::Batch(edits) => edits.iter().any(Self::changes_image),
             _ => true,

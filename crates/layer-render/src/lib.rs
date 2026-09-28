@@ -550,8 +550,8 @@ pub struct RegionResult {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransformPreview {
     pub transaction: u64,
-    /// A handle is still being dragged. The renderer may draw a bicubic
-    /// transform bilinearly until the preview stops moving; Apply then
+    /// A handle is still being dragged. The renderer may draw a bicubic or
+    /// Lanczos transform bilinearly until the preview stops moving; Apply then
     /// resamples at the requested filter unless a still preview was drawn.
     pub moving: bool,
     pub layer: LayerId,
@@ -561,7 +561,9 @@ pub struct TransformPreview {
 impl TransformPreview {
     /// The transform the renderer draws for this preview.
     pub fn drawn(&self) -> std::borrow::Cow<'_, layer_core::ImageTransform> {
-        if self.moving && self.transform.interpolation == layer_core::Interpolation::Bicubic {
+        if self.moving
+            && matches!(self.transform.interpolation, layer_core::Interpolation::Bicubic | layer_core::Interpolation::Lanczos)
+        {
             std::borrow::Cow::Owned(layer_core::ImageTransform {
                 interpolation: layer_core::Interpolation::Linear,
                 ..self.transform.clone()

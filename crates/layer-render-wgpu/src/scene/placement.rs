@@ -13,6 +13,7 @@ pub(super) struct PlacementJob {
     region: PixelRect,
     extent: [u32; 2],
     transform: layer_core::ImageTransform,
+    taps: u32,
     background: f32,
     sources: Vec<([u32; 2], wgpu::TextureView)>,
     source_size: [u32; 2],
@@ -43,7 +44,8 @@ impl Scene {
         } else {
             mask.default_coverage
         };
-        self.placed_jobs(r, affine, extent, tile, background, |scene, c| {
+        let transform = layer_core::ImageTransform::affine(affine);
+        self.placed_jobs(r, transform, extent, tile, background, |scene, c| {
             Ok(scene.mask_tile(r, mask, layer_core::Point::default(), c))
         })
     }
@@ -74,28 +76,36 @@ impl Scene {
                 region: PixelRect::full([PAGE_SIZE; 2]),
                 extent: size,
                 transform,
+                taps: pixel_transform::PREVIEW_TAPS,
                 background: 0.,
                 sources: vec![([0, 0], view)],
                 source_size: size,
             })));
             return Ok(out);
         }
-        self.placed_jobs(r, affine, extent, tile, 0., |scene, c| scene.local_color_tile(r, packet, layer, c))
+        let mut transform = layer_core::ImageTransform::affine(affine);
+        if !self.placement_display && crate::paint_transform::magnification(affine) > 1. + 1e-4 {
+            transform.interpolation = layer_core::Interpolation::Bicubic;
+        }
+        self.placed_jobs(r, transform, extent, tile, 0., |scene, c| scene.local_color_tile(r, packet, layer, c))
     }
 
-    /// Place `tile` of a layer `extent` pixels large through `affine`, one job
-    /// per piece whose source pages `source` draws into scratch.
+    /// Place `tile` of a layer `extent` pixels large through `transform`, one
+    /// job per piece whose source pages `source` draws into scratch. Exact
+    /// capture averages as many taps as a minified pixel covers, up to
+    /// EXACT_TAPS per axis; the live display keeps the preview's count.
     fn placed_jobs(
         &mut self,
         r: &WgpuRasterizer,
-        affine: layer_core::Affine,
+        transform: layer_core::ImageTransform,
         extent: [u32; 2],
         tile: [u32; 2],
         background: f32,
         mut source: impl FnMut(&mut Self, [u32; 2]) -> Result<usize, GpuRasterError>,
     ) -> Result<usize, GpuRasterError> {
         let bounds = PixelRect::full(extent);
-        let transform = layer_core::ImageTransform::affine(affine);
+        let exact = pixel_transform::exact_taps(&transform);
+        let taps = if self.placement_display { exact.min(pixel_transform::PREVIEW_TAPS) } else { exact };
         let mut pieces = Vec::new();
         Splitter::new(bounds, &transform, None, |c| !page_rect(c).intersect(bounds).is_empty())?
             .split(page_rect(tile), &mut pieces)?;
@@ -114,6 +124,7 @@ impl Scene {
                 region: piece.region.page_local(tile),
                 extent,
                 transform: transform.clone(),
+                taps,
                 background,
                 sources,
                 source_size: [PAGE_SIZE; 2],
@@ -156,6 +167,7 @@ pub(super) fn encode(
             bounds,
             job.background,
             &job.transform,
+            job.taps,
             &[TiledTransformRecord {
                 target: job.tile,
                 sources: &coordinates,

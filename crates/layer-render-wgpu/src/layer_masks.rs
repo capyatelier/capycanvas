@@ -230,7 +230,12 @@ impl MaskRenderer {
                 });
                 needed.extend(page_coordinates(bounds));
             }
-            for batch in batches.iter().filter(|b| b.layer_id == mask.id) {
+            let transforms = |batch: &DabBatch| {
+                matches!(batch.kind, DabBatchKind::LayerOperation(index)
+                    if mask.pending_operations.get(index as usize)
+                        .is_some_and(|op| matches!(op.kind, layer_core::LayerOperationKind::Transform(_))))
+            };
+            for batch in batches.iter().filter(|b| b.layer_id == mask.id && !transforms(b)) {
                 needed.extend(page_coordinates(batch_pixel_rect(batch, extent)));
             }
             // Initialize only missing pages. Polygon and connected-region masks

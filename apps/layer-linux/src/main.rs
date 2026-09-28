@@ -2,6 +2,7 @@ mod alert;
 mod canvas;
 mod canvas_bar;
 mod canvas_size;
+mod image_size;
 mod documents;
 mod display_color;
 mod proof_view;

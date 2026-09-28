@@ -90,6 +90,7 @@ fn crop_starts_at_the_canvas_with_its_bar_and_blocks_other_edits() {
     assert_eq!(items, [
         ("crop-ratio", "Free Original 1:1 4:5 2:3 5:7 16:9".to_string()),
         ("Swap crop orientation", String::new()),
+        ("Fit Crop to Content", "Fit Content".into()),
         ("crop-overlay", "Thirds Grid Diagonal Golden Ratio".to_string()),
         ("Straighten", "Straighten".into()),
         ("Delete Cropped Pixels", "Delete Cropped".into()),

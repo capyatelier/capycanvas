@@ -553,7 +553,9 @@ fn command_section(command: CommandId) -> &'static str {
     use CommandId as C;
     match command {
         C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::PasteImage | C::ClearLayer | C::FillSelection
-        | C::ClearSelected | C::ClearOutside | C::CanvasSize | C::CropCanvasToSelection => "Edit",
+        | C::ClearSelected | C::ClearOutside | C::CanvasSize | C::CropCanvasToSelection | C::ImageSize
+        | C::RotateImageLeft | C::RotateImageRight | C::RotateImage180 | C::FlipImageHorizontal
+        | C::FlipImageVertical | C::Trim | C::RevealAll => "Edit",
         C::CropRatioFree | C::CropRatioOriginal | C::CropRatioSquare | C::CropRatioFourFive | C::CropRatioTwoThree
         | C::CropRatioFiveSeven | C::CropRatioSixteenNine | C::CropSwapOrientation | C::CropOverlayThirds
         | C::CropOverlayGrid | C::CropOverlayDiagonal | C::CropOverlayGolden | C::CropCycleOverlay | C::CropStraighten
@@ -561,7 +563,7 @@ fn command_section(command: CommandId) -> &'static str {
         C::ApplyTransform | C::CancelTransform | C::PlacementOriginalSize | C::ResetTransform
         | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
-        | C::TransformBilinear | C::TransformBicubic => "Transform",
+        | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent => "Transform",
         command if CommandId::TOOLS.contains(&command) => "Tools",
         C::TonalSelect | C::QuickMask | C::ReturnToArtwork | C::NewSelectionLayer | C::SaveSelectionLayer | C::Reselect
         | C::SelectionOutline | C::MaskOverlay | C::MaskOverlayProtected | C::ResetMaskColors | C::SwapMaskColors

@@ -946,6 +946,7 @@ pub struct Workspace {
     pub(crate) canvas_bar: crate::canvas_bar::CanvasBar,
     selection_refine: crate::selection_masks::RefineDialog,
     pub(crate) canvas_size: Rc<crate::canvas_size::CanvasSizeDialog>,
+    pub(crate) image_size: Rc<crate::image_size::ImageSizeDialog>,
     color_panel: crate::tool_panels::ColorPanel,
     palette_panel: Rc<crate::color_library::PalettePanel>,
     navigator: crate::navigator::Navigator,
@@ -1207,6 +1208,7 @@ impl Workspace {
             canvas_bar,
             selection_refine: crate::selection_masks::RefineDialog::new(),
             canvas_size: Rc::new(crate::canvas_size::CanvasSizeDialog::new()),
+            image_size: Rc::new(crate::image_size::ImageSizeDialog::new()),
             color_panel,
             palette_panel,
             proof_panel,
@@ -1248,6 +1250,7 @@ impl Workspace {
         this.view_info.bind(&this);
         this.selection_refine.bind(&this);
         this.canvas_size.bind(&this);
+        this.image_size.bind(&this);
         this.color_panel.bind(&this);
         this.palette_panel.bind(&this);
         this.navigator.bind(&this);
@@ -2610,6 +2613,7 @@ impl Workspace {
             self.tool_settings.refresh(self, &state);
             self.selection_refine.refresh(self, &state);
             self.canvas_size.refresh(self, &state);
+            self.image_size.refresh(self, &state);
         }
         if regions & (regions::COLOR_PREVIEW | regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
             self.color_panel.refresh(&state.preview_colors(), self.view_color(), self.picker_headroom());

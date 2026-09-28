@@ -20,6 +20,7 @@ import { createHeader } from "./header.js";
 import { createNumberField } from "./numeric.js";
 import { createSelectionUi } from "./selection-masks.js";
 import { createCanvasSizeUi } from "./canvas-size.js";
+import { createImageSizeUi } from "./image-size.js";
 import { createLayerPanel } from "./layers.js";
 import { createPalettes } from "./palettes.js";
 import { createEffectPanels } from "./effects.js";
@@ -56,7 +57,7 @@ let app,
   dragItem = null,
   statusTimer,
   shownHostError = null;
-let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, canvasSizeUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
+let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, canvasSizeUi, imageSizeUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
 let commandBar;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
@@ -834,7 +835,7 @@ function update(regions) {
   if (regions & (1 | 2 | 4 | 8 | 16 | 128)) header?.refresh();
   if (regions & (4 | 8)) documents?.refresh();
   if (regions & (2 | 4 | 16)) palettes.refresh(regions);
-  if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); selectionUi.refresh(); canvasSizeUi.refresh(); workspaceChrome?.refresh(); }
+  if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); selectionUi.refresh(); canvasSizeUi.refresh(); imageSizeUi.refresh(); workspaceChrome?.refresh(); }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (1 | 8 | 1024)) canvasBar?.refresh(state.canvas_bar);
   if (regions & (1 | 128)) persistWorkspace();
@@ -1745,6 +1746,7 @@ try {
   workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message });
   selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
   canvasSizeUi = createCanvasSizeUi({state:()=>state,element,button,icon,numberField,resolve:request=>app.number_input(request),dispatch});
+  imageSizeUi = createImageSizeUi({state:()=>state,element,button,numberField,resolve:request=>app.number_input(request),dispatch});
   editor = createEditorPanels({selectionUi,app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged});
   palettes = createPalettes({ app, state: () => state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker,
     dismissContext: () => customization?.dismissContext(), contentChanged: panelContentChanged });

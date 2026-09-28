@@ -237,7 +237,7 @@ pub(super) fn apply_canvas_size(w: &Workspace, input: &mut RemoteInput) {
     until(|| state(w).layer_tools.canvas_size.is_none(), "Apply closes Canvas Size");
 }
 
-fn until_some_widget(mut find: impl FnMut() -> Option<gtk::Widget>, message: &str) -> gtk::Widget {
+pub(super) fn until_some_widget(mut find: impl FnMut() -> Option<gtk::Widget>, message: &str) -> gtk::Widget {
     let mut found = None;
     until(|| {
         found = find();

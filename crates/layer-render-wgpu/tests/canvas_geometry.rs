@@ -433,3 +433,224 @@ fn canvas_geometry_timing_on_a_24_megapixel_photo() {
     println!("undo the rebase: {:.2} ms, first frame to GPU idle {:.1} ms", undo.as_secs_f64() * 1e3, frame.as_secs_f64() * 1e3);
 }
 
+
+/// The coordinates of a target's tiles in `plane`.
+fn tiles(engine: &Engine, id: LayerId, plane: raster::RasterPlane) -> std::collections::BTreeSet<[u32; 2]> {
+    let raster = engine.document().target_raster(id).unwrap().wait_data().unwrap();
+    raster.tiles.keys().filter(|k| k.plane == plane).map(|k| k.coordinate).collect()
+}
+
+/// The pages of 256 pixels that `rect` touches.
+fn pages_of(rect: Rect) -> std::collections::BTreeSet<[u32; 2]> {
+    let [x0, y0] = [rect.min.x, rect.min.y].map(|v| (v.max(0.) / 256.).floor() as u32);
+    let [x1, y1] = [rect.max.x, rect.max.y].map(|v| (v.max(0.) / 256.).ceil() as u32);
+    (y0..y1).flat_map(|y| (x0..x1).map(move |x| [x, y])).collect()
+}
+
+fn settled(engine: &mut Engine, time: u64) {
+    engine.render_frame_at(time).unwrap();
+    while engine.has_pending_document_edits() {
+        std::thread::yield_now();
+        engine.render_frame_at(time).unwrap();
+    }
+}
+
+/// A 6000 × 4000 paint layer filled edge to edge, halved by Image Size,
+/// keeps only the tiles of the halved canvas.
+#[test]
+fn resizing_a_whole_layer_leaves_no_vacated_tiles() {
+    let extent = [6000, 4000];
+    let doc = Document::new("24 MP resize", extent[0], extent[1]);
+    let paint = doc.layers[0].id;
+    let (mut engine, _input) = engine(doc);
+    engine
+        .append_layer_operation(paint, LayerOperation {
+            placement: Affine::IDENTITY,
+            coverage: LayerMask::reveal_all(LayerId(900), Point::default()),
+            kind: LayerOperationKind::Fill { color: [0.2, 0.4, 0.8, 0.5], alpha_locked: false },
+        })
+        .unwrap();
+    settled(&mut engine, 0);
+    let full = tiles(&engine, paint, raster::RasterPlane::Color);
+    assert_eq!(full.len(), 24 * 16);
+    let half = [3000, 2000];
+    engine.apply_canvas_geometry(&CanvasGeometry::resize(extent, half, Interpolation::Bicubic)).unwrap();
+    settled(&mut engine, 1_000_000_000);
+    let canvas = Rect { min: Point::default(), max: Point { x: half[0] as f32, y: half[1] as f32 } };
+    assert_eq!(tiles(&engine, paint, raster::RasterPlane::Color), pages_of(canvas), "only the halved canvas keeps tiles");
+    let mut rgba = vec![0; (half[0] * half[1] * 4) as usize];
+    engine.backend_mut().copy_rgba8_srgb(&mut rgba, half[0] as usize * 4).unwrap();
+    let first = &rgba[..4];
+    assert!(first[3] > 0 && rgba.chunks(4).all(|p| p == first), "the halved fill stays uniform to the edges");
+    assert!(engine.undo().unwrap());
+    settled(&mut engine, 1_100_000_000);
+    assert_eq!(tiles(&engine, paint, raster::RasterPlane::Color), full, "undo restores every tile");
+    assert!(engine.redo().unwrap());
+    settled(&mut engine, 1_200_000_000);
+    assert_eq!(tiles(&engine, paint, raster::RasterPlane::Color), pages_of(canvas), "redo prunes again");
+}
+
+/// A non-square drawing on a layer moved left of the canvas, with a mask.
+fn oriented_fixture() -> (Engine, InputProducer<PenEvent>, LayerId) {
+    let mut doc = Document::new("orientation", SIZE[0], SIZE[1]);
+    let upper = doc.allocate_layer_id();
+    let mut layer = Layer::paint(upper, "Upper");
+    layer.properties.offset = Point { x: -256., y: 0. };
+    layer.properties.extent = Some([SIZE[0] + 256, SIZE[1]]);
+    let mut mask = LayerMask::reveal_all(doc.allocate_layer_id(), layer.properties.offset);
+    mask.default_coverage = 0.;
+    mask.initial = Some(Selection::polygon(vec![
+        Point { x: 256., y: 0. },
+        Point { x: 556., y: 0. },
+        Point { x: 556., y: 200. },
+        Point { x: 256., y: 200. },
+    ]).unwrap());
+    layer.mask = Some(mask);
+    doc.layers.insert(0, layer);
+    let lower = doc.layers[1].id;
+    let (mut engine, mut input) = engine(doc);
+    engine.set_active_layer(lower).unwrap();
+    draw(&mut engine, &mut input, [0.8, 0.1, 0.05, 1.], Point { x: 20., y: 30. }, Point { x: 370., y: 230. }, 1_000_000_000);
+    engine.set_active_layer(upper).unwrap();
+    draw(&mut engine, &mut input, [0.05, 0.2, 0.9, 0.9], Point { x: 10., y: 220. }, Point { x: 360., y: 20. }, 2_000_000_000);
+    draw(&mut engine, &mut input, [0.9, 0.8, 0.1, 0.7], Point { x: 5., y: 10. }, Point { x: 60., y: 250. }, 3_000_000_000);
+    (engine, input, upper)
+}
+
+/// Every pixel of `after` is the pixel of `before` that `linear` moved there.
+fn assert_permutation(after: &Image, before: &Image, linear: Affine, what: &str) {
+    let back = linear.inverse().unwrap();
+    for y in 0..after.size[1] {
+        for x in 0..after.size[0] {
+            let p = back.map(Point { x: x as f32 + 0.5, y: y as f32 + 0.5 });
+            let [sx, sy] = [p.x.floor() as u32, p.y.floor() as u32];
+            let i = ((y * after.size[0] + x) * 4) as usize;
+            let j = ((sy * before.size[0] + sx) * 4) as usize;
+            assert_eq!(after.rgba[i..i + 4], before.rgba[j..j + 4], "{what}: pixel {x}, {y} from {sx}, {sy}");
+        }
+    }
+}
+
+#[test]
+fn flips_and_turns_move_every_pixel_exactly_in_one_undo_step() {
+    use ImageOrientation::*;
+    let (mut engine, _input, upper) = oriented_fixture();
+    let mask = engine.document().layer(upper).unwrap().mask.as_ref().unwrap().id;
+    let original = image(&mut engine, 4_000_000_000);
+    let mut time = 5_000_000_000;
+    for orientation in [FlipHorizontal, FlipVertical, Rotate180, RotateRight, RotateLeft] {
+        let canvas = [engine.document().width, engine.document().height];
+        let geometry = CanvasGeometry::orient(canvas, orientation);
+        let before = [upper, mask].map(|id| (id, engine.document().clone()));
+        engine.apply_canvas_geometry(&geometry).unwrap();
+        assert!(engine.document().extents_cover_canvas());
+        let oriented = image(&mut engine, time);
+        assert_eq!(oriented.size, geometry.rect.size);
+        assert_permutation(&oriented, &original, geometry.to_canvas(), &format!("{orientation:?}"));
+        for (id, document) in before {
+            let plane = if id == upper { raster::RasterPlane::Color } else { raster::RasterPlane::Mask };
+            let old = target_transform(&document.layers, id);
+            let new = target_transform(&engine.document().layers, id).inverse().unwrap();
+            let extent = document.target_extent(id).map(|v| v as f32);
+            let initial = document.layer(upper).unwrap().mask.as_ref().filter(|m| m.id == id).and_then(|m| m.initial.as_ref());
+            let page = |[x, y]: [u32; 2]| Rect {
+                min: Point { x: (x * 256) as f32, y: (y * 256) as f32 },
+                max: Point { x: ((x + 1) * 256) as f32, y: ((y + 1) * 256) as f32 },
+            };
+            let held = document.target_raster(id).unwrap().wait_data().unwrap().tiles.keys()
+                .filter(|k| k.plane == plane)
+                .map(|k| k.coordinate)
+                .chain(initial.into_iter().flat_map(|s| pages_of(s.bounds())))
+                .map(page)
+                .fold(Rect::EMPTY, Rect::union);
+            let held = Rect { min: held.min, max: Point { x: held.max.x.min(extent[0]), y: held.max.y.min(extent[1]) } };
+            let reach = pages_of(old.then(geometry.to_canvas()).then(new).bounds(held));
+            let kept = tiles(&engine, id, plane);
+            assert!(kept.is_subset(&reach), "{orientation:?}: {id:?} keeps tiles {kept:?} outside its content {reach:?}");
+        }
+        assert!(engine.undo().unwrap());
+        image(&mut engine, time + 1_000_000).assert_eq(&original, &format!("{orientation:?}: one undo step"));
+        assert!(engine.redo().unwrap());
+        image(&mut engine, time + 2_000_000).assert_eq(&oriented, &format!("{orientation:?}: redo"));
+        assert!(engine.undo().unwrap());
+        image(&mut engine, time + 3_000_000).assert_eq(&original, &format!("{orientation:?}: undo again"));
+        time += 1_000_000_000;
+    }
+    for (orientation, times) in [(FlipHorizontal, 2), (FlipVertical, 2), (Rotate180, 2), (RotateRight, 4), (RotateLeft, 4)] {
+        for step in 0..times {
+            let canvas = [engine.document().width, engine.document().height];
+            engine.apply_canvas_geometry(&CanvasGeometry::orient(canvas, orientation)).unwrap();
+            settled(&mut engine, time + step);
+        }
+        image(&mut engine, time).assert_eq(&original, &format!("{orientation:?} {times} times"));
+        time += 1_000_000_000;
+    }
+}
+
+/// Measurement, not a gate: `cargo test --release -p layer-render-wgpu --test
+/// canvas_geometry -- --ignored --nocapture image_size_publication`.
+#[test]
+#[ignore = "16-bit 24 MP Image Size report"]
+fn image_size_publication_of_a_16_bit_24_megapixel_document() {
+    let extent = [6000, 4000];
+    for layers in [1, 2] {
+        for size in [[3000, 2000], [12000, 8000]] {
+            let mut doc = Document::new("16-bit 24 MP", extent[0], extent[1]);
+            doc.color.depth = color::SampleDepth::U16;
+            let mut ids = vec![doc.layers[0].id];
+            for _ in 1..layers {
+                let id = doc.allocate_layer_id();
+                doc.layers.insert(0, Layer::paint(id, "Paint"));
+                ids.push(id);
+            }
+            let (mut engine, _input) = engine(doc);
+            for (i, id) in ids.iter().enumerate() {
+                engine
+                    .append_layer_operation(*id, LayerOperation {
+                        placement: Affine::IDENTITY,
+                        coverage: LayerMask::reveal_all(LayerId(900 + i as u64), Point::default()),
+                        kind: LayerOperationKind::Gradient {
+                            start: Point::default(),
+                            end: Point { x: 6000., y: 4000. },
+                            colors: [[0.9, 0.2, 0.05, 1.], [0.05, 0.3, 0.9, 0.6]],
+                            radial: i % 2 == 1,
+                            alpha_locked: false,
+                        },
+                    })
+                    .unwrap();
+                settled(&mut engine, 0);
+            }
+            engine.backend_mut().wait_idle().unwrap();
+            let geometry = CanvasGeometry::resize(extent, size, Interpolation::Bicubic);
+            let label = format!("{layers} layer(s) to {} × {}", size[0], size[1]);
+            if let Err(error) = engine.document().check_canvas_geometry(&geometry, engine.geometry_limits()) {
+                println!("{label}: refused before commit: {error}");
+                continue;
+            }
+            let start = std::time::Instant::now();
+            engine.apply_canvas_geometry(&geometry).unwrap();
+            let apply = start.elapsed();
+            settled(&mut engine, 1_000_000_000);
+            let published = start.elapsed();
+            engine.backend_mut().wait_idle().unwrap();
+            let idle = start.elapsed();
+            let mut tiles = 0;
+            for id in &ids {
+                for tile in engine.document().target_raster(*id).unwrap().wait_data().unwrap().tiles.values() {
+                    tile.wait_backing().unwrap();
+                    tiles += 1;
+                }
+            }
+            let backed = start.elapsed();
+            let tile_bytes = 256 * 256 * 8u64;
+            println!(
+                "{label}: apply {:.1} ms, frames submitted {:.0} ms, GPU idle {:.0} ms, tiles backed {:.0} ms; {tiles} tiles, {:.0} MiB published of the 1024 MiB ceiling",
+                apply.as_secs_f64() * 1e3,
+                published.as_secs_f64() * 1e3,
+                idle.as_secs_f64() * 1e3,
+                backed.as_secs_f64() * 1e3,
+                (tiles as u64 * tile_bytes) as f64 / (1024. * 1024.),
+            );
+        }
+    }
+}

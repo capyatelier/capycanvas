@@ -42,6 +42,11 @@ mod selection_masks;
 #[path = "canvas_size.rs"]
 mod canvas_size;
 pub use canvas_size::{CanvasAnchor, CanvasAnchorChoice, CanvasSizeAction, CanvasSizeUnit, CanvasSizeView, CanvasUnitChoice};
+#[path = "image_size.rs"]
+mod image_size;
+pub use image_size::{ImageResample, ImageResampleChoice, ImageSizeAction, ImageSizeView};
+#[path = "image_geometry.rs"]
+mod image_geometry;
 #[path = "selection_properties.rs"]
 mod selection_properties;
 pub use selection_masks::{SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionMenu};
@@ -146,6 +151,8 @@ pub struct UiSession<R: CanvasRenderer> {
     painted_selections: painted_selections::PaintedSelections,
     selection_masks: selection_masks::SelectionMasks,
     canvas_size: Option<canvas_size::CanvasSizeDraft>,
+    image_size: Option<image_size::ImageSizeDraft>,
+    content_bounds: image_geometry::ContentBounds,
     rulers: rulers::RulerInteraction,
     operation: operation::Operation,
     system_theme: Theme,
@@ -193,6 +200,7 @@ fn transform_choice(command: CommandId) -> Option<TransformChoice> {
         CommandId::TransformNearest => TransformChoice::Interpolation(Nearest),
         CommandId::TransformBilinear => TransformChoice::Interpolation(Linear),
         CommandId::TransformBicubic => TransformChoice::Interpolation(Bicubic),
+        CommandId::TransformLanczos => TransformChoice::Interpolation(Lanczos),
         CommandId::WarpGridThree => TransformChoice::Cells(cells[0]),
         CommandId::WarpGridFour => TransformChoice::Cells(cells[1]),
         CommandId::WarpGridFive => TransformChoice::Cells(cells[2]),
@@ -247,6 +255,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             painted_selections: Default::default(),
             selection_masks: Default::default(),
             canvas_size: None,
+            image_size: None,
+            content_bounds: Default::default(),
             rulers: Default::default(),
             operation: Default::default(),
             system_theme: Theme::Light,
@@ -2122,7 +2132,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::CropOverlayGolden
             | CommandId::CropCycleOverlay
             | CommandId::CropStraighten
-            | CommandId::CropDeleteCroppedPixels => idle && self.cropping(),
+            | CommandId::CropDeleteCroppedPixels
+            | CommandId::CropFitContent => idle && self.cropping(),
             CommandId::StraightenToGuide => {
                 idle && self.straighten_to_guide_refusal().is_none()
                     && (self.cropping() || self.require_document_idle().is_ok())
@@ -2142,7 +2153,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::TransformWarp
             | CommandId::TransformNearest
             | CommandId::TransformBilinear
-            | CommandId::TransformBicubic => {
+            | CommandId::TransformBicubic
+            | CommandId::TransformLanczos => {
                 idle && self.operation.transforming() && !self.operation.placing() && !self.operation.outline()
             }
             CommandId::TransformPerspective => {
@@ -2195,7 +2207,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::RevertToOriginal => {
                 self.require_document_idle().is_ok() && self.revert_to_original_refusal().is_none()
             }
-            CommandId::CanvasSize => self.require_document_idle().is_ok() && self.canvas_geometry_refusal().is_none(),
+            CommandId::CanvasSize
+            | CommandId::ImageSize
+            | CommandId::RotateImageLeft
+            | CommandId::RotateImageRight
+            | CommandId::RotateImage180
+            | CommandId::FlipImageHorizontal
+            | CommandId::FlipImageVertical
+            | CommandId::Trim
+            | CommandId::RevealAll => self.require_document_idle().is_ok() && self.canvas_geometry_refusal().is_none(),
             CommandId::CropCanvasToSelection => {
                 self.require_document_idle().is_ok() && self.crop_to_selection_refusal().is_none()
             }
@@ -2625,6 +2645,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 let apply = action == CanvasSizeAction::Apply;
                 self.canvas_size_action(action)?;
+                (DOCUMENT | BRUSH | COMMANDS | if apply { CAMERA } else { 0 }, apply)
+            }
+            UiAction::ImageSize { action } => {
+                if action != ImageSizeAction::Cancel {
+                    self.require_document_idle()?;
+                }
+                let apply = action == ImageSizeAction::Apply;
+                self.image_size_action(action)?;
                 (DOCUMENT | BRUSH | COMMANDS | if apply { CAMERA } else { 0 }, apply)
             }
             UiAction::Layer { action } => {
@@ -3972,6 +4000,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.region_tools.busy()
             || self.selection_masks.refine.as_ref().is_some_and(|d| d.unsettled())
             || self.painted_selections.busy()
+            || self.content_bounds.busy()
             || self.notices.publishing()
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
@@ -3979,6 +4008,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut changed = self.poll_filter_installation();
         let revision = self.engine.document().revision;
         changed |= self.poll_selection_paint()?;
+        changed |= self.poll_content_bounds();
         self.sync_selection_overlay();
         self.sync_crop_overlay();
         self.engine
@@ -4219,6 +4249,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::TransformNearest
             | CommandId::TransformBilinear
             | CommandId::TransformBicubic
+            | CommandId::TransformLanczos
             | CommandId::WarpGridThree
             | CommandId::WarpGridFour
             | CommandId::WarpGridFive => {
@@ -4330,6 +4361,27 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::CanvasSize => {
                 self.open_canvas_size()?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, false))
+            }
+            CommandId::ImageSize => {
+                self.open_image_size()?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, false))
+            }
+            CommandId::RotateImageLeft
+            | CommandId::RotateImageRight
+            | CommandId::RotateImage180
+            | CommandId::FlipImageHorizontal
+            | CommandId::FlipImageVertical => {
+                self.orient_image(image_geometry::orientation(command).expect("an image orientation"))?;
+                Ok((DOCUMENT | BRUSH | COMMANDS | CAMERA, true))
+            }
+            CommandId::Trim | CommandId::RevealAll | CommandId::CropFitContent => {
+                let purpose = match command {
+                    CommandId::Trim => image_geometry::ContentUse::Trim,
+                    CommandId::RevealAll => image_geometry::ContentUse::RevealAll,
+                    _ => image_geometry::ContentUse::FitContent,
+                };
+                self.request_content_bounds(purpose)?;
+                Ok((DOCUMENT | BRUSH | COMMANDS | CAMERA | HOST, true))
             }
             CommandId::CropCanvasToSelection => {
                 self.crop_canvas_to_selection()?;
@@ -4805,6 +4857,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 CommandId::TransformNearest,
                 CommandId::TransformBilinear,
                 CommandId::TransformBicubic,
+                CommandId::TransformLanczos,
                 CommandId::ApplyTransform,
                 CommandId::CancelTransform,
             ]
@@ -4933,6 +4986,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.mask_editing = self.mask_editing_view();
         self.state.layer_tools.selection_resize = self.selection_masks.refine_view();
         self.state.layer_tools.canvas_size = self.canvas_size_view();
+        self.state.layer_tools.image_size = self.image_size_view();
     }
 
     pub fn pointer_contact_paints(&self, button: PointerButton) -> bool {
@@ -5345,6 +5399,8 @@ mod tests {
     include!("view_tests.rs");
     include!("canvas_size_tests.rs");
     include!("crop_tests.rs");
+    include!("image_size_tests.rs");
+    include!("image_geometry_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

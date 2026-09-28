@@ -12,6 +12,8 @@ pub enum Interpolation {
     /// Catmull-Rom with overshoot clamped to the nearest taps, averaging a
     /// grid of bilinear taps where the map minifies.
     Bicubic,
+    /// Lanczos-3 over 6×6 taps, with overshoot clamped like Bicubic.
+    Lanczos,
 }
 impl Interpolation {
     /// Source pixels beyond a sample position that the filter can read.
@@ -20,6 +22,7 @@ impl Interpolation {
             Self::Nearest => 0,
             Self::Linear => 1,
             Self::Bicubic => 2,
+            Self::Lanczos => 3,
         }
     }
 }

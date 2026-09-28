@@ -179,6 +179,10 @@ pub(super) struct CropSession {
     previous: LayerCanvasTool,
 }
 impl CropSession {
+    pub fn set_frame(&mut self, frame: CropFrame) {
+        self.frame = frame;
+        self.portrait = frame.size[1] > frame.size[0];
+    }
     pub fn dragging(&self) -> bool {
         self.drag.is_some()
     }
@@ -269,21 +273,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             let unchanged = geometry.rect == CanvasRect { origin: [0; 2], size: session.canvas }
                 && geometry.linear == Affine::IDENTITY
                 && !geometry.delete_outside;
-            let applied = !unchanged
-                && match self.engine.apply_canvas_geometry(&geometry) {
-                    Ok(()) => true,
-                    Err(layer_core::CanvasGeometryError::Unchanged) => false,
+            if !unchanged {
+                match self.apply_canvas_geometry(&geometry, Vec::new()) {
+                    Ok(()) | Err(layer_core::CanvasGeometryError::Unchanged) => (),
                     Err(e) if e.exceeds_raster_limits() && !geometry.delete_outside => {
                         return Err(format!("{e}. {DELETE_HINT}"));
                     }
                     Err(e) => return Err(e.to_string()),
-                };
-            if applied {
-                let to_canvas = geometry.to_canvas();
-                if let Some(reselect) = &mut self.selection_masks.reselect {
-                    *reselect = reselect.transformed(to_canvas).map_err(error)?;
                 }
-                self.follow_canvas_origin(geometry.rect.origin);
             }
         }
         let previous = self.operation.crop.take().map_or(LayerCanvasTool::Move, |s| s.previous);
@@ -625,7 +622,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         CropRatio::ALL
             .map(CropRatio::command)
             .into_iter()
-            .chain([CommandId::CropSwapOrientation])
+            .chain([CommandId::CropSwapOrientation, CommandId::CropFitContent])
             .chain(CropGuides::ALL.map(CropGuides::command))
             .chain([
                 CommandId::CropStraighten,

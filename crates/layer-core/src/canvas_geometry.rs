@@ -1,11 +1,11 @@
 //! Canvas geometry: one plan turns a new canvas rectangle, and optionally a
-//! rotation, into a single reversible batch. The canvas is a window over each
+//! rotation, flip or scale, into a single reversible batch. The canvas is a window over each
 //! layer's local extent, so shrinking it hides pixels and growing it shows
 //! them again.
 //!
 //! Every geometry edit keeps these invariants:
 //! - Root offsets carry the canvas origin. Child offsets are relative to their
-//!   group and change only when a rotation resamples the child.
+//!   group and change only when a resample moves the child.
 //! - A paint layer without a source, and every mask, has a local extent that
 //!   covers the canvas window, so the whole canvas stays paintable. Growing
 //!   the canvas left or up rebases such a layer by whole tiles: its tiles are
@@ -16,8 +16,12 @@
 //! - Stored extents shrink only when Delete Cropped Pixels trims a layer to
 //!   the tiles its window touches. Hidden tiles count toward the project's
 //!   tile and byte limits like visible ones.
-//! - A rotation resamples paint layers and masks without a source into a
-//!   frame that holds the whole rotated extent, so hidden corners are kept.
+//! - A rotation, flip or scale resamples paint layers and masks without a
+//!   source into a frame that holds the whole mapped extent, so hidden
+//!   corners are kept. The frame never shrinks below the layer's extent, since
+//!   source and result share one tile grid; the renderer then drops the pages
+//!   the result left empty, so tile limits count only the result. Effect
+//!   distances in pixels scale with the image.
 use crate::raster::{RasterData, RasterPlane, RasterRevision, TILE_SIZE, TileKey};
 use crate::*;
 
@@ -40,6 +44,16 @@ pub struct CanvasGeometry {
     /// Drop the pixels outside the new canvas instead of keeping them hidden.
     pub delete_outside: bool,
 }
+/// A flip or turn of the whole image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageOrientation {
+    FlipHorizontal,
+    FlipVertical,
+    RotateLeft,
+    RotateRight,
+    Rotate180,
+}
+
 impl CanvasGeometry {
     /// Keep every pixel, hiding what falls outside `rect`.
     pub fn crop(rect: CanvasRect) -> Self {
@@ -47,6 +61,34 @@ impl CanvasGeometry {
             rect,
             linear: Affine::IDENTITY,
             interpolation: Interpolation::default(),
+            delete_outside: false,
+        }
+    }
+    /// Flip or turn a `canvas` of that size. Pixels move without resampling.
+    pub fn orient(canvas: [u32; 2], orientation: ImageOrientation) -> Self {
+        let [w, h] = canvas.map(|v| v as f32);
+        let turned = [canvas[1], canvas[0]];
+        let (linear, size) = match orientation {
+            ImageOrientation::FlipHorizontal => (Affine([-1., 0., 0., 1., w, 0.]), canvas),
+            ImageOrientation::FlipVertical => (Affine([1., 0., 0., -1., 0., h]), canvas),
+            ImageOrientation::Rotate180 => (Affine([-1., 0., 0., -1., w, h]), canvas),
+            ImageOrientation::RotateRight => (Affine([0., 1., -1., 0., h, 0.]), turned),
+            ImageOrientation::RotateLeft => (Affine([0., -1., 1., 0., 0., w]), turned),
+        };
+        Self {
+            rect: CanvasRect { origin: [0; 2], size },
+            linear,
+            interpolation: Interpolation::Nearest,
+            delete_outside: false,
+        }
+    }
+    /// Scale a `canvas` of that size to `size`.
+    pub fn resize(canvas: [u32; 2], size: [u32; 2], interpolation: Interpolation) -> Self {
+        let [x, y] = std::array::from_fn(|i| size[i] as f32 / canvas[i].max(1) as f32);
+        Self {
+            rect: CanvasRect { origin: [0; 2], size },
+            linear: Affine([x, 0., 0., y, 0., 0.]),
+            interpolation,
             delete_outside: false,
         }
     }
@@ -188,7 +230,8 @@ fn local_window(layers: &[Layer], id: LayerId, canvas: [u32; 2]) -> Result<Rect,
     Ok(inverse.bounds(canvas_rect(canvas)))
 }
 
-/// Local pixels a target holds: its tiles and a mask's initial coverage.
+/// Local pixels a target holds, in whole tiles: its tiles and the tiles a
+/// mask's initial coverage fills when the renderer draws it.
 fn content_bounds(layer: &Layer, id: LayerId) -> Result<Rect, CanvasGeometryError> {
     let (raster, initial) = if id == layer.id {
         (&layer.raster, None)
@@ -202,9 +245,12 @@ fn content_bounds(layer: &Layer, id: LayerId) -> Result<Rect, CanvasGeometryErro
         let [x, y] = key.coordinate.map(|v| (v * TILE_SIZE) as f32);
         bounds = bounds.union(Rect { min: Point { x, y }, max: Point { x: x + size, y: y + size } });
     }
+    if bounds.is_empty() {
+        return Ok(bounds);
+    }
     Ok(Rect {
-        min: Point { x: bounds.min.x.floor(), y: bounds.min.y.floor() },
-        max: Point { x: bounds.max.x.ceil(), y: bounds.max.y.ceil() },
+        min: Point { x: (bounds.min.x / size).floor() * size, y: (bounds.min.y / size).floor() * size },
+        max: Point { x: (bounds.max.x / size).ceil() * size, y: (bounds.max.y / size).ceil() * size },
     })
 }
 
@@ -263,6 +309,19 @@ fn erase_outside(window: Rect, extent: [u32; 2], tiles: &RasterData) -> Result<V
 /// Float noise in placements must not rebase or grow a layer by a pixel.
 const PIXEL_TOLERANCE: f32 = 1e-3;
 
+/// Whether `affine` turns the image a quarter turn, so width and height trade places.
+fn swaps_axes(affine: Affine) -> bool {
+    let [a, b, c, d, ..] = affine.0;
+    a.abs() <= 1e-6 && d.abs() <= 1e-6 && b.abs() > 1e-6 && c.abs() > 1e-6
+}
+
+/// How much `affine` scales areas, as a length: the factor for distances
+/// declared in pixels.
+fn length_scale(affine: Affine) -> f32 {
+    let [a, b, c, d, ..] = affine.0;
+    (a * d - b * c).abs().sqrt()
+}
+
 fn is_translation(affine: Affine) -> bool {
     let [a, b, c, d, ..] = affine.0;
     [a - 1., b, c, d - 1.].iter().all(|v| v.abs() <= 1e-6)
@@ -308,6 +367,12 @@ impl Document {
         let mut plan = if resampled { self.resampled_plan(geometry, limits)? } else { self.crop_plan(geometry, limits)? };
         if same && plan.edits.is_empty() && plan.operations.is_empty() {
             return Err(CanvasGeometryError::Unchanged);
+        }
+        if let Some(resolution) = self.resolution
+            && swaps_axes(geometry.linear)
+            && resolution.swapped() != resolution
+        {
+            plan.edits.push(Edit::SetResolution(Some(resolution.swapped())));
         }
         let to_canvas = geometry.to_canvas();
         if let Some(selection) = &self.selection {
@@ -475,9 +540,9 @@ impl Document {
         Ok((layers, changes))
     }
 
-    /// A rotated canvas. Paint layers and masks without a source resample
-    /// into a new frame; photos, Selection Layers, the selection and guides
-    /// change as metadata.
+    /// A rotated, flipped or scaled canvas. Paint layers and masks without a
+    /// source resample into a new frame; photos, Selection Layers, the
+    /// selection and guides change as metadata.
     fn resampled_plan(&self, geometry: &CanvasGeometry, limits: GeometryLimits) -> Result<CanvasGeometryPlan, CanvasGeometryError> {
         let rect = geometry.rect;
         let to_canvas = geometry.to_canvas();
@@ -552,8 +617,11 @@ impl Document {
                 let content = content_bounds(old, id)?;
                 let existing = raster_data(self.target_raster(id).ok_or(DocumentError::MissingLayer(id))?)?;
                 let transform = ImageTransform { map: TransformMap::Affine(map), interpolation: geometry.interpolation };
-                let mut written: BTreeSet<[u32; 2]> = existing.tiles.keys().map(|k| k.coordinate).collect();
-                written.extend(pages(transform.affected_bounds(content), grown));
+                let written: BTreeSet<[u32; 2]> = if content.is_empty() {
+                    existing.tiles.keys().map(|k| k.coordinate).collect()
+                } else {
+                    pages(transform.affected_regions(content)[1], grown).collect()
+                };
                 predicted.insert(id, written.len());
                 if !content.is_empty() {
                     operations.push((id, pixel_operation(rectangle(content)?, LayerOperationKind::Transform(transform))));
@@ -567,6 +635,14 @@ impl Document {
                             operations.push((id, pixel_operation(rectangle(strip)?, ERASE)));
                         }
                     }
+                }
+            }
+        }
+        let factor = length_scale(geometry.linear);
+        if (factor - 1.).abs() > 1e-4 {
+            for layer in layers.iter_mut().filter(|l| l.kind == LayerKind::Effect) {
+                if let Some(scaled) = layer.effect.as_ref().and_then(|e| e.scaled_px(factor)) {
+                    layer.effect = Some(Arc::new(scaled));
                 }
             }
         }

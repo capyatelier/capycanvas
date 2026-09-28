@@ -3,6 +3,7 @@
 //! premultiplied source, the selection and each filter evaluated on the CPU.
 use super::*;
 use super::transforms::{mask_values, masked, packed};
+use crate::pixel_transform::EXACT_TAPS;
 use crate::test_support::preimage;
 use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::*};
 use layer_core::{
@@ -110,9 +111,8 @@ impl Oracle {
     }
     /// Catmull-Rom, clamped to the range of the four nearest texels, with
     /// straight color no brighter than theirs.
-    fn bicubic(&self, [u, v]: [f64; 2]) -> [f64; 4] {
-        let kernel = |d: f64| {
-            let d = d.abs();
+    fn bicubic(&self, s: [f64; 2]) -> [f64; 4] {
+        self.clamped(s, 2, |d| {
             if d < 1. {
                 (1.5 * d - 2.5) * d * d + 1.
             } else if d < 2. {
@@ -120,15 +120,35 @@ impl Oracle {
             } else {
                 0.
             }
-        };
+        })
+    }
+    /// Lanczos-3 with normalized weights, clamped as bicubic is.
+    fn lanczos(&self, s: [f64; 2]) -> [f64; 4] {
+        self.clamped(s, 3, |d| {
+            if d < 1e-4 {
+                1.
+            } else if d >= 3. {
+                0.
+            } else {
+                let p = std::f64::consts::PI * d;
+                3. * p.sin() * (p / 3.).sin() / (p * p)
+            }
+        })
+    }
+    /// A separable filter of `radius` taps each side, of the distance to each
+    /// tap, with normalized weights and the bicubic clamp.
+    fn clamped(&self, [u, v]: [f64; 2], radius: i32, kernel: impl Fn(f64) -> f64) -> [f64; 4] {
         let [left, top] = [(u - 0.5).floor() as i32, (v - 0.5).floor() as i32];
+        let kernel = &kernel;
+        let taps = |at: f64, first: i32| (first + 1 - radius..=first + radius).map(move |i| (i, kernel((at - 0.5 - i as f64).abs())));
+        let [total_x, total_y] = [taps(u, left).map(|(_, w)| w).sum::<f64>(), taps(v, top).map(|(_, w)| w).sum::<f64>()];
         let mut sum = [0.; 4];
         let mut low = [f64::INFINITY; 4];
         let mut high = [f64::NEG_INFINITY; 4];
         let mut brightest = [0f64; 3];
-        for y in top - 1..=top + 2 {
-            for x in left - 1..=left + 2 {
-                let w = kernel(u - 0.5 - x as f64) * kernel(v - 0.5 - y as f64);
+        for (y, wy) in taps(v, top) {
+            for (x, wx) in taps(u, left) {
+                let w = wx * wy / (total_x * total_y);
                 let color = self.selected(x, y);
                 for k in 0..4 {
                     sum[k] += color[k] * w;
@@ -170,6 +190,7 @@ impl Oracle {
     ) -> [f64; 4] {
         match (nx, ny, interpolation) {
             (1, 1, Interpolation::Bicubic) => self.bicubic(s),
+            (1, 1, Interpolation::Lanczos) => self.lanczos(s),
             (1, 1, _) => self.bilinear(s),
             _ => {
                 let mut sum = [0.; 4];
@@ -203,7 +224,7 @@ impl Oracle {
                 return vec![1];
             };
             let reach = (b[0] - a[0]).hypot(b[1] - a[1]) / (2. * step) + 0.5;
-            let count = |r: f64| (r.floor() as u32).clamp(1, 4);
+            let count = |r: f64| (r.floor() as u32).clamp(1, EXACT_TAPS);
             let mut counts = vec![count(reach)];
             for other in [count(reach - 1e-3), count(reach + 1e-3)] {
                 if !counts.contains(&other) {
@@ -213,10 +234,22 @@ impl Oracle {
             counts
         });
         let tap = |o: [f64; 2]| preimage(h, [center[0] + o[0], center[1] + o[1]]);
+        // A clamped filter's nearest four texels change across a texel
+        // boundary, which Float32 evaluation may place either side of.
+        let slack: &[[f64; 2]] = if matches!(interpolation, Interpolation::Bicubic | Interpolation::Lanczos) {
+            &[[0., 0.], [-2e-4, 0.], [2e-4, 0.], [0., -2e-4], [0., 2e-4]]
+        } else {
+            &[[0., 0.]]
+        };
         counts[0]
             .iter()
             .flat_map(|&nx| counts[1].iter().map(move |&ny| [nx, ny]))
-            .map(|count| self.filtered(interpolation, source, count, tap))
+            .flat_map(|count| {
+                slack.iter().map(move |[ox, oy]| {
+                    let at = if count == [1, 1] { [source[0] + ox, source[1] + oy] } else { source };
+                    self.filtered(interpolation, at, count, tap)
+                })
+            })
             .collect()
     }
     fn composed(&self, x: u32, y: u32, moved: [f64; 4]) -> [f64; 4] {
@@ -300,6 +333,7 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
             Interpolation::Nearest,
             Interpolation::Linear,
             Interpolation::Bicubic,
+            Interpolation::Lanczos,
         ] {
             for map in &maps {
                 transaction += 1;
@@ -402,29 +436,31 @@ fn minified_native_transforms_average_the_pixel_footprint() {
 }
 
 #[test]
-fn bicubic_mask_transforms_keep_scalar_coverage_within_the_unit_interval() {
-    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let layer = masked([[20., 20.], [60., 20.], [60., 60.], [20., 60.]]);
-    frame(&mut r, &layer, true);
-    r.set_transform_preview(Some(&layer_render::TransformPreview {
-        transaction: 1,
-        moving: false,
-        layer: LayerId(9),
-        selection: None,
-        transform: ImageTransform {
-            map: TransformMap::Affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])),
-            interpolation: Interpolation::Bicubic,
-        },
-    }))
-    .unwrap();
-    frame(&mut r, &layer, false);
-    let values: Vec<f32> = mask_values(&r).into_values().flatten().collect();
-    assert!(!values.is_empty(), "the preview draws mask pages");
-    assert!(
-        values.iter().all(|v| (0. ..=1.).contains(v)),
-        "bicubic lobes leave the unit interval"
-    );
-    assert!(values.iter().any(|v| *v > 0.999) && values.iter().any(|v| *v > 0.01 && *v < 0.99));
+fn bicubic_and_lanczos_mask_transforms_keep_scalar_coverage_within_the_unit_interval() {
+    for interpolation in [Interpolation::Bicubic, Interpolation::Lanczos] {
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let layer = masked([[20., 20.], [60., 20.], [60., 60.], [20., 60.]]);
+        frame(&mut r, &layer, true);
+        r.set_transform_preview(Some(&layer_render::TransformPreview {
+            transaction: 1,
+            moving: false,
+            layer: LayerId(9),
+            selection: None,
+            transform: ImageTransform {
+                map: TransformMap::Affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])),
+                interpolation,
+            },
+        }))
+        .unwrap();
+        frame(&mut r, &layer, false);
+        let values: Vec<f32> = mask_values(&r).into_values().flatten().collect();
+        assert!(!values.is_empty(), "the preview draws mask pages");
+        assert!(
+            values.iter().all(|v| (0. ..=1.).contains(v)),
+            "{interpolation:?} lobes leave the unit interval"
+        );
+        assert!(values.iter().any(|v| *v > 0.999) && values.iter().any(|v| *v > 0.01 && *v < 0.99));
+    }
 }
 
 /// Source positions of the mesh's triangles at pixel centers, rasterized on
@@ -515,7 +551,7 @@ impl Oracle {
         };
         let [dx, dy] = [step(1, 0), step(0, 1)];
         let reach = [dx[0].hypot(dx[1]), dy[0].hypot(dy[1])];
-        let count = |r: f64| ((r + 0.5).floor() as u32).clamp(1, 4);
+        let count = |r: f64| ((r + 0.5).floor() as u32).clamp(1, EXACT_TAPS);
         let mut values = Vec::new();
         let mut counts = Vec::new();
         for offset in [0., -1e-2, 1e-2] {
@@ -525,11 +561,11 @@ impl Oracle {
             }
         }
         for n in counts {
-            if n == [1, 1] && interpolation == Interpolation::Bicubic {
+            if n == [1, 1] && matches!(interpolation, Interpolation::Bicubic | Interpolation::Lanczos) {
                 // Its clamp follows the nearest four texels, which change
                 // across a texel boundary.
                 for [ox, oy] in [[0., 0.], [-5e-3, 0.], [5e-3, 0.], [0., -5e-3], [0., 5e-3]] {
-                    values.push(self.bicubic([s[0] + ox, s[1] + oy]));
+                    values.push(self.filtered(interpolation, [s[0] + ox, s[1] + oy], n, |_| None));
                 }
                 continue;
             }
@@ -602,6 +638,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
                 Interpolation::Nearest,
                 Interpolation::Linear,
                 Interpolation::Bicubic,
+                Interpolation::Lanczos,
             ] {
                 transaction += 1;
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
@@ -696,4 +733,131 @@ fn mask_warps_seeded_from_an_affine_match_the_affine() {
         assert!(moved > 1000, "{interpolation:?}: the mask moves");
         assert!(largest <= 4e-3, "{interpolation:?}: the warp differs from its affine by {largest}");
     }
+}
+
+const PLATE: u32 = 1024;
+/// A zone plate whose frequency rises from the centre, reaching one cycle per
+/// two pixels at the middle of each edge.
+fn zone(x: u32, y: u32) -> f32 {
+    let [dx, dy] = [x, y].map(|v| v as f64 + 0.5 - f64::from(PLATE) / 2.);
+    (0.5 + 0.5 * (std::f64::consts::PI * (dx * dx + dy * dy) / f64::from(PLATE)).cos()) as f32
+}
+fn zone_plate() -> Arc<SourceImage> {
+    let mut builder = SourceBuilder::new(
+        [PLATE; 2],
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: SampleDepth::F32,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: false,
+        },
+        64 * 1024 * 1024,
+    )
+    .unwrap();
+    for y in 0..PLATE {
+        let row: Vec<u8> = (0..PLATE).flat_map(|x| { let v = zone(x, y); [v, v, v, 1.] }).flat_map(f32::to_le_bytes).collect();
+        builder.push_row(&row).unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}
+/// The zone plate reduced by `RowResampler`'s area average over footprints
+/// half a pixel up and left: the area of each pixel of the plate moved half a
+/// pixel is the mean of its 2×2 neighbourhood, with transparency beyond.
+fn area_reduced(size: u32) -> Vec<f32> {
+    let mut resampler = layer_color::RowResampler::new([PLATE; 2], [size; 2]).unwrap();
+    let mut out = vec![[0f32; 4]; size as usize];
+    let mut values = Vec::new();
+    let pixel = |x: u32, y: u32| if x == 0 || y == 0 { 0. } else { zone(x - 1, y - 1) };
+    for y in 0..size {
+        resampler
+            .read_row(y, &mut out, |sy, row| {
+                for (x, out) in row.iter_mut().enumerate() {
+                    let x = x as u32;
+                    let v = (pixel(x, sy) + pixel(x + 1, sy) + pixel(x, sy + 1) + pixel(x + 1, sy + 1)) / 4.;
+                    *out = [v, v, v, 1.];
+                }
+                Ok(())
+            })
+            .unwrap();
+        values.extend(out.iter().map(|p| p[0]));
+    }
+    values
+}
+fn largest_difference(actual: impl Iterator<Item = f32>, expected: &[f32]) -> f32 {
+    actual.zip(expected).map(|(a, e)| (a - e).abs()).fold(0., f32::max)
+}
+
+/// An eighth of the zone plate, placed half a source pixel to the right and
+/// down, so a destination pixel covers the source from -0.5 to 7.5 pixels
+/// past its multiple of eight.
+const EIGHTH: Affine = Affine([0.125, 0., 0., 0.125, 0.0625, 0.0625]);
+
+#[test]
+fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
+    let size = PLATE / 8;
+    let expected = area_reduced(size);
+    let extent = [PLATE; 2];
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut layer = Layer::paint(LayerId(1), "zone plate");
+    layer.source = Some(zone_plate());
+    let submit = |r: &mut WgpuRasterizer, layer: &Layer, batches: &[DabBatch], reset: bool| {
+        r.submit(FramePacket {
+            dab_batches: batches,
+            reset_layers: reset,
+            composite_all: reset,
+            ..packet(std::slice::from_ref(layer), extent)
+        })
+        .unwrap();
+    };
+    submit(&mut r, &layer, &[], true);
+    let transform = ImageTransform {
+        map: TransformMap::Affine(EIGHTH),
+        interpolation: Interpolation::Bicubic,
+    };
+    let reduced = |r: &WgpuRasterizer| {
+        let page = r.paint_layers[0].pages.iter().find(|p| p.coordinate == [0, 0]).unwrap();
+        let bytes = page_bytes(r, &page.active().texture);
+        (0..size * size)
+            .map(|i| {
+                let offset = (((i / size) * PAGE_SIZE + i % size) * 16) as usize;
+                f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+            })
+            .collect::<Vec<_>>()
+    };
+    r.set_transform_preview(Some(&layer_render::TransformPreview {
+        transaction: 1,
+        moving: true,
+        layer: layer.id,
+        selection: None,
+        transform: transform.clone(),
+    }))
+    .unwrap();
+    submit(&mut r, &layer, &[], false);
+    let preview = largest_difference(reduced(&r).into_iter(), &expected);
+    r.set_transform_preview(None).unwrap();
+    submit(&mut r, &layer, &[], false);
+    let mut coverage = LayerMask::reveal_all(LayerId(40), Point::default());
+    coverage.default_coverage = 1.;
+    let operation = LayerOperation { placement: Affine::IDENTITY, coverage, kind: LayerOperationKind::Transform(transform) };
+    let batch = DabBatch {
+        kind: DabBatchKind::LayerOperation(0),
+        dab_count: 0,
+        damage: operation.bounds(extent),
+        ..crate::test_support::dab_batch(layer.id, crate::tests::test_style(BrushExecution::Dry), operation.bounds(extent))
+    };
+    let mut committed = layer.clone();
+    committed.pending_operations.push(operation);
+    submit(&mut r, &committed, &[batch], false);
+    let commit = largest_difference(reduced(&r).into_iter(), &expected);
+    assert!(preview > 0.1, "a moving preview averages at most four taps and aliases: {preview}");
+    assert!(commit < 1e-3, "the commit averages the whole footprint: {commit} from the area reduction");
+
+    let mut document = layer_core::Document::new("placed zone plate", size, size);
+    document.layers[1].visible = false;
+    document.layers[0].source = Some(zone_plate());
+    document.layers[0].properties.placement = EIGHTH;
+    let mut capture = r.snapshot_gpu().capture(layer_core::Project { document }, [0.; 4], 0., Default::default()).unwrap();
+    let exported = capture.read_region([0, 0, size, size]).unwrap();
+    let placed = largest_difference(exported.iter().map(|p| p[0]), &expected);
+    assert!(placed < 1e-3, "exact capture of a photo placed at an eighth: {placed} from the area reduction");
 }

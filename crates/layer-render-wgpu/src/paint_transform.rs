@@ -256,7 +256,7 @@ pub(crate) fn local_level(level: u32, placement: layer_core::Affine) -> u32 {
 
 /// How far `placement` stretches layer pixels along the axis it magnifies
 /// most.
-fn magnification(placement: layer_core::Affine) -> f32 {
+pub(crate) fn magnification(placement: layer_core::Affine) -> f32 {
     let [a, b, c, d, _, _] = placement.0;
     let sum = a * a + b * b + c * c + d * d;
     let det = (a * d - b * c).abs();
@@ -279,6 +279,13 @@ pub(crate) fn resample_map(
         .try_fold(scale((1u32 << local) as f32), layer_core::Projective::then)
         .ok_or(GpuRasterError::InvalidTransform("Transform must be finite and invertible"))?;
     Ok(layer_core::ImageTransform { map: map.into(), interpolation: layer_core::Interpolation::Linear })
+}
+
+/// Taps per axis a preview's pages average over a minified pixel: the exact
+/// count once it stops moving, since Apply may keep those pages.
+fn preview_taps(preview: &layer_render::TransformPreview) -> u32 {
+    let exact = pixel_transform::exact_taps(&preview.drawn());
+    if preview.moving { exact.min(pixel_transform::PREVIEW_TAPS) } else { exact }
 }
 
 /// Whether `selection` fully covers every pixel of `bounds`, so a transform
@@ -509,9 +516,23 @@ impl ImageTransformState {
         let regions = transform
             .affected_regions(self.cut)
             .map(|b| pixel_rect(b, extent));
-        let result = self.render_source(r, encoder, layer, transform, &regions);
+        let taps = pixel_transform::exact_taps(transform);
+        let result = self.render_source(r, encoder, layer, transform, taps, &regions);
+        if result.is_ok() && self.moves_everything(operation.coverage.initial.as_ref()) {
+            let placed = regions[1];
+            r.drop_vacated_pages(layer, |c| !placed.page_local(c).is_empty());
+        }
         self.release_snapshot();
         result
+    }
+    /// Whether the captured transform moves every pixel its target holds,
+    /// leaving only the pages its forward bounds reach. A photo's original
+    /// stays under its pages, so emptied pages must keep covering it.
+    fn moves_everything(&self, selection: Option<&layer_core::Selection>) -> bool {
+        let source = self.source_bounds.into_iter().fold(PixelRect::EMPTY, PixelRect::union);
+        self.sources[0].as_ref().is_some_and(|s| s.original.is_none())
+            && !source.is_empty()
+            && selection.is_none_or(|s| selects_all(s, source))
     }
     fn capture_source(
         &mut self,
@@ -619,6 +640,7 @@ impl ImageTransformState {
         encoder: &mut crate::submission::CommandEncoder,
         layer: LayerId,
         transform: &layer_core::ImageTransform,
+        taps: u32,
         regions: &[PixelRect],
     ) -> Result<(), GpuRasterError> {
         if self.sources[0].is_none() || regions.iter().all(|b| b.is_empty()) {
@@ -798,7 +820,7 @@ impl ImageTransformState {
             if channel == 0 && r.device.working_format().block_copy_size(None) == Some(4) {
                 self.capture_originals(r, encoder, &windows)?;
             }
-            self.draw_windows(r, encoder, channel, transform, &windows, self.has_selection)?;
+            self.draw_windows(r, encoder, channel, transform, taps, &windows, self.has_selection)?;
         }
         // The next stroke establishes fresh stroke-scoped accumulation. Keep
         // persistent wetness and the layer-level watercolor edge style intact.
@@ -878,12 +900,14 @@ impl ImageTransformState {
 
     /// Draw each window's jobs into the atlas, in as few passes as the source
     /// cache allows, then copy each page's region to its target.
+    #[allow(clippy::too_many_arguments)]
     fn draw_windows(
         &mut self,
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         channel: usize,
         transform: &layer_core::ImageTransform,
+        taps: u32,
         windows: &[Window],
         selected: bool,
     ) -> Result<(), GpuRasterError> {
@@ -924,6 +948,7 @@ impl ImageTransformState {
                 bounds,
                 self.background.unwrap_or(0.),
                 transform,
+                taps,
                 &records,
                 None,
             )
@@ -1048,7 +1073,7 @@ impl ImageTransformState {
             .collect();
         let identity = layer_core::ImageTransform::default();
         let copies = self.plan_windows(r, 0, &identity, None, targets)?;
-        self.draw_windows(r, encoder, 0, &identity, &copies, false)?;
+        self.draw_windows(r, encoder, 0, &identity, pixel_transform::PREVIEW_TAPS, &copies, false)?;
         let snapshot = self.sources[0].as_mut().unwrap();
         for (coordinate, _) in copies.iter().flat_map(|window| &window.pages) {
             let capture = &self.captures[0][coordinate];
@@ -1174,6 +1199,7 @@ impl ImageTransformState {
             .get(index as usize)?;
         if !matches!(&operation.kind, layer_core::LayerOperationKind::Transform(t) if *t == *preview.drawn())
             || operation.coverage.initial != preview.selection
+            || preview_taps(preview) != pixel_transform::exact_taps(&preview.drawn())
         {
             return None;
         }
@@ -1197,7 +1223,7 @@ impl ImageTransformState {
         if r.paint_layers.iter().any(|l| l.id == previous.layer)
             || r.layer_masks.definitions.contains_key(&previous.layer)
         {
-            self.render_source(r, encoder, previous.layer, &Default::default(), &regions)?;
+            self.render_source(r, encoder, previous.layer, &Default::default(), pixel_transform::PREVIEW_TAPS, &regions)?;
         }
         self.retain_pages(r, previous.layer, &[], None);
         self.preview_regions = [PixelRect::EMPTY; 2];
@@ -1237,7 +1263,7 @@ impl ImageTransformState {
             regions[0],
             regions[1],
         ];
-        self.render_source(r, encoder, next.layer, &next.drawn(), &affected)?;
+        self.render_source(r, encoder, next.layer, &next.drawn(), preview_taps(next), &affected)?;
         // Drop only pages created for a previous preview and no longer needed.
         // Original sparse pages remain untouched outside the preview footprint.
         self.retain_pages(r, next.layer, &regions, Some(&next.transform));
@@ -1411,6 +1437,7 @@ impl ImageTransformState {
                 bounds,
                 0.,
                 transform,
+                pixel_transform::PREVIEW_TAPS,
                 &records,
                 Some((display, part)),
             )
@@ -1638,7 +1665,7 @@ impl ImageTransformState {
             }
             self.settling.as_mut().unwrap().2.pop();
             let regions: Vec<_> = affected.map(|b| b.intersect(page_rect(c))).into_iter().filter(|b| !b.is_empty()).collect();
-            self.render_source(r, encoder, next.layer, &drawn, &regions)?;
+            self.render_source(r, encoder, next.layer, &drawn, preview_taps(next), &regions)?;
             Ok(true)
         })?;
         if !self.settling.as_ref().unwrap().2.is_empty() {

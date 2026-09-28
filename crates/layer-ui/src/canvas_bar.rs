@@ -195,6 +195,7 @@ pub(crate) fn short_label(command: CommandId) -> &'static str {
         CommandId::CropOverlayDiagonal => "Diagonal",
         CommandId::CropOverlayGolden => "Golden Ratio",
         CommandId::CropDeleteCroppedPixels => "Delete Cropped",
+        CommandId::CropFitContent => "Fit Content",
         CommandId::StraightenToGuide => "Straighten",
         _ => command.label(),
     }

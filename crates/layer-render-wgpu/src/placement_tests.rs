@@ -753,8 +753,10 @@ fn retained_placement_samples_full_source_across_tiles_without_creating_raster()
         let pixels = r.readback_srgb_rgba8().unwrap();
         let inverse = affine.inverse().unwrap();
         let [a, b, c, d, _, _] = inverse.0;
-        // A minified pixel averages a grid of bilinear taps over its area.
-        let count = [a.hypot(b), c.hypot(d)].map(|reach| ((reach + 0.5).floor() as u32).clamp(1, 4));
+        // The readback is an exact capture: a minified pixel averages a grid
+        // of bilinear taps over its whole area.
+        let count = [a.hypot(b), c.hypot(d)]
+            .map(|reach| ((reach + 0.5).floor() as u32).clamp(1, crate::pixel_transform::EXACT_TAPS));
         let bilinear = |p: Point| {
             let (sx, sy) = (p.x - 0.5, p.y - 0.5);
             let (ix, iy) = (sx.floor() as i32, sy.floor() as i32);

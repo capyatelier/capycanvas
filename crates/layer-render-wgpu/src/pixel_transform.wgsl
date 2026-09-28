@@ -1,6 +1,7 @@
 // Original premultiplied layer pixels are immutable for the whole transaction.
 // Sample color * selection together, never filter them independently (halos).
-// Rows x, y and w map a destination pixel to homogeneous source coordinates.
+// Rows x, y and w map a destination pixel to homogeneous source coordinates;
+// x.w holds the most taps per axis a minified pixel averages.
 // attachment holds its origin in layer pixels, the flags and the background.
 // A display level reads display: layer pixels per texel side, layer opacity
 // and the layer extent; texels: the region of its texels drawn; and
@@ -25,6 +26,7 @@ const BICUBIC=8u;
 const NO_VIEW=16u;
 const SELECTED=32u;
 const KEPT=64u;
+const LANCZOS=128u;
 const UNCOVERED=-1e38;
 
 @vertex fn vertex_main(@builtin(vertex_index) index:u32)->@builtin(position) vec4<f32> {
@@ -121,6 +123,43 @@ fn bicubic(local:vec2<f32>)->vec4<f32> {
     value.a=clamp(value.a,0.,1.);
     return vec4(min(value.rgb,value.a*brightest),value.a);
 }
+fn lanczos3(d:f32)->f32 {
+    let x=abs(d);
+    if x<1e-4 {return 1.;}
+    if x>=3. {return 0.;}
+    let p=3.14159265*x;
+    return 3.*sin(p)*sin(p/3.)/(p*p);
+}
+// Lanczos-3 over 6x6 taps with normalized weights, its overshoot clamped as
+// bicubic's is.
+fn lanczos(local:vec2<f32>)->vec4<f32> {
+    if far(local,3.) {return outside(brush_selection_at(local));}
+    let p=local-vec2(.5);let base=vec2<i32>(floor(p));let t=fract(p);
+    var wx:array<f32,6>;var wy:array<f32,6>;
+    var total=vec2(0.);
+    for (var i=0;i<6;i++) {
+        wx[i]=lanczos3(t.x-f32(i-2));wy[i]=lanczos3(t.y-f32(i-2));
+        total+=vec2(wx[i],wy[i]);
+    }
+    let view=view_of(base-vec2(2),base+vec2(3));
+    var sum=vec4(0.);var low=vec4(3.4e38);var high=vec4(-3.4e38);var brightest=vec3(0.);
+    for (var j=0;j<6;j++) {
+        var row=vec4(0.);
+        for (var i=0;i<6;i++) {
+            let value=tap(view,base+vec2(i-2,j-2));
+            row+=value*wx[i];
+            if (i==2 || i==3) && (j==2 || j==3) {
+                low=min(low,value);high=max(high,value);
+                if value.a>0. {brightest=max(brightest,value.rgb/value.a);}
+            }
+        }
+        sum+=row*wy[j];
+    }
+    var value=clamp(sum/(total.x*total.y),low,high);
+    if scalar {return clamp(value,vec4(0.),vec4(1.));}
+    value.a=clamp(value.a,0.,1.);
+    return vec4(min(value.rgb,value.a*brightest),value.a);
+}
 fn source_position(world:vec2<f32>)->vec3<f32> {
     let h=vec3(world,1.);
     let w=dot(transform.w.xyz,h);
@@ -146,10 +185,10 @@ fn mesh_step(p:vec2<i32>,axis:vec2<i32>,s:vec2<f32>)->vec2<f32> {
     return vec2(0.);
 }
 // Destination pixels covering several source pixels average a grid of up to
-// 4x4 bilinear taps spread over the pixel, sized by the source steps dx and dy
-// to the next pixel.
+// x.w by x.w bilinear taps spread over the pixel, sized by the source steps dx
+// and dy to the next pixel.
 fn filtered(world:vec2<f32>,s:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
-    let count=vec2<u32>(clamp(floor(vec2(length(dx),length(dy))+.5),vec2(1.),vec2(4.)));
+    let count=vec2<u32>(clamp(floor(vec2(length(dx),length(dy))+.5),vec2(1.),vec2(max(transform.x.w,1.))));
     if any(count>vec2(1u)) {
         var sum=vec4(0.);
         for (var j=0u;j<count.y;j++) {
@@ -165,6 +204,7 @@ fn filtered(world:vec2<f32>,s:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
         }
         return sum/f32(count.x*count.y);
     }
+    if (flags()&LANCZOS)!=0u {return lanczos(s);}
     if (flags()&BICUBIC)!=0u {return bicubic(s);}
     return bilinear(s);
 }
