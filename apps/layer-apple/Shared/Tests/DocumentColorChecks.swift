@@ -30,7 +30,11 @@ extension XCTestCase {
             workspaceActivate(button)
         }
         func choose(_ id:String,_ label:String) {
+            #if os(macOS)
             let picker=app.descendants(matching:.any).matching(identifier:id).firstMatch
+            #else
+            let picker=app.buttons.matching(identifier:id).firstMatch
+            #endif
             XCTAssertTrue(picker.waitForExistence(timeout:10));workspaceActivate(picker)
             #if os(macOS)
             workspaceActivate(app.menuItems[label].firstMatch)

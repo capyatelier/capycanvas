@@ -340,14 +340,16 @@ extension XCTestCase {
     @MainActor func checkNumericTextHistory(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)
-        let paper = editorPixels(in: app)
+        let above = CGPoint(x: 0.5, y: 0.42)
+        func pixels() -> Data { editorPixels(in: app, at: above) }
+        let paper = pixels()
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
         editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
         expectation(for: NSPredicate { _, _ in
-            let sample = self.editorPixels(in: app); return Int(sample[2]) > Int(sample[0]) + 50
+            let sample = pixels(); return Int(sample[2]) > Int(sample[0]) + 50
         }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
-        let painted = editorPixels(in: app)
+        let painted = pixels()
         let value = app.buttons["number-value-tool-size"], entry = app.textFields["number-entry-tool-size"]
         revealEditorControl(value, in: app.scrollViews.containing(.button, identifier: value.identifier).firstMatch)
         workspaceActivate(value); XCTAssertTrue(entry.waitForExistence(timeout: 5))
@@ -364,11 +366,11 @@ extension XCTestCase {
         attachEditor(in: app, name: "keyboard-focused-text-undo")
         expectation(for: NSPredicate(format: "value != %@", "96"), evaluatedWith: entry)
         waitForExpectations(timeout: 5)
-        XCTAssertEqual(editorPixels(in: app), painted, "Text Undo must preserve artwork")
+        XCTAssertEqual(pixels(), painted, "Text Undo must preserve artwork")
         app.typeKey("z", modifierFlags: [.command, .shift])
         expectation(for: NSPredicate(format: "value == %@", "96"), evaluatedWith: entry)
         waitForExpectations(timeout: 5)
-        XCTAssertEqual(editorPixels(in: app), painted, "Text Redo must preserve artwork")
+        XCTAssertEqual(pixels(), painted, "Text Redo must preserve artwork")
         #if os(macOS)
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         #else
@@ -379,7 +381,7 @@ extension XCTestCase {
         let history: [(XCUIElement.KeyModifierFlags, Data)] = [(.command, paper), ([.command, .shift], painted)]
         for (flags, expected) in history {
             app.typeKey("z", modifierFlags: flags)
-            expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) == expected }, evaluatedWith: app)
+            expectation(for: NSPredicate { _, _ in pixels() == expected }, evaluatedWith: app)
             waitForExpectations(timeout: 10)
         }
         attachEditor(in: app, name: "keyboard-text-and-artwork-history")
