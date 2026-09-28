@@ -84,7 +84,7 @@ fn bristle_rough(point: vec2<f32>, lens: BristleLens, origin: f32) -> f32 {
     let track = bristle_cross(point * vec2<f32>(lens.half_width, lens.depth), lens.heading) / lens.half_width;
     let per_half_width = BRISTLE_FAN_TEXELS / max(style.bristles.y, 0.01);
     let hair = origin + track * per_half_width + lens.distance * 40.0;
-    let level = log2(max(per_half_width / max(lens.half_width, 0.5), 1.0));
+    let level = log2(max(per_half_width / max(lens.half_width, 0.5) * f32(style.operation.z), 1.0));
     return clamp((bristle_table(1.0, hair, level) - 0.2) / 0.6, 0.0, 1.0);
 }
 
@@ -222,7 +222,7 @@ fn bristle_track(dab: Dab, pose: BristlePose, lens: BristleLens, closest: vec2<f
     track.distance = max(mix(dab.previous_contact.z, dab.contact.z, leaving), 0.0);
     let spread = 1.0 - 0.5 * style.bristles.w * (1.0 - sqrt(lens.pressure));
     track.per_pixel = BRISTLE_FAN_TEXELS / max(style.bristles.y, 0.01) / (lens.half_width / max(spread, 0.05));
-    track.level = log2(max(track.per_pixel, 1.0));
+    track.level = log2(max(track.per_pixel * f32(style.operation.z), 1.0));
     track.engaged = bristle_engaged(closest.x, lens);
     let left = bristle_lens(dab, pose, leaving);
     let heading = left.heading;

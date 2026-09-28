@@ -25,6 +25,20 @@ fn paint(
     feedback: bool,
     pose: impl Fn(f32) -> Pose,
 ) -> Vec<u8> {
+    paint_at(brush, extent, 1., samples, until, cadence, feedback, pose)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_at(
+    brush: BrushSnapshot,
+    extent: [u32; 2],
+    scale: f32,
+    samples: u64,
+    until: u64,
+    cadence: u64,
+    feedback: bool,
+    pose: impl Fn(f32) -> Pose,
+) -> Vec<u8> {
     let (mut input, consumer) = input_queue(1024);
     let mut engine = CanvasEngine::new(
         WgpuRasterizer::new_native_headless(color::DocumentColor::default()).unwrap(),
@@ -33,7 +47,7 @@ fn paint(
         ViewState {
             width_px: extent[0],
             height_px: extent[1],
-            document_to_surface: Affine::IDENTITY.0,
+            document_to_surface: [scale, 0., 0., scale, 0., 0.],
             background_rgba_linear: [1.; 4],
         },
         ViewTransform::IDENTITY,
@@ -397,4 +411,16 @@ fn bristle_pen_down_leaves_an_imprint_no_denser_than_the_stroke() {
     let body = density(200, 312);
     assert!(body > 60., "the loaded body must be painted: {body}");
     assert!(start < body * 1.1, "pen-down must not be denser than the body: {start} vs {body}");
+}
+
+#[test]
+fn a_zoomed_out_preview_commits_the_same_paint() {
+    let mut brush = default_brush(DefaultBrushPreset::BristlePaintbrush);
+    brush.diameter = 120.;
+    let stroke = |scale| paint_at(brush.clone(), [512; 2], scale, 80, 80, 4, true, |t| {
+        let a = t * 4.;
+        Pose { position: [256. + a.cos() * 150., 256. + a.sin() * 110.], pressure: 0.3 + 0.6 * (t * 3.).sin().abs(),
+            tilt: [0.5, 0.2], twist: None }
+    });
+    assert!(stroke(1.) == stroke(0.1), "coarse previews must not reach committed paint");
 }
