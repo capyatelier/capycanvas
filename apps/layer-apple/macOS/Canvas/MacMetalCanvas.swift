@@ -13,6 +13,7 @@ struct MacMetalCanvas: NSViewRepresentable {
 final class MacCanvasView: NSView {
     let store: EditorStore
     private var displayLink: CADisplayLink?
+    private var screenReport: ScreenReport?
     private var attached = false
     private lazy var frames = CanvasFrameDriver(store: store)
     private lazy var input = MacInput(view: self, store: store)
@@ -155,6 +156,10 @@ final class MacCanvasView: NSView {
         if store.displayHeadroom != value {
             store.displayHeadroom = value; store.native?.displayHeadroom(value)
         }
+        guard let screen = window?.screen else { return }
+        let report = ScreenReport(name: screen.localizedName, wide: screen.canRepresent(.p3),
+            headroom: Double(screen.maximumPotentialExtendedDynamicRangeColorComponentValue))
+        if report != screenReport { screenReport = report; store.native?.screenReport(report) }
     }
     @objc private func tick(_ link: CADisplayLink) {
         updateHeadroom()

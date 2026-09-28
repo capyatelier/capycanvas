@@ -18,6 +18,10 @@ private final class PersistenceLoad: @unchecked Sendable {
 }
 
 /// The only owner of Rust and GPU state. UI callbacks submit owned input batches.
+struct ScreenReport: Equatable {
+    var name = "", wide = false, headroom = 1.0
+}
+
 final class NativeOwner: @unchecked Sendable {
     private let queue: DispatchQueue
     private let handle: OpaquePointer
@@ -31,6 +35,12 @@ final class NativeOwner: @unchecked Sendable {
     func displayHeadroom(_ value: Double) {
         perform { [self] in
             _ = try request(2, JSON(["type": "display_headroom", "value": value]))
+            try publish()
+        }
+    }
+    func screenReport(_ report: ScreenReport) {
+        perform { [self] in
+            _ = try request(2, JSON(["type": "screen_report", "name": report.name, "wide": report.wide, "headroom": report.headroom]))
             try publish()
         }
     }
@@ -511,7 +521,7 @@ final class NativeOwner: @unchecked Sendable {
     private func startGpuHealthChecks() {
         guard gpuHealth == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 1, repeating: hdrDocument ? 0.2 : 1, leeway: .milliseconds(50))
+        timer.schedule(deadline: .now() + 1, repeating: hdrDocument ? 0.2 : 0.25, leeway: .milliseconds(50))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             // EDR headroom can change while the display link is asleep. Poll

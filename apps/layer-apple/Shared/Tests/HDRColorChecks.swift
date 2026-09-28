@@ -34,6 +34,18 @@ extension XCTestCase {
         let apply = app.buttons["document-color-apply"]
         expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: apply); waitForExpectations(timeout: 60)
         workspaceActivate(apply); XCTAssertTrue(apply.waitForNonExistence(timeout: 60))
+        let screen = app.buttons["screen-status"]
+        XCTAssertTrue(screen.waitForExistence(timeout: 15), "An HDR drawing shows how the screen presents it")
+        let presented = screen.label
+        XCTAssertTrue(["HDR", "Showing SDR"].contains(presented), presented)
+        workspaceActivate(screen)
+        let headline = app.staticTexts["screen-details-headline"]
+        XCTAssertTrue(headline.waitForExistence(timeout: 5))
+        let shown = (headline.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? headline.label
+        XCTAssertEqual(shown, presented == "HDR" ? "Showing HDR" : "Showing the SDR version")
+        attachEditor(in: app, name: "hdr-screen-details")
+        workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).clickOrTap()
+        XCTAssertTrue(headline.waitForNonExistence(timeout: 5))
         let edit = app.buttons["paint-edit-color"].firstMatch
         XCTAssertTrue(edit.waitForExistence(timeout: 15)); workspaceActivate(edit)
         let ev = app.textFields["color-input-intensity"]

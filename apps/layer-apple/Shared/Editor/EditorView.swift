@@ -28,6 +28,7 @@ struct EditorView<Canvas: View>: View {
                 if !store.snapshot["chrome_hidden"].bool && store.state["workspace"]["layout"]["canvas_info"]["visible"].bool {
                     HStack {
                         Spacer()
+                        ScreenStatus(store: store, palette: palette)
                         CameraStatus(store: store, camera: store.camera).padding(.horizontal, 10).padding(.vertical, 3)
                             .glassSurface(SquircleShape.tile, fill: palette.chromeSurface)
                     }.placed(store.snapshot["layout"]["status"])
@@ -49,7 +50,7 @@ struct EditorView<Canvas: View>: View {
             }
             HistogramPresentation(model: store.histogram, palette: palette)
             HStack {
-                HDRDisplayIndicator(store: store, palette: palette)
+                ToneStatusLabel(store: store, palette: palette)
                 ProofIndicator(model: store.proof, palette: palette)
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)

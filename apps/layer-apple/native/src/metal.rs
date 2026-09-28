@@ -32,7 +32,10 @@ pub struct MetalHost {
     pub(crate) glass: Glass,
     watch: layer_host::DeviceWatch,
     pub(crate) cache: Option<std::path::PathBuf>,
+    screen_presented: Option<Instant>,
 }
+
+const SCREEN_CHECK_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -51,6 +54,26 @@ impl MetalHost {
         }
         Ok(())
     }
+    pub(crate) fn screen_tick(&mut self, host: &mut NativeHost) -> bool {
+        let clipped = {
+            let (Some(surface), Some(gpu)) = (self.surface.as_mut(), host.session.engine().backend().0.as_deref()) else {
+                return false;
+            };
+            let _ = gpu.device().poll(wgpu::PollType::Poll);
+            match surface.presenter.screen_check_result() {
+                Some(result) => result.ok(),
+                None => {
+                    if !host.dirty && self.screen_presented.is_some_and(|at| at.elapsed() >= SCREEN_CHECK_DELAY) {
+                        surface.presenter.check_screen(gpu);
+                    }
+                    return false;
+                }
+            }
+        };
+        let changed = host.session.set_screen_clipped(clipped);
+        host.dirty |= changed;
+        changed
+    }
     pub(crate) fn poll_color(&mut self,host:&mut NativeHost)->Result<bool,String>{
         let changed=self.local_tone.tick(host)?;
         if changed {host.dirty=true; host.invalidate_snapshot();}
@@ -61,11 +84,7 @@ impl MetalHost {
         let hdr = s.engine().document().color.depth.is_float();
         let hdr_output = hdr && self.surface.is_some() && self.headroom > 1. && s.hdr_presentation_allowed();
         let retained = self.local_tone.current(host).is_some();
-        let label = if hdr_output { "HDR" } else if self.local_tone.error.is_some() { "SDR preview unavailable" }
-            else if !retained { "Preparing SDR…" } else if s.state().soft_proof { "Print proof" }
-            else if self.headroom > 1. { "SDR preview" } else { "Showing SDR" };
-        serde_json::json!({"hdr":hdr,"hdr_output":hdr_output,"label":label,"headroom":self.headroom.max(1.),
-            "retained":retained,"error":self.local_tone.error,"reference_white":203,
+        serde_json::json!({"hdr":hdr,"hdr_output":hdr_output,"retained":retained,"error":self.local_tone.error,
             "glass_regions":self.glass.count(),
             "backdrop_frames":self.surface.as_ref().map_or([0; 2], |s| s.presenter.backdrop_frames())})
     }
@@ -314,12 +333,17 @@ impl MetalHost {
         let display = SceneDisplay { scale, headroom: self.headroom, blank_presented: self.blank_presented, compositor_hdr: false };
         host.compose_scene(&mut surface.presenter, &mut self.cursor, &self.navigators,
             self.glass.regions(scale), tone_guide, display)?;
+        let hdr_output = surface.working_color.depth.is_float() && self.headroom > 1. && host.session.hdr_presentation_allowed();
+        let screen = &host.session.state().screen;
+        let screen_check = layer_render_wgpu::ScreenCheck::for_view(&screen.assessment,
+            Self::encoding(surface.working_color).primaries(), hdr_output, screen.show_clipped);
         let gpu = host
             .session
             .renderer_mut()
             .0
             .as_ref()
             .ok_or("Missing Metal renderer")?;
+        surface.presenter.set_screen_check(gpu, screen_check);
         if [view.width_px, view.height_px] != [surface.config.width, surface.config.height] {
             surface.config.width = view.width_px;
             surface.config.height = view.height_px;
@@ -356,6 +380,7 @@ impl MetalHost {
         costs[2] = clock.elapsed().as_nanos() as u64 - costs[..2].iter().sum::<u64>();
         gpu.queue().present(target);
         self.blank_presented = true;
+        self.screen_presented = Some(Instant::now());
         costs[3] = clock.elapsed().as_nanos() as u64 - costs[..3].iter().sum::<u64>();
         gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         costs[4] = clock.elapsed().as_nanos() as u64 - costs[..4].iter().sum::<u64>();

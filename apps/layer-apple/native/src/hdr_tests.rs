@@ -85,6 +85,10 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
             "Above-white paint must survive publication"
         );
         app.request(2, json!({"type":"display_headroom","value":4.}));
+        app.request(2, json!({"type":"screen_report","name":"Studio Display","wide":true,"headroom":4.}));
+        let screen = app.state()["screen"].clone();
+        assert_eq!((screen["chip"]["label"].as_str(), screen["details"]["title"].as_str()), (Some("HDR"), Some("Studio Display")));
+        assert_eq!(screen["details"]["body"], "This screen can show highlights up to 4× (+2.0 EV).");
         proof(&app, json!({"type":"mode","mode":"sdr"}));
         let initial = proof(&app, json!({"type":"reveal"}))["recipe"].clone();
         proof(

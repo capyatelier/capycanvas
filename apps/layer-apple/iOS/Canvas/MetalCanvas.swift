@@ -14,6 +14,7 @@ final class CanvasView: UIView {
     override class var layerClass: AnyClass { ObservedMetalLayer.self }
     let store: EditorStore
     private var displayLink: CADisplayLink?
+    private var screenReport: ScreenReport?
     private lazy var frames = CanvasFrameDriver(store: store)
     private var attached = false
     private var drawableExtent = CGSize.zero
@@ -202,6 +203,9 @@ final class CanvasView: UIView {
         if store.displayHeadroom != value {
             store.displayHeadroom = value; store.native?.displayHeadroom(value)
         }
+        guard let screen = window?.screen else { return }
+        let report = ScreenReport(wide: traitCollection.displayGamut == .P3, headroom: Double(screen.potentialEDRHeadroom))
+        if report != screenReport { screenReport = report; store.native?.screenReport(report) }
     }
     @objc private func tick(_ link: CADisplayLink) {
         updateHeadroom()

@@ -340,9 +340,14 @@ colors** still tests every pixel as it is drawn.
 - **Web** reports the `color-gamut` and `dynamic-range` media queries; peak
   brightness is never known. The canvas is sRGB, or extended sRGB for HDR, and
   the idle count runs from the same 200 ms display poll.
-- **macOS/iPadOS** can use the screen's color space (including measured
-  profiles) and EDR headroom, and **Windows** the DXGI output description; both
-  still show their own HDR status.
+- **macOS/iPadOS** report whether the screen shows Display P3
+  (`NSScreen.canRepresent(.p3)`, the trait collection's display gamut) and its
+  potential EDR headroom, which gives the peak and whether it can show HDR; the
+  Mac also reports the screen's name. SDR drawings present on a Display P3
+  surface and HDR drawings on extended linear sRGB, and the idle count runs from
+  the renderer poll every 250 ms (200 ms for HDR drawings).
+- **Windows** can use the DXGI output description and still shows its own HDR
+  status.
 
 A new drawing in the same window keeps the screen report and the highlight
 choice, and is checked again for clipping.

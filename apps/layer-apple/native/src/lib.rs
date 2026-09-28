@@ -304,6 +304,21 @@ pub unsafe extern "C" fn capy_apple_request(
                     serde_json::Value::Null
                 },
                 Some("document_tabs") => a.tabs_request(value)?,
+                Some("screen_report") => {
+                    use layer_color::screen::{Chromaticities, ScreenReport};
+                    use layer_core::color::{RgbSpace, hdr::REFERENCE_WHITE_NITS};
+                    let name = value["name"].as_str().filter(|n| !n.is_empty()).map(str::to_owned);
+                    let gamut = if value["wide"].as_bool() == Some(true) { RgbSpace::DisplayP3 } else { RgbSpace::Srgb };
+                    let headroom = value["headroom"].as_f64().map(|h| h as f32).filter(|h| h.is_finite() && *h >= 1.);
+                    let capable = headroom.map(|h| h > 1.);
+                    let report = ScreenReport::managed(name, Chromaticities::of(gamut), capable == Some(true),
+                        headroom.map(|h| h * REFERENCE_WHITE_NITS), capable);
+                    if a.host.session.set_screen_report(report) {
+                        a.host.dirty = true;
+                        a.host.invalidate_snapshot();
+                    }
+                    serde_json::Value::Null
+                }
                 _ => a.host.query(value)?,
             }),
             6 => Some(a.workspace(value)?),
@@ -467,7 +482,7 @@ pub unsafe extern "C" fn capy_apple_poll_renderer(app: *mut CapyApple) -> i32 {
     app.perform(|a| {
         a.gpu_operation(|a| {
             a.metal.observe_failure(&mut a.host, true);
-            let changed=a.metal.poll_color(&mut a.host)?;
+            let changed=a.metal.poll_color(&mut a.host)? | a.metal.screen_tick(&mut a.host);
             if changed {a.host.invalidate_snapshot();}
             Ok(i32::from(changed || a.host.session.rendering_suspended()))
         })
