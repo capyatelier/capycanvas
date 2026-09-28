@@ -881,7 +881,7 @@ impl Reduced<'_> {
         ]);
         values[8..12].copy_from_slice(&back.color().map(f32::to_bits));
         values[12] = if front.view().is_some() { front.opacity() } else { 0. }.to_bits();
-        values[13] = (blend as u32 as f32).to_bits();
+        values[13] = (blend_code(blend, &self.r.device) as f32).to_bits();
         values[14] = back.opacity().to_bits();
         let offset = self.commands.record(self.r, self.encoder, values)?;
         let binding = Commands::binding(self.r, front.view().unwrap_or(&self.r.empty_view), back.view().unwrap_or(&self.r.empty_view), &view);

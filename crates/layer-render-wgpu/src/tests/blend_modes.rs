@@ -314,7 +314,15 @@ fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
 }
 
 fn live(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], blend_space: BlendSpace) -> Vec<Rgba> {
-    let view = ViewState { background_rgba_linear: background, ..crate::test_support::view(EXTENT) };
+    live_at(r, layers, background, 0, blend_space)
+}
+fn live_at(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], level: u32, blend_space: BlendSpace) -> Vec<Rgba> {
+    let scale = 1. / (1 << level) as f32;
+    let view = ViewState {
+        background_rgba_linear: background,
+        document_to_surface: [scale, 0., 0., scale, 0., 0.],
+        ..crate::test_support::view(EXTENT)
+    };
     r.submit(FramePacket { view, reset_layers: true, blend_space, ..packet(layers, EXTENT) }).unwrap();
     for _ in 0..16 {
         if !layer_render::CanvasRenderer::has_pending_work(r) {
@@ -323,7 +331,15 @@ fn live(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], blend_sp
         r.submit(FramePacket { view, blend_space, ..packet(layers, EXTENT) }).unwrap();
     }
     assert!(!layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
-    crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap())
+    let texture = if level == 0 {
+        crate::test_support::document_texture(r)
+    } else {
+        let display = r.scale_display.as_ref().unwrap();
+        assert_eq!(display.plan.level, level);
+        assert!(r.composite_texture.is_none() && r.live_display.is_none());
+        display.texture()
+    };
+    crate::layer_tests::page_bytes(r, texture)
         .chunks_exact(16)
         .map(|p| std::array::from_fn(|c| f64::from(f32::from_le_bytes(p[c * 4..c * 4 + 4].try_into().unwrap()))))
         .collect()
@@ -421,6 +437,50 @@ fn every_blend_mode_matches_the_reference_on_every_path_and_depth() {
 }
 
 #[test]
+fn reduced_blend_modes_match_the_reference_at_every_depth() {
+    let weights = RgbSpace::Srgb.to_xyz()[1];
+    for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+        let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth }).unwrap();
+        for path in [Path::Layer, Path::Clip] {
+            let Case { mut document, background, blended } = case(depth, path);
+            let inputs = [alone(&mut r, &document, 0), alone(&mut r, &document, 1)];
+            for level in [1, 3] {
+                let step = 1 << level;
+                let extent = EXTENT.map(|size| size / step);
+                let average = |input: &[Rgba], x: u32, y: u32| -> Rgba {
+                    let mut sum = [0.; 4];
+                    for dy in 0..step {
+                        for dx in 0..step {
+                            let p = input[((y * step + dy) * EXTENT[0] + x * step + dx) as usize];
+                            for c in 0..4 { sum[c] += p[c] / f64::from(step * step); }
+                        }
+                    }
+                    sum
+                };
+                for mode in LayerBlend::ALL {
+                    document.layers[blended].properties.blend = mode;
+                    let actual = live_at(&mut r, &document.layers, background, level, document.blend_space);
+                    assert_eq!(actual.len(), (extent[0] * extent[1]) as usize);
+                    for (i, actual) in actual.iter().enumerate() {
+                        let (x, y) = (i as u32 % extent[0], i as u32 / extent[0]);
+                        let top = average(&inputs[0], x, y);
+                        let bottom = average(&inputs[1], x, y);
+                        let form = if matches!(path, Path::Clip) { Form::Clip } else { Form::Composite };
+                        let [low, high] = expected(form, straight(top), top[3] * f64::from(OPACITY), bottom, mode, depth.is_float(), weights);
+                        for c in 0..4 {
+                            let tol = tolerance(depth, high[c]);
+                            assert!(actual[c] >= low[c] - tol && actual[c] <= high[c] + tol,
+                                "{depth:?} {path:?} {mode:?} level={level} at ({x}, {y}) channel {c}: {} outside [{}, {}]",
+                                actual[c], low[c], high[c]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn brush_blend_modes_use_the_layer_formulas() {
     let w = RgbSpace::Srgb.to_xyz()[1];
     for (depth, tolerance, source, backdrop) in [
@@ -433,7 +493,7 @@ fn brush_blend_modes_use_the_layer_formulas() {
         let extent = [128, 128];
         let center = 64 * 128 + 64;
         let read = |r: &mut WgpuRasterizer| -> Rgba {
-            let p = crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap());
+            let p = crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r));
             std::array::from_fn(|c| f64::from(f32::from_le_bytes(p[center * 16 + c * 4..][..4].try_into().unwrap())))
         };
         for mode in [

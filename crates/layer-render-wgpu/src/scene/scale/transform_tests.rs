@@ -16,12 +16,18 @@ fn transform_sources_compose_with_the_stack_without_native_preview_or_settling()
     let maps = [TransformMap::Affine(Affine::translation(Point { x: 12., y: -8. })),
         TransformMap::Affine(Affine::around(Point { x: 250., y: 125. }, [0.8, 1.1], 0.2, Point { x: 8., y: 2. })),
         TransformMap::Projective(projective), TransformMap::Mesh(Arc::new(mesh)), TransformMap::Mesh(Arc::new(folded))];
-    for stacked in [false, true] {
+    for (stacked, blend) in [
+        (false, layer_core::LayerBlend::Normal),
+        (true, layer_core::LayerBlend::Normal),
+        (true, layer_core::LayerBlend::Difference),
+        (true, layer_core::LayerBlend::Luminosity),
+    ] {
     for placement in [Affine::IDENTITY, Affine([0.45, 0.1, -0.1, 0.45, 200., 10.])] {
         for selection in [None, Some(all.clone()), Some(selected.clone())] {
             let mut doc = document();
             let id = doc.layers[0].id;
             doc.layers[0].opacity = 0.8;
+            doc.layers[0].properties.blend = blend;
             doc.layers[0].properties.placement = placement;
             let mut below = doc.layers[0].clone();
             below.id = LayerId(40); below.opacity = 1.; below.properties.placement = Affine::IDENTITY;

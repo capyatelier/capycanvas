@@ -39,7 +39,9 @@ source-over runs are balanced using associativity, with each layer's opacity
 applied before regrouping. Power-of-two grouping boundaries and empty layer
 positions preserve existing branches when painting starts; transparent operands
 require no image or blend pass. Group opacity, masks, clipping and non-normal blends
-remain expression boundaries. Reusable branches retain page validity; a source
+remain expression boundaries. Exact and reduced composition share blend formulas
+and document-depth flags, including clipped layers and extended float colors.
+Reusable branches retain page validity; a source
 change invalidates only dependent regions. Branch images share the display
 allowance with source levels, after reserving required sources, evaluation
 scratch, command storage and presentation mips. Large unchanged branches get

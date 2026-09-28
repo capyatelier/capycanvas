@@ -18,11 +18,9 @@ fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
         textureStore(output, p, color + below * (1. - color.a));
         return;
     }
-    let mixed = blend(working_unassociate(color), working_unassociate(below), mode);
     if clipped {
-        textureStore(output, p, vec4<f32>(mix(below.rgb, mixed * below.a, color.a), below.a));
+        textureStore(output, p, blend_clip(color, below, mode));
     } else {
-        let rgb = (1. - color.a) * below.rgb + (1. - below.a) * color.rgb + color.a * below.a * mixed;
-        textureStore(output, p, vec4<f32>(rgb, color.a + below.a * (1. - color.a)));
+        textureStore(output, p, blend_composite(color, below, mode));
     }
 }
