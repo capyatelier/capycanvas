@@ -32,9 +32,10 @@
   - On the mid tier they reach about 6–25, and on the low tier about 3–19.
 - **Liquify at 512 px** completes 28–74 updates/s on the top tier, 1.2–6.5 on
   the mid tier and 0.8–12 on the low tier.
-- **Clone Stamp at 512 px** completes 23 updates/s on the mid tier. It is
-  GPU-bound: about 30 dabs per update, and each page gathers its source
-  separately. The low and top tiers are not measured.
+- **The retouching brushes at 512 px** (Clone Stamp, Healing and Spot Healing)
+  complete 57–62 updates/s on the mid tier (target 90). Their soft edge keeps
+  a wide band of pixels in the dab loop. The low and top tiers are not
+  measured.
 - **The MovinkPad 11 presents at 60 Hz.** Before any display-paced mid-tier row
   can pass, it must present at 90 Hz.
 - **Navigation on the tier canvas is untested on two tiers.** The low and mid

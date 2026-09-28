@@ -36,9 +36,39 @@ struct MaterialSources {
     // Adjacent pages also provide the ordered dry-contact range in zw.
     header: vec4<u32>,
     // For dry paint, pages[0] is the local dirty rectangle (min xy, max xy).
+    // A clone's pages[1..5] map it to its source, whose 2x2 blocks of target
+    // and reference pages it binds around source_11.
     pages: array<vec4<u32>, 9>,
 }
 @group(2) @binding(12) var<uniform> material_sources: MaterialSources;
+
+fn retouch_target_load(page: i32, texel: vec2<i32>) -> vec4<f32> {
+    switch page {
+        case 0: { return textureLoad(source_00, texel, 0); }
+        case 1: { return textureLoad(source_10, texel, 0); }
+        case 2: { return textureLoad(source_20, texel, 0); }
+        default: { return textureLoad(source_01, texel, 0); }
+    }
+}
+
+fn retouch_reference_load(page: i32, texel: vec2<i32>) -> vec4<f32> {
+    switch page {
+        case 0: { return textureLoad(source_21, texel, 0); }
+        case 1: { return textureLoad(source_02, texel, 0); }
+        case 2: { return textureLoad(source_12, texel, 0); }
+        default: { return textureLoad(source_22, texel, 0); }
+    }
+}
+
+fn clone_source_at(fragment_position: vec2<f32>) -> vec4<f32> {
+    let mapping = retouch_mapping(array<vec4<u32>, 4>(
+        material_sources.pages[1],
+        material_sources.pages[2],
+        material_sources.pages[3],
+        material_sources.pages[4],
+    ));
+    return retouch_source(mapping, render_target.origin_extent.xy + fragment_position);
+}
 
 @vertex
 fn vertex_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
@@ -658,14 +688,17 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             return MaterialOutput(result, vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0), vec4<f32>(0.0));
         }
     }
-    // A clone lays its gathered source, as straight color, over the
-    // destination, with the source's own coverage scaling each dab.
+    // A clone lays its source, as straight color, over the destination, with
+    // the source's own coverage scaling each dab. Over Normal stroke-uniform
+    // paint the increments compose to that coverage times the stroke's, so
+    // the dabs only raise the stroke coverage and the source is read once.
+    let telescoped = MATERIAL_OPERATION == OP_CLONE && contact_uniform() && style.render_mode.x < 0.5;
     var clone_source = vec4<f32>(0.0);
-    if MATERIAL_OPERATION == OP_CLONE {
-        let texel = vec2<i32>(floor(fragment_position.xy)) - vec2<i32>(material_sources.pages[0].xy);
-        let gathered = textureLoad(reservoir_texture, texel, 0);
-        clone_source = vec4<f32>(working_unassociate(gathered), gathered.a);
+    if MATERIAL_OPERATION == OP_CLONE && !telescoped {
+        let source = clone_source_at(fragment_position.xy);
+        clone_source = vec4<f32>(working_unassociate(source), source.a);
     }
+    let first_coverage = stroke_coverage;
     let field = contact_field_with_paper(world, tooth);
     for (var offset = 0u; offset < range.y; offset += 1u) {
         let dab = dabs[range.x + offset];
@@ -680,6 +713,10 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             let selected = brush_selection_at(brush_to_layer(world));
             let unselected_coverage = coverage / max(selected, 0.000001);
             requested_alpha = (1.0 - exp(-unselected_coverage * dab.flow * dab.color.a * 6.0)) * selected;
+        }
+        if telescoped {
+            stroke_coverage = max(stroke_coverage, requested_alpha);
+            continue;
         }
         var source_alpha = requested_alpha;
         if contact_uniform() {
@@ -711,6 +748,16 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         if style.operation.w != 0u { result *= 1.0 - source_alpha; }
         else if MATERIAL_OPERATION == OP_CLONE { result = source_over(result, clone_source.rgb, source_alpha); }
         else { result = source_over(result, dab.color.rgb, source_alpha); }
+    }
+    if telescoped && stroke_coverage > first_coverage {
+        let source = clone_source_at(fragment_position.xy);
+        let alpha = clamp(
+            working_ratio(source.a * (stroke_coverage - first_coverage), 1.0 - source.a * first_coverage),
+            0.0,
+            1.0,
+        );
+        if style.operation.w != 0u { result *= 1.0 - alpha; }
+        else { result = source_over(result, working_unassociate(source), alpha); }
     }
     return MaterialOutput(
         result,

@@ -1038,6 +1038,25 @@ mod tests {
     }
 
     #[test]
+    fn retouching_keeps_its_size_through_a_release_without_motion() {
+        for preset in [
+            layer_core::DefaultBrushPreset::CloneStamp,
+            layer_core::DefaultBrushPreset::HealingBrush,
+            layer_core::DefaultBrushPreset::SpotHealingBrush,
+        ] {
+            let brush = layer_core::default_brush(preset);
+            let points = vec![point(0., 0.5, 0), point(5., 0.5, 16_000), point(10., 0.5, 32_000), point(10., 0., 40_000)];
+            let stroke =
+                Stroke::new(StrokeId(3), layer_core::LayerId(1), layer_core::StrokeTool::Brush, brush, points).unwrap();
+            let mut dabs = Vec::new();
+            DabGenerator::generate(&stroke, RgbSpace::Srgb, &mut dabs);
+            let end = dabs.last().unwrap();
+            assert_eq!(end.center.x, 10., "{preset:?}");
+            assert_eq!(end.radii, dabs[0].radii, "{preset:?}: the stroke ends at its width");
+        }
+    }
+
+    #[test]
     fn swept_input_does_not_expand_a_fast_light_stroke_into_stamps() {
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         let mut generator = DabGenerator::default();

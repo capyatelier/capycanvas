@@ -129,9 +129,15 @@ impl WgpuRasterizer {
                 add_job(tile.coordinate, tile.local, tile.dabs.clone());
             }
         }
+        let retouches = batch.style.execution.retouches();
+        let mappings = if retouches {
+            jobs.iter().map(|job| self.retouch_mapping(batch, job.coordinate, job.local)).collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
         self.prepare_dry_records(
             batch,
-            jobs.iter().map(|j| (j.local, j.dabs.clone())),
+            jobs.iter().enumerate().map(|(i, j)| (j.local, j.dabs.clone(), mappings.get(i).map_or([0; 16], |m| m.words))),
             encoder,
         )?;
         let texture_key = Self::texture_set_key(&batch.style);
@@ -152,8 +158,12 @@ impl WgpuRasterizer {
                 self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
                 compute_jobs.clear();
             }
-            let source_bind_group = if batch.style.execution.retouches() {
-                self.clone_source_binding(batch, job.coordinate, job.local, preview && !from_persistent, encoder)?
+            let source_bind_group = if retouches {
+                if !self.retouch_resident(&mappings[record_index]) {
+                    self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+                    compute_jobs.clear();
+                }
+                self.clone_source_binding(batch, job.coordinate, &mappings[record_index], preview && !from_persistent, encoder)?
             } else {
                 self.material_source_binding(
                     batch_index,
@@ -341,7 +351,7 @@ impl WgpuRasterizer {
                             self.target_extent(batch.layer_id)[1].saturating_sub(1) / PAGE_SIZE,
                         ),
                     ];
-                    self.material_bind_group(batch, coordinate, false, None, encoder)
+                    self.material_bind_group(batch, coordinate, false, MaterialInputs::Neighborhood, encoder)
                         .map(|bind_group| (coordinate, bind_group))
                 })
                 .transpose()?

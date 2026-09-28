@@ -300,7 +300,7 @@ fn the_reference_cache_follows_its_frame_and_evicts_the_least_recent_page() {
     settle(&mut r, &layers);
     let bytes = r.retouch.as_ref().unwrap().storage_bytes();
     let page = u64::from(PAGE_SIZE * PAGE_SIZE) * 16;
-    assert_eq!(bytes, (16 + REFERENCE_PAGES as u64) * page + 64, "idle sources keep only their pages");
+    assert_eq!(bytes, (16 + REFERENCE_PAGES as u64) * page + PARAMETER_BYTES, "idle sources keep only their pages");
     assert_eq!(r.metrics().retouch_storage_bytes, bytes);
     r.set_telemetry_enabled(true);
     assert!(r.telemetry().resident_bytes >= bytes);

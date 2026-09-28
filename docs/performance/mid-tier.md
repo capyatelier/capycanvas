@@ -113,6 +113,8 @@ Measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how
 | Liquify Pinch (37) | Very complex | 512 px | 3.8 updates/s (3.8–4.1); gap p99 429.0 ms | **Not met** |
 | Liquify Expand (38) | Very complex | 512 px | 3.8 updates/s (3.7–3.9); gap p99 456.8 ms | **Not met** |
 | Liquify Crystals (39) | Very complex | 512 px | 1.4 updates/s (1.4–1.4); gap p99 2078.1 ms | **Not met** |
-| Clone Stamp (40) | Very complex | 512 px | 23.3 updates/s (22.9–23.6); gap p99 80.8 ms | **Not met** |
+| Clone Stamp (40) | Very complex | 512 px | 57.8 updates/s (57.6–58.4); gap p99 31.1 ms | **Not met** |
+| Healing Brush (41) | Very complex | 512 px | 57.4 updates/s (57.2–57.4); gap p99 31.4 ms | **Not met** |
+| Spot Healing Brush (42) | Very complex | 512 px | 62.1 updates/s (61.5–62.8); gap p99 27.9 ms | **Not met** |
 
-Clone Stamp was measured on 2026-09-28 at the commit that added it, cloning the photo marked as a reference layer.
+The retouching brushes were measured on 2026-09-28 at the commit that made them contact brushes, copying from the photo marked as a reference layer.

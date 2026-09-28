@@ -220,9 +220,11 @@ fn swept_rotation(bounds: Rect, center: Point, angle: f32) -> Rect {
 }
 
 impl WgpuRasterizer {
+    /// Each pointwise job's dirty rectangle and dab range, then a retouching
+    /// job's source mapping.
     pub(super) fn prepare_dry_records(
         &mut self, batch: &DabBatch,
-        records: impl Iterator<Item = (PixelRect, std::ops::Range<u32>)> + Clone,
+        records: impl Iterator<Item = (PixelRect, std::ops::Range<u32>, [u32; 16])> + Clone,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         if !pointwise(&batch.style) { return Ok(()); }
@@ -244,10 +246,10 @@ impl WgpuRasterizer {
         // vector or second CPU copy on the drawing path.
         self.uploads.write_mapped(encoder, records_buffer.buffer.as_ref().unwrap(), 0, used, |mapped| {
             mapped.slice(..).fill(0);
-            for (index, (local, range)) in records.enumerate() {
+            for (index, (local, range, mapping)) in records.enumerate() {
                 let offset = index * records_buffer.stride as usize;
-                for (i, word) in [0, 0, range.start, range.len() as u32,
-                    local.min_x(), local.min_y(), local.max_x(), local.max_y()].into_iter().enumerate() {
+                let words = [0, 0, range.start, range.len() as u32, local.min_x(), local.min_y(), local.max_x(), local.max_y()];
+                for (i, word) in words.into_iter().chain(mapping).enumerate() {
                     mapped.slice(offset + i * 4..offset + i * 4 + 4).copy_from_slice(&word.to_le_bytes());
                 }
             }
@@ -287,7 +289,7 @@ impl WgpuRasterizer {
         self.metrics.material_cpu_ms[0] += elapsed(started);
         if !distant {
             let started = timing.then(web_time::Instant::now);
-            let result = self.material_bind_group(batch, coordinate, preview, None, encoder);
+            let result = self.material_bind_group(batch, coordinate, preview, MaterialInputs::Neighborhood, encoder);
             self.metrics.material_cpu_ms[4] += elapsed(started);
             return result;
         }
@@ -378,7 +380,7 @@ impl WgpuRasterizer {
             batch,
             coordinate,
             preview,
-            Some((&samples, &meta)),
+            MaterialInputs::Gathered(&samples, &meta),
             encoder,
         );
         self.metrics.material_cpu_ms[4] += elapsed(started);
@@ -393,40 +395,18 @@ impl WgpuRasterizer {
         }
     }
 
-    /// Gather what the retouching batch copies onto the `local` part of page
-    /// `coordinate` into the first sample field, which the deposit reads from
-    /// its dirty rectangle's corner. Spot Healing lays a translucent tint until
-    /// pen-up finds its source; a batch without a source copies nothing.
+    /// Bind what a retouching batch copies onto page `coordinate`: the pages
+    /// `mapping` reads, around the destination.
     pub(super) fn clone_source_binding(
         &mut self,
         batch: &DabBatch,
         coordinate: [u32; 2],
-        local: PixelRect,
+        mapping: &crate::retouch_sources::Mapping,
         preview: bool,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
-        self.ensure_material_gather();
-        let gather = self.material_gather.as_ref().unwrap();
-        let (field, meta) = (gather.fields[0].1.clone(), gather.complete.clone());
-        let [x, y] = coordinate.map(|v| v * PAGE_SIZE);
-        let region = PixelRect::new(x + local.min_x(), y + local.min_y(), x + local.max_x(), y + local.max_y());
-        match &batch.style.retouch {
-            _ if batch.style.execution == BrushExecution::SpotHeal => {
-                drop(encoder.color_pass("spot healing tint", &field, wgpu::LoadOp::Clear(crate::retouch_sources::SPOT_TINT)))
-            }
-            Some(retouch) if !region.is_empty() => {
-                let scale = retouch.flip.map(|f| if f { -1. } else { 1. });
-                let source = crate::retouch_sources::Gather {
-                    region,
-                    scale,
-                    offset: retouch.offset,
-                    stroke: Some((batch.stroke_id, batch.layer_id, retouch.clone())),
-                };
-                self.encode_retouch_gather(&field, source, encoder)?;
-            }
-            _ => drop(encoder.color_pass("clone without a source", &field, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT))),
-        }
-        self.material_bind_group(batch, coordinate, preview, Some((&field, &meta)), encoder)
+        let pages = self.retouch_pages(mapping, encoder)?;
+        self.material_bind_group(batch, coordinate, preview, MaterialInputs::Retouch(&pages), encoder)
     }
 }
 

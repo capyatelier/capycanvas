@@ -116,12 +116,12 @@ impl Requirements {
             return;
         }
         let plan = BrushPassPlan::for_device(style, &r.device);
-        if style.execution == BrushExecution::Dry && plan.direct.is_none() {
-            let kernels = r.pipelines.dry_material.for_style(style);
-            self.compute.push(kernels[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
-            if preview { self.compute.push(kernels[plan.material as usize * 2].clone()); }
+        if pointwise(style) && plan.direct.is_none() {
+            let kernels = &r.pipelines.dry_material;
+            self.compute.push(kernels.kernel(style, plan.material, plan.state.coverage).clone());
+            if preview { self.compute.push(kernels.kernel(style, plan.material, false).clone()); }
             if let Some(in_place) = &r.pipelines.dry_in_place {
-                self.compute.push(in_place.for_style(style)[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
+                self.compute.push(in_place.kernel(style, plan.material, plan.state.coverage).clone());
             }
         }
         if let Some(kind) = plan.direct {
@@ -652,9 +652,9 @@ mod gpu_tests {
                 .required_pipelines(document.color.depth)
                 .all(Deferred::ready)
         );
-        for index in [2, 3] {
+        for coverage in [false, true] {
             assert!(renderer.pipelines.dry_material
-                .for_style(&layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush))[index].ready(),
+                .kernel(&layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush), MaterialOperation::Coverage, coverage).ready(),
                 "G-Pen commit and prediction kernels must be ready before input is enabled");
         }
         while !renderer.poll_startup().unwrap().complete {
@@ -676,5 +676,30 @@ mod gpu_tests {
         renderer.prepare_startup(&document, &brush, false).unwrap();
         assert!(renderer.poll_startup().unwrap().brush_ready, "cached dependencies resume immediately");
 
+    }
+
+    #[test]
+    fn retouching_kernels_compile_before_pen_down() {
+        let color = layer_core::color::DocumentColor::default();
+        let reference = WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut renderer =
+            WgpuRasterizer::from_wgpu_native_staged(reference.adapter.clone(), reference.device().clone(), reference.queue.clone(), color)
+                .unwrap();
+        renderer.finish_startup_cache();
+        let document = Document::new("retouching startup", 128, 128);
+        for preset in [layer_core::DefaultBrushPreset::CloneStamp, layer_core::DefaultBrushPreset::HealingBrush] {
+            let brush = layer_core::default_brush(preset);
+            renderer.prepare_startup(&document, &brush, false).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            while !renderer.poll_startup().unwrap().brush_ready {
+                assert!(std::time::Instant::now() < deadline, "{preset:?} compilation timed out");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let style = layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush);
+            let pipelines = &renderer.pipelines;
+            let prediction = pipelines.dry_material.kernel(&style, MaterialOperation::Clone, false);
+            let commit = pipelines.dry_in_place.as_ref().unwrap_or(&pipelines.dry_material).kernel(&style, MaterialOperation::Clone, true);
+            assert!(prediction.ready() && commit.ready(), "{preset:?} commit and prediction kernels are ready before input");
+        }
     }
 }

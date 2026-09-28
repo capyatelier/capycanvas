@@ -32,6 +32,10 @@ pub struct BrushContact {
     pub pooling: f32,
     /// Ink-load decay per nominal brush diameter of travel.
     pub depletion: f32,
+    /// Coverage falls linearly from the solid core to the rim, as an analytic
+    /// stamp's does, instead of along a smooth curve.
+    #[serde(default)]
+    pub linear_edge: bool,
 }
 
 impl Default for BrushContact {
@@ -48,6 +52,7 @@ impl Default for BrushContact {
             fiber_strength: 0.0,
             pooling: 0.0,
             depletion: 0.0,
+            linear_edge: false,
         }
     }
 }

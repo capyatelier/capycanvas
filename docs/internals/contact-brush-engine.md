@@ -88,6 +88,10 @@ zoom does not change tilt magnitude. Calligraphy uses a held nib angle, whose
 projected width naturally varies with the stroke direction. Brushed ink follows
 stroke direction. A device providing twist can use the existing twist mapping.
 
+The Clone Stamp, Healing and Spot Healing presets use the plain solid nib with
+`linear_edge`, which keeps an analytic stamp's linear fall from core to rim in
+place of the smooth curve ([retouching](brushes.md#clone-stamp)).
+
 Contact snapshots use schema 5. All contact strokes use the current swept
 generator, including replay; there is no version-selected contact algorithm.
 Saved raster revisions preserve existing artwork. Ordinary stamp brushes and

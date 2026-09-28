@@ -1,7 +1,7 @@
 //! Clone oracles through the real engine: what each stroke copies, bit for bit
 //! where the brush fully covers a pixel.
 use super::*;
-use layer_core::{CloneSource, DefaultBrushPreset, Edit, Selection, default_brush};
+use layer_core::{CloneSource, DefaultBrushPreset, Edit, Selection, color::source::rgba8_source, default_brush};
 
 const EXTENT: [u32; 2] = [768, 512];
 
@@ -107,6 +107,41 @@ fn an_integer_offset_clones_the_source_exactly_and_a_second_pass_sees_the_first(
             let (sx, sy) = shifted(bx, by, first);
             assert_eq!(pixel(engine.backend(), target, x, y), original(sx, sy), "{source:?} second pass ({x},{y})");
         }
+    }
+}
+
+/// A stroke's coverage across its width, where it runs straight, is one
+/// continuous stamp with the brush's linear edge to within a code, hard or
+/// soft; stamps laid a spacing apart scallop instead.
+#[test]
+fn clone_strokes_lay_one_continuous_stamp() {
+    let mut doc = document(EXTENT);
+    doc.layers.iter_mut().find(|l| l.id == PHOTO).unwrap().source = Some(rgba8_source(EXTENT, |_, _| [255; 4]));
+    let radius = 48.;
+    let deviation = |brush: BrushSnapshot| {
+        let (mut input, mut engine) = cloner(doc.clone(), TARGET, RetouchSource::References, false);
+        engine.set_brush(brush.clone()).unwrap();
+        source_at(&mut engine, 110., 230., |_| {});
+        stroke(&mut engine, &mut input, 1, [100., 200.], [668., 200.]);
+        let edge = (1. - brush.hardness).max(1. / radius);
+        let pages: Vec<_> = (0..3).map(|x| layer_page(engine.backend(), TARGET, [x, 0])).collect();
+        let mut worst = 0f32;
+        for x in 200..568u32 {
+            for y in 140..256u32 {
+                let rho = ((y as f32 + 0.5 - 200.).abs() / radius).min(1.);
+                let ideal = ((1. - rho) / edge).clamp(0., 1.);
+                let got = pages[(x / PAGE_SIZE) as usize][(y * PAGE_SIZE + x % PAGE_SIZE) as usize][3];
+                worst = worst.max((got - ideal).abs());
+            }
+        }
+        worst
+    };
+    for hardness in [1., 0.5] {
+        let swept = BrushSnapshot { hardness, diameter: 2. * radius, ..clone_brush() };
+        let stamped = BrushSnapshot { contact: None, ..swept.clone() };
+        let (swept, stamped) = (deviation(swept), deviation(stamped));
+        assert!(swept <= 1. / 255., "hardness {hardness}: {swept}");
+        assert!(stamped > swept, "hardness {hardness}: {stamped} {swept}");
     }
 }
 
@@ -264,9 +299,16 @@ fn clone_stroke_frame_cost() {
         engine.set_instant_feedback(InstantFeedbackConfig { enabled: false, ..Default::default() }).unwrap();
         engine.backend_mut().set_telemetry_enabled(true);
         engine.set_retouch(Some(RetouchSource::References));
-        engine.set_clone_source(CloneSource { point: Some(Point { x: 1500., y: 2600. }), ..CloneSource::default() });
+        let source = CloneSource { point: Some(Point { x: 1500., y: 2600. }), ..CloneSource::default() };
+        engine.set_clone_source(source);
         engine.set_retouch_points(&[Point { x: 1500., y: 2600. }, Point { x: 1400., y: 1200. }]);
         flush(&mut engine);
+        for (i, phase) in [PenPhase::Down, PenPhase::Move, PenPhase::Up].into_iter().enumerate() {
+            let at = [(4000. + 100. * i as f32) * zoom, 3600. * zoom];
+            draw(&mut engine, &mut input, pen(1 + i as u64, phase, at, SampleFlags::PRIMARY));
+        }
+        flush(&mut engine);
+        engine.set_clone_source(source);
         while engine.backend().has_pending_work() {
             timed_frame(&mut engine, &mut Vec::new());
         }
@@ -275,7 +317,7 @@ fn clone_stroke_frame_cost() {
             let t = i as f32 / 119.;
             let at = [(1400. + 3000. * t) * zoom, (1200. + 400. * (t * 6.).sin()) * zoom];
             let phase = match i { 0 => PenPhase::Down, 119 => PenPhase::Up, _ => PenPhase::Move };
-            input.push(pen(1 + i, phase, at, SampleFlags::PRIMARY)).unwrap();
+            input.push(pen(10 + i, phase, at, SampleFlags::PRIMARY)).unwrap();
             timed_frame(&mut engine, &mut frames);
         }
         summary(&format!("{diameter} px clone stroke frames"), &frames);

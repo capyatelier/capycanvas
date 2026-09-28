@@ -442,6 +442,18 @@ impl MaterialOperation {
     ];
 }
 
+/// What a material pass reads besides its destination page.
+#[derive(Clone, Copy)]
+enum MaterialInputs<'a> {
+    /// The pages around the destination.
+    Neighborhood,
+    /// A gathered sample field and its page metadata.
+    Gathered(&'a wgpu::TextureView, &'a wgpu::Buffer),
+    /// A retouching source's target and reference pages, in the eight slots
+    /// around the destination.
+    Retouch(&'a [wgpu::TextureView; 8]),
+}
+
 /// Brushes whose output pixels read only the same pixel of their destination
 /// and of per-page inputs, so tiles, dab ranges and damage stay per page.
 fn pointwise(style: &layer_render::DabStyle) -> bool {
@@ -2001,12 +2013,13 @@ impl WgpuRasterizer {
             batch.kind == DabBatchKind::Persistent
                 && BrushPassPlan::for_device(&batch.style, &self.device).requires_destination()
         }) {
-            if !self.in_place_dry_material(batch) {
-                destination_pages.extend(tiles.iter().map(|tile| (batch.layer_id, tile.coordinate)));
-            }
             // Pen-up edges and healing revisit the whole stroke, including
             // companions retired since the pointer left those pages.
-            if batch.stroke_end && revisits_stroke(&batch.style) {
+            let revisits = batch.stroke_end && revisits_stroke(&batch.style);
+            if !self.in_place_dry_material(batch) || revisits {
+                destination_pages.extend(tiles.iter().map(|tile| (batch.layer_id, tile.coordinate)));
+            }
+            if revisits {
                 destination_pages.extend(
                     self.paint_layers.iter().filter(|l| l.id == batch.layer_id)
                         .flat_map(|l| &l.coverage_pages)
@@ -2045,10 +2058,14 @@ impl WgpuRasterizer {
         batch: &DabBatch,
         coordinate: [u32; 2],
         preview: bool,
-        gathered: Option<(&wgpu::TextureView, &wgpu::Buffer)>,
+        inputs: MaterialInputs<'_>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let in_place = self.in_place_dry_material(batch);
+        let gathered = match inputs {
+            MaterialInputs::Gathered(field, meta) => Some((field, meta)),
+            _ => None,
+        };
         let offsets = std::array::from_fn::<_, 9, _>(|i| {
             if in_place || ((pointwise(&batch.style) || gathered.is_some()) && i != 4) {
                 // Dry paint reads only its destination pixel. Completed gather
@@ -2065,7 +2082,12 @@ impl WgpuRasterizer {
             .iter()
             .find(|layer| layer.id == batch.layer_id)
             .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
-        let views = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
+        let mut views = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
+        if let MaterialInputs::Retouch(pages) = inputs {
+            for (slot, page) in [0, 1, 2, 3, 5, 6, 7, 8].into_iter().zip(pages) {
+                views[slot] = page;
+            }
+        }
         let coverage_page = if preview {
             self.preview_coverage_pages
                 .iter()
@@ -2093,7 +2115,7 @@ impl WgpuRasterizer {
                 .expect("watercolor wetness page is prepared before binding")
                 .active()
                 .view
-        } else if batch.style.execution == BrushExecution::Dry {
+        } else if pointwise(&batch.style) {
             &self.empty_view
         } else {
             &self.reservoir.active().view
@@ -2109,7 +2131,7 @@ impl WgpuRasterizer {
                 wgpu::BindingResource::Buffer(self.dry_records.binding())
             } else { gathered.map_or(&self.material_source_meta, |g| g.1).as_entire_binding() },
         );
-        if batch.style.execution == BrushExecution::Dry {
+        if pointwise(&batch.style) {
             // Coverage owns state-dependent bindings, so ending a stroke can
             // release both coverage textures even while color pages survive.
             let color_page = if preview { self.preview_page(coordinate) } else { None }
@@ -2117,8 +2139,8 @@ impl WgpuRasterizer {
             let cache = coverage_page.or_else(|| color_page.map(|p| p.active()))
                 .map(|p| if in_place { &p.material_in_place_input } else { &p.material_input })
                 .unwrap_or(&self.empty_material_input);
-            Ok(cache.get(([self.dab_buffer.clone(), self.dry_records.binding().buffer.clone()],
-                [views[4].clone(), coverage.clone()]), create))
+            let bound = std::array::from_fn(|i| views.get(i).map_or(coverage, |view| *view).clone());
+            Ok(cache.get(([self.dab_buffer.clone(), self.dry_records.binding().buffer.clone()], bound), create))
         } else { Ok(create()) }
     }
 
@@ -4998,7 +5020,7 @@ impl StyleGpu {
                 contact.pressure_gain,
                 contact.depletion,
                 contact.tilt_shading,
-                0.,
+                f32::from(contact.linear_edge),
             ];
         }
         // This lane is unused by dry and composite shaders and avoids growing

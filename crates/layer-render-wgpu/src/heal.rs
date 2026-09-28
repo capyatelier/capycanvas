@@ -6,8 +6,6 @@
 use super::*;
 use wgpu::util::DeviceExt;
 
-/// Spot Healing's live tint: a translucent mid grey, premultiplied.
-pub(crate) const SPOT_TINT: wgpu::Color = wgpu::Color { r: 0.107, g: 0.107, b: 0.107, a: 0.5 };
 /// Finest-level cells at most. Strokes whose pages hold more heal at half or
 /// quarter resolution, and the membrane is upsampled.
 const MAX_CELLS: u64 = 1 << 22;
@@ -25,15 +23,24 @@ const CANDIDATES: usize = DISTANCES.len() * DIRECTIONS.len();
 /// leaves the image: the largest difference a pixel can score.
 const PENALTY: f32 = 4.;
 const PARAMS_BYTES: u64 = 64;
-/// The chosen offset and index, then four words per draw-indirect record.
-const CHOICE_WORDS: u64 = 4 + 4 * CANDIDATES as u64;
+/// A candidate's page origin, padded to 16 bytes, then its source mapping.
+const CANDIDATE_BYTES: u64 = 80;
+/// Spot Healing's blocks of 32 x 32 pixels, and how many a page holds.
+const SCORE_BLOCK: u32 = 32;
+const SCORE_BLOCKS: u64 = (PAGE_SIZE as u64 / SCORE_BLOCK as u64).pow(2);
+/// Before each page's dispatch-indirect record: the best cost so far and its
+/// index, padded.
+const CHOICE_WORDS: u64 = 4;
 /// Plane buffers kept for the next stroke; larger ones are released.
 const RETAINED_BYTES: u64 = 64 << 20;
 const NONE: u32 = u32::MAX;
 
 pub(in crate::retouch_sources) struct Pipelines {
     planes: wgpu::BindGroupLayout,
+    parameters: wgpu::BindGroupLayout,
     pages: wgpu::BindGroupLayout,
+    candidate: wgpu::BindGroupLayout,
+    chosen: wgpu::BindGroupLayout,
     apply_planes: wgpu::BindGroupLayout,
     apply_pages: wgpu::BindGroupLayout,
     seed: Deferred<wgpu::ComputePipeline>,
@@ -41,7 +48,8 @@ pub(in crate::retouch_sources) struct Pipelines {
     pull: Deferred<wgpu::ComputePipeline>,
     push: Deferred<wgpu::ComputePipeline>,
     relax: Deferred<wgpu::ComputePipeline>,
-    choose: Deferred<wgpu::ComputePipeline>,
+    judge: Deferred<wgpu::ComputePipeline>,
+    pick: Deferred<wgpu::ComputePipeline>,
     apply: Deferred<wgpu::RenderPipeline>,
 }
 
@@ -60,17 +68,27 @@ impl Pipelines {
             range.map(|binding| bindings::texture(binding, stage, false)).collect::<Vec<_>>()
         };
         let pages = bindings::layout(device, "heal page fields", &textures(0..=2, compute));
+        let mut entries = textures(0..=7, compute);
+        entries.push(bindings::buffer(8, compute, wgpu::BufferBindingType::Uniform, true, NonZeroU64::new(CANDIDATE_BYTES)));
+        let candidate = bindings::layout(device, "heal candidate source", &entries);
+        let chosen = bindings::layout(
+            device,
+            "heal chosen source",
+            &[bindings::storage_texture(0, compute, wgpu::TextureFormat::Rgba32Float, wgpu::StorageTextureAccess::WriteOnly)],
+        );
         let apply_planes =
             bindings::layout(device, "heal membrane", &[params(fragment), storage(1, fragment, true), storage(5, fragment, true), storage(6, fragment, true)]);
         let apply_pages = bindings::layout(device, "heal page", &textures(1..=4, fragment));
-        let layout = |label, groups: &[&wgpu::BindGroupLayout]| {
-            let groups: Vec<_> = groups.iter().map(|g| Some(*g)).collect();
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: &groups, immediate_size: 0 })
+        let parameters = bindings::layout(device, "heal parameters", &[params(compute)]);
+        let layout = |label, groups: &[Option<&wgpu::BindGroupLayout>]| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: groups, immediate_size: 0 })
         };
-        let plane_layout = layout("heal planes", &[&planes]);
-        let page_layout = layout("heal page fields", &[&planes, &pages]);
-        let apply_layout = layout("heal apply", &[&apply_planes, &apply_pages]);
-        let shader = Deferred::wgsl(device, "heal", include_str!("heal.wgsl"));
+        let plane_layout = layout("heal planes", &[Some(&planes)]);
+        let page_layout = layout("heal page fields", &[Some(&planes), Some(&pages)]);
+        let score_layout = layout("heal candidate scores", &[Some(&planes), Some(&pages), Some(&candidate)]);
+        let pick_layout = layout("heal chosen source", &[Some(&parameters), None, Some(&candidate), Some(&chosen)]);
+        let apply_layout = layout("heal apply", &[Some(&apply_planes), Some(&apply_pages)]);
+        let shader = Deferred::wgsl(device, "heal", compose_wgsl(&[include_str!("retouch_sample.wgsl"), include_str!("heal.wgsl")]));
         let kernel = |layout: &wgpu::PipelineLayout, entry| Deferred::compute(device, entry, layout, &shader, entry);
         let apply = {
             let (device, layout, shader) = (device.clone(), apply_layout.clone(), shader.clone());
@@ -80,21 +98,25 @@ impl Pipelines {
         };
         Self {
             seed: kernel(&page_layout, "seed"),
-            score: kernel(&page_layout, "score"),
+            score: kernel(&score_layout, "score"),
+            pick: kernel(&pick_layout, "pick"),
             pull: kernel(&plane_layout, "pull"),
             push: kernel(&plane_layout, "push"),
             relax: kernel(&plane_layout, "relax"),
-            choose: kernel(&plane_layout, "choose"),
+            judge: kernel(&plane_layout, "judge"),
             apply,
             planes,
+            parameters,
             pages,
+            candidate,
+            chosen,
             apply_planes,
             apply_pages,
         }
     }
 
-    pub fn all(&self) -> ([&Deferred<wgpu::RenderPipeline>; 1], [&Deferred<wgpu::ComputePipeline>; 6]) {
-        ([&self.apply], [&self.seed, &self.score, &self.pull, &self.push, &self.relax, &self.choose])
+    pub fn all(&self) -> ([&Deferred<wgpu::RenderPipeline>; 1], [&Deferred<wgpu::ComputePipeline>; 7]) {
+        ([&self.apply], [&self.seed, &self.score, &self.pull, &self.push, &self.relax, &self.judge, &self.pick])
     }
 }
 
@@ -138,7 +160,7 @@ impl Planes {
         Self {
             values: buffer("heal values", cells * 16, wgpu::BufferUsages::empty()),
             membrane: buffer("heal membrane", finest * 16, wgpu::BufferUsages::empty()),
-            words: buffer("heal weights and choice", words * 4, wgpu::BufferUsages::INDIRECT),
+            words: buffer("heal weights and choice", words * 4, wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST),
         }
     }
 }
@@ -255,11 +277,12 @@ struct Params {
     scores: u32,
     choice: u32,
     windows: u32,
+    boxes: u32,
 }
 
 impl Params {
-    fn bytes(self) -> [u8; PARAMS_BYTES as usize] {
-        let words = [
+    fn words(self) -> [u32; 16] {
+        [
             self.level,
             self.parity,
             self.tile,
@@ -275,12 +298,8 @@ impl Params {
             self.scores,
             self.choice,
             self.windows,
-        ];
-        let mut bytes = [0; PARAMS_BYTES as usize];
-        for (chunk, word) in bytes.chunks_exact_mut(4).zip(words) {
-            chunk.copy_from_slice(&word.to_le_bytes());
-        }
-        bytes
+            self.boxes,
+        ]
     }
 }
 
@@ -291,11 +310,14 @@ struct Slots {
 }
 
 impl Slots {
-    fn push(&mut self, params: Params) -> u32 {
+    fn words(&mut self, words: impl IntoIterator<Item = u32>) -> u32 {
         let offset = self.bytes.len();
-        self.bytes.extend(params.bytes());
+        self.bytes.extend(words.into_iter().flat_map(u32::to_le_bytes));
         self.bytes.resize(offset + self.stride as usize, 0);
         offset as u32
+    }
+    fn push(&mut self, params: Params) -> u32 {
+        self.words(params.words())
     }
 }
 
@@ -398,11 +420,28 @@ impl RetouchSources {
             blocks(w[0], w[2]) * blocks(w[1], w[3])
         });
         layout.extend(cell_windows.iter().flatten().chain(&window_cells).chain(&window_blocks));
+        let locals: Vec<[i32; 4]> = pages
+            .iter()
+            .zip(&windows)
+            .map(|(page, window)| {
+                let local = window.page_local(*page);
+                [local.min_x(), local.min_y(), local.max_x(), local.max_y()].map(|v| v as i32)
+            })
+            .collect();
+        let boxes: Vec<[u32; 2]> = locals
+            .iter()
+            .map(|w| {
+                [[w[0], w[2]], [w[1], w[3]]]
+                    .map(|[lo, hi]| if hi > lo { (hi as u32).div_ceil(SCORE_BLOCK) - lo as u32 / SCORE_BLOCK } else { 0 })
+            })
+            .collect();
+        let box_words = layout.len() as u32;
+        layout.extend(boxes.iter().flatten());
 
         let cells = pyramid.cells();
         let scores_at = cells;
-        let choice_at = scores_at + 2 * CANDIDATES as u64 * pages.len() as u64;
-        let words = choice_at + CHOICE_WORDS;
+        let choice_at = scores_at + if spot { 2 * pages.len() as u64 * SCORE_BLOCKS } else { 0 };
+        let words = choice_at + CHOICE_WORDS + 4 * pages.len() as u64;
         let stride = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(PARAMS_BYTES);
         let mut slots = Slots { stride, bytes: Vec::new() };
         let page_count = pages.len() as u32;
@@ -413,23 +452,12 @@ impl RetouchSources {
             scores: scores_at as u32,
             choice: choice_at as u32,
             windows: window_words,
+            boxes: box_words,
             ..Params::default()
         };
-        let choose = slots.push(base);
-        let locals: Vec<[i32; 4]> = pages
-            .iter()
-            .zip(&windows)
-            .map(|(page, window)| {
-                let local = window.page_local(*page);
-                [local.min_x(), local.min_y(), local.max_x(), local.max_y()].map(|v| v as i32)
-            })
-            .collect();
+        let judges: Vec<u32> =
+            (0..if spot { CANDIDATES as u32 } else { 0 }).map(|candidate| slots.push(Params { candidate, ..base })).collect();
         let seeds: Vec<u32> = (0..page_count).map(|tile| slots.push(Params { tile, window: locals[tile as usize], ..base })).collect();
-        let scores: Vec<Vec<u32>> = (0..if spot { CANDIDATES as u32 } else { 0 })
-            .map(|candidate| {
-                (0..page_count).map(|tile| slots.push(Params { tile, candidate, window: locals[tile as usize], ..base })).collect()
-            })
-            .collect();
         let top = pyramid.levels.len() - 1;
         let pulls: Vec<(u32, u64)> =
             (1..=top).map(|level| (slots.push(Params { level: level as u32, ..base }), pyramid.levels[level].cells())).collect();
@@ -525,40 +553,77 @@ impl RetouchSources {
         let seed_groups = (PAGE_SIZE / pyramid.scale).div_ceil(16);
         let inside: Vec<bool> = windows.iter().map(|w| !w.is_empty()).collect();
         let identity = |i| at(i, [1.; 2], [0.; 2]);
-        // Spot Healing keeps each page's destination and chosen source, so the
-        // candidates are gathered one at a time across every page.
         let (found, copied): (Vec<wgpu::TextureView>, Vec<wgpu::TextureView>) = if spot {
-            let page = |label| Page::new(r, label).view;
-            pages.iter().map(|_| (page("spot healing destination"), page("spot healing source"))).unzip()
+            let chosen = |_| create_target(&device, [PAGE_SIZE; 2], wgpu::TextureFormat::Rgba32Float, "spot healing source").1;
+            (pages.iter().map(|_| Page::new(r, "spot healing destination").view).collect(), pages.iter().map(chosen).collect())
         } else {
             (vec![fields[0].clone(); pages.len()], vec![fields[1].clone(); pages.len()])
         };
         if spot {
+            // Candidates are judged one at a time, each laid down only while
+            // it is the best so far, so the pages a candidate reads stay
+            // cached from its scores to its source.
             for i in (0..pages.len()).filter(|i| inside[*i]) {
-                self.encode_gather(r, &found[i], identity(i), Draw::Clear, encoder)?;
-                drop(encoder.color_pass("spot healing source", &copied[i], wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)));
+                self.encode_gather(r, &found[i], identity(i), encoder)?;
             }
-            let groups: Vec<_> = pages.iter().enumerate().map(|(i, page)| page_group(r, *page, &found[i], &fields[1])).collect();
-            for (candidate, (offset, _)) in offsets.iter().enumerate() {
-                for i in 0..pages.len() {
-                    if inside[i] {
-                        self.encode_gather(r, &fields[1], at(i, [1.; 2], offset.map(|v| v as f32)), Draw::Clear, encoder)?;
-                    }
-                    dispatch(encoder, &k.score, scores[candidate][i], Some(&groups[i]), 1);
+            let mut uniforms = Slots { stride, bytes: Vec::new() };
+            let mut mappings = Vec::with_capacity(pages.len() * CANDIDATES);
+            for (offset, _) in &offsets {
+                for (i, page) in pages.iter().enumerate() {
+                    let origin = page.map(|v| ((v * PAGE_SIZE) as f32).to_bits());
+                    let mapping = if inside[i] {
+                        self.mapping(r, &at(i, [1.; 2], offset.map(|v| v as f32)))?
+                    } else {
+                        Mapping::fixed(false)
+                    };
+                    mappings.push((uniforms.words(origin.into_iter().chain([0, 0]).chain(mapping.words)), mapping));
                 }
             }
-            dispatch(encoder, &k.choose, choose, None, 1);
-            for (candidate, (offset, _)) in offsets.iter().enumerate() {
-                let record = Draw::Indirect(&choice, (choice_at + 4 + 4 * candidate as u64) * 4);
+            let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("spot healing candidates"),
+                contents: &uniforms.bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let fields: Vec<_> = pages.iter().enumerate().map(|(i, page)| page_group(r, *page, &found[i], &r.empty_view)).collect();
+            let parameters = bindings::group(&device, "spot healing parameters", &k.parameters, [uniform()]);
+            let chosen: Vec<_> = copied
+                .iter()
+                .map(|view| bindings::group(&device, "spot healing chosen source", &k.chosen, [wgpu::BindingResource::TextureView(view)]))
+                .collect();
+            let candidate = |this: &mut Self, r: &mut WgpuRasterizer, index: usize, encoder: &mut crate::submission::CommandEncoder| {
+                let (offset, mapping) = &mappings[index];
+                let views = this.pages(r, mapping, encoder)?.0.map(|view| view.unwrap_or_else(|| r.empty_view.clone()));
+                let uniform = wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &uniforms, offset: 0, size: NonZeroU64::new(CANDIDATE_BYTES) });
+                let resources = views.iter().map(wgpu::BindingResource::TextureView).chain([uniform]);
+                Ok::<_, GpuRasterError>((bindings::group(&device, "spot healing candidate", &k.candidate, resources), *offset))
+            };
+            encoder.clear_buffer(&choice, scores_at * 4, Some(2 * pages.len() as u64 * SCORE_BLOCKS * 4));
+            for (c, judge) in judges.iter().enumerate() {
                 for i in (0..pages.len()).filter(|i| inside[*i]) {
-                    self.encode_gather(r, &copied[i], at(i, [1.; 2], offset.map(|v| v as f32)), record, encoder)?;
+                    let (group, offset) = candidate(self, r, c * pages.len() + i, encoder)?;
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("spot healing score"), timestamp_writes: None });
+                    pass.set_pipeline(&k.score);
+                    pass.set_bind_group(0, &plane_group, &[seeds[i]]);
+                    pass.set_bind_group(1, &fields[i], &[]);
+                    pass.set_bind_group(2, &group, &[offset]);
+                    pass.dispatch_workgroups(boxes[i][0], boxes[i][1], 1);
+                }
+                dispatch(encoder, &k.judge, *judge, None, 1);
+                for i in (0..pages.len()).rev().filter(|i| inside[*i]) {
+                    let (group, offset) = candidate(self, r, c * pages.len() + i, encoder)?;
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("spot healing source"), timestamp_writes: None });
+                    pass.set_pipeline(&k.pick);
+                    pass.set_bind_group(0, &parameters, &[seeds[i]]);
+                    pass.set_bind_group(2, &group, &[offset]);
+                    pass.set_bind_group(3, &chosen[i], &[]);
+                    pass.dispatch_workgroups_indirect(&choice, (choice_at + CHOICE_WORDS + 4 * i as u64) * 4);
                 }
             }
         }
         for (i, page) in pages.iter().enumerate() {
             if !spot && inside[i] {
-                self.encode_gather(r, &fields[0], identity(i), Draw::Clear, encoder)?;
-                self.encode_gather(r, &fields[1], at(i, flip, retouch.offset), Draw::Clear, encoder)?;
+                self.encode_gather(r, &fields[0], identity(i), encoder)?;
+                self.encode_gather(r, &fields[1], at(i, flip, retouch.offset), encoder)?;
             }
             dispatch(encoder, &k.seed, seeds[i], Some(&page_group(r, *page, &found[i], &copied[i])), seed_groups);
         }

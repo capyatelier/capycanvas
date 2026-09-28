@@ -113,6 +113,9 @@ fn evolving_contact_prepared(
     boundary += pool * 0.12 * (0.3 + 0.7 * pressure);
     let feather = max(1.0 - hardness, aa);
     var coverage = 1.0 - smoothstep(boundary - feather, boundary + aa * 0.5, radius);
+    if contact_feature(256u, style.contact_c.w > 0.5) {
+        coverage = clamp((boundary - radius) / feather, 0.0, 1.0);
+    }
     if !contact_uniform() {
         // Integrate a compact parabolic pigment kernel along the actual span.
         // Adjacent spans partition the integral, so there are no overlapping

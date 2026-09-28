@@ -1,7 +1,7 @@
 use crate::{
-    AssetId, BrushAccumulation, BrushBlendMode, BrushColorDynamics, BrushCombine, BrushCurve,
+    AssetId, BrushAccumulation, BrushBlendMode, BrushColorDynamics, BrushCombine, BrushContact, BrushCurve,
     BrushDeform, BrushExecution, BrushGrain, BrushGrainBehavior, BrushMapping, BrushPath,
-    BrushRendering, BrushSensor, BrushShape, BrushSnapshot, BrushTarget, BrushTip, BrushTransport,
+    BrushRendering, BrushSensor, BrushShape, BrushSnapshot, BrushStabilization, BrushTarget, BrushTip, BrushTransport,
     BrushWetMix, ColorMixSpace, LiquifyMode,
 };
 use std::sync::Arc;
@@ -552,6 +552,7 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
 /// pixel takes the source once however many dabs cross it.
 fn retouching(execution: BrushExecution, diameter: f32, hardness: f32) -> BrushSnapshot {
     BrushSnapshot {
+        contact: Some(BrushContact { linear_edge: true, ..BrushContact::default() }),
         diameter,
         hardness,
         flow: 1.0,
@@ -562,6 +563,7 @@ fn retouching(execution: BrushExecution, diameter: f32, hardness: f32) -> BrushS
             ..BrushRendering::default()
         },
         mappings: Arc::from([BrushMapping::pressure_size()]),
+        stabilization: BrushStabilization { pressure_fall_micros: 80_000, ..BrushStabilization::default() },
         ..BrushSnapshot::default()
     }
 }

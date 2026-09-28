@@ -307,7 +307,7 @@ Implemented now:
 - stroke-start page copies and a cached reference composite for retouching
   strokes, sampled without uploads or waits during contact
   ([retouching sources](../internals/brushes.md#retouching-sources)), the
-  Clone Stamp pass that gathers them per page ([Clone Stamp](../internals/brushes.md#clone-stamp)),
+  Clone Stamp pass that reads them per page ([Clone Stamp](../internals/brushes.md#clone-stamp)),
   and pen-up healing in the stroke's last submission
   ([Healing Brush and Spot Healing Brush](../internals/brushes.md#healing-brush-and-spot-healing-brush));
 - GPU memory/page metrics through the C ABI;

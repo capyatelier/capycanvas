@@ -19,6 +19,7 @@ struct Params {
     scores: u32,
     choice: u32,
     windows: u32,
+    boxes: u32,
 }
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -31,9 +32,9 @@ struct Params {
 @group(0) @binding(1) var<storage, read> pyramid: array<u32>;
 @group(0) @binding(2) var<storage, read_write> values: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> membrane: array<vec4<f32>>;
-// Each cell's weight as f32 bits, then from p.scores each candidate's score
-// per page, then from p.choice the chosen offset, its index and the
-// draw-indirect records.
+// Each cell's weight as f32 bits, then from p.scores the judged candidate's
+// score per 32 x 32 block of each page, then from p.choice the best cost so
+// far and its index, and a dispatch-indirect record per page.
 @group(0) @binding(4) var<storage, read_write> words: array<u32>;
 @group(0) @binding(5) var<storage, read> healed: array<vec4<f32>>;
 @group(0) @binding(6) var<storage, read> known: array<u32>;
@@ -42,6 +43,46 @@ struct Params {
 @group(1) @binding(2) var coverage: texture_2d<f32>;
 @group(1) @binding(3) var painted: texture_2d<f32>;
 @group(1) @binding(4) var start: texture_2d<f32>;
+// Spot Healing's candidate source for one page: the target and reference
+// pages its mapping reads, the page's first pixel in the target, and where
+// the chosen candidate is laid down.
+struct Candidate {
+    origin: vec4<f32>,
+    mapping: array<vec4<u32>, 4>,
+}
+@group(2) @binding(0) var candidate_target0: texture_2d<f32>;
+@group(2) @binding(1) var candidate_target1: texture_2d<f32>;
+@group(2) @binding(2) var candidate_target2: texture_2d<f32>;
+@group(2) @binding(3) var candidate_target3: texture_2d<f32>;
+@group(2) @binding(4) var candidate_reference0: texture_2d<f32>;
+@group(2) @binding(5) var candidate_reference1: texture_2d<f32>;
+@group(2) @binding(6) var candidate_reference2: texture_2d<f32>;
+@group(2) @binding(7) var candidate_reference3: texture_2d<f32>;
+@group(2) @binding(8) var<uniform> candidate: Candidate;
+@group(3) @binding(0) var chosen: texture_storage_2d<rgba32float, write>;
+
+fn retouch_target_load(page: i32, texel: vec2<i32>) -> vec4<f32> {
+    switch page {
+        case 0: { return textureLoad(candidate_target0, texel, 0); }
+        case 1: { return textureLoad(candidate_target1, texel, 0); }
+        case 2: { return textureLoad(candidate_target2, texel, 0); }
+        default: { return textureLoad(candidate_target3, texel, 0); }
+    }
+}
+
+fn retouch_reference_load(page: i32, texel: vec2<i32>) -> vec4<f32> {
+    switch page {
+        case 0: { return textureLoad(candidate_reference0, texel, 0); }
+        case 1: { return textureLoad(candidate_reference1, texel, 0); }
+        case 2: { return textureLoad(candidate_reference2, texel, 0); }
+        default: { return textureLoad(candidate_reference3, texel, 0); }
+    }
+}
+
+// The candidate's source at page pixel `texel`.
+fn candidate_at(texel: vec2<i32>) -> vec4<f32> {
+    return retouch_source(retouch_mapping(candidate.mapping), candidate.origin.xy + vec2<f32>(texel) + 0.5);
+}
 
 struct Level {
     tile: u32,
@@ -298,18 +339,71 @@ fn relax(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) 
 
 var<workgroup> partial: array<vec2<f32>, 256>;
 
-// Spot Healing: how far candidate p.candidate's source B(x + offset), in the
-// source field, is from B(x) over the uncovered part of p.window of one page.
-@compute @workgroup_size(256)
-fn score(@builtin(local_invocation_index) lane: u32) {
+// Spot Healing works on 32 x 32 blocks of a page, a workgroup of 8 x 8
+// lanes each taking every eighth pixel of the block.
+const SCORE_BLOCK: u32 = 32u;
+const SCORE_LANES: u32 = 8u;
+const LANE_PIXELS: u32 = (SCORE_BLOCK / SCORE_LANES) * (SCORE_BLOCK / SCORE_LANES);
+const PAGE_BLOCKS: u32 = 256u / SCORE_BLOCK;
+var<workgroup> lanes: array<vec2<f32>, SCORE_LANES * SCORE_LANES>;
+
+// The block a workgroup covers, counted from the block holding the window's
+// corner, and the page pixel its lane takes at step `i`.
+fn window_block(group: vec3<u32>) -> vec2<u32> {
+    return vec2<u32>(p.window.xy) / SCORE_BLOCK + group.xy;
+}
+fn block_texel(block: vec2<u32>, lid: vec3<u32>, i: u32) -> vec2<i32> {
+    let steps = SCORE_BLOCK / SCORE_LANES;
+    return vec2<i32>(block * SCORE_BLOCK + lid.xy + SCORE_LANES * vec2<u32>(i % steps, i / steps));
+}
+
+// Spot Healing: how far candidate p.candidate's source B(x + offset) is from
+// B(x) over the uncovered part of p.window, for one block of a page.
+@compute @workgroup_size(8, 8)
+fn score(
+    @builtin(workgroup_id) group: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32,
+) {
+    let block = window_block(group);
     var sum = vec2<f32>(0.0);
-    for (var y = p.window.y; y < p.window.w; y++) {
-        for (var x = p.window.x + i32(lane); x < p.window.z; x += 256) {
-            let texel = vec2<i32>(x, y);
+    for (var i = 0u; i < LANE_PIXELS; i++) {
+        let texel = block_texel(block, lid, i);
+        if windowed(texel) {
             let w = weight_of(texel);
-            let d = field(destination, texel) - field(source, texel);
+            let d = field(destination, texel) - candidate_at(texel);
             sum += vec2<f32>(w * dot(d, d), w);
         }
+    }
+    lanes[lane] = sum;
+    workgroupBarrier();
+    for (var stride = 32u; stride > 0u; stride /= 2u) {
+        if lane < stride {
+            lanes[lane] += lanes[lane + stride];
+        }
+        workgroupBarrier();
+    }
+    if lane == 0u {
+        let blocks = PAGE_BLOCKS * PAGE_BLOCKS;
+        let at = p.scores + 2u * (p.tile * blocks + block.y * PAGE_BLOCKS + block.x);
+        words[at] = bitcast<u32>(lanes[0].x);
+        words[at + 1u] = bitcast<u32>(lanes[0].y);
+    }
+}
+
+var<workgroup> improved: bool;
+
+// Sum candidate p.candidate's blocks into its mean difference plus its
+// penalty. Candidates are judged in order and only a strictly better one
+// replaces the best so far, so the first wins a tie. Each page's
+// dispatch-indirect record lays this candidate down over the page's window
+// only when it is the best so far.
+@compute @workgroup_size(256)
+fn judge(@builtin(local_invocation_index) lane: u32) {
+    var sum = vec2<f32>(0.0);
+    for (var block = lane; block < p.pages * PAGE_BLOCKS * PAGE_BLOCKS; block += 256u) {
+        let at = p.scores + 2u * block;
+        sum += vec2<f32>(bitcast<f32>(words[at]), bitcast<f32>(words[at + 1u]));
     }
     partial[lane] = sum;
     workgroupBarrier();
@@ -320,44 +414,31 @@ fn score(@builtin(local_invocation_index) lane: u32) {
         workgroupBarrier();
     }
     if lane == 0u {
-        let at = p.scores + 2u * (p.candidate * p.pages + p.tile);
-        words[at] = bitcast<u32>(partial[0].x);
-        words[at + 1u] = bitcast<u32>(partial[0].y);
+        let cost = partial[0].x / max(partial[0].y, 1e-6) + bitcast<f32>(pyramid[p.candidates + p.candidate * 3u + 2u]);
+        improved = p.candidate == 0u || cost < bitcast<f32>(words[p.choice]);
+        if improved {
+            words[p.choice] = bitcast<u32>(cost);
+            words[p.choice + 1u] = p.candidate;
+        }
+    }
+    let lay = workgroupUniformLoad(&improved);
+    for (var page = lane; page < p.pages; page += 256u) {
+        let args = p.choice + 4u + 4u * page;
+        let size = vec2<u32>(pyramid[p.boxes + 2u * page], pyramid[p.boxes + 2u * page + 1u]);
+        words[args] = select(0u, size.x, lay);
+        words[args + 1u] = select(0u, size.y, lay);
+        words[args + 2u] = 1u;
     }
 }
 
-var<workgroup> costs: array<f32, 16>;
-
-// Pick the candidate with the smallest mean difference plus its penalty; the
-// first wins a tie. Writes its offset and index, then one draw-indirect
-// record per candidate that only the chosen one draws.
-@compute @workgroup_size(16)
-fn choose(@builtin(local_invocation_index) lane: u32) {
-    var sum = vec2<f32>(0.0);
-    for (var page = 0u; page < p.pages; page++) {
-        let at = p.scores + 2u * (lane * p.pages + page);
-        sum += vec2<f32>(bitcast<f32>(words[at]), bitcast<f32>(words[at + 1u]));
-    }
-    let candidate = p.candidates + lane * 3u;
-    costs[lane] = sum.x / max(sum.y, 1e-6) + bitcast<f32>(pyramid[candidate + 2u]);
-    workgroupBarrier();
-    if lane == 0u {
-        var best = 0u;
-        for (var k = 1u; k < 16u; k++) {
-            if costs[k] < costs[best] {
-                best = k;
-            }
-        }
-        words[p.choice] = pyramid[p.candidates + best * 3u];
-        words[p.choice + 1u] = pyramid[p.candidates + best * 3u + 1u];
-        words[p.choice + 2u] = best;
-        words[p.choice + 3u] = 0u;
-        for (var k = 0u; k < 16u; k++) {
-            let args = p.choice + 4u + k * 4u;
-            words[args] = select(0u, 3u, k == best);
-            words[args + 1u] = 1u;
-            words[args + 2u] = 0u;
-            words[args + 3u] = 0u;
+// Lay the chosen candidate's source into the page's window, from its corner.
+@compute @workgroup_size(8, 8)
+fn pick(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let block = window_block(group);
+    for (var i = 0u; i < LANE_PIXELS; i++) {
+        let texel = block_texel(block, lid, i);
+        if windowed(texel) {
+            textureStore(chosen, texel - p.window.xy, candidate_at(texel));
         }
     }
 }

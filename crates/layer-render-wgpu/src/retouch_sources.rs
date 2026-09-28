@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[path = "heal.rs"]
 mod heal;
-pub(crate) use heal::SPOT_TINT;
 
 /// Stroke-start pages kept ready while a retouching tool is selected.
 const POOL_PAGES: usize = 16;
@@ -18,7 +17,8 @@ pub(super) const REFERENCE_PAGES: usize = 96;
 const PREFETCH_PAGES: usize = 2;
 /// Pages prefetched on each side of a focus point.
 const PREFETCH_RING: i64 = 2;
-const PARAMETER_BYTES: u64 = 64;
+/// A gather's first pixel, padded to 16 bytes, then its mapping.
+const PARAMETER_BYTES: u64 = 80;
 
 struct Page {
     texture: wgpu::Texture,
@@ -54,7 +54,11 @@ impl Pipelines {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = Deferred::wgsl(device, "retouch sources", include_str!("retouch_sources.wgsl"));
+        let shader = Deferred::wgsl(
+            device,
+            "retouch sources",
+            compose_wgsl(&[include_str!("retouch_sample.wgsl"), include_str!("retouch_sources.wgsl")]),
+        );
         let pipeline = |entry: &'static str| {
             let (device, layout, shader) = (device.clone(), pipeline_layout.clone(), shader.clone());
             Deferred::pipeline(move |mode| {
@@ -249,12 +253,35 @@ pub(super) struct Gather {
     pub stroke: Option<(StrokeId, LayerId, layer_core::Retouch)>,
 }
 
-/// How a pass draws into its target: over a cleared target, or over what the
-/// target holds when an indirect record, written on the GPU, says to draw.
+/// What `retouch_sample.wgsl` reads for a gather: sixteen words that map its
+/// destination pixels to the source, and the 2x2 blocks of target and
+/// reference pages they address.
+pub(super) struct Mapping {
+    pub words: [u32; 16],
+    mode: Mode,
+    target: LayerId,
+    stroke: Option<StrokeId>,
+    references: Option<Arc<BTreeSet<LayerId>>>,
+    blocks: [[i64; 2]; 2],
+}
+
 #[derive(Clone, Copy)]
-enum Draw<'a> {
-    Clear,
-    Indirect(&'a wgpu::Buffer, u64),
+#[repr(u32)]
+enum Mode {
+    None = 0,
+    Target = 1,
+    References = 2,
+    Tint = 3,
+}
+
+impl Mapping {
+    /// A source that reads no pages: nothing, or Spot Healing's live tint.
+    pub fn fixed(tint: bool) -> Self {
+        let mode = if tint { Mode::Tint } else { Mode::None };
+        let mut words = [0; 16];
+        words[13] = mode as u32;
+        Self { words, mode, target: LayerId(0), stroke: None, references: None, blocks: [[0; 2]; 2] }
+    }
 }
 
 pub(super) struct RetouchSources {
@@ -484,7 +511,7 @@ impl RetouchSources {
             Some(view) => {
                 let mut sources = [&r.empty_view; 8];
                 sources[0] = &view;
-                self.draw(r, &self.pipelines.copy, &destination, [PAGE_SIZE; 2], sources, Draw::Clear, encoder)
+                self.draw(r, &self.pipelines.copy, &destination, [PAGE_SIZE; 2], sources, encoder)
             }
             None => drop(encoder.color_pass("retouch transparent reference", &destination, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT))),
         }
@@ -500,7 +527,6 @@ impl RetouchSources {
         destination: &wgpu::TextureView,
         size: [u32; 2],
         sources: [&wgpu::TextureView; 8],
-        draw: Draw,
         encoder: &mut crate::submission::CommandEncoder,
     ) {
         let binding = bindings::group(
@@ -512,18 +538,11 @@ impl RetouchSources {
                 .map(wgpu::BindingResource::TextureView)
                 .chain([self.parameters.as_entire_binding()]),
         );
-        let load = match draw {
-            Draw::Clear => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            Draw::Indirect(..) => wgpu::LoadOp::Load,
-        };
-        let mut pass = encoder.color_pass("retouch sources", destination, load);
+        let mut pass = encoder.color_pass("retouch sources", destination, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
         pass.set_scissor_rect(0, 0, size[0], size[1]);
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &binding, &[]);
-        match draw {
-            Draw::Clear => pass.draw(0..3, 0..1),
-            Draw::Indirect(buffer, offset) => pass.draw_indirect(buffer, offset),
-        }
+        pass.draw(0..3, 0..1);
     }
 
     /// The target page as `stroke` found it: its stroke-start copy, or the
@@ -572,47 +591,45 @@ impl RetouchSources {
         if page_rect(coordinate).intersect(PixelRect::full(r.document_extent)).is_empty() {
             return Ok(None);
         }
-        let slot = match self.cache.get(coordinate) {
-            Some(slot) => Some(slot),
-            None => {
-                let slot = self.capture_reference(r, coordinate, self.live.is_none(), encoder)?;
-                if slot.is_none() && self.live.is_some() {
+        if let Some(slot) = self.cache.get(coordinate) {
+            return Ok(Some(self.cache.slots[slot].page.view.clone()));
+        }
+        if self.live.is_some()
+            && let Some(layer) = self.cache.frame.as_deref().and_then(lone_layer)
+        {
+            return Ok(match lone_page(r, layer, coordinate) {
+                Prepared::View(view) => Some(view),
+                Prepared::Absent => None,
+                Prepared::Decode => {
                     self.miss();
+                    None
                 }
-                slot
-            }
-        };
+            });
+        }
+        let slot = self.capture_reference(r, coordinate, self.live.is_none(), encoder)?;
+        if slot.is_none() && self.live.is_some() {
+            self.miss();
+        }
         Ok(slot.map(|slot| self.cache.slots[slot].page.view.clone()))
     }
 
-    /// Draw the source of `gather` into `destination`: the target as the
-    /// latest retouching stroke found it, over the reference composite below
-    /// it. Returns whether every page it needed was ready.
-    fn encode_gather(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        destination: &wgpu::TextureView,
-        gather: Gather,
-        draw: Draw,
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<bool, GpuRasterError> {
-        let (target, retouch, stroke) = match (gather.stroke.clone(), &self.stroke, &self.prepared) {
-            (Some((stroke, target, retouch)), ..) => (target, retouch, Some(stroke)),
-            (None, Some(stroke), _) => (stroke.target, stroke.retouch.clone(), None),
-            (None, None, Some(prepared)) => (prepared.target, prepared.retouch.clone(), None),
+    /// Map `gather`'s destination pixels to the target as the latest
+    /// retouching stroke found it, over the reference composite below it.
+    pub fn mapping(&self, r: &WgpuRasterizer, gather: &Gather) -> Result<Mapping, GpuRasterError> {
+        let (target, retouch, stroke) = match (&gather.stroke, &self.stroke, &self.prepared) {
+            (Some((stroke, target, retouch)), ..) => (*target, retouch, Some(*stroke)),
+            (None, Some(stroke), _) => (stroke.target, &stroke.retouch, None),
+            (None, None, Some(prepared)) => (prepared.target, &prepared.retouch, None),
             (None, None, None) => return Err(GpuRasterError::MissingPaintLayer(LayerId(0))),
         };
-        let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
+        let frame = r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?;
         let layer_core::Affine([a, b, c, d, tx, ty]) = layer_core::target_transform(&frame.layers, target);
-        if [a, b, c, d] != [1., 0., 0., 1.] || gather.region.is_empty() || gather.region.width().max(gather.region.height()) > PAGE_SIZE {
+        let region = gather.region;
+        if [a, b, c, d] != [1., 0., 0., 1.] || region.is_empty() || region.width().max(region.height()) > PAGE_SIZE {
             return Err(GpuRasterError::InvalidTransform("Retouch sources need an unrotated, unscaled layer"));
         }
-        let references = retouch.source == layer_core::RetouchSource::References && !retouch.references.is_empty();
-        if references {
-            self.cache.validate(&frame, &retouch.references, r.document_extent);
-        }
-        let misses = self.counts.misses;
-        let region = gather.region;
+        let references = (retouch.source == layer_core::RetouchSource::References && !retouch.references.is_empty())
+            .then(|| retouch.references.clone());
         let ends = [[region.min_x(), region.max_x()], [region.min_y(), region.max_y()]];
         let block = |shift: [f32; 2]| {
             std::array::from_fn::<i64, 2, _>(|axis| {
@@ -621,61 +638,110 @@ impl RetouchSources {
                 (texels[0].min(texels[1]).floor() as i64).div_euclid(i64::from(PAGE_SIZE))
             })
         };
-        let target_block = block([0.; 2]);
-        let reference_block = block([tx, ty]);
-        let mut targets: [Option<wgpu::TextureView>; 4] = Default::default();
-        let mut below: [Option<wgpu::TextureView>; 4] = Default::default();
-        for (i, [dx, dy]) in [[0, 0], [1, 0], [0, 1], [1, 1]].into_iter().enumerate() {
-            let page = |block: [i64; 2]| {
-                let [x, y] = [block[0] + dx, block[1] + dy];
-                (x >= 0 && y >= 0 && x < i64::from(u32::MAX / PAGE_SIZE) && y < i64::from(u32::MAX / PAGE_SIZE))
-                    .then_some([x as u32, y as u32])
-            };
-            if let Some(coordinate) = page(target_block) {
-                targets[i] = self.target_page(r, target, stroke, coordinate, encoder)?;
-            }
-            if references
-                && let Some(coordinate) = page(reference_block)
-            {
-                below[i] = self.reference_page(r, coordinate, encoder)?;
-            }
-        }
+        let blocks = [block([0.; 2]), block([tx, ty])];
+        let whole = |values: [f32; 2]| values.iter().all(|v| v.fract() == 0.);
+        let exact = gather.scale.iter().all(|s| s.abs() == 1.)
+            && whole(gather.offset)
+            && (references.is_none() || whole([gather.offset[0] + tx, gather.offset[1] + ty]));
         let opacity = frame.layers.iter().find(|l| l.id == target).map_or(1., |l| l.opacity);
+        let page = i64::from(PAGE_SIZE);
+        let mode = if references.is_some() { Mode::References } else { Mode::Target };
         let mut words = [0u32; 16];
-        for (word, value) in words.iter_mut().zip([
-            region.min_x() as f32,
-            region.min_y() as f32,
-            gather.scale[0],
-            gather.scale[1],
-            gather.offset[0],
-            gather.offset[1],
-            tx,
-            ty,
-        ]) {
+        for (word, value) in words.iter_mut().zip([gather.scale[0], gather.scale[1], gather.offset[0], gather.offset[1], tx, ty]) {
             *word = value.to_bits();
         }
-        let page = PAGE_SIZE as i64;
-        for (word, value) in words[8..14].iter_mut().zip([
-            target_block[0] * page,
-            target_block[1] * page,
-            reference_block[0] * page,
-            reference_block[1] * page,
+        for (word, value) in words[6..12].iter_mut().zip([
             i64::from(r.document_extent[0]),
             i64::from(r.document_extent[1]),
+            blocks[0][0] * page,
+            blocks[0][1] * page,
+            blocks[1][0] * page,
+            blocks[1][1] * page,
         ]) {
             *word = (value as i32) as u32;
         }
-        words[14] = opacity.to_bits();
-        words[15] = u32::from(references);
-        let bytes: Vec<u8> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+        words[12] = opacity.to_bits();
+        words[13] = mode as u32;
+        words[14] = u32::from(exact);
+        Ok(Mapping { words, mode, target, stroke, references, blocks })
+    }
+
+    /// The target and reference pages `mapping` reads, 2x2 each, and whether
+    /// every page it needed was ready.
+    pub fn pages(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        mapping: &Mapping,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<([Option<wgpu::TextureView>; 8], bool), GpuRasterError> {
+        let mut views: [Option<wgpu::TextureView>; 8] = Default::default();
+        if !matches!(mapping.mode, Mode::Target | Mode::References) {
+            return Ok((views, true));
+        }
+        if let Some(references) = &mapping.references {
+            let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
+            self.cache.validate(&frame, references, r.document_extent);
+        }
+        let misses = self.counts.misses;
+        let [targets, references] = mapping.blocks.map(block_pages);
+        for i in 0..4 {
+            if let Some(coordinate) = targets[i] {
+                views[i] = self.target_page(r, mapping.target, mapping.stroke, coordinate, encoder)?;
+            }
+            if mapping.references.is_some()
+                && let Some(coordinate) = references[i]
+            {
+                views[4 + i] = self.reference_page(r, coordinate, encoder)?;
+            }
+        }
+        Ok((views, self.counts.misses == misses))
+    }
+
+    /// Whether `pages` would read `mapping` without capturing or decoding a
+    /// page, which could evict one that work encoded earlier still reads.
+    pub fn resident(&self, r: &WgpuRasterizer, mapping: &Mapping) -> bool {
+        if !matches!(mapping.mode, Mode::Target | Mode::References) {
+            return true;
+        }
+        let stroke = self.stroke.as_ref().filter(|s| s.target == mapping.target && mapping.stroke.is_none_or(|id| id == s.id));
+        let target = block_pages(mapping.blocks[0]).into_iter().flatten().all(|coordinate| {
+            stroke.is_some_and(|s| s.pages.contains_key(&coordinate))
+                || r.paint_layers
+                    .iter()
+                    .any(|l| l.id == mapping.target && l.pages.iter().any(|p| p.coordinate == coordinate))
+                || !matches!(raw_prepared_view(r, mapping.target, coordinate), Prepared::Decode)
+        });
+        let lone = self.live.is_some() && self.cache.frame.as_deref().and_then(lone_layer).is_some();
+        let references = mapping.references.as_ref().is_none_or(|members| {
+            r.artwork_frame.as_ref().is_some_and(|frame| {
+                self.cache.key.as_ref().is_some_and(|key| key.matches(frame, members, r.document_extent))
+            }) && block_pages(mapping.blocks[1]).into_iter().flatten().all(|coordinate| {
+                lone || page_rect(coordinate).intersect(PixelRect::full(r.document_extent)).is_empty()
+                    || self.cache.pages.contains_key(&coordinate)
+            })
+        });
+        target && references
+    }
+
+    /// Draw the source of `gather` into `destination`. Returns whether every
+    /// page it needed was ready.
+    fn encode_gather(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        destination: &wgpu::TextureView,
+        gather: Gather,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<bool, GpuRasterError> {
+        let mapping = self.mapping(r, &gather)?;
+        let (views, complete) = self.pages(r, &mapping, encoder)?;
+        let region = gather.region;
+        let origin = [region.min_x() as f32, region.min_y() as f32].map(f32::to_bits);
+        let bytes: Vec<u8> =
+            origin.into_iter().chain([0, 0]).chain(mapping.words).flat_map(u32::to_le_bytes).collect();
         r.uploads.write(encoder, &self.parameters, &bytes)?;
-        let empty = r.empty_view.clone();
-        let view = |view: &Option<wgpu::TextureView>| view.clone().unwrap_or_else(|| empty.clone());
-        let targets = targets.each_ref().map(view);
-        let below = below.each_ref().map(view);
-        let sources = std::array::from_fn(|i| if i < 4 { &targets[i] } else { &below[i - 4] });
-        self.draw(r, &self.pipelines.gather, destination, [region.width(), region.height()], sources, draw, encoder);
-        Ok(self.counts.misses == misses)
+        let views = views.map(|view| view.unwrap_or_else(|| r.empty_view.clone()));
+        self.draw(r, &self.pipelines.gather, destination, [region.width(), region.height()], views.each_ref(), encoder);
+        Ok(complete)
     }
 
     fn prefetch(
@@ -714,10 +780,29 @@ impl RetouchSources {
     }
 }
 
+/// The 2x2 pages of the block whose first page is `block`, where they exist.
+fn block_pages(block: [i64; 2]) -> [Option<[u32; 2]>; 4] {
+    [[0, 0], [1, 0], [0, 1], [1, 1]].map(|[dx, dy]| {
+        let [x, y] = [block[0] + dx, block[1] + dy];
+        (x >= 0 && y >= 0 && x < i64::from(u32::MAX / PAGE_SIZE) && y < i64::from(u32::MAX / PAGE_SIZE))
+            .then_some([x as u32, y as u32])
+    })
+}
+
 enum Prepared {
     View(wgpu::TextureView),
     Absent,
     Decode,
+}
+
+/// A lone reference layer's page as the renderer holds it: painted, or an
+/// original or backed tile it already decoded.
+fn lone_page(r: &WgpuRasterizer, layer: LayerId, coordinate: [u32; 2]) -> Prepared {
+    r.paint_layers
+        .iter()
+        .find(|l| l.id == layer)
+        .and_then(|l| l.pages.iter().find(|p| p.coordinate == coordinate))
+        .map_or_else(|| raw_prepared_view(r, layer, coordinate), |page| Prepared::View(page.active().view.clone()))
 }
 
 /// A layer page the renderer can read without uploading: an original or
@@ -840,16 +925,49 @@ impl WgpuRasterizer {
         self.retouch = Some(retouch);
     }
 
-    pub(super) fn encode_retouch_gather(
+    /// Map what the retouching batch copies onto the `local` part of page
+    /// `coordinate`. Spot Healing lays a translucent tint until pen-up finds
+    /// its source; a batch without a source copies nothing.
+    pub(super) fn retouch_mapping(
         &mut self,
-        destination: &wgpu::TextureView,
-        gather: Gather,
+        batch: &DabBatch,
+        coordinate: [u32; 2],
+        local: PixelRect,
+    ) -> Result<Mapping, GpuRasterError> {
+        let [x, y] = coordinate.map(|v| v * PAGE_SIZE);
+        let region = PixelRect::new(x + local.min_x(), y + local.min_y(), x + local.max_x(), y + local.max_y());
+        match &batch.style.retouch {
+            _ if batch.style.execution == BrushExecution::SpotHeal => Ok(Mapping::fixed(true)),
+            Some(retouch) if !region.is_empty() => {
+                let gather = Gather {
+                    region,
+                    scale: retouch.flip.map(|f| if f { -1. } else { 1. }),
+                    offset: retouch.offset,
+                    stroke: Some((batch.stroke_id, batch.layer_id, retouch.clone())),
+                };
+                let retouch = self.retouch_sources();
+                let mapping = retouch.mapping(self, &gather);
+                self.retouch = Some(retouch);
+                mapping
+            }
+            _ => Ok(Mapping::fixed(false)),
+        }
+    }
+
+    pub(super) fn retouch_resident(&self, mapping: &Mapping) -> bool {
+        self.retouch.as_ref().is_some_and(|retouch| retouch.resident(self, mapping))
+    }
+
+    /// The pages `mapping` reads, empty where there are none.
+    pub(super) fn retouch_pages(
+        &mut self,
+        mapping: &Mapping,
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<bool, GpuRasterError> {
+    ) -> Result<[wgpu::TextureView; 8], GpuRasterError> {
         let mut retouch = self.retouch_sources();
-        let result = retouch.encode_gather(self, destination, gather, Draw::Clear, encoder);
+        let pages = retouch.pages(self, mapping, encoder);
         self.retouch = Some(retouch);
-        result
+        Ok(pages?.0.map(|view| view.unwrap_or_else(|| self.empty_view.clone())))
     }
 
     /// Draw what the latest retouching stroke samples into `destination`, a
@@ -871,7 +989,10 @@ impl WgpuRasterizer {
             &self.device,
             &wgpu::CommandEncoderDescriptor { label: Some("retouch source") },
         );
-        let complete = self.encode_retouch_gather(destination, Gather { region, scale, offset, stroke: None }, &mut encoder)?;
+        let mut retouch = self.retouch_sources();
+        let complete = retouch.encode_gather(self, destination, Gather { region, scale, offset, stroke: None }, &mut encoder);
+        self.retouch = Some(retouch);
+        let complete = complete?;
         self.uploads.finish(&encoder);
         self.last_submission = Some(encoder.submit(&self.queue));
         Ok(complete)

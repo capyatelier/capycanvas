@@ -103,7 +103,9 @@ The renderer keeps the source apart from the pages the stroke paints
   painting the editing layer keeps them. A lone untransformed layer is copied
   rather than composed.
 - **Sampling.** Each pixel reads the editing layer at its opacity over the
-  reference composite, with bilinear taps, so whole-pixel shifts copy exactly.
+  reference composite, with bilinear taps; a whole-pixel shift reads one texel
+  of each, so it copies exactly. [`retouch_sample.wgsl`](../../crates/layer-render-wgpu/src/retouch_sample.wgsl)
+  holds this sampling for every pass that reads a source.
 
 While a retouching tool is selected, 16 stroke-start pages and the source
 pipelines are ready before pen-down, and reference pages around the focus points
@@ -120,6 +122,13 @@ tip, opacity and flow. Each document's engine keeps its
 [`CloneSource`](../../crates/layer-core/src/retouch.rs): the source point, the
 Aligned flag, the flips and, once an aligned stroke has started, its offset.
 
+- **Tip.** The retouching presets use the solid nib of the
+  [contact brush engine](contact-brush-engine.md) with a linear edge: the
+  footprint sweeps between contacts, so a stroke is one continuous stamp whose
+  coverage falls linearly from its hard core to its rim, as an analytic stamp's
+  does, without the scallops of stamps a spacing apart. Contacts follow the
+  swept generator, a few per update, and falling pressure is limited as for
+  the pens, so lifting without moving keeps the stroke's width to its end.
 - **Mapping.** A stroke copies document point `p` from `flip · p + offset`. It
   takes the offset at pen-down: the kept offset when Aligned has one, otherwise
   the source point minus the stroke's first point. Aligned keeps that offset for
@@ -127,13 +136,20 @@ Aligned flag, the flips and, once an aligned stroke has started, its offset.
   Offset and setting the source start again at the source point. The stroke
   records the mapping in the editing layer's pixels, and a corrected first point
   maps it again, so replays match a direct stroke.
-- **Pass.** Clone runs on the fragment path, one page at a time: it gathers the
-  source for the page's dirty rectangle into the first material sample field,
-  bound in the reservoir slot, then deposits. The deposit is the dry loop with
-  the gathered straight color, its coverage scaling each dab; with stroke-uniform
-  accumulation the dabs compose to exactly the source's coverage times the
-  stroke's. Selection clipping and alpha lock apply as for any dry brush, and
-  tiles, dab ranges and damage stay per page.
+- **Pass.** Clone runs the dry page kernels, with the pixels a page needs from
+  the source read in the same pass: each page binds the 2x2 blocks of target and
+  reference pages its dirty rectangle maps to, in the eight neighborhood slots
+  around it, and its dry record carries the mapping. The deposit is the dry loop
+  with the source's straight color, its coverage scaling each dab. With
+  stroke-uniform accumulation over Normal paint, the dabs compose to exactly the
+  source's coverage times the stroke's, so the loop only raises the stroke
+  coverage and the source is read once, for pixels whose coverage rose. Other
+  blend modes read the source first and lay it down dab by dab. Selection
+  clipping and alpha lock apply as for any dry brush, and tiles, dab ranges and
+  damage stay per page. A page whose source needs a capture or a decode is
+  encoded after the pages before it, so reading it cannot evict what they read.
+  While the pen is down, a lone reference layer's pages are read where the
+  renderer holds them rather than copied into the reference cache.
 - **Source disc.** The session draws the disc from cursor segments and sets a new
   document's source in the middle of the view when the tool is first selected.
   Set Source (held Alt, a bound side button, or its button for one contact) makes
@@ -163,11 +179,14 @@ corrections all include the healed pixels.
   candidate sources, 8 directions at 1.25 and 2 times the stroke's extent, by the
   squared difference of `B` against the shifted `B` over the uncovered part of a
   window around the stroke, plus a cost for a candidate window that overlaps the
-  stroke or leaves the image. A workgroup reduction per page and one argmin pass
-  choose the candidate on the GPU, the first winning a tie, and write indirect
-  draw records, so only the chosen source is gathered, with no readback. The
-  healing blend follows. Only proximity matching is available; Content-Aware and
-  Create Texture are not.
+  stroke or leaves the image. `B` is gathered once per page; each candidate's
+  shifted `B` is read straight from its pages while it is scored, 32 by 32
+  pixels to a workgroup. Candidates are judged in order on the GPU, and one that
+  is strictly better than the best so far is laid down over each page's window
+  through dispatch-indirect records, so the first best wins, nothing is read
+  back, and the pages a candidate reads are still cached when its source is
+  laid down. The healing blend follows. Only proximity matching is available;
+  Content-Aware and Create Texture are not.
 - **Membrane.** `h` is solved over the stroke's pages, within a window on each
   page around the dabs plus a margin: pull-push down a pyramid whose finest
   level keeps one tile per page, each cell weighted by `1 − coverage`, then 32

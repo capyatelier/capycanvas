@@ -24,7 +24,7 @@ pub(super) fn shader(device: &PipelineDevice, in_place: bool) -> Deferred<wgpu::
 
 pub(super) fn shader_source(device: &PipelineDevice, in_place: bool, material: &str) -> Cow<'static, str> {
     compose_wgsl(&[
-        &working_color::shader(device), include_str!("blend_modes.wgsl"), &shader_destination(in_place), include_str!("brush_types.wgsl"), include_str!("brush_textures.wgsl"), material,
+        &working_color::shader(device), include_str!("blend_modes.wgsl"), &shader_destination(in_place), include_str!("brush_types.wgsl"), include_str!("brush_textures.wgsl"), include_str!("retouch_sample.wgsl"), material,
         include_str!("brush_footprint.wgsl"),
         include_str!("brush_geometry.wgsl"), include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
         include_str!("contact.wgsl"), include_str!("selection_clip.wgsl"),
@@ -58,11 +58,16 @@ pub(super) fn prepare_film(style: &layer_render::DabStyle, dabs: &mut [DabGpu]) 
     }
 }
 
+/// The pointwise operations with page kernels, each with and without a
+/// coverage output.
+const OPERATIONS: [MaterialOperation; 3] = [MaterialOperation::Deposit, MaterialOperation::Coverage, MaterialOperation::Clone];
+type Kernels = [Deferred<wgpu::ComputePipeline>; 2 * OPERATIONS.len()];
+
 pub(super) struct Pipelines {
     in_place: bool,
     layouts: [wgpu::BindGroupLayout; 2],
-    pub kernels: [Deferred<wgpu::ComputePipeline>; 4],
-    variants: std::collections::BTreeMap<u32, [Deferred<wgpu::ComputePipeline>; 4]>,
+    pub kernels: Kernels,
+    variants: std::collections::BTreeMap<u32, Kernels>,
 }
 
 pub(super) fn contact_flags(contact: Option<layer_core::BrushContact>) -> u32 {
@@ -75,6 +80,7 @@ pub(super) fn contact_flags(contact: Option<layer_core::BrushContact>) -> u32 {
         | (u32::from(c.pooling > 0.) << 4)
         | (u32::from(c.depletion > 0.) << 5)
         | (u32::from(c.tip_bias > 0. || c.tilt_shading > 0.) << 6)
+        | (u32::from(c.linear_edge) << 8)
 }
 
 impl Pipelines {
@@ -129,7 +135,7 @@ impl Pipelines {
                             }),
                             compilation_options: wgpu::PipelineCompilationOptions {
                                 constants: &[
-                                    ("MATERIAL_OPERATION", (index / 2) as f64),
+                                    ("MATERIAL_OPERATION", OPERATIONS[index / 2] as u32 as f64),
                                     ("CONTACT_FLAGS", f64::from(flags)),
                                     ("MATERIAL_IN_PLACE", f64::from(in_place)),
                                 ],
@@ -142,8 +148,14 @@ impl Pipelines {
             })
         };
         let kernels = make_kernels(u32::MAX);
+        let retouching = [
+            layer_core::DefaultBrushPreset::CloneStamp,
+            layer_core::DefaultBrushPreset::HealingBrush,
+            layer_core::DefaultBrushPreset::SpotHealingBrush,
+        ];
         let mut flags = layer_core::CONTACT_BRUSH_PRESETS
             .into_iter()
+            .chain(retouching)
             .map(|p| contact_flags(layer_core::default_brush(p).contact))
             .collect::<std::collections::BTreeSet<_>>();
         flags.insert(0);
@@ -157,18 +169,22 @@ impl Pipelines {
         }
     }
 
-    pub fn for_style(
+    /// The kernel that runs `operation` for `style`, with or without a
+    /// coverage output.
+    pub fn kernel(
         &self,
         style: &layer_render::DabStyle,
-    ) -> &[Deferred<wgpu::ComputePipeline>; 4] {
+        operation: MaterialOperation,
+        coverage: bool,
+    ) -> &Deferred<wgpu::ComputePipeline> {
         // Flow integration and maximum-film deposition have different kernels.
         // Resolve that uniform branch at compilation, including its register
         // requirements, rather than carrying both models through every pixel.
         let flags = contact_flags(style.contact)
             | if style.rendering.accumulation == BrushAccumulation::Uniform { 128 } else { 0 };
-        self.variants
-            .get(&flags)
-            .unwrap_or(&self.kernels)
+        let kernels = self.variants.get(&flags).unwrap_or(&self.kernels);
+        let slot = OPERATIONS.iter().position(|o| *o == operation).expect("a pointwise operation");
+        &kernels[slot * 2 + usize::from(coverage)]
     }
 
     pub fn output(
@@ -243,7 +259,7 @@ impl WgpuRasterizer {
             return;
         }
         let operation = BrushPassPlan::for_device(&batch.style, &self.device).material;
-        let kernels = self.dry_material_pipeline(batch).for_style(&batch.style);
+        let pipelines = self.dry_material_pipeline(batch);
         let texture_key = Self::texture_set_key(&batch.style);
         let textures = self
             .texture_sets
@@ -258,7 +274,7 @@ impl WgpuRasterizer {
         let mut active_coverage = None;
         for (output, source, coordinate, coverage, record_offset) in jobs {
             if active_coverage != Some(*coverage) {
-                pass.set_pipeline(&kernels[operation as usize * 2 + usize::from(*coverage)]);
+                pass.set_pipeline(pipelines.kernel(&batch.style, operation, *coverage));
                 active_coverage = Some(*coverage);
             }
             pass.set_bind_group(0, output, &[batch_index as u32 * self.style_stride as u32]);
@@ -274,5 +290,5 @@ impl WgpuRasterizer {
 }
 
 fn dry_material_compute_eligible(style: &layer_render::DabStyle) -> bool {
-    style.execution == BrushExecution::Dry && style.rendering.blend_mode == BrushBlendMode::Normal
+    pointwise(style) && style.rendering.blend_mode == BrushBlendMode::Normal
 }

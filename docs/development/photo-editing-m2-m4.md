@@ -499,8 +499,7 @@ Each is a uniform flag read by a pass that already runs, so choosing Linear ligh
 - **Lifetime.** Copies are dropped at the next stroke, or when the 2 s correction window ends; replays re-make them.
 
 **Clone rendering**
-- `BrushExecution::Clone` on the fragment path. Each page needs its own gather before its deposit, so it cannot use the batched dry compute path.
-- The gather reads `RetouchSources` into the `reservoir_texture` slot. The deposit is the dry loop with the gathered colour.
+- The retouching presets are contact brushes with a linear edge, so a stroke is one swept stamp. They run the specialized dry compute kernels: each page binds the target and reference pages its source maps to in the neighbourhood slots, and `retouch_sample.wgsl` reads them, with one tap for a whole-pixel shift.
 - `Stroke.retouch` holds the offset, the Aligned flag, the flip and the source kind for replay; it is not persisted.
 
 **Healing (decision 16)**
@@ -509,7 +508,7 @@ Each is a uniform flag read by a pass that already runs, so choosing Linear ligh
 
 **Spot Healing**
 - The live stroke deposits a translucent tint.
-- At pen-up, an argmin over 16 candidate offsets writes the chosen offset to a buffer the heal gather reads.
+- At pen-up, the 16 candidate offsets are scored from their pages and judged in order on the GPU; a strictly better one is laid down through dispatch-indirect records, so the first best wins with no readback.
 
 ## Steps
 
@@ -731,6 +730,7 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - Flatten confirms through the shared notice when it would discard hidden layers.
   - Merge Down needs a Normal, visible layer below. Merge Visible and Flatten accept any blend mode, with the paper kept separate, so a non-Normal layer can look different where the paper shows through.
 - **M3.7** on GTK, Web and Android: photos opened as documents keep their Exif, XMP and IPTC in `.capy` (version 10); exports keep camera, lens, exposure, dates, copyright and contact, with location removed by default; a Metadata row in each export dialog.
+- **Retouch speed:** Clone Stamp, Healing and Spot Healing are contact brushes on the dry compute kernels and hold the Huion's panel rate at 300 px; Spot Healing's pen-up no longer gathers every candidate.
 - **M4.6** on GTK, Web and Android: Pass Through as a group blend mode, whose opacity and mask fade between the layers below and the group's result; a clipped Pass Through group composites isolated; Ungroup keeps its appearance. The **Use Pass Through for new groups** preference (off) applies to New Group and Group Layers.
 - **M4.3** on GTK, Web and Android: the Healing Brush (preset 41) previews as the clone and heals into its surroundings at pen-up; the Spot Healing Brush (preset 42) picks the best of 16 nearby offsets on the GPU and heals it in. S cycles the three retouching brushes; J and Shift+J choose Spot Healing and Healing in the Photoshop keys.
 - **M4.1–M4.2** on GTK, Web and Android: Clone Stamp (preset 40) with a source disc that drags with every device and a bar (Aligned, Source ▾, Flip H/V, Reset Offset, Set Source); Set Source with Alt or a bound pen side button; sources read from stroke-start pages and a cached reference composite, with no upload or wait during contact and a pen-up replay after a miss.
@@ -769,7 +769,8 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **Metadata:** writing IPTC-IIM, and Extended XMP for packets larger than one JPEG segment.
 - **Soft Light** uses the W3C formula; Photoshop's differs. Decide in M4.5 whether Perceptual documents use Photoshop's.
 - **Properties panel** still offers a flat blend choice in code order, including modes hidden from the menu in float documents.
-- **Clone Stamp on tablets** is GPU-bound: its 0.08 spacing lays about 38 dabs per update against the G-Pen's 6, and each page runs its own gather. Wider spacing and one gather per update are the likely fixes.
+- **Short retouching strokes** commit their swept span only in their last frame, which lengthens a small heal's pen-up.
+- **Contact brushes without a release limit** (the Eraser, for example) still taper the last span when pressure falls without motion.
 - **Clone source bar on tablets** sits at the bottom of the work area instead of beside the disc.
 - **Web tests on tablets:** after a run leaves an unsaved document, the next `device.test.mjs` load waits on "Recover drawing?".
 - **Preference actions** sent while Settings is closed are refused with no visible error.
@@ -793,4 +794,4 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M4.5, M4.7, and retouch speed on tablets. M2 and M3 are complete. Record milestone completion in the research record's section 7.
+**Remaining:** M4.5 and M4.7. M2 and M3 are complete. Record milestone completion in the research record's section 7.
