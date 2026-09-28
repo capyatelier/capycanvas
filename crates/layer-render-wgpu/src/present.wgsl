@@ -98,7 +98,7 @@ fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
     let footprint = max(length(dx), length(dy));
     if footprint <= scale { return detail_point(p); }
     if cache.grid.w != 0u {
-        // Adjacent levels contain the completed full-resolution composition.
+        // Adjacent levels contain the completed presentation composition.
         // Trilinear display sampling avoids supersampling every screen pixel;
         // no source/filter input or editable pixel is reduced.
         let next_scale = f32(cache.grid.w);

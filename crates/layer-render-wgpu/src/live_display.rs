@@ -1,5 +1,6 @@
-//! Derived live composition: retained zoomed-out levels and an atlas of
-//! visible detail. Filters always run before display reduction.
+//! Exact-composition fallback: retained levels and an atlas of visible detail.
+//! Eligible normal paint stacks use scene::scale instead; this pyramid remains
+//! for effects, masks, transforms and fine views. Filters precede reduction.
 use super::*;
 use layer_render::ViewState;
 use std::collections::{BTreeSet, HashMap};
@@ -34,20 +35,8 @@ impl Window {
         {
             return Err(GpuRasterError::InvalidExtent);
         }
-        // The largest singular value keeps a mip texel no larger than a surface
-        // pixel, including reflected, rotated and nonuniform affine views.
-        // This equivalent singular-value form avoids subtracting nearly equal
-        // fourth powers for ordinary rotation/uniform-scale cameras.
-        let scale = ((a + d).hypot(b - c) + (a - d).hypot(b + c)) * 0.5;
-        let mut level = 0;
-        // The camera arrives as Float32. sin/cos rounding must not flip an exact
-        // power-of-two zoom between adjacent levels on every rotation frame.
-        // This tolerance is below one millionth of a surface pixel per texel;
-        // real zoom changes outside it still select the finer representation.
-        let unit = 1. + 4. * f64::from(f32::EPSILON);
-        while level < coarse.level && scale * f64::from(1u32 << (level + 1)) <= unit {
-            level += 1;
-        }
+        let level = display_mips::view_level(view.document_to_surface, coarse.level)
+            .ok_or(GpuRasterError::InvalidExtent)?;
         if level == coarse.level {
             return Ok(None);
         }

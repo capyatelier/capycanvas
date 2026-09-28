@@ -779,6 +779,7 @@ struct TextureSet {
 
 struct Pipelines {
     dry_material: dry_material::Pipelines,
+    dry_display: dry_material::Pipelines,
     dry_in_place: Option<dry_material::Pipelines>,
     direct: [Deferred<wgpu::RenderPipeline>; DirectPipelineKind::COUNT],
     material: [Deferred<wgpu::RenderPipeline>;
@@ -903,6 +904,7 @@ pub struct WgpuRasterizer {
     ui_preview_pipeline: Option<wgpu::RenderPipeline>,
     display_pipelines: Option<display_mips::Pipelines>,
     live_display: Option<live_display::Cache>,
+    scale_display: Option<scene::scale::Cache>,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
     composite_damage: PixelRect,
@@ -924,6 +926,7 @@ pub struct WgpuRasterizer {
     preview_contact_tiles: Option<std::collections::BTreeSet<[u32; 2]>>,
     preview_layer_id: Option<LayerId>,
     preview_requires_base: bool,
+    preview_level: u32,
     masks: Vec<MaskAsset>,
     texture_sets: Vec<TextureSet>,
     sampler: wgpu::Sampler,
@@ -977,6 +980,8 @@ struct TestHooks {
     /// Recompose every change, as a reference for layers drawn straight into
     /// the display.
     reference: bool,
+    /// Exercise the exact display fallback independently of scale eligibility.
+    exact_display: bool,
     pages_created: std::cell::Cell<u64>,
     reduced_pages: std::cell::Cell<u64>,
     reduced_exactly: std::cell::Cell<u64>,
@@ -1226,6 +1231,7 @@ impl WgpuRasterizer {
             filter_source_epoch: 0,
             display_pipelines: None,
             live_display: None,
+            scale_display: None,
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
             composite_damage: PixelRect::EMPTY,
@@ -1249,6 +1255,7 @@ impl WgpuRasterizer {
             preview_contact_tiles: None,
             preview_layer_id: None,
             preview_requires_base: false,
+            preview_level: 0,
             masks: Vec::with_capacity(8),
             texture_sets: Vec::with_capacity(16),
             sampler,
@@ -1885,6 +1892,7 @@ impl WgpuRasterizer {
             self.composite_view = None;
             self.composite_bind_group = None;
             self.live_display = None;
+            self.scale_display = None;
             self.preview_damage = PixelRect::EMPTY;
             self.preview_contact_tiles = None;
             self.preview_layer_id = None;
@@ -2243,7 +2251,12 @@ impl WgpuRasterizer {
                     page.coordinate = coordinate;
                     page.active_secondary = false;
                 } else {
-                    let page = self.create_page(coordinate, "layer sparse preview page");
+                    let page = LayerPage {
+                        coordinate,
+                        primary: create_page_surface(&self.device, &self.texture_layout, &self.sampler,
+                            [PAGE_SIZE >> self.preview_level; 2], self.device.working_format(), "prediction page"),
+                        secondary: None, active_secondary: false, primary_needs_clear: true,
+                    };
                     self.preview_pages.push(page);
                 }
             }
@@ -2392,7 +2405,7 @@ impl WgpuRasterizer {
         self.metrics.material_pages = material_pages;
         self.metrics.paint_storage_bytes = paint_pages.saturating_mul(page_bytes);
         self.metrics.preview_storage_bytes = preview_pages
-            .saturating_mul(page_bytes)
+            .saturating_mul(page_bytes >> (2 * self.preview_level))
             .saturating_add(preview_coverage_pages.saturating_mul(scalar_bytes * 2))
             .saturating_add(preview_watercolor_wetness_pages.saturating_mul(scalar_bytes * 2));
         self.metrics.destination_storage_bytes =
@@ -2409,6 +2422,7 @@ impl WgpuRasterizer {
         self.metrics.composite_storage_bytes =
             self.composite_texture.as_ref().map_or(0, texture_bytes)
                 + self.live_display.as_ref().map_or(0, live_display::Cache::storage_bytes)
+                + self.scale_display.as_ref().map_or(0, scene::scale::Cache::storage_bytes)
                 + self
                     .layered_display
                     .as_ref()
@@ -3625,7 +3639,26 @@ impl CanvasRenderer for WgpuRasterizer {
             ..packet
         };
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
-        let (resized, display_rebuilt) = self.ensure_document(packet.document_extent, packet.layers)?;
+        let (resized, display_rebuilt) = if let Some(level) = scene::scale::level(self, packet) {
+            let unchanged = self.artwork_frame.as_ref().is_some_and(|frame|
+                frame.same_artwork(packet, requested_view.background_rgba_linear));
+            let resized = self.ensure_document_metadata(packet.document_extent, packet.layers)?;
+            let previous = self.scale_display.take();
+            let (cache, rebuilt) = scene::scale::Cache::select(previous, self, packet, level, unchanged);
+            self.scale_display = Some(cache);
+            // Presentation has exactly one owner. The supported path supersedes
+            // the full composite/pyramid and transform-specific static copies.
+            self.live_display = None;
+            self.composite_texture = None;
+            self.composite_view = None;
+            self.composite_bind_group = None;
+            self.layered_display = None;
+            self.placement_copy = None;
+            (resized, rebuilt)
+        } else {
+            self.scale_display = None;
+            self.ensure_document(packet.document_extent, packet.layers)?
+        };
         let packet = FramePacket { composite_all: packet.composite_all || display_rebuilt, ..packet };
         self.prepare_selection_previews(packet.layers)?;
         let mut batch_tiles = original_batches.iter().map(|batch| {
@@ -3795,6 +3828,14 @@ impl CanvasRenderer for WgpuRasterizer {
                 .all(|batch| {
                     BrushPassPlan::for_device(&batch.style, &self.device).requires_destination()
                 });
+        let preview_level = self.scale_display.as_ref().filter(|_| new_preview_from_persistent
+            && packet.dab_batches.iter().filter(|b| b.kind == DabBatchKind::Preview && b.dab_count != 0)
+                .all(|b| dry_material::display_preview_eligible(&b.style)))
+            .map_or(0, |cache| cache.plan.level.min(preview_block(packet.view.document_to_surface).ilog2()));
+        if self.preview_level != preview_level {
+            self.preview_pages.clear();
+            self.preview_level = preview_level;
+        }
         if new_preview_layer.is_none() {
             // Preview is disposable by contract. Release its high-water pool
             // when the tail commits or is cancelled instead of retaining pages
@@ -5270,12 +5311,14 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             })
         })
     };
-    let material_shader = dry_material::shader(device, false);
-    let dry_material = dry_material::Pipelines::new(device, &layouts, &material_shader, false);
+    let material_shader = dry_material::shader(device, dry_material::Target::Exact);
+    let dry_material = dry_material::Pipelines::new(device, &layouts, &material_shader, dry_material::Target::Exact);
+    let dry_display = dry_material::Pipelines::new(device, &layouts,
+        &dry_material::shader(device, dry_material::Target::Display), dry_material::Target::Display);
     // Native hosts request this feature only after checking Float32 read/write
     // storage support. Each dry invocation owns exactly one destination texel.
     let dry_in_place = device.features().contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
-        .then(|| dry_material::Pipelines::new(device, &layouts, &dry_material::shader(device, true), true));
+        .then(|| dry_material::Pipelines::new(device, &layouts, &dry_material::shader(device, dry_material::Target::InPlace), dry_material::Target::InPlace));
     let stroke_edge_shader = {
         let device = device.clone();
         Deferred::new(move || {
@@ -5626,6 +5669,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     };
     Pipelines {
         dry_material,
+        dry_display,
         dry_in_place,
         direct,
         material,

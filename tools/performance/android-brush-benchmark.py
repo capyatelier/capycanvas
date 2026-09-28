@@ -36,6 +36,12 @@ def main():
     p.add_argument("--paint-load", type=float, help="Bristle paint supply, 0 to 1; omit for the preset default")
     p.add_argument("--speed", type=float, default=1)
     p.add_argument("--prediction", choices=["true", "false"], default="true")
+    p.add_argument("--horizon", type=int, default=16, help="Engine prediction lookahead in ms")
+    p.add_argument("--radius-x", type=float, default=520, help="Ellipse radius in surface pixels")
+    p.add_argument("--radius-y", type=float, default=299, help="Ellipse radius in surface pixels")
+    p.add_argument("--photo", default="/data/local/tmp/capy-brush-photo.jpg")
+    p.add_argument("--zoom", type=float, help="Absolute view scale; default fits the canvas")
+    p.add_argument("--photo-layers", type=int, default=1, help="Photo layer count, with translucent duplicates")
     tracing = p.add_mutually_exclusive_group()
     tracing.add_argument("--trace", action="store_true", help="Full CPU/GPU phase attribution")
     tracing.add_argument("--presentation-trace", action="store_true",
@@ -66,11 +72,15 @@ def main():
         cmd = adb + ["shell", "am", "instrument", "-w", "-r", "-e", "brushBenchmark", "true"]
         for key, value in dict(label=label, preset=preset, brushSize=args.size,
                                durationMs=args.duration, repeats=args.repeats, mode=args.mode,
-                               speed=args.speed, prediction=args.prediction,
+                               speed=args.speed, prediction=args.prediction, horizon=args.horizon,
+                               radiusX=args.radius_x, radiusY=args.radius_y, photo=args.photo,
+                               photoLayers=args.photo_layers,
                                waitForTrace="true").items():
             cmd += ["-e", key, str(value)]
         if args.paint_load is not None:
             cmd += ["-e", "paintLoad", str(args.paint_load)]
+        if args.zoom is not None:
+            cmd += ["-e", "zoom", str(args.zoom)]
         cmd += [f"{args.package}/art.capycanvas.BrushBenchmarkInstrumentation"]
         trace = None
         profile = None
@@ -131,7 +141,8 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
                 profile_log.close()
                 run("pull", "/data/local/tmp/capy-brush.perf.data", str(args.output / f"{label}.perf.data"))
         log = (args.output / f"{label}-instrumentation.txt").read_text()
-        if f"BRUSH_COMPLETE {label}" not in log or process.returncode != 0:
+        complete = "PINCH_COMPLETE" if args.mode == "pinch" else "BRUSH_COMPLETE"
+        if f"{complete} {label}" not in log or process.returncode != 0:
             # A native crash may leave no screenshot or completed stroke report.
             # Preserve its evidence and continue the remaining preset matrix.
             for suffix in ["-info.json"] + [suffix for i in range(args.repeats)
@@ -144,12 +155,15 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
                 run("shell", f"dumpsys activity exit-info {args.package}; dumpsys thermalservice", stdout=out)
             (args.output / f"{label}-failed.json").write_text(json.dumps({
                 "label": label, "preset": preset, "returncode": process.returncode,
-                "reason": "Runner did not report BRUSH_COMPLETE; inspect instrumentation and crash logs"}, indent=2))
+                "reason": f"Runner did not report {complete}; inspect instrumentation and crash logs"}, indent=2))
             print(f"FAILED {label}; crash evidence retained", flush=True)
             failures.append(label)
             continue
         # Pull reports individually; prior benchmark outputs remain on-device.
-        for suffix in ["-info.json", ".png"] + (["-detail.png"] if args.mode == "visual" else []) + [f"-{i}.json" for i in range(args.repeats)]:
+        suffixes = (["-info.json", "-before.png", "-after.png", "-measurements.json", "-complete.json"]
+                    if args.mode == "pinch" else ["-info.json", ".png"]
+                    + (["-detail.png"] if args.mode == "visual" else []) + [f"-{i}.json" for i in range(args.repeats)])
+        for suffix in suffixes:
             run("pull", f"{remote}/{label}{suffix}", str(args.output / f"{label}{suffix}"), stdout=subprocess.DEVNULL)
         info_path = args.output / f"{label}-info.json"
         info = json.loads(info_path.read_text())
@@ -157,6 +171,9 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
         info_path.write_text(json.dumps(info, indent=2))
         with (args.output / f"{label}-environment-after.txt").open("w") as out:
             run("shell", "cat /proc/meminfo; dumpsys thermalservice; dumpsys battery", stdout=out)
+        if args.mode == "pinch":
+            print(f"DONE {label} navigation measurements retained", flush=True)
+            continue
         summary = []
         for i in range(args.repeats):
             report = json.loads((args.output / f"{label}-{i}.json").read_text())

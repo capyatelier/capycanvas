@@ -6,6 +6,7 @@ use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
 
 fn bounded_renderer(color: DocumentColor) -> Result<WgpuRasterizer, GpuRasterError> {
     let mut r = WgpuRasterizer::new_native_headless(color)?;
+    r.test.exact_display = true;
     r.set_complete_display_allowance(0);
     Ok(r)
 }
@@ -119,6 +120,7 @@ fn display_batches_preserve_direct_and_fallback_submission_bounds() {
             let tiles = columns * rows;
             let doc = layer_core::Document::new("paper batches", columns * PAGE_SIZE, rows * PAGE_SIZE);
             let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+            r.test.exact_display = true;
             r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
             r.set_complete_display_allowance(if complete { u64::MAX } else { 0 });
             // Constant paper can write directly on every device, including

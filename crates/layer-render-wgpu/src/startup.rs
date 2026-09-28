@@ -120,6 +120,9 @@ impl Requirements {
             let kernels = r.pipelines.dry_material.for_style(style);
             self.compute.push(kernels[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
             if preview { self.compute.push(kernels[plan.material as usize * 2].clone()); }
+            if preview && dry_material::display_preview_eligible(style) {
+                self.compute.push(r.pipelines.dry_display.for_style(style)[plan.material as usize * 2].clone());
+            }
             if let Some(in_place) = &r.pipelines.dry_in_place {
                 self.compute.push(in_place.for_style(style)[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
             }
@@ -296,6 +299,10 @@ impl WgpuRasterizer {
                 .extend(self.scene_pipelines.pipeline.iter().cloned());
             if self.device.portable_blend() { required.compute.extend(self.portable_blend.pipelines.iter().cloned()); }
             required.compute.push(self.scene_pipelines.constant.2.clone());
+            if self.native_edit.is_some() {
+                required.compute.push(self.scene_pipelines.scale.reduce.clone());
+                required.compute.push(self.scene_pipelines.scale.compose.clone());
+            }
             if self.native_edit.as_ref().is_some_and(|native| {
                 u64::from(document.width) * u64::from(document.height) * 16 > native.display_dense_bytes
             }) {

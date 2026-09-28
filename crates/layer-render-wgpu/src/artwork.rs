@@ -11,6 +11,7 @@ pub(super) struct Frame {
     pub background: [f32; 4],
     pub time: f32,
     pub previews: Vec<DabBatch>,
+    preview_dabs: Vec<Dab>,
 }
 impl Frame {
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
@@ -68,6 +69,14 @@ impl Frame {
         same.then_some(moved)
     }
     pub fn new(packet: FramePacket<'_>, background: [f32; 4]) -> Self {
+        let mut preview_dabs = Vec::new();
+        let previews = packet.dab_batches.iter().filter(|b| b.kind == DabBatchKind::Preview)
+            .map(|batch| {
+                let mut retained = batch.clone();
+                retained.first_dab = preview_dabs.len() as u32;
+                preview_dabs.extend_from_slice(&packet.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize]);
+                retained
+            }).collect();
         Self {
             layers: packet
                 .layers
@@ -77,12 +86,8 @@ impl Frame {
             view: packet.view,
             background,
             time: packet.time_seconds,
-            previews: packet
-                .dab_batches
-                .iter()
-                .filter(|b| b.kind == DabBatchKind::Preview)
-                .cloned()
-                .collect(),
+            previews,
+            preview_dabs,
         }
     }
     pub fn packet(&self, extent: [u32; 2]) -> FramePacket<'_> {
@@ -91,7 +96,7 @@ impl Frame {
             view: self.view,
             document_extent: extent,
             time_seconds: self.time,
-            dabs: &[],
+            dabs: &self.preview_dabs,
             dab_batches: &self.previews,
             restore_rasters: &[],
             reset_layers: false,
@@ -134,6 +139,7 @@ impl Capture {
         size: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<source_access::RawTile, GpuRasterError> {
+        r.ensure_exact_preview(encoder)?;
         if size.contains(&0)
             || size[0] > PAGE_SIZE
             || size[1] > PAGE_SIZE
@@ -178,6 +184,35 @@ impl Capture {
             texture: texture.clone(),
             view: view.clone(),
         })
+    }
+}
+
+impl WgpuRasterizer {
+    /// A display prediction owns only coarse pages. Explicit artwork queries
+    /// replay its retained contacts through the same exact tile executor, once
+    /// per tail. This work is absent from painting/presentation and introduces
+    /// no background settling backlog or duplicate permanent preview cache.
+    fn ensure_exact_preview(&mut self, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        if self.preview_level == 0 { return Ok(()); }
+        let frame = self.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
+        let packet = frame.packet(self.document_extent);
+        let mut tiles = packet.dab_batches.iter().map(|batch| {
+            let dabs = &packet.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize];
+            brush_tiles::plan(batch, dabs, self.target_extent(batch.layer_id))
+        }).collect::<Vec<_>>();
+        self.preview_level = 0;
+        self.preview_pages.clear();
+        self.ensure_preview_pages(self.preview_damage, self.preview_contact_tiles.clone().as_ref());
+        self.prepare_uploads(packet, &mut tiles, encoder)?;
+        for (index, batch) in packet.dab_batches.iter().enumerate() {
+            self.encode_brush_batch(encoder, index, batch, BrushEncodingContext {
+                batches: packet.dab_batches, dabs: packet.dabs, tiles: &tiles[index],
+                document_extent: self.target_extent(batch.layer_id),
+                target: BrushEncodingTarget::Preview { from_persistent: true },
+            })?;
+        }
+        self.refresh_storage_metrics();
+        Ok(())
     }
 }
 

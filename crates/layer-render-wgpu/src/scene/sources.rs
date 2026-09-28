@@ -147,6 +147,12 @@ pub(super) struct DecodedTiles {
     pub misses: u64,
 }
 impl DecodedTiles {
+    /// Release derived pixels when a presentation owner no longer reads them.
+    /// Keep admission and cumulative counters for subsequent exact fallback.
+    pub(super) fn release_pixels(&mut self) {
+        self.slots.clear();
+        self.inputs = Default::default();
+    }
     pub fn new(destination: RgbSpace) -> Self {
         Self {
             destination,

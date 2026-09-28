@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Instrumentation
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -57,12 +58,16 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             RecoveryController.directoryForTest = File(root, "recovery")
             ColorPreferencesStore.directoryForTest = File(root, "color")
             DocumentController.nativeFileJobsForTest = true
+            val source = arguments.getString("photo", "/data/local/tmp/capy-brush-photo.jpg")!!
+            check(source.matches(Regex("/data/local/tmp/[a-zA-Z0-9_.-]+\\.jpg")))
             val photo = (if (mode == "pinch") File(targetContext.getExternalFilesDir(null), "photo.capy").takeIf { it.isFile } else null)
-                ?: File(targetContext.filesDir, "brush-benchmark.jpg")
+                ?: File(targetContext.filesDir, "brush-benchmark-${File(source).name}")
             if (!photo.isFile) ParcelFileDescriptor.AutoCloseInputStream(
-                uiAutomation.executeShellCommand("cat /data/local/tmp/capy-brush-photo.jpg")
+                uiAutomation.executeShellCommand("cat $source")
             ).use { input -> photo.outputStream().use { input.copyTo(it) } }
             check(photo.length() > 1_000_000)
+            val photoWidth = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                .also { BitmapFactory.decodeFile(photo.path, it) }.outWidth.takeIf { it > 0 } ?: 9504
             stage("photo-staged")
             activity = startActivitySync(Intent(targetContext, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)) as MainActivity
@@ -128,7 +133,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             stage("photo-adopted")
             runOnMainSync { host.documentChanged() }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true &&
-                host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any { it.optInt("width") == 9504 } == true }
+                host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any { it.optInt("width") == photoWidth } == true }
             stage("photo-ready")
             action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
             val group = snapshot().getJSONObject("layout")
@@ -139,8 +144,29 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 action(obj("type" to "set_layer_visibility", "id" to layer.getLong("id"), "visible" to (mode == "visual")))
             if (mode == "visual") for (layer in state().array("layers").objects().filter { it.optString("label") == "Photo" })
                 action(obj("type" to "set_layer_visibility", "id" to layer.getLong("id"), "visible" to false))
+            val photoLayers = arguments.getString("photoLayers", "1")!!.toInt()
+            check(photoLayers in 1..8)
+            if (photoLayers > 1) {
+                val id = state().array("layers").objects().first { it.optString("label") == "Photo" }.getLong("id")
+                action(obj("type" to "select_layer", "id" to id))
+                repeat(photoLayers - 1) {
+                    action(obj("type" to "layer", "action" to obj("op" to "duplicate_selected")))
+                    action(obj("type" to "set_layer_opacity", "opacity" to .35))
+                }
+            }
             invoke("add_layer")
             invoke("fit_canvas")
+            arguments.getString("zoom")?.toDouble()?.let { requested ->
+                check(requested in .01..8.0)
+                val camera = state().getJSONObject("camera")
+                val area = camera.getJSONArray("work_area")
+                val cx = area.getDouble(0) + area.getDouble(2) / 2
+                val cy = area.getDouble(1) + area.getDouble(3) / 2
+                runOnMainSync { host.scroll(cx.toFloat(), cy.toFloat(), 0f,
+                    (ln(camera.getDouble("zoom") / requested) / .0015 / 40).toFloat(), true, false) }
+                native { Unit }
+                waitFor { abs(state().getJSONObject("camera").getDouble("zoom") - requested) < .001 }
+            }
             action(obj("type" to "select_brush", "id" to preset))
             action(obj("type" to "set_brush_size", "value" to size))
             arguments.getString("paintLoad")?.let {
@@ -148,7 +174,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 check(load in 0.0..1.0)
                 action(obj("type" to "set_tool_setting", "id" to "bristle_load", "value" to load))
             }
-            for ((id, value) in listOf("feedback" to prediction, "platform_prediction" to false, "prediction_horizon" to 16))
+            for ((id, value) in listOf("feedback" to prediction, "platform_prediction" to false, "prediction_horizon" to (arguments.getString("horizon")?.toInt() ?: 16)))
                 action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
             SystemClock.sleep(1500)
             waitFor { host.snapshot?.optBoolean("brush_ready") == true }
@@ -162,8 +188,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val area = camera.getJSONArray("work_area")
             val cx = area.getDouble(0) + area.getDouble(2) / 2
             val cy = area.getDouble(1) + area.getDouble(3) / 2
-            val rx = 520.0
-            val ry = 299.0
+            val rx = min(arguments.getString("radiusX", "520")!!.toDouble(), area.getDouble(2) * .45)
+            val ry = min(arguments.getString("radiusY", "299")!!.toDouble(), area.getDouble(3) * .45)
             val sampleInterval = 5_000_000L
             if (mode == "pinch") {
                 runPinchBenchmark(this, arguments, host, output, label, cx, cy)

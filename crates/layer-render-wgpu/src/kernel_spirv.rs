@@ -9,7 +9,7 @@ fn dry_material_kernel_spirv() {
     let brush = layer_core::default_brush(preset);
     let uniform = brush.rendering.accumulation == BrushAccumulation::Uniform;
     let r = WgpuRasterizer::new_native_headless(layer_core::color::DocumentColor::default()).unwrap();
-    let source = dry_material::shader_source(&r.device, false, include_str!("material_brush.wgsl"))
+    let source = dry_material::shader_source(&r.device, dry_material::Target::Exact, include_str!("material_brush.wgsl"))
         .replace("override CONTACT_FLAGS: u32 = 4294967295u;",
             &format!("const CONTACT_FLAGS: u32 = {}u;", dry_material::contact_flags(brush.contact)))
         .replace("override MATERIAL_OPERATION: u32;", &format!("const MATERIAL_OPERATION: u32 = {}u;", u32::from(uniform)))
