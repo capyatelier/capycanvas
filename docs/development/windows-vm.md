@@ -50,7 +50,9 @@ and untracked files, to `C:\capycanvas`, and runs
 [`test-without-gpu.ps1`](../../apps/layer-windows/scripts/test-without-gpu.ps1):
 the Debug build (`--release` for Release), the native input tests, and the
 shared and Windows Rust unit tests, with the `layer-host` GPU tests and the
-ignored `d3d12_` document tests on WARP. Build outputs persist between syncs;
+ignored `d3d12_` document tests on WARP. Each check uses a fresh document-test
+profile under `artifacts/windows/test-settings`; keep it isolated across runs.
+Build outputs persist between syncs;
 each sync sends only files that changed since that VM's last sync, stamped with
 the current time, so incremental builds stay correct when a VM switches trees.
 `sync`, `check` and `fixtures` lock their VM, so run parallel work on separate
@@ -95,9 +97,10 @@ sets `CAPY_WAIT_SCALE=3`, which lengthens every `CapyUia.ps1` wait for the slowe
 adapter. Name fixtures
 (`layers`) or single variants (`header:pen`); with no names it runs `shortcuts`
 and every fixture that launches its own app, once with its defaults and once for
-each switch and each other `ValidateSet` choice. It skips `documents -RecoverGpu`
-and `-FailGpu` unless they are named: after their simulated device removal, WARP
-itself crashes in `d3d10warp.dll`. `--no-build` verifies the synced build inputs
+each switch and each other `ValidateSet` choice, including document GPU recovery
+and exhausted recovery. The isolated removal hook drains rendering and
+presentation before removing the real device; raw in-flight GPU loss remains
+a hardware check. `--no-build` verifies the synced build inputs
 and executable/DLL hashes before reusing a build. Fixture-only changes can reuse it; changes to Rust, native code
 or build scripts require rebuilding.
 

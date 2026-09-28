@@ -142,7 +142,7 @@ try{
     # the opaque Tool Set body; the wide preset leaves empty canvas below it.
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1100 -Height 1000
     Start-Sleep -Milliseconds 400
-    Capture 'navigator-before'
+    Capture 'navigator-before' -Composed
     $configuration=Configure 'navigator'
     $null=Control 'navigator-overview' -Within $configuration
     Invoke 'Test stroke' -Name
@@ -151,11 +151,11 @@ try{
     Invoke 'navigator-zoom_in' -Within $configuration
     Wait-Until {(Control 'canvas-camera').Current.Name -ne $zoom} 'Configuration Navigator did not update the shared camera'
     Start-Sleep -Milliseconds 250
-    Capture 'navigator'
+    Capture 'navigator' -Composed
     $occlusion=Check-OverviewOverlap $configuration
     Dismiss 'navigator'
     Start-Sleep -Milliseconds 250
-    Capture 'navigator-after'
+    Capture 'navigator-after' -Composed
     $restored=[Drawing.Bitmap]::new((Join-Path $run 'navigator-after.png'))
     try{$pixel=$restored.GetPixel($occlusion.x,$occlusion.y);if($pixel.R -gt 245 -and $pixel.G -gt 245 -and $pixel.B -gt 245){throw 'Closing configuration did not restore the lower native panel'}}
     finally{$restored.Dispose()}

@@ -32,6 +32,10 @@ function Hover-Until($at,[scriptblock]$Condition,[string]$Message,[switch]$Mouse
     throw $Message
 }
 function Tap($at,[string]$Device='mouse'){[CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 30;[CapyRowPointer]::Up()}
+function Double-Press($At){
+    $elapsed=[CapyRowPointer]::DoubleClick($At.x,$At.y)
+    Write-Output "Double press batch submitted in $elapsed ms"
+}
 function Key([uint16]$Code){(Control 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::KeyAt($Code,$paper.x,$paper.y)}
 function Escape-Picker{
     for($i=0;$i -lt 3 -and ((Picking) -or (Model).state.customization.drawer);$i++){Key 0x1B;Start-Sleep -Milliseconds 200}
@@ -98,7 +102,7 @@ try {
 
     $tile=Tile 'color_picker';$at=Center $tile
     $tooltip=(Control $tile).Current.HelpText
-    Tap $at;Start-Sleep -Milliseconds 90;Tap $at
+    Double-Press $at
     Wait-Until {$d=(Model).state.customization.drawer;$d -and $d.compact} 'Double press did not open the compact picker drawer'
     if(!(Picking)){throw 'The first press did not start picking'}
     $drawer=(Model).state.customization.drawer
@@ -176,7 +180,7 @@ try {
     Switch-Workspace 'Paint' 'builtin:workspace:illustrator'
     if(Find 'canvas-fit'){Invoke 'canvas-fit'};Start-Sleep -Milliseconds 300;Canvas-Points
     $category=Tile 'command' 'eyedropper';$at=Center $category
-    Tap $at;Start-Sleep -Milliseconds 90;Tap $at
+    Double-Press $at
     Wait-Until {$d=(Model).state.customization.drawer;$d -and $d.compact} 'Double press did not open the Eyedropper drawer'
     $drawer=(Model).state.customization.drawer
     if((ConvertTo-Json -InputObject $drawer.columns -Compress) -ne '[["brushes"],["tool_settings"]]'){throw "Unexpected Eyedropper drawer: $(ConvertTo-Json -InputObject $drawer.columns -Compress)"}

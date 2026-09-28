@@ -18,7 +18,7 @@ function Point($Element) {
 function Transform-Enabled { @((Model).state.commands|Where-Object id -eq 'scale_rotate')[0].enabled }
 function Camera { $camera=(Model).state.camera;"$($camera.zoom) $($camera.translation -join ' ')" }
 function Inked([string]$Name,[int]$Left,[int]$Right,[int]$Y) {
- & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
+ & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed *> (Join-Path $run ($Name+'.json'))
  $origin=[int[]]@(0,0);$null=[Capy.PenButtonsWindow]::ClientToScreen($review.MainWindowHandle,$origin)
  $image=[System.Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')))
  try {
@@ -121,7 +121,7 @@ try {
 } catch {
  $failure=$_
  if($review -and !$review.HasExited){
-  try { & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-window.json') } catch { Write-Warning $_ }
+  try { & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly -Composed *> (Join-Path $run 'failure-window.json') } catch { Write-Warning $_ }
  }
  throw $failure
 } finally {

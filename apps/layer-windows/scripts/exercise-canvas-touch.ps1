@@ -94,8 +94,10 @@ try{
  [CapyCanvasTouch]::Move(3,($ax+135),($ay+35));Check 'remaining two fingers resume navigation' {!(Same-Camera (Camera) $turned)}
  [CapyCanvasTouch]::Up(3);$one=Camera;[CapyCanvasTouch]::Move(1,($ax+20),($ay-140));Stable 'remaining single finger does not pan with Pen' $one
  [CapyCanvasTouch]::Up(1);Stable 'all contacts released without a jump' $one
- [CapyCanvasTouch]::Down(1,($cx-100),$cy);[CapyCanvasTouch]::Down(2,($cx+100),$cy);$cancelled=Camera
- [CapyCanvasTouch]::CancelAll();Stable 'cancelled touch contacts preserve the camera' $cancelled
+ foreach($attempt in 1..3){
+  [CapyCanvasTouch]::Down(1,($cx-100),$cy);[CapyCanvasTouch]::Down(2,($cx+100),$cy);$cancelled=Camera
+  [CapyCanvasTouch]::CancelAll();Stable "cancelled touch pair $attempt preserves the drawing and camera" $cancelled
+ }
  [CapyCanvasTouch]::Down(1,($cx-100),$cy);[CapyCanvasTouch]::Down(2,($cx+100),$cy)
  Stable 'fresh contact pair after cancellation does not jump' $cancelled
  [CapyCanvasTouch]::Pair(($cx-70),($cy+20),($cx+130),($cy+20))

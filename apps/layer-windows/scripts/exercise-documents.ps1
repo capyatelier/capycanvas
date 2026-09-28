@@ -11,7 +11,8 @@ public static class CapyDocumentControls {
     [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
     [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h,out Rect rect);
-    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
+    [StructLayout(LayoutKind.Sequential)] public struct Point {public int x,y;}
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h,ref Point point);
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr h,uint message,UIntPtr w,IntPtr l,uint flags,uint timeout,out UIntPtr result);
     [DllImport("user32.dll",SetLastError=true)] public static extern bool PostMessage(IntPtr h,uint message,UIntPtr w,IntPtr l);
@@ -178,9 +179,12 @@ function Stroke-InkPixels {
         if(![CapyDocumentControls]::GetClientRect($review.MainWindowHandle,[ref]$rect)){throw 'No canvas bounds'}
         $bitmap=[Drawing.Bitmap]::new($rect.right,$rect.bottom)
         try {
-            $graphics=[Drawing.Graphics]::FromImage($bitmap);$dc=$graphics.GetHdc()
-            try{if(![CapyDocumentControls]::PrintWindow($review.MainWindowHandle,$dc,3)){throw 'No canvas capture'}}
-            finally{$graphics.ReleaseHdc($dc);$graphics.Dispose()}
+            $graphics=[Drawing.Graphics]::FromImage($bitmap)
+            try{
+                $origin=[CapyDocumentControls+Point]::new()
+                if(![CapyDocumentControls]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'No canvas origin'}
+                $graphics.CopyFromScreen($origin.x,$origin.y,0,0,$bitmap.Size)
+            }finally{$graphics.Dispose()}
             # Early pen segment, away from its current cursor and chrome.
             $left=[int][Math]::Floor($rect.right*0.4)+20;$top=[int][Math]::Floor($rect.bottom/2)+10
             $ink=0

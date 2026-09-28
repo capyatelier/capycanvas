@@ -108,11 +108,19 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
             [weak=get_weak()]{if(auto self=weak.get())self->AddWindow();},
             [weak=get_weak()](uint64_t id){if(auto self=weak.get()){self->windows.erase(id);self->TraceWindows();}},
             [weak=get_weak()](uint64_t source){if(auto self=weak.get())for(auto const& [id,window]:self->windows)
-                if(id!=source)window->RefreshWorkspaceSwitcher();});
+                if(id!=source)window->RefreshWorkspaceSwitcher();},
+            [weak=get_weak()]{if(auto self=weak.get())self->TestDeviceLoss();});
         windows.emplace(next->Id(),next);
         TraceWindows();
         if(!files.empty())next->OpenFiles(std::move(files));
         next->Open();
+    }
+    void TestDeviceLoss() {
+        static uint64_t token=0;
+        std::vector<std::shared_ptr<CanvasWindow>> participants;
+        for(auto const& [id,window]:windows)if(!window->Closing())participants.push_back(window);
+        auto group="["+std::to_string(++token)+","+std::to_string(participants.size())+"]";
+        for(auto const& window:participants)window->TestDeviceLoss(group);
     }
     App() {
         metadata=Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider();

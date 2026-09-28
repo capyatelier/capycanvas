@@ -1187,15 +1187,15 @@ pub unsafe extern "C" fn capy_reset_surface(host: *mut CapyHost, panel: *mut c_v
         host.surface = surface;
         host.config = None;
         host.blank_presented = false;
-        host.cancel_contacts()?;
         Ok(0)
     })
 }
 
 /// # Safety
 /// Exclusive render-owner access. Available only in an isolated smoke-test host.
+/// `json` is a readable NUL-terminated pair of group token and window count.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_test_device_loss(host: *mut CapyHost) -> i32 {
+pub unsafe extern "C" fn capy_test_device_loss(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
         if std::env::var_os("CAPY_SMOKE_TEST").is_none()
             || !std::env::var_os("CAPY_SETTINGS_DIRECTORY")
@@ -1204,6 +1204,7 @@ pub unsafe extern "C" fn capy_test_device_loss(host: *mut CapyHost) -> i32 {
         {
             return Err("Device-loss injection requires an isolated smoke test".into());
         }
+        let (token, participants) = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
         host.target = None;
         let gpu = host
             .native
@@ -1213,15 +1214,31 @@ pub unsafe extern "C" fn capy_test_device_loss(host: *mut CapyHost) -> i32 {
             .0
             .as_ref()
             .ok_or("GPU is not ready")?;
+        gpu.device().poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(10)),
+        }).map_err(err)?;
         // Remove the D3D12 device shared by this process's windows on the adapter.
         // The COM object remains owned by wgpu. Ordinary loss detection must
         // observe removal; this hook never sets the flag or resets the adapter.
         {
-            use windows::{Win32::Graphics::Direct3D12::ID3D12Device5, core::Interface};
+            use windows::{Win32::Graphics::Direct3D12::{ID3D12Device5, ID3D12Fence, D3D12_FENCE_FLAG_NONE}, core::Interface};
             let native = unsafe { gpu.device().as_hal::<wgpu::hal::api::Dx12>() }
                 .ok_or("Device removal requires D3D12")?;
             let device: ID3D12Device5 = native.raw_device().cast().map_err(err)?;
-            unsafe { device.RemoveDevice() };
+            let presented: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.map_err(err)?;
+            unsafe { native.raw_queue().Signal(&presented, 1) }.map_err(err)?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while unsafe { presented.GetCompletedValue() } < 1 {
+                if std::time::Instant::now() >= deadline {
+                    return Err("Device-loss injection timed out waiting for presentation".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            crate::device_loss_test::together(token, participants, || {
+                unsafe { device.RemoveDevice() };
+                Ok(())
+            })?;
         }
         // Drop the HAL guard before polling wgpu's device-loss notification.
         let _ = gpu.device().poll(wgpu::PollType::Poll);

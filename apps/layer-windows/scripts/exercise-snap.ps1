@@ -17,7 +17,6 @@ public static class CapySnapWindow {
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h,int x,int y,int w,int height,bool repaint);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h,uint flags);
     [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr h,ref Monitor info);
-    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h,int attribute,out Rect rect,int size);
     public static Rect Frame(IntPtr h) {
         Rect rect;Marshal.ThrowExceptionForHR(DwmGetWindowAttribute(h,9,out rect,16));return rect;
@@ -67,7 +66,11 @@ function Patch-Hash {
     $bitmap=[Drawing.Bitmap]::new($client.right,$client.bottom)
     try{
         $graphics=[Drawing.Graphics]::FromImage($bitmap)
-        try{$dc=$graphics.GetHdc();try{if(![CapySnapWindow]::PrintWindow($handle,$dc,3)){throw 'Cannot capture canvas'}}finally{$graphics.ReleaseHdc($dc)}}finally{$graphics.Dispose()}
+        try{
+            $origin=[CapyRowPointer+Point]::new()
+            if(![CapyRowPointer]::ClientToScreen($handle,[ref]$origin)){throw 'Cannot locate client'}
+            $graphics.CopyFromScreen($origin.x,$origin.y,0,0,$bitmap.Size)
+        }finally{$graphics.Dispose()}
         $patch=$bitmap.Clone($sample,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
         try{
             $stream=[IO.MemoryStream]::new();$hash=[Security.Cryptography.SHA256]::Create()

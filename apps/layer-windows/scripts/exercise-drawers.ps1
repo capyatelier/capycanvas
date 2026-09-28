@@ -64,8 +64,10 @@ try{
     $grip=Control "drawer-grip-$($right.anchor.group)"
     if($grip.Current.HelpText -notmatch 'every panel'){throw 'Drawer is missing its whole-group drag handle'}
     Wait-Until {try{($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -eq 320}catch{$false}} 'Properties drawer did not reach shared width'
-    Invoke 'drawer-tab-adjustments';Invoke 'drawer-tab-adjustments'
-    Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'adjustments'}).Count -eq 1} 'Drawer tabs did not follow shared selection'
+    foreach($press in 1..2){
+        (Control 'drawer-tab-adjustments' -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'adjustments'}).Count -eq 1} 'Drawer tabs did not follow shared selection'
+    }
     if($null -ne (Model).state.customization.expanded){throw 'Repeating a drawer tab opened configuration'}
     if(($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -ne 320){throw 'Drawer tab switch changed the shared column width'}
     Capture 'filters-column'

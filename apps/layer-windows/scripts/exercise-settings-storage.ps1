@@ -129,6 +129,7 @@ try {
 
     Start-App
     if(Test-Path -LiteralPath $settingsFile){throw 'Missing settings must not cause an initial write'}
+    $defaults=(Model).state.settings
     Open-Preferences
     Edit 'Dark theme base color' '#203040'
     if((Model).state.settings.dark_base -eq '#203040'){throw 'Text draft was already committed; close-time commit was not exercised'}
@@ -208,11 +209,13 @@ try {
     Check-Exit
     $locked.Dispose();$locked=$null
     if((Get-FileHash -LiteralPath $settingsFile).Hash -ne $savedHash){throw 'Explicit discard changed the last saved preferences'}
-    $invalid='{"version":999,"retain":"isolated recovery fixture"}'
-    [IO.File]::WriteAllText($settingsFile,$invalid)
+    $stale='{"version":999,"dark_base":"#607080","pressure_gamma":"invalid","retain":"isolated recovery fixture"}'
+    [IO.File]::WriteAllText($settingsFile,$stale)
     Start-App
-    if(!(Model).error){throw 'Unreadable settings were not reported'}
-    if([IO.File]::ReadAllText($settingsFile) -ne $invalid){throw 'Loading changed the unreadable file'}
+    $restored=Model
+    if($restored.error -or $restored.state.host_error){throw 'Stale preferences blocked startup'}
+    if($restored.state.settings.dark_base -ne '#607080' -or $restored.state.settings.pressure_gamma -ne $defaults.pressure_gamma){throw 'Restore did not retain valid preferences and default invalid ones'}
+    if([IO.File]::ReadAllText($settingsFile) -ne $stale){throw 'Loading rewrote the stored preferences'}
     Open-Preferences
     Edit 'Dark theme base color' '#506070'
     Commit-Color
@@ -237,7 +240,7 @@ try {
         failed_close_keeps_preferences_and_workspace='passed'
         repeated_close_retry_and_restart='passed'
         explicit_discard_preserves_saved_file='passed'
-        unreadable_file_recovery='passed'
+        stale_preferences_preserve_valid_fields_and_default_invalid_fields='passed'
         scope='isolated native UI Automation; not OS pen delivery or a performance benchmark'
     } | ConvertTo-Json
 } catch {

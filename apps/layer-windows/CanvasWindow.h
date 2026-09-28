@@ -33,7 +33,8 @@ void CapyLifecycle(char const* event);
 class CanvasWindow : public std::enable_shared_from_this<CanvasWindow> {
 public:
     CanvasWindow(std::function<void()> createWindow,std::function<void(uint64_t)> onClosed,
-        std::function<void(uint64_t)> preferencesChanged);
+        std::function<void(uint64_t)> preferencesChanged,std::function<void()> testDeviceLoss);
+    void TestDeviceLoss(std::string group){Send(std::move(group),CanvasCommandKind::DeviceLoss);}
     void RefreshWorkspaceSwitcher();
     uint64_t Id()const{return windowId;}
     HWND Handle()const;
@@ -49,7 +50,7 @@ private:
     struct Size { uint32_t width=1, height=1; float scale=1; };
     winrt::Microsoft::UI::Xaml::Window window;
     uint64_t const windowId;
-    std::function<void()> createWindow;
+    std::function<void()> createWindow,testDeviceLoss;
     std::function<void(uint64_t)> onClosed,workspacePreferencesChanged;
     std::optional<uint64_t> workspacePreferencesRevision;
     void TraceState(char const* kind,std::string const& value)const;

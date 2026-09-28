@@ -178,6 +178,11 @@ function Held-Blur([string]$Id) {
     }
     Intact $before
 }
+function Collapse-Column {
+    $menu=@{collapse=$null;expand=$null}
+    Wait-Until {$menu.collapse=Find 'Collapse column' -Name;$menu.expand=Find 'Expand column' -Name;$menu.collapse -or $menu.expand} 'Column menu did not expose its collapse state'
+    if($menu.collapse){Invoke 'Collapse column' -Name}else{Dismiss}
+}
 function Held-Drag([string]$Id,$To,[switch]$Cancel) {
     $before=Settled-Layout
     Hold $Id
@@ -315,9 +320,7 @@ try {
     $script:case='collapsed-column'
     $at=Point 'panel-tab-sizes'
     [CapyRowPointer]::RightClick($at.x,$at.y)
-    if(Find 'Collapse column' -Name){Invoke 'Collapse column' -Name}
-    elseif(Find 'Expand column' -Name){Dismiss}
-    else{throw 'Column menu did not expose its collapse state'}
+    Collapse-Column
     Wait-Until {$null -ne (Find 'column-icon-sizes')} 'Panel context did not collapse its column'
     Use-Drawers 'column-icon-sizes'
     Tap 'column-icon-sizes'
@@ -331,7 +334,14 @@ try {
     $script:case='column-drag';Held-Drag 'column-icon-sizes' $destination
     $script:case='column-cancel';Held-Drag 'column-icon-sizes' $destination -Cancel
     $script:case='toolbar-drawer'
-    $group=@((Model).layout.groups|Where-Object {$_.panels -contains 'properties'})[0]
+    if(Find 'column-icon-properties'){
+        $at=Point 'column-icon-properties'
+        [CapyRowPointer]::RightClick($at.x,$at.y)
+        Invoke 'Expand column' -Name
+    }
+    $target=@{group=$null}
+    Wait-Until {$target.group=@((Model).layout.groups|Where-Object {$_.panels -contains 'properties'})[0];$null -ne $target.group} 'Properties column did not expand for toolbar placement'
+    $group=$target.group
     $at=Point ("group-grip-"+$group.id)
     [CapyRowPointer]::RightClick($at.x,$at.y)
     (Control 'Add Toolbar' -Name).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
@@ -339,9 +349,7 @@ try {
     Wait-Until {@((Model).layout.groups|Where-Object {$_.id -eq $group.id -and $_.panels -contains 'toolbar'}).Count -eq 1} 'Group menu did not place Tools in the column'
     $at=Point 'panel-tab-toolbar'
     [CapyRowPointer]::RightClick($at.x,$at.y)
-    if(Find 'Collapse column' -Name){Invoke 'Collapse column' -Name}
-    elseif(Find 'Expand column' -Name){Dismiss}
-    else{throw 'Column menu did not expose its collapse state'}
+    Collapse-Column
     Wait-Until {$null -ne (Find 'column-icon-toolbar')} 'Toolbar context did not collapse its column'
     Use-Drawers 'column-icon-toolbar'
     Start-Sleep -Milliseconds 300
@@ -375,6 +383,7 @@ try {
     [pscustomobject]@{device=$Device;column_mode=$ColumnMode;canvas_cursor='passed';short_click='passed';drifting_taps='passed';early_rejection='passed';hold_release_menu='passed';same_contact_drag='passed';immediate_grip='passed';native_cancellation='passed';one_step_undo_redo='passed';collapsed_icons='passed';floating_tiles='passed';divider_tiles='passed';disabled_commands='passed';drawer_tiles='passed';nested_drawer='passed';zen_visibility='passed';divider_keyboard='passed';held_blur='passed';native_submenu='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, full presentation matrix and timing remain separate'}|ConvertTo-Json
 }catch{
     $failure=$_
+    try{Model|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'failure-model.json')}catch{}
     @{case=$script:case;error=$failure.ToString();gesture=(Gesture)}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure.json')
     if($review -and !$review.HasExited){
         & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-window.json')

@@ -155,6 +155,17 @@ public static class CapyRowPointer {
    active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
   }
  }
+ public static double DoubleClick(int x,int y) {
+  lock(gate){
+   Check();if(active)throw new Exception("A review contact is already active.");
+   var point=new Point{x=x,y=y};Guard(point);MouseMove(point);last=point;kind=4;
+   var clicks=new[]{new Input{mouse=new Mouse{flags=2}},new Input{mouse=new Mouse{flags=4}},
+    new Input{mouse=new Mouse{flags=2}},new Input{mouse=new Mouse{flags=4}}};
+   var clock=System.Diagnostics.Stopwatch.StartNew();
+   if(SendInput(4,clicks,40)!=4)throw new Win32Exception(Marshal.GetLastWin32Error());
+   return clock.Elapsed.TotalMilliseconds;
+  }
+ }
  public static void Cancel() {
   lock(gate){
    if(!active)return;

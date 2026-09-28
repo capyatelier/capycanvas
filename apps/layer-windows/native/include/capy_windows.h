@@ -43,7 +43,7 @@ __declspec(dllimport) int32_t capy_suspend_renderer(CapyHost*);
 /* UI-thread replacement: worker parked, no acquired image, old swap chain detached. */
 __declspec(dllimport) int32_t capy_reset_surface(CapyHost*, void* panel);
 /* Isolated CAPY_SMOKE_TEST only; removes the process's D3D12 device, never the adapter. */
-__declspec(dllimport) int32_t capy_test_device_loss(CapyHost*);
+__declspec(dllimport) int32_t capy_test_device_loss(CapyHost*,char const*);
 /* Start/load on the render owner before queued user actions. Wake runs on the
    storage thread and must only signal owned synchronization state. */
 __declspec(dllimport) int32_t capy_start_services(CapyHost*, void* context, void (*wake)(void*));

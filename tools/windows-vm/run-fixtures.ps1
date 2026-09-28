@@ -108,11 +108,10 @@ $env:LAYER_TEST_SOFTWARE_GPU = '1'
 $env:CAPY_WAIT_SCALE = '3'
 $env:NO_COLOR = '1'
 $selected = if ($Name) { $Name -split ',' } else { @() }
-$hardware = 'documents:RecoverGpu', 'documents:FailGpu'
 foreach ($requested in $selected) {
     if (!@($runs.Keys | Where-Object { $_ -eq $requested -or ($_ -split ':')[0] -eq $requested }).Count) { throw "Unknown fixture: $requested" }
 }
-$planned = @($runs.Keys | Where-Object { (!$selected -or $_ -in $selected -or ($_ -split ':')[0] -in $selected) -and ($_ -notin $hardware -or $_ -in $selected) })
+$planned = @($runs.Keys | Where-Object { !$selected -or $_ -in $selected -or ($_ -split ':')[0] -in $selected })
 if (!$planned.Count) { throw 'No fixtures selected.' }
 @{runs=$planned;timeout_minutes=$TimeoutMinutes}|ConvertTo-Json|Set-Content (Join-Path $Output 'plan.json')
 $results = Join-Path $Output 'results.jsonl'

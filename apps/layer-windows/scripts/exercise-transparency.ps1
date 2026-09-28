@@ -41,7 +41,7 @@ function Preference([int]$Index){
     Wait-Until {$null -eq (Find 'Preferences' -Name -Type $ControlType::Window)} 'Preferences did not close'
 }
 function Sample([string]$Name,$Points){
-    Start-Sleep -Milliseconds 900;Capture $Name
+    Start-Sleep -Milliseconds 900;Capture $Name -Composed
     $origin=[int[]]@(0,0);$null=[Capy.GlassWindow]::ClientToScreen($review.MainWindowHandle,$origin)
     $image=[System.Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')))
     try{@($Points|ForEach-Object {$image.GetPixel($_.x-$origin[0],$_.y-$origin[1]).G})}finally{$image.Dispose()}

@@ -70,30 +70,37 @@ function Check-OverviewOverlap([string]$Before,[string]$After) {
  $overview=(Control 'navigator-overview').Current.BoundingRectangle
  $origin=[CapyRowPointer+Point]::new()
  if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client capture'}
- $document=(Model).state.tabs[0]
+ $model=Model;$document=$model.state.tabs[0]
  $fit=[Math]::Min(($overview.Width-8*$scale)/$document.width,($overview.Height-8*$scale)/$document.height)
  $width=$document.width*$fit;$height=$document.height*$fit
  $left=$overview.Left-$origin.x+($overview.Width-$width)/2
  $top=$overview.Top-$origin.y+($overview.Height-$height)/2
- $lower=((Model).layout.groups|Where-Object active -eq 'brushes').bounds
+ $lower=($model.layout.groups|Where-Object active -eq 'brushes').bounds
+ $hint=(Presentation).workspace_update.drag.drop_hint
+ $accent=[Drawing.ColorTranslator]::FromHtml($model.state.palette.accent)
+ $tinted=@($accent.R,$accent.G,$accent.B)|ForEach-Object {[int][Math]::Round(191+$_*64/255.)}
  $beforeImage=[Drawing.Bitmap]::new((Join-Path $run ($Before+'.png')))
  $afterImage=[Drawing.Bitmap]::new((Join-Path $run ($After+'.png')))
  try{
   $tested=0;$white=0;$point=$null
   # Sample an area: the legitimate camera outline can cross any one pixel.
-  foreach($fx in @(.08,.2,.32,.44,.56,.68,.8,.92)){foreach($fy in @(.08,.2,.32,.44,.56,.68,.8,.92)){
+  foreach($ix in 0..15){foreach($iy in 0..15){
+   $fx=($ix+.5)/16;$fy=($iy+.5)/16
    $x=[int]($left+$width*$fx);$y=[int]($top+$height*$fy)
    if($x -le $lower.x*$scale -or $x -ge ($lower.x+$lower.width)*$scale -or
       $y -le ($lower.y+36)*$scale -or $y -ge ($lower.y+$lower.height)*$scale){continue}
    $old=$beforeImage.GetPixel($x,$y);$pixel=$afterImage.GetPixel($x,$y)
    if($old.R -gt 245 -and $old.G -gt 245 -and $old.B -gt 245){continue}
    $tested++
-   if(($pixel.R+$pixel.G+$pixel.B)/3 -ge 180){
+   $expected=@(255,255,255);$h=$hint.bounds
+   if($hint.target.kind -eq 'tab' -and $x -gt ($h.x+2)*$scale -and $x -lt ($h.x+$h.width-2)*$scale -and
+      $y -gt ($h.y+2)*$scale -and $y -lt ($h.y+$h.height-2)*$scale){$expected=$tinted}
+   if([Math]::Abs([int]$pixel.R-$expected[0]) -le 3 -and [Math]::Abs([int]$pixel.G-$expected[1]) -le 3 -and [Math]::Abs([int]$pixel.B-$expected[2]) -le 3){
     $white++;if(!$point){$point=@{x=$x;y=$y;before=$old.ToArgb()}}
    }
   }}
   if($tested -lt 3){throw 'Navigator motion fixture did not cover enough opaque Tool Set pixels'}
-  if($white -lt [Math]::Ceiling($tested*.8)){throw 'GPU Navigator did not move above the lower native panel'}
+  if($white -lt [Math]::Ceiling($tested*.8)){throw "GPU Navigator did not move above the lower native panel ($white of $tested samples)"}
   $point
  }finally{$beforeImage.Dispose();$afterImage.Dispose()}
 }
@@ -141,23 +148,25 @@ try{
  $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
  $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
  Start-Sleep -Milliseconds 350
- $normal=(Model).layout|ConvertTo-Json -Depth 80 -Compress
+ $baseline=Model
+ $normal=$baseline.state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
+ $baseline|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'before-model.json')
  $position=Start-Slide
- Capture 'attached'
+ Capture 'attached' -Composed
  [CapyCanvasTouch]::Up(1)
  Wait-Until {((Current-Group).panels -join ',') -eq 'sizes,tool_settings'} 'Release did not commit the preview insertion'
  Undo-Workspace
  $position=Start-Slide 35
- Capture 'second-grab'
+ Capture 'second-grab' -Composed
  [CapyCanvasTouch]::CancelAll()
  Wait-Until {$null -eq (Find-Preview)} 'Cancelled pointer retained the overlay'
- Wait-Until {((Model).layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Cancellation changed the workspace'
+ Wait-Until {((Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Cancellation changed the workspace'
  $position=Start-Slide
  $canvas=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
  $x=$canvas.Left+$canvas.Width*.55;$y=$canvas.Top+$canvas.Height*.6
  Walk $position.x $position.y $x $y
  Wait-Until {(Current-Group).floating -and $null -eq (Find-Preview)} 'Tear-off did not release the attached preview'
- Capture 'detached'
+ Capture 'detached' -Composed
  Start-Sleep -Milliseconds 800
  $floating=Current-Group;$floatingX=$floating.bounds.x
  $before=Presentation
@@ -176,17 +185,17 @@ try{
  Wait-Until {(Current-Group).floating -and $null -eq (Find-Preview)} 'Cancellation review did not tear off'
  Start-Sleep -Milliseconds 400
  [CapyCanvasTouch]::CancelAll()
- Wait-Until {((Model).layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Detached cancellation did not restore the workspace'
+ Wait-Until {((Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Detached cancellation did not restore the workspace'
  if((Model).state.document_file.modified){throw 'Workspace dragging modified the drawing'}
 
  # A GPU overview must follow the same placement as its retained native controls.
  # Place it over an opaque Tool Set region so seeing white cannot be mistaken
  # for the ordinary drawing canvas behind the panel.
  (Control 'Drawing canvas' -Name).SetFocus()
- Capture 'navigator-before'
+ Capture 'navigator-before' -Composed
  $source=(Control 'panel-tab-navigator').Current.BoundingRectangle
  $startX=$source.Left+8*$scale;$startY=$source.Top+$source.Height/2
- $x=$canvas.Left+180*$scale;$y=$canvas.Top+130*$scale
+ $x=$canvas.Left+180*$scale;$y=$canvas.Top+90*$scale
  [CapyCanvasTouch]::Down(1,[int]$startX,[int]$startY)
  Walk $startX $startY $x $y
  Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'navigator' -and $_.floating}).Count -eq 1} 'Navigator did not tear off'
@@ -194,7 +203,7 @@ try{
  $navigator=(Model).layout.groups|Where-Object {$_.active -eq 'navigator' -and $_.floating}
  $before=Presentation
  $retained=(Control 'navigator-zoom_in').GetRuntimeId() -join ':'
- Capture 'navigator-first'
+ Capture 'navigator-first' -Composed
  $firstPixel=Check-OverviewOverlap 'navigator-before' 'navigator-first'
  $oldCamera=(Control 'canvas-camera').Current.Name
  Invoke 'navigator-zoom_in'
@@ -215,21 +224,24 @@ try{
     [Math]::Abs(($after.overviews[0].bounds[1]-$before.overviews[0].bounds[1])-($moved.bounds.y-$old.bounds.y)) -gt 1){
   throw 'GPU overview allocation did not follow native Navigator placement'
  }
- Capture 'navigator-moved'
+ Capture 'navigator-moved' -Composed
  $secondPixel=Check-OverviewOverlap 'navigator-before' 'navigator-moved'
  [CapyCanvasTouch]::CancelAll()
- Wait-Until {((Model).layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Navigator cancellation did not restore workspace layout'
- Start-Sleep -Milliseconds 200
- Capture 'navigator-restored'
- $restored=[Drawing.Bitmap]::new((Join-Path $run 'navigator-restored.png'))
- try{foreach($point in @($firstPixel,$secondPixel)){
-  $pixel=$restored.GetPixel($point.x,$point.y);if(($pixel.R+$pixel.G+$pixel.B)/3 -ge 180){throw 'Navigator cancellation did not restore the lower native panel'}
- }}finally{$restored.Dispose()}
+ Wait-Until {((Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Navigator cancellation did not restore workspace layout'
+ Wait-Until {
+  Capture 'navigator-restored' -Composed
+  $restored=[Drawing.Bitmap]::new((Join-Path $run 'navigator-restored.png'))
+  try{foreach($point in @($firstPixel,$secondPixel)){
+   $pixel=$restored.GetPixel($point.x,$point.y);$old=[Drawing.Color]::FromArgb($point.before)
+   if([Math]::Abs([int]$pixel.R-$old.R) -gt 3 -or [Math]::Abs([int]$pixel.G-$old.G) -gt 3 -or [Math]::Abs([int]$pixel.B-$old.B) -gt 3){return $false}
+  };$true}finally{$restored.Dispose()}
+ } 'Navigator cancellation did not restore the lower native panel pixels'
  if((Model).state.document_file.modified){throw 'Navigator workspace/camera motion modified the drawing'}
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
  if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
  [pscustomobject]@{os_touch_routing='passed';attached_preview='passed';fixed_hit_rectangles='passed';release_insertion='passed';different_grab_position='passed';pointer_cancel='passed';tear_off='passed';held_floating_drag='passed';incremental_publication='passed';retained_native_controls='passed';resize_grip_placement='passed';navigator_gpu_motion='passed';fast_tearoff_capture='passed';mixed_camera='passed';overview_occlusion_and_restore='passed';detached_cancel='passed';workspace_undo='passed';zero_exit='passed';scope='OS-injected touch; physical input and latency acceptance remain separate'}|ConvertTo-Json
 }catch{
+ try{Capture 'failure' -WithModel -Composed}catch{}
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
  [CapyCanvasTouch]::Dispose()

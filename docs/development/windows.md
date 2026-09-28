@@ -168,14 +168,25 @@ ignored `artifacts/windows`.
 - **Wait for layout.** Before injecting input, wait for both the published state
   and the arranged control bounds, then check that the hit belongs to the owned
   app. Use `Control -Arranged` from `CapyUia.ps1` when locating a pointer target.
-  A model update alone does not mean the visible rows have moved.
+  A model update alone does not mean the visible rows have moved. Expand a
+  collapsed column before addressing its group grip, and wait for a menu to
+  acquire keyboard focus before sending Escape. Cancellation comparisons use
+  the saved workspace layout; measured bounds can change as controls settle.
+- **Measure timed input.** Use the native test drivers for double presses and
+  prediction strokes. PowerShell sleeps and method calls can exceed a gesture's
+  interval under load; retain the actual injection timing with the result.
+- **Preserve OS cancellation.** A released sample with `IsCanceled` is a cancel,
+  including for the hold recognizer. Keep the canvas-touch fixture's rapid
+  canceled pairs: they must preserve the drawing instead of triggering Undo.
 - **Wait for the operation you started.** Compare the document revision or the
   requested state before and after input. An already enabled Undo command does
   not prove that a new stroke has committed.
 - **Capture composed pixels.** GPU pixel assertions use the owned window's
   screen rectangle on the private desktop. `PrintWindow` can return an earlier
   SwapChainPanel image. Wait for the expected visible change before comparing
-  pixels.
+  pixels. For restoration, compare with the original pixels; a fixed dark-panel
+  threshold cannot verify the same journey in the light theme. Move the owned
+  pointer away from the capture area and dismiss tooltips before a baseline.
 - **Use current menu identifiers.** `NativeMenuItems` uses the shared command ID
   for routed commands; other layer actions use `layer-menu-<op>`. Check the shared
   menu definition when an item cannot be found.
@@ -214,6 +225,13 @@ cargo test --locked -p layer-windows --lib filter_packages::tests::recovery_test
 `-RecoverGpu` removes the device during pen strokes and checks exported pixels,
 history and thumbnails after reconstruction. `-FailGpu` also blocks
 reconstruction and checks that completed edits remain saveable.
+
+The isolated UI test hook drains the rendering and presentation queues on every
+participating render worker before calling `ID3D12Device5::RemoveDevice`. WARP can crash when
+manual removal races queued presentation work. The hook still removes the real
+device; active contacts and queued input survive successful reconstruction.
+Replacing the surface must not cancel those contacts. The ignored Rust removal
+tests above exercise in-flight GPU work on hardware without this drain.
 
 ### Control reviews
 

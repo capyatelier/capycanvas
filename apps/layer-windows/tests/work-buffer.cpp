@@ -8,6 +8,11 @@
 #include <iostream>
 
 int main() {
+    for(uint32_t phase=0;phase<=4;++phase) {
+        assert(CanvasPointerPhase(phase,false)==phase);
+        assert(CanvasPointerPhase(phase,true)==4);
+    }
+    std::cout<<"Canvas canceled samples retain cancellation across every native event phase\n";
     for(uint32_t tool:{0u,2u}) {
         for(bool middle:{false,true})for(bool right:{false,true})
             assert(CanvasPointerButton(tool,middle,right)==0);

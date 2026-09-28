@@ -2,6 +2,7 @@ param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -AssemblyName System.Drawing
+Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -52,13 +53,13 @@ function Image-Rect {
         [int][Math]::Floor($overview.Left-$window.left+($overview.Width+$width)/2-2),
         [int][Math]::Floor($overview.Top-$window.top+($overview.Height+$height)/2-2))
 }
-function Check-Surround($Capture) {
+function Surround-Matches($Capture) {
     $overview=(Control 'navigator-overview').Current.BoundingRectangle
     $window=[CapyNavigatorCapture+Rect]::new()
     if(![CapyNavigatorCapture]::GetWindowRect($review.MainWindowHandle,[ref]$window)){throw 'Window bounds unavailable'}
     $pixel=$Capture.GetPixel([int]($overview.Left-$window.left+2),[int]($overview.Top-$window.top+2))
     $expected=[Drawing.ColorTranslator]::FromHtml((Model).state.palette.bg)
-    if($pixel.R -ne $expected.R -or $pixel.G -ne $expected.G -or $pixel.B -ne $expected.B){throw 'Navigator surround differs from the shared palette'}
+    $pixel.R -eq $expected.R -and $pixel.G -eq $expected.G -and $pixel.B -eq $expected.B
 }
 function Different($Before,$After,$Rect) {
     $count=0
@@ -108,10 +109,20 @@ try {
     }
     if((Model).state.document_file.modified){throw 'Camera controls modified the document'}
     if(((Control 'navigator-overview').GetRuntimeId() -join ':') -ne $identity){throw 'Camera updates replaced the native overview'}
+    $canvas=Control 'Drawing canvas' -Name -Arranged
+    $canvas.SetFocus()
+    [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+    [CapyRowPointer]::Initialize([uint32]$review.Id)
+    $bounds=$canvas.Current.BoundingRectangle
+    [CapyRowPointer]::Hover([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
+    $tooltip=[System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
+    Wait-Until {!@([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$tooltip)|Where-Object {!$_.Current.IsOffscreen}).Count} 'Navigator tooltip did not leave the capture area'
     $area=Image-Rect
     $blank=Capture 'blank'
     try {
-        Check-Surround $blank
+        if(!(Surround-Matches $blank)){throw 'Navigator surround differs from the shared palette'}
         Invoke 'Test stroke' -Name
         Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not reach the shared document'
         Wait-Until {$paint=Capture 'paint';try {(Different $blank $paint $area) -ge 20}finally{$paint.Dispose()}} 'Live GPU overview did not show the stroke'
@@ -135,8 +146,7 @@ try {
             $area=Image-Rect
             $inside=$replacement.GetPixel($area.Left+8,$area.Top+8)
             if($inside.R -lt 250 -or $inside.G -lt 250 -or $inside.B -lt 250){return $false}
-            Check-Surround $replacement
-            $true
+            Surround-Matches $replacement
         }finally{$replacement.Dispose()}
     } 'New document did not fill the expected overview image'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1550 -Height 1040
@@ -158,8 +168,10 @@ try {
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
     $null=Control 'navigator-overview'
-    $light=Capture 'alternate-theme'
-    try{Check-Surround $light}finally{$light.Dispose()}
+    Wait-Until {
+        $alternate=Capture 'alternate-theme'
+        try{Surround-Matches $alternate}finally{$alternate.Dispose()}
+    } 'Navigator surround did not present the alternate theme after Preferences closed'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native runtime stderr requires inspection'}
     [PSCustomObject]@{
@@ -168,4 +180,4 @@ try {
         document_aspect_replacement='passed';hide_reopen_and_theme='passed';zero_exit='passed'
         scope='isolated native controls and app-only GPU pixels; physical pointer gestures, full-editor parity and presentation acceptance remain separate'
     }|ConvertTo-Json
-}catch{[IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw}finally{Exit-CapyEnvironment}
+}catch{[IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw}finally{[CapyRowPointer]::Dispose();Exit-CapyEnvironment}

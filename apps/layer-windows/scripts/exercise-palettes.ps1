@@ -48,7 +48,11 @@ function Menu-Items{
     @($items|Where-Object {$_.Current.ProcessId -eq $review.Id -and !$_.Current.IsOffscreen})
 }
 function Close-Menu{
-    for($i=0;$i -lt 3 -and @(Menu-Items).Count;$i++){[CapyRowPointer]::Key([uint16]0x1B);Start-Sleep -Milliseconds 150}
+    Wait-Until {
+        $focused=[System.Windows.Automation.AutomationElement]::FocusedElement
+        $focused.Current.ProcessId -eq $review.Id -and $focused.Current.ControlType -eq $ControlType::MenuItem
+    } 'Palette menu did not acquire keyboard focus'
+    [CapyRowPointer]::Key([uint16]0x1B)
     Wait-Until {!@(Menu-Items).Count} 'Menu did not close'
 }
 function Menu-Invoke([string]$Id){

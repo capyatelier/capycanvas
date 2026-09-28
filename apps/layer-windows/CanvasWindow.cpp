@@ -33,7 +33,7 @@ static int DispatchCanvasCommand(CapyHost* host,CanvasCommand const& command) {
         case CanvasCommandKind::Glass:return capy_glass(host,json);
         case CanvasCommandKind::Action:return capy_action(host,json);
         case CanvasCommandKind::Filters:return capy_load_filter_directory(host,json);
-        case CanvasCommandKind::DeviceLoss:return capy_test_device_loss(host);
+        case CanvasCommandKind::DeviceLoss:return capy_test_device_loss(host,json);
         case CanvasCommandKind::TestDisplay:return capy_test_display(host,command.json=="hdr");
     }
     return -1;
@@ -58,9 +58,9 @@ void CapyLifecycle(char const* event) {
         << GetCurrentProcessId() << " " << Now() << " " << event << "\n";
 }
 CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint64_t)> close,
-    std::function<void(uint64_t)> preferencesChanged)
+    std::function<void(uint64_t)> preferencesChanged,std::function<void()> deviceLoss)
     :windowId(window.AppWindow().Id().Value),
-     createWindow(std::move(create)),onClosed(std::move(close)),workspacePreferencesChanged(std::move(preferencesChanged)) {
+     createWindow(std::move(create)),testDeviceLoss(std::move(deviceLoss)),onClosed(std::move(close)),workspacePreferencesChanged(std::move(preferencesChanged)) {
     // HWND/WindowId can be reused after an earlier window closes. Invalidate
     // its old diagnostic model before publishing the new live-window manifest.
     if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))TraceState("ui-state","{}");
@@ -170,8 +170,7 @@ void CanvasWindow::Open() {
             self->Send(R"({"mode":"merge"})",CanvasCommandKind::Filters);});
         toolbar.Children().Append(reload);
         Button recover;recover.Content(box_value(L"Test GPU loss"));
-        recover.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())
-            self->Send("",CanvasCommandKind::DeviceLoss);});
+        recover.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->testDeviceLoss();});
         toolbar.Children().Append(recover);
         if(GetEnvironmentVariableW(L"CAPY_TEST_HDR",nullptr,0))for(bool hdr:{false,true}){Button test;test.Content(box_value(hdr?L"Test HDR output":L"Test SDR output"));test.Click([weak=weak_from_this(),hdr](auto&&,auto&&){if(auto self=weak.lock())self->Send(hdr?"hdr":"sdr",CanvasCommandKind::TestDisplay);});toolbar.Children().Append(test);}
     }
@@ -533,6 +532,7 @@ void CanvasWindow::CancelPickerHold(){
 }
 void CanvasWindow::PickerHold(Microsoft::UI::Input::PointerEventArgs const& e, uint32_t phase){
     using namespace Microsoft::UI::Input;
+    phase=CanvasPointerPhase(phase,e.CurrentPoint().Properties().IsCanceled());
     if(!pickerHold)return;
     auto point=e.CurrentPoint();auto id=point.PointerId();
     bool touch=point.PointerDeviceType()==PointerDeviceType::Touch;
@@ -552,6 +552,7 @@ void CanvasWindow::PickerHold(Microsoft::UI::Input::PointerEventArgs const& e, u
     }
 }
 void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint32_t phase) {
+    phase=CanvasPointerPhase(phase,e.CurrentPoint().Properties().IsCanceled());
     auto arrival=latencyTrace.enabled?Now():0;
     uint64_t view;float scale;
     {std::lock_guard lock(mutex);if(closing)return;view=revision;scale=inputScale;}

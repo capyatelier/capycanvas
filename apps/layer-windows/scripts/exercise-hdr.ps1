@@ -27,7 +27,7 @@ $run=Join-Path $repo ('artifacts/windows/hdr-ui/'+[Guid]::NewGuid().ToString('N'
 [IO.Directory]::CreateDirectory((Join-Path $run 'profile'))|Out-Null
 function Assert-CanvasInk([string]$Label){
  $capture=Join-Path $run ($Label+'-canvas.png')
- & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output $capture -ClientOnly *> (Join-Path $run ($Label+'-canvas.json'))
+ & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output $capture -ClientOnly -Composed *> (Join-Path $run ($Label+'-canvas.json'))
  $bitmap=[Drawing.Bitmap]::new($capture)
  try {
   # This fixture uses an 1800x1300 window; these bounds lie inside the canvas,
@@ -371,7 +371,7 @@ try {
   Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Gain-map photo did not reopen as HDR' 60
   Assert-CanvasInk $name
  }
- & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'hdr.png') -ClientOnly *> (Join-Path $run 'hdr.json')
+ & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'hdr.png') -ClientOnly -Composed *> (Join-Path $run 'hdr.json')
  $count=@((Model).windows_tabs.tabs).Count
  $review.CloseMainWindow()|Out-Null;Button 'Cancel';Idle
  if(@((Model).windows_tabs.tabs).Count -ne $count){throw 'Window close cancellation lost drawings'}
@@ -381,7 +381,7 @@ try {
  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'HDR stderr requires inspection'}
  [pscustomobject]@{depth=$Depth;creation='passed';sdr_appearance_cancel_history='passed';painting='passed';painting_history='passed';numeric_hdr_color='passed';hdr_photo_open='passed';reopened_canvas_presentation='passed';pq_exr_sdr_exports='passed';gainmap_exports_and_open='passed';proof_panel_numeric_modes_history='passed';proof_dial_mouse_touch_pen_cancel_history='passed';drawing_tabs_reorder_history_close_cancel='passed';synthetic_display_switching='passed';proof_export_separation='passed';device_recovery='passed';save_reopen='passed';physical_display=$display;scope='Native UIA/D3D12 functional checks. Injected display reports do not qualify physical HDR, mixed-monitor behavior, or performance.'}|ConvertTo-Json -Depth 8|Tee-Object -FilePath (Join-Path $run 'results.json')
 }catch{
- if($review -and !$review.HasExited){try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure.json')}catch{}}
+ if($review -and !$review.HasExited){try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly -Composed *> (Join-Path $run 'failure.json')}catch{}}
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
  Exit-CapyEnvironment

@@ -116,7 +116,7 @@ try {
 
     Switch-Workspace 'Photo' 'builtin:workspace:photographer'
     foreach($command in @('rectangle_select','ellipse_select','polygon_select','color_select')){
-        if(!@((Model).panels|ForEach-Object {$_.tiles}|Where-Object {$_.control.command -eq $command}).Count){throw "Photo has no $command tool"}
+        Wait-Until {@((Model).panels|ForEach-Object {$_.tiles}|Where-Object {$_.control.command -eq $command}).Count -gt 0} "Photo has no $command tool"
     }
     Switch-Workspace 'Sketch' 'builtin:workspace:painter'
     if(Find 'canvas-fit'){$revision=(Model).state.camera.revision;Invoke 'canvas-fit';Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not update the camera'};Canvas-Points
@@ -137,7 +137,7 @@ try {
         $height=Dip $row
         if($height -lt $minimum-.5){throw "$($choice.label) row is $height DIP, shorter than $minimum DIP"}
         Tap (Center $row) $devices[$i%3]
-        Wait-Until {(Model).state.tool_set.subtools[$i].selected} "$($choice.label) did not select"
+        Wait-Until {$current=Model;$current -and $current.state.tool_set.subtools[$i].selected} "$($choice.label) did not select"
         Wait-Until {(Header-Icon $select) -eq $choice.icon} "Select opener did not remember $($choice.label)"
         if(!(Model).state.customization.drawer){throw "$($choice.label) closed the Select drawer"}
         $brush=$choice.icon -eq 'selection-brush';$tonal=$choice.icon -eq 'tonal-select'
@@ -166,7 +166,7 @@ try {
         }
     }
     Tap (Center (Control 'tool-subtool-0'))
-    Wait-Until {(Model).state.tool_set.subtools[0].selected} 'Rectangle Select did not restore'
+    Wait-Until {$current=Model;$current -and $current.state.tool_set.subtools[0].selected} 'Rectangle Select did not restore'
     Capture 'select-drawer'
     Invoke 'selection-actions-menu'
     Wait-Until {@(Menu-Items).Count -gt 0} 'Selection Actions did not open a menu'
@@ -176,7 +176,10 @@ try {
         if(!$row -or $row.Current.IsEnabled){throw "$label must be a disabled leaf without saved layers"}
         $pattern=$null;if($row.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$pattern)){throw "$label shows a submenu arrow"}
     }
-    foreach($label in @("Grow$([char]0x2026)","Shrink$([char]0x2026)")){if(!@($rows|Where-Object {$_.Current.Name -eq $label}).Count){throw "Selection Actions lacks $label"}}
+    foreach($id in @('grow_selection','shrink_selection','feather_selection','border_selection','smooth_selection','transform_selection_outline')){
+        $command=Command $id
+        if(!$command -or !@($rows|Where-Object {$_.Current.AutomationId -eq $id -and $_.Current.Name -eq $command.label}).Count){throw "Selection Actions lacks shared command $id"}
+    }
     if(@($rows|Where-Object {$_.Current.Name -eq 'Modify'}).Count){throw 'Selection Actions still nests Modify'}
     Close-Menu
 
@@ -216,7 +219,7 @@ try {
     Wait-Until {(Outline 'redo-subtract' ($center.x-12) ($center.x+12) ($center.y-20)) -gt .3} 'Redo did not restore the Subtract hole'
 
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Select'
-    $grow=@{item=$null};Wait-Until {$grow.item=@(Menu-Items)|Where-Object {$_.Current.Name -eq "Grow$([char]0x2026)"}|Select-Object -First 1;$grow.item} 'Select menu has no Grow'
+    $grow=@{item=$null};Wait-Until {$grow.item=@(Menu-Items)|Where-Object {$_.Current.AutomationId -eq 'grow_selection'}|Select-Object -First 1;$grow.item} 'Select menu has no Grow'
     $grow.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {(Tools).selection_resize} 'Grow did not open the shared resize draft'
     $distance=Control 'selection-resize-distance' -Type $ControlType::Edit
@@ -297,7 +300,7 @@ try {
     $tooltip=((Model).state.layers|Where-Object id -eq $id).load_selection_tooltip
     if($load.Current.Name -ne $tooltip){throw 'Load button does not use the shared tooltip'}
     $load.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {(Tools).has_selection -and !(Model).state.layers.Where({$_.id -eq $id})[0].editing} 'Load did not load coverage and return to artwork'
+    Wait-Until {$current=Model;$current -and $current.state.layer_tools.has_selection -and !$current.state.layers.Where({$_.id -eq $id})[0].editing} 'Load did not load coverage and return to artwork'
     Capture 'selection-layer'
     [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
 

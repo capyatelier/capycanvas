@@ -20,6 +20,8 @@ mod color_storage;
 mod recovery;
 mod events;
 #[cfg(any(target_os = "windows", test))]
+mod device_loss_test;
+#[cfg(any(target_os = "windows", test))]
 mod filter_packages;
 #[cfg(any(target_os = "windows", test))]
 mod navigator;

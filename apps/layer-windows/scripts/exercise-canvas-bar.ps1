@@ -69,10 +69,12 @@ try {
  Wait-Until {(Model).state.document_file.modified} 'Controlled drawing did not finish'
  $canvas=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
  $cx=[int]($canvas.X+$canvas.Width*.5);$cy=[int]($canvas.Y+$canvas.Height*.45)
- $glassBefore=Glass
  if(Bar){throw 'The bar showed before any selection or transform'}
 
  Tool 'lasso';Subtool 'rectangle_select'
+ $glass=@{count=-1;stable=0}
+ Wait-Until {$count=Glass;if($count -eq $glass.count){$glass.stable++}else{$glass.count=$count;$glass.stable=0};$glass.stable -ge 3} 'Selection tool glass did not settle'
+ $glassBefore=$glass.count
  $selection=@(@(($cx-160),($cy-110)),@(($cx+160),($cy+60)))
  Drag 'mouse' $selection[0] $selection[1]
  Wait-Until {(Model).state.layer_tools.has_selection -and (Kind) -eq 'selection' -and (Bar)} 'The selection bar did not appear' 10
