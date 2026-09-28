@@ -47,7 +47,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 - **Distort on photo placements:** refused with the route that works: select all, then transform the pixels.
 - **Crop:** Crop Canvas to Selection crops the canvas to the bounds of the selection's coverage, as metadata: pixels outside stay on their layers and reappear when the canvas grows. It is disabled, with a reason, for an inverted selection.
 - **Moving selected pixels:** a Move drag over a selection keeps the Selection context; the bar hides during the contact and returns beside the moved selection. Leave Copy is the Move toggle described in [Selections](selections.md#moving-selected-pixels).
-- **Not on the bar:** Canvas Size…, Image Size…, the Rotate and Flip Image commands, Trim and Reveal All (Edit › Image; see [image commands](image-commands.md)) and Layer › New › Solid Color Fill and Gradient Fill (which also take the selection as their mask) and Revert to Original Photo have no bar item; menus and command search reach them.
+- **Not on the bar:** Canvas Size…, Image Size…, the Rotate and Flip Image commands, Trim and Reveal All (Edit › Image; see [image commands](image-commands.md)), Layer › New › Solid Color Fill and Gradient Fill (which also take the selection as their mask), Revert to Original Photo and the merges (Merge Down, Merge Group, Merge Visible, Stamp Visible and Flatten Image) have no bar item; menus and command search reach them.
 
 ## Placement
 

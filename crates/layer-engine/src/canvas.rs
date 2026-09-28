@@ -147,25 +147,32 @@ fn plain_color(raster: &layer_core::raster::RasterRevision) -> bool {
         && data.tiles.keys().all(|key| key.plane == layer_core::raster::RasterPlane::Color))
 }
 
+/// The document's layers, followed by the hidden members of pending bakes
+/// that the same edit removed, so the renderer keeps their pages until the
+/// bake has run. None when no bake is pending.
+fn with_bake_members(document: &Document) -> Option<Vec<layer_core::Layer>> {
+    let mut removed = document
+        .layers
+        .iter()
+        .flat_map(|l| &l.pending_operations)
+        .filter_map(|op| match &op.kind {
+            layer_core::LayerOperationKind::Bake { members, .. } => Some(members.iter()),
+            _ => None,
+        })
+        .flatten()
+        .filter(|member| document.layer(member.id).is_none())
+        .peekable();
+    removed.peek()?;
+    let mut layers = document.layers.clone();
+    layers.extend(removed.map(|member| layer_core::Layer { visible: false, ..member.clone() }));
+    Some(layers)
+}
+
 fn full_extent(extent: [u32; 2]) -> Rect {
     Rect {
         min: layer_core::Point::default(),
         max: layer_core::Point { x: extent[0] as f32, y: extent[1] as f32 },
     }
-}
-
-/// Raster pages of `extent` that `damage` touches.
-fn pages(damage: Rect, extent: [u32; 2]) -> u64 {
-    if damage.is_empty() {
-        return 0;
-    }
-    let size = layer_core::raster::TILE_SIZE as f32;
-    let span = |min: f32, max: f32, limit: u32| {
-        let first = (min.max(0.) / size).floor() as u64;
-        let last = (max.min(limit as f32) / size).ceil() as u64;
-        last.saturating_sub(first)
-    };
-    span(damage.min.x, damage.max.x, extent[0]) * span(damage.min.y, damage.max.y, extent[1])
 }
 
 impl<B: CanvasRenderer> CanvasEngine<B> {
@@ -681,7 +688,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             };
             let tile = layer_core::raster::TileBlob::max_compressed_len(plane.descriptor(color))
                 .unwrap_or(0) as u64;
-            raster.reserve_pending_bytes(pages(damage, document.target_extent(id)) * tile);
+            raster.reserve_pending_bytes(layer_core::raster::page_count(damage, document.target_extent(id)) * tile);
         }
         let mut edits = prefix;
         for edit in &mut edits {
@@ -695,8 +702,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if let Some(selection) = selection_after {
             edits.push(Edit::SetSelection(selection));
         }
+        let removes = edits.iter().any(|e| matches!(e, Edit::RemoveLayer { .. }));
         self.editor.perform(Edit::Batch(edits))?;
         self.transform_preview = None;
+        self.composite_all |= removes;
         self.batches.extend(batches);
         self.restore_rasters.extend(restores);
         Ok(())
@@ -1177,11 +1186,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         rebuilt: bool,
         time_seconds: f32,
     ) -> Result<(), EngineError<B::Error>> {
+        let baking = with_bake_members(self.editor.document());
         let packet = FramePacket {
             time_seconds,
             view: self.view(),
             document_extent: [self.editor.document().width, self.editor.document().height],
-            layers: &self.editor.document().layers,
+            layers: baking.as_deref().unwrap_or(&self.editor.document().layers),
             dabs: &self.dabs,
             dab_batches: &self.batches,
             restore_rasters: &self.restore_rasters,
@@ -2311,6 +2321,7 @@ mod tests {
         styles: Vec<DabStyle>,
         saw_reset: bool,
         transform: Option<layer_render::TransformPreview>,
+        visibility: Vec<(LayerId, bool)>,
     }
 
     impl CanvasRenderer for RecordingRenderer {
@@ -2360,6 +2371,7 @@ mod tests {
 
         fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
             self.time_seconds = packet.time_seconds;
+            self.visibility = packet.layers.iter().map(|l| (l.id, l.visible)).collect();
             if self.size != [packet.view.width_px, packet.view.height_px] {
                 return Err(BackendError("surface size mismatch"));
             }
@@ -3135,6 +3147,34 @@ mod tests {
         assert_eq!(engine.document().selection, before.selection);
         assert!(engine.redo().unwrap());
         assert_eq!(engine.document().layers.len(), before.layers.len() + 1);
+    }
+
+    #[test]
+    fn a_bake_keeps_its_removed_members_hidden_until_it_has_run() {
+        let (_, mut engine) = engine("bake", 1024, 768);
+        let lower = engine.document().active_layer;
+        let upper = engine.allocate_layer_id();
+        engine
+            .apply_edit(Edit::InsertLayer { index: 0, layer: layer_core::Layer::paint(upper, "Upper") })
+            .unwrap();
+        engine.set_active_layer(upper).unwrap();
+        engine.render_frame().unwrap();
+        let before = engine.document().clone();
+        let result = engine.allocate_layer_id();
+        let coverage = engine.allocate_layer_id();
+        let plan = engine.document().merge_plan(layer_core::MergeKind::Down, result, coverage).unwrap();
+        engine.insert_with_operations(plan.edits, vec![(result, plan.operation)], None).unwrap();
+        assert!(engine.composite_all, "the members' area is recomposited");
+        assert!(engine.document().layer(upper).is_none() && engine.document().layer(lower).is_none());
+        engine.render_frame().unwrap();
+        let members = |engine: &CanvasEngine<RecordingRenderer>| {
+            engine.backend().visibility.iter().filter(|(id, _)| [upper, lower].contains(id)).copied().collect::<Vec<_>>()
+        };
+        assert_eq!(members(&engine), [(upper, false), (lower, false)], "hidden in the frame that bakes them");
+        engine.render_frame().unwrap();
+        assert!(members(&engine).is_empty(), "released once the bake has run");
+        assert!(engine.undo().unwrap());
+        assert_eq!(engine.document().layers, before.layers, "one undo step restores both layers");
     }
 
     #[test]

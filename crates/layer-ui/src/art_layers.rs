@@ -101,7 +101,7 @@ pub struct LayerControls {
 pub(super) fn apply_mask_refusal(kind: LayerKind) -> Option<&'static str> {
     match kind {
         LayerKind::Paint => None,
-        LayerKind::Group => Some("A group's mask can't be applied; it stays live on the group"),
+        LayerKind::Group => Some("A group's mask can't be applied on its own; Merge Group applies it"),
         LayerKind::Effect => Some("An effect layer's mask sets where the effect shows; it can't be applied"),
         LayerKind::Background | LayerKind::Selection => Some("Only a paint layer's mask can be applied"),
     }
@@ -154,6 +154,8 @@ pub enum LayerAction {
     Ungroup {
         id: u64,
     },
+    /// Flatten Image without asking, as accepted from its notice.
+    Flatten,
     DeleteSelected,
     DuplicateSelected,
     Visibility {
@@ -818,6 +820,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_interaction.selected = children;
                 self.layer_interaction.collapsed.remove(&LayerId(id));
             }
+            LayerAction::Flatten => self.bake(layer_core::MergeKind::Flatten)?,
             LayerAction::DeleteSelected => {
                 let doc = self.engine.document();
                 let edit = doc
@@ -1421,6 +1424,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         },
                     ),
                 ],
+                self.merge_menu_items(l),
                 vec![
                     check(
                         "Show paper",
@@ -1674,6 +1678,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         },
                     ),
                 ],
+                self.merge_menu_items(l),
                 destructive,
             ]
         };

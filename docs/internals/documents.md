@@ -28,6 +28,42 @@ in layer order, forming an effect chain. A generator effect instead produces
 content that is composited as a layer. Masks and opacity control where and how
 strongly an effect applies.
 
+### Merging layers
+
+Merge Down, Merge Group, Merge Visible, Flatten Image and Stamp Visible, in the
+Layer menu and the layer's menu, replace layers with one new paint layer in one
+undo step ([`merge.rs`](../../crates/layer-core/src/merge.rs)). The new layer has
+full opacity, Normal blending and no mask. It takes the place, name and clipping
+of the layer it replaces, and references move to it. Placed photos become
+ordinary document pixels.
+
+- **Merge Down** merges the active layer into the artwork layer below it in its
+  group. Both must be visible, unlocked and Normal, and the layer below must hold
+  pixels: not the paper or an adjustment. A clipped layer below takes only a
+  layer clipped to the same base. A clipping base instead merges its visible
+  clipped layers into itself (Merge Clipped Layers), as does an adjustment
+  clipped to a base. An unclipped adjustment applies to the layer below only
+  (Apply Effect to Layer Below), so whatever else lies below no longer takes it.
+- **Merge Group** composites a visible group, with its mask, into one layer that
+  keeps the group's blend mode and opacity. Hidden layers inside are discarded.
+- **Merge Visible** composites the visible layers over transparency. Hidden
+  layers stay; hidden layers clipped to a merged base are released. The paper
+  is not part of the composite, so a non-Normal layer can look different where
+  the paper shows through it.
+- **Flatten Image** does the same, then discards hidden layers and pixels
+  outside the canvas. When it would discard hidden layers, it asks first through
+  the canvas notice. The paper stays separate.
+- **Stamp Visible** adds the visible image as a new top layer and keeps every
+  layer.
+
+Locks block every merge except Stamp Visible, and a group that holds Selection
+Layers must give them up first. A merge is refused with a reason when its result
+would exceed the 1 GiB publication limit or its undo step would not fit the
+history budget. Merge Down, Merge Group and Merge Visible keep pixels outside the
+canvas: the result's extent is the union of the merged layers' extents, on whole
+tiles from the canvas origin. A merge that includes an effect layer covers the
+canvas only, because effects are defined over the canvas.
+
 A `Stroke` stores real pen samples and a `BrushSnapshot`, which captures the brush
 settings used for that stroke. Committed sample storage is shared rather than
 copied whenever history changes. Later sensor corrections replace the affected

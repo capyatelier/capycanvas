@@ -21,6 +21,23 @@ pub(crate) const MAX_COMPRESSED_TILE_BYTES: usize =
     lz4_flex::block::get_maximum_output_size(MAX_TILE_BYTES);
 mod compression;
 pub const MAX_CAPTURE_BYTES: u64 = 256 * 1024 * 1024;
+/// Immutable native output one frame may publish: a full 60 MP 16-bit edit
+/// with its linked mask.
+pub const MAX_PUBLICATION_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Raster pages of a target `extent` pixels large that `bounds` touches.
+pub fn page_count(bounds: crate::Rect, extent: [u32; 2]) -> u64 {
+    if bounds.is_empty() {
+        return 0;
+    }
+    let size = TILE_SIZE as f32;
+    let span = |min: f32, max: f32, limit: u32| {
+        let first = (min.max(0.) / size).floor() as u64;
+        let last = (max.min(limit as f32) / size).ceil() as u64;
+        last.saturating_sub(first)
+    };
+    span(bounds.min.x, bounds.max.x, extent[0]) * span(bounds.min.y, bounds.max.y, extent[1])
+}
 #[cfg(not(target_arch = "wasm32"))]
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 static NEXT_PUBLICATION: AtomicU64 = AtomicU64::new(1);

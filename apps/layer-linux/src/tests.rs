@@ -42,6 +42,8 @@ mod notice;
 mod zoom_readout;
 #[path = "photo_edit_tests.rs"]
 mod photo_edit;
+#[path = "merge_tests.rs"]
+mod merge;
 #[path = "crop_tests.rs"]
 mod crop;
 #[path = "image_tests.rs"]

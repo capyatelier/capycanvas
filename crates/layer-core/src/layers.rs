@@ -488,6 +488,13 @@ pub enum LayerOperationKind {
         radial: bool,
         alpha_locked: bool,
     },
+    /// Composite `members`, isolated and in document order, into the empty
+    /// target: see `bake_layers`. `offset` places the coordinates of the
+    /// members' parent in the target's pixels.
+    Bake {
+        members: Arc<[Layer]>,
+        offset: Point,
+    },
 }
 impl LayerOperation {
     /// Conservative affected area in layer coordinates. Inverted coverage and
@@ -495,6 +502,7 @@ impl LayerOperation {
     pub fn bounds(&self, extent: [u32; 2]) -> Rect {
         let mut bounds = match &self.kind {
             LayerOperationKind::Figure(figure) => self.placement.bounds(figure.bounds()),
+            LayerOperationKind::Bake { members, offset } => crate::merge::bake_bounds(members, *offset, extent),
             _ => Rect {
                 min: Point::default(),
                 max: Point {
@@ -551,6 +559,14 @@ impl LayerOperation {
         let valid = match &self.kind {
             LayerOperationKind::ApplyMask | LayerOperationKind::Erase { .. } => {
                 self.placement == Affine::IDENTITY
+            }
+            LayerOperationKind::Bake { offset, .. } => {
+                self.placement == Affine::IDENTITY
+                    && offset.x.is_finite()
+                    && offset.y.is_finite()
+                    && self.coverage.default_coverage == 1.
+                    && self.coverage.initial.is_none()
+                    && self.coverage.raster.is_empty()
             }
             LayerOperationKind::Transform(transform) => {
                 self.placement == Affine::IDENTITY

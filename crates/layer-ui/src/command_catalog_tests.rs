@@ -566,7 +566,7 @@ fn apply_mask_explains_group_and_effect_masks() {
     s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id: group, replace: false } }).unwrap();
     let apply = UiAction::Layer { action: LayerAction::ApplyMask { id: group } };
     let error = s.dispatch(apply.clone()).unwrap_err();
-    assert_eq!(error, "A group's mask can't be applied; it stays live on the group");
+    assert_eq!(error, "A group's mask can't be applied on its own; Merge Group applies it");
     let command = UiAction::Invoke { command: CommandId::ApplyLayerMask };
     let entry = s
         .command_catalog()

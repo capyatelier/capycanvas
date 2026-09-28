@@ -60,6 +60,8 @@ mod canvas_bar;
 mod notices;
 #[path = "selection_pixels.rs"]
 mod selection_pixels;
+#[path = "merges.rs"]
+mod merges;
 #[path = "selection_refine.rs"]
 mod selection_refine;
 pub use selection_refine::{RefineKind, SelectionRefineView};
@@ -2005,6 +2007,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         } else if id == CommandId::SoftProof {
             "Proof"
+        } else if id == CommandId::MergeDown {
+            self.merge_down_label()
         } else {
             id.label()
         }
@@ -2215,6 +2219,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::RevertToOriginal => {
                 self.require_document_idle().is_ok() && self.revert_to_original_refusal().is_none()
+            }
+            CommandId::MergeDown
+            | CommandId::MergeGroup
+            | CommandId::MergeVisible
+            | CommandId::FlattenImage
+            | CommandId::StampVisible => {
+                self.require_document_idle().is_ok()
+                    && merges::merge_kind(id).is_some_and(|kind| self.merge_refusal(kind).is_none())
             }
             CommandId::CanvasSize
             | CommandId::ImageSize
@@ -4381,6 +4393,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.revert_to_original()?;
                 Ok((DOCUMENT | COMMANDS, true))
             }
+            CommandId::MergeDown
+            | CommandId::MergeGroup
+            | CommandId::MergeVisible
+            | CommandId::FlattenImage
+            | CommandId::StampVisible => {
+                self.merge(merges::merge_kind(command).ok_or("Unknown merge")?)?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
             CommandId::CanvasSize => {
                 self.open_canvas_size()?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, false))
@@ -5412,6 +5432,7 @@ mod tests {
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
     include!("selection_pixel_tests.rs");
+    include!("merge_tests.rs");
     include!("selection_refine_tests.rs");
     include!("tonal_tests.rs");
     include!("painted_selection_tests.rs");
@@ -10396,8 +10417,9 @@ mod tests {
     #[test]
     fn shortcuts_share_modifiers_editing_guards_and_repeat_policy() {
         let mut s = session(Platform::Gtk);
-        assert!(!key(&mut s, "e", true, true, false).handled);
+        assert!(key(&mut s, "e", true, true, false).handled, "Ctrl+E is Merge Down");
         key(&mut s, "e", false, true, false);
+        assert_ne!(s.state.brush.tool, Tool::Eraser);
         assert!(!key(&mut s, "e", true, false, true).handled);
         key(&mut s, "e", false, false, true);
         assert!(key(&mut s, "E", true, false, false).handled);

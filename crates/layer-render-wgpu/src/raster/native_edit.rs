@@ -370,7 +370,7 @@ impl WgpuRasterizer {
                 .iter()
                 .map(|(_, tile)| tile.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64)
                 .sum::<u64>();
-        if output_bytes > MAX_NATIVE_OUTPUT_BYTES {
+        if output_bytes > layer_core::raster::MAX_PUBLICATION_BYTES {
             return Err(GpuRasterError::Effect(
                 "Raster frame exceeds the 1 GiB native output budget".into(),
             ));

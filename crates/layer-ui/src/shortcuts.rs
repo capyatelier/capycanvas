@@ -510,6 +510,7 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.FillSelection" => key("backspace", false, true),
         "command.CopySelectionToLayer" => key("j", true, false),
         "command.CutSelectionToLayer" => key("j", true, true),
+        "command.MergeDown" => key("e", true, false),
         "command.QuickMask" => key("q", false, false),
         "command.Reselect" => key("d", true, true),
         "command.ResetMaskColors" => key("d", false, false),
@@ -581,7 +582,8 @@ fn command_section(command: CommandId) -> &'static str {
         | C::SmoothSelection | C::TransformSelectionOutline => "Select",
         C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RepairSourceProfile
         | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer | C::RevertToOriginal | C::InvertLayerMask
-        | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask | C::EditLayerContent => "Layer",
+        | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask | C::EditLayerContent | C::MergeDown | C::MergeGroup
+        | C::MergeVisible | C::FlattenImage | C::StampVisible => "Layer",
         C::FitCanvas | C::ActualPixels | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
         | C::ZenMode | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
         | C::ToggleTheme => "View",

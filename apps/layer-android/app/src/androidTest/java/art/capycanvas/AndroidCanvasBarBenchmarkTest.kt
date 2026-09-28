@@ -454,6 +454,35 @@ class AndroidCanvasBarBenchmarkTest {
                 measure("canvas-size-grow-then-pan") { resize(width + 512 to height + 512); drag(center, duration, pan) }
                 measure("canvas-size-crop-then-pan") { resize(width to height); drag(center, duration, pan) }
             }
+            if (wanted("merge")) {
+                newDocument()
+                place(photo())
+                invoke("apply_transform")
+                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                invoke("pen"); action(obj("type" to "select_brush", "id" to 1)); action(obj("type" to "set_brush_size", "value" to 120))
+                val area = state().getJSONObject("camera").getJSONArray("work_area")
+                val left = area.getDouble(0) + area.getDouble(2) * .1
+                val top = area.getDouble(1) + area.getDouble(3) * .1
+                val span = area.getDouble(2) * .8
+                repeat(8) { band ->
+                    invoke("add_layer")
+                    action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.1 * band, .8 - .07 * band, .5, .8))))
+                    drag(left to top + area.getDouble(3) * .1 * band, 500) { t -> span * t / .5 to 0.0 }
+                }
+                val layers = { state().array("layers").length() }
+                waitFor("ten layers over the paper") { layers() == 11 }
+                SystemClock.sleep(3000)
+                for (command in listOf("merge_visible", "flatten_image")) {
+                    measure("merge-${command.replace('_', '-')}") {
+                        mark = System.nanoTime(); invoke(command); dispatched = System.nanoTime()
+                        waitFor("$command replaces the layers") { layers() == 2 }
+                        SystemClock.sleep(2500)
+                    }
+                    invoke("undo")
+                    waitFor("undo restores the layers") { layers() == 11 }
+                    SystemClock.sleep(3000)
+                }
+            }
             if (wanted("refine")) for (extent in listOf(2048 to 1536, width to height).distinct()) {
                 newDocument(extent)
                 invoke("select_all"); invoke("fill_selection"); invoke("deselect"); invoke("rectangle_select")

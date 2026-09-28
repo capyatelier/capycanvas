@@ -523,6 +523,11 @@ command_ids! {
     CopyMerged,
     PasteInPlace,
     PasteInto,
+    MergeDown,
+    MergeVisible,
+    FlattenImage,
+    StampVisible,
+    MergeGroup,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -738,6 +743,11 @@ impl CommandId {
             Self::PasteImage => "paste",
             Self::PasteInPlace => "paste-in-place",
             Self::PasteInto => "paste-into",
+            Self::MergeDown => "merge-down",
+            Self::MergeVisible => "merge-visible",
+            Self::FlattenImage => "flatten",
+            Self::StampVisible => "stamp-visible",
+            Self::MergeGroup => "merge-group",
         })
     }
     pub const TOOLS: [Self; 27] = [
@@ -969,6 +979,11 @@ impl CommandId {
             Self::CopyMerged => "Copy Merged",
             Self::PasteInPlace => "Paste in Place",
             Self::PasteInto => "Paste Into",
+            Self::MergeDown => "Merge Down",
+            Self::MergeVisible => "Merge Visible",
+            Self::FlattenImage => "Flatten Image",
+            Self::StampVisible => "Stamp Visible",
+            Self::MergeGroup => "Merge Group",
         }
     }
 }

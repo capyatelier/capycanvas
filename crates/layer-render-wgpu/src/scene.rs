@@ -11,6 +11,7 @@ pub(super) use previews::FilterPreviews;
 const DISPLAY_JOBS_PER_SUBMISSION: usize = 256;
 mod sources;
 mod placement;
+mod bake;
 
 #[derive(Clone)]
 enum Job {
@@ -1192,6 +1193,9 @@ impl Scene {
         if matches!(op.kind, LayerOperationKind::Erase { alpha_locked: true }) {
             return Ok(());
         }
+        if let LayerOperationKind::Bake { members, offset } = &op.kind {
+            return self.bake(r, packet, layer, members, *offset, damage, encoder);
+        }
         let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) else {
             return Ok(());
         };
@@ -1218,8 +1222,8 @@ impl Scene {
             let mask = self.mask_at(r, &op.coverage, op.coverage.placement.then(layer_core::Affine::translation(op.coverage.offset)), layer.local_extent(packet.document_extent), c)?;
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             match op.kind {
-                LayerOperationKind::Transform(_) => {
-                    unreachable!("transforms execute against immutable captures")
+                LayerOperationKind::Transform(_) | LayerOperationKind::Bake { .. } => {
+                    unreachable!("transforms and bakes run before page operations")
                 }
                 LayerOperationKind::ApplyMask | LayerOperationKind::Erase { .. } => {
                     let mut resolved = None;

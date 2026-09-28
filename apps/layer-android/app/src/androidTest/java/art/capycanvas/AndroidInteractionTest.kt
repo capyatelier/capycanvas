@@ -3064,6 +3064,66 @@ class AndroidInteractionTest {
         .zip(rgba).all { (value, expected) -> kotlin.math.abs(value - 255 * expected) < 45 }
     private fun same(a: Int, b: Int) = listOf(16, 8, 0).all { shift -> kotlin.math.abs((a shr shift and 0xff) - (b shr shift and 0xff)) <= 12 }
 
+    @Test fun mergeDownAndStampVisibleAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        popupInput = true
+        try {
+            val (width, height) = cleanDocument(keep)
+            val crossing = documentPoint(width * .5, height * .5)
+            val beside = documentPoint(width * .35, height * .5)
+            tool = MotionEvent.TOOL_TYPE_STYLUS
+            command("pen"); action(obj("type" to "select_brush", "id" to 1)); action(obj("type" to "set_brush_size", "value" to 40))
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.1, .3, .85, 1.0))))
+            val enabled = { id: String -> state().array("commands").objects().any { it.getString("id") == id && it.getBoolean("enabled") } }
+            val stroke = { from: Offset, to: Offset ->
+                val layer = editingLayer()
+                val before = paintRevision(layer)
+                drag(from, to)
+                waitFor("the stroke is committed", 5_000) { paintRevision(layer) != before }
+            }
+            stroke(documentPoint(width * .3, height * .5), documentPoint(width * .7, height * .5))
+            command("add_layer")
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.9, .6, .05, .7))))
+            stroke(documentPoint(width * .5, height * .3), documentPoint(width * .5, height * .7))
+            SystemClock.sleep(300)
+            val points = listOf(crossing, beside)
+            val before = screenPixels(points)
+            val count = layerStates().size
+            val unchanged = { pixels: List<Int> -> pixels.zip(before).all { (a, b) -> same(a, b) } }
+            val now = SystemClock.uptimeMillis()
+            val control = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+            instrumentation.sendKeySync(KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_E, 0, control))
+            instrumentation.sendKeySync(KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_E, 0, control))
+            waitFor("Ctrl+E merges down", 5_000) { layerStates().size == count - 1 }
+            awaitPixels("Ctrl+E keeps the canvas", points, unchanged)
+            command("undo")
+            waitFor("one undo step restores both layers", 5_000) { layerStates().size == count && enabled("merge_down") }
+            for ((index, device) in pointerTools.withIndex()) {
+                val name = listOf("mouse", "finger", "stylus")[index]
+                tool = device
+                chooseFromApplicationMenu("layer", listOf("Merge Down"))
+                waitFor("$name: Layer › Merge Down replaces both layers with one", 5_000) { layerStates().size == count - 1 }
+                awaitPixels("$name: Merge Down keeps the canvas", points, unchanged)
+                command("undo")
+                waitFor("$name: one undo step restores both layers", 5_000) { layerStates().size == count && enabled("stamp_visible") }
+                chooseFromApplicationMenu("layer", listOf("Stamp Visible"))
+                waitFor("$name: Stamp Visible adds the visible image on top", 5_000) {
+                    layerStates().size == count + 1 && layerStates()[0].getString("label") == "Visible" && editingLayer() == layerStates()[0].getLong("id")
+                }
+                if (index == 0) captureCanvasBar("stamp-visible", "merge")
+                val hidden = layerStates().drop(1).map { it.getLong("id") }
+                hidden.forEach { layerAction(obj("op" to "visibility", "id" to it, "value" to false)) }
+                awaitPixels("$name: the stamp alone shows the crossing", listOf(crossing)) { (pixel) -> same(pixel, before[0]) }
+                repeat(hidden.size + 1) { command("undo") }
+                waitFor("$name: undo removes the stamp and shows every layer", 5_000) {
+                    layerStates().size == count && layerStates().all { it.getBoolean("visible") } && enabled("merge_down")
+                }
+                println("PASS merges $name")
+            }
+        } finally { popupInput = false }
+        println("PASS Ctrl+E and Layer › Merge Down keep the canvas in one undo step, and Stamp Visible adds the visible image on top, with mouse, finger and stylus")
+    }
+
     @Test fun solidColorFillMasksTheSelectionAcrossDevices() {
         val keep = layerStates().map { it.getLong("id") }.toSet()
         val colors = listOf(listOf(.85, .08, .05, 1.0), listOf(.05, .6, .1, 1.0), listOf(.8, .1, .7, 1.0))

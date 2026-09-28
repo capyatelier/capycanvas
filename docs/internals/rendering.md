@@ -76,6 +76,21 @@ from its raster revision, including on undo and redo
 Limits are checked before the edit commits, including the device's texture limit
 through `CanvasRenderer::max_document_dimension`.
 
+### Merges
+
+A merge inserts its result with a pending `LayerOperationKind::Bake` holding the
+merged layers as they were. The frame that runs it composites them with
+`Scene::group` over transparency, isolated and moved into the result's pixels,
+and copies each tile into the result's pages
+([`scene/bake.rs`](../../crates/layer-render-wgpu/src/scene/bake.rs)). Placed
+photos are sampled as for export, never from the display's mip levels, and
+watercolor settles into the result, which keeps no wet state. The same edit
+removes the merged layers, so the engine appends them, hidden, to that frame's
+layers, and the renderer keeps their pages, masks and photo tiles until the bake
+has run (`with_bake_members` in
+[`canvas.rs`](../../crates/layer-engine/src/canvas.rs)). The bake is frame work
+on the render owner; the UI thread only plans it.
+
 The Crop tool's shield is drawn by the presentation pass itself. `set_crop_overlay`
 passes a `CropOverlay` (the map from document pixels onto the crop's unit square,
 and the shield opacity) to the renderer, which folds it into the presentation

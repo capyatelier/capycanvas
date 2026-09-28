@@ -13,10 +13,6 @@ use std::sync::{
 
 const CAPTURE_CHUNK: u64 = 16 * 1024 * 1024;
 use layer_core::raster::MAX_CAPTURE_BYTES;
-// Immutable native outputs are separate from mapped transfer memory. A full
-// 60 MP U16 edit exceeds 256 MiB; color plus linked scalar planes fit this
-// publication bound. Readback still uses one 16 MiB chunk at a time.
-const MAX_NATIVE_OUTPUT_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[cfg(target_arch = "wasm32")]
 mod browser;

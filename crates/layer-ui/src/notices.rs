@@ -65,7 +65,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.raise_notice(text.into(), None);
     }
 
-    fn raise_notice(&mut self, text: String, action: Option<(String, UiAction)>) {
+    pub(super) fn raise_notice(&mut self, text: String, action: Option<(String, UiAction)>) {
         let (label, action) = action.unzip();
         let notices = &mut self.notices;
         notices.last_id += 1;

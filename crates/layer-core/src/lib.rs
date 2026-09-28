@@ -46,6 +46,8 @@ mod canvas_geometry;
 pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits, ImageOrientation};
 mod content_bounds;
 pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope, ScanBudget};
+mod merge;
+pub use merge::{MergeDown, MergeKind, MergePlan, MergeRefusal, bake_layers};
 mod project_storage;
 pub use project_storage::SelectionIndex as ProjectSelections;
 mod history_budget;
@@ -1704,8 +1706,10 @@ impl Edit {
             Self::SetSavedSelection { .. } => true,
             Self::Batch(edits) => edits.iter().any(|e| e.requires_history_admission(document)),
             // A copy that shares an existing layer's original adds no ownership.
+            // A merge's result must leave room to undo it.
             Self::InsertLayer { layer, .. } => {
                 layer.selection.is_some()
+                    || layer.pending_operations.iter().any(|op| matches!(op.kind, LayerOperationKind::Bake { .. }))
                     || layer.source.as_ref().is_some_and(|source| {
                         !document.layers.iter().any(|l| l.source.as_ref().is_some_and(|s| Arc::ptr_eq(s, source)))
                     })

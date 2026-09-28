@@ -3891,6 +3891,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     layer_core::LayerOperationKind::Fill { .. }
                         | layer_core::LayerOperationKind::Gradient { .. }
                         | layer_core::LayerOperationKind::Figure(_)
+                        | layer_core::LayerOperationKind::Bake { .. }
                 ) || (masking && (layer.source.is_some() || self.native_backing(layer.id).is_some()))
                 {
                     // Coverage may be translated or inverted: its source mask
@@ -4033,7 +4034,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     self.scene = Some(scene);
                 }
                 let bounds = packet.layers[layer_index].pending_operations[op as usize]
-                    .bounds(packet.document_extent);
+                    .bounds(self.target_extent(batch.layer_id));
                 let offset = scene::world_offset(packet.layers, batch.layer_id, false);
                 dirty = dirty.union(pixel_rect(
                     layer_core::Rect {

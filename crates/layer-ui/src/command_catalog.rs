@@ -318,6 +318,11 @@ fn entry(
                 | CommandId::CopySelectionToLayer
                 | CommandId::CutSelectionToLayer
                 | CommandId::RevertToOriginal
+                | CommandId::MergeDown
+                | CommandId::MergeGroup
+                | CommandId::MergeVisible
+                | CommandId::FlattenImage
+                | CommandId::StampVisible
                 | CommandId::LoadSelectionLayer
                 | CommandId::InvertSelectionLayer
                 | CommandId::InvertLayerMask
@@ -480,6 +485,11 @@ fn action_description(action: &UiAction) -> &'static str {
             CopySelectionToLayer => "Copy the selected pixels to a new layer above, in place. Without a selection, duplicate the layer.",
             CutSelectionToLayer => "Move the selected pixels from the active layer to a new layer above, in place.",
             RevertToOriginal => "Discard painting, erasing and applied masks on a placed photo, keeping its placement, mask, opacity and blend mode.",
+            MergeDown => "Merge the active layer into the layer below. A clipping base merges its clipped layers, and an effect layer applies to the layer below only. Placed photos become document pixels.",
+            MergeGroup => "Merge the active group into one layer with the group's blend mode and opacity, discarding its hidden layers. Placed photos become document pixels.",
+            MergeVisible => "Merge every visible layer into one, keeping hidden layers. Placed photos become document pixels.",
+            FlattenImage => "Merge every visible layer into one over the paper and discard hidden layers and pixels outside the canvas. Placed photos become document pixels.",
+            StampVisible => "Add a layer on top with everything visible merged into it, keeping every layer.",
             LoadSelectionLayer => "Use the Selection Layer being edited as the current selection and return to the artwork.",
             InvertSelectionLayer => "Invert the stored coverage of the Selection Layer being edited, staying in the mode.",
             InvertLayerMask => "Swap what the active layer's mask shows and hides.",
@@ -1069,6 +1079,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::CopySelectionToLayer
             | C::CutSelectionToLayer
             | C::RevertToOriginal
+            | C::MergeDown
+            | C::MergeGroup
+            | C::MergeVisible
+            | C::FlattenImage
+            | C::StampVisible
             | C::LoadSelectionLayer
             | C::InvertSelectionLayer
             | C::InvertLayerMask
@@ -1224,6 +1239,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_to_layer_refusal(command == C::CutSelectionToLayer).unwrap_or(UNAVAILABLE)
             }
             C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or(UNAVAILABLE),
+            C::MergeDown | C::MergeGroup | C::MergeVisible | C::FlattenImage | C::StampVisible => {
+                super::merges::merge_kind(command).and_then(|kind| self.merge_refusal(kind)).unwrap_or(UNAVAILABLE)
+            }
             C::CanvasSize
             | C::ImageSize
             | C::RotateImageLeft
