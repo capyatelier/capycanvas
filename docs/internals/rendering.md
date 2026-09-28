@@ -351,6 +351,9 @@ Spot Healing scores its candidates on linear values in both spaces.
 The *compositor* combines paint and image layers, groups, masks, clipping and
 blend modes. Its [scene code](../../crates/layer-render-wgpu/src/scene.rs) tracks
 *damage*: regions whose previously rendered pixels are no longer valid.
+Stroke-finalization passes, including healing and wet edges, invalidate every
+page they revisit. Destination storage, redraw regions and reduced source caches
+use the same stroke coverage pages, including pages far from the final dab.
 
 Eligible paint stacks use [region and scale composition](../rendering/display-composition.md).
 The scene retains local source levels across camera and placement changes. Reduced

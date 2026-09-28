@@ -138,6 +138,42 @@ fn heals_texture_and_tone(blend_space: layer_core::BlendSpace) {
 }
 
 #[test]
+fn healing_pen_up_refreshes_every_painted_display_page() {
+    for preset in [DefaultBrushPreset::HealingBrush, DefaultBrushPreset::SpotHealingBrush] {
+        let doc = photo(|x, y| grey(texture_and_gradient(x, y)));
+        let (mut input, mut engine) = healer(doc, preset, 64., false);
+        let mut fit = view(EXTENT);
+        fit.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        engine.set_view(fit, ViewTransform { revision: 1, surface_to_document: [4., 0., 0., 4., 0., 0.] });
+        source_at(&mut engine, 150., 256.);
+        for i in 0..9 {
+            let phase = if i == 0 { PenPhase::Down } else if i == 8 { PenPhase::Up } else { PenPhase::Move };
+            let mut event = pen(i + 1, phase, [(580. + i as f32 * 40.) * 0.25, 64.], SampleFlags::PRIMARY);
+            event.view_revision = 1;
+            draw(&mut engine, &mut input, event);
+        }
+        assert_eq!(counts(&engine).heals, 1);
+        let r = engine.backend();
+        let cache = r.scale_display.as_ref().unwrap();
+        assert_eq!(cache.plan.level, 2);
+        let output = floats(&crate::layer_tests::page_bytes(r, cache.texture()));
+        let healed = target(r);
+        for y in 62..66 {
+            for x in 152..180 {
+                let mut expected = [0.; 4];
+                for dy in 0..4 { for dx in 0..4 {
+                    let p = healed(x * 4 + dx, y * 4 + dy);
+                    assert!(p[3] > 0.999);
+                    for c in 0..4 { expected[c] += p[c] / 16.; }
+                }}
+                let actual = output[(y * cache.plan.size[0] + x) as usize];
+                assert!(close(actual, expected), "{preset:?} ({x},{y}): displayed {actual:?}, healed {expected:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn with_matching_surroundings_healing_is_the_clone() {
     let periodic = |x: u32, y: u32| grey(0.4 + 0.2 * noise(x % 32, y % 32));
     for blend_space in layer_core::BlendSpace::ALL {

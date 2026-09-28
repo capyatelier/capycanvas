@@ -205,6 +205,26 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 At the 2048 px goal, the G-Pen completes 12.3 updates/s (12.3–12.4), with a gap p99 of 114.1 ms.
 
+Retouch brushes measured on 2026-09-28, production `9f364292` plus shared
+stroke-finalization invalidation, on the 12 MP photo at Fit. Each tool uses three
+five-second inside-photo strokes, 512 px diameter and 16 ms prediction. Thermal
+status is zero before and after each tool. These are current-path measurements;
+there is no matched old-renderer comparison.
+
+| Brush | Completed updates/s (range) | Update-start gap p99 | Last completion after input ends, median (range) | Status |
+| --- | --- | --- | --- | --- |
+| Clone Stamp | 19.56 (19.55–19.73) | 92.0 ms | 148 ms (142–212) | **Not met** |
+| Healing Brush | 19.35 (19.30–19.73) | 91.8 ms | 1661 ms (256–1727) | **Not met** |
+| Spot Healing Brush | 29.26 (24.71–29.28) | 65.8 ms | 3879 ms (3851–3881) | **Not met** |
+
+Completion rates exclude work after the input window. The final column of timings
+includes queued input, release processing and GPU observation; it does not isolate
+the healing solver. All submitted frames finish before the harness records its
+drained snapshot. Renderer-owned storage is 709, 726 and 726 MiB respectively,
+not process RSS. The build's APK SHA-256 is
+`d1f62e558bd7a313a6355edb7be7a540b0afd683f605c14eb15604a5923fdc57`.
+Raw results are in `artifacts/display-production/healing-finish-retouch-12mp-fit`.
+
 G-Pen was remeasured on 2026-09-28 after integrating Clone and color mixing,
 with cached composition branches and the validated benchmark harness.
 Release Rust APK SHA-256:

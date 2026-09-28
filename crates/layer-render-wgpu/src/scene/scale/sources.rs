@@ -96,6 +96,7 @@ impl Sources {
         for batch in packet.dab_batches.iter().filter(|b| b.layer_id == id) {
             let coordinates = page_coordinates(batch_pixel_rect(batch, extent));
             damage.extend(coordinates.clone());
+            damage.extend(r.stroke_finish_pages(batch));
             if batch.kind == DabBatchKind::Preview { source.preview.extend(coordinates); }
         }
         if r.preview_layer_id == Some(id) {

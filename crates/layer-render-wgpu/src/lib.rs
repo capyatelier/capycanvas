@@ -1718,6 +1718,14 @@ impl WgpuRasterizer {
         )
     }
 
+    fn stroke_finish_pages<'a>(&'a self, batch: &'a DabBatch) -> impl Iterator<Item = [u32; 2]> + 'a {
+        self.paint_layers.iter()
+            .filter(move |layer| batch.stroke_end && revisits_stroke(&batch.style) && layer.id == batch.layer_id)
+            .flat_map(|layer| &layer.coverage_pages)
+            .filter(move |page| page.owner == Some(batch.stroke_id))
+            .map(|page| page.coordinate)
+    }
+
     fn destination_pages(
         &self,
         batches: &[DabBatch],
@@ -1728,20 +1736,11 @@ impl WgpuRasterizer {
             batch.kind == DabBatchKind::Persistent
                 && BrushPassPlan::for_device(&batch.style, &self.device).requires_destination()
         }) {
-            // Pen-up edges and healing revisit the whole stroke, including
-            // companions retired since the pointer left those pages.
             let revisits = batch.stroke_end && revisits_stroke(&batch.style);
             if !self.in_place_dry_material(batch) || revisits {
                 destination_pages.extend(tiles.iter().map(|tile| (batch.layer_id, tile.coordinate)));
             }
-            if revisits {
-                destination_pages.extend(
-                    self.paint_layers.iter().filter(|l| l.id == batch.layer_id)
-                        .flat_map(|l| &l.coverage_pages)
-                        .filter(|p| p.owner == Some(batch.stroke_id))
-                        .map(|p| (batch.layer_id, p.coordinate)),
-                );
-            }
+            destination_pages.extend(self.stroke_finish_pages(batch).map(|page| (batch.layer_id, page)));
         }
         destination_pages
     }
@@ -3551,26 +3550,9 @@ impl CanvasRenderer for WgpuRasterizer {
             } else {
                 batch_dirty
             };
-            if batch.stroke_end && revisits_stroke(&batch.style) {
-                let edge_dirty = self
-                    .paint_layers
-                    .iter()
-                    .find(|layer| layer.id == batch.layer_id)
-                    .map(|layer| {
-                        layer
-                            .coverage_pages
-                            .iter()
-                            .filter(|page| page.owner == Some(batch.stroke_id))
-                            .fold(PixelRect::EMPTY, |damage, page| {
-                                damage.union(
-                                    page_rect(page.coordinate)
-                                        .intersect(PixelRect::full(packet.document_extent)),
-                                )
-                            })
-                    })
-                    .unwrap_or(PixelRect::EMPTY);
-                dirty = dirty.union(edge_dirty);
-            }
+            dirty = self.stroke_finish_pages(batch).fold(dirty, |damage, page| {
+                damage.union(page_rect(page).intersect(PixelRect::full(packet.document_extent)))
+            });
             if batch_dirty.is_empty() || dabs.is_empty() {
                 continue;
             }
