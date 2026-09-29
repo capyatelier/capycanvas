@@ -3,9 +3,20 @@
   "scope": "Command and shared-control catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
   "unavailable": {
     "ios": {
-      "fullscreen": "Use the native iPadOS window control, explicitly accepted by the user on 2026-09-16. The installed UIKit SDK has no app-callable full-screen toggle; Mac Catalyst's geometry API does not apply to this target. The shared in-app command remains unavailable."
+      "fullscreen": "Use the native iPadOS window control, explicitly accepted by the user on 2026-09-16. The installed UIKit SDK has no app-callable full-screen toggle; Mac Catalyst's geometry API does not apply to this target. The shared in-app command remains unavailable.",
+      "copy": "Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap).",
+      "copy_merged": "Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap).",
+      "cut": "Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap).",
+      "paste_in_place": "Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap).",
+      "paste_into": "Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap)."
     },
-    "mac": {}
+    "mac": {
+      "copy": "Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap).",
+      "copy_merged": "Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap).",
+      "cut": "Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap).",
+      "paste_in_place": "Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap).",
+      "paste_into": "Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap)."
+    }
   },
   "groups": [
     {
@@ -53,7 +64,7 @@
     },
     {
       "name": "Selection, fill, and shapes",
-      "commands": ["lasso", "auto_select", "fill", "gradient", "figure"],
+      "commands": ["lasso", "lasso_fill", "auto_select", "fill", "gradient", "figure"],
       "checks": ["native/src/tests.rs", "native/src/region_tests.rs", "tests/canvas-native-input.swift", "tests/property-slider-input.swift", "Shared/Tests/CanvasToolChecks.swift", "Shared/Tests/RegionSelectionChecks.swift", "Shared/Tests/CanvasNavigationChecks.swift", "tests/canvas-modifiers.swift"],
       "ios": "partial: native figure/gradient choices, Fill/Auto select sources and applicable settings, lasso selection/direct-fill menus; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; UIKit native gap-closing, positive/negative expansion and smoothing controls pass 14 committed edits with published-value retention after switching tools; physical Pencil artwork and applicable native shape modifiers remain; Lasso/Auto select share the New/Add/Subtract/Intersect modes (see Selection tools and masks); AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies; supplied UIKit mouse/Pencil callbacks on simulator and physical iPad GPU cover all figure shape/paint combinations with/without Shift, all four gradients, cancellation and exact decoded PNG Undo/Redo; physical sensor/key delivery and visible editor hit targets remain separate",
       "mac": "partial: mouse figures/gradients, Fill/Auto select sources with distinct sampled results, inversion and history, lasso control routes and assembled AppKit editor freehand selection/fill through verified canvas hit targets, Escape/focus/tool cancellation, shared lifecycle interruption/renderer restart without mouseUp, stale-movement exclusion, next-contact recovery and exact PNG history; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; native Mac fields/scrolling/canvas clicks and PNG exports verify Fill/Auto select expansion, contraction, smoothing and gap-closing Fill with exact artwork/Undo and softened-result Redo; AppKit mouse/flagsChanged delivery verifies line, rectangle and ellipse constraints with Shift held, stationary press/release after movement, fresh unmodified contact, captured presented previews before mouse-up and exact PNG Undo/Redo on both Apple policies; OS-delivered mouse freehand selection/fill, cancellation and exact PNG history also pass on both policies; physical pen refinement remains; Lasso/Auto select share the New/Add/Subtract/Intersect modes (see Selection tools and masks); AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies"
@@ -160,10 +171,45 @@
     },
     {
       "name": "Canvas action bar and transform modes",
-      "commands": ["show_canvas_action_bar", "transform_free", "transform_uniform", "transform_distort", "transform_perspective", "transform_flip_horizontal", "transform_flip_vertical", "transform_rotate_left", "transform_rotate_right", "reset_transform", "transform_nearest", "transform_bilinear", "transform_bicubic", "remove_selection_point", "mask_selection", "transform_warp", "warp_grid_three", "warp_grid_four", "warp_grid_five"],
+      "commands": ["show_canvas_action_bar", "transform_free", "transform_uniform", "transform_distort", "transform_perspective", "transform_flip_horizontal", "transform_flip_vertical", "transform_rotate_left", "transform_rotate_right", "reset_transform", "transform_nearest", "transform_bilinear", "transform_bicubic", "remove_selection_point", "mask_selection", "transform_warp", "warp_grid_three", "warp_grid_four", "warp_grid_five", "transform_lanczos", "grow_selection", "shrink_selection", "feather_selection", "border_selection", "smooth_selection", "transform_selection_outline", "load_selection_layer", "invert_selection_layer", "invert_layer_mask", "layer_mask_enabled", "apply_layer_mask", "edit_layer_mask", "edit_layer_content"],
       "checks": ["Shared/Editor/CanvasBar.swift", "Shared/Editor/ToolbarComponents.swift", "Shared/Tests/CanvasActionBarChecks.swift", "../../crates/layer-ui/src/canvas_bar_tests.rs", "../../docs/ui/canvas-action-bar.md"],
-      "ios": "partial: the shared bar is a panel-glass SwiftUI row built from the Tool Options fields, placed by canvas_bar_layout, hidden during canvas contacts and camera motion and restored after the shared delay; EditorLaunchTests/testCanvasActionBar drives the transform and selection bars.",
-      "mac": "partial: same presentation and journey through AppKit input; placements and transforms no longer use the separate Apple placement controls."
+      "ios": "partial: the shared bar is a panel-glass SwiftUI row built from the Tool Options fields, placed by canvas_bar_layout, hidden during canvas contacts and camera motion and restored after the shared delay; EditorLaunchTests/testCanvasActionBar drives the transform and selection bars. Refine ▾ opens the non-modal SelectionRefinePanel for Grow, Shrink, Feather, Border and Smooth, and the journey steps Feather, applies it and applies Transform Outline; the Quick Mask, Selection Layer and layer-mask bars (Load, Invert, Enable or Disable, Apply Mask, Edit Mask or Content) and Lanczos interpolation come from the shared model without an Apple journey of their own.",
+      "mac": "partial: same presentation and journey through AppKit input; placements and transforms no longer use the separate Apple placement controls; the same Refine, Transform Outline and mode-bar coverage."
+    },
+    {
+      "name": "Canvas and image geometry",
+      "commands": ["canvas_size", "image_size", "crop_canvas_to_selection", "crop", "crop_ratio_free", "crop_ratio_original", "crop_ratio_square", "crop_ratio_four_five", "crop_ratio_two_three", "crop_ratio_five_seven", "crop_ratio_sixteen_nine", "crop_swap_orientation", "crop_overlay_thirds", "crop_overlay_grid", "crop_overlay_diagonal", "crop_overlay_golden", "crop_cycle_overlay", "crop_straighten", "crop_delete_cropped_pixels", "crop_fit_content", "straighten_to_guide", "rotate_image_left", "rotate_image_right", "rotate_image180", "flip_image_horizontal", "flip_image_vertical", "trim", "reveal_all"],
+      "checks": ["Shared/Editor/CanvasSizeDialog.swift", "Shared/Tests/CanvasSizeChecks.swift", "../../crates/layer-ui/src/crop_tests.rs"],
+      "ios": "partial: Canvas Size… opens CanvasSizeDialog (units, Relative, the 3×3 anchor and the resulting size) and EditorLaunchTests/testCanvasSize passes on the physical iPad. Image Size has no Apple dialog yet; the Crop tool and bar, Straighten Image to Guide, the image turns and flips, Trim and Reveal All come from the shared tool, bar and menu models without an Apple journey.",
+      "mac": "partial: the same Canvas Size dialog and journey through AppKit input, in the dark theme. Image Size has no Apple dialog yet; the Crop tool and bar, Straighten Image to Guide, the image turns and flips, Trim and Reveal All come from the shared tool, bar and menu models without an Apple journey."
+    },
+    {
+      "name": "Retouching",
+      "commands": ["clone", "clone_aligned", "clone_flip_horizontal", "clone_flip_vertical", "clone_reset_offset", "clone_source_arm", "heal", "spot_heal", "new_dodge_burn_layer", "frequency_separation"],
+      "checks": [],
+      "ios": "pending: not ported or checked on Apple (see the photo editing roadmap); no Apple journey covers these commands yet.",
+      "mac": "pending: not ported or checked on Apple (see the photo editing roadmap); no Apple journey covers these commands yet."
+    },
+    {
+      "name": "Merging and moving pixels",
+      "commands": ["merge_down", "merge_group", "merge_visible", "flatten_image", "stamp_visible", "move_leave_copy"],
+      "checks": [],
+      "ios": "pending: not ported or checked on Apple (see the photo editing roadmap); no Apple journey covers these commands yet.",
+      "mac": "pending: not ported or checked on Apple (see the photo editing roadmap); no Apple journey covers these commands yet."
+    },
+    {
+      "name": "Blending and color mixing",
+      "commands": ["blend_perceptual", "blend_linear", "color_mix_oklab", "color_mix_linear", "color_mix_classic"],
+      "checks": [],
+      "ios": "pending: not ported or checked on Apple (see the photo editing roadmap); no Apple journey covers these commands yet.",
+      "mac": "pending: not ported or checked on Apple (see the photo editing roadmap); no Apple journey covers these commands yet."
+    },
+    {
+      "name": "Clipboard",
+      "commands": ["copy", "copy_merged", "cut", "paste_in_place", "paste_into"],
+      "checks": [],
+      "ios": "unavailable: Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap).",
+      "mac": "unavailable: Shared gate: Platform::pixel_clipboard excludes Apple until the clipboard image writers are ported (see the photo editing roadmap)."
     }
   ],
   "workspace_commands": {

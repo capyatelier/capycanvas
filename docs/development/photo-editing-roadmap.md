@@ -48,7 +48,6 @@ M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_POR
   - the Use Pass Through for new groups setting;
   - the Frequency Separation dialog (`frequency_separation`, shaped like Refine) and the Dodge & Burn and Frequency Separation icons.
 - **Tests:**
-  - Apple's `command-coverage.json` lacks the M2–M4 commands;
   - `CanvasToolChecks.swift` must expect the new preset count;
   - the Swift ruler fixtures now check the `CAPYRASTER` signature and have not run on a Mac.
 
