@@ -853,6 +853,7 @@ pub struct WgpuRasterizer {
     regions: Option<region_requests::RegionRequests>,
     unclipped: wgpu::Buffer,
     scene: Option<scene::Scene>,
+    source_tiles: std::cell::RefCell<scene::sources::DecodedTiles>,
     transforms: Option<paint_transform::PaintTransforms>,
     transform_preview: Option<layer_render::TransformPreview>,
     transform_damage: Vec<(LayerId, PixelRect)>,
@@ -1174,6 +1175,7 @@ impl WgpuRasterizer {
             regions: None,
             unclipped,
             scene: None,
+            source_tiles: Default::default(),
             transforms,
             transform_preview: None,
             transform_damage: Vec::with_capacity(2),
@@ -1306,9 +1308,7 @@ impl WgpuRasterizer {
     pub fn metrics(&self) -> GpuRasterMetrics {
         let mut metrics = self.metrics.clone();
         metrics.raster_backing_reserved_bytes = self.raster_staging_bytes();
-        if let Some(scene) = &self.scene {
-            [metrics.source_tile_hits, metrics.source_tile_misses] = scene.source_cache_work();
-        }
+        [metrics.source_tile_hits, metrics.source_tile_misses] = self.source_cache_work();
         metrics
     }
 
@@ -1740,7 +1740,8 @@ impl WgpuRasterizer {
             .iter()
             .find(|layer| layer.id == batch.layer_id)
             .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
-        let mut views = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
+        let sources = self.source_tiles.borrow();
+        let mut views = self.raw_layer_neighborhood(&sources, layer, coordinate, offsets, preview);
         if let MaterialInputs::Retouch(pages) = inputs {
             for (slot, page) in [0, 1, 2, 3, 5, 6, 7, 8].into_iter().zip(pages) {
                 views[slot] = page;
@@ -2588,7 +2589,8 @@ impl WgpuRasterizer {
             .iter()
             .find(|l| l.id == layer_id)
             .ok_or(GpuRasterError::MissingPaintLayer(layer_id))?;
-        let colors = self.raw_layer_neighborhood(layer, coordinate, offsets.map(Some), preview);
+        let sources = self.source_tiles.borrow();
+        let colors = self.raw_layer_neighborhood(&sources, layer, coordinate, offsets.map(Some), preview);
         let wetness_pages = if preview {
             &self.preview_watercolor_wetness_pages
         } else {
@@ -3163,6 +3165,7 @@ impl CanvasRenderer for WgpuRasterizer {
         t.dabs = m.dabs;
         t.dirty_pixels = m.composited_pixels;
         t.resident_bytes = self.raster_staging_bytes()
+            + self.source_tiles.borrow().gpu_bytes()
             + m.paint_storage_bytes
             + m.preview_storage_bytes
             + m.destination_storage_bytes
@@ -4225,9 +4228,9 @@ impl CanvasRenderer for WgpuRasterizer {
         performance_trace::counter(c"Capy restore batches", self.metrics.native_restore_submissions);
         performance_trace::counter(c"Capy paint pages", self.metrics.paint_pages);
         performance_trace::counter(c"Capy preview pages", self.metrics.preview_pages);
-        if let Some(scene) = &self.scene {
-            let [hits, misses] = scene.source_cache_work();
-            let [resident, uploads] = scene.source_cache_limits();
+        {
+            let [hits, misses] = self.source_cache_work();
+            let [resident, uploads] = self.source_tiles.borrow().admitted_bytes();
             performance_trace::counter(c"Capy source resident limit bytes", resident);
             performance_trace::counter(c"Capy source upload limit bytes", uploads);
             performance_trace::counter(c"Capy source hits", hits);

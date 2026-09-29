@@ -53,10 +53,13 @@ measurements below.
 | GPU painting, composition and presentation | 12 ms | 8 ms | 6 ms |
 
 Background refinement must yield to fresh input. Aim for at most one frame of
-additional delay when drawing resumes. On the low tier, aim to finish ordinary
-stroke refinement within 100–250 ms and broad composition damage within
-250–500 ms. Measure both completion and interrupted refinement; a fast completion
-time cannot justify a long input stall.
+additional delay when drawing resumes, and require new operations to meet their
+normal motion and response targets while refinement is pending. Refinement may
+take longer to finish if it preserves that responsiveness. On the low tier,
+100–250 ms for ordinary stroke refinement and 250–500 ms for broad composition
+damage are efficiency aims, not independent pass conditions. Measure both
+completion and interrupted refinement; a fast completion time cannot justify a
+long input stall.
 
 Model each workload from its changed pixels, texture reads and writes, filter
 taps, and submissions. Compare it with the same kernels and formats measured on

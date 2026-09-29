@@ -157,7 +157,7 @@ impl WgpuRasterizer {
     /// Admitted display, decoded-source and in-flight upload ceilings in bytes.
     pub fn display_memory_limits(&self) -> [u64; 3] {
         let display = self.native_edit.as_ref().map_or(0, |n| n.display_complete_bytes);
-        let [sources, uploads] = self.scene.as_ref().map_or([0; 2], |s| s.source_cache_limits());
+        let [sources, uploads] = self.source_tiles.borrow().admitted_bytes();
         [display, sources, uploads]
     }
 
@@ -256,18 +256,13 @@ impl WgpuRasterizer {
         self.device = self.device.clone().with_hdr(color.depth.is_float());
         self.ui_rendition = color.depth.is_float().then_some(Default::default());
         self.scene = None;
+        self.source_tiles = std::cell::RefCell::new(crate::scene::sources::DecodedTiles::new(color.space));
         let transfer = self.prepare_native_transfer(color.space)?;
         let native = NativeEdit::new(self, transfer);
-        // Transfer-table preparation creates the scene before NativeEdit's
-        // headroom snapshot exists. Admit live source storage now, while that
-        // new scene still owns no decoded pixels. Background snapshots retain
-        // the original smaller source/upload ceilings.
         let allowance = native.display_complete_bytes;
         #[cfg(not(target_arch = "wasm32"))]
         let allowance = if self.snapshot_worker { 0 } else { allowance };
-        if let Some(scene) = &mut self.scene {
-            scene.admit_native_sources(allowance);
-        }
+        self.source_tiles.get_mut().admit(allowance);
         self.native_edit = Some(native);
         Ok(())
     }

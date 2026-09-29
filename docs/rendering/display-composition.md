@@ -115,7 +115,10 @@ temporary results reuse 256-texel working tiles at every resolution. Every value
 so a tile can compose directly into a viewport image without changing document
 coordinates. Aligned native sources borrow paint or decoded tiles directly.
 Decoded tiles carry leases until their consuming commands are encoded; eviction
-cannot replace a borrowed tile. Other native sources use the shared paint and
+cannot replace a borrowed tile. The renderer owns one decoded-tile cache and
+upload allowance shared by display composition, refinement and exact queries.
+Replacing a scene preserves this cache; changing document color resets it.
+Other native sources use the shared paint and
 mask gatherers; minified sources use retained reduced windows or streamed tiles. Composition batches
 uniform records and compute dispatches, flushing before source preparation,
 transforms, effects or reduction consume or replace their inputs. Admission

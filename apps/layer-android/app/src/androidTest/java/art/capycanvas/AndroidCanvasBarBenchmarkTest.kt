@@ -45,6 +45,7 @@ class AndroidCanvasBarBenchmarkTest {
         val refineSpan = args.getString("refineSpan", ".5")!!.toDouble()
         val refineBar = args.getString("refineBar", "on") == "on"
         val blending = args.getString("blending")
+        val memory = args.getString("memory") == "true"
         if (args.getString("composeTrace") == "true") @OptIn(androidx.compose.runtime.InternalComposeTracingApi::class)
             androidx.compose.runtime.Composer.setTracer(object : androidx.compose.runtime.CompositionTracer {
                 override fun isTraceInProgress() = android.os.Trace.isEnabled()
@@ -52,6 +53,7 @@ class AndroidCanvasBarBenchmarkTest {
                 override fun traceEventEnd() = android.os.Trace.endSection()
             })
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            device.landscape(scenario)
             lateinit var activity: MainActivity
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
             val host = activity.host
@@ -115,7 +117,9 @@ class AndroidCanvasBarBenchmarkTest {
                     this.x = x.toFloat() + host.surfaceOrigin.x; this.y = y.toFloat() + host.surfaceOrigin.y; this.pressure = pressure
                 })
                 val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_STYLUS, 0)
-                try { check(instrumentation.uiAutomation.injectInputEvent(event, action == MotionEvent.ACTION_UP)) } finally { event.recycle() }
+                try { check(instrumentation.uiAutomation.injectInputEvent(event, action != MotionEvent.ACTION_MOVE) || action == MotionEvent.ACTION_CANCEL) {
+                    "Stylus injection failed: $event"
+                } } finally { event.recycle() }
             }
             fun drag(start: Pair<Double, Double>, milliseconds: Int, path: (Double) -> Pair<Double, Double>) {
                 val initial = path(0.0)
@@ -193,6 +197,7 @@ class AndroidCanvasBarBenchmarkTest {
                 host.measurementReport(true)
                 native { Native.completionTimings(it, true) }
                 val rendererBefore = native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) }
+                val memoryBefore = if (memory) native { JSONObject(Native.rendererMemory(it)) } else null
                 val displayBefore = native { JSONObject(Native.displayStatus(it)) }
                 val cameraBefore = JSONObject(state().getJSONObject("camera").toString())
                 synchronized(uiFrames) { uiFrames.clear() }
@@ -234,6 +239,8 @@ class AndroidCanvasBarBenchmarkTest {
                     "motion" to obj("begin_ns" to began, "end_ns" to operated,
                         "begin_boot_ns" to beganBoot, "end_boot_ns" to operatedBoot),
                     "drained_ns" to ended, "display_after_drain" to drained, "renderer_before" to rendererBefore,
+                    "memory_before" to memoryBefore,
+                    "memory_after" to if (memory) native { JSONObject(Native.rendererMemory(it)) } else null,
                     "renderer_after" to native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) },
                     "display_before" to displayBefore, "display_after_input" to displayAfterInput,
                     "bar_visible_fraction" to if (bars.isEmpty()) 0.0 else bars.count { it } / bars.size.toDouble(),
@@ -271,6 +278,7 @@ class AndroidCanvasBarBenchmarkTest {
                 println("CANVAS BAR $label $result")
             }
             fun wanted(name: String) = only == null || name in only
+            inject(MotionEvent.ACTION_CANCEL, SystemClock.uptimeMillis(), 0.0, 0.0, 0f)
             waitFor("ready") { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
             if (args.getString("rendererProfile") == "true") {
@@ -667,7 +675,6 @@ class AndroidCanvasBarBenchmarkTest {
                     measure("dodge-burn-layer") {
                         mark = System.nanoTime(); invoke("new_dodge_burn_layer"); dispatched = System.nanoTime()
                         waitFor("New Dodge & Burn Layer adds a layer") { layers() == count + 1 }
-                        SystemClock.sleep(2500)
                     }
                     invoke("undo")
                     waitFor("undo removes the layer") { layers() == count }
@@ -681,7 +688,6 @@ class AndroidCanvasBarBenchmarkTest {
                     measure("frequency-separation") {
                         mark = System.nanoTime(); separate(obj("op" to "apply")); dispatched = System.nanoTime()
                         waitFor("Frequency Separation adds its group") { layers() == count + 3 }
-                        SystemClock.sleep(2500)
                     }
                     invoke("undo")
                     waitFor("undo removes the group") { layers() == count }

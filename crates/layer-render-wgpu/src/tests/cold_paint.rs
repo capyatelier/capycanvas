@@ -151,7 +151,7 @@ fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() 
             let unique: std::collections::BTreeSet<_> = p.document.layers[0].raster
                 .wait_data().unwrap().tiles.values()
                 .map(|tile| tile.wait_backing().unwrap().digest).collect();
-            assert_eq!(cold.scene.as_ref().unwrap().source_cache_work()[1], unique.len() as u64);
+            assert_eq!(cold.source_cache_work()[1], unique.len() as u64);
         }
     }
 }

@@ -128,17 +128,20 @@ fn transform_queries_keep_only_the_native_tiles_the_requested_window_reads() {
     let doc = document_at([2053, 1541]);
     let extent = [doc.width, doc.height];
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    r.source_tiles.get_mut().admit(0);
     let mut frame = packet(&doc.layers, extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     frame.composite_all = false;
     r.submit(frame).unwrap();
     r.set_transform_preview(Some(&layer_render::TransformPreview {
-        transaction: 1, layer: doc.layers[0].id, moving: true, selection: None,
+        transaction: 1, layer: doc.layers[0].id, moving: false, selection: None,
         transform: ImageTransform::affine(Affine::translation(Point { x: 13.5, y: -5.25 })),
     })).unwrap();
     r.submit(frame).unwrap();
     let mut capture = artwork::Capture::default();
-    for origin in [[256,256], [1024,768], [1536,1024], [0,0]] {
+    while r.has_pending_work() { r.wait_idle().unwrap(); r.submit(frame).unwrap(); }
+    r.wait_idle().unwrap();
+    for origin in [[256,256], [1024,768], [1536,1024], [0,0]].into_iter().cycle().take(16) {
         let region = PixelRect::new(origin[0], origin[1], origin[0] + 32, origin[1] + 32);
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let result = capture.region(&mut r, frame, region, [32,32], &mut encoder).unwrap();
@@ -146,6 +149,10 @@ fn transform_queries_keep_only_the_native_tiles_the_requested_window_reads() {
         assert!(r.paint_layers.iter().map(|l| l.pages.len()).sum::<usize>() <= 9,
             "one native tile with interpolation support reaches at most three tiles per axis");
         assert!(pixels(&r, &result.texture).iter().all(|p| p.iter().all(|v| v.is_finite())));
+        if let Some(report) = r.device.generate_allocator_report() {
+            let tiles = report.allocations.iter().filter(|a| a.name == "bounded source tile").count();
+            assert!(tiles <= 64, "decoded source cache retained {tiles} tiles");
+        }
     }
     r.set_transform_preview(None).unwrap(); r.submit(frame).unwrap();
     assert!(r.paint_layers.iter().all(|l| l.pages.is_empty()));

@@ -331,7 +331,8 @@ impl WgpuRasterizer {
                 .iter()
                 .find(|l| l.id == batch.layer_id)
                 .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
-            let views = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
+            let sources = self.source_tiles.borrow();
+            let views = self.raw_layer_neighborhood(&sources, layer, coordinate, offsets, preview);
             let gather = self.material_gather.as_ref().unwrap();
             let binding = create_material_bind_group(
                 &self.device,

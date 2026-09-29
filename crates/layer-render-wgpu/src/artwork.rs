@@ -109,7 +109,7 @@ impl Capture {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<source_access::RawTile, GpuRasterError> {
         self.scene
-            .get_or_insert_with(|| query_scene(r))
+            .get_or_insert_with(|| scene::Scene::new(r))
             .source_tile_for_query(r, source, coordinate, encoder)
     }
     pub fn storage_bytes(&self) -> u64 {
@@ -171,7 +171,7 @@ impl Capture {
                 scene.release_capture_window(window);
             }
         }
-        let scene = self.scene.get_or_insert_with(|| query_scene(r));
+        let scene = self.scene.get_or_insert_with(|| scene::Scene::new(r));
         scene.capture_region(r, packet, destination, region, scene::Output::Artwork(None), encoder)?;
         self.window = Some(window);
         self.peak_image_bytes = self.peak_image_bytes.max(bytes);
@@ -202,19 +202,17 @@ impl Capture {
             || page_coordinates(region).any(|tile| self.decodes(r, packet.layers, tile))
     }
     fn decodes(&self, r: &WgpuRasterizer, layers: &[Layer], tile: [u32; 2]) -> bool {
-        let Some(scene) = &self.scene else {
-            return layers.iter().any(|l| l.visible && (l.source.is_some() || r.native_backing(l.id).is_some()));
-        };
+        let sources = r.source_tiles.borrow();
         let space = r.document_color().space;
         let resident = |id: LayerId| {
             r.paint_layers.iter().any(|l| l.id == id && l.pages.iter().any(|p| p.coordinate == tile))
         };
-        scene.uploads_full()
+        sources.uploads_full()
             || layers.iter().filter(|l| l.visible && l.is_artwork()).any(|l| {
                 let placed = layer_core::target_transform(layers, l.id) != layer_core::Affine::IDENTITY;
                 let source = l.source.as_ref().is_some_and(|source| placed
                     || (tile[0] * PAGE_SIZE < source.extent[0] && tile[1] * PAGE_SIZE < source.extent[1]
-                        && !resident(l.id) && scene.prepared_source_view(source, tile).is_none()));
+                        && !resident(l.id) && sources.prepared_view(source, tile).is_none()));
                 let native = r.native_backing(l.id).is_some()
                     || l.mask.as_ref().is_some_and(|m| r.native_backing(m.id).is_some());
                 source || (native
@@ -222,7 +220,7 @@ impl Capture {
                         || l.mask.is_some()
                         || (!resident(l.id)
                             && r.native_color_tile(l.id, tile).map_or(true, |blob| {
-                                blob.is_some_and(|blob| scene.prepared_raster_view(&blob, space).is_none())
+                                blob.is_some_and(|blob| sources.prepared_raster_view(&blob, space).is_none())
                             }))))
             })
     }
@@ -251,14 +249,6 @@ impl WgpuRasterizer {
         self.refresh_storage_metrics();
         Ok(())
     }
-}
-
-fn query_scene(r: &WgpuRasterizer) -> scene::Scene {
-    let mut scene = scene::Scene::new(r);
-    // An exact query sweeps independent tiles once. Its decoded scratch needs
-    // only the bounded upload neighborhood, not the live display's admission.
-    scene.admit_native_sources(0);
-    scene
 }
 
 #[cfg(test)]

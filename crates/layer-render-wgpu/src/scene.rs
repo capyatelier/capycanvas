@@ -9,7 +9,7 @@ mod metadata;
 mod stack;
 pub(crate) mod windows;
 pub(super) use previews::FilterPreviews;
-mod sources;
+pub(super) mod sources;
 mod placement;
 mod bake;
 pub(crate) mod resample;
@@ -124,7 +124,6 @@ pub(super) struct Scene {
     placement_display: bool,
     scale_sources: scale::Sources,
     scale_commands: Option<scale::Commands>,
-    source_tiles: sources::DecodedTiles,
     pool: Vec<PageSurface>,
     used: Vec<bool>,
     jobs: Vec<Job>,
@@ -180,27 +179,16 @@ impl Scene {
     pub fn image_cache_bytes(&self) -> u64 {
         self.images.storage_bytes()
     }
-    pub fn source_cache_work(&self) -> [u64; 2] {
-        [self.source_tiles.hits, self.source_tiles.misses]
-    }
-    pub fn admit_native_sources(&mut self, allowance: u64) {
-        self.source_tiles.admit(allowance);
-    }
-    pub fn source_cache_limits(&self) -> [u64; 2] {
-        self.source_tiles.admitted_bytes()
-    }
     #[cfg(test)]
     pub fn placement_cache(&self, id: LayerId) -> Option<(wgpu::Texture, u64, u32)> {
         self.scale_sources.cache_info(id)
     }
     pub fn scratch_bytes(&self) -> u64 {
-        let mut bytes = self.pool.iter().map(PageSurface::storage_bytes).sum::<u64>()
+        self.pool.iter().map(PageSurface::storage_bytes).sum::<u64>()
             + (self.capacity * self.stride) as u64
             + self.effects.storage_bytes()
             + self.placement.storage_bytes()
-            + self.images.storage_bytes() + self.scale_sources.storage_bytes() + self.scale_commands.as_ref().map_or(0, scale::Commands::storage_bytes);
-        { bytes += self.source_tiles.gpu_bytes(); }
-        bytes
+            + self.images.storage_bytes() + self.scale_sources.storage_bytes() + self.scale_commands.as_ref().map_or(0, scale::Commands::storage_bytes)
     }
     fn submit_source_uploads(
         r: &mut WgpuRasterizer,
@@ -327,7 +315,6 @@ impl Scene {
         });
         let binding = uniform_binding(device, &uniforms, &buffer);
         let effects = effects::Effects::new(r, &uniforms, &layout);
-        let source_tiles = sources::DecodedTiles::for_renderer(r);
         Self {
             valid: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             placement_display: false,
@@ -337,7 +324,6 @@ impl Scene {
                 || pixel_transform::PixelTransform::staged(device, false).placement_pass(),
                 paint_transform::PaintTransforms::placement_pass,
             ),
-            source_tiles,
             pool: Vec::new(),
             used: Vec::new(),
             jobs: Vec::new(),
@@ -400,13 +386,13 @@ impl Scene {
         let _trace = crate::performance_trace::Span::new(c"capy.source_tile");
         let (tile, pending) = if let Some(blob) = r.native_color_tile(layer.id, coordinate)? {
             let space = r.document_color().space;
-            self.source_tiles.plan_raster(r, &blob, space, space)?
+            r.source_tiles.borrow_mut().plan_raster(r, &blob, space, space)?
         } else {
             let Some(source) = &layer.source else { return Ok(None); };
             if coordinate[0] >= source.extent[0].div_ceil(PAGE_SIZE) || coordinate[1] >= source.extent[1].div_ceil(PAGE_SIZE) {
                 return Ok(None);
             }
-            self.source_tiles.plan(r, source, coordinate)?
+            r.source_tiles.borrow_mut().plan(r, source, coordinate)?
         };
         if let Some(pending) = pending { self.enqueue_source_decode(pending); }
         Ok(Some(tile.view))
@@ -422,12 +408,12 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<crate::source_access::RawTile, GpuRasterError> {
         debug_assert!(self.jobs.is_empty());
-        let (tile, pending) = self.source_tiles.plan(r, source, coordinate)?;
+        let (tile, pending) = r.source_tiles.borrow_mut().plan(r, source, coordinate)?;
         self.encode_decode(r, pending, encoder)?;
         Ok(tile)
     }
     pub fn prepare_native_transfer(&mut self, r: &WgpuRasterizer, space: layer_core::color::RgbSpace) -> Result<crate::native_tiles::NativeTransfer, GpuRasterError> {
-        self.source_tiles.prepare_transfer(&r.device, space)
+        r.source_tiles.borrow_mut().prepare_transfer(&r.device, space)
     }
     pub fn restore_native_tiles(
         &mut self,
@@ -440,7 +426,7 @@ impl Scene {
             sources::validate_raster(request.blob, request.space)?;
         }
         for request in requests {
-            let (tile, pending) = self.source_tiles.plan_raster(r, request.blob, request.space, request.destination)?;
+            let (tile, pending) = r.source_tiles.borrow_mut().plan_raster(r, request.blob, request.space, request.destination)?;
             self.encode_decode(r, pending, encoder)?;
             // Consume this view before a later request can reuse the slot.
             encoder.copy_texture_to_texture(tile.texture.as_image_copy(), request.working.as_image_copy(), tile.texture.size());
@@ -454,30 +440,17 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         for request in requests {
-            if self.source_tiles.uploads_full() {
+            if r.source_tiles.borrow().uploads_full() {
                 Self::submit_source_uploads(r, encoder)?;
             }
             let bytes = crate::native_tiles::scalar::restore_upload(r, request, encoder)?;
-            let in_flight = self.source_tiles.charge_upload(encoder, bytes);
+            let in_flight = r.source_tiles.borrow().charge_upload(encoder, bytes);
             r.metrics.source_upload_peak_bytes = r.metrics.source_upload_peak_bytes.max(in_flight);
         }
         Ok(())
     }
-    pub fn prepared_source_view(
-        &self,
-        source: &std::sync::Arc<layer_core::color::source::SourceImage>,
-        coordinate: [u32; 2],
-    ) -> Option<&wgpu::TextureView> {
-        self.source_tiles.prepared_view(source, coordinate)
-    }
-    pub fn prepared_raster_view(&self, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace) -> Option<&wgpu::TextureView> {
-        self.source_tiles.prepared_raster_view(blob, space)
-    }
-    pub fn uploads_full(&self) -> bool {
-        self.source_tiles.uploads_full()
-    }
     pub fn raster_tile_for_query(&mut self, r: &mut WgpuRasterizer, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace, encoder: &mut crate::submission::CommandEncoder) -> Result<crate::source_access::RawTile, GpuRasterError> {
-        let (tile, pending) = self.source_tiles.plan_raster(r, blob, space, r.document_color().space)?;
+        let (tile, pending) = r.source_tiles.borrow_mut().plan_raster(r, blob, space, r.document_color().space)?;
         self.encode_decode(r, pending, encoder)?;
         Ok(tile)
     }
@@ -563,7 +536,7 @@ impl Scene {
             Some(ColorInput { view: p.active().view.clone(), lease: None })
         } else {
             self.source_tile(r, layer, c)?.map(|view| {
-                let lease = self.source_tiles.lease(&view);
+                let lease = r.source_tiles.borrow().lease(&view);
                 ColorInput { view, lease }
             })
         };
@@ -1573,11 +1546,11 @@ impl Scene {
             match job {
                 Job::Placement(job) => placement::encode(&mut self.placement, r, encoder, job)?,
                 Job::DecodedTile(pending) => {
-                    if self.source_tiles.uploads_full() {
+                    if r.source_tiles.borrow().uploads_full() {
                         Self::submit_source_uploads(r, encoder)?;
                     }
-                    let bytes = self.source_tiles.encode(r, encoder, pending, &self.binding, ((base + i) * self.stride) as u32)?;
-                    let in_flight = self.source_tiles.charge_upload(encoder, bytes);
+                    let bytes = r.source_tiles.get_mut().encode(&r.device, &mut r.uploads, &r.scene_pipelines.source, encoder, pending, &self.binding, ((base + i) * self.stride) as u32)?;
+                    let in_flight = r.source_tiles.borrow().charge_upload(encoder, bytes);
                     r.metrics.source_upload_peak_bytes = r.metrics.source_upload_peak_bytes.max(in_flight);
                 }
                 Job::Clear(target, color) => {

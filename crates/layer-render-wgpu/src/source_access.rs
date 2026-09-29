@@ -8,6 +8,11 @@ pub(super) struct RawTile {
 }
 
 impl WgpuRasterizer {
+    pub(super) fn source_cache_work(&self) -> [u64; 2] {
+        let sources = self.source_tiles.borrow();
+        [sources.hits, sources.misses]
+    }
+
     /// Pooled prediction surfaces can outlive their current footprint. Every
     /// reader must use membership as well as coordinates to avoid stale paint.
     pub(super) fn preview_page(&self, coordinate: [u32; 2]) -> Option<&LayerPage> {
@@ -51,6 +56,7 @@ impl WgpuRasterizer {
     /// no cache eviction may intervene. All returned resources are borrowed.
     pub(super) fn raw_layer_neighborhood<'a, const N: usize>(
         &'a self,
+        sources: &'a scene::sources::DecodedTiles,
         layer: &'a PaintLayer,
         coordinate: [u32; 2],
         offsets: [Option<[i32; 2]>; N],
@@ -74,18 +80,12 @@ impl WgpuRasterizer {
                 return &page.active().view;
             }
             if let Ok(Some(blob)) = self.native_color_tile(layer.id, neighbor)
-                && let Some(view) = self
-                    .scene
-                    .as_ref()
-                    .and_then(|s| s.prepared_raster_view(&blob, self.document_color().space))
+                && let Some(view) = sources.prepared_raster_view(&blob, self.document_color().space)
             {
                 return view;
             }
             if let Some(source) = self.tiled_sources.get(&layer.id)
-                && let Some(view) = self
-                    .scene
-                    .as_ref()
-                    .and_then(|s| s.prepared_source_view(source, neighbor))
+                && let Some(view) = sources.prepared_view(source, neighbor)
             {
                 return view;
             }

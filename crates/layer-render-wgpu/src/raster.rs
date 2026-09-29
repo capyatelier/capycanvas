@@ -849,7 +849,7 @@ impl WgpuRasterizer {
         texture: wgpu::Texture,
     ) -> Result<(), GpuRasterError> {
         let space = self.document_color().space;
-        if self.scene.as_ref().is_some_and(|scene| scene.prepared_raster_view(&blob, space).is_some()) {
+        if self.source_tiles.borrow().prepared_raster_view(&blob, space).is_some() {
             if batch.capacity() == 0 { batch.reserve_exact(crate::native_tiles::MAX_BATCH_TILES); }
             batch.push((blob, texture));
             if batch.len() == crate::native_tiles::MAX_BATCH_TILES { self.restore_native_raster_batch(batch)?; }

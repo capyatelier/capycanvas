@@ -59,7 +59,13 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             check(blending == null || blending in listOf("linear", "perceptual"))
             check(duration in 1000..60000 && repeats in 1..10)
             check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "pauses", "visual", "pinch"))
-            check(mode != "pauses" || duration % 200 == 0)
+            val pauseMs = arguments.getString("pauseMs", "100")!!.toInt()
+            val contactMs = arguments.getString("contactMs", "100")!!.toInt()
+            check(pauseMs in 5..5000 && pauseMs % 5 == 0)
+            check(contactMs in 5..10000 && contactMs % 5 == 0)
+            val contactSamples = contactMs / 5
+            val contactCycle = contactSamples + pauseMs / 5
+            check(mode != "pauses" || duration % (contactCycle * 5) == 0)
             output = File(targetContext.getExternalFilesDir(null), "brush-benchmark").apply { mkdirs() }
             val root = File(targetContext.cacheDir, "brush-benchmark-$label-${System.nanoTime()}")
             CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
@@ -275,12 +281,12 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 for (i in 0..count) {
                     val delay = begun + i * sampleInterval - System.nanoTime()
                     if (delay > 0) LockSupport.parkNanos(delay)
-                    if (kind == "pauses" && (i == count || i % 40 > 20)) continue
-                    val t = i * .005
+                    if (kind == "pauses" && (i == count || i % contactCycle > contactSamples)) continue
+                    val t = (if (kind == "pauses") i / contactCycle * 2 * contactSamples + i % contactCycle else i) * .005
                     val progress = i.toDouble() / count
                     val angle = t * speed * 2 * PI
-                    val lift = (kind == "lifts" && i > 0 && i % 40 == 0) || (kind == "pauses" && i % 40 == 20)
-                    val restart = (kind == "lifts" && i > 1 && i % 40 == 1) || (kind == "pauses" && i % 40 == 0)
+                    val lift = (kind == "lifts" && i > 0 && i % 40 == 0) || (kind == "pauses" && i % contactCycle == contactSamples)
+                    val restart = (kind == "lifts" && i > 1 && i % 40 == 1) || (kind == "pauses" && i % contactCycle == 0)
                     val phase = if (i == count || lift) MotionEvent.ACTION_UP else if (i == 0 || restart) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_MOVE
                     if (phase == MotionEvent.ACTION_DOWN) down = SystemClock.uptimeMillis()
                     coords[0].x = (cx + (if (kind == "stationary") 0.0 else rx * cos(angle))).toFloat() + host.surfaceOrigin.x
@@ -330,6 +336,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 "stats_panel" to statsPanel,
                 "color_before_strokes" to colorBeforeStrokes,
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
+                "pause_ms" to pauseMs,
+                "contact_ms" to contactMs,
                 "state" to state(), "display" to displayInfo, "resources" to resources(),
                 "center" to JSONArray(listOf(cx, cy)), "radii" to JSONArray(listOf(rx, ry))).toString(2))
             val unprimed = state().getJSONObject("document_file").getLong("revision")
@@ -401,7 +409,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     invoke("fit_canvas")
                 }
                 sendStatus(0, Bundle().apply { putString("stream", "BRUSH_RUN $label $run\n") })
-                if (mode in listOf("lifts", "pauses")) repeat(duration / 200) { invoke("undo") } else invoke("undo")
+                if (mode in listOf("lifts", "pauses")) repeat(duration / (if (mode == "pauses") contactCycle * 5 else 200)) { invoke("undo") } else invoke("undo")
                 SystemClock.sleep(2000)
             }
             result.putString("stream", "\nBRUSH_COMPLETE $label\n")

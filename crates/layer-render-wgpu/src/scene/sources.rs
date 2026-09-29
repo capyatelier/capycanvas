@@ -133,7 +133,7 @@ impl Drop for UploadCharge {
     }
 }
 #[derive(Default)]
-pub(super) struct DecodedTiles {
+pub(crate) struct DecodedTiles {
     destination: RgbSpace,
     limits: SourceLimits,
     slots: Vec<Slot>,
@@ -152,14 +152,6 @@ impl DecodedTiles {
             destination,
             ..Self::default()
         }
-    }
-    pub fn for_renderer(r: &WgpuRasterizer) -> Self {
-        let allowance = r.native_edit.as_ref().map_or(0, |n| n.display_complete_bytes);
-        #[cfg(not(target_arch = "wasm32"))]
-        let allowance = if r.snapshot_worker { 0 } else { allowance };
-        let mut tiles = Self::new(r.document_color().space);
-        tiles.admit(allowance);
-        tiles
     }
     pub fn admit(&mut self, allowance: u64) {
         debug_assert!(self.slots.is_empty(), "source admission precedes pixel allocation");
@@ -224,7 +216,7 @@ impl DecodedTiles {
                 .sum::<u64>()
     }
 
-    pub fn plan(
+    pub(super) fn plan(
         &mut self,
         r: &WgpuRasterizer,
         source: &Arc<SourceImage>,
@@ -243,7 +235,7 @@ impl DecodedTiles {
 
     /// Committed native paint shares the original-image cache, transfer tables
     /// and upload ceiling. Cache keys never retain compressed history backing.
-    pub fn plan_raster(
+    pub(super) fn plan_raster(
         &mut self,
         r: &WgpuRasterizer,
         blob: &Arc<TileBlob>,
@@ -347,9 +339,12 @@ impl DecodedTiles {
         ))
     }
 
-    pub fn encode(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn encode(
         &mut self,
-        r: &mut WgpuRasterizer,
+        device: &crate::PipelineDevice,
+        uploads: &mut crate::Uploads,
+        pipelines: &Pipelines,
         encoder: &mut crate::submission::CommandEncoder,
         pending: &PendingTile,
         uniforms: &wgpu::BindGroup,
@@ -358,9 +353,8 @@ impl DecodedTiles {
         let bytes = if pending.data.is_some() {
             let samples = pending.pixels.native()?;
             let index = samples.depth.bytes().ilog2() as usize;
-            let pipelines = &r.scene_pipelines.source;
             let input = self.inputs[index].get_or_insert_with(|| {
-                let texture = r.device.create_texture(&wgpu::TextureDescriptor {
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("bounded integer source input"),
                     size: pending.texture.size(),
                     mip_level_count: 1,
@@ -380,9 +374,9 @@ impl DecodedTiles {
                 }
             });
             let space = samples.space;
-            let table = self.transfer.prepare(&r.device, space)?;
+            let table = self.transfer.prepare(device, space)?;
             let binding = input.bindings[transfer::Tables::index(space)].get_or_insert_with(|| {
-                crate::bindings::group(&r.device, "native integer source and shared transfer", &pipelines.layout, [
+                crate::bindings::group(device, "native integer source and shared transfer", &pipelines.layout, [
                     wgpu::BindingResource::TextureView( &input.texture.create_view(&Default::default()), ),
                     table.as_entire_binding(),
                 ])
@@ -392,10 +386,10 @@ impl DecodedTiles {
                     "Source tile has the wrong sample representation".into(),
                 ));
             }
-            let decoded = r.device.source_samples.decode(samples.tile).map_err(GpuRasterError::Color)?;
+            let decoded = device.source_samples.decode(samples.tile).map_err(GpuRasterError::Color)?;
             let step = samples.depth.bytes();
             let bytes = (PAGE_SIZE * PAGE_SIZE) as usize * 4 * step;
-            r.uploads.write_texture(encoder, &input.texture, PAGE_SIZE * 4 * step as u32, |mapped| {
+            uploads.write_texture(encoder, &input.texture, PAGE_SIZE * 4 * step as u32, |mapped| {
                 if samples.channels == SourceChannels::Rgba {
                     mapped.copy_from_slice(&decoded);
                 } else {
@@ -426,7 +420,7 @@ impl DecodedTiles {
             let Pixels::Image(source, coordinate) = &pending.pixels else {
                 unreachable!()
             };
-            self.upload_icc(r, source, *coordinate, encoder, &pending.texture)?;
+            self.upload_icc(device, uploads, source, *coordinate, encoder, &pending.texture)?;
             FLOAT_TILE_BYTES
         };
         pending.write.track(encoder);
@@ -435,7 +429,8 @@ impl DecodedTiles {
 
     fn upload_icc(
         &mut self,
-        r: &mut WgpuRasterizer,
+        device: &crate::PipelineDevice,
+        uploads: &mut crate::Uploads,
         source: &Arc<SourceImage>,
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
@@ -463,10 +458,10 @@ impl DecodedTiles {
             .resize((PAGE_SIZE * PAGE_SIZE) as usize, [0.; 4]);
         decoder
             .1
-            .decode_tile_cached(source, coordinate, &mut self.pixels, &r.device.source_samples)
+            .decode_tile_cached(source, coordinate, &mut self.pixels, &device.source_samples)
             .map_err(GpuRasterError::Color)?;
         self.decoders.push_back(decoder);
-        r.uploads.write_texture(encoder, texture, PAGE_SIZE * 16, |mapped| {
+        uploads.write_texture(encoder, texture, PAGE_SIZE * 16, |mapped| {
             let mut row = [0u8; PAGE_SIZE as usize * 16];
             for (y, pixels) in self.pixels.chunks_exact(PAGE_SIZE as usize).enumerate() {
                 for (bytes, pixel) in row.chunks_exact_mut(16).zip(pixels) {

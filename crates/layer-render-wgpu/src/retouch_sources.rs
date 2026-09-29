@@ -812,11 +812,10 @@ fn lone_page(r: &WgpuRasterizer, layer: LayerId, coordinate: [u32; 2]) -> Prepar
 /// A layer page the renderer can read without uploading: an original or
 /// backed tile it already decoded. `Decode` when reading needs an upload.
 fn raw_prepared_view(r: &WgpuRasterizer, layer: LayerId, coordinate: [u32; 2]) -> Prepared {
-    let scene = r.scene.as_ref();
+    let sources = r.source_tiles.borrow();
     match r.native_color_tile(layer, coordinate) {
         Ok(Some(blob)) => {
-            return scene
-                .and_then(|s| s.prepared_raster_view(&blob, r.document_color().space))
+            return sources.prepared_raster_view(&blob, r.document_color().space)
                 .map_or(Prepared::Decode, |view| Prepared::View(view.clone()));
         }
         Err(_) => return Prepared::Decode,
@@ -826,8 +825,7 @@ fn raw_prepared_view(r: &WgpuRasterizer, layer: LayerId, coordinate: [u32; 2]) -
         Some(source)
             if coordinate[0] * PAGE_SIZE < source.extent[0] && coordinate[1] * PAGE_SIZE < source.extent[1] =>
         {
-            scene
-                .and_then(|s| s.prepared_source_view(source, coordinate))
+            sources.prepared_view(source, coordinate)
                 .map_or(Prepared::Decode, |view| Prepared::View(view.clone()))
         }
         _ => Prepared::Absent,

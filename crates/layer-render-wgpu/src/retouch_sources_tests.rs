@@ -82,7 +82,8 @@ fn flush(engine: &mut CanvasEngine<WgpuRasterizer>) {
 }
 
 fn engine(doc: Document, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
-    let r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    r.source_tiles.get_mut().admit(0);
     let (input, consumer) = input_queue(256);
     let extent = [doc.width, doc.height];
     let mut engine = CanvasEngine::new(r, doc, consumer, view(extent), ViewTransform::IDENTITY).unwrap();
@@ -377,7 +378,7 @@ fn contacts_neither_upload_nor_wait_and_a_miss_replays_after_pen_up() {
     let mut warm = None;
     let mut live_copies = 0;
     for miss in [false, true] {
-        let mut doc = document([1536, 512]);
+        let mut doc = document([4608, 1024]);
         doc.reference_layers.insert(LayerId(2));
         let (mut input, mut engine) = engine(doc, false);
         engine.set_retouch(Some(RetouchSource::References));

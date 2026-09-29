@@ -1708,7 +1708,7 @@ fn unchanged_navigation_derives_and_reuses_a_bounded_neighbor_level() {
         p.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
         r.submit(p).unwrap();
         exact.submit(p).unwrap();
-        let work = r.scene.as_ref().unwrap().source_cache_work()[1];
+        let work = r.source_cache_work()[1];
         assert_eq!(
             *misses.get_or_insert(work),
             work,

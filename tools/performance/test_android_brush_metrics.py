@@ -40,6 +40,16 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duration_ms"):
             validate_setup(self.info, self.requested)
 
+    def test_rejects_missing_or_unmatched_contact_timing(self):
+        for key in ("pause_ms", "contact_ms"):
+            self.requested[key] = 1100
+            for duration in (None, 100):
+                self.info[key] = duration
+                with self.assertRaisesRegex(ValueError, key):
+                    validate_setup(self.info, self.requested)
+            self.info[key] = 1100
+            validate_setup(self.info, self.requested)
+
     def test_requires_the_requested_blend_space_to_be_selected(self):
         for blending in ("linear", "perceptual"):
             self.requested["blending"] = blending

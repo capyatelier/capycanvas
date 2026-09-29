@@ -310,10 +310,7 @@ fn photo_filter_frame_time() {
         native.image_pixel_bytes = Some(mib.parse::<u64>().unwrap() * 1024 * 1024);
     }
     if let Ok(mib) = std::env::var("CAPY_FILTER_SOURCE_MIB") {
-        r.scene
-            .as_mut()
-            .unwrap()
-            .admit_native_sources(mib.parse::<u64>().unwrap() * 4 * 1024 * 1024);
+        r.source_tiles.get_mut().admit(mib.parse::<u64>().unwrap() * 4 * 1024 * 1024);
     }
     eprintln!(
         "adapter={:?} init_ms={:.3}",
@@ -372,7 +369,7 @@ fn photo_filter_frame_time() {
     );
     eprintln!(
         "source_limits={:?}",
-        r.scene.as_ref().unwrap().source_cache_limits()
+        r.source_tiles.borrow().admitted_bytes()
     );
     r.set_telemetry_enabled(true);
     let name = std::env::var("CAPY_FILTER_NAME").unwrap_or_else(|_| "gaussian_blur".into());

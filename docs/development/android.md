@@ -244,6 +244,11 @@ APK calls, so test-APK benchmarks use the unminified build.
   Flatten Image; its `after_mark` has the dispatch time and the GPU completions
   that follow. `dodge_burn` and `frequency_separation` time New Dodge & Burn
   Layer and Frequency Separation (radius 8) on a placed photo the same way.
+  Their completion latency is `drained_ns - motion.begin_ns`: a new layer can
+  appear before its pixels finish. These scenarios add no fixed delay after
+  the command. Measure latency without `rendererProfile` or PSS sampling;
+  collect memory separately. Use `-e photo` for the reference photo and
+  `-e zoomOut false` to retain Fit zoom.
   `photo` separates body translation, corner resizing, distortion and a warp
   node drag. Priming gestures validate their geometry, then reset the transform
   and restore the intended mode before measurement. Commands query the owner
@@ -292,7 +297,7 @@ another JPEG under `/data/local/tmp`, such as a
 size. Then
 `python3 tools/performance/android-brush-benchmark.py OUT --serial "$CAPY_ANDROID_SERIAL" --presets 1 --size 1000`
 passes `-e preset`, `-e brushSize` and `-e mode` (`constant`, `pressure`, `tilt`,
-`stationary`, `lifts`, `visual` or `pinch`); `--trace` and `--profile` add
+`stationary`, `lifts`, `pauses`, `visual` or `pinch`); `--trace` and `--profile` add
 Perfetto and simpleperf captures. The default preset list is the dry brushes;
 the default workspace keeps Stats closed. `--stats` opens Stats and enables GPU
 timing; use `--trace --stats` for GPU phase diagnostics. Report these runs
@@ -300,6 +305,10 @@ separately because Stats changes the workspace and adds measurement work.
 `--presets` accepts every built-in preset, including wet, smudge, Liquify, and
 Clone Stamp, Healing Brush and Spot Healing Brush, which read the photo as a
 reference layer.
+`--mode pauses --contact-ms 100 --pause-ms 100` resumes during refinement.
+Increase only the gap to measure the same contacts after settling, or increase
+contact duration to test finalization after a broad stroke. The runner checks
+both durations in the observed setup; older APKs that ignore them are rejected.
 `--radius-x` and `--radius-y` set the ellipse radii in surface pixels;
 `--photo-layers` creates 1–32 photos with translucent duplicates. The runner
 checks the observed trajectory, layer count, brush, prediction and requested

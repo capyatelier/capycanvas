@@ -11,6 +11,15 @@ is 4248 × 2832.
 
 ## Operations
 
+Decoded-source ownership diagnostic, 2026-09-29: the 12 MP photo transform
+sequence retained 204 decoded tiles throughout after sharing the renderer's
+source cache (APK `e91330b3a54e549712e60a89e5727ce31a5c604f1a6421fb5c2edcb119cae867`).
+Before this fix, pixel translation retained 1,616 tiles and 2,098 MiB of total
+GPU allocations; afterwards it retained 204 tiles and 686 MiB. The full sequence
+completed with at least 2.2 GiB system memory available. Allocator and PSS sampling
+make this a memory diagnostic, not frame-rate qualification. Records are under
+`artifacts/latency-investigation/{current-geometry-4,fixed-geometry-memory-2}`.
+
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
 | Pan: Hand tool, one or two fingers | 60 | Generated group: screen 59.4 presents/s, p99 16.7 ms; renderer 59.8 completed updates/s. Photo coverage pending | Pass Through navigation below |
