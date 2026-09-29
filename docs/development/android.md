@@ -190,8 +190,9 @@ start and successful completion separately.
 The shared renderer's Rust GPU tests can also be cross-built with `cargo ndk
 -t arm64-v8a --platform 29 test --locked --release -p layer-render-wgpu --lib --no-run`
 and run on the reserved device. Headless renderers compile deferred pipelines
-as their workload needs them. Timing harnesses must prime each workload before
-measuring steady motion.
+as their workload needs them. Timing harnesses must prime each workload over
+the full measured motion range before measuring steady motion, including the
+most magnified transform pose.
 
 ## Benchmarks
 

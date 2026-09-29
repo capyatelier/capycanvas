@@ -1350,6 +1350,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(reply)
     }
 
+    pub fn hold_canvas_backdrop(&self) -> bool {
+        self.input_pending || self.engine.has_active_stroke() || self.operation.dragging()
+    }
+
     fn refresh_chrome(&mut self) {
         if !self.state.workspace.zen_mode {
             self.interaction.keep_chrome_until_contact = false;
@@ -8059,6 +8063,7 @@ mod tests {
                 .unwrap();
             s.frame(3, 3).unwrap();
             assert_ne!(preview(&mut s), settled);
+            assert!(s.hold_canvas_backdrop());
             match interrupt {
                 None => assert!(s.input(UiInput::Blur).unwrap().cancel_paint),
                 Some(phase) => s
@@ -8066,6 +8071,7 @@ mod tests {
                     .unwrap(),
             }
             s.frame(4, 4).unwrap();
+            assert!(!s.hold_canvas_backdrop());
             assert!(s.operation.active());
             assert_eq!(preview(&mut s), settled);
             assert!(s.layer_interaction.path.is_empty());

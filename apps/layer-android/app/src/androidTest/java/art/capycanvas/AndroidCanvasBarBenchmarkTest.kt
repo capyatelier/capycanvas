@@ -291,7 +291,7 @@ class AndroidCanvasBarBenchmarkTest {
             val wiggle = { t: Double -> (60 * (cos(2 * PI * t) - 1)) to (40 * (cos(2 * PI * t) - 1)) }
             fun primeTransform(fraction: Double = 1.0, mode: String? = null) {
                 val before = state().getJSONObject("canvas_bar").getJSONArray("anchor")
-                drag(anchorPoint(fraction), 400, wiggle)
+                drag(anchorPoint(fraction), 600, wiggle)
                 if (mode == null && (fraction == 1.0 || fraction == .5)) waitFor("priming gesture changes its geometry") {
                     val after = state().getJSONObject("canvas_bar").getJSONArray("anchor")
                     if (fraction == .5) kotlin.math.abs(after.getDouble(0) - before.getDouble(0)) > 100

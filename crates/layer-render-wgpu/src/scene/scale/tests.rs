@@ -774,6 +774,37 @@ fn source_windows_derive_across_origins_and_fill_only_missing_pages() {
 }
 
 #[test]
+fn placement_crossing_identity_keeps_the_prepared_source() {
+    let extent = [1024, 512];
+    let mut doc = document_at(extent);
+    let id = doc.layers[0].id;
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    r.prepare_moving_layer(Some(id));
+    let mut prepared = None;
+    for x in [10., 0., -10., 0., 10., 0.] {
+        doc.layers[0].properties.placement = layer_core::Affine([1., 0., 0., 1., x, 0.]);
+        let mut frame = packet(&doc.layers, extent);
+        frame.blend_space = layer_core::BlendSpace::Perceptual;
+        frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        r.submit(frame).unwrap();
+        let source = &r.scene.as_ref().unwrap().scale_sources.entries[&id];
+        let current = (source.updates, source.levels[&2].image.texture.clone());
+        assert_eq!(prepared.get_or_insert_with(|| current.clone()), &current,
+            "moving an unchanged photo through its original pose must reuse its pixels");
+    }
+    r.prepare_moving_layer(None);
+    doc.layers[0].properties.placement = layer_core::Affine::IDENTITY;
+    let mut frame = packet(&doc.layers, extent);
+    frame.blend_space = layer_core::BlendSpace::Perceptual;
+    frame.composite_all = false;
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    r.submit(frame).unwrap();
+    let mut fresh = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    fresh.submit(frame).unwrap();
+    assert_eq!(display_pixels(&r), display_pixels(&fresh));
+}
+
+#[test]
 fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
     let mut doc = document_at([1025, 513]);
     let extent = [641, 385];

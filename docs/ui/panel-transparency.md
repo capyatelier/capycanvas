@@ -155,9 +155,9 @@ zooms with the canvas, and recomputes it every fourth frame or as soon as a
 panel would sample beyond it; blur recomputed mid-gesture keeps a 48-pixel slack
 for that. The first still frame recomputes the exact blur. A new document,
 proofing, HDR or a camera change that rebinds the display cache recomputes at
-once. While a brush stroke is in progress (`has_active_stroke`), artwork damage
-leaves the cached blur in place; the first frame after the stroke refreshes the
-glass it reached, so pen latency never includes a glass refresh. A stroke that
+once. While a brush stroke or canvas handle drag is in progress
+(`UiSession::hold_canvas_backdrop`), artwork damage leaves the cached blur in
+place; the first frame after release refreshes the glass it reached. A stroke that
 begins just after a gesture keeps the moved blur until it ends. Retained
 targets, such as Android's front buffer, repaint only glass that changed. Idle
 views present nothing.
@@ -184,8 +184,8 @@ tables, such as [low tier](../performance/low-tier.md).
   such as the Paint tool drawer over the Tool Set column, is translucent over
   that panel too, so its content shows faintly through the drawer on every
   host.
-- Glass over artwork that a stroke is still painting shows the new ink only
-  when the stroke ends.
+- Glass over artwork being painted or transformed refreshes when the contact
+  ends.
 - During a pan or pinch the blur is recomputed every fourth frame and moved
   with the canvas in between, so artwork sliding beneath a panel, and the blur
   size while zooming, trail by up to three frames. At the window edges the

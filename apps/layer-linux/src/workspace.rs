@@ -2337,7 +2337,7 @@ impl Workspace {
                             levels: blur.levels,
                             offset: blur.offset,
                         };
-                        g.session.renderer_mut().backdrop_hold = g.session.engine().has_active_stroke();
+                        g.session.renderer_mut().backdrop_hold = g.session.hold_canvas_backdrop();
                         let command_bar = g.session.state().palette.glass.transparency.enabled()
                             .then(|| this.command_bar.glass(&this))
                             .flatten();

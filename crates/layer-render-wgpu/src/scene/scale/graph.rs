@@ -91,11 +91,11 @@ impl Expression {
             _ => {}
         }
     }
-    fn deferred(&self) -> bool {
+    fn deferred(&self, moving: Option<LayerId>) -> bool {
         match self {
-            Self::Source { placement, .. } => *placement != layer_core::Affine::IDENTITY.0.map(f32::to_bits),
-            Self::Opacity { input, .. } => input.deferred(),
-            Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(),
+            Self::Source { id, placement, .. } => moving == Some(*id) || *placement != layer_core::Affine::IDENTITY.0.map(f32::to_bits),
+            Self::Opacity { input, .. } => input.deferred(moving),
+            Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(moving),
             _ => false,
         }
     }
@@ -247,7 +247,7 @@ impl stack::Compositor for Builder<'_> {
 
 impl Evaluator<'_> {
     pub(super) fn evaluate_root(&mut self, node: &Node, direct: bool) -> Result<Value, GpuRasterError> {
-        let deferred = if direct && self.cache.plan.level > 0 && node.deferred() && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
+        let deferred = if direct && self.cache.plan.level > 0 && node.deferred(self.r.moving_layer) && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
             && self.r.transform_preview.is_none() { Some(self.evaluate(node)?) } else { None };
         if matches!(deferred, Some(Value::Placed(_))) { return Ok(deferred.unwrap()); }
         self.cache.pixels.ensure(self.r, self.cache.plan);

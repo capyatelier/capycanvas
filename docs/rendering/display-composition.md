@@ -25,7 +25,10 @@ color and masks use scalar coverage. In perceptual documents, identity-source
 reduction encodes each input color before averaging; encoding an averaged linear
 color would change the composite. Transformed sources retain linear samples for
 resampling and encode their result before opacity and blending. Each source level
-records its representation; a change invalidates all retained pages. Encoded
+records its representation; a change invalidates all retained pages. A placement
+transaction keeps its hinted layer's linear source and sampling resolution when
+the pose passes through identity. Ending the transaction reevaluates the source
+representation and composition. Encoded
 levels cannot supply linear transform inputs. Source identity, immutable native captures, brush damage
 and retired prediction footprints invalidate the affected pages at every level.
 Brush invalidation reuses the painting tile plan, preserving untouched pages
@@ -220,8 +223,9 @@ Subsequent pan, rotation and zoom select these resident levels. An edit
 invalidates affected pages across the hierarchy; finer detail is repaired before
 reuse. Devices without that allowance retain bounded visible windows and their
 overview. Admission checks current device headroom plus the bytes already owned
-by the hierarchy being retained. Artwork changes release optional residency when
-that allowance no longer covers it. Snapshot workers do
+by the hierarchy being retained. The first artwork change after idle refinement
+rechecks this allowance and releases optional residency when it no longer fits.
+Continuous changes reuse that admission until refinement resumes. Snapshot workers do
 not allocate optional display levels.
 Exact filter image pixels and retained display pixels share one composition
 allowance; the filter budget reserves the full bounded display cache before

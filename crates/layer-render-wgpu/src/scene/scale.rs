@@ -269,7 +269,7 @@ pub(crate) fn request(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Result<Req
     let records = records_for(r, plan, packet.layers);
     let fits = transform_plans(r, plan, packet.layers).all(|(source, _)| source.size.iter()
         .all(|size| *size <= r.device.limits().max_texture_dimension_2d)) && targets(r, packet).all(|(layer, id)| {
-        source_plan(plan, layer_core::target_transform(packet.layers, id), layer.local_extent(plan.extent))
+        source_plan(plan, layer_core::target_transform(packet.layers, id), layer.local_extent(plan.extent), r.moving_layer == Some(id))
             .is_ok_and(|source| (plan.level == 0 && source.level == 0) || source.size.iter().all(|size| *size <= r.device.limits().max_texture_dimension_2d))
     });
     let native = !fits || records > r.device.limits().max_buffer_size.min(u64::from(u32::MAX))
@@ -323,8 +323,8 @@ fn local_regions(required: PixelRect, covered: PixelRect, placement: layer_core:
     Ok((pixel_rect(inverse.bounds(required.to_rect()), extent).expand(1 << level, extent), PixelRect::EMPTY))
 }
 
-fn source_plan(output: display_mips::Plan, placement: layer_core::Affine, extent: [u32; 2]) -> Result<display_mips::Plan, GpuRasterError> {
-    let level = source_level(output.level, placement);
+fn source_plan(output: display_mips::Plan, placement: layer_core::Affine, extent: [u32; 2], moving: bool) -> Result<display_mips::Plan, GpuRasterError> {
+    let level = source_level(output.level, placement).saturating_sub(u32::from(moving && placement == layer_core::Affine::IDENTITY));
     let (bounds, _) = local_regions(output.bounds, PixelRect::EMPTY, placement, extent, level)?;
     let coarse = source_coarse_level(display_mips::Plan::at(extent, level));
     let bounds = if bounds.is_empty() { PixelRect::EMPTY } else {
@@ -385,7 +385,7 @@ fn allocation_for(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePac
     let (source_bytes, root_mips) = targets(r, packet).fold((0, 0), |(sum, largest), (layer, id)| {
         let placement = layer_core::target_transform(layers, id);
         if streamed && placement == layer_core::Affine::IDENTITY { return (sum, largest); }
-        let Ok(source) = source_plan(plan, placement, layer.local_extent(plan.extent)) else { return (sum, largest); };
+        let Ok(source) = source_plan(plan, placement, layer.local_extent(plan.extent), r.moving_layer == Some(id)) else { return (sum, largest); };
         if plan.level == 0 && source.level == 0 { return (sum, largest); }
         let source = sources.map_or(source, |s| s.resident_plan(id, source));
         let extra = if plan.level == 0 { 0 } else { source.level_bytes(source.level + 1) + source.level_bytes(source_coarse_level(source)) };
@@ -492,7 +492,8 @@ impl Cache {
         };
         let unchanged = unchanged && old.transform == r.transform_preview;
         old.transform = r.transform_preview.clone();
-        let hierarchy = old.hierarchy.take().filter(|c| old.plan.extent == plan.extent && (unchanged || c.fits(r)));
+        let hierarchy = old.hierarchy.take().filter(|c| old.plan.extent == plan.extent
+            && (unchanged || !old.residency_checked || c.fits(r)));
         if hierarchy.is_none() && matches!(old.pixels, hierarchy::Pixels::Resident { .. }) {
             let mut next = Self::new(r, request, packet.layers.len());
             next.graph = old.graph.without_pixels();
@@ -611,7 +612,7 @@ impl Cache {
             .filter(|(_, id)| sources.entries.contains_key(id) && !r.transforms.as_ref().is_some_and(|t| t.display_source(*id))).map(|(layer, id)| {
             let placement = layer_core::target_transform(packet.layers, id);
             (id, plans.clone().filter(|(_, streamed)| !streamed || placement != layer_core::Affine::IDENTITY)
-                .filter_map(|(p, _)| source_plan(p, placement, layer.local_extent(p.extent)).ok().filter(|s| p.level > 0 || s.level > 0))
+                .filter_map(|(p, _)| source_plan(p, placement, layer.local_extent(p.extent), r.moving_layer == Some(id)).ok().filter(|s| p.level > 0 || s.level > 0))
                 .filter(|p| !p.bounds.is_empty()).map(|p| (p.level, self.source_plan(sources, id, p))).collect())
         }).collect();
         if let Some(root) = &self.placed && let Some(levels) = requested.get_mut(&root.value.id) {
@@ -755,7 +756,7 @@ impl Cache {
             let placement = layer_core::target_transform(packet.layers, layer.id);
             if self.streamed_sources && placement == layer_core::Affine::IDENTITY { continue; }
             let extent = layer.local_extent(packet.document_extent);
-            let requested = source_plan(self.plan, placement, extent)?;
+            let requested = source_plan(self.plan, placement, extent, r.moving_layer == Some(layer.id))?;
             if self.plan.level == 0 && requested.level == 0 { continue; }
             let plan = self.source_plan(&scene.scale_sources, layer.id, requested);
             let (needed, covered) = local_regions(required, source_covered, placement, extent, plan.level)?;
@@ -767,7 +768,7 @@ impl Cache {
                 let placement = layer_core::target_transform(packet.layers, mask.id);
                 if self.streamed_sources && placement == layer_core::Affine::IDENTITY { continue; }
                 let extent = layer.local_extent(packet.document_extent);
-                let requested = source_plan(self.plan, placement, extent)?;
+                let requested = source_plan(self.plan, placement, extent, false)?;
                 if self.plan.level == 0 && requested.level == 0 { continue; }
                 let plan = self.source_plan(&scene.scale_sources, mask.id, requested);
                 let (needed, covered) = local_regions(required, source_covered, placement, extent, plan.level)?;
@@ -1049,7 +1050,7 @@ impl Evaluator<'_> {
         if self.r.transforms.as_ref().is_some_and(|t| t.display_source(id)) {
             return Ok(Value::Transform(TransformSource { id, placement, opacity: 1., backdrop: [0.; 4], encode }));
         }
-        let plan = source_plan(self.cache.plan, placement, extent)?;
+        let plan = source_plan(self.cache.plan, placement, extent, self.r.moving_layer == Some(id))?;
         if self.cache.plan.level == 0 && plan.level == 0 {
             let tile = [self.region.min_x() / PAGE_SIZE, self.region.min_y() / PAGE_SIZE];
             let slot = if let Some(index) = self.packet.layers.iter().position(|l| l.id == id) {
@@ -1108,7 +1109,7 @@ impl Evaluator<'_> {
         let image = &self.scene.scale_sources.image(id, plan.level).image;
         let plan = image.plan;
         let view = image.view.clone();
-        if placement == layer_core::Affine::IDENTITY && plan.level == self.cache.plan.level
+        if placement == layer_core::Affine::IDENTITY && self.r.moving_layer != Some(id) && plan.level == self.cache.plan.level
             && (outside == 0. || self.region.intersect(plan.bounds) == self.region) {
             return Ok(Value::Image { view, slot: None, opacity: 1., plan, preview: None, encode });
         }

@@ -262,7 +262,7 @@ impl NativeHost {
                 levels: style.blur.levels,
                 offset: style.blur.offset,
             },
-            session.engine().has_active_stroke(),
+            session.hold_canvas_backdrop(),
         );
         Ok(())
     }

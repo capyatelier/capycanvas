@@ -81,19 +81,22 @@ fn resample_color(t:vec2<u32>,mesh:bool,keeps:bool,source:vec2<f32>,dx:vec2<f32>
         covered=all(q-reach>=vec2(0.)) && all(q+reach<resample.source_extent.xy);
     }
     let inside_clip=all(layer_center-margin>=vec2(0.)) && all(layer_center+margin<resample.extent.xy);
-    var empty=source_disjoint(center,footprint);
-    if mesh {empty=q.x<=UNCOVERED;}
-    let original_lod=projective_lod(resample.kept_x,resample.kept_y,resample.kept_w,vec3(center,1.),footprint);
-    if inside_clip && (empty || resample.options.z==2.) {
-        return composite_color(remainder(vec3(center,1.),original_lod,keeps));
+    var original_lod=0.;
+    if keeps || resample.options.z!=0. {
+        original_lod=projective_lod(resample.kept_x,resample.kept_y,resample.kept_w,vec3(center,1.),footprint);
     }
-    if covered && inside_clip {
+    if covered && inside_clip && resample.options.z!=2. {
         var color=vec4(0.);
         if mesh {
             if q.x>UNCOVERED {color=bilinear_at(moved,q,moved_lod);}
         } else {color=bilinear(moved,resample.x,resample.y,resample.w,vec3(center,1.),moved_lod);}
         if (!keeps && resample.options.z==0.) || color.a==1. {return composite_color(color);}
         if color.a==0. {return composite_color(remainder(vec3(center,1.),original_lod,keeps));}
+    }
+    var empty=source_disjoint(center,footprint);
+    if mesh {empty=q.x<=UNCOVERED;}
+    if inside_clip && (empty || resample.options.z==2.) {
+        return composite_color(remainder(vec3(center,1.),original_lod,keeps));
     }
     var sum=vec4(0.);
     moved_lod=max(moved_lod-1.,0.);

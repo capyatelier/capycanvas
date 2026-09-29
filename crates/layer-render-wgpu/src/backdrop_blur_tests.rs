@@ -179,6 +179,29 @@ fn local_refresh_matches_a_full_blur() {
 }
 
 #[test]
+fn held_artwork_damage_refreshes_the_glass_on_release() {
+    let size = [256, 128];
+    let glass = [region([140., 32., 96., 64.], [12.; 4])];
+    let mut r = document(size);
+    let surface = texture(&r, size);
+    let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
+    presenter.set_target_retention(true);
+    presenter.set_backdrop(&r, &glass, Default::default(), false);
+    let before = present(&r, &mut presenter, &surface, 0.);
+    presenter.set_backdrop(&r, &glass, Default::default(), true);
+    paint_near_glass(&mut r, size);
+    let held = present(&r, &mut presenter, &surface, 0.);
+    assert_eq!(presenter.backdrop_frames(), [1, 1]);
+    let at = |bytes: &[u8]| bytes[((64 * 256 + 144) * 4) as usize];
+    assert_eq!(at(&held), at(&before));
+    presenter.set_backdrop(&r, &glass, Default::default(), false);
+    assert!(presenter.needs_present(&r, view(size, 0.), [0., 0., 0., 1.]));
+    let released = present(&r, &mut presenter, &surface, 0.);
+    assert_eq!(presenter.backdrop_frames(), [2, 1]);
+    assert!(at(&released) < at(&held));
+}
+
+#[test]
 fn regions_follow_the_surface_rotation() {
     let logical = region([10., 5., 20., 10.], [1., 2., 3., 4.]);
     let size = [100., 50.];

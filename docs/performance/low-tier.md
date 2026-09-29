@@ -27,16 +27,16 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Two-finger rotate | 60 | | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
-| Placed-photo translation | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 93.8 completed updates/s | Transform damage build below, `photo-translate-drag` |
-| Placed-photo corner resize | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 86.3 completed updates/s | Transform damage build below, `photo-handle-drag-bar-hidden` |
-| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 77.7 completed updates/s | Transform damage build below, `photo-pixels-handle-drag` |
+| Placed-photo translation | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 99.4 completed updates/s | Current drag comparison below, `photo-translate-drag` |
+| Placed-photo corner resize | 60 | Screen 59.1 presents/s, p99 16.9 ms; renderer 90.1 completed updates/s | Current drag comparison below, `photo-handle-drag-bar-hidden` |
+| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 78.6 completed updates/s | Current drag comparison below, `photo-pixels-handle-drag` |
 | Pixel transform: Uniform, Skew or Rotate | 60 | | |
-| Pixel transform translation | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 84.1 completed updates/s | Transform damage build below, `photo-pixels-translate-drag` |
-| Pixel transform: Distort | 60 | **Not met.** Screen 55.8 presents/s, p99 16.9 ms; renderer 62.0 completed updates/s | Transform damage build below, `photo-pixels-distort-drag` |
+| Pixel transform translation | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 85.5 completed updates/s | Current drag comparison below, `photo-pixels-translate-drag` |
+| Pixel transform: Distort | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 66.7 completed updates/s | Current drag comparison below, `photo-pixels-distort-drag` |
 | Pixel transform: Perspective | 60 | | |
-| Pixel transform: Warp | 60 | **Not met.** Screen 45.9 presents/s, p99 33.4 ms; renderer 45.9 completed updates/s | Transform damage build below, `photo-pixels-warp-drag` |
-| Crop corner drag | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 113.1 completed updates/s | Geometry build below, `crop-handle-drag` |
-| Pixel resize after placing the photo at 45% size | 60 | Screen 59.6 presents/s, p99 16.9 ms; renderer 115.3 completed updates/s | Geometry build below, `scaled-photo-pixels-handle-drag` |
+| Pixel transform: Warp | 60 | **Not met.** Screen 47.9 presents/s, p99 33.4 ms; renderer 47.9 completed updates/s | Current drag comparison below, `photo-pixels-warp-drag` |
+| Crop corner drag | 60 | Screen 59.2 presents/s, p99 16.9 ms; renderer 110.5 completed updates/s | Current drag comparison below, `crop-handle-drag` |
+| Pixel resize after placing the photo at 45% size | 60 | Screen 58.6 presents/s, p99 16.7 ms; renderer 140.4 completed updates/s | Current drag comparison below, `scaled-photo-pixels-handle-drag` |
 | Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
 | Move tool layer drag | 60 | | |
 | Move selected pixels: whole image | 60 | Screen 59.1 presents/s, p99 16.8 ms; renderer 86.6 completed updates/s | Transform damage build below, `move-all-drag` |
@@ -70,30 +70,54 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | List scrolling: layers, brushes, filters | 60 | | |
 | Menu open and close | 60 | | |
 
-Earlier geometry build (crop and scaled-photo rows): 2026-09-28, graph transform
-migration based on `af177ede`,
-APK SHA-256 `c872c55b455d292c4444f7c2ca42303e421fe17e1e90a4b62e1b11b9510f8554`.
-Release Rust with an unminified Android benchmark harness, default glass, thermal
-status 0, three warmed five-second gestures per row. Values are medians across
-runs. Screen rates use SurfaceFlinger actual-present timestamps; this device
-provides no separate SurfaceView timeline, so they do not independently establish
-canvas presentation rates. Renderer counts exclude empty updates and terminal
-polling. Setup commands wait for shared command availability outside timing.
-Raw results are in `artifacts/display-production/transform-final-geometry-tcl`.
+## Current drag comparison
 
-In that earlier comparison, the old renderer at `29a564eb` completes 96.3 placement translations/s,
-94.6 placement resizes/s, 92.7 pixel translations/s, 91.2 pixel resizes/s,
-91.7 distortions/s, 51.4 warps/s, 123.8 crops/s and 112.0 scaled-photo resizes/s.
-Placement resize, crop and the pixel-transform journeys regress in renderer
-throughput. Distort and Warp fall below the screen-present target; other rows
-remain near 59 screen presents/s. Pixel transforms now use the shared graph,
-with prefiltered immutable inputs and direct mesh color evaluation. These
-measurements precede the selected-pixel Move integration from `a16bb1a4`.
-Separate phase traces show 6–10 ms of transform composition plus 5.5 ms of
-viewport work, rising to 12.6 ms for Warp. The matching old viewport costs
-about 3.1 ms, or 9.0 ms for Warp. Both costs remain optimization work. Earlier canvas-bar handle-labelled measurements
-started inside the handle and measured translation; they do not qualify resizing
-or distortion.
+Measured 2026-09-29 on the 12 MP Perceptual reference photo at Fit: release Rust,
+default glass, Stats closed and three warmed five-second gestures per row.
+Thermal status is zero before and after all runs. Both renderers use the same
+600 ms warm-up through the complete motion range and the same test APK.
+Values are medians across runs. No allocator or process-memory sampler runs
+inside qualification; a separate safety guard observes system available RAM.
+
+| Journey | Old compositor, completed updates/s | Current, completed updates/s |
+| --- | --- | --- |
+| Placed-photo translation | 94.50 | 99.43 |
+| Placed-photo corner resize | 91.67 | 90.12 |
+| Pixel transform corner resize: Free | 86.80 | 78.57 |
+| Pixel transform translation | 87.67 | 85.53 |
+| Pixel transform: Distort | 85.34 | 66.73 |
+| Pixel transform: Warp | 42.46 | 47.88 |
+| Crop corner drag | 113.77 | 110.46 |
+| Pixel resize after placing the photo at 45% size | 108.81 | 140.42 |
+
+The current build shares decoded sources, retains placement sources through
+identity crossings, holds glass backdrops during drags and checks optional
+hierarchy headroom once per motion sequence. Placement resize no longer rebuilds
+source mips each time the pose crosses identity. A separate trace observes one
+hierarchy-budget query per five-second pixel drag instead of roughly 300, and
+one backdrop refresh instead of 278 during Distort. These reduce CPU and GPU
+work without changing the artwork.
+
+Pixel resize and Distort still trail the old compositor in completed-update
+throughput. Distort meets the screen-cadence criterion in this fixture; Warp
+still misses it. The current resampler filters a mip pyramid according to the
+transformed pixel footprint; the old resampler takes one bilinear sample at a
+fixed source level. That changes the work per pixel, but does not establish that
+the remaining cost is unavoidable.
+
+Screen rates use SurfaceFlinger actual-present timestamps. This device provides
+no separate SurfaceView timeline, so screen records do not independently
+establish canvas scanout. Renderer counts exclude empty updates and terminal
+polling. Setup waits for command availability outside timing.
+
+Old renderer: `7382bd260` with read-only benchmark observers, APK SHA-256
+`d60230a701dd4edcd6e7e0346898893122669da72447784304b72f27d4e3c718`.
+Current: `bf534b8e8` plus the drag fixes, APK SHA-256
+`89ad253df04ed082393f9b134766427b49f133da3794f34c990b855394879926`.
+Raw runs are in `artifacts/latency-investigation/{old-warm-2,stable-drag-warm}`;
+phase diagnostics are in `drag-budget-profile` and `specialized-profile`.
+
+### Earlier selected-pixel Move measurements
 
 Transform damage build: 2026-09-28, `2e04caa8` plus incremental cut
 invalidation, APK SHA-256
@@ -258,7 +282,7 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | 53.6 fresh updates/s (53.57–53.61); completion gap p99 30.6 ms | **Not met** |
+| G-Pen (1) | Simple | 1024 px | 53.3 fresh updates/s (50.14–53.45); median completion gap p99 30.6 ms (one run 38.0 ms) | **Not met** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -301,16 +325,17 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 Measured on 2026-09-29: G-Pen 1024 px, Perceptual 12 MP photo, Fit at 15.97%,
 240 × 140 px trajectory, 16 ms prediction, three five-second strokes. Stats is
-closed. Fresh updates count completed frames that consumed new real pen samples.
-The median is 53.6/s, below the 60/s target; CPU callback median is 17.1 ms.
-The settled renderer retains 812 MiB, excluding other process allocations.
+closed and thermal status remains zero. Fresh updates count completed frames
+that consumed new real pen samples. The median is 53.3/s (50.14–53.45), below
+60/s. Completion-gap p99 is 38.0 / 28.5 / 30.6 ms; the first run also misses
+the 33.3 ms gap limit.
 
-The measured build integrates `64036b643` with `13720d303` and the memory,
-source invalidation and command batching fixes. Its APK SHA-256 is
-`be9a9ad367b9a0215ea5f57ac9d14028818d1f029fe8787324b66d3d4ac71e48`.
+The build shares decoded sources and includes the drag-cache fixes. Its APK
+SHA-256 is `89ad253df04ed082393f9b134766427b49f133da3794f34c990b855394879926`.
 Raw input, completion and environment records are in
-`artifacts/integration/source-record-batch/tcl`.
+`artifacts/latency-investigation/stable-brush-continuous`.
 
-Exact refinement remains above the 100–250 ms ordinary-stroke aim. The preceding
-build, with identical refinement code, takes 640–646 ms for this stroke. Neither
-this rate nor that tail qualifies stacked photos, native zoom, or other brushes.
+The preceding integration measured 53.6/s under the same conditions. Neither
+measurement qualifies stacked photos, native zoom or other brushes. Matched
+contacts establish that ordinary refinement adds less than one frame to resumed
+input for this workload; see [responsiveness](responsiveness.md).

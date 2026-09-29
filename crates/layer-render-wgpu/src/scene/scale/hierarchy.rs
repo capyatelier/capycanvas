@@ -40,6 +40,7 @@ pub(super) struct Hierarchy {
 }
 impl Hierarchy {
     fn budget(r: &WgpuRasterizer, _retained: u64) -> u64 {
+        let _trace = crate::performance_trace::Span::new(c"capy.hierarchy_budget");
         let configured = r.native_edit.as_ref().map_or(0, |n| n.display_complete_bytes);
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
         let configured = configured.min(crate::display_memory::complete_budget(&r.device, _retained));

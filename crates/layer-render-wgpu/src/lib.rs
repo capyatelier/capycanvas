@@ -864,6 +864,7 @@ pub struct WgpuRasterizer {
     awaiting_meshes: bool,
     background_ready: Arc<std::sync::atomic::AtomicBool>,
     moving_pixels: Option<(LayerId, layer_core::Selection)>,
+    moving_layer: Option<LayerId>,
     #[cfg(test)]
     test: TestHooks,
     thumbnails: thumbnails::Thumbnails,
@@ -1183,6 +1184,7 @@ impl WgpuRasterizer {
             awaiting_meshes: false,
             background_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             moving_pixels: None,
+            moving_layer: None,
             #[cfg(test)]
             test: Default::default(),
             filter_previews: None,
@@ -3086,6 +3088,12 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn can_capture_raster(&self) -> bool {
         self.raster_ready()
+    }
+    fn prepare_moving_layer(&mut self, layer: Option<LayerId>) {
+        if self.moving_layer != layer {
+            self.moving_layer = layer;
+            self.artwork_frame = None;
+        }
     }
     fn prepare_moving_pixels(&mut self, pixels: Option<(LayerId, layer_core::Selection)>) {
         if self.moving_pixels != pixels { self.transforms.as_mut().unwrap().release_standby(); }

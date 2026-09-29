@@ -1089,7 +1089,7 @@ impl WebApp {
         self.session.append_layer_overlay(&mut self.cursor.segments);
         let picker = self.session.color_picker_overlay();
         let glass = self.session.state().palette.glass;
-        let stroke = self.session.engine().has_active_stroke();
+        let backdrop_hold = self.session.hold_canvas_backdrop();
         let scale = self.viewport_scale;
         change.canvas_wake |= self.present_navigators()?;
         let (Some(gpu), Some(surface)) = (self.session.engine().backend().0.as_deref(), self.surface.as_mut()) else {
@@ -1102,7 +1102,7 @@ impl WebApp {
             gpu,
             if glass.transparency.enabled() { &self.glass } else { &[] },
             layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
-            stroke,
+            backdrop_hold,
         );
         if !surface.presenter.needs_present(gpu, view, surround) {
             return serialize(&change);

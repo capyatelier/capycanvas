@@ -549,8 +549,10 @@ fn handle_drags_publish_values_and_the_document_only_on_release() {
         let quad = s.operation.quad();
         let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
         let moved = Point { x: centre.x + 40., y: centre.y + 20. };
+        assert!(!s.hold_canvas_backdrop());
         s.transform_pen(event(&s, 1, PenPhase::Down, 1.), centre).unwrap();
         assert_eq!(s.frame(3, 3).unwrap().regions, 0, "a drag starts without publishing");
+        assert!(s.hold_canvas_backdrop());
         assert!(!s.command(CommandId::CancelSelection).enabled, "a transform drag is not a selection gesture");
         s.transform_pen(event(&s, 2, PenPhase::Move, 1.), moved).unwrap();
         let change = s.frame(4, 4).unwrap();
@@ -560,6 +562,7 @@ fn handle_drags_publish_values_and_the_document_only_on_release() {
         assert!(!placing || placement(&s) != before.1, "the preview still moves the photo");
         s.transform_pen(event(&s, 3, PenPhase::Up, 1.), moved).unwrap();
         let change = s.frame(5, 5).unwrap();
+        assert!(!s.hold_canvas_backdrop());
         assert_ne!(change.regions & regions::BRUSH, 0, "release publishes the new values");
         assert!(!placing || change.regions & regions::DOCUMENT != 0, "release publishes the placed photo");
         assert!(placing || change.regions & regions::COMMANDS == 0, "release publishes values, not availability");

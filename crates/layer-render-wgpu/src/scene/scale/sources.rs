@@ -101,7 +101,7 @@ impl Sources {
         let (id, plane, image, mask) = if is_mask {
             (layer.mask.as_ref().unwrap().id, RasterPlane::Mask, None, metadata::mask_metadata(&layer.mask))
         } else { (layer.id, RasterPlane::Color, layer.source.clone(), None) };
-        let blend_space = if is_mask || layer_core::target_transform(packet.layers, id) != layer_core::Affine::IDENTITY {
+        let blend_space = if is_mask || r.moving_layer == Some(id) || layer_core::target_transform(packet.layers, id) != layer_core::Affine::IDENTITY {
             layer_core::BlendSpace::Linear
         } else { packet.blend_space };
         self.reset |= !self.entries.contains_key(&id);
