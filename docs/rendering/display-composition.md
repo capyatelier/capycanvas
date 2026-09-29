@@ -28,7 +28,16 @@ Each image carries its native extent, resident bounds and texel footprint.
 Source windows cover the inverse-mapped output with page-aligned sampling
 padding. A resident window grows to include nearby requests while it occupies at
 most twice the requested pixel storage; admission charges the retained window.
-Motion back into that window preserves its images. Moving beyond that allowance
+Required source windows determine admission; optional retained overlap yields
+when the combined source and composition allocation would exceed the budget.
+For pointwise stacks whose identity-placed source windows exceed that allowance,
+the evaluator reduces source pages into reusable working tiles on demand.
+Complete source windows remain optional reuse; required coarse overview levels
+retain their allocation. Cached and streamed requests share the same paint and
+mask reducers. Both derive valid regions from retained finer levels before
+requesting native pages, and consuming commands are encoded before a working tile
+is reused.
+Motion back into a retained window preserves its images. Moving beyond that allowance
 replaces the window, copies valid overlap and prepares only missing pages.
 Reduction between windows uses their origins and weights partial boundary texels.
 Admission charges the resident dimensions, including replacement windows and
@@ -42,6 +51,12 @@ Required previews take priority over spare detail when several photos compete
 for the admitted memory. Admission reserves composition scratch and command
 capacity before retaining optional source levels, including images allocated
 later in the frame. Pose changes preserve local pixels.
+Cold sources may prepare one adjacent finer level from the remaining
+source allowance, deriving the required level without decoding twice. Existing
+finer detail is refreshed with source damage and retained across scale boundaries;
+required images take priority under pressure. A first stroke prepares only its
+required level. A compact prediction cannot update
+a source level finer than its own sampling grid.
 
 The shared layer traversal builds an expression tree. Normal premultiplied
 source-over runs are balanced using associativity, with each layer's opacity
@@ -65,7 +80,8 @@ branches, and writes changed pages into a stable root image. An edit in a
 balanced normal run needs logarithmically many composition operations when
 its unchanged branches fit the budget. Placed sources and masks use the common transform
 resampler. Their most magnified axis determines source resolution; an additional
-level of detail and a two-by-two sample grid limit placement-edge error.
+level of detail and up to four samples per axis limit placement-edge error.
+Unit-scale aligned inputs use one sample per pixel.
 Interior samples use the hardware linear sampler. Boundary samples account
 for partially filled source texels and the smaller final output cell. Masks retain their default coverage outside their local image.
 A normal placed layer over a constant backdrop keeps its source and transform
@@ -77,11 +93,30 @@ their result and derive an adjacent output mip for trilinear presentation.
 Navigator sampling subdivides footprints that span more than four coarse-source
 texels along either axis.
 
-At native or larger views, the shared tile executor fills a padded, page-aligned
-viewport window. Panning reuses its overlap and renders only newly required or
-changed pages. A full-document overview serves the navigator and pixels outside
-the window. Covered overview regions derive from completed detail; uncovered
-regions use reduced composition, avoiding duplicate exact-source work.
+The expression graph fills a padded, page-aligned viewport window at the selected
+resolution. Retained root and branch images have viewport bounds; pointwise
+temporary results reuse 256-texel working tiles at every resolution. Every value and output carries its own grid,
+so a tile can compose directly into a viewport image without changing document
+coordinates. Aligned native sources borrow paint or decoded tiles directly.
+Decoded tiles carry leases until their consuming commands are encoded; eviction
+cannot replace a borrowed tile. Other native sources use the shared paint and
+mask gatherers; minified sources use retained reduced windows or streamed tiles. Composition batches
+uniform records and compute dispatches, flushing before source preparation,
+transforms, effects or reduction consume or replace their inputs. Admission
+reserves the root, its adjacent mip,
+bounded working tiles and placement gathers separately. Panning reuses valid
+overlap and renders only newly required or changed pages. Shared sparse contact
+plans restrict pointwise edits to touched pages, including retired prediction
+pages. Spatial and global programs retain their dependency propagation. A full-document
+overview serves the navigator and pixels outside the window. Covered overview
+regions derive from completed detail; uncovered regions use reduced composition,
+avoiding duplicate exact-source work.
+The overview remains coarser than the window, including at reduced zoom.
+Image-boundary effects currently retain whole-document dependency coverage at
+reduced resolution.
+Retained windows are admitted again when their source requirements change.
+Presentation regeneration advances display damage independently of the artwork
+revision used by document previews; camera motion does not publish an artwork edit.
 
 The cache replaces the full composite, live display pyramid/detail atlas,
 transform static copies and obsolete scene image intermediates for its supported

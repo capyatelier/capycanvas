@@ -370,3 +370,36 @@ production APK (`cff6f839c8fa90fe67df272408ac272b8fd01ba9e5fd631d9a475435dac7d73
 completes 69.7 updates/s (68.5–69.9), with gap p99 22.9 ms on that trajectory;
 it does not qualify sustained painting inside the canvas. Its raw results are
 in `artifacts/display-production/final-region-12mp-fit`.
+
+
+## Viewport-window composition
+
+Measured on 2026-09-28 with the same TCL 12 MP photo, G-Pen 1024 px,
+240 × 140 surface-pixel ellipse, 16 ms prediction and default glass. Three
+five-second gestures alternate control and candidate order; all 36 thermal
+snapshots report status 0. These are completed renderer updates during input.
+
+The control is the production spatial-filter build at `7a554597`. The candidate
+is based on `25b4c2f9`, with bounded scratch at every pointwise display scale,
+viewport source windows, adjacent source-detail preparation, active-paint priority
+and fixed-width source sample decoding. Its APK SHA-256
+is `73242ba8b3b5bdfaeea905b9725c7f6b48c6d4284b8a38ca73960e1273d88c9b`;
+its source patch SHA-256 is
+`c558ecafcdb87850f062a2ec0981df00c4ac10baa60153842cc0f05ce5ce2320`.
+Raw pairs and the summary are under
+`artifacts/display-production/source-decode-paired` and
+`artifacts/display-production/source-decode-paired-summary.json`.
+
+| Photo layers below the brush | Zoom | Control updates/s | Candidate updates/s | Speedup |
+| --- | --- | --- | --- | --- |
+| 8 | 50% | 1.792 | 28.247 | 15.76× |
+| 8 | 100% | 1.793 | 18.714 | 10.44× |
+| 1 | Fit | 37.883 | 46.567 | 1.23× |
+
+All three miss 60 updates/s. Update-start gap p99 ranges across the candidate's
+three runs are 45.7–50.6 ms, 62.4–71.6 ms and 31.7–35.4 ms respectively.
+Prioritizing required paint over optional first-stroke detail removes the earlier
+candidate's Fit and native painting regression. That comparison remains in
+`artifacts/display-production/source-admission-paired-summary.json`.
+These runs precede streamed source preparation and do not qualify its performance
+or photo navigation.

@@ -19,6 +19,42 @@ pub(super) struct Source {
     pub(super) damage: PixelRect,
 }
 
+impl Source {
+    pub(super) fn derive_pages(
+        &self, commands: &mut Commands, r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder, plan: display_mips::Plan,
+        output: &wgpu::TextureView, missing: &mut BTreeSet<[u32; 2]>,
+    ) -> Result<(), GpuRasterError> {
+        for (&finer, previous) in self.levels.range(..=plan.level).rev() {
+            if previous.image.view == *output { continue; }
+            let completed: Vec<_> = previous.valid.intersection(missing).copied().filter(|tile| {
+                let region = page_rect(*tile).intersect(PixelRect::full(self.extent));
+                region.intersect(previous.image.plan.bounds) == region && region.intersect(plan.bounds) == region
+            }).collect();
+            for changed in page_regions(completed.iter().copied(), plan.bounds) {
+                let [x, y, width, height] = paint_transform::texel_rect(changed.window_local(plan.bounds), 1 << plan.level);
+                let binding = Commands::binding(r, &previous.image.view, &r.empty_view, output);
+                let mut values = [0; 20];
+                values[..8].copy_from_slice(&[x, y, width, height, previous.image.plan.bounds.width(), previous.image.plan.bounds.height(),
+                    1 << (plan.level - finer), (finer << 8) | 8]);
+                values[14] = ((previous.image.plan.bounds.min_x() as f32 - plan.bounds.min_x() as f32) / (1 << finer) as f32).to_bits();
+                values[15] = ((previous.image.plan.bounds.min_y() as f32 - plan.bounds.min_y() as f32) / (1 << finer) as f32).to_bits();
+                let offset = commands.record(r, encoder, values)?;
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("derive source level"), timestamp_writes: None,
+                });
+                pass.set_pipeline(&r.scene_pipelines.scale.reduce);
+                pass.set_bind_group(0, &commands.record_binding, &[offset]);
+                pass.set_bind_group(1, &binding, &[]);
+                pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+            }
+            for tile in completed { missing.remove(&tile); }
+            if missing.is_empty() { break; }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Sources {
     pub(super) entries: HashMap<LayerId, Source>,
@@ -197,46 +233,13 @@ impl Sources {
                 }));
             }
         }
-        if let Some((&finer, previous)) = source.levels.range(..level).next_back() {
-            let mut columns: Vec<PixelRect> = Vec::new();
-            let mut completed = Vec::new();
-            for tile in previous.valid.difference(&target.valid) {
-                let region = page_rect(*tile).intersect(PixelRect::full(source.extent));
-                if region.intersect(plan.bounds) != region { continue; }
-                completed.push(*tile);
-                if let Some(last) = columns.last_mut().filter(|r| r.min_x() == region.min_x() && r.max_y() == region.min_y()) {
-                    *last = last.union(region);
-                } else { columns.push(region); }
-            }
-            let mut regions: Vec<PixelRect> = Vec::new();
-            for column in columns {
-                if let Some(last) = regions.last_mut().filter(|r| r.min_y() == column.min_y() && r.max_y() == column.max_y() && r.max_x() == column.min_x()) {
-                    *last = last.union(column);
-                } else { regions.push(column); }
-            }
-            for changed in regions {
-                let [x, y, width, height] = paint_transform::texel_rect(changed.window_local(plan.bounds), 1 << level);
-                let binding = Commands::binding(r, &previous.image.view, &r.empty_view, &target.image.view);
-                let mut values = [0; 16];
-                values[..8].copy_from_slice(&[x, y, width, height, previous.image.plan.bounds.width(), previous.image.plan.bounds.height(),
-                    1 << (level - finer), (finer << 8) | 8]);
-                values[14] = ((previous.image.plan.bounds.min_x() as f32 - plan.bounds.min_x() as f32) / (1 << finer) as f32).to_bits();
-                values[15] = ((previous.image.plan.bounds.min_y() as f32 - plan.bounds.min_y() as f32) / (1 << finer) as f32).to_bits();
-                let offset = commands.record(r, encoder, values)?;
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("derive source level"), timestamp_writes: None,
-                });
-                pass.set_pipeline(&r.scene_pipelines.scale.reduce);
-                pass.set_bind_group(0, &commands.record_binding, &[offset]);
-                pass.set_bind_group(1, &binding, &[]);
-                pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
-            }
-            target.valid.extend(completed);
-        }
+        let mut missing: BTreeSet<_> = page_coordinates(plan.bounds).filter(|c| !target.valid.contains(c)).collect();
+        source.derive_pages(commands, r, encoder, plan, &target.image.view, &mut missing)?;
+        target.valid.extend(page_coordinates(plan.bounds).filter(|c| !missing.contains(c)));
         source.levels.insert(level, target);
         Ok(())
     }
-    pub fn retain_levels(&mut self, requested: &BTreeMap<LayerId, BTreeMap<u32, display_mips::Plan>>, budget: u64) {
+    pub fn retain_levels(&mut self, requested: &BTreeMap<LayerId, BTreeMap<u32, display_mips::Plan>>, budget: u64) -> u64 {
         let mut reserve = 0;
         let empty = BTreeMap::new();
         for (id, source) in &mut self.entries {
@@ -255,10 +258,45 @@ impl Sources {
             self.entries.get_mut(&id).unwrap().levels.remove(&level);
             bytes -= size;
         }
+        bytes
     }
 }
 
 impl Scene {
+    pub(in crate::scene) fn prepare_display_sources(
+        &mut self, cache: &Cache, commands: &mut Commands, r: &mut WgpuRasterizer,
+        packet: FramePacket<'_>, encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        let requested = cache.source_levels(r, packet, &self.scale_sources);
+        let budget = cache.source_budget(r, packet, commands, Some(&self.scale_sources));
+        let reserved = self.scale_sources.retain_levels(&requested, budget);
+        let mut remaining = budget.saturating_sub(reserved);
+        for (layer, id) in targets(r, packet).collect::<Vec<_>>() {
+            if cache.streamed_sources && layer_core::target_transform(packet.layers, id) == layer_core::Affine::IDENTITY { continue; }
+            let Some((_, required)) = requested.get(&id).and_then(|levels| levels.first_key_value()) else { continue; };
+            let source = &self.scale_sources.entries[&id];
+            let existing = source.levels.range(..required.level).next_back();
+            let cold = source.levels.range(..=required.level).next().is_none()
+                && !packet.dab_batches.iter().any(|batch| batch.layer_id == id);
+            let Some(level) = existing.map(|(&level, _)| level)
+                .or_else(|| (cold && required.level > 1).then(|| required.level - 1)) else { continue; };
+            if r.preview_layer_id == Some(id) && r.preview_level > level { continue; }
+            let plan = self.scale_sources.resident_plan(id,
+                display_mips::Plan::window(required.extent, level, required.bounds));
+            let previous = existing.map_or(0, |(_, image)| image.image.bytes());
+            let bytes = plan.level_bytes(level);
+            if bytes > previous + remaining || plan.size.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d) { continue; }
+            remaining = remaining + previous - bytes;
+            let request = SourceRequest { plan, required: plan.bounds, covered: PixelRect::EMPTY };
+            if id == layer.id {
+                self.prepare_scale_color(commands, r, packet, encoder, layer, request)?;
+            } else {
+                self.prepare_scale_mask(commands, r, encoder, layer.mask.as_ref().unwrap(), request)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn prepare_scale_color(
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder, layer: &Layer, request: SourceRequest,
@@ -266,14 +304,24 @@ impl Scene {
         let SourceRequest { plan, required, covered } = request;
         if plan.bounds.is_empty() { return Ok(PixelRect::EMPTY); }
         let level = plan.level;
-        let extent = layer.local_extent(packet.document_extent);
-        let mut changed = PixelRect::EMPTY;
         self.scale_sources.ensure_level(commands, r, encoder, layer.id, plan)?;
         let cached = self.scale_sources.image(layer.id, level);
         let output = cached.image.view.clone();
         let missing: Vec<_> = page_coordinates(required.intersect(plan.bounds))
             .filter(|c| !cached.valid.contains(c) && page_rect(*c).intersect(covered).is_empty())
             .collect();
+        let changed = self.reduce_color_pages(commands, r, packet, encoder, layer, plan, &output, &missing)?;
+        self.scale_sources.entries.get_mut(&layer.id).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
+        Ok(changed)
+    }
+    pub(super) fn reduce_color_pages(
+        &mut self, commands: &mut Commands, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
+        encoder: &mut crate::submission::CommandEncoder, layer: &Layer, plan: display_mips::Plan,
+        output: &wgpu::TextureView, missing: &[[u32; 2]],
+    ) -> Result<PixelRect, GpuRasterError> {
+        let level = plan.level;
+        let extent = layer.local_extent(packet.document_extent);
+        let mut changed = PixelRect::EMPTY;
         for chunk in missing.chunks(32) {
             let mut jobs = Vec::with_capacity(chunk.len());
             let mut scratch = Vec::new();
@@ -315,7 +363,7 @@ impl Scene {
                     [valid.width(), valid.height()].map(|n| n.div_ceil(1 << level));
                 let origin = [(tile[0] * PAGE_SIZE - plan.bounds.min_x()) >> level, (tile[1] * PAGE_SIZE - plan.bounds.min_y()) >> level];
                 let input_level = if reduced_preview { r.preview_level } else { 0 };
-                let mut values = [0; 16];
+                let mut values = [0; 20];
                 values[..8].copy_from_slice(&[
                     origin[0],
                     origin[1],
@@ -343,7 +391,6 @@ impl Scene {
             drop(pass);
             for slot in scratch { self.free(slot); }
             self.scale_sources.entries.get_mut(&layer.id).unwrap().updates += chunk.len() as u64;
-            self.scale_sources.entries.get_mut(&layer.id).unwrap().levels.get_mut(&level).unwrap().valid.extend(chunk);
         }
         Ok(changed)
     }
@@ -354,19 +401,29 @@ impl Scene {
         let SourceRequest { plan, required, covered } = request;
         if plan.bounds.is_empty() { return Ok(PixelRect::EMPTY); }
         let level = plan.level;
-        let extent = self.scale_sources.entries[&mask.id].extent;
-        let mut changed = PixelRect::EMPTY;
         self.scale_sources.ensure_level(commands, r, encoder, mask.id, plan)?;
         let cached = self.scale_sources.image(mask.id, level);
         let output = cached.image.view.clone();
         let missing: Vec<_> = page_coordinates(required.intersect(plan.bounds)).filter(|c| !cached.valid.contains(c) && page_rect(*c).intersect(covered).is_empty()).collect();
-        for tile in missing {
+        let changed = self.reduce_mask_pages(commands, r, encoder, mask, plan, &output, &missing)?;
+        self.scale_sources.entries.get_mut(&mask.id).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
+        Ok(changed)
+    }
+    pub(super) fn reduce_mask_pages(
+        &mut self, commands: &mut Commands, r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder, mask: &layer_core::LayerMask,
+        plan: display_mips::Plan, output: &wgpu::TextureView, missing: &[[u32; 2]],
+    ) -> Result<PixelRect, GpuRasterError> {
+        let level = plan.level;
+        let extent = self.scale_sources.entries[&mask.id].extent;
+        let mut changed = PixelRect::EMPTY;
+        for &tile in missing {
             let source = r.layer_masks.pages.get(&(mask.id, tile)).map(|p| p.view.clone());
             let valid = page_rect(tile).intersect(PixelRect::full(extent));
             changed = changed.union(valid);
             let size = [valid.width(), valid.height()].map(|n| n.div_ceil(1 << level));
             let origin = [(tile[0] * PAGE_SIZE - plan.bounds.min_x()) >> level, (tile[1] * PAGE_SIZE - plan.bounds.min_y()) >> level];
-            let mut values = [0; 16];
+            let mut values = [0; 20];
             values[..8].copy_from_slice(&[
                 origin[0], origin[1], size[0], size[1], valid.width(), valid.height(), 1 << level,
                 if source.is_none() { 4 } else { 32 | if mask.inverted { 64 } else { 0 } },
@@ -381,7 +438,6 @@ impl Scene {
             pass.set_bind_group(1, &binding, &[]);
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
             drop(pass);
-            self.scale_sources.entries.get_mut(&mask.id).unwrap().levels.get_mut(&level).unwrap().valid.insert(tile);
         }
         Ok(changed)
     }

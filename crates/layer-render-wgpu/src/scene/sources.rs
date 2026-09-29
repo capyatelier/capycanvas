@@ -66,6 +66,7 @@ struct Slot {
     view: wgpu::TextureView,
     used: u64,
     valid: Arc<std::sync::atomic::AtomicBool>,
+    lease: Arc<()>,
 }
 enum Pixels {
     Image(Arc<SourceImage>, [u32; 2]),
@@ -300,6 +301,10 @@ impl DecodedTiles {
         Ok((tile, pending))
     }
 
+    pub fn lease(&self, view: &wgpu::TextureView) -> Option<Arc<()>> {
+        self.slots.iter().find(|s| s.view == *view).map(|s| s.lease.clone())
+    }
+
     fn plan_key(
         &mut self,
         r: &WgpuRasterizer,
@@ -347,14 +352,16 @@ impl DecodedTiles {
                 view,
                 used: 0,
                 valid: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                lease: Arc::new(()),
             });
             id
         } else {
             self.slots
                 .iter()
                 .enumerate()
+                .filter(|(_, s)| Arc::strong_count(&s.lease) == 1)
                 .min_by_key(|(_, s)| s.used)
-                .unwrap()
+                .ok_or(GpuRasterError::SourceWorkingSetExceeded)?
                 .0
         };
         let slot = &mut self.slots[index];

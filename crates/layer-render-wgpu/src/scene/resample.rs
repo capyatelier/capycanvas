@@ -1,7 +1,7 @@
 use super::*;
 use crate::submission::ColorPass;
 
-pub(crate) const UNIFORM_BYTES: u64 = 240;
+pub(crate) const UNIFORM_BYTES: u64 = 256;
 
 pub(crate) struct Request<'a> {
     pub moved: &'a layer_core::ImageTransform,
@@ -10,6 +10,7 @@ pub(crate) struct Request<'a> {
     pub extent: [u32; 2],
     pub texels: [u32; 4],
     pub display: pixel_transform::DisplayLevel,
+    pub target: display_mips::Plan,
     pub source: display_mips::Plan,
     pub max_lod: u32,
     pub outside: f32,
@@ -101,12 +102,14 @@ impl Resample {
         Self { layout, mesh_layout, sampler, mapped, mesh, area }
     }
     pub fn values(request: Request<'_>) -> Result<[u8; UNIFORM_BYTES as usize], GpuRasterError> {
-        let Request { moved, kept, clip, extent, texels, display, source, max_lod, outside, keep_source, identity } = request;
-        let rows = |transform| pixel_transform::inverse_rows(transform).map_err(GpuRasterError::InvalidTransform);
+        let Request { moved, kept, clip, extent, texels, display, target, source, max_lod, outside, keep_source, identity } = request;
+        let origin = [target.bounds.min_x(), target.bounds.min_y()].map(|n| n as f32 / display.side as f32);
+        let local = |[x, y, z]: [f32; 3]| [x, y, z + x * origin[0] + y * origin[1]];
+        let rows = |transform| pixel_transform::inverse_rows(transform).map(|rows| rows.map(local)).map_err(GpuRasterError::InvalidTransform);
         let [x, y, w] = rows(moved)?;
         let [kx, ky, kw] = rows(kept)?;
         let [a, b, c, d, u, v] = clip.0;
-        let rows = [x, y, w, kx, ky, kw, [a, c, u], [b, d, v], [extent[0] as f32, extent[1] as f32, 0.]];
+        let rows = [x, y, w, kx, ky, kw, local([a, c, u]), local([b, d, v]), [extent[0] as f32, extent[1] as f32, 0.]];
         let floats = rows.into_iter().flat_map(|row| row.into_iter().chain([0.]));
         let mut values = [0u8; UNIFORM_BYTES as usize];
         for (dst, value) in values[..144].chunks_exact_mut(4).zip(floats) {
@@ -123,13 +126,14 @@ impl Resample {
             dst.copy_from_slice(&value.to_le_bytes());
         }
         let sizes = [[source.bounds.width(), source.bounds.height()].map(|n| n as f32 / (1 << source.level) as f32),
-            display.extent.map(|n| n as f32 / display.side as f32)];
+            [target.bounds.width(), target.bounds.height()].map(|n| n as f32 / display.side as f32)];
         for (row, size) in values[192..].chunks_exact_mut(16).zip(sizes) {
             for (dst, value) in row.chunks_exact_mut(4).zip(size.into_iter().chain([0.; 2])) {
                 dst.copy_from_slice(&value.to_le_bytes());
             }
         }
-        values[224..228].copy_from_slice(&f32::from(display.encode).to_le_bytes());
+        values[224..228].copy_from_slice(&pixel_transform::exact_taps(moved).min(pixel_transform::PREVIEW_TAPS).to_le_bytes());
+        values[240..244].copy_from_slice(&f32::from(display.encode).to_le_bytes());
         Ok(values)
     }
     pub fn binding(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer, offset: u64,

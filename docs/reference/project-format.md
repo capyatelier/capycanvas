@@ -83,6 +83,8 @@ and imported tiles use the same `lz4_flex` encoder with safe, checked Rust paths
 There is no native codec, vendor patch, compression-level policy or codec dispatch.
 Multibyte U16/F16/F32 samples use reversible byte-plane shuffling; the SHA-256 tile
 digest covers the descriptor and original decoded bytes, before shuffling.
+Reconstruction uses fixed-width loops for the validated sample layout; every
+decode still checks that digest and validates floating-point samples.
 Image profiles are binary payloads with independent hashes; builtins are explicit
 identifiers. There are no paths to extract.
 

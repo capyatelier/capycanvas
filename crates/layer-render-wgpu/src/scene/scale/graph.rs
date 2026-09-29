@@ -229,30 +229,30 @@ impl stack::Compositor for Builder<'_> {
     }
 }
 
-impl Reduced<'_> {
+impl Evaluator<'_> {
     pub(super) fn evaluate_root(&mut self, node: &Node) -> Result<Value, GpuRasterError> {
-        if node.deferred() && self.r.transform_preview.is_none() { return self.evaluate(node); }
+        let deferred = if self.cache.plan.level > 0 && node.deferred() && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
+            && self.r.transform_preview.is_none() { Some(self.evaluate(node)?) } else { None };
+        if matches!(deferred, Some(Value::Placed(_))) { return Ok(deferred.unwrap()); }
         if self.cache.output.is_empty() { self.cache.allocate(self.r); }
         self.cache.used[0] = true;
         let view = self.cache.output[0].view.clone();
-        let output = Some((view.clone(), Some(0)));
-        let value = self.evaluate_into(node, output)?;
-        self.materialize(value, Some((view, Some(0))))
+        let output = Target { view, slot: Some(Slot::Cache(0)), plan: self.cache.plan };
+        let value = match deferred { Some(value) => value, None => self.evaluate_into(node, Some(output.clone()))? };
+        self.materialize(value, Some(output))
     }
     pub(super) fn evaluate(&mut self, node: &Node) -> Result<Value, GpuRasterError> {
         self.evaluate_into(node, None)
     }
-    fn evaluate_into(&mut self, node: &Node, output: Option<(wgpu::TextureView, Option<usize>)>) -> Result<Value, GpuRasterError> {
-        let side = 1 << self.cache.plan.level;
-        let region = PixelRect::new(self.origin[0] * side, self.origin[1] * side,
-            (self.origin[0] + self.size[0]) * side, (self.origin[1] + self.size[1]) * side).intersect(self.cache.plan.bounds);
+    fn evaluate_into(&mut self, node: &Node, output: Option<Target>) -> Result<Value, GpuRasterError> {
+        let region = self.region;
         if let Some(branch) = self.cache.graph.branches.get(node)
             && page_coordinates(region).all(|c| branch.valid.contains(&c))
             && let Some(image) = &branch.image {
-                return Ok(Value::Image { view: image.view.clone(), slot: None, opacity: 1. });
+                return Ok(Value::Image { view: image.view.clone(), slot: None, opacity: 1., plan: self.cache.plan, preview: None });
         }
         let output = if let Some(branch) = self.cache.graph.branches.get_mut(node) {
-            Some((branch.image.get_or_insert_with(|| Image::new(self.r, self.cache.plan, "composition branch")).view.clone(), None))
+            Some(Target { view: branch.image.get_or_insert_with(|| Image::new(self.r, self.cache.plan, "composition branch")).view.clone(), slot: None, plan: self.cache.plan })
         } else { output };
         let result = match node.as_ref() {
             Expression::Color(c) => Value::Color(c.map(f32::from_bits)),

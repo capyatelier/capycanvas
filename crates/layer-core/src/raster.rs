@@ -144,17 +144,26 @@ fn shuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
     result
 }
 fn unshuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
+    fn interleave<const N: usize>(bytes: &[u8]) -> Vec<u8> {
+        let pixels = bytes.len() / N;
+        let planes: [&[u8]; N] = std::array::from_fn(|i| &bytes[i * pixels..(i + 1) * pixels]);
+        let mut result = vec![0; bytes.len()];
+        for (pixel, destination) in result.chunks_exact_mut(N).enumerate() {
+            for (channel, byte) in destination.iter_mut().enumerate() {
+                *byte = planes[channel][pixel];
+            }
+        }
+        result
+    }
     let bpp = descriptor
         .bytes_per_pixel()
         .expect("validated multibyte descriptor");
-    let pixels = bytes.len() / bpp;
-    let mut result = vec![0; bytes.len()];
-    for (pixel, destination) in result.chunks_exact_mut(bpp).enumerate() {
-        for (channel, byte) in destination.iter_mut().enumerate() {
-            *byte = bytes[channel * pixels + pixel];
-        }
+    match bpp {
+        2 => interleave::<2>(bytes), 4 => interleave::<4>(bytes),
+        6 => interleave::<6>(bytes), 8 => interleave::<8>(bytes),
+        12 => interleave::<12>(bytes), 16 => interleave::<16>(bytes),
+        _ => unreachable!("validated multibyte descriptor"),
     }
-    result
 }
 
 impl TileBlob {
@@ -469,6 +478,31 @@ impl RasterRevision {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn multibyte_tiles_preserve_every_channel_and_validate_integrity() {
+        use crate::color::{AlphaAssociation, SampleType, TransferEncoding};
+        for (sample, bits, channels) in [
+            (SampleType::Unsigned, 16, 1), (SampleType::Unsigned, 16, 2),
+            (SampleType::Unsigned, 16, 3), (SampleType::Unsigned, 16, 4),
+            (SampleType::Float, 16, 3), (SampleType::Float, 16, 4),
+            (SampleType::Float, 32, 3), (SampleType::Float, 32, 4),
+        ] {
+            let descriptor = PixelDescriptor {
+                sample, bits_per_channel: bits, channels, encoding: TransferEncoding::Linear,
+                alpha: if channels == 2 || channels == 4 { AlphaAssociation::Straight } else { AlphaAssociation::None },
+            };
+            let bytes: Vec<_> = (0..65536 * u32::from(channels)).flat_map(|i| {
+                let code = (i.wrapping_mul(103) ^ (i / 37)) as u16;
+                if bits == 32 { (f32::from(code) / 65535.).to_le_bytes().to_vec() }
+                else { (if sample == SampleType::Float { code % 0x3c00 } else { code }).to_le_bytes().to_vec() }
+            }).collect();
+            let blob = TileBlob::encode(descriptor, &bytes).unwrap();
+            assert_eq!(blob.decode().unwrap(), bytes, "{descriptor:?}");
+            let mut digest = blob.digest;
+            digest[7] ^= 1;
+            assert!(TileBlob::from_compressed(descriptor, digest, blob.compressed().unwrap()).is_err());
+        }
+    }
     #[test]
     fn pending_history_charges_each_retained_tiles_own_precision() {
         use crate::color::{DocumentColor, SampleDepth, RgbSpace};

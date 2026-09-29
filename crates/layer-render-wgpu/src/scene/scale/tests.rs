@@ -36,68 +36,388 @@ fn document_at(extent: [u32; 2]) -> Document {
 }
 
 #[test]
-fn native_view_windows_reuse_overlap_and_preserve_global_sampling() {
-    let doc = document_at([2053, 1541]);
-    let extent = [doc.width, doc.height];
+fn clipped_contacts_do_not_require_unmaterialized_source_levels() {
+    let doc = Document::new("clipped contact", 517, 259);
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    exact.test.reference = true;
-    exact.native_edit.as_mut().unwrap().display_dense_bytes = 0;
-    exact.set_complete_display_allowance(256 << 20);
-    let mut frame = packet(&doc.layers, extent);
-    exact.submit(frame).unwrap();
-    let oracle = pixels(&exact, exact.live_display.as_ref().unwrap().level_texture(0).unwrap());
-    frame.composite_all = false;
-    frame.view.width_px = 192;
-    frame.view.height_px = 128;
-    let mut presenter = crate::present::ViewportPresenter::for_surface(
-        &r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
-    let mut reference_presenter = crate::present::ViewportPresenter::for_surface(
-        &exact, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
-    let surface = |renderer: &WgpuRasterizer, presenter: &mut crate::present::ViewportPresenter, view| {
-        let (texture, target) = create_color_target(&renderer.device, [192, 128], "composition viewport oracle");
-        presenter.present(renderer, &target, view, [0.2; 4]).unwrap();
-        pixels(renderer, &texture)
-    };
-    let views = [
-        [1., 0., 0., 1., -300., -200.],
-        [1., 0., 0., 1., -310., -210.],
-        [1., 0., 0., 1., -750., -410.],
-        [0., 1., -1., 0., 900., -510.],
-        [-1.5, 0., 0., 0.75, 1700., -300.],
-        [1., 0., 0., 1., -1900., -1430.],
-    ];
-    let mut work = 0;
-    for (i, transform) in views.into_iter().enumerate() {
-        frame.view.document_to_surface = transform;
+    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+    r.submit(frame).unwrap();
+    let expected = display_pixels(&r);
+    let dab = crate::tests::test_dab([10000., 10000.], [0.8, 0.2, 0.1, 1.], 1.);
+    let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+    for kind in [DabBatchKind::Persistent, DabBatchKind::Preview] {
+        let batch = DabBatch { kind, ..batch.clone() };
+        r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+        assert_eq!(display_pixels(&r), expected);
+        assert!(r.paint_layers.iter().all(|layer| layer.pages.is_empty()));
+        assert!(r.preview_pages.is_empty());
+        assert!(r.live_display.is_none() && r.composite_texture.is_none());
+    }
+}
+
+#[test]
+fn native_graph_admits_a_full_4k_view_with_bounded_scratch() {
+    let mut doc = document_at([65, 33]);
+    doc.width = 4096;
+    doc.height = 4096;
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    for count in [1, 32] {
+        while doc.layers.len() <= count {
+            let mut layer = doc.layers[0].clone();
+            layer.id = LayerId(100 + doc.layers.len() as u64);
+            layer.opacity = 0.35;
+            doc.layers.insert(0, layer);
+        }
+        let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+        frame.view.width_px = doc.width;
+        frame.view.height_px = doc.height;
+        assert_eq!(level(&r, frame), Some(0));
         r.submit(frame).unwrap();
         let cache = r.scale_display.as_ref().unwrap();
+        let scene = r.scene.as_ref().unwrap();
         assert_eq!(cache.plan.level, 0);
-        assert!(cache.plan.bounds.area() < PixelRect::full(extent).area() / 2);
-        assert!(cache.overview.is_some());
-        assert!(r.live_display.is_none() && r.composite_texture.is_none());
-        assert!(quality(&display_pixels(&r), &oracle, cache.plan)[2] < 1e-6, "view={i}");
-        assert_presentation_mip(&r);
-        if i == 1 { assert_eq!(r.metrics.composited_pixels, work); }
-        if i == 2 { assert!(r.metrics.composited_pixels - work < cache.plan.bounds.area()); }
-        work = r.metrics.composited_pixels;
-        let actual = surface(&r, &mut presenter, frame.view);
-        let reference = surface(&exact, &mut reference_presenter, frame.view);
-        let error = actual.iter().flatten().zip(reference.iter().flatten()).map(|(a,b)| (a-b).abs()).fold(0., f32::max);
-        assert!(error < 0.0001, "window presentation view={i} error={error}");
+        assert!(cache.graph.root.is_some());
+        assert!(scene.scale_sources.entries.values().all(|s| !s.levels.contains_key(&0)));
+        let bytes = cache.storage_bytes() + scene.scale_sources.storage_bytes()
+            + scene.scale_commands.as_ref().unwrap().storage_bytes()
+            + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>();
+        assert!(bytes <= live_display::CACHE_BYTES, "layers={count}, bytes={bytes}");
+        assert!(scene.used.iter().all(|used| !used));
     }
-    let dab = crate::tests::test_dab([1980., 1480.], [0.9, 0.2, 0.1, 1.], 0.7);
-    let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-    frame.dabs = std::slice::from_ref(&dab);
-    frame.dab_batches = std::slice::from_ref(&batch);
+}
+
+#[test]
+fn reduced_photo_stacks_use_bounded_working_tiles() {
+    let mut doc = document_at([65, 33]);
+    doc.width = 9504; doc.height = 6336;
+    for index in 0..4 {
+        let mut layer = doc.layers[0].clone();
+        layer.id = LayerId(40 + index);
+        layer.opacity = 0.35;
+        layer.properties.blend = layer_core::LayerBlend::SoftLight;
+        doc.layers.insert(0, layer);
+    }
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    frame.view.width_px = 1500;
+    frame.view.height_px = 1000;
+    frame.view.document_to_surface = [0.1578, 0., 0., 0.1578, 0., 0.];
+    assert_eq!(level(&r, frame), Some(2));
     r.submit(frame).unwrap();
-    exact.submit(frame).unwrap();
     let cache = r.scale_display.as_ref().unwrap();
-    let oracle = pixels(&exact, exact.live_display.as_ref().unwrap().level_texture(0).unwrap());
-    assert!(quality(&display_pixels(&r), &oracle, cache.plan)[2] < 1e-6);
-    let overview = cache.overview.as_ref().unwrap();
-    assert!(quality(&pixels(&r, overview.texture()), &oracle, overview.plan)[2] < 1e-5);
+    let scene = r.scene.as_ref().unwrap();
+    assert_eq!(cache.output.len(), 1, "only the completed root needs a viewport image");
+    assert!(scene.pool.iter().all(|p| p.texture.width() == PAGE_SIZE && p.texture.height() == PAGE_SIZE));
+    let bytes = cache.storage_bytes() + scene.scale_sources.storage_bytes()
+        + scene.scale_commands.as_ref().unwrap().storage_bytes()
+        + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>();
+    assert!(bytes <= live_display::CACHE_BYTES, "resident bytes={bytes}");
+    assert!(r.live_display.is_none() && r.composite_texture.is_none());
+}
+
+#[test]
+fn partial_reduced_views_admit_the_visible_window() {
+    let mut doc = document_at([65, 33]);
+    doc.width = 9504;
+    doc.height = 6336;
+    let r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    for detail in [1, 2, 4] {
+        let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+        frame.view.width_px = 960;
+        frame.view.height_px = 640;
+        let scale = 1. / (1 << detail) as f32;
+        frame.view.document_to_surface = [scale, 0., 0., scale, -1600. * scale, -900. * scale];
+        assert_eq!(level(&r, frame), Some(detail));
+        let plan = request(frame, detail).unwrap();
+        assert!(plan.bounds.area() < PixelRect::full(plan.extent).area());
+        assert!(allocation(&r, plan, frame, None).into_iter().sum::<u64>() <= live_display::CACHE_BYTES);
+    }
+}
+
+#[test]
+fn rotated_reduced_stacks_admit_bounded_source_working_storage() {
+    let mut doc = document_at([65, 33]);
+    doc.width = 9504; doc.height = 6336;
+    for index in 0..4 {
+        let mut layer = doc.layers[0].clone();
+        layer.id = LayerId(40 + index);
+        layer.opacity = 0.35;
+        layer.properties.blend = layer_core::LayerBlend::SoftLight;
+        doc.layers.insert(0, layer);
+    }
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    frame.view.width_px = 1600; frame.view.height_px = 1000;
+    let (s, c) = std::f32::consts::FRAC_PI_4.sin_cos();
+    let scale = 0.307;
+    frame.view.document_to_surface = [scale * c, scale * s, -scale * s, scale * c,
+        800. - scale * (c * doc.width as f32 - s * doc.height as f32) * 0.5,
+        500. - scale * (s * doc.width as f32 + c * doc.height as f32) * 0.5];
+    assert_eq!(level(&r, frame), Some(1));
+    r.submit(frame).unwrap();
+    let cache = r.scale_display.as_ref().unwrap();
+    let scene = r.scene.as_ref().unwrap();
+    let bytes = cache.storage_bytes() + scene.scale_sources.storage_bytes()
+        + scene.scale_commands.as_ref().unwrap().storage_bytes()
+        + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>();
+    assert!(bytes <= live_display::CACHE_BYTES, "resident bytes={bytes}");
+    assert!(r.live_display.is_none() && r.composite_texture.is_none());
+    assert!(scene.used.iter().all(|used| !used));
+}
+
+#[test]
+fn streamed_sources_match_cached_pixels_through_masks_paint_and_admission_changes() {
+    let mut doc = document_at([2053, 1541]);
+    let extent = [doc.width, doc.height];
+    for index in 0..63 {
+        let mut layer = doc.layers[0].clone();
+        layer.id = LayerId(40 + index);
+        layer.opacity = 0.35;
+        layer.properties.blend = layer_core::LayerBlend::SoftLight;
+        doc.layers.insert(0, layer);
+    }
+    let mut mask = layer_core::LayerMask::reveal_all(LayerId(200), Default::default());
+    mask.initial = Some(layer_core::Selection::polygon(vec![
+        layer_core::Point { x: 280., y: 210. }, layer_core::Point { x: 1600., y: 260. },
+        layer_core::Point { x: 1700., y: 1200. }, layer_core::Point { x: 330., y: 1100. },
+    ]).unwrap());
+    doc.layers[0].mask = Some(mask);
+    let mut streamed = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut cached = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    for state in 0..6 {
+        for (i, layer) in doc.layers.iter_mut().enumerate() { layer.visible = state != 3 || i < 2; }
+        doc.layers[0].mask.as_mut().unwrap().inverted = state == 2;
+        let dab = crate::tests::test_dab([420. + state as f32 * 7., 310.], [0.8, 0.2, 0.1, 1.], 0.7);
+        let mut batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        if state < 4 { batch.kind = DabBatchKind::Preview; }
+        let mut frame = packet(&doc.layers, extent);
+        frame.composite_all = (2..=4).contains(&state);
+        frame.view.width_px = extent[0]; frame.view.height_px = extent[1];
+        frame.view.document_to_surface = [0.5, 0., 0., 0.5, 0., 0.];
+        if state == 1 || state >= 4 {
+            frame.dabs = std::slice::from_ref(&dab);
+            frame.dab_batches = std::slice::from_ref(&batch);
+        }
+        streamed.submit(frame).unwrap();
+        let full = streamed.scale_display.as_ref().unwrap();
+        assert_eq!(full.streamed_sources, state != 3, "state {state}");
+        let full_plan = full.plan;
+        let complete = display_pixels(&streamed);
+        frame.view.width_px = 192; frame.view.height_px = 128;
+        let [x, y] = if state == 2 { [-910., -660.] } else { [-160., -110.] };
+        frame.view.document_to_surface = [0.5, 0., 0., 0.5, x, y];
+        cached.submit(frame).unwrap();
+        let window = cached.scale_display.as_ref().unwrap();
+        assert!(!window.streamed_sources, "cached oracle state {state}");
+        let actual = display_pixels(&cached);
+        let origin = [window.plan.bounds.min_x() >> 1, window.plan.bounds.min_y() >> 1];
+        for (i, pixel) in actual.iter().enumerate() {
+            let x = origin[0] + i as u32 % window.plan.size[0];
+            let y = origin[1] + i as u32 / window.plan.size[0];
+            let expected = complete[(y * full_plan.size[0] + x) as usize];
+            assert!(pixel.iter().zip(expected).all(|(a, b)| (a - b).abs() < 2e-5),
+                "state {state}, [{x}, {y}]: {pixel:?} != {expected:?}");
+        }
+        let scene = streamed.scene.as_ref().unwrap();
+        let bytes = full.storage_bytes() + scene.scale_sources.storage_bytes()
+            + scene.scale_commands.as_ref().unwrap().storage_bytes()
+            + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>();
+        assert!(bytes <= live_display::CACHE_BYTES, "state {state}, bytes {bytes}");
+        assert!(scene.used.iter().all(|used| !used));
+        assert!(streamed.live_display.is_none() && streamed.composite_texture.is_none());
+        assert_presentation_mip(&streamed);
+    }
+}
+
+#[test]
+fn streamed_sources_reuse_valid_finer_pages_without_native_decoding() {
+    let doc = document_at([1027, 773]);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+    r.submit(frame).unwrap();
+    let expected = display_pixels(&r);
+    let mut cache = r.scale_display.take().unwrap();
+    let mut scene = r.scene.take().unwrap();
+    let mut commands = scene.scale_commands.take().unwrap();
+    let source = scene.scale_sources.entries.get_mut(&doc.layers[0].id).unwrap();
+    assert!(source.levels.contains_key(&2));
+    source.levels.remove(&3);
+    cache.streamed_sources = true;
+    for missing in [None, Some([4, 3])] {
+        let source = scene.scale_sources.entries.get_mut(&doc.layers[0].id).unwrap();
+        if let Some(tile) = missing { assert!(source.levels.get_mut(&2).unwrap().valid.remove(&tile)); }
+        let updates = source.updates;
+        cache.graph = Default::default();
+        cache.valid.clear();
+        scene.begin_frame();
+        commands.begin();
+        cache.prepare_graph(&r, frame, &scene.scale_sources, &commands).unwrap();
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        cache.render(&mut scene, &mut r, frame, PixelRect::full(frame.document_extent),
+            &mut Encoding { encoder: &mut encoder, commands: &mut commands }, None).unwrap();
+        commands.flush(&mut r, &mut encoder).unwrap();
+        r.uploads.finish(&encoder);
+        encoder.submit(&r.queue);
+        assert_eq!(scene.scale_sources.entries[&doc.layers[0].id].updates, updates + u64::from(missing.is_some()),
+            "only gaps in retained finer pages may require native reduction");
+        let actual = pixels(&r, cache.texture());
+        assert!(actual.iter().zip(&expected).all(|(a, b)| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 2e-5)));
+    }
+    scene.scale_commands = Some(commands);
+    r.scene = Some(scene);
+    r.scale_display = Some(cache);
     assert_presentation_mip(&r);
+}
+
+#[test]
+fn source_window_growth_remains_admitted_during_rotated_pans() {
+    let mut doc = document_at([65, 33]);
+    doc.width = 9504; doc.height = 6336;
+    for index in 0..4 {
+        let mut layer = doc.layers[0].clone();
+        layer.id = LayerId(40 + index);
+        layer.opacity = 0.35;
+        layer.properties.blend = layer_core::LayerBlend::SoftLight;
+        doc.layers.insert(0, layer);
+    }
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    for step in 0..24 {
+        let angle = step as f32 / 23. * std::f32::consts::TAU;
+        let (s, c) = angle.sin_cos();
+        let [x, y] = [(0.5 + 0.4 * c) * doc.width as f32, (0.5 + 0.4 * s) * doc.height as f32];
+        let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+        frame.view.width_px = 1600; frame.view.height_px = 1000;
+        frame.view.document_to_surface = [0.5 * c, 0.5 * s, -0.5 * s, 0.5 * c,
+            800. - 0.5 * (c * x - s * y), 500. - 0.5 * (s * x + c * y)];
+        assert_eq!(level(&r, frame), Some(1), "step {step}");
+        r.submit(frame).unwrap();
+        assert!(r.scale_display.is_some() && r.live_display.is_none());
+        let cache = r.scale_display.as_ref().unwrap();
+        let scene = r.scene.as_ref().unwrap();
+        let bytes = cache.storage_bytes() + scene.scale_sources.storage_bytes()
+            + scene.scale_commands.as_ref().unwrap().storage_bytes()
+            + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>();
+        assert!(bytes <= live_display::CACHE_BYTES, "step {step}: {bytes}");
+    }
+}
+
+#[test]
+fn retained_windows_stream_sources_when_source_requirements_grow() {
+    let mut doc = document_at([65, 33]);
+    doc.width = 3584; doc.height = 3584;
+    for index in 0..15 {
+        let mut layer = doc.layers[0].clone();
+        layer.id = LayerId(20 + index);
+        layer.visible = false;
+        doc.layers.push(layer);
+    }
+    let r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut full = packet(&doc.layers, [doc.width, doc.height]);
+    full.view.width_px = doc.width;
+    full.view.height_px = doc.height;
+    full.view.document_to_surface = [0.5, 0., 0., 0.5, 0., 0.];
+    let previous = request(full, 1).unwrap();
+    assert_eq!(previous.bounds, PixelRect::full(previous.extent));
+    assert_eq!(level(&r, full), Some(1));
+    let old = Cache::new(&r, previous, doc.layers.len());
+    for layer in &mut doc.layers { layer.visible = true; }
+    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    frame.view.width_px = 192;
+    frame.view.height_px = 128;
+    frame.view.document_to_surface = [0.5, 0., 0., 0.5, 0., 0.];
+    assert_eq!(level(&r, frame), Some(1));
+    assert!(allocation(&r, previous, frame, None).into_iter().sum::<u64>() > live_display::CACHE_BYTES);
+    let (selected, _) = Cache::select(Some(old), &r, frame, 1, false);
+    assert_eq!(selected.plan, previous);
+    assert!(selected.streamed_sources);
+    assert!(allocation_for(&r, selected.plan, frame, None, true).into_iter().sum::<u64>() <= live_display::CACHE_BYTES);
+}
+
+#[test]
+fn view_windows_reuse_overlap_and_preserve_global_sampling() {
+    let doc = document_at([2053, 1541]);
+    let extent = [doc.width, doc.height];
+    for detail in [0, 1, 2, 4] {
+        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut whole = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        exact.test.reference = true;
+        exact.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+        exact.set_complete_display_allowance(256 << 20);
+        let mut frame = packet(&doc.layers, extent);
+        exact.submit(frame).unwrap();
+        let oracle = pixels(&exact, exact.live_display.as_ref().unwrap().level_texture(0).unwrap());
+        frame.composite_all = false;
+        frame.view.width_px = 192;
+        frame.view.height_px = 128;
+        let mut presenter = crate::present::ViewportPresenter::for_surface(
+            &r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+        let mut reference_presenter = crate::present::ViewportPresenter::for_surface(
+            &whole, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+        let surface = |renderer: &WgpuRasterizer, presenter: &mut crate::present::ViewportPresenter, view| {
+            let (texture, target) = create_color_target(&renderer.device, [192, 128], "composition viewport oracle");
+            presenter.present(renderer, &target, view, [0.2; 4]).unwrap();
+            pixels(renderer, &texture)
+        };
+        let views = [
+            [1., 0., 0., 1., -300., -200.],
+            [1., 0., 0., 1., -310., -210.],
+            [1., 0., 0., 1., -750., -410.],
+            [0., 1., -1., 0., 900., -510.],
+            [-1.5, 0., 0., 0.75, 1700., -300.],
+            [1., 0., 0., 1., -1900., -1430.],
+        ];
+        let mut work = 0;
+        let mut revision = None;
+        for (i, transform) in views.into_iter().enumerate() {
+            let transform = transform.map(|n| n / (1 << detail) as f32);
+            frame.view.document_to_surface = transform;
+            r.submit(frame).unwrap();
+            let current = r.canvas_preview_revision();
+            assert!(revision.is_none_or(|previous| previous == current), "camera motion preserves artwork revision");
+            revision = Some(current);
+            let cache = r.scale_display.as_ref().unwrap();
+            assert_eq!(cache.plan.level, display_mips::view_level(transform, 4).unwrap());
+            assert!(cache.graph.root.is_some());
+            if detail == 0 { assert!(cache.plan.bounds.area() < PixelRect::full(extent).area() / 2); }
+            if let Some(overview) = &cache.overview { assert!(overview.plan.level > cache.plan.level); }
+            assert!(r.live_display.is_none() && r.composite_texture.is_none());
+            assert!(quality(&display_pixels(&r), &oracle, cache.plan)[2] < 2e-5, "view={i}");
+            assert_presentation_mip(&r);
+            if i == 1 { assert_eq!(r.metrics.composited_pixels, work); }
+            if i == 2 { assert!(r.metrics.composited_pixels - work < cache.plan.size.map(u64::from).into_iter().product()); }
+            work = r.metrics.composited_pixels;
+            let actual = surface(&r, &mut presenter, frame.view);
+            let scale = 1. / (1 << cache.plan.level) as f32;
+            let mut full = packet(&doc.layers, extent);
+            full.view.width_px = extent[0];
+            full.view.height_px = extent[1];
+            full.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+            whole.submit(full).unwrap();
+            let complete = whole.scale_display.as_ref().unwrap();
+            assert_eq!(complete.plan.bounds, PixelRect::full(extent));
+            assert_eq!(complete.plan.level, cache.plan.level);
+            assert!(quality(&display_pixels(&whole), &oracle, complete.plan)[2] < 2e-5);
+            let reference = surface(&whole, &mut reference_presenter, frame.view);
+            let error = actual.iter().flatten().zip(reference.iter().flatten()).map(|(a,b)| (a-b).abs()).fold(0., f32::max);
+            assert!(error < 0.0001, "window presentation detail={detail} view={i} plan={:?} error={error}", cache.plan);
+        }
+        let dab = crate::tests::test_dab([1980., 1480.], [0.9, 0.2, 0.1, 1.], 0.7);
+        let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        frame.dabs = std::slice::from_ref(&dab);
+        frame.dab_batches = std::slice::from_ref(&batch);
+        r.submit(frame).unwrap();
+        assert!(r.canvas_preview_revision() > revision.unwrap(), "painting advances artwork revision");
+        exact.submit(frame).unwrap();
+        let cache = r.scale_display.as_ref().unwrap();
+        let oracle = pixels(&exact, exact.live_display.as_ref().unwrap().level_texture(0).unwrap());
+        assert!(quality(&display_pixels(&r), &oracle, cache.plan)[2] < 2e-5);
+        if let Some(overview) = &cache.overview {
+            assert!(quality(&pixels(&r, overview.texture()), &oracle, overview.plan)[2] < 2e-5);
+        }
+        assert_presentation_mip(&r);
+    }
 }
 
 #[test]
@@ -144,7 +464,7 @@ fn placed_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
         doc.layers[0].mask.as_mut().unwrap().inverted = pose % 2 != 0;
         for enabled in [true, false] {
             doc.layers[0].mask.as_mut().unwrap().enabled = enabled;
-            for level in [1, 2, 3] {
+            for level in [0, 1, 2, 3] {
                 let scale = 1. / (1 << level) as f32;
                 let mut frame = packet(&doc.layers, extent);
                 frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
@@ -205,6 +525,64 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
     let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), r.scale_display.as_ref().unwrap().plan);
     assert!(error[0] < 0.004 && error[1] < 0.04, "native placement after a partial source: {error:?}");
+}
+
+#[test]
+fn cold_identity_sources_prepare_adjacent_detail_without_redecoding() {
+    let doc = document_at([1025, 769]);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    frame.view.width_px = 512; frame.view.height_px = 512;
+    frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+    r.submit(frame).unwrap();
+    let source = &r.scene.as_ref().unwrap().scale_sources.entries[&doc.layers[0].id];
+    let updates = source.updates;
+    assert_eq!(updates, 20);
+    assert!(source.levels.contains_key(&2) && source.levels.contains_key(&3));
+    let finer = source.levels[&2].image.texture.clone();
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    r.submit(frame).unwrap();
+    let source = &r.scene.as_ref().unwrap().scale_sources.entries[&doc.layers[0].id];
+    assert_eq!(source.updates, updates);
+    assert_eq!(source.levels[&2].image.texture, finer);
+    assert!(!source.levels.contains_key(&1), "scale changes must not repeatedly promote optional detail");
+}
+
+#[test]
+fn optional_source_detail_yields_to_unallocated_required_images() {
+    let mut doc = document_at([1024, 1024]);
+    doc.width = 128; doc.height = 128;
+    doc.layers[0].properties.placement = layer_core::Affine([0.125, 0., 0., 0.125, 0., 0.]);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    r.submit(packet(&doc.layers, [doc.width, doc.height])).unwrap();
+    let mut scene = r.scene.take().unwrap();
+    let source = &scene.scale_sources.entries[&doc.layers[0].id];
+    assert_eq!(source.updates, 16, "cold detail and its required level decode each native page once");
+    assert!(source.levels.contains_key(&1) && source.levels.contains_key(&2));
+    let mut second = doc.layers[0].clone();
+    second.id = LayerId(20);
+    second.opacity = 0.5;
+    doc.layers.insert(0, second);
+    let frame = packet(&doc.layers, [doc.width, doc.height]);
+    scene.scale_sources.prepare(&r, frame);
+    let requested = r.scale_display.as_ref().unwrap().source_levels(&r, frame, &scene.scale_sources);
+    let budget = requested.values().flat_map(|levels| levels.values()).map(|p| p.level_bytes(p.level)).sum();
+    assert_eq!(scene.scale_sources.retain_levels(&requested, budget), budget);
+    assert!(scene.scale_sources.entries.values().all(|s| !s.levels.contains_key(&1)));
+    let mut commands = Commands::new(&r);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    for layer in &doc.layers {
+        if let Some(levels) = requested.get(&layer.id) {
+            for &plan in levels.values() {
+                scene.prepare_scale_color(&mut commands, &mut r, frame, &mut encoder, layer,
+                    SourceRequest { plan, required: plan.bounds, covered: PixelRect::EMPTY }).unwrap();
+            }
+        }
+    }
+    r.uploads.finish(&encoder); encoder.submit(&r.queue);
+    assert_eq!(scene.scale_sources.storage_bytes(), budget);
+    assert!(requested.iter().all(|(id, levels)| levels.keys().all(|level|
+        scene.scale_sources.entries[id].levels.contains_key(level))));
 }
 
 #[test]
@@ -577,23 +955,33 @@ fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
 #[test]
 fn identity_edits_recompose_only_damaged_pages() {
     let doc = document_at([1024, 768]);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
-    frame.composite_all = false;
-    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    r.submit(frame).unwrap();
-    let mut dab = crate::tests::test_dab([125., 125.], [1., 0., 0., 1.], 1.);
-    dab.radii = [16.; 2];
-    let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-    frame.dabs = std::slice::from_ref(&dab);
-    frame.dab_batches = std::slice::from_ref(&batch);
-    let work = r.metrics.composited_pixels;
-    r.submit(frame).unwrap();
-    assert_eq!(r.metrics.composited_pixels - work, u64::from(PAGE_SIZE / 4).pow(2));
-    let incremental = display_pixels(&r);
-    r.scale_display = None;
-    r.submit(FramePacket { dabs: &[], dab_batches: &[], composite_all: true, ..frame }).unwrap();
-    assert_eq!(display_pixels(&r), incremental);
+    let dabs: Vec<_> = [[125., 125.], [893., 125.], [893., 637.], [125., 637.]].into_iter().map(|p| {
+        let mut dab = crate::tests::test_dab(p, [1., 0., 0., 1.], 1.);
+        dab.radii = [16.; 2];
+        dab
+    }).collect();
+    let damage = dabs.iter().fold(layer_core::Rect::default(), |r, d| r.union(d.bounds()));
+    let batch = DabBatch { dab_count: dabs.len() as u32,
+        ..dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), damage) };
+    for level in [0, 2] {
+        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+        frame.composite_all = false;
+        frame.view.width_px = doc.width;
+        frame.view.height_px = doc.height;
+        let scale = 1. / (1 << level) as f32;
+        frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+        r.submit(frame).unwrap();
+        frame.dabs = &dabs;
+        frame.dab_batches = std::slice::from_ref(&batch);
+        let work = r.metrics.composited_pixels;
+        r.submit(frame).unwrap();
+        assert_eq!(r.metrics.composited_pixels - work, 4 * u64::from(PAGE_SIZE >> level).pow(2));
+        let incremental = display_pixels(&r);
+        r.scale_display = None;
+        r.submit(FramePacket { dabs: &[], dab_batches: &[], composite_all: true, ..frame }).unwrap();
+        assert_eq!(display_pixels(&r), incremental);
+    }
 }
 
 #[test]
@@ -887,6 +1275,52 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
     assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 0);
     assert!(r.composite_texture.is_none());
     assert!(quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), r.scale_display.as_ref().unwrap().plan)[2] < 1e-6);
+}
+
+#[test]
+fn native_predictions_match_exact_composition_before_layer_opacity_and_blending() {
+    let mut doc = document_at([257, 259]);
+    let mut front = doc.layers[0].clone();
+    front.id = LayerId(50);
+    front.opacity = 0.37;
+    doc.layers[0].opacity = 0.63;
+    doc.layers.insert(0, front);
+    let extent = [doc.width, doc.height];
+    for target in [0, 1] {
+        for mode in [layer_render::DabMode::Paint, layer_render::DabMode::Erase] {
+            let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+            let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+            exact.test.reference = true;
+            let mut frame = packet(&doc.layers, extent);
+            frame.view.width_px = extent[0];
+            frame.view.height_px = extent[1];
+            frame.view.background_rgba_linear = [0.; 4];
+            r.submit(frame).unwrap();
+            exact.submit(frame).unwrap();
+            let original = display_pixels(&r);
+            let mut dab = crate::tests::test_dab([253., 254.], [0.9, 0.02, 0.1, 0.7], 1.);
+            dab.radii = [35.; 2];
+            let mut style = crate::layer_tests::preset_style(DefaultBrushPreset::GPen);
+            style.mode = mode;
+            let batch = DabBatch { kind: DabBatchKind::Preview,
+                ..dab_batch(doc.layers[target].id, style, dab.bounds()) };
+            for prediction in [true, false] {
+                let stroke = FramePacket {
+                    dabs: if prediction { std::slice::from_ref(&dab) } else { &[] },
+                    dab_batches: if prediction { std::slice::from_ref(&batch) } else { &[] },
+                    composite_all: false, ..frame
+                };
+                r.submit(stroke).unwrap();
+                exact.submit(stroke).unwrap();
+                let actual = display_pixels(&r);
+                let expected = pixels(&exact, crate::test_support::document_texture(&exact));
+                let error = quality(&actual, &expected, r.scale_display.as_ref().unwrap().plan);
+                assert!(error[2] < 1e-6, "target={target}, mode={mode:?}, preview={prediction}: {error:?}");
+                if prediction { assert_ne!(actual, original); }
+                else { assert_eq!(actual, original); }
+            }
+        }
+    }
 }
 
 #[test]

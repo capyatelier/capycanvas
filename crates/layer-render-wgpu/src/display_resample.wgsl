@@ -3,7 +3,9 @@ struct Resample {
     kept_x:vec4<f32>, kept_y:vec4<f32>, kept_w:vec4<f32>,
     clip_x:vec4<f32>, clip_y:vec4<f32>, extent:vec4<f32>,
     texels:vec4<u32>, backdrop:vec4<f32>, options:vec4<f32>,
-    source_extent:vec4<f32>, target_extent:vec4<f32>, encoding:vec4<f32>,
+    source_extent:vec4<f32>, target_extent:vec4<f32>,
+    affine_taps:vec4<u32>,
+    encoding:vec4<f32>,
 }
 @group(0) @binding(0) var moved:texture_2d<f32>;
 @group(0) @binding(1) var level:texture_storage_2d<rgba32float,write>;
@@ -153,7 +155,18 @@ fn resample_affine_area(@builtin(global_invocation_id) id:vec3<u32>) {
     if !inside(h) {textureStore(level,vec2<i32>(t),composite_color(vec4(resample.options.w)));return;}
     let footprint=min(vec2(1.),resample.target_extent.xy-vec2<f32>(t));
     let center=vec2(dot(resample.x.xyz,h),dot(resample.y.xyz,h));
-    let dx=vec2(resample.x.x,resample.y.x)*footprint.x*.25;
-    let dy=vec2(resample.x.y,resample.y.y)*footprint.y*.25;
-    textureStore(level,vec2<i32>(t),composite_color(area_sample(moved,linear_sampler,resample.source_extent.xy,resample.options.w,center,dx,dy)));
+    let dx=vec2(resample.x.x,resample.y.x)*footprint.x;
+    let dy=vec2(resample.x.y,resample.y.y)*footprint.y;
+    let taps=resample.affine_taps.x;
+    var color=vec4(0.);
+    if taps==2u {
+        color=area_sample(moved,linear_sampler,resample.source_extent.xy,resample.options.w,center,dx*.25,dy*.25);
+    } else {
+        for (var y=0u;y<taps;y++) {for (var x=0u;x<taps;x++) {
+            let delta=(vec2<f32>(f32(x),f32(y))+.5)/f32(taps)-.5;
+            color+=border_sample(moved,linear_sampler,resample.source_extent.xy,resample.options.w,center+dx*delta.x+dy*delta.y);
+        }}
+        color/=f32(taps*taps);
+    }
+    textureStore(level,vec2<i32>(t),composite_color(color));
 }

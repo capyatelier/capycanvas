@@ -164,12 +164,12 @@ impl PaintTransforms {
     pub fn render_region(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         id: LayerId, placement: layer_core::Affine, output: &wgpu::TextureView,
-        display: pixel_transform::DisplayLevel, region: PixelRect,
+        display: pixel_transform::DisplayLevel, target: display_mips::Plan, region: PixelRect,
     ) -> Result<(), GpuRasterError> {
         let state = self.0.iter_mut().find(|t| t.preview.as_ref().is_some_and(|p| p.layer == id)).unwrap();
         let preview = state.preview.clone().unwrap();
         let resample = r.scene_pipelines.resample.clone();
-        state.render_region(r, encoder, &preview, r.target_extent(id), placement, output, display, region, &resample)
+        state.render_region(r, encoder, &preview, r.target_extent(id), placement, output, display, target, region, &resample)
     }
 
 }
@@ -1311,7 +1311,7 @@ impl ImageTransformState {
     fn render_region(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         next: &layer_render::TransformPreview, extent: [u32; 2], placement: layer_core::Affine,
-        level: &wgpu::TextureView, display: pixel_transform::DisplayLevel, region: PixelRect,
+        level: &wgpu::TextureView, display: pixel_transform::DisplayLevel, target: display_mips::Plan, region: PixelRect,
         resample: &resample::Resample,
     ) -> Result<(), GpuRasterError> {
         let side = display.side;
@@ -1320,7 +1320,7 @@ impl ImageTransformState {
         let mesh = match &next.transform.map {
             layer_core::TransformMap::Mesh(map) => Some(map.clone()), _ => None,
         };
-        let texels = texel_rect(region, side);
+        let texels = texel_rect(region.window_local(target.bounds), side);
         let transform = resample_map(&next.transform, placement, local, display_level)?;
         let kept = resample_map(&layer_core::ImageTransform::default(), placement, local, display_level)?;
         let clip = layer_core::Affine([side as f32, 0., 0., side as f32, 0., 0.])
@@ -1341,6 +1341,7 @@ impl ImageTransformState {
             extent,
             texels,
             display,
+            target,
             mesh.as_ref().map(|_| &self.display_mesh),
             next.transform.keep_source,
             next.transform.is_identity(),

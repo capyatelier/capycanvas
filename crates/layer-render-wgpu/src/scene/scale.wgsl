@@ -8,11 +8,15 @@ struct Region {
     flags: u32,
     paper: vec4<f32>,
     opacity: vec4<f32>,
+    source_origin: vec2<i32>,
+    base_origin: vec2<i32>,
 }
 @group(0) @binding(0) var<uniform> region: Region;
 @group(1) @binding(0) var source: texture_2d<f32>;
 @group(1) @binding(1) var base: texture_2d<f32>;
 @group(1) @binding(2) var output: texture_storage_2d<rgba32float, write>;
+@group(1) @binding(3) var source_preview: texture_2d<f32>;
+@group(1) @binding(4) var base_preview: texture_2d<f32>;
 
 @compute @workgroup_size(8, 8)
 fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {

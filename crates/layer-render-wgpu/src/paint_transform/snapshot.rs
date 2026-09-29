@@ -629,11 +629,12 @@ impl DisplayInputs {
         extent: [u32; 2],
         texels: [u32; 4],
         display: pixel_transform::DisplayLevel,
+        target: display_mips::Plan,
         mesh: Option<&MeshBuffers>,
         keep_source: bool,
         identity: bool,
     ) -> Result<(), GpuRasterError> {
-        let values = resample::Resample::values(resample::Request { moved, kept, clip, extent, texels, display,
+        let values = resample::Resample::values(resample::Request { moved, kept, clip, extent, texels, display, target,
             source: self.image.plan, keep_source, identity, max_lod: self.image.last_level()-self.image.plan.level, outside: 0. })?;
         r.uploads.write(encoder, &self.uniforms, &values)?;
         if let Some(mesh) = mesh {

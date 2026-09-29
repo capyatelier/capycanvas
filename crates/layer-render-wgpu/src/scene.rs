@@ -30,6 +30,11 @@ impl Image {
     fn bytes(&self) -> u64 { texture_bytes(&self.texture) }
 }
 
+struct ColorInput {
+    view: wgpu::TextureView,
+    lease: Option<Arc<()>>,
+}
+
 #[derive(Clone)]
 enum Job {
     Placement(Box<placement::PlacementJob>),
@@ -550,21 +555,8 @@ impl Scene {
                 self.free(page);
             }
         } else {
-            let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
-            let predicted = if preview {
-                r.preview_page(c)
-            } else {
-                None
-            };
-            let base = if let Some(p) = predicted.filter(|_| r.preview_requires_base).or(persistent) {
-                Some(p.active().view.clone())
-            } else {
-                self.source_tile(r, layer, c)?
-            };
-            let flow = predicted.filter(|_| !r.preview_requires_base).map(|p| p.active().view.clone());
+            let [base, flow] = self.color_inputs(r, layer, stored, c, preview)?.map(|input| input.map(|i| i.view));
             match (base, flow) {
-                // A Flow preview lies on its layer's pixels before they are
-                // converted, as its stroke will once committed.
                 (Some(base), Some(flow)) if convert != Convert::None => {
                     self.draw(r, out, flow, Some(base), rect, [14., 1., 0., 0.], true, convert);
                 }
@@ -576,6 +568,21 @@ impl Scene {
             }
         }
         Ok(())
+    }
+    fn color_inputs(&mut self, r: &WgpuRasterizer, layer: &Layer, stored: Option<&PaintLayer>, c: [u32; 2], preview: bool) -> Result<[Option<ColorInput>; 2], GpuRasterError> {
+        let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
+        let predicted = preview.then(|| r.preview_page(c)).flatten();
+        let base = if let Some(p) = predicted.filter(|_| r.preview_requires_base).or(persistent) {
+            Some(ColorInput { view: p.active().view.clone(), lease: None })
+        } else {
+            self.source_tile(r, layer, c)?.map(|view| {
+                let lease = self.source_tiles.lease(&view).or_else(|| self.display_source_tiles.lease(&view));
+                ColorInput { view, lease }
+            })
+        };
+        let overlay = predicted.filter(|_| !r.preview_requires_base)
+            .map(|p| ColorInput { view: p.active().view.clone(), lease: None });
+        Ok([base, overlay])
     }
     fn watercolor_binding(
         &mut self,
@@ -922,40 +929,9 @@ impl Scene {
             let input = self.alloc(r, wgpu::Color::TRANSPARENT);
             // Generator coverage is applied below with ordinary layer masks.
             self.effect(r, packet, &[index], tile, input)?
-        } else if layer.properties.placement != layer_core::Affine::IDENTITY {
-            let placed = self.placed_tile(r, packet, index, tile)?;
-            self.converted(r, placed, Convert::layers(packet))
         } else {
-            let out = self.alloc(r, wgpu::Color::TRANSPARENT);
-            let offset = world_offset(packet.layers, layer.id, false);
-            let stored = r.paint_layers.iter().find(|l| l.id == layer.id);
-            if stored.is_some() || layer.source.is_some() {
-                // A translated output tile intersects at most four native
-                // source tiles. Watercolor samples its halo from their bindings;
-                // never scan/expand every page in the layer for every output tile.
-                let origin = layer_core::Point {
-                    x: (tile[0] * PAGE_SIZE) as f32 - offset.x,
-                    y: (tile[1] * PAGE_SIZE) as f32 - offset.y,
-                };
-                let region = pixel_rect(
-                    layer_core::Rect {
-                        min: origin,
-                        max: layer_core::Point {
-                            x: origin.x + PAGE_SIZE as f32,
-                            y: origin.y + PAGE_SIZE as f32,
-                        },
-                    },
-                    layer.local_extent(r.document_extent),
-                );
-                for c in page_coordinates(region) {
-                    let rect = local_rect(c, offset, tile);
-                    if !intersects(rect) {
-                        continue;
-                    }
-                    self.paint_page(r, packet, layer, stored, c, out, rect, Convert::layers(packet))?;
-                }
-            }
-            out
+            let out = self.paint_tile(r, packet, index, tile, scale::placement_level(packet.layers, layer.id))?;
+            self.converted(r, out, Convert::layers(packet))
         };
         if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled) {
             let m = self.mask_at(r, mask, layer_core::target_transform(packet.layers, mask.id), layer.local_extent(packet.document_extent), tile)?;
@@ -976,6 +952,42 @@ impl Scene {
         } else {
             Ok(out)
         }
+    }
+    fn paint_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, index: usize, tile: [u32; 2], source_level: u32) -> Result<usize, GpuRasterError> {
+        let layer = &packet.layers[index];
+        if layer.properties.placement != layer_core::Affine::IDENTITY {
+            return self.placed_tile(r, packet, index, tile, source_level);
+        }
+        let out = self.alloc(r, wgpu::Color::TRANSPARENT);
+        let offset = world_offset(packet.layers, layer.id, false);
+        let stored = r.paint_layers.iter().find(|l| l.id == layer.id);
+        if stored.is_some() || layer.source.is_some() {
+            // A translated output tile intersects at most four native
+            // source tiles. Watercolor samples its halo from their bindings;
+            // never scan/expand every page in the layer for every output tile.
+            let origin = layer_core::Point {
+                x: (tile[0] * PAGE_SIZE) as f32 - offset.x,
+                y: (tile[1] * PAGE_SIZE) as f32 - offset.y,
+            };
+            let region = pixel_rect(
+                layer_core::Rect {
+                    min: origin,
+                    max: layer_core::Point {
+                        x: origin.x + PAGE_SIZE as f32,
+                        y: origin.y + PAGE_SIZE as f32,
+                    },
+                },
+                layer.local_extent(r.document_extent),
+            );
+            for c in page_coordinates(region) {
+                let rect = local_rect(c, offset, tile);
+                if !intersects(rect) {
+                    continue;
+                }
+                self.paint_page(r, packet, layer, stored, c, out, rect)?;
+            }
+        }
+        Ok(out)
     }
     fn group(
         &mut self,
@@ -1368,17 +1380,16 @@ impl Scene {
             // the exact path; immutable pipeline recipes remain shared.
             self.images.release_window_pixels();
             self.image_window = None;
-            if cache.plan.level > 0 {
+            if cache.plan.level > 0 && !scale::bounded(packet.layers) {
                 self.pool.clear();
                 self.used.clear();
             }
+            self.placement_display = true;
             self.display_source_tiles.release_pixels();
             self.effects.retain(packet.layers);
             cache.prepare_graph(r, packet, &self.scale_sources, &commands)?;
-            self.scale_sources.retain_levels(&cache.source_levels(r, packet, &self.scale_sources),
-                cache.source_budget(r, packet, &commands, Some(&self.scale_sources)));
             let result = (|| {
-                if cache.plan.level == 0 { self.prepare_placed_sources(r, packet, encoder, &mut commands)?; }
+                self.prepare_display_sources(&cache, &mut commands, r, packet, encoder)?;
                 cache.render(self, r, packet, dirty, &mut scale::Encoding { encoder, commands: &mut commands }, tiles)
             })();
             self.scale_commands = Some(commands);

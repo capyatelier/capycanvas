@@ -54,13 +54,14 @@ impl Scene {
         packet: FramePacket<'_>,
         index: usize,
         tile: [u32; 2],
+        source_level: u32,
     ) -> Result<usize, GpuRasterError> {
         let layer = &packet.layers[index];
         let extent = layer.local_extent(r.document_extent);
         let affine = layer_core::target_transform(packet.layers, layer.id);
         if self.placement_display
-            && scale::placement_level(packet.layers, layer.id) > 0
-            && let Some((plan, view)) = self.scale_sources.sample(layer.id, scale::placement_level(packet.layers, layer.id))
+            && source_level > 0
+            && let Some((plan, view)) = self.scale_sources.sample(layer.id, source_level)
         {
             let scale = (1 << plan.level) as f32;
             let size = plan.size;

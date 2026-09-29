@@ -3,8 +3,20 @@ fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= region.size) { return; }
     let p = vec2<i32>(region.origin + id.xy);
     var below = region.paper;
-    if (region.flags & 2u) != 0u { below = textureLoad(base, p, 0) * region.opacity.z; }
-    var color = textureLoad(source, p, 0) * region.opacity.x;
+    if (region.flags & 2u) != 0u {
+        below = textureLoad(base, p + region.base_origin, 0);
+        if (region.flags & 512u) != 0u {
+            let preview = textureLoad(base_preview, p + region.base_origin, 0);
+            below = preview + below * (1. - preview.a);
+        }
+        below *= region.opacity.z;
+    }
+    var color = textureLoad(source, p + region.source_origin, 0);
+    if (region.flags & 256u) != 0u {
+        let preview = textureLoad(source_preview, p + region.source_origin, 0);
+        color = preview + color * (1. - preview.a);
+    }
+    color *= region.opacity.x;
     if (region.flags & 128u) != 0u {
         textureStore(output, p, color + below);
         return;

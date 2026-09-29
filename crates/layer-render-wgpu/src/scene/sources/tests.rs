@@ -2,6 +2,33 @@ use super::*;
 use layer_core::color::source::{SourceBuilder, SourceInterpretation};
 
 #[test]
+fn borrowed_source_tiles_survive_eviction_and_release_their_capacity() {
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut cache = DecodedTiles {
+        limits: SourceLimits { slots: 2, ..Default::default() },
+        ..Default::default()
+    };
+    let key = |id| Key::Raster([id; 32], RgbSpace::Srgb, RgbSpace::Srgb);
+    let (first, first_write) = cache.plan_key(&r, key(1)).unwrap();
+    let first_lease = cache.lease(&first.view).unwrap();
+    let (second, second_write) = cache.plan_key(&r, key(2)).unwrap();
+    let second_lease = cache.lease(&second.view).unwrap();
+    assert!(matches!(cache.plan_key(&r, key(3)), Err(GpuRasterError::SourceWorkingSetExceeded)));
+    let (hit, write) = cache.plan_key(&r, key(1)).unwrap();
+    assert_eq!(hit.view, first.view);
+    assert!(write.is_none());
+    drop(second_lease);
+    let (third, third_write) = cache.plan_key(&r, key(3)).unwrap();
+    assert_eq!(third.view, second.view);
+    assert_ne!(third.view, first.view);
+    drop(first_lease);
+    let (fourth, fourth_write) = cache.plan_key(&r, key(4)).unwrap();
+    assert_eq!(fourth.view, first.view);
+    assert_eq!(cache.gpu_bytes(), 2 * FLOAT_TILE_BYTES);
+    drop((first_write, second_write, third_write, fourth_write));
+}
+
+#[test]
 fn source_residency_and_upload_window_follow_admitted_headroom() {
     let gib = 1024 * 1024 * 1024;
     for (allowance, slots) in [(0, 64), (gib / 4, 64), (gib / 2 - 1, 127), (gib / 2, 128),
@@ -100,4 +127,3 @@ fn compact_display_sources_preserve_srgb_codes_and_padding() {
     drop(r);
     startup::finish_shader_compiler_shutdown();
 }
-

@@ -37,7 +37,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     exact.test.reference = true;
-    for level in [1, 2, 3] {
+    for level in [0, 1, 2, 3] {
         let mut updates = None;
         for state in 0..4 {
             Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("exposure", EffectValue::Number(state as f32 * 0.1)).unwrap();
@@ -74,6 +74,67 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
     let plan = r.scale_display.as_ref().unwrap().plan;
     let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), plan);
     assert!(error[0] < 0.002 && error[1] < 0.015, "partial paint error={error:?}");
+    assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
+}
+
+#[test]
+fn window_effects_preserve_document_coordinates_and_shifted_masks() {
+    let mut doc = document_at([1541, 1027]);
+    let extent = [doc.width, doc.height];
+    let mut adjustment = effect(80, "exposure");
+    let program = Arc::make_mut(&mut Arc::make_mut(adjustment.effect.as_mut().unwrap()).program);
+    program.id = "window_position".into();
+    program.entry = "window_position".into();
+    program.wgsl = "fn window_position(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4(c.rgb*.7+vec3(p/fx_extent(),0.)*.1*c.a,c.a);}".into();
+    let mut mask = layer_core::LayerMask::reveal_all(LayerId(81), layer_core::Point { x: 17., y: -9. });
+    mask.initial = Some(layer_core::Selection::polygon(vec![
+        layer_core::Point { x: 260., y: 130. }, layer_core::Point { x: 1300., y: 170. },
+        layer_core::Point { x: 1100., y: 920. }, layer_core::Point { x: 310., y: 850. },
+    ]).unwrap());
+    adjustment.mask = Some(mask);
+    doc.layers.insert(0, adjustment);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    let mut whole = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, extent);
+    exact.submit(frame).unwrap();
+    let oracle = pixels(&exact, exact.composite_texture.as_ref().unwrap());
+    frame.view.width_px = 192;
+    frame.view.height_px = 128;
+    frame.composite_all = false;
+    for level in [0, 1, 2, 4] {
+        let scale = 1. / (1 << level) as f32;
+        let mut full = packet(&doc.layers, extent);
+        full.view.width_px = extent[0];
+        full.view.height_px = extent[1];
+        full.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+        whole.submit(full).unwrap();
+        let full_plan = whole.scale_display.as_ref().unwrap().plan;
+        assert_eq!(full_plan.bounds, PixelRect::full(extent));
+        let complete = display_pixels(&whole);
+        for [x, y] in [[-610., -390.], [-810., -490.], [-1210., -810.], [-610., -390.]] {
+            frame.view.document_to_surface = [scale, 0., 0., scale, x * scale, y * scale];
+            r.submit(frame).unwrap();
+            let cache = r.scale_display.as_ref().unwrap();
+            assert_eq!(cache.plan.level, level);
+            assert!(cache.graph.root.is_some());
+            assert!(cache.plan.bounds.min_x() > 0);
+            let actual = display_pixels(&r);
+            let error = quality(&actual, &oracle, cache.plan);
+            let limit = if level == 0 { [1e-6, 1e-5] } else { [0.002, 0.015] };
+            assert!(error[0] < limit[0] && error[1] < limit[1], "level={level} window [{x}, {y}]: {error:?}");
+            let origin = [cache.plan.bounds.min_x() >> level, cache.plan.bounds.min_y() >> level];
+            for (i, pixel) in actual.iter().enumerate() {
+                let x = origin[0] + i as u32 % cache.plan.size[0];
+                let y = origin[1] + i as u32 / cache.plan.size[0];
+                let expected = complete[(y * full_plan.size[0] + x) as usize];
+                assert!(pixel.iter().zip(expected).all(|(a, b)| (a - b).abs() < 2e-5),
+                    "window and full effects level={level} at [{x}, {y}]: {pixel:?} != {expected:?}");
+            }
+            assert_presentation_mip(&r);
+        }
+    }
     assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
 }
 

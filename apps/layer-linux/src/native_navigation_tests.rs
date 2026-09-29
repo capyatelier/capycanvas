@@ -391,26 +391,22 @@ fn native_large_photo_navigation() {
     frame_clock.disconnect(layout);
     frame_clock.disconnect(paint);
     pump(300);
-    assert!(w.frame_timer.borrow().is_none(), "idle navigation must stop requesting frames");
-    assert!(!w.gpu.borrow().as_ref().unwrap().session.rendering_suspended());
-    assert_eq!(
-        w.gpu.borrow().as_ref().unwrap().session.engine().document(),
-        &original
-    );
+    let idle = w.frame_timer.borrow().is_none();
+    let suspended = w.gpu.borrow().as_ref().unwrap().session.rendering_suspended();
+    let document_unchanged = w.gpu.borrow().as_ref().unwrap().session.engine().document() == &original;
     let stats = stats.lock().unwrap();
     let unchanged_work = stats.camera_work.first().is_some_and(|work|
         stats.camera_work.iter().all(|frame| frame[1] == work[1] && frame[4] == 0));
-    assert!(stats.presented.iter().filter(|p| p[3] == 1).count() > 100);
-    assert!(
-        stats
+    let presented = stats.presented.iter().filter(|p| p[3] == 1).count();
+    let revision_unchanged = stats
             .camera_views
             .iter()
-            .all(|v| v.2 == stats.camera_views[0].2),
-        "navigation must not change the artwork preview revision"
-    );
+            .all(|v| v.2 == stats.camera_views[0].2);
     let telemetry = w.gpu.borrow().as_ref().unwrap().session.engine().backend().telemetry();
     let mut report = serde_json::json!({
         "startup_ready_ms": startup_ms,
+        "idle_navigation": idle, "rendering_suspended": suspended,
+        "document_unchanged": document_unchanged, "preview_revision_unchanged": revision_unchanged,
         "hdr": original.color.depth.is_float(),
         "reference_white_nits": if original.color.depth.is_float() { Some(203) } else { None },
         "effect_count": original.layers.iter().filter(|layer| layer.effect.is_some()).count(),
@@ -440,7 +436,11 @@ fn native_large_photo_navigation() {
         serde_json::to_vec_pretty(&report).unwrap(),
     )
     .unwrap();
-    // Preserve the evidence for a failed zero-work assertion as well as passes.
+    assert!(idle, "idle navigation must stop requesting frames");
+    assert!(!suspended);
+    assert!(document_unchanged, "navigation must not change the document");
+    assert!(presented > 100, "navigation presented only {presented} frames");
+    assert!(revision_unchanged, "navigation must not change the artwork preview revision");
     if std::env::var("LAYER_NAVIGATION_COMPLETE").as_deref() == Ok("1") {
         assert!(unchanged_work,
             "complete display navigation must not recompose or decode source tiles");

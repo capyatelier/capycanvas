@@ -315,6 +315,7 @@ pub struct GpuAdapterInfo {
 pub enum GpuRasterError {
     Color(String),
     CaptureBudget { required: u64, limit: u64 },
+    SourceWorkingSetExceeded,
     AdapterUnavailable,
     HardwareAdapterRequired,
     DeviceRequest(String),
@@ -338,6 +339,7 @@ impl fmt::Display for GpuRasterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Color(message) => write!(formatter, "color: {message}"),
+            Self::SourceWorkingSetExceeded => formatter.write_str("Source working set exceeds the decoded tile budget"),
             Self::CaptureBudget { required, limit } => write!(formatter,
                 "Snapshot dependency plan requires {required} bytes; limit is {limit}"),
             Self::Effect(message) => write!(formatter, "effect shader: {message}"),
@@ -890,6 +892,7 @@ pub struct WgpuRasterizer {
     scale_display: Option<scene::scale::Cache>,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
+    artwork_revision: u64,
     composite_damage: PixelRect,
     /// The composite's blend space, from the latest frame.
     blend_space: layer_core::BlendSpace,
@@ -1213,6 +1216,7 @@ impl WgpuRasterizer {
             scale_display: None,
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
+            artwork_revision: 0,
             composite_damage: PixelRect::EMPTY,
             thumbnails: thumbnails::Thumbnails::new(),
             ui_preview_space: layer_core::color::RgbSpace::Srgb,
@@ -1339,7 +1343,7 @@ impl WgpuRasterizer {
 
     /// Changes only when document composition changes, never for camera motion.
     pub fn canvas_preview_revision(&self) -> u64 {
-        self.composite_revision
+        self.artwork_revision
     }
 
     /// Benchmark/export synchronization only. Live drawing never calls this.
@@ -4241,9 +4245,12 @@ impl CanvasRenderer for WgpuRasterizer {
             self.finish_native_rasters(commit, submission)?;
         }
         if let Some(cache) = &mut self.live_display { cache.finish_frame(); }
-        if (animated || packet.reset_layers || !packet.dabs.is_empty() || !packet.restore_rasters.is_empty()
-            || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear)))
-            && let Some(regions) = &mut self.regions { regions.raw.invalidate_tonal(); }
+        if animated || reset || !packet.dabs.is_empty() || !packet.restore_rasters.is_empty()
+            || self.transform_damage.iter().any(|(_, bounds)| !bounds.is_empty()) || !self.document_damage.is_empty()
+            || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear)) {
+            self.artwork_revision = self.artwork_revision.wrapping_add(1);
+            if let Some(regions) = &mut self.regions { regions.raw.invalidate_tonal(); }
+        }
         self.artwork_frame = Some(frame);
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();
