@@ -103,7 +103,10 @@ fn retouch_source(m: RetouchMapping, destination: vec2<f32>) -> vec4<f32> {
     if m.mode == RETOUCH_TARGET {
         return current;
     }
+    let alpha = current.a * m.opacity;
+    if alpha == 1.0 { return current * m.opacity; }
     let below = retouch_sample_reference(m, source + m.to_document);
+    if alpha == 0.0 { return below; }
     if m.perceptual {
         let over = working_encode(current) * m.opacity;
         return working_decode(over + working_encode(below) * (1.0 - over.a));

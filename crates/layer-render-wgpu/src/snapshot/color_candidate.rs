@@ -110,6 +110,7 @@ impl ColorCanvas {
             })
             .collect();
         let packet = FramePacket {
+            commit_rasters: true,
             time_seconds: self.time,
             view: self.view,
             document_extent: [document.width, document.height],

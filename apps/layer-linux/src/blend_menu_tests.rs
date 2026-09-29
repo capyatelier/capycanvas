@@ -103,6 +103,7 @@ fn native_pass_through_group_and_new_group_preference() {
     w.window.maximize();
     w.window.present();
     pump(1600);
+    until(|| w.gpu.borrow().as_ref().is_some_and(|g| g.session.engine().backend().startup.brush_ready), "canvas startup");
     let group = document(&w).active_layer;
     let photo = document(&w).layers.iter().find(|l| l.source.is_some()).unwrap().id;
     let context = glib::MainContext::default();
@@ -170,7 +171,7 @@ fn native_pass_through_group_and_new_group_preference() {
     for theme in [Theme::Light, Theme::Dark] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(250);
-        save_widget(&w.window, &directory.join(format!("{}-preferences.png", format!("{theme:?}").to_lowercase())));
+        crate::capture(&w, directory.join(format!("{}-preferences.png", format!("{theme:?}").to_lowercase())).to_str().unwrap());
     }
     w.preferences.dialog.close();
     until(|| !w.preferences.dialog.is_mapped(), "Preferences close");
@@ -185,7 +186,7 @@ fn native_pass_through_group_and_new_group_preference() {
         w.area.grab_focus();
         pump(200);
         let name = format!("{theme:?}").to_lowercase();
-        save_widget(&w.window, &directory.join(format!("{name}-window.png")));
+        crate::capture(&w, directory.join(format!("{name}-window.png")).to_str().unwrap());
         open(&mut input, Device::Mouse);
         pump(200);
         capture_popover(popover.upcast_ref(), directory.join(format!("{name}-menu.png")).to_str().unwrap());

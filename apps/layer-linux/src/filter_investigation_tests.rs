@@ -99,7 +99,11 @@ fn native_photo_filter_investigation() {
             s.camera_work, s.source_transfers
         );
     }
-    crate::capture(&w, "../../artifacts/filter-investigation/gtk-gaussian.png");
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        settled(&w);
+        crate::capture(&w, &format!("../../artifacts/filter-investigation/gtk-gaussian-{}.png", format!("{theme:?}").to_lowercase()));
+    }
     w.window.destroy();
     pump(100);
 }

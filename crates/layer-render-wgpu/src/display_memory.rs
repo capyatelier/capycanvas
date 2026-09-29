@@ -3,11 +3,11 @@
 //! or VRAM is not free GPU memory.
 //! This is an admission snapshot, not a reservation against other applications.
 
-fn allowance(headroom: Option<u64>, divisor: u64) -> u64 {
+fn allowance(headroom: Option<u64>, divisor: u64, retained: u64) -> u64 {
     // Leave room for editable layers, scratch, GTK and other documents. This
     // is an admission ceiling: the cache allocates only the actual document's
     // completed pixels and mip levels, never the whole allowance.
-    headroom.map_or(0, |bytes| bytes / divisor)
+    headroom.map_or(0, |bytes| bytes.saturating_add(retained) / divisor)
 }
 
 /// Exact filter dependencies can use available unified memory when the driver
@@ -19,7 +19,7 @@ pub(super) fn composition_budget(device: &wgpu::Device, display: u64) -> u64 {
     // workaround; query available process/system memory only for dependencies.
     #[cfg(target_os = "linux")]
     if display == 0 && unified_memory(device) {
-        return budget.max(allowance(layer_color::photo::PhotoMemoryBudget::available_memory(), 4));
+        return budget.max(allowance(layer_color::photo::PhotoMemoryBudget::available_memory(), 4, 0));
     }
     #[cfg(not(target_os = "linux"))]
     let _ = device;
@@ -27,7 +27,7 @@ pub(super) fn composition_budget(device: &wgpu::Device, display: u64) -> u64 {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
+pub(super) fn complete_budget(device: &wgpu::Device, retained: u64) -> u64 {
     let headroom = vulkan_headroom(device);
     #[cfg(target_os = "android")]
     {
@@ -40,14 +40,14 @@ pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
             (None, Some(system)) if unified_memory(device) => Some(system),
             _ => None,
         };
-        allowance(headroom, 2)
+        allowance(headroom, 2, retained)
     }
     #[cfg(not(target_os = "android"))]
-    allowance(headroom, 4)
+    allowance(headroom, 4, retained)
 }
 
 #[cfg(target_vendor = "apple")]
-pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
+pub(super) fn complete_budget(device: &wgpu::Device, retained: u64) -> u64 {
     // SAFETY: the guard retains wgpu's live device. These read-only Metal
     // properties neither allocate resources nor submit work.
     let Some(hal) = (unsafe { device.as_hal::<wgpu::hal::api::Metal>() }) else {
@@ -60,7 +60,7 @@ pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
         metal.currentAllocatedSize() as u64,
         layer_color::photo::PhotoMemoryBudget::available_memory(),
     );
-    allowance(headroom, 4)
+    allowance(headroom, 4, retained)
 }
 
 #[cfg(target_vendor = "apple")]
@@ -121,13 +121,23 @@ mod tests {
         assert_eq!(metal_headroom(4096, 0, None), None);
     }
     #[test]
+    fn retaining_a_pyramid_preserves_its_admission_budget() {
+        for divisor in [2, 4] {
+            let initial = allowance(Some(4096), divisor, 0);
+            let retained = initial - 128;
+            assert_eq!(allowance(Some(4096 - retained), divisor, retained), initial);
+            assert!(allowance(Some(0), divisor, retained) < retained);
+            assert_eq!(allowance(None, divisor, retained), 0);
+        }
+    }
+    #[test]
     fn complete_pyramid_admission_scales_with_remaining_headroom() {
-        assert_eq!(allowance(None, 4), 0);
-        assert_eq!(allowance(Some(1024), 2), 512);
-        assert_eq!(allowance(Some(0), 4), 0);
-        assert_eq!(allowance(Some(1024 * 1024 * 1024), 4), 256 * 1024 * 1024);
+        assert_eq!(allowance(None, 4, 0), 0);
+        assert_eq!(allowance(Some(1024), 2, 0), 512);
+        assert_eq!(allowance(Some(0), 4, 0), 0);
+        assert_eq!(allowance(Some(1024 * 1024 * 1024), 4, 0), 256 * 1024 * 1024);
         assert_eq!(
-            allowance(Some(96 * 1024 * 1024 * 1024), 4),
+            allowance(Some(96 * 1024 * 1024 * 1024), 4, 0),
             24 * 1024 * 1024 * 1024
         );
     }
@@ -158,8 +168,8 @@ fn unified_memory(device: &wgpu::Device) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
-    allowance(dx12_headroom(device), 4)
+pub(super) fn complete_budget(device: &wgpu::Device, retained: u64) -> u64 {
+    allowance(dx12_headroom(device), 4, retained)
 }
 
 #[cfg(target_os = "windows")]

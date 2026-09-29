@@ -125,6 +125,29 @@ mod retouch_layer_checks {
     }
 
     #[test]
+    fn color_sampling_waits_for_every_region_of_a_bake() {
+        let mut s = perceptual();
+        s.engine.apply_edit(Edit::SetCanvasSize { size: [1280, 768], origin: [0, 0] }).unwrap();
+        let mut layer = s.engine.document().layers[0].clone();
+        layer.source = Some(layer_core::color::source::rgba8_source([1280, 768], |_, _| [80, 120, 160, 255]));
+        s.engine.apply_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+        s.frame(1, 1).unwrap();
+        invoke(&mut s, CommandId::FrequencySeparation);
+        separation(&mut s, FrequencySeparationAction::Apply).unwrap();
+        s.eyedropper.queue(layer_render::ColorSampleSource::Composite, [32, 32]);
+        s.frame(2, 2).unwrap();
+        assert!(s.engine.has_pending_document_edits());
+        assert!(s.renderer_mut().sample_requests.is_empty(), "partial bakes cannot supply artwork samples");
+        for frame in 3..100 {
+            if !s.engine.has_pending_document_edits() { break; }
+            s.frame(frame, frame).unwrap();
+            assert!(!s.refresh_commands(), "bake polling keeps command availability current");
+        }
+        assert!(!s.engine.has_pending_document_edits());
+        assert_eq!(s.renderer_mut().sample_requests.len(), 1, "the queued sample survives the bake");
+    }
+
+    #[test]
     fn frequency_separation_applies_low_and_high_in_an_isolated_group_in_one_undo_step() {
         let mut s = perceptual();
         s.dispatch(UiAction::Preferences {
@@ -154,11 +177,15 @@ mod retouch_layer_checks {
             .iter()
             .map(|(target, op)| match &op.kind {
                 LayerOperationKind::Bake { members, .. } => (*target, members[0].effect.as_ref().unwrap().value("sigma").cloned(), members[1].id),
-                _ => panic!("a bake"),
+                LayerOperationKind::FrequencyDetail { members, low: reference, .. } => {
+                    assert_eq!(*reference, low);
+                    (*target, None, members[0].id)
+                }
+                _ => panic!("a separation operation"),
             })
             .collect();
         let radius = Some(layer_core::EffectValue::Number(6.));
-        assert_eq!(bakes, [(low, radius.clone(), photo), (high, radius, photo)]);
+        assert_eq!(bakes, [(low, radius, photo), (high, None, photo)]);
         invoke(&mut s, CommandId::Undo);
         assert_eq!(s.engine.document().layers, before, "one undo step");
     }

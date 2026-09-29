@@ -4,26 +4,10 @@ use super::metadata::{Metadata, mask_metadata};
 use super::*;
 use wgpu::util::DeviceExt;
 
-#[derive(Clone)]
-struct Image {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    bounds: PixelRect,
-}
-impl Image {
-    fn new(r: &WgpuRasterizer, bounds: PixelRect, label: &'static str) -> Self {
-        let (texture, view) =
-            create_color_target(&r.device, [bounds.width(), bounds.height()], label);
-        Self {
-            texture,
-            view,
-            bounds,
-        }
-    }
-    fn bytes(&self) -> u64 {
-        texture_bytes(&self.texture)
-    }
-}
+#[cfg(test)]
+#[path = "scene/image_grid_tests.rs"]
+mod grid_tests;
+
 struct CachedStage {
     id: LayerId,
     input: Image,
@@ -65,7 +49,7 @@ impl ImageComposition {
         front: &Image,
         back: &Image,
     ) -> Self {
-        let output = Image::new(r, bounds, "clipping composition cache");
+        let output = Image::new(r, front.plan, "clipping composition cache");
         let inputs = crate::bindings::group(&r.device, "cached clipping composition inputs", &scene.layout, [
             wgpu::BindingResource::TextureView(&front.view),
             wgpu::BindingResource::TextureView(&back.view),
@@ -125,7 +109,7 @@ impl ImageComposition {
         pass.set_pipeline(&scene.pipeline[0]);
         pass.set_bind_group(0, &self.binding, &[0]);
         pass.set_bind_group(1, &self.inputs, &[]);
-        let region = region.window_local(self.output.bounds);
+        let region = region.window_local(self.output.plan.bounds);
         pass.set_scissor_rect(
             region.min_x(),
             region.min_y(),
@@ -162,24 +146,6 @@ impl ImageStages {
         self.scratch.clear();
         self.backdrops.clear();
     }
-    pub(super) fn metadata_changed(&self, layers: &[Layer], background: [f32; 4], blend_space: layer_core::BlendSpace) -> bool {
-        self.background != background
-            || self.blend_space != blend_space
-            || self.metadata.len() != layers.len()
-            || self.metadata.iter().zip(layers).any(|(old, layer)| *old != Metadata::new(layer))
-    }
-    pub fn scene_texture(&self, layer: &Layer) -> Option<&wgpu::Texture> {
-        let stage = self.stages.iter().find(|s| s.id == layer.id && s.valid)?;
-        if layer.properties.clipped {
-            stage
-                .composition
-                .as_ref()
-                .filter(|c| c.valid)
-                .map(|c| &c.output.texture)
-        } else {
-            Some(&stage.output.texture)
-        }
-    }
     pub fn checkpoint(
         &self,
         index: usize,
@@ -206,6 +172,13 @@ impl ImageStages {
             .iter()
             .find(|s| s.id == id && s.valid)
             .map(|s| s.output.view.clone())
+    }
+    fn views(&self) -> Vec<wgpu::TextureView> {
+        self.stages.iter().flat_map(|stage| [
+            stage.input_owned.then_some(&stage.input), Some(&stage.output), stage.mask.as_ref(),
+            stage.composition.as_ref().map(|composition| &composition.output),
+        ]).flatten().chain(&self.scratch).chain(self.backdrops.values().map(|backdrop| &backdrop.image))
+            .map(|image| image.view.clone()).collect()
     }
     pub fn storage_bytes(&self) -> u64 {
         self.stages
@@ -373,7 +346,7 @@ impl Scene {
             .backdrops
             .remove(&base.id)
             .unwrap_or_else(|| Backdrop {
-                image: Image::new(r, bounds, "clipping backdrop cache"),
+                image: Image::new(r, display_mips::Plan::window(self.images.extent, 0, bounds), "clipping backdrop cache"),
                 valid: false,
                 updated: false,
                 damage: PixelRect::EMPTY,
@@ -439,7 +412,7 @@ impl Scene {
         convert: Convert,
     ) {
         let output = self.converted(r, output, convert);
-        let bounds = destination.bounds;
+        let bounds = destination.plan.bounds;
         let extent = [bounds.width(), bounds.height()];
         let view = &self.pool[output].view;
         let start = self
@@ -493,7 +466,7 @@ impl Scene {
             }
             self.free(output);
         } else {
-            self.copy_window_tile(output, &destination.texture, tile, bounds);
+            self.copy_window_tile(output, destination, tile);
         }
     }
     pub(super) fn image_tile(
@@ -524,19 +497,41 @@ impl Scene {
     pub(super) fn copy_window_tile(
         &mut self,
         output: usize,
-        destination: &wgpu::Texture,
+        destination: &Image,
         tile: [u32; 2],
-        bounds: PixelRect,
     ) {
+        let bounds = destination.plan.bounds;
         let region = page_rect(tile).intersect(bounds);
         if !region.is_empty() {
+            let extent = [destination.texture.width(), destination.texture.height()];
+            let view = &self.pool[output].view;
+            if (extent == [bounds.width(), bounds.height()] || region == page_rect(tile))
+                && destination.texture.usage().contains(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::STORAGE_BINDING)
+                && let Some(Job::Draw { target, sources, data, over: false, clip }) = self.jobs.last_mut()
+                && target == view && !sources.contains(view)
+                && data[..4] == [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32]
+                && clip.is_none_or(|clip| clip == PixelRect::full([PAGE_SIZE; 2]))
+            {
+                *target = destination.view.clone();
+                data[0] = (tile[0] * PAGE_SIZE) as f32 - bounds.min_x() as f32;
+                data[1] = (tile[1] * PAGE_SIZE) as f32 - bounds.min_y() as f32;
+                data[4] = extent[0] as f32;
+                data[5] = extent[1] as f32;
+                *clip = Some(region.window_local(bounds));
+                let n = self.jobs.len();
+                if n >= 2 && matches!(&self.jobs[n - 2], Job::Clear(target, _) if target == view) {
+                    self.jobs.remove(n - 2);
+                }
+                self.free(output);
+                return;
+            }
             self.jobs.push(Job::Copy {
                 source: self.pool[output].texture.clone(),
                 source_origin: [
                     region.min_x() - tile[0] * PAGE_SIZE,
                     region.min_y() - tile[1] * PAGE_SIZE,
                 ],
-                destination: destination.clone(),
+                destination: destination.texture.clone(),
                 origin: [
                     region.min_x() - bounds.min_x(),
                     region.min_y() - bounds.min_y(),
@@ -547,7 +542,26 @@ impl Scene {
         }
         self.free(output);
     }
+    pub(super) fn retire_images<T>(&mut self, change: impl FnOnce(&mut Self) -> T) -> T {
+        let held = self.images.views();
+        let result = change(self);
+        if !held.is_empty() {
+            let kept = self.images.views();
+            let retired: Vec<_> = held.into_iter().filter(|view| !kept.contains(view)).collect();
+            self.forget_bindings(&retired);
+        }
+        result
+    }
     pub(super) fn update_images(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        packet: FramePacket<'_>,
+        dirty: PixelRect,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<PixelRect, GpuRasterError> {
+        self.retire_images(|scene| scene.update_image_stages(r, packet, dirty, encoder))
+    }
+    fn update_image_stages(
         &mut self,
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
@@ -556,6 +570,7 @@ impl Scene {
     ) -> Result<PixelRect, GpuRasterError> {
         let extent = packet.document_extent;
         let bounds = self.image_window.unwrap_or(PixelRect::full(extent));
+        let grid = display_mips::Plan::window(extent, 0, bounds);
         if self.images.extent != extent || self.images.bounds != bounds {
             self.images = ImageStages {
                 extent,
@@ -747,9 +762,9 @@ impl Scene {
                         id: layer.id,
                         input: alias
                             .clone()
-                            .unwrap_or_else(|| Image::new(r, bounds, "effect source cache")),
+                            .unwrap_or_else(|| Image::new(r, grid, "effect source cache")),
                         input_owned: alias.is_none(),
-                        output: Image::new(r, bounds, "effect result cache"),
+                        output: Image::new(r, grid, "effect result cache"),
                         mask: None,
                         mask_offset: layer_core::Point {
                             x: f32::NAN,
@@ -764,7 +779,7 @@ impl Scene {
                 cached.input = input;
                 cached.input_owned = false;
             } else if !cached.input_owned {
-                cached.input = Image::new(r, bounds, "effect source cache");
+                cached.input = Image::new(r, grid, "effect source cache");
                 cached.input_owned = true;
                 cached.valid = false;
             }
@@ -841,11 +856,11 @@ impl Scene {
                     };
                     let image = cached
                         .mask
-                        .get_or_insert_with(|| Image::new(r, bounds, "effect mask cache"));
+                        .get_or_insert_with(|| Image::new(r, grid, "effect mask cache"));
                     if !mask_dirty.is_empty() {
                         for tile in page_coordinates(mask_dirty) {
                             let m = self.mask_tile(r, mask, mask_offset, tile);
-                            self.copy_window_tile(m, &image.texture, tile, bounds);
+                            self.copy_window_tile(m, &image, tile);
                         }
                         self.encode_jobs(r, encoder)?;
                     }
@@ -855,10 +870,11 @@ impl Scene {
                 }
                 self.jobs.clear();
                 let count = effect.program.passes.len().max(1);
+                let regions = effects::pass_regions(effect, output_dirty, grid);
                 while self.images.scratch.len() < count.saturating_sub(1).min(2) {
                     self.images
                         .scratch
-                        .push(Image::new(r, bounds, "reusable effect intermediate"));
+                        .push(Image::new(r, grid, "reusable effect intermediate"));
                 }
                 let mut previous = cached.input.view.clone();
                 for pass in 0..count {
@@ -868,41 +884,15 @@ impl Scene {
                     } else {
                         self.images.scratch[pass % 2].view.clone()
                     };
-                    // Intermediate scratch is shared, so populate the halo that
-                    // later passes will read even outside the final dirty area.
-                    let region = effect
-                        .program
-                        .passes
-                        .iter()
-                        .skip(pass + 1)
-                        .try_fold(output_dirty, |rect, p| {
-                            Some(rect.expand(p.sampling.radius(effect)?, extent))
-                        })
-                        .unwrap_or(bounds)
-                        .intersect(bounds);
+                    let region = regions[pass + 1];
                     let local = region.window_local(bounds);
-                    let mut data = [0.; 32];
-                    data[..6].copy_from_slice(&[
+                    let mut data = effects::image_grid(grid, grid, cached.input.plan);
+                    data[..4].copy_from_slice(&[
                         local.min_x() as f32,
                         local.min_y() as f32,
                         local.width() as f32,
                         local.height() as f32,
-                        bounds.width() as f32,
-                        bounds.height() as f32,
                     ]);
-                    data[12..16].copy_from_slice(&[
-                        bounds.min_x() as f32,
-                        bounds.min_y() as f32,
-                        extent[0] as f32,
-                        extent[1] as f32,
-                    ]);
-                    data[16..20].copy_from_slice(&[
-                        bounds.min_x() as f32,
-                        bounds.min_y() as f32,
-                        bounds.width() as f32,
-                        bounds.height() as f32,
-                    ]);
-                    data.copy_within(16..20, 20);
                     data[9] = f32::from(layer.properties.clipped);
                     let mut masks = Box::new(std::array::from_fn(|_| r.empty_view.clone()));
                     if last && let Some(mask) = &cached.mask {
@@ -918,6 +908,7 @@ impl Scene {
                             &[layer],
                             effects::Execution::Image(pass),
                             packet.time_seconds,
+                            grid.level,
                             packet.blend_space,
                         )?,
                         masks,

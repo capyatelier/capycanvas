@@ -3,6 +3,7 @@ package art.capycanvas
 import android.app.Activity
 import android.app.Instrumentation
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
@@ -35,6 +36,9 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
         var activity: MainActivity? = null
         var output: File? = null
         var label = "unknown"
+        var captureFailure: (() -> Unit)? = null
+        val samplingMemory = java.util.concurrent.atomic.AtomicBoolean(true)
+        var memorySampler: Thread? = null
         try {
             fun stage(name: String) = sendStatus(0, Bundle().apply { putString("stream", "BRUSH_STAGE $name\n") })
             stage("starting")
@@ -48,12 +52,14 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val repeats = arguments.getString("repeats", "3")!!.toInt()
             val mode = arguments.getString("mode", "constant")!!
             val prediction = arguments.getString("prediction", "true") == "true"
+            val statsPanel = arguments.getString("statsPanel", "false") == "true"
             val colorBeforeStrokes = arguments.getString("colorBeforeStrokes", "false") == "true"
             val speed = arguments.getString("speed", "1")!!.toDouble()
             val blending = arguments.getString("blending")
             check(blending == null || blending in listOf("linear", "perceptual"))
             check(duration in 1000..60000 && repeats in 1..10)
-            check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "visual", "pinch"))
+            check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "pauses", "visual", "pinch"))
+            check(mode != "pauses" || duration % 200 == 0)
             output = File(targetContext.getExternalFilesDir(null), "brush-benchmark").apply { mkdirs() }
             val root = File(targetContext.cacheDir, "brush-benchmark-$label-${System.nanoTime()}")
             CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
@@ -75,7 +81,12 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)) as MainActivity
             stage("activity-started")
             val active = activity
-            runOnMainSync { active.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            runOnMainSync {
+                active.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                // Keep the fixed trajectory and fit zoom comparable regardless
+                // of how the tablet is held. This applies only to this activity.
+                active.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
             val host = active.host
             fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
             fun waitFor(condition: () -> Boolean) {
@@ -83,6 +94,20 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 while (!condition()) {
                     check(host.failure == null) { host.failure!! }
                     check(host.actionError == null) { host.actionError!! }
+                    if (SystemClock.uptimeMillis() >= deadline) {
+                        var focused = false
+                        runOnMainSync {
+                            focused = active.window.decorView.hasWindowFocus()
+                            File(output, "$label-failed-state.json").writeText(obj(
+                                "focused" to focused, "snapshot" to host.snapshot,
+                                "surface_origin" to JSONArray(listOf(host.surfaceOrigin.x, host.surfaceOrigin.y))
+                            ).toString(2))
+                        }
+                        if (focused) uiAutomation.takeScreenshot()?.let { bitmap ->
+                            File(output, "$label-failed.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                            bitmap.recycle()
+                        }
+                    }
                     check(SystemClock.uptimeMillis() < deadline) { "Timed out waiting for brush benchmark" }
                     SystemClock.sleep(20)
                 }
@@ -110,12 +135,43 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 return value
             }
             fun resources(): JSONObject = obj("boot_ns" to SystemClock.elapsedRealtimeNanos(),
+                "gpu" to native { org.json.JSONTokener(Native.rendererMemory(it)).nextValue() },
                 "meminfo" to File("/proc/meminfo").readText(),
                 "process_status" to File("/proc/self/status").readText(),
                 "process_mappings" to File("/proc/self/maps").useLines { it.count() })
+            captureFailure = {
+                File(output, "$label-failure-state.json").writeText(obj(
+                    "failure" to host.failure, "action_error" to host.actionError,
+                    "snapshot" to host.snapshot, "meminfo" to File("/proc/meminfo").readText(),
+                    "process_status" to File("/proc/self/status").readText()
+                ).toString(2))
+                File(output, "$label-failure-measurements.json").writeText(report(false).toString())
+                runBlocking {
+                    kotlinx.coroutines.withTimeout(30_000) {
+                        host.withNative { handle ->
+                            File(output, "$label-failure-gpu.json").writeText(obj(
+                                "display" to JSONObject(Native.displayStatus(handle)),
+                                "completions" to JSONArray(Native.completionTimings(handle, false)),
+                                "memory" to org.json.JSONTokener(Native.rendererMemory(handle)).nextValue()
+                            ).toString())
+                        }
+                    }
+                }
+            }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true &&
                 host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             stage("workspace-ready")
+            if (arguments.getString("memorySnapshots") == "true") {
+                val memoryFile = File(output, "$label-memory.jsonl")
+                memorySampler = Thread {
+                    try {
+                        while (samplingMemory.get()) {
+                            memoryFile.appendText(resources().toString() + "\n")
+                            Thread.sleep(100)
+                        }
+                    } catch (_: InterruptedException) { }
+                }.apply { isDaemon = true; start() }
+            }
             val task = native { h ->
                 Native.dispatch(h, obj("type" to "invoke", "command" to "open_document").toString())
                 val s = JSONObject(Native.snapshot(h)!!).getJSONObject("state")
@@ -132,33 +188,73 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true &&
                 host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any { it.optInt("width") == photoWidth } == true }
             stage("photo-ready")
-            blending?.let { invoke("blend_$it") }
-            action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
-            val group = snapshot().getJSONObject("layout")
-                .array("groups").objects().first { "stats" in it.array("panels").values() }.getInt("id")
-            action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
-            action(obj("type" to "select_panel_tab", "group" to group, "panel" to "stats"))
+            blending?.let {
+                val command = "blend_$blending"
+                invoke(command)
+                check(state().array("commands").objects().filter {
+                    it.getString("id") in listOf("blend_linear", "blend_perceptual") && it.optBoolean("selected")
+                }.map { it.getString("id") } == listOf(command))
+            }
+            if (statsPanel) {
+                action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
+                val group = snapshot().getJSONObject("layout")
+                    .array("groups").objects().first { "stats" in it.array("panels").values() }.getInt("id")
+                action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
+                action(obj("type" to "select_panel_tab", "group" to group, "panel" to "stats"))
+            }
             for (layer in state().array("layers").objects().filter { it.optString("label") == "Paper" })
                 action(obj("type" to "set_layer_visibility", "id" to layer.getLong("id"), "visible" to (mode == "visual")))
             if (mode == "visual") for (layer in state().array("layers").objects().filter { it.optString("label") == "Photo" })
                 action(obj("type" to "set_layer_visibility", "id" to layer.getLong("id"), "visible" to false))
+            val photoLayers = arguments.getString("photoLayers", "1")!!.toInt()
+            check(photoLayers in 1..32)
+            if (photoLayers > 1) {
+                val id = state().array("layers").objects().first { it.optString("label") == "Photo" }.getLong("id")
+                action(obj("type" to "select_layer", "id" to id))
+                repeat(photoLayers - 1) {
+                    action(obj("type" to "layer", "action" to obj("op" to "duplicate_selected")))
+                    action(obj("type" to "set_layer_opacity", "opacity" to .35))
+                }
+            }
             invoke("add_layer")
             invoke("fit_canvas")
+            arguments.getString("zoom")?.toDouble()?.let { requested ->
+                check(requested in .01..8.0)
+                val camera = state().getJSONObject("camera")
+                val area = camera.getJSONArray("work_area")
+                val cx = area.getDouble(0) + area.getDouble(2) / 2
+                val cy = area.getDouble(1) + area.getDouble(3) / 2
+                runOnMainSync { host.scroll(cx.toFloat(), cy.toFloat(), 0f,
+                    (ln(camera.getDouble("zoom") / requested) / .0015 / 40).toFloat(), true, false) }
+                native { Unit }
+                waitFor { abs(state().getJSONObject("camera").getDouble("zoom") - requested) < .001 }
+            }
             action(obj("type" to "select_brush", "id" to preset))
             if (state().getJSONObject("brush").getString("tool") in setOf("clone", "heal", "spot_heal")) invoke("use_reference_below")
             action(obj("type" to "set_brush_size", "value" to size))
-            for ((id, value) in listOf("feedback" to prediction, "platform_prediction" to false, "prediction_horizon" to 16))
-                action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
+            arguments.getString("paintLoad")?.let {
+                val load = it.toDouble()
+                check(load in 0.0..1.0)
+                action(obj("type" to "set_tool_setting", "id" to "bristle_load", "value" to load))
+            }
+            val settings = state().getJSONObject("settings")
+                .put("feedback", prediction).put("platform_prediction", false)
+                .put("prediction_ms", arguments.getString("horizon")?.toInt() ?: 16)
+            action(obj("type" to "restore_settings", "settings" to settings))
             SystemClock.sleep(1500)
             waitFor { host.snapshot?.optBoolean("brush_ready") == true }
+            waitFor {
+                val viewport = state().getJSONObject("camera").getJSONArray("viewport")
+                viewport.getInt(0) > viewport.getInt(1)
+            }
             val initial = state()
             check(abs(initial.getJSONObject("brush").getDouble("diameter") - size) < .01)
             val camera = initial.getJSONObject("camera")
             val area = camera.getJSONArray("work_area")
             val cx = area.getDouble(0) + area.getDouble(2) / 2
             val cy = area.getDouble(1) + area.getDouble(3) / 2
-            val rx = min(520.0, area.getDouble(2) * .45)
-            val ry = min(299.0, area.getDouble(3) * .45)
+            val rx = min(arguments.getString("radiusX", "520")!!.toDouble(), area.getDouble(2) * .45)
+            val ry = min(arguments.getString("radiusY", "299")!!.toDouble(), area.getDouble(3) * .45)
             val sampleInterval = 5_000_000L
             if (mode == "pinch") {
                 runPinchBenchmark(this, arguments, host, output, label, cx, cy)
@@ -173,15 +269,18 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 val boot = SystemClock.elapsedRealtimeNanos()
                 var down = SystemClock.uptimeMillis()
                 val delivered = JSONArray()
+                val active = JSONArray()
+                var contactBegin = 0L
                 val count = milliseconds / 5
                 for (i in 0..count) {
                     val delay = begun + i * sampleInterval - System.nanoTime()
                     if (delay > 0) LockSupport.parkNanos(delay)
+                    if (kind == "pauses" && (i == count || i % 40 > 20)) continue
                     val t = i * .005
                     val progress = i.toDouble() / count
                     val angle = t * speed * 2 * PI
-                    val lift = kind == "lifts" && i > 0 && i % 40 == 0
-                    val restart = kind == "lifts" && i > 1 && i % 40 == 1
+                    val lift = (kind == "lifts" && i > 0 && i % 40 == 0) || (kind == "pauses" && i % 40 == 20)
+                    val restart = (kind == "lifts" && i > 1 && i % 40 == 1) || (kind == "pauses" && i % 40 == 0)
                     val phase = if (i == count || lift) MotionEvent.ACTION_UP else if (i == 0 || restart) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_MOVE
                     if (phase == MotionEvent.ACTION_DOWN) down = SystemClock.uptimeMillis()
                     coords[0].x = (cx + (if (kind == "stationary") 0.0 else rx * cos(angle))).toFloat() + host.surfaceOrigin.x
@@ -198,11 +297,16 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     }
                     val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), phase, 1, properties, coords,
                         0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_STYLUS, 0)
+                    val sent = System.nanoTime()
+                    if (phase == MotionEvent.ACTION_DOWN) contactBegin = sent
+                    if (phase == MotionEvent.ACTION_UP) active.put(JSONArray(listOf(contactBegin, sent)))
                     try { check(uiAutomation.injectInputEvent(event, false)) } finally { event.recycle() }
                     delivered.put(JSONArray(listOf(System.nanoTime(), phase, coords[0].pressure)))
                 }
                 return obj("begin_ns" to begun, "begin_boot_ns" to boot, "end_ns" to System.nanoTime(),
-                    "end_boot_ns" to SystemClock.elapsedRealtimeNanos(), "injected" to delivered)
+                    "end_boot_ns" to SystemClock.elapsedRealtimeNanos(), "injected" to delivered).also {
+                    if (kind == "pauses") it.put("active_intervals_ns", active)
+                }
             }
             // Erase actual paint along the replay path. Preparing a wider ink
             // stroke keeps the photo visible and avoids timing empty erasure.
@@ -222,6 +326,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             check(displayInfo.getString("present_mode") in listOf("SharedDemandRefresh", "Fifo"))
             File(output, "$label-info.json").writeText(obj("label" to label, "preset" to preset,
                 "brush_size" to size, "mode" to mode, "prediction" to prediction, "speed" to speed,
+                "memory_snapshots" to (arguments.getString("memorySnapshots") == "true"),
+                "stats_panel" to statsPanel,
                 "color_before_strokes" to colorBeforeStrokes,
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
                 "state" to state(), "display" to displayInfo, "resources" to resources(),
@@ -258,6 +364,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 val displayAfterInput = display()
                 check(displayAfterInput.getString("present_mode") == "SharedDemandRefresh")
                 check(displayAfterInput.getBoolean("retained_target"))
+                waitFor { !native { Native.renderingPending(it) } }
+                val settled = System.nanoTime()
                 SystemClock.sleep(1000)
                 val data = report(false)
                 val present = native { JSONArray(Native.presentationTimings(it, false)) }
@@ -269,6 +377,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 check(host.actionError == null) { host.actionError!! }
                 check(data.getJSONArray("frames").length() > 0)
                 data.put("motion", motion).put("presentation", present).put("renderer_before", before)
+                    .put("settled_ns", settled)
                     .put("completions", completions)
                     .put("renderer_after", stats()).put("display_before", displayBefore)
                     .put("display_after_input", displayAfterInput).put("display_after_drain", display())
@@ -292,16 +401,22 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     invoke("fit_canvas")
                 }
                 sendStatus(0, Bundle().apply { putString("stream", "BRUSH_RUN $label $run\n") })
-                if (mode == "lifts") repeat(duration / 200) { invoke("undo") } else invoke("undo")
+                if (mode in listOf("lifts", "pauses")) repeat(duration / 200) { invoke("undo") } else invoke("undo")
                 SystemClock.sleep(2000)
             }
             result.putString("stream", "\nBRUSH_COMPLETE $label\n")
         } catch (error: Throwable) {
             output?.let { File(it, "$label-error.txt").writeText(error.stackTraceToString()) }
+            runCatching { captureFailure?.invoke() }.onFailure { captureError ->
+                output?.let { File(it, "$label-error.txt").appendText("\n${captureError.stackTraceToString()}") }
+            }
             result.putString("stream", "\n${error.stackTraceToString()}\n")
             finish(Activity.RESULT_CANCELED, result)
             return
         } finally {
+            samplingMemory.set(false)
+            memorySampler?.interrupt()
+            memorySampler?.join(1000)
             activity?.let { runOnMainSync { it.finish() } }
             CanvasHost.workspaceDirectoryForTest = null
             RecoveryController.directoryForTest = null

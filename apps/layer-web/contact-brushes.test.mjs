@@ -60,7 +60,7 @@ export async function checkContactBrushes({call, evaluate, settle}, photoUrl) {
       }
       await call('Input.dispatchMouseEvent',{type:'mouseMoved',pointerType:'pen',x:1,y:1,buttons:0});
     };
-    const presets=(process.env.LAYER_BRUSH_PRESETS || "2,25,26,27,1,28,29,30,31,32,33,34,3,4,5,6,7,9,15,16,17,18,8").split(",").map(Number);
+    const presets=(process.env.LAYER_BRUSH_PRESETS || "2,25,26,27,1,28,29,30,31,32,33,34,3,4,35,5,6,7,9,15,16,17,18,8").split(",").map(Number);
     for (const id of presets) {
       // Erase real paint above the retained photo, then remove that seed too.
       if(id===3){

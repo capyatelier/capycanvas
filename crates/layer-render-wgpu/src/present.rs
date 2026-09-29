@@ -3,7 +3,7 @@
 use crate::{BackdropBlurStyle, BackdropRegion, GpuRasterError, SdrSurfaceColor, Uploads, WgpuRasterizer};
 use layer_render::{CanvasRenderer, CursorSegment, ViewState};
 
-const CAMERA_SIZE: u64 = 176;
+const CAMERA_SIZE: u64 = 256;
 const SOURCE_CAMERA: u32 = 256;
 
 /// A native UI's document overview, sampled from the existing GPU image.
@@ -70,7 +70,6 @@ pub struct ViewportPresenter {
     coarse_view: Option<wgpu::TextureView>,
     next_view: Option<wgpu::TextureView>,
     display_geometry: Option<wgpu::Buffer>,
-    plain_display: wgpu::Buffer,
     document_extent: [u32; 2],
     encode_srgb: bool,
     corner_radius: f32,
@@ -79,12 +78,14 @@ pub struct ViewportPresenter {
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
     uploads: Uploads,
-    camera_data: Option<[f32; 44]>,
+    camera_data: Option<[f32; 64]>,
     quarter_turns: u32,
     retained: bool,
     history: crate::present_damage::Retained,
+    presented_view: Option<(ViewState, [f32; 4], u32, f32)>,
+    overlays_changed: bool,
     backdrop: Option<crate::backdrop_blur::BackdropBlur>,
-    source_camera: Option<[f32; 44]>,
+    source_camera: Option<[f32; 64]>,
     presented_area: u64,
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
@@ -418,13 +419,13 @@ impl ViewportPresenter {
                 false,
                 None,
             ),
-            crate::bindings::texture(4, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, false),
+            crate::bindings::texture(4, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
             crate::bindings::buffer(
                 5,
                 wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: true },
                 false,
-                std::num::NonZeroU64::new(64),
+                std::num::NonZeroU64::new(32),
             ),
             crate::bindings::texture(6, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
             crate::bindings::buffer(
@@ -479,7 +480,7 @@ impl ViewportPresenter {
                     include_str!("hdr_view.wgsl"),
                     include_str!("proof_view.wgsl"),
                     include_str!("overview_sample.wgsl"),
-                    include_str!("present.wgsl"),
+                    concat!(include_str!("area_sample.wgsl"), "\n", include_str!("present.wgsl")),
                     include_str!("present_screen.wgsl")
                 )
                 .into(),
@@ -556,12 +557,7 @@ impl ViewportPresenter {
             coarse_view: None,
             next_view: None,
             display_geometry: None,
-            plain_display: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("dense display geometry"),
-                size: 64,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            }),
+
             document_extent: [0; 2],
             encode_srgb: color
                 .shader_encoding(format)
@@ -576,6 +572,8 @@ impl ViewportPresenter {
             quarter_turns: 0,
             retained: false,
             history: Default::default(),
+            presented_view: None,
+            overlays_changed: false,
             backdrop: None,
             source_camera: None,
             presented_area: 0,
@@ -662,6 +660,7 @@ impl ViewportPresenter {
         let backdrop = self
             .backdrop
             .get_or_insert_with(|| crate::backdrop_blur::BackdropBlur::new(&renderer.device, self.format));
+        self.overlays_changed |= backdrop.regions() != regions || backdrop.style() != style;
         backdrop.set_style(style);
         backdrop.set_regions(regions);
         backdrop.set_hold(hold);
@@ -691,18 +690,17 @@ impl ViewportPresenter {
     }
 
     pub fn set_cursor(&mut self, device: &wgpu::Device, segments: &[CursorSegment], scale: f32) {
-        self.cursor_vertices.clear();
-        if segments.is_empty() {
-            return;
-        }
-        self.cursor_vertices
-            .extend(segments.iter().map(|s| CursorSegment {
+        let vertices = segments.iter().map(|s| CursorSegment {
                 from: s.from.map(|v| v * scale),
                 to: s.to.map(|v| v * scale),
                 distance: s.distance * scale,
                 marker: s.marker,
                 scale,
-            }));
+            });
+        if self.cursor_vertices.iter().copied().eq(vertices.clone()) { return; }
+        self.overlays_changed = true;
+        self.cursor_vertices.clear();
+        self.cursor_vertices.extend(vertices);
         let size = std::mem::size_of_val(self.cursor_vertices.as_slice()) as u64;
         if self.cursor_buffer.size() < size {
             self.cursor_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -712,6 +710,32 @@ impl ViewportPresenter {
                 mapped_at_creation: false,
             });
         }
+    }
+
+    pub fn needs_present(&self, renderer: &WgpuRasterizer, view: ViewState, surround_linear: [f32; 4]) -> bool {
+        let Some(cache) = &renderer.scale_display else { return false; };
+        let previous = &self.history;
+        !previous.valid
+            || self.presented_view != Some((view, surround_linear, self.quarter_turns, self.corner_radius))
+            || (previous.revision != renderer.composite_revision
+                && (previous.artwork_revision != renderer.artwork_revision || !cache.has_pending_work()))
+            || previous.selection_revision != renderer.selection_paint_revision
+            || previous.outline_revision != renderer.display_selection_revision
+            || previous.hdr != self.hdr_options
+            || previous.proof != self.proof_options
+            || previous.screen != self.screen_options
+            || self.overlays_changed
+            || self.picker.changed()
+            || previous.overviews != self.overviews
+            || self.backdrop.as_ref().is_some_and(|b| b.needs_refresh())
+            || self.bind_group.is_none()
+            || self.document_extent != renderer.document_extent
+            || self.composite_view.as_ref() != Some(cache.view())
+            || self.coarse_view.as_ref() != Some(cache.coarse_view())
+            || self.next_view.as_ref() != Some(cache.next_view())
+            || self.display_geometry.as_ref() != Some(&cache.geometry)
+            || self.selection_buffer.as_ref() != Some(renderer.display_selection.as_ref().map_or(&renderer.unclipped, |(_, b)| b))
+            || self.saved_selection_buffer.as_ref() != Some(renderer.selection_previews.texture.as_ref().unwrap_or(&self.empty_saved_selection))
     }
 
     /// The target is a toolkit-owned framebuffer or acquired surface texture.
@@ -798,27 +822,11 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
-        let Some(composite) = renderer
-            .live_display
-            .as_ref()
-            .map(|cache| cache.detail_view())
-            .or(renderer.composite_view.as_ref())
-        else {
-            return Ok(());
-        };
-        let coarse = renderer
-            .live_display
-            .as_ref()
-            .map_or(composite, |cache| &cache.coarse.view);
-        let next = renderer
-            .live_display
-            .as_ref()
-            .and_then(|c| c.next_view())
-            .unwrap_or(coarse);
-        let geometry = renderer
-            .live_display
-            .as_ref()
-            .map_or(&self.plain_display, |cache| &cache.geometry);
+        let Some(cache) = &renderer.scale_display else { return Ok(()); };
+        let composite = cache.view();
+        let coarse = cache.coarse_view();
+        let next = cache.next_view();
+        let geometry = &cache.geometry;
         let device = &renderer.device;
         let selection = renderer.display_selection.as_ref();
         let coverage = selection.map_or(&renderer.unclipped, |(_, buffer)| buffer);
@@ -875,7 +883,8 @@ impl ViewportPresenter {
         let overlay_color = overlay.map_or([0.;4],|o| o.color);
         let crop = renderer.crop_overlay.filter(|c| c.to_crop.inverse().is_some());
         let [ca, cb, cc, cd, cx, cy] = crop.map_or([0.; 6], |c| c.to_crop.0);
-        let data: [f32; 44] = [
+        let mut data = [0.; 64];
+        data[..40].copy_from_slice(&[
             d / det,
             -b / det,
             -c / det,
@@ -904,19 +913,21 @@ impl ViewportPresenter {
             overlay_color[0], overlay_color[1], overlay_color[2], overlay_color[3],
             ca, cb, cc, cd,
             cx, cy, crop.map_or(0., |c| c.dim.clamp(0., 1.)), f32::from(crop.is_some()),
-            f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual), 0., 0., 0.,
-        ];
+        ]);
+        if let Some(cache) = &renderer.scale_display { data[40..60].copy_from_slice(&cache.placement_values()); }
+        data[60] = f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual);
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {
             std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(&data))
         };
         let placement = 16..24;
         let camera_changed = self.camera_data.is_none_or(|old| {
-            old[..placement.start] != data[..placement.start] || old[placement.end..] != data[placement.end..]
+            old[..placement.start] != data[..placement.start] || old[placement.end..40] != data[placement.end..40]
         });
         let selection_changed = selection_changed
             || self.camera_data.is_some_and(|old| old[placement.clone()] != data[placement]);
-        if camera_changed || selection_changed {
+        let artwork_changed = self.camera_data.is_none_or(|old| old[40..] != data[40..]);
+        if camera_changed || selection_changed || artwork_changed {
             self.uploads
                 .write(encoder, &self.uniform, bytes)?;
             self.camera_data = Some(data);
@@ -995,6 +1006,12 @@ impl ViewportPresenter {
             } else {
                 crate::pixel_rect::PixelRect::EMPTY
             };
+            if crate::performance_trace::enabled() {
+                crate::performance_trace::counter(c"Capy viewport full redraw", u64::from(full));
+                crate::performance_trace::counter(c"Capy viewport bindings changed", u64::from(bindings_changed));
+                crate::performance_trace::counter(c"Capy viewport artwork pixels", repaint.area());
+                crate::performance_trace::counter(c"Capy viewport cursor pixels", cursor.area());
+            }
             let mut regions = Vec::with_capacity(5 + 2 * self.overviews.len());
             for bounds in previous.picker.into_iter().chain(self.picker.bounds()) {
                 crate::present_damage::add_region(&mut regions, crate::present_damage::surface_bounds(bounds, view, self.quarter_turns));
@@ -1005,6 +1022,7 @@ impl ViewportPresenter {
                     crate::present_damage::damage(renderer.selection_paint_damage, view, self.quarter_turns));
             }
             let outline = outline.filter(|_| !full).map(|area| crate::present_damage::damage(area, view, self.quarter_turns));
+            crate::performance_trace::counter(c"Capy viewport outline pixels", outline.map_or(0, |r| r.area()));
             if let Some(area) = outline {
                 crate::present_damage::add_region(&mut regions, area);
             }
@@ -1061,6 +1079,7 @@ impl ViewportPresenter {
             let previous = &mut self.history;
             previous.valid = true;
             previous.revision = renderer.composite_revision;
+            previous.artwork_revision = renderer.artwork_revision;
             previous.selection_revision = renderer.selection_paint_revision;
             previous.outline_revision = renderer.display_selection_revision;
             previous.hdr = self.hdr_options;
@@ -1101,6 +1120,7 @@ impl ViewportPresenter {
                 timestamp_writes.as_ref().map(|t| wgpu::RenderPassTimestampWrites { end_of_pass_write_index: None, ..t.clone() }),
                 &mut glass,
             );
+            crate::performance_trace::counter(c"Capy viewport glass pixels", glass.iter().map(|r| r.area()).sum());
             if !full {
                 for area in glass {
                     crate::present_damage::add_region(&mut regions, area);
@@ -1116,6 +1136,7 @@ impl ViewportPresenter {
         let bounds = crate::pixel_rect::PixelRect::full([size.width, size.height]);
         let regions: Vec<_> = regions.into_iter().map(|r| r.intersect(bounds)).filter(|r| !r.is_empty()).collect();
         self.presented_area = regions.iter().map(|r| r.area()).sum();
+        crate::performance_trace::counter(c"Capy viewport regions", regions.len() as u64);
         for (index, repaint) in regions.iter().enumerate() {
             // Each pass needs its own view: wgpu can defer encoding until
             // finish(), so mutating one view would reuse the last area.
@@ -1209,6 +1230,8 @@ impl ViewportPresenter {
         // Return upload chunks only after this encoder's GPU work completes.
         // Works both for present() and hosts submitting encode() themselves.
         self.uploads.finish(encoder);
+        self.presented_view = Some((view, surround_linear, self.quarter_turns, self.corner_radius));
+        self.overlays_changed = false;
         Ok(())
     }
 }

@@ -3,9 +3,7 @@
 //! operations on the new layers.
 use super::*;
 
-/// Identities a Frequency Separation takes: its group, Low and High, the two
-/// filters it bakes with and the coverage of each bake.
-pub const SEPARATION_IDS: usize = 7;
+pub const SEPARATION_IDS: usize = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetouchLayerRefusal {
@@ -18,26 +16,19 @@ pub enum RetouchLayerRefusal {
     TooLarge,
 }
 
-/// Frequency Separation's filters at one radius: the Gaussian Blur filter,
-/// and High Pass at half strength against the same blur.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SeparationFilters {
     pub blur: Arc<EffectInstance>,
-    pub high_pass: Arc<EffectInstance>,
 }
 impl SeparationFilters {
     pub const BLUR: &'static str = "gaussian_blur";
-    pub const HIGH_PASS: &'static str = "high_pass";
     const RADIUS: &'static str = "sigma";
 
     pub fn new(catalog: &EffectCatalog, radius: f32) -> Result<Self, &'static str> {
         let instance = |id: &str| catalog.get(id).map(|f| EffectInstance::new(f.program())).ok_or("Frequency Separation's filters are missing");
         let mut blur = instance(Self::BLUR)?;
         blur.set(Self::RADIUS, EffectValue::Number(radius))?;
-        let mut high_pass = instance(Self::HIGH_PASS)?;
-        high_pass.set(Self::RADIUS, EffectValue::Number(radius))?;
-        high_pass.set("amount", EffectValue::Number(50.))?;
-        Ok(Self { blur: Arc::new(blur), high_pass: Arc::new(high_pass) })
+        Ok(Self { blur: Arc::new(blur) })
     }
 
     /// The blur's radius parameter, which bounds the radius a dialog offers.
@@ -155,7 +146,7 @@ impl Document {
         if let Some(refusal) = self.separation_refusal(target) {
             return Err(refusal);
         }
-        let [group_id, low, high, blur, high_pass, low_coverage, high_coverage] = ids;
+        let [group_id, low, high, blur, low_coverage, high_coverage] = ids;
         let index = self.layers.iter().position(|l| l.id == target).ok_or(RetouchLayerRefusal::NoLayer)?;
         let layer = &self.layers[index];
         let parent_offset = layer.properties.parent.map_or(Point::default(), |p| self.layer_offset(p));
@@ -164,11 +155,11 @@ impl Document {
         source.properties.parent = None;
         source.properties.clipped = false;
         let canvas = [self.width, self.height];
-        let bake = |filter: Layer, coverage: LayerId| {
+        let operation = |kind, coverage: LayerId| {
             let operation = LayerOperation {
                 placement: Affine::IDENTITY,
                 coverage: LayerMask::reveal_all(coverage, Point::default()),
-                kind: LayerOperationKind::Bake { members: [filter, source.clone()].into(), offset: parent_offset },
+                kind,
             };
             if self.exceeds_publication(&operation, canvas) {
                 return Err(RetouchLayerRefusal::TooLarge);
@@ -176,8 +167,12 @@ impl Document {
             Ok(operation)
         };
         let operations = vec![
-            (low, bake(SeparationFilters::clipped(blur, &filters.blur), low_coverage)?),
-            (high, bake(SeparationFilters::clipped(high_pass, &filters.high_pass), high_coverage)?),
+            (low, operation(LayerOperationKind::Bake {
+                members: [SeparationFilters::clipped(blur, &filters.blur), source.clone()].into(), offset: parent_offset,
+            }, low_coverage)?),
+            (high, operation(LayerOperationKind::FrequencyDetail {
+                members: [source].into(), offset: parent_offset, low,
+            }, high_coverage)?),
         ];
         let mut group = Layer::paint(group_id, "Frequency Separation");
         group.kind = LayerKind::Group;

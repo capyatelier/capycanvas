@@ -96,6 +96,49 @@ fn engine(
 }
 
 #[test]
+fn partial_bakes_back_tiles_without_publishing_the_layer() {
+    let mut document = layer_core::Document::new("incremental capture", 1280, 768);
+    document.blend_space = layer_core::BlendSpace::Perceptual;
+    document.layers[0].source = Some(layer_core::color::source::rgba8_source([1280, 768], |x, y| {
+        [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
+    }));
+    let photo = document.layers[0].id;
+    let (_, mut engine) = engine(document);
+    let pixels = |engine: &mut CanvasEngine<WgpuRasterizer>| {
+        let mut bytes = vec![0; 1280 * 768 * 4];
+        engine.backend_mut().copy_rgba8_srgb(&mut bytes, 1280 * 4).unwrap();
+        bytes
+    };
+    let original = pixels(&mut engine);
+    engine.backend_mut().native_edit.as_mut().unwrap().color_cache_bytes = 4 << 20;
+    let ids = std::array::from_fn(|_| engine.allocate_layer_id());
+    let filters = layer_core::SeparationFilters::new(layer_core::bundled_effect_catalog(), 8.).unwrap();
+    let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+    let low = plan.operations[0].0;
+    engine.insert_with_operations(plan.edits, plan.operations, None).unwrap();
+    engine.render_frame().unwrap();
+    let root = engine.document().layer(low).unwrap().raster.clone();
+    assert!(root.try_data().is_none());
+    let r = engine.backend();
+    let data = &r.native_edit.as_ref().unwrap().backing[&low];
+    assert!(!data.tiles.is_empty() && data.tiles.len() < 15, "the first region has backing while the layer is incomplete");
+    let (&key, tile) = data.tiles.iter().next().unwrap();
+    let first = tile.wait_backing().unwrap().decode().unwrap();
+    flush(&mut engine);
+    let data = root.wait_data().unwrap();
+    assert_eq!(data.tiles.len(), 15);
+    assert_eq!(data.tiles[&key].wait_backing().unwrap().decode().unwrap(), first);
+    let actual = pixels(&mut engine);
+    assert!(actual.iter().zip(&original).all(|(a, b)| a.abs_diff(*b) <= 1), "High must use Low after its working pages are evicted");
+    assert!(engine.undo().unwrap());
+    flush(&mut engine);
+    assert!(engine.redo().unwrap());
+    flush(&mut engine);
+    assert_eq!(engine.document().layer(low).unwrap().raster.wait_data().unwrap().tiles.len(), 15);
+    assert_eq!(pixels(&mut engine), actual);
+}
+
+#[test]
 fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
     use layer_core::{Affine, Figure, FigurePaint, FigureShape, LayerMask, LayerOperation, LayerOperationKind, Point};
     use layer_core::color::{RgbColor, f16};

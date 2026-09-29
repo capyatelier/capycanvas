@@ -101,3 +101,24 @@ are kept separate from the 10 s comparison table below.
 | Liquify Pinch (37) | Very complex | 512 px | 67.3 updates/s (66.1–67.4); gap p99 39.4 ms | **Not met** |
 | Liquify Expand (38) | Very complex | 512 px | 68.4 updates/s (66.7–69.2); gap p99 38.3 ms | **Not met** |
 | Liquify Crystals (39) | Very complex | 512 px | 41.6 updates/s (39.3–42.2); gap p99 70.0 ms | **Not met** |
+
+## Retouching with the integrated compositor
+
+Measured on 2026-09-29 on the reference tablet: 61 MP Perceptual photo,
+512 px brushes, Fit zoom, 520 × 240 px trajectory, 16 ms prediction, three
+five-second strokes per brush. Stats is closed. Fresh
+updates count completed frames that consumed new real pen samples.
+
+| Brush | Fresh updates/s, median | Completion gap p99, median | Moving-stroke rate |
+| --- | ---: | ---: | --- |
+| Clone Stamp | 187.7 | 12.2 ms | Meets 120/s |
+| Healing Brush | 184.5 | 12.7 ms | Meets 120/s |
+| Spot Healing Brush | 192.2 | 10.1 ms | Meets 120/s |
+
+These measurements cover drawing. Clone settles in 643–664 ms; Healing in
+873–980 ms and Spot Healing in 807–925 ms. Completion after pen-up remains an
+open gate. They do not qualify presentation-paced navigation or the other
+brushes. The measured build integrates `64036b643` with `13720d303`, bounded
+bakes, the healing solver optimization and sparse stroke replay. Its APK SHA-256
+is `be9a9ad367b9a0215ea5f57ac9d14028818d1f029fe8787324b66d3d4ac71e48`.
+Raw reports are in `artifacts/integration/source-record-batch/top`.

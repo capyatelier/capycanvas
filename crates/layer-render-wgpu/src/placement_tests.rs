@@ -224,7 +224,7 @@ fn placed_photo_gradient_and_figure_use_document_geometry() {
 }
 
 #[test]
-fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
+fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_edges() {
     let size = [1024, 768];
     let mut photo = Layer::paint(LayerId(1), "moving alpha photo");
     photo.source = Some(rgba8_source(size, |x, y| {
@@ -237,10 +237,8 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
     behind.properties.placement = Affine([0.3, 0., 0., 0.3, 140.25, 87.5]);
     let canvas = [1031, 777]; // Both partial edge tiles and full interior tiles.
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    // This test requires an admitted placement cache, including on drivers
-    // where optional cache admission is unavailable (e.g. RADV memory budgets).
-    r.set_complete_display_allowance(64 * 1024 * 1024);
-    let mut cached = None;
+    let mut rebuilt = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut source_misses = None;
     for (step, transform) in [
         Affine([0.4, 0., 0., 0.4, 10.25, 19.75]),
         Affine([0.4, 0., 0., 0.4, -71.25, -45.75]),
@@ -250,28 +248,23 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
         photo.properties.placement = transform;
         let layers = [photo.clone(), behind.clone()];
         let mut images = Vec::new();
-        for tiled in [false, true] {
-            if let Some(scene) = r.scene.as_mut() { scene.set_tiled_composition(tiled); }
+        for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
+            if full { r.scale_display = None; }
             r.submit(FramePacket {
                 view: ViewState { width_px: canvas[0], height_px: canvas[1], background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
-                reset_layers: step == 0 && !tiled,
+                reset_layers: step == 0,
                 ..packet(&layers, canvas)
             }).unwrap();
-            // Export intentionally uses exact source tiles. Inspect the live
-            // composite instead, so this covers the cached display draw.
-            images.push(page_bytes(&r, r.composite_texture.as_ref().unwrap()));
+            images.push(page_bytes(&r, crate::test_support::document_texture(&r)));
         }
-        let cache = r.scene.as_ref().unwrap().placement_cache(photo.id).unwrap();
-        let work = (cache.0, cache.1, cache.2, r.metrics().source_tile_misses);
-        if let Some(before) = &cached { assert_eq!(&work, before, "moving reuses source pixels"); }
-        else { cached = Some(work); }
+        let misses = r.metrics().source_tile_misses;
+        if let Some(before) = source_misses { assert_eq!(misses, before, "moving reuses source pixels"); }
+        else { source_misses = Some(misses); }
         let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))
             .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
             .fold(0.0f32, f32::max);
         assert!(maximum < 0.0001, "pose {step}: live pixel error {maximum}");
     }
-    // Both overlay-only and destination-reading prediction must use the same
-    // complete cached image, including translucent paint and layer opacity.
     for (opacity, mode, mask) in [(1., DabMode::Paint, false), (0.63, DabMode::Paint, false),
         (1., DabMode::Erase, false), (0.63, DabMode::Erase, true)] {
         photo.opacity = opacity;
@@ -293,21 +286,21 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
         let mut baseline = None;
         for prediction in [false, true, false] {
             let mut images = Vec::new();
-            for tiled in [false, true] {
-                r.scene.as_mut().unwrap().set_tiled_composition(tiled);
+            for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
+                if full { r.scale_display = None; }
                 let before = r.metrics.composited_pixels;
                 r.submit(FramePacket {
                     view: ViewState { width_px: canvas[0], height_px: canvas[1], background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
                     dabs: if prediction { std::slice::from_ref(&ink) } else { &[] },
                     dab_batches: if prediction { std::slice::from_ref(&stroke) } else { &[] },
-                    composite_all: tiled || baseline.is_none(),
+                    composite_all: full || baseline.is_none(),
                     ..packet(&layers, canvas)
                 }).unwrap();
-                if prediction && !tiled {
+                if prediction && !full {
                     assert!(r.metrics.composited_pixels - before < u64::from(canvas[0]) * u64::from(canvas[1]),
                         "a placed contact must not rebuild the entire canvas");
                 }
-                images.push(page_bytes(&r, r.composite_texture.as_ref().unwrap()));
+                images.push(page_bytes(&r, crate::test_support::document_texture(&r)));
             }
             let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))
                 .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
@@ -319,29 +312,26 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
             } else { baseline = Some(images.remove(0)); }
         }
         if mask {
-            // Mask strokes are committed contacts (the engine disables mask
-            // prediction). Compare one edit with a later full recomposition;
-            // replaying the same mask edit would legitimately accumulate it.
             stroke.layer_id = LayerId(9);
             stroke.kind = DabBatchKind::Persistent;
             stroke.style.brush_to_layer = layer_core::target_transform(&layers, stroke.layer_id).inverse().unwrap();
             let mut images = Vec::new();
-            for full in [false, true] {
-                r.scene.as_mut().unwrap().set_tiled_composition(full);
+            for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
+                if full { r.scale_display = None; }
                 r.submit(FramePacket {
                     view: ViewState { width_px: canvas[0], height_px: canvas[1], background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
-                    dabs: if full { &[] } else { std::slice::from_ref(&ink) },
-                    dab_batches: if full { &[] } else { std::slice::from_ref(&stroke) },
+                    dabs: std::slice::from_ref(&ink),
+                    dab_batches: std::slice::from_ref(&stroke),
                     composite_all: full,
                     ..packet(&layers, canvas)
                 }).unwrap();
-                images.push(page_bytes(&r, r.composite_texture.as_ref().unwrap()));
+                images.push(page_bytes(&r, crate::test_support::document_texture(&r)));
             }
             assert!(images[0] != baseline.unwrap(), "mask painting changes live pixels");
             let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))
                 .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
                 .fold(0.0f32, f32::max);
-            assert!(maximum < 0.0001, "transformed mask damage matches full tiled composition: {maximum}");
+            assert!(maximum < 0.0001, "transformed mask damage matches rebuilt composition: {maximum}");
         }
     }
 }
@@ -353,8 +343,6 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
     layer.source = Some(rgba8_source(size, |_, _| [255; 4]));
     layer.properties.placement = Affine([0.0625, 0., 0., 0.0625, 0., 0.]);
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    // Exercise the admitted cache independently of measured host headroom.
-    r.set_complete_display_allowance(32 * 1024 * 1024 + 128 * 128 * 16);
     submit(&mut r, &[layer.clone()], &[], &[], true);
     let cache = |r: &WgpuRasterizer| {
         r.scene
@@ -430,11 +418,8 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
         );
         assert_eq!(work, updates, "pose changes do not reread source tiles");
     }
-    // A cache prepared with spare detail must yield that spare memory when a
-    // second visible photo needs it. Both sources still get their required LOD.
-    r.native_edit.as_mut().unwrap().display_complete_bytes = 24 * 1024 * 1024 + 128 * 128 * 16;
     let mut second = Layer::paint(LayerId(2), "second photo needs a finer preview");
-    second.source = layer.source.clone();
+    second.source = Some(rgba8_source(size, |_, _| [0, 255, 0, 255]));
     second.properties.placement = Affine([0.3, 0., 0., 0.3, 0., 0.]);
     submit(&mut r, &[layer, second], &[], &[], false);
     let scene = r.scene.as_ref().unwrap();
@@ -442,37 +427,37 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
         scene.placement_cache(LayerId(1)).is_some(),
         "retain the first photo's required preview"
     );
-    assert!(
-        scene.placement_cache(LayerId(2)).is_some(),
-        "spare detail must not exclude another photo"
-    );
+    assert!(scene.placement_cache(LayerId(2)).is_none(), "native source samples borrow tiles");
+    let bytes = page_bytes(&r, crate::test_support::document_texture(&r));
+    let edge = (127 * 128 + 127) * 16;
+    let actual = std::array::from_fn::<f32, 4, _>(|c|
+        f32::from_le_bytes(bytes[edge + c * 4..edge + c * 4 + 4].try_into().unwrap()));
+    assert_eq!(actual, [0., 1., 0., 1.], "second photo contributes native pixels");
 }
 
 #[test]
 fn oversized_photo_preview_uses_admitted_memory_across_scale_boundary() {
-    let size = [8192, 4352]; // Half-size Float32 pixels exceed the old 128 MiB cap.
+    let size = [8192, 4352];
     let mut layer = Layer::paint(LayerId(1), "oversized cached photo");
     layer.source = Some(rgba8_source(size, |_, _| [255; 4]));
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let allowance = 160 * 1024 * 1024;
-    r.native_edit.as_mut().unwrap().display_complete_bytes = allowance + 128 * 128 * 16;
     layer.properties.placement = Affine([0.24, 0., 0., 0.24, -900., -450.]);
     submit(&mut r, &[layer.clone()], &[], &[], true);
     let (texture, updates, level) = r.scene.as_ref().unwrap().placement_cache(layer.id).unwrap();
-    assert_eq!(level, 1, "prepare the admitted scale-up detail before the boundary");
-    assert!(u64::from(texture.width()) * u64::from(texture.height()) * 16 > 128 * 1024 * 1024);
-    let misses = r.metrics().source_tile_misses;
+    assert_eq!(level, 1);
+    assert!(u64::from(texture.width()) * u64::from(texture.height()) * 16 < 8 * 1024 * 1024,
+        "the source window is bounded by visible output");
     for scale in [0.26, 0.42, 0.24] {
         layer.properties.placement = Affine([scale, 0., 0., scale, -900., -450.]);
         submit(&mut r, &[layer.clone()], &[], &[], false);
         let cache = r.scene.as_ref().unwrap().placement_cache(layer.id).unwrap();
         assert_eq!((cache.0, cache.1, cache.2), (texture.clone(), updates, level));
-        assert_eq!(r.metrics().source_tile_misses, misses, "motion must not fetch source tiles again");
+        let bytes = page_bytes(&r, crate::test_support::document_texture(&r));
+        assert!(bytes.chunks_exact(4).all(|v| (f32::from_le_bytes(v.try_into().unwrap()) - 1.).abs() < 1e-5));
+        let misses = r.metrics().source_tile_misses;
+        submit(&mut r, &[layer.clone()], &[], &[], false);
+        assert_eq!(r.metrics().source_tile_misses, misses, "covered motion must reuse source tiles");
     }
-    // Memory pressure still wins over spare detail; no unadmitted allocation.
-    r.native_edit.as_mut().unwrap().display_complete_bytes = 48 * 1024 * 1024 + 128 * 128 * 16;
-    submit(&mut r, &[layer], &[], &[], false);
-    assert_eq!(r.scene.as_ref().unwrap().placement_cache(LayerId(1)).unwrap().2, 2);
 }
 
 #[test]

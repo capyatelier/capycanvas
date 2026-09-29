@@ -227,7 +227,7 @@ fn filter_microbench() {
             for frame in 0..24 {
                 let start = Instant::now();
                 let mut encoder = r.device.create_command_encoder(&Default::default());
-                r.telemetry.begin(&r.device, &r.queue, &mut encoder);
+                r.telemetry.begin(&r.device, &r.queue, &mut encoder, r.metrics.submissions + 1);
                 for pass in 0..if variant == "warp" { 1 } else { 2 } {
                     let attachments = [Some(wgpu::RenderPassColorAttachment {
                         view: &views[pass + 1],
@@ -308,9 +308,6 @@ fn photo_filter_frame_time() {
         && let Some(native) = &mut r.native_edit
     {
         native.image_pixel_bytes = Some(mib.parse::<u64>().unwrap() * 1024 * 1024);
-    }
-    if std::env::var("CAPY_FILTER_DISPLAY").as_deref() == Ok("dense") {
-        r.native_edit.as_mut().unwrap().display_dense_bytes = u64::MAX;
     }
     if let Ok(mib) = std::env::var("CAPY_FILTER_SOURCE_MIB") {
         r.scene

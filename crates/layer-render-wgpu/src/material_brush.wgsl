@@ -399,7 +399,7 @@ fn watercolor_fragment(
         vec2<i32>(0),
         vec2<i32>(255),
     );
-    var stroke_coverage = textureLoad(stroke_coverage_texture, state_coordinate, 0).r;
+    var stroke_coverage = dry_coverage(state_coordinate);
     if style.canvas_opacity.w > 0.5 {
         stroke_coverage = 0.0;
     }
@@ -567,7 +567,7 @@ fn wet_fragment(
         vec2<i32>(0),
         vec2<i32>(255),
     );
-    var stroke_coverage = textureLoad(stroke_coverage_texture, state_coordinate, 0).r;
+    var stroke_coverage = dry_coverage(state_coordinate);
     if style.canvas_opacity.w > 0.5 {
         stroke_coverage = 0.0;
     }
@@ -690,7 +690,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         vec2<i32>(0),
         vec2<i32>(255),
     );
-    var stroke_coverage = textureLoad(stroke_coverage_texture, state_coordinate, 0).r;
+    var stroke_coverage = dry_coverage(state_coordinate);
     if style.canvas_opacity.w > 0.5 {
         stroke_coverage = 0.0;
     }
@@ -699,7 +699,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     // dark contact seams on Adreno for large, multi-contact batches.
     let range = material_sources.header.zw;
     let tooth = contact_paper(world);
-    if contact_uniform() && brush_normal() {
+    if contact_uniform() && brush_normal() && !bristles_enabled() {
         var ceiling = 1.0;
         if contact_feature(1u, style.contact_a.x > 0.5) && range.y > 0u {
             ceiling = dabs[range.x].invariants.z;
@@ -736,7 +736,23 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     let field = contact_field_with_paper(world, tooth);
     for (var offset = 0u; offset < range.y; offset += 1u) {
         let dab = dabs[range.x + offset];
-        let coverage = contact_coverage_field(dab, world, field);
+        var pigment = dab.color.rgb;
+        var coverage = 0.0;
+        var repaint = false;
+        if bristles_enabled() {
+            let paint = bristle_paint(dab, world, field.y);
+            let selected = brush_selection_at(brush_to_layer(world));
+            if paint.held {
+                stroke_coverage = max(stroke_coverage, paint.coverage * selected);
+                continue;
+            }
+            pigment = paint.color;
+            coverage = paint.opacity * select(paint.coverage * selected,
+                max(paint.coverage * selected, stroke_coverage), paint.reached);
+            repaint = paint.reached || (paint.rim && stroke_coverage >= 1.0);
+        } else {
+            coverage = contact_coverage_field(dab, world, field);
+        }
         if coverage <= 0.0 { continue; }
         var requested_alpha = clamp(
             (dab.flow * dab.color.a) * coverage,
@@ -754,6 +770,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         }
         var source_alpha = requested_alpha;
         if contact_uniform() {
+            if repaint { stroke_coverage = 0.0; }
             let next_coverage = max(stroke_coverage, requested_alpha);
             if MATERIAL_OPERATION == OP_CLONE {
                 // The source's coverage scales the stroke's: the increments
@@ -786,7 +803,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
                 result = deposit_paint(result);
             }
             if MATERIAL_OPERATION == OP_CLONE { result = source_over(result, clone_source.rgb, source_alpha); }
-            else { result = source_over(result, dab.color.rgb, source_alpha); }
+            else { result = source_over(result, pigment, source_alpha); }
         }
     }
     if deposited {
@@ -831,7 +848,7 @@ fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
         if any(p < bounds.xy) || any(p >= bounds.zw) {
             return MaterialOutput(
                 dry_original(vec2<i32>(p)),
-                vec4<f32>(textureLoad(stroke_coverage_texture, vec2<i32>(p), 0).r, 0.0, 0.0, 1.0),
+                vec4<f32>(dry_coverage(vec2<i32>(p)), 0.0, 0.0, 1.0),
                 vec4<f32>(0.0),
             );
         }
@@ -896,18 +913,58 @@ fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOut
 // dry_material::shader supplies material_color_output and dry_original.
 @group(0) @binding(2) var material_coverage_output: texture_storage_2d<r32float, write>;
 override MATERIAL_IN_PLACE: bool = false;
+fn dry_block_result(id: vec2<u32>) -> MaterialOutput {
+    let block = style.operation.z;
+    return material_result(vec4<f32>(vec2<f32>(id * block) + 0.5 * f32(block), 0.0, 1.0));
+}
+
+@compute @workgroup_size(32, 2)
+fn compute_display_color(@builtin(global_invocation_id) id: vec3<u32>) {
+    if any(id.xy >= textureDimensions(material_color_output)) { return; }
+    let result = dry_block_result(id.xy);
+    textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+}
+
+fn dry_block_pixel(id: vec2<u32>, offset: vec2<u32>, result: MaterialOutput) -> MaterialOutput {
+    let block = style.operation.z;
+    let p = id * block + offset;
+    let bounds = material_sources.pages[0];
+    let centre = id * block + block / 2u;
+    if block == 1u || (all(p >= bounds.xy) && all(p < bounds.zw) && all(centre >= bounds.xy) && all(centre < bounds.zw)) {
+        return result;
+    }
+    return MaterialOutput(dry_original(vec2<i32>(p)),
+        vec4<f32>(textureLoad(stroke_coverage_texture, vec2<i32>(p), 0).r, 0.0, 0.0, 1.0), vec4<f32>(0.0));
+}
+
 @compute @workgroup_size(32, 2)
 fn compute_color(@builtin(global_invocation_id) id: vec3<u32>) {
-    let result = material_result(vec4<f32>(vec2<f32>(id.xy) + 0.5, 0.0, 1.0));
-    if !MATERIAL_IN_PLACE || any(result.color != dry_original(vec2<i32>(id.xy))) {
-        textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+    let block = style.operation.z;
+    if any(id.xy * block >= vec2<u32>(256u)) { return; }
+    let result = dry_block_result(id.xy);
+    for (var y = 0u; y < block; y += 1u) {
+        for (var x = 0u; x < block; x += 1u) {
+            let pixel = dry_block_pixel(id.xy, vec2<u32>(x, y), result);
+            let p = vec2<i32>(id.xy * block + vec2<u32>(x, y));
+            if !MATERIAL_IN_PLACE || any(pixel.color != dry_original(p)) {
+                textureStore(material_color_output, p, pixel.color);
+            }
+        }
     }
 }
 @compute @workgroup_size(32, 2)
 fn compute_coverage(@builtin(global_invocation_id) id: vec3<u32>) {
-    let result = material_result(vec4<f32>(vec2<f32>(id.xy) + 0.5, 0.0, 1.0));
-    if !MATERIAL_IN_PLACE || any(result.color != dry_original(vec2<i32>(id.xy))) {
-        textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+    let block = style.operation.z;
+    if any(id.xy * block >= vec2<u32>(256u)) { return; }
+    let result = dry_block_result(id.xy);
+    for (var y = 0u; y < block; y += 1u) {
+        for (var x = 0u; x < block; x += 1u) {
+            let pixel = dry_block_pixel(id.xy, vec2<u32>(x, y), result);
+            let p = vec2<i32>(id.xy * block + vec2<u32>(x, y));
+            if !MATERIAL_IN_PLACE || any(pixel.color != dry_original(p)) {
+                textureStore(material_color_output, p, pixel.color);
+            }
+            textureStore(material_coverage_output, p, pixel.coverage);
+        }
     }
-    textureStore(material_coverage_output, vec2<i32>(id.xy), result.coverage);
 }

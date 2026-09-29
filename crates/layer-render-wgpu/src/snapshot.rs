@@ -532,6 +532,7 @@ impl SnapshotRenderer {
         }
         self.resident = selected;
         let packet = FramePacket {
+            commit_rasters: true,
             view: layer_render::ViewState {
                 width_px: width,
                 height_px: height,
@@ -561,7 +562,7 @@ impl SnapshotRenderer {
         )?;
         let (target, _) = create_color_target(&r.device, [width, height], "snapshot region");
         let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
-        let captured = scene.capture_region(r, packet, &target, region, None, &mut encoder);
+        let captured = scene.capture_region(r, packet, &target, region, scene::Output::Artwork(None), &mut encoder);
         r.scene = Some(scene);
         captured?;
         let result = consume(&r.device, &target, &mut encoder);

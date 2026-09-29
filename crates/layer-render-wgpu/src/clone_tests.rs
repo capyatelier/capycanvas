@@ -241,7 +241,7 @@ fn aligned_strokes_keep_one_offset_and_others_restart_at_the_source() {
 #[test]
 fn clone_replays_from_estimates_and_corrections_match_a_direct_stroke() {
     let estimated = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
-    let path = [[80., 90.], [130., 110.], [190., 100.], [250., 140.]];
+    let path = [[80., 90.], [350., 90.], [650., 140.], [650., 380.], [80., 380.], [80., 90.]];
     let corrected = |mut event: PenEvent| {
         event.pressure = 0.4;
         event.surface_position.y += 6.;
@@ -267,7 +267,7 @@ fn clone_replays_from_estimates_and_corrections_match_a_direct_stroke() {
                 draw(&mut engine, &mut input, fix);
             }
         }
-        draw(&mut engine, &mut input, pen(9, PenPhase::Up, [260., 146.], SampleFlags::PRIMARY));
+        draw(&mut engine, &mut input, pen(9, PenPhase::Up, [80., 96.], SampleFlags::PRIMARY));
         flush(&mut engine);
         if late {
             for event in &events {

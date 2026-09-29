@@ -29,6 +29,14 @@ use std::{collections::VecDeque, fmt, sync::Arc};
 mod corrections;
 #[path = "color_transition.rs"]
 mod color_transition;
+#[path = "bake_steps.rs"]
+mod bake_steps;
+
+struct PreparedFrame {
+    reset: bool,
+    time: f32,
+    bake: Option<bake_steps::BakeSteps>,
+}
 
 const TRANSFORM_HISTORY: usize = 16;
 const INPUT_BATCH: usize = 4096;
@@ -51,6 +59,7 @@ const MAX_SMUDGE_DAMAGE_DIAMETERS_SQUARED: f32 = 4.0;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct EngineMetrics {
     pub input_events: u64,
+    pub last_consumed_paint_ns: u64,
     pub stale_transform_fallbacks: u64,
     pub frames: u64,
     pub committed_strokes: u64,
@@ -112,6 +121,7 @@ struct ActiveStroke {
     replay_after_contact: bool,
     /// The Clone source as this stroke found it, before anchoring it.
     clone_start: Option<CloneSource>,
+    barrel_twist: bool,
 }
 
 pub struct CanvasEngine<B: CanvasRenderer> {
@@ -144,7 +154,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     completed_before: Option<layer_core::raster::RasterRevision>,
     completed_clone_start: Option<CloneSource>,
     restore_rasters: Vec<(LayerId, layer_core::raster::RasterRevision)>,
-    pending_frame: Option<(bool, f32)>,
+    pending_frame: Option<PreparedFrame>,
     rebuild_completed: bool,
     estimates: std::collections::BTreeMap<(u64, u64), corrections::EstimatedPoint>,
     pending_smudge_dabs: Vec<Dab>,
@@ -187,7 +197,8 @@ fn frame_layers(document: &Document, preview: Option<&LayerPreview>) -> Option<V
         .iter()
         .flat_map(|l| &l.pending_operations)
         .filter_map(|op| match &op.kind {
-            layer_core::LayerOperationKind::Bake { members, .. } => Some(members.iter()),
+            layer_core::LayerOperationKind::Bake { members, .. }
+            | layer_core::LayerOperationKind::FrequencyDetail { members, .. } => Some(members.iter()),
             _ => None,
         })
         .flatten()
@@ -450,6 +461,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             // Hovering pens report zero pressure; show the nominal footprint.
             point.pressure = 1.0;
             hover.set_space(self.document().color.space);
+            hover.set_barrel_twist(event.flags.contains(SampleFlags::BARREL_TWIST));
             hover.cursor_seed(self.document().next_stroke_id(), self.brush());
             hover.cursor_contacts(point, self.brush())
         };
@@ -836,6 +848,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn has_pending_document_edits(&self) -> bool {
         self.pending_frame.is_some()
             || self.rebuild_all
+            || self.rebuild_completed
             || self.composite_all
             || self.raster_dirty
             || self
@@ -984,14 +997,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let offset = start.begin_stroke(first).unwrap_or(retouch.offset);
             stroke.retouch = Some(clone_mapping(self.editor.document(), stroke.layer_id, retouch, offset, start.flip));
         }
-        let Some((stroke, before)) = self.completed_stroke.as_ref().zip(self.completed_before.as_ref()) else {
+        let Some((stroke, _)) = self.completed_stroke.as_ref().zip(self.completed_before.as_ref()) else {
             return Ok(());
         };
         let layer = stroke.layer_id;
-        self.restore_rasters.push((layer, before.clone()));
         self.editor.amend_raster(layer, layer_core::raster::RasterRevision::pending())?;
         self.rebuild_completed = true;
-        self.rebuild_all = true;
+        self.rebuild_all |= !self.backend.supports_raster_damage();
         Ok(())
     }
 
@@ -1325,8 +1337,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if !self.backend.can_submit() {
             return Ok(());
         }
-        if let Some((reset, time)) = self.pending_frame.take() {
-            return self.submit_prepared_frame(reset, time);
+        if let Some(frame) = self.pending_frame.take() {
+            return self.submit_prepared_frame(frame);
         }
         if !self.backend.can_capture_raster()
             && (self.input.peek().is_some_and(|e| {
@@ -1354,10 +1366,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             )));
         }
         let mut rebuilt = false;
-        if self.rebuild_all {
+        if self.rebuild_all || self.rebuild_completed {
+            rebuilt |= self.rebuild_all;
             self.build_full_scene();
             self.rebuild_all = false;
-            rebuilt = true;
         }
         // Complete queued raster operations before starting another contact.
         if !self
@@ -1376,10 +1388,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         self.advance_finalized_prefix();
         self.record_material_update();
-        if self.rebuild_all {
+        if self.rebuild_all || self.rebuild_completed {
+            rebuilt |= self.rebuild_all;
             self.build_full_scene();
             self.rebuild_all = false;
-            rebuilt = true;
         }
         if !awaiting_boundary {
             self.build_predicted_preview(timestamp_ns, presentation_timestamp_ns);
@@ -1389,29 +1401,32 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let time = timestamp_ns.map_or(0., |now| {
             now.saturating_sub(*self.animation_origin_ns.get_or_insert(now)) as f32 * 1e-9
         });
-        self.submit_prepared_frame(rebuilt, time)
+        let bake = self.dabs.is_empty().then(|| bake_steps::BakeSteps::new(self.document(), &self.batches)).flatten();
+        self.submit_prepared_frame(PreparedFrame { reset: rebuilt, time, bake })
     }
 
     fn submit_prepared_frame(
         &mut self,
-        rebuilt: bool,
-        time_seconds: f32,
+        frame: PreparedFrame,
     ) -> Result<(), EngineError<B::Error>> {
+        let step = frame.bake.map(|bake| bake.next(self.document(), &self.batches));
+        let commit_rasters = step.as_ref().is_none_or(|(_, next)| next.is_none());
         let layers = frame_layers(self.editor.document(), self.layer_preview.as_ref());
         let packet = FramePacket {
-            time_seconds,
+            time_seconds: frame.time,
             view: self.view(),
             document_extent: [self.editor.document().width, self.editor.document().height],
             layers: layers.as_deref().unwrap_or(&self.editor.document().layers),
             dabs: &self.dabs,
-            dab_batches: &self.batches,
+            dab_batches: step.as_ref().map_or(&self.batches, |(batch, _)| std::slice::from_ref(batch)),
             restore_rasters: &self.restore_rasters,
-            reset_layers: rebuilt,
+            reset_layers: frame.reset,
+            commit_rasters,
             composite_all: self.composite_all,
             blend_space: self.editor.document().blend_space,
         };
         if !self.backend.raster_dependencies_ready(packet) {
-            self.pending_frame = Some((rebuilt, time_seconds));
+            self.pending_frame = Some(frame);
             return Ok(());
         }
         let selection = self.display_selection().map(|s| s.into_owned());
@@ -1425,18 +1440,23 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .and_then(|_| self.backend.submit(packet))
             .map_err(EngineError::Backend);
 
+        self.metrics.frames = self.metrics.frames.saturating_add(1);
+        if result.is_ok() && !commit_rasters {
+            self.restore_rasters.clear();
+            self.pending_frame = Some(PreparedFrame { reset: false, time: frame.time, bake: step.unwrap().1 });
+            return Ok(());
+        }
         self.dabs.clear();
         self.batches.clear();
         self.restore_rasters.clear();
         if result.is_err() {
             self.rebuild_all = true;
         } else {
-            self.animation_time = time_seconds;
+            self.animation_time = frame.time;
             self.composite_all = false;
             self.raster_dirty = false;
             self.editor.finish_raster_submission();
         }
-        self.metrics.frames = self.metrics.frames.saturating_add(1);
         result
     }
 
@@ -1603,6 +1623,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return Ok(());
         }
         self.metrics.input_events = self.metrics.input_events.saturating_add(1);
+        if matches!(event.phase, PenPhase::Down | PenPhase::Move) && !event.flags.contains(SampleFlags::PREDICTED) {
+            self.metrics.last_consumed_paint_ns = self.metrics.last_consumed_paint_ns.max(event.timestamp_ns);
+        }
         if event.flags.contains(SampleFlags::CORRECTION) {
             return self.correct_input(event);
         }
@@ -1732,6 +1755,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     ruler,
                     replay_after_contact: false,
                     clone_start: None,
+                    barrel_twist: event.flags.contains(SampleFlags::BARREL_TWIST),
                 };
                 self.active_stroke = Some(active);
                 self.recording.begin(
@@ -1754,8 +1778,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.builder.begin(event, transform, self.pressure);
                 self.record_builder_sample(event);
                 self.track_estimate(event, transform);
-                self.dab_generator
-                    .reset_for_stroke(id, &self.active_stroke.as_ref().expect("set above").brush);
+                let active = self.active_stroke.as_ref().expect("set above");
+                self.dab_generator.reset_for_stroke(id, &active.brush);
+                self.dab_generator.set_barrel_twist(active.barrel_twist);
                 let point = *self
                     .builder
                     .real_points()
@@ -1846,6 +1871,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .map_err(EngineError::Document)?;
                 stroke.alpha_locked = alpha_locked;
                 stroke.blend_space = active.style.blend_space;
+                stroke.barrel_twist = active.barrel_twist;
                 stroke.material_updates = active.material_updates.into();
                 stroke.selection = active.style.selection.clone();
                 stroke.retouch = active.style.retouch.clone();
@@ -1872,7 +1898,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     // End taper depends on final stroke length, and a retouch
                     // source missed during contact can wait now. Replay after
                     // pen-up so the stored stroke and visible result agree.
-                    self.rebuild_all = true;
+                    self.rebuild_all |= !self.backend.supports_raster_damage();
                     self.rebuild_completed = true;
                 }
                 self.metrics.committed_strokes = self.metrics.committed_strokes.saturating_add(1);
@@ -2194,6 +2220,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             && let Some(stroke) = self.completed_stroke.as_ref()
         {
             self.rebuild_completed = false;
+            if let Some(before) = &self.completed_before {
+                self.restore_rasters.push((stroke.layer_id, before.clone()));
+            }
             let mut style = DabStyle::for_brush(&stroke.brush, stroke.tool);
             style.brush_to_layer = layer_core::Affine::translation(self.document().layer_offset(stroke.layer_id))
                 .then(self.document().layer_transform(stroke.layer_id).inverse().expect("validated layer geometry"));
@@ -2247,6 +2276,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if let Some(active) = self.active_stroke.as_ref() {
             let mut generator = DabGenerator::new(self.document().color.space);
             generator.reset_for_stroke(active.id, &active.brush);
+            generator.set_barrel_twist(active.barrel_twist);
             let point_count = if active.feedback.enabled {
                 self.finalized_real_points
             } else {
@@ -2635,7 +2665,7 @@ mod tests {
                 self.persistent.clear();
                 self.material_batches.clear();
             }
-            for layer in packet.layers {
+            for layer in packet.layers.iter().filter(|_| packet.commit_rasters) {
                 for revision in
                     std::iter::once(&layer.raster).chain(layer.mask.iter().map(|m| &m.raster))
                 {
@@ -4768,6 +4798,25 @@ mod tests {
                 35.
             );
         }
+    }
+
+    #[test]
+    fn a_hovering_bristle_fan_turns_with_a_measured_barrel() {
+        let (_producer, mut engine) = engine("hover-twist", 256, 256);
+        engine.set_brush(default_brush(DefaultBrushPreset::BristlePaintbrush)).unwrap();
+        let facing = |twist: f32, flags: SampleFlags| {
+            let mut hover = DabGenerator::default();
+            let mut sample = event(1, PenPhase::Hover, 128.);
+            sample.tilt_radians = [0.3, 0.];
+            sample.twist_radians = twist;
+            sample.flags = flags;
+            let outline = engine.cursor_contacts(sample, &mut hover, 0);
+            outline[0].rotation[1].atan2(outline[0].rotation[0])
+        };
+        let measured = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::BARREL_TWIST.0);
+        let turned = facing(1.1, measured) - facing(0.6, measured);
+        assert!((turned - 0.5).abs() < 0.1, "the outline follows the barrel: {turned}");
+        assert_eq!(facing(1.1, SampleFlags::PRIMARY), facing(0.6, SampleFlags::PRIMARY), "pens without a sensor face their lean");
     }
 
     #[test]

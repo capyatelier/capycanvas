@@ -179,6 +179,20 @@ also save images under `Pictures/` through MediaStore.
 - `awaitMain` defaults to a 10 s timeout. A cold shader cache on a slow tablet
   can take longer to start; see [Devices](devices.md).
 
+To isolate a driver shader-compiler failure, build the renderer's
+`shader_compile` example with `cargo ndk -t arm64-v8a --platform 29 build
+--locked --release -p layer-render-wgpu --example shader_compile`. Copy the executable
+and the complete WGSL module to the reserved device through the device wrapper.
+Run `shader_compile FILE ENTRY...` to compile named compute entry points without
+starting the renderer or its background shader catalog. Each entry logs its
+start and successful completion separately.
+
+The shared renderer's Rust GPU tests can also be cross-built with `cargo ndk
+-t arm64-v8a --platform 29 test --locked --release -p layer-render-wgpu --lib --no-run`
+and run on the reserved device. Headless renderers compile deferred pipelines
+as their workload needs them. Timing harnesses must prime each workload before
+measuring steady motion.
+
 ## Benchmarks
 
 The `benchmark` build type inherits `release`, is not debuggable, and is signed
@@ -204,11 +218,21 @@ APK calls, so test-APK benchmarks use the unminified build.
   transparency (off to high) and restores it afterwards. Results appear in
   logcat under `CapyDragPerf` and `CapyResizePerf`.
 - **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
-  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation`,
-  `durationMs`, `width`, `height`, `transparency` (`off` to `high`) and `blending`
-  (`perceptual` or `linear`, the new document's Blending) narrow or resize the run. Each scenario logs a `CapyBarPerf` line and writes
+  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation,effects,spatial-effects`,
+  `durationMs`, `width`, `height`, `blending` (`perceptual` or `linear`) and
+  `transparency` (`off` to `high`) narrow or
+  resize the run. `-e photo <readable-file>` uses a JPEG matching `width` and
+  `height`; otherwise the fixture generates an image. `-e zoomOut false` keeps
+  Fit zoom. Each scenario records the initial camera and its input window in
+  monotonic and boot clocks, separately from terminal completion polling,
+  logs a `CapyBarPerf` line and writes
   `canvas-bar-benchmark/<label>.json` in external files; `ui_hz` and
   `ui_interval_ms` count the distinct vsyncs the UI drew until the gestures end.
+  `effects` scrubs Exposure alone and after Levels/Vibrance; `spatial-effects`
+  scrubs Gaussian Blur at small and large radii. Both prime the actual slider,
+  wait for shader readiness and verify changing parameter values during motion.
+  `-e captureFilters true` captures the resulting filter canvas in both themes
+  after timing finishes.
   `refine` drags the Refine panel's Feather slider with the stylus on a
   2048 × 1536 document and at `width` × `height`, and logs the values sent and
   previews drawn. `-e refine grow` (or `shrink`, `border`) picks another
@@ -220,14 +244,29 @@ APK calls, so test-APK benchmarks use the unminified build.
   Flatten Image; its `after_mark` has the dispatch time and the GPU completions
   that follow. `dodge_burn` and `frequency_separation` time New Dodge & Burn
   Layer and Frequency Separation (radius 8) on a placed photo the same way.
+  `photo` separates body translation, corner resizing, distortion and a warp
+  node drag. Priming gestures validate their geometry, then reset the transform
+  and restore the intended mode before measurement. Commands query the owner
+  for the current shared `command_reason` after injected gestures. Published
+  command state stays stable during contact; Android input delivery can finish before
+  the renderer owner consumes the terminal sample. These waits occur outside the
+  motion measurement window. The output directory is
+  cleared at the beginning of each invocation, so omitted scenarios cannot
+  contribute results from an earlier run.
   Photo drags are marked by `capy-drag` trace sections; `capy.publish.native` and `capy.publish.parse`
   time each model publication; `-e composeTrace true` adds a section per
   composable, which slows the frames it attributes.
+  `-e rendererProfile true` opens the Stats panel to collect renderer GPU phase
+  timestamps. Use these runs for attribution; the panel changes the workload,
+  so compare motion rates with the ordinary runs separately.
 - **Canvas navigation and drawing.** `AndroidViewportBenchmarkTest` runs with
-  `-e viewportBenchmark true`. `-e motion pan|pinch` measures navigation;
+  `-e viewportBenchmark true`. `-e width 4248 -e height 2832` selects the low-tier
+  canvas; `-e canvasSize` supplies both dimensions when they are omitted.
+  `-e passThrough true` adds a Pass Through group with a Black & White adjustment
+  above a Solid Color fill. Warmup waits for shader readiness and the timed interval ends
+  with the gesture, before draining frames. `-e motion pan|pinch` measures navigation;
   the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,
-  `intervalMs`, `durationMs`, `repeats`, `blending` and `label`. `-e passThrough true` puts a
-  Black & White adjustment in a Pass Through group over a Solid Color fill. Pull
+  `intervalMs`, `durationMs`, `repeats`, `blending` and `label`. Pull
   `files/viewport-benchmark/` from the app's external storage and summarize it
   with `python3 tools/performance/android-viewport-report.py DIRECTORY`.
 - **UI startup.** With an `-PcapyOptimize` build under an isolated ID, run
@@ -255,9 +294,23 @@ size. Then
 passes `-e preset`, `-e brushSize` and `-e mode` (`constant`, `pressure`, `tilt`,
 `stationary`, `lifts`, `visual` or `pinch`); `--trace` and `--profile` add
 Perfetto and simpleperf captures. The default preset list is the dry brushes;
+the default workspace keeps Stats closed. `--stats` opens Stats and enables GPU
+timing; use `--trace --stats` for GPU phase diagnostics. Report these runs
+separately because Stats changes the workspace and adds measurement work.
 `--presets` accepts every built-in preset, including wet, smudge, Liquify, and
 Clone Stamp, Healing Brush and Spot Healing Brush, which read the photo as a
 reference layer.
+`--radius-x` and `--radius-y` set the ellipse radii in surface pixels;
+`--photo-layers` creates 1–32 photos with translucent duplicates. The runner
+checks the observed trajectory, layer count, brush, prediction and requested
+zoom before starting the timed window, including when reusing completed output.
+`--blending linear` or `--blending perceptual` selects the document's blend space
+and verifies the selected shared command; omitting it keeps the imported default.
+Comparisons across blend-space defaults must explicitly select the same space.
+Use the same instrumentation source in comparison APKs: older runners can ignore
+arguments they do not recognize. Each build and configuration needs its own
+output directory. The private benchmark restores its prediction settings
+atomically, independently of which preference controls the device enables.
 `python3 tools/performance/android-brush-report.py OUT` summarizes completed
 canvas updates per second, the rate the performance targets use for brushes.
 Run directly, the instrumentation also accepts `-e navigationBetweenStrokes true`

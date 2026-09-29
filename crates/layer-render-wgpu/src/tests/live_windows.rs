@@ -7,12 +7,12 @@ use layer_core::{LayerMask, Selection};
 
 fn packet(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
     FramePacket {
-        view: ViewState { background_rgba_linear: [0.; 4], ..test_view() },
+        view: ViewState { width_px: extent[0], height_px: extent[1], background_rgba_linear: [0.; 4], ..test_view() },
         ..crate::test_support::packet(layers, extent)
     }
 }
 fn pixels(r: &WgpuRasterizer) -> Vec<u8> {
-    crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap())
+    crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
 }
 fn close(actual: &[u8], reference: &[u8]) {
     assert_eq!(actual.len(), reference.len());
@@ -29,6 +29,24 @@ fn close(actual: &[u8], reference: &[u8]) {
         maximum = maximum.max(error);
     }
     eprintln!("window composite maximum absolute channel error: {maximum}");
+}
+
+#[test]
+fn completed_filter_windows_release_cached_texture_references() {
+    let extent = [777, 533];
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor::default()).unwrap();
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(8 << 20);
+    let layers = vec![effect(2, false, false), effect(1, true, false)];
+    r.submit(packet(&layers, extent)).unwrap();
+    r.wait_idle().unwrap();
+    assert_eq!(r.scene.as_ref().unwrap().image_cache_bytes(), 0);
+    if let Some(report) = r.device.generate_allocator_report() {
+        let retained: Vec<_> = report.allocations.iter().filter(|allocation| matches!(allocation.name.as_str(),
+            "effect source cache" | "effect result cache" | "effect mask cache" |
+            "clipping composition cache" | "clipping backdrop cache" | "reusable effect intermediate"
+        )).collect();
+        assert!(retained.is_empty(), "completed filter windows still own allocations: {retained:?}");
+    }
 }
 
 #[test]
@@ -103,7 +121,7 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                                 composite_all: false,
                                 ..packet(&layers, extent)
                             },
-                            PixelRect::new(253, 251, 279, 283),
+                            &[], PixelRect::new(253, 251, 279, 283),
                             &mut encoder,
                             None,
                         )
@@ -135,7 +153,7 @@ fn native_live_global_limit_rejects_before_document_or_submission_changes() {
     let mut layers = vec![effect(2, false, true), effect(1, true, false)];
     r.submit(packet(&layers, extent)).unwrap();
     let before = pixels(&r);
-    let texture = r.composite_texture.clone();
+    let texture = r.scale_display.as_ref().map(|c| c.texture().clone());
     let metrics = r.metrics();
     r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(1024);
     // Includes a resize and reset: rejection must precede both.
@@ -147,7 +165,7 @@ fn native_live_global_limit_rejects_before_document_or_submission_changes() {
         .unwrap_err();
     assert!(error.to_string().contains("Document-wide"));
     assert_eq!(r.document_extent, extent);
-    assert_eq!(r.composite_texture, texture);
+    assert_eq!(r.scale_display.as_ref().map(|c| c.texture().clone()), texture);
     assert_eq!(r.metrics(), metrics);
     assert_eq!(
         pixels(&r),
@@ -240,7 +258,7 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
                 composite_all: false,
                 ..packet(&layers, extent)
             },
-            PixelRect::new(259, 261, 263, 265),
+            &[], PixelRect::new(259, 261, 263, 265),
             &mut encoder,
             None,
         )

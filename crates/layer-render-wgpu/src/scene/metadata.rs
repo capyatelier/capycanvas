@@ -2,6 +2,7 @@
 use super::*;
 use std::sync::Weak;
 
+#[derive(Clone)]
 pub(super) struct Metadata {
     layer: Layer,
     source: Option<Weak<layer_core::color::source::SourceImage>>,

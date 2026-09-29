@@ -44,6 +44,7 @@ struct Frame {
     restore_rasters: Vec<(layer_core::LayerId, layer_core::raster::RasterRevision)>,
     reset: bool,
     composite: bool,
+    commit_rasters: bool,
     blend_space: layer_core::BlendSpace,
     geometry: Geometry,
     surround: [f32; 4],
@@ -71,6 +72,7 @@ impl Drop for Frame {
 impl Frame {
     fn packet(&self) -> FramePacket<'_> {
         FramePacket {
+            commit_rasters: self.commit_rasters,
             time_seconds: self.time_seconds,
             view: self.view,
             document_extent: self.extent,
@@ -848,7 +850,7 @@ impl CanvasRenderer for RenderWorker {
                 .layers
                 .iter()
                 .flat_map(|l| std::iter::once(&l.raster).chain(l.mask.iter().map(|m| &m.raster)))
-                .filter(|r| r.try_data().is_none())
+                .filter(|r| packet.commit_rasters && r.try_data().is_none())
                 .cloned()
                 .collect(),
             dabs: packet.dabs.to_vec(),
@@ -856,6 +858,7 @@ impl CanvasRenderer for RenderWorker {
             restore_rasters: packet.restore_rasters.to_vec(),
             reset: packet.reset_layers,
             composite: packet.composite_all,
+            commit_rasters: packet.commit_rasters,
             blend_space: packet.blend_space,
             geometry,
             surround: self.surround,
@@ -1025,28 +1028,21 @@ impl Worker {
                         ))
                         .map_err(error)?;
                 }
-                while progress.canvas_ready
-                    && pending_frames
-                        .front()
-                        .is_some_and(|f| f.dabs.is_empty() || progress.brush_ready)
-                {
-                    let frame = pending_frames.pop_front().unwrap();
-                    #[cfg(test)]
-                    timing.begin(frame.queued_ns);
-                    self.draw(
-                        &frame,
-                        false,
-                        #[cfg(test)]
-                        &mut timing,
-                    )?;
-                    document_drawn = true;
-                    last_canvas_frame = std::time::Instant::now();
-                    self.report_frame(report);
-                    count.fetch_sub(1, Ordering::Release);
-                }
                 if progress.complete {
                     startup_input = None;
                 }
+            }
+            while startup_progress.canvas_ready && self.renderer.can_submit()
+                && pending_frames.front().is_some_and(|f| f.dabs.is_empty() || startup_progress.brush_ready)
+            {
+                let frame = pending_frames.pop_front().unwrap();
+                #[cfg(test)]
+                timing.begin(frame.queued_ns);
+                self.draw(&frame, false, #[cfg(test)] &mut timing)?;
+                document_drawn = true;
+                last_canvas_frame = std::time::Instant::now();
+                self.report_frame(report);
+                count.fetch_sub(1, Ordering::Release);
             }
             if telemetry_enabled && let Ok(mut snapshot) = worker_telemetry.try_lock() {
                 *snapshot = self.renderer.telemetry();
@@ -1092,6 +1088,7 @@ impl Worker {
             let next = if document_drawn && !deferred.is_empty() {
                 Ok(deferred.pop_front().unwrap())
             } else if !startup_progress.complete
+                || !pending_frames.is_empty()
                 || self.renderer.effect_validation_pending()
                 || self.renderer.filter_previews_pending()
                 || self.pending_present
@@ -1311,7 +1308,7 @@ impl Worker {
                     if fail_next_frame {
                         self.inject_validation_failure();
                     }
-                    if self.paper_submitted
+                    if !self.renderer.can_submit() || !pending_frames.is_empty() || self.paper_submitted
                         && (!startup_progress.canvas_ready
                             || (!frame.dabs.is_empty() && !startup_progress.brush_ready))
                     {
@@ -1435,19 +1432,12 @@ impl Worker {
         let features = working_features
             | layer_render_wgpu::native_tiles::native_in_place_features(&adapter)
             | (adapter.features()
-                & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE));
-        #[cfg(test)]
-        let features = features
-            | (adapter.features()
-                & (wgpu::Features::TIMESTAMP_QUERY
-                    | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS));
+                & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS | wgpu::Features::PIPELINE_CACHE));
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Wayland canvas GPU"),
             required_features: features,
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
-            memory_hints: wgpu::MemoryHints::Manual {
-                suballocated_device_memory_block_size: (64 * 1024 * 1024)..(128 * 1024 * 1024),
-            },
+            memory_hints: layer_render_wgpu::memory_hints(),
             ..Default::default()
         }))
         .map_err(error)?;
@@ -1571,21 +1561,16 @@ impl Worker {
         {
             self.config.width = frame.view.width_px;
             self.config.height = frame.view.height_px;
-            self.surface.configure(self.renderer.device(), &self.config);
+            self.configure_surface();
         }
         self.last_view = Some((frame.view, frame.surround));
         self.pending_present = true;
+        #[cfg(test)]
+        timing.rendering(&self.renderer);
         self.renderer
             .resize_surface(frame.view.width_px, frame.view.height_px)
             .map_err(error)?;
-        // Only this worker may wait in acquire. Always apply paint, even when
-        // occluded; an idle retry presents the retained viewport without replay.
-        let target = self.acquire()?;
         let _presentation = self.renderer.prioritize_raster_presentation();
-        #[cfg(test)]
-        if target.is_some() {
-            timing.acquired(&self.renderer);
-        }
         #[cfg(test)]
         if !paper && frame.layers.iter().any(|layer| layer.raster.try_data().is_none()
             || layer.masks().any(|mask| mask.raster.try_data().is_none())) {
@@ -1632,6 +1617,14 @@ impl Worker {
         } else {
             0.0
         });
+        self.pending_present = self.presenter.needs_present(&self.renderer, frame.view, frame.surround);
+        let target = if self.pending_present {
+            #[cfg(test)]
+            let target = timing.acquire(|| self.acquire())?;
+            #[cfg(not(test))]
+            let target = self.acquire()?;
+            target
+        } else { None };
         if let Some(target) = target {
             self.publish(
                 target,
@@ -1644,6 +1637,11 @@ impl Worker {
         Ok(())
     }
 
+    fn configure_surface(&mut self) {
+        self.surface.configure(self.renderer.device(), &self.config);
+        self.presenter.set_target_retention(false);
+    }
+
     fn acquire(&mut self) -> Result<Option<wgpu::SurfaceTexture>, String> {
         match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)
@@ -1652,14 +1650,14 @@ impl Worker {
                 Ok(None)
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
-                self.surface.configure(self.renderer.device(), &self.config);
+                self.configure_surface();
                 Ok(None)
             }
             wgpu::CurrentSurfaceTexture::Lost => {
                 // Same owned child, adapter, device and document textures.
                 self.surface = unsafe { self.instance.create_surface_unsafe(self.child.target()) }
                     .map_err(error)?;
-                self.surface.configure(self.renderer.device(), &self.config);
+                self.configure_surface();
                 Ok(None)
             }
             wgpu::CurrentSurfaceTexture::Validation => {

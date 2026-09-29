@@ -3,9 +3,16 @@ use crate::frame_timing::{GpuFrameSample, GpuFrameTimer};
 use layer_render::{RendererTelemetry, TimingSamples};
 use std::sync::Mutex;
 
+const PHASE_NAMES: [&std::ffi::CStr; 8] = [
+    c"Capy GPU paint ns", c"Capy GPU prediction ns", c"Capy GPU composition ns",
+    c"Capy GPU heal candidates ns", c"Capy GPU heal seed ns", c"Capy GPU heal apply ns",
+    c"Capy GPU heal pyramid ns", c"Capy GPU heal relaxation ns",
+];
+
 #[derive(Default)]
 struct GpuSamples {
     timer: Option<GpuFrameTimer>,
+    frame: u64,
     samples: TimingSamples,
     phases: Vec<GpuFrameTimer>,
 }
@@ -32,16 +39,18 @@ impl Telemetry {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
+        frame: u64,
     ) {
         if !self.enabled || !self.supported {
             return;
         }
         let gpu = self.gpu.get_mut().unwrap();
+        gpu.frame = frame;
         let timer = gpu
             .timer
             .get_or_insert_with(|| GpuFrameTimer::new(device, queue));
         timer.poll(device, queue);
-        timer.begin_encoded(encoder, timer.stats().requested + 1);
+        timer.begin_encoded(encoder, frame);
     }
     pub fn end(&mut self, encoder: &mut wgpu::CommandEncoder) {
         if let Some(timer) = &mut self.gpu.get_mut().unwrap().timer {
@@ -70,9 +79,9 @@ impl Telemetry {
         }
         let gpu = self.gpu.get_mut().unwrap();
         if gpu.phases.is_empty() {
-            gpu.phases = (0..3).map(|_| GpuFrameTimer::new(device, queue)).collect();
+            gpu.phases = PHASE_NAMES.map(|_| GpuFrameTimer::new(device, queue)).into();
         }
-        let frame = gpu.timer.as_ref().map_or(0, |t| t.stats().requested);
+        let frame = gpu.frame;
         let timer = &mut gpu.phases[index];
         timer.poll(device, queue);
         timer.begin_encoded(encoder, frame);
@@ -118,11 +127,7 @@ impl Telemetry {
                                 sample.frame,
                             );
                             crate::performance_trace::counter(
-                                [
-                                    c"Capy GPU paint ns",
-                                    c"Capy GPU prediction ns",
-                                    c"Capy GPU composition ns",
-                                ][index],
+                                PHASE_NAMES[index],
                                 sample.elapsed_ns,
                             );
                         }

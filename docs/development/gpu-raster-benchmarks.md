@@ -56,6 +56,35 @@ distribution. The release painter record uses three repetitions per brush.
 
 ## Workloads
 
+`raster_workloads --calibrate --output-dir PATH` measures RGBA32Float copies,
+source-over blending, area reduction at 4×/8×/16× footprints and horizontal
+neighborhood kernels. Gaussian horizontal and vertical kernels use paired taps
+and the production Float32 sampler at sigma 3, 8 and 21. They retain the same
+weights and footprint as the filter; preparation is outside the timed loop.
+The runner retains thirty samples after four warmups at five
+sizes, from one pixel to 4248 × 2832. `calibration.csv` separates command encoding
+and submission, queue completion, and optional GPU pass timestamps. The same
+run measures the production linear and area resamplers at three output sizes,
+including the 1062 × 708 display level used by the low-tier Fit view, from
+inputs twice as wide and high. Resampler sample counts are bilinear operations;
+their byte column counts distinct input and output texels. Timestamp
+mapping and CSV output happen after the timed completion boundary.
+
+The byte column is minimum distinct input/output traffic; cache reuse means
+texture sample count is not DRAM traffic. The `blur` kernel uses equal
+weights to calibrate raw sampling costs. `gaussian_h` and `gaussian_v` include
+weighting and Float32 interpolation; their sample counts represent the equivalent
+integer taps. They exclude the filter graph, color conversion and native capture.
+Use matching-size results to estimate a journey's fixed and per-pixel costs,
+then check held-out workloads. These serialized kernel measurements exclude
+source preparation, UI scheduling and presentation; they are not frame rates.
+Record thermal state and repeat when clock changes affect the fitted range.
+
+```sh
+cargo build --locked --release -p layer-render-wgpu --example raster_workloads
+target/release/examples/raster_workloads --calibrate --output-dir artifacts/calibration
+```
+
 The `raster_workloads` example separately exercises tiled native photos. Build
 with `cargo build -p layer-render-wgpu --example raster_workloads --release` and
 run the resulting executable with `24mp`, `45mp`, `60mp`, or `multiple`.

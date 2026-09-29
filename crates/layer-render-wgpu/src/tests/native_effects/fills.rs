@@ -7,7 +7,7 @@ const DEPTHS: [SampleDepth; 4] = [SampleDepth::U8, SampleDepth::U16, SampleDepth
 
 fn composite(r: &mut WgpuRasterizer, layers: &[Layer]) -> Vec<[f32; 4]> {
     r.submit(packet(layers, EXTENT)).unwrap();
-    crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap())
+    crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
         .chunks_exact(16)
         .map(|p| std::array::from_fn(|c| f32::from_le_bytes(p[c * 4..c * 4 + 4].try_into().unwrap())))
         .collect()

@@ -66,6 +66,7 @@ struct Slot {
     view: wgpu::TextureView,
     used: u64,
     valid: Arc<std::sync::atomic::AtomicBool>,
+    lease: Arc<()>,
 }
 enum Pixels {
     Image(Arc<SourceImage>, [u32; 2]),
@@ -133,7 +134,6 @@ impl Drop for UploadCharge {
 }
 #[derive(Default)]
 pub(super) struct DecodedTiles {
-    display_encoded: bool,
     destination: RgbSpace,
     limits: SourceLimits,
     slots: Vec<Slot>,
@@ -165,33 +165,11 @@ impl DecodedTiles {
         debug_assert!(self.slots.is_empty(), "source admission precedes pixel allocation");
         self.limits = SourceLimits::admitted(allowance);
     }
-    // Reserve a quarter of the admitted source memory for opaque sRGB8
-    // display tiles. Their original codes occupy four bytes per texel; native
-    // paint, color queries and captures continue using the Float32 cache.
-    pub fn split_display_cache(&mut self) -> Self {
-        let reserved = if self.destination == RgbSpace::Srgb && self.limits.slots >= 256 {
-            self.limits.slots / 4
-        } else { 0 };
-        self.limits.slots -= reserved;
-        Self {
-            display_encoded: true,
-            destination: self.destination,
-            limits: SourceLimits { slots: reserved * 4, upload_bytes: self.limits.upload_bytes },
-            in_flight: self.in_flight.clone(),
-            ..Default::default()
-        }
-    }
-    pub fn accepts_display(&self, source: &SourceImage) -> bool {
-        self.display_encoded && self.limits.slots > 0
-            && source.interpretation.depth == SampleDepth::U8
-            && source.interpretation.channels == SourceChannels::Rgb
-            && source.interpretation.profile == ColorProfile::Builtin(RgbSpace::Srgb)
-    }
     pub fn admitted_bytes(&self) -> [u64; 2] {
         [self.limits.slots as u64 * self.tile_bytes(), self.limits.upload_bytes]
     }
     fn tile_bytes(&self) -> u64 {
-        if self.display_encoded { FLOAT_TILE_BYTES / 4 } else { FLOAT_TILE_BYTES }
+        FLOAT_TILE_BYTES
     }
     pub fn prepare_transfer(
         &mut self,
@@ -252,7 +230,6 @@ impl DecodedTiles {
         source: &Arc<SourceImage>,
         coordinate: [u32; 2],
     ) -> Result<(RawTile, Option<PendingTile>), GpuRasterError> {
-        debug_assert!(!self.display_encoded || self.accepts_display(source));
         let (tile, write) = self.plan_key(r, Key::Image(Arc::downgrade(source), coordinate))?;
         let pending = write.map(|write| PendingTile {
             pixels: Pixels::Image(source.clone(), coordinate),
@@ -294,6 +271,10 @@ impl DecodedTiles {
         Ok((tile, pending))
     }
 
+    pub fn lease(&self, view: &wgpu::TextureView) -> Option<Arc<()>> {
+        self.slots.iter().find(|s| s.view == *view).map(|s| s.lease.clone())
+    }
+
     fn plan_key(
         &mut self,
         r: &WgpuRasterizer,
@@ -325,8 +306,7 @@ impl DecodedTiles {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: if self.display_encoded { wgpu::TextureFormat::Rgba8UnormSrgb }
-                    else { wgpu::TextureFormat::Rgba32Float },
+                format: wgpu::TextureFormat::Rgba32Float,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_DST
                     | wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -341,14 +321,16 @@ impl DecodedTiles {
                 view,
                 used: 0,
                 valid: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                lease: Arc::new(()),
             });
             id
         } else {
             self.slots
                 .iter()
                 .enumerate()
+                .filter(|(_, s)| Arc::strong_count(&s.lease) == 1)
                 .min_by_key(|(_, s)| s.used)
-                .unwrap()
+                .ok_or(GpuRasterError::SourceWorkingSetExceeded)?
                 .0
         };
         let slot = &mut self.slots[index];
@@ -373,27 +355,7 @@ impl DecodedTiles {
         uniforms: &wgpu::BindGroup,
         offset: u32,
     ) -> Result<u64, GpuRasterError> {
-        let bytes = if pending.texture.format() == wgpu::TextureFormat::Rgba8UnormSrgb {
-            let Pixels::Image(source, coordinate) = &pending.pixels else { unreachable!() };
-            let samples = pending.pixels.native()?;
-            let decoded = r.device.source_samples.decode(samples.tile).map_err(GpuRasterError::Color)?;
-            let valid = std::array::from_fn::<_, 2, _>(|i| source.extent[i].saturating_sub(coordinate[i] * PAGE_SIZE).min(PAGE_SIZE));
-            r.uploads.write_texture(encoder, &pending.texture, PAGE_SIZE * 4, |mapped| {
-                let mut row = [0u8; PAGE_SIZE as usize * 4];
-                for y in 0..PAGE_SIZE as usize {
-                    row.fill(0);
-                    if y < valid[1] as usize {
-                        let start = y * PAGE_SIZE as usize * 3;
-                        for x in 0..valid[0] as usize {
-                            row[x * 4..x * 4 + 3].copy_from_slice(&decoded[start + x * 3..start + x * 3 + 3]);
-                            row[x * 4 + 3] = 255;
-                        }
-                    }
-                    mapped.slice(y * row.len()..(y + 1) * row.len()).copy_from_slice(&row);
-                }
-            })?;
-            FLOAT_TILE_BYTES / 4
-        } else if pending.data.is_some() {
+        let bytes = if pending.data.is_some() {
             let samples = pending.pixels.native()?;
             let index = samples.depth.bytes().ilog2() as usize;
             let pipelines = &r.scene_pipelines.source;

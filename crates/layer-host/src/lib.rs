@@ -44,6 +44,8 @@ pub struct PointerBatch<'a> {
     pub records: &'a [f64],
     pub predicted: bool,
     pub view_revision: u64,
+    /// Twist is a measured barrel rotation rather than an absent axis.
+    pub barrel_twist: bool,
 }
 
 pub struct NativeHost {
@@ -391,6 +393,7 @@ impl NativeHost {
             records,
             predicted,
             view_revision: self.session.state().camera.revision,
+            barrel_twist: false,
         })
     }
 
@@ -422,6 +425,7 @@ impl NativeHost {
             records,
             predicted,
             view_revision,
+            barrel_twist,
         } = batch;
         if records.is_empty()
             || !records.len().is_multiple_of(9)
@@ -499,6 +503,11 @@ impl NativeHost {
                         }
                         | if predicted {
                             SampleFlags::PREDICTED.0
+                        } else {
+                            0
+                        }
+                        | if barrel_twist {
+                            SampleFlags::BARREL_TWIST.0
                         } else {
                             0
                         },
@@ -671,6 +680,7 @@ impl NativeHost {
                 link: layer_ui::ApplicationLink,
             },
             RendererStats,
+            CommandReason { command: layer_ui::CommandId },
             FilterPreviews {
                 filters: Vec<std::sync::Arc<str>>,
                 size: [u32; 2],
@@ -830,6 +840,7 @@ impl NativeHost {
                 json!(recipe)
             }
             Query::RendererStats => json!(self.session.renderer_stats()),
+            Query::CommandReason { command } => json!(self.session.command_disabled_reason(command)),
             Query::FilterPreviews {
                 filters,
                 size,
@@ -1090,6 +1101,29 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_reason_queries_current_input_while_published_commands_stay_stable() {
+        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        host.session.renderer_mut().0 = Some(layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap().into());
+        let query = json!({"type": "command_reason", "command": "add_layer"});
+        assert!(host.query(query.clone()).unwrap().is_null());
+        let commands = host.session.state().commands.clone();
+        let mut event = PenEvent {
+            device_id: 1, sequence: 1, timestamp_ns: 1,
+            view_revision: host.session.state().camera.revision,
+            surface_position: layer_core::Point { x: 50., y: 50. }, pressure: 1.,
+            tilt_radians: [0.; 2], twist_radians: 0., distance: 0.,
+            phase: PenPhase::Down, tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
+        };
+        host.session.pen(event).unwrap();
+        assert_eq!(host.session.state().commands, commands);
+        assert_eq!(host.query(query.clone()).unwrap(), json!("Finish the canvas interaction first"));
+        event.phase = PenPhase::Up; event.sequence = 2; event.timestamp_ns = 2; event.pressure = 0.;
+        host.session.pen(event).unwrap();
+        assert_eq!(host.query(query.clone()).unwrap(), json!("Finish the canvas interaction first"));
+        host.session.frame(3, 3).unwrap();
+        assert!(host.query(query).unwrap().is_null());
+    }
     #[test]
     fn requests_query_does_not_consume_publications() {
         let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
@@ -1773,7 +1807,7 @@ mod tests {
                     (clock.get() + u64::from(i) * 1_000_000) as f64, phase]
             })
             .collect();
-        host.pointer_batch(PointerBatch { id: 77, tool: 1, button: 0, records: &records, predicted: false, view_revision })
+        host.pointer_batch(PointerBatch { id: 77, tool: 1, button: 0, records: &records, predicted: false, view_revision, barrel_twist: false })
             .unwrap();
         for _ in 0..8 {
             frame(&mut host, true);
@@ -1896,6 +1930,7 @@ mod tests {
                     button: 0,
                     predicted: false,
                     view_revision: revision,
+                    barrel_twist: false,
                     records: &[x, 24., 0.25, 0., 0., 0., 0., time, phase],
                 },
                 &[token, pending],
@@ -1928,6 +1963,7 @@ mod tests {
                 button: 0,
                 predicted: false,
                 view_revision: revision,
+                barrel_twist: false,
                 records: &[24., 24., 0.9, 0.2, -0.3, 1.7, 0., 10_000_000., 1.],
             },
             &[9001, 0],

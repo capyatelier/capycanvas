@@ -142,7 +142,7 @@ class AndroidRasterTest {
         native { handle ->
         val viewport=host.snapshot!!.getJSONObject("state").getJSONObject("camera").getJSONArray("viewport")
         val bytes=doubleArrayOf(viewport.getDouble(0)*.50+dx,viewport.getDouble(1)*.5+dy,.65,0.0,0.0,0.0,0.0,System.nanoTime().toDouble(),phase.toDouble())
-        Native.pointer(handle,71,0,0,bytes,bytes.size,false)
+        Native.pointer(handle,71,0,0,bytes,bytes.size,false,false)
         val now=System.nanoTime(); Native.frame(handle,now,now+16_666_667)
     }
         // Direct JNI input bypasses CanvasHost.wake(). Honor frame()'s retry

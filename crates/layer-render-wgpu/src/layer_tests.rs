@@ -114,8 +114,12 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
             ..packet(&layers, [1024; 2])
         }).unwrap();
         if i > 0 { assert!(r.composite_damage.area() < 1024 * 1024); }
+        let cursor = [layer_render::CursorSegment { from: [x + 24., y - 24.],
+            to: [x + 140., y + 24.], distance: 0., marker: 2., scale: 1. }];
+        retained.set_cursor(r.device(), &cursor, 1.);
         retained.present(&r, &target.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
         let mut full = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+        full.set_cursor(r.device(), &cursor, 1.);
         full.present(&r, &reference.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
         assert_eq!(page_bytes(&r, &target), page_bytes(&r, &reference), "frame {i}");
     }

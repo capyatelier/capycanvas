@@ -105,6 +105,61 @@ fn texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
 }
 
 #[test]
+fn presentation_wakes_for_visible_changes_and_skips_unchanged_frames() {
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor::default()).unwrap();
+    frame(&mut r, &source(RgbSpace::Srgb, [17000, 45000, 5000, 33000]));
+    let target = texture(&r, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let target = target.create_view(&Default::default());
+    let mut p = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
+    let mut v = view();
+    let surround = [0.04, 0.08, 0.2, 1.];
+    let draw = |p: &mut ViewportPresenter, r: &WgpuRasterizer, v| {
+        assert!(p.needs_present(r, v, surround));
+        p.present(r, &target, v, surround).unwrap();
+        assert!(!p.needs_present(r, v, surround));
+    };
+    draw(&mut p, &r, v);
+    let mut cursor = [layer_render::CursorSegment {
+        from: [20., 30.], to: [50., 60.], distance: 0., marker: 1., scale: 1.,
+    }];
+    p.set_cursor(r.device(), &cursor, 1.);
+    draw(&mut p, &r, v);
+    let before = crate::layer_tests::page_bytes(&r, target.texture());
+    p.set_cursor(r.device(), &cursor, 1.);
+    assert!(!p.needs_present(&r, v, surround));
+    cursor[0].marker = 6.;
+    p.set_cursor(r.device(), &cursor, 1.);
+    draw(&mut p, &r, v);
+    assert_ne!(before, crate::layer_tests::page_bytes(&r, target.texture()));
+    p.set_cursor(r.device(), &[], 1.);
+    draw(&mut p, &r, v);
+    let mut picker = layer_render::ColorPickerOverlay {
+        center: [100., 100.], scale: 1., classic: false, sample: [120., 120.],
+        layer: false, original: [0.2, 0.2, 0.2, 1.], candidate: [0.5, 0.5, 0.5, 1.],
+    };
+    p.set_color_picker(&r, Some(picker));
+    draw(&mut p, &r, v);
+    p.set_color_picker(&r, Some(picker));
+    assert!(!p.needs_present(&r, v, surround));
+    picker.candidate = [0.8, 0.8, 0.8, 1.];
+    p.set_color_picker(&r, Some(picker));
+    draw(&mut p, &r, v);
+    p.set_color_picker(&r, None);
+    draw(&mut p, &r, v);
+    v.document_to_surface[4] += 3.;
+    draw(&mut p, &r, v);
+    assert!(p.needs_present(&r, v, [0.; 4]));
+    p.set_surface_rotation(1);
+    draw(&mut p, &r, v);
+    p.set_corner_radius(12.);
+    draw(&mut p, &r, v);
+    p.set_target_retention(false);
+    draw(&mut p, &r, v);
+    frame(&mut r, &source(RgbSpace::Srgb, [5000, 17000, 45000, 33000]));
+    draw(&mut p, &r, v);
+}
+
+#[test]
 fn native_surface_rotation_preserves_artwork_cursor_and_clipped_overview() {
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::Srgb, depth: SampleDepth::U16,
@@ -203,7 +258,7 @@ fn native_export_thumbnails_and_raw_samples_keep_their_declared_color_coordinate
                     let layer = source(RgbSpace::ProPhoto, codes);
                     frame(&mut r, &layer);
                     let before =
-                        crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+                        crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
                     let expected = linear(RgbSpace::ProPhoto, codes, RgbSpace::Srgb);
                     let preview = linear(RgbSpace::ProPhoto, codes, preview_space);
                     let alpha = f64::from(codes[3]) / 65535.;
@@ -269,7 +324,7 @@ fn native_export_thumbnails_and_raw_samples_keep_their_declared_color_coordinate
                         assert!((f64::from(sample.rgba[3]) - alpha).abs() < 2e-7);
                     }
                     assert_eq!(
-                        crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()),
+                        crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r)),
                         before
                     );
                     assert!(
@@ -293,7 +348,7 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
         let codes = [17000, 65000, 5000, 17000];
         let layer = source(RgbSpace::ProPhoto, codes);
         frame(&mut r, &layer);
-        let before = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+        let before = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
         for color in [
             SdrSurfaceColor::Srgb,
             SdrSurfaceColor::DisplayP3,
@@ -354,7 +409,7 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
             .is_err()
         );
         assert_eq!(
-            crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()),
+            crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r)),
             before
         );
     }
@@ -467,7 +522,7 @@ fn hdr_paint_and_photo_thumbnails_follow_the_sdr_rendition_without_clipping() {
         }
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         frame(&mut r, &layer);
-        let original = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+        let original = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
         for recipe in [SdrRendition::default(), SdrRendition { exposure: -2., ..Default::default() }, SdrRendition::default()] {
             r.set_ui_rendition(Some(recipe)).unwrap();
             r.request_thumbnail(7, layer.id).unwrap(); complete(&r);
@@ -475,7 +530,7 @@ fn hdr_paint_and_photo_thumbnails_follow_the_sdr_rendition_without_clipping() {
             let expected = recipe.mapper(RgbSpace::Srgb, RgbSpace::Srgb).map_rgb(pixel[..3].try_into().unwrap());
             close(&thumbnail.bytes[(16 * 32 + 16) * 4..][..4], bytes(expected.map(f64::from), 1.), "HDR thumbnail");
         }
-        assert_eq!(crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()), original);
+        assert_eq!(crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r)), original);
     }
 }
 
@@ -495,7 +550,7 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
         .flat_map(f32::to_le_bytes)
         .collect::<Vec<_>>();
     let input = pixel.repeat(256 * 256);
-    let texture = r.composite_texture.as_ref().unwrap();
+    let texture = crate::test_support::document_texture(&r);
     r.queue.write_texture(
         texture.as_image_copy(),
         &input,
@@ -509,7 +564,8 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
     // Exercise the unassociated output boundary with deliberately hidden
     // RGB. Exact artwork readback must ignore the corrupted display cache.
     let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    let binding = r.composite_bind_group.as_ref().unwrap().clone();
+    let view = texture.create_view(&Default::default());
+    let binding = create_texture_bind_group(&r.device, &r.texture_layout, &view, &r.sampler, "hidden RGB output oracle");
     let (tx, rx) = std::sync::mpsc::channel();
     r.submit_ui_readback(encoder, &binding, [1; 2], 42, move |image| {
         tx.send(image).unwrap();
@@ -518,7 +574,7 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
     assert!(rx.recv().unwrap().unwrap().bytes.iter().all(|v| *v == 0));
     assert_eq!(r.readback_srgb_rgba8().unwrap(), artwork);
     assert_eq!(
-        crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()),
+        crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r)),
         input
     );
 }
@@ -594,7 +650,7 @@ fn check_proof_renderer(recipe: &layer_core::color::ProofRecipe, renderer: impl 
                     [1234, 1234, 54321, 65535], [1234, 54321, 1234, 65535],
                     [54321, 1234, 1234, 65535], [0, 0, 0, 65535], [65535; 4]] {
                     frame(&mut r, &source(space, codes));
-                    let raw = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+                    let raw = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
                     let exported = r.readback_srgb_rgba8().unwrap();
                     let alpha = codes[3] as f32 / 65535.;
                     let input = std::array::from_fn(|i| if i == 3 { alpha }
@@ -610,7 +666,7 @@ fn check_proof_renderer(recipe: &layer_core::color::ProofRecipe, renderer: impl 
                         let i = (16 * 256 + 16) * 4;
                         close(&actual[i..i+4], bytes(expected, 1.), "CPU/GPU proof parity");
                         assert_eq!(r.readback_srgb_rgba8().unwrap(), exported, "proof must not reach export");
-                        assert_eq!(crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()), raw);
+                        assert_eq!(crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r)), raw);
                     }
                 }
             }
@@ -638,7 +694,7 @@ fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
             for _ in 0..256 {builder.push_row(&row).unwrap();}
             let mut layer=Layer::paint(LayerId(1),"HDR reference");layer.source=Some(Arc::new(builder.finish().unwrap()));
             frame(&mut r,&layer);
-            let original=crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap());
+            let original=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));
             for surface in [SdrSurfaceColor::ExtendedLinearSrgb, SdrSurfaceColor::ExtendedSrgb, SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
             let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             let mut capture=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
@@ -670,7 +726,7 @@ fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
                             // 203/80. Both tolerances remain well below one 8-bit code.
                             let tolerance=if headroom==1. || proof {if surface==SdrSurfaceColor::WindowsScrgb{0.0004}else if surface==SdrSurfaceColor::ExtendedLinearSrgb{0.00015}else{0.00008}}else{0.};
                             for c in 0..3 {let actual=f32::from_le_bytes(bytes[i+c*4..i+c*4+4].try_into().unwrap()) as f64;assert!((actual-expected[c]).abs()<=tolerance+2e-6+expected[c].abs()*2e-5,"{space:?} {p:?} {recipe:?} headroom={headroom} proof={proof}: {actual} != {}",expected[c]);}
-                            assert_eq!(crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap()),original);
+                            assert_eq!(crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r)),original);
                         }
                     }
                 }
@@ -750,7 +806,7 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
         let mut layer = Layer::paint(LayerId(1), "Local tone reference");
         layer.source = Some(Arc::new(source.finish().unwrap()));
         frame(&mut r, &layer);
-        let original = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+        let original = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
         let lut = Arc::new(
             layer_color::ProofLut::build(
                 space,
@@ -827,7 +883,7 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
                 }
             }
             assert_eq!(
-                crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()),
+                crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r)),
                 original
             );
         }

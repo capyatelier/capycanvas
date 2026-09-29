@@ -60,9 +60,10 @@ pub struct Timing {
     stats: Arc<Mutex<Stats>>,
     id: u64,
     start: Instant,
-    acquired: Instant,
+    render_start: Instant,
     start_cpu: f64,
-    acquired_cpu: f64,
+    render_cpu: f64,
+    surface_acquire: [f64; 2],
     queued_ns: u64,
     source_misses_before: u64,
     stages: std::cell::Cell<[[f64; 2]; 4]>,
@@ -152,9 +153,10 @@ impl Timing {
             stats,
             id: 0,
             start: Instant::now(),
-            acquired: Instant::now(),
+            render_start: Instant::now(),
             start_cpu: 0.,
-            acquired_cpu: 0.,
+            render_cpu: 0.,
+            surface_acquire: [0.; 2],
             queued_ns: 0,
             source_misses_before: 0,
             stages: Default::default(),
@@ -164,24 +166,28 @@ impl Timing {
         self.id
     }
     pub fn begin(&mut self, queued_ns: u64) {
+        if let Some(index) = self.active.take() {
+            self.slots[index].free.store(true, Ordering::Release);
+        }
         self.id += 1;
         self.start = Instant::now();
         self.start_cpu = thread_cpu_ms();
         self.queued_ns = queued_ns;
         self.stages.set([[0.; 2]; 4]);
+        self.surface_acquire = [0.; 2];
     }
     pub fn mark(&self, stage: usize) {
         let mut stages = self.stages.get();
         stages[stage] = [
-            self.acquired.elapsed().as_secs_f64() * 1000.,
-            thread_cpu_ms() - self.acquired_cpu,
+            self.render_start.elapsed().as_secs_f64() * 1000.,
+            thread_cpu_ms() - self.render_cpu,
         ];
         self.stages.set(stages);
     }
-    pub fn acquired(&mut self, renderer: &WgpuRasterizer) {
+    pub fn rendering(&mut self, renderer: &WgpuRasterizer) {
         self.source_misses_before = renderer.metrics().source_tile_misses;
-        self.acquired = Instant::now();
-        self.acquired_cpu = thread_cpu_ms();
+        self.render_start = Instant::now();
+        self.render_cpu = thread_cpu_ms();
         self.active = self
             .slots
             .iter()
@@ -194,6 +200,13 @@ impl Timing {
             renderer.queue().submit([encoder.finish()]);
         }
     }
+    pub fn acquire<T>(&mut self, acquire: impl FnOnce() -> T) -> T {
+        let start = Instant::now();
+        let start_cpu = thread_cpu_ms();
+        let result = acquire();
+        self.surface_acquire = [start.elapsed().as_secs_f64() * 1000., thread_cpu_ms() - start_cpu];
+        result
+    }
     pub fn backdrop(&self, frames: [u64; 2]) {
         self.stats.lock().unwrap().backdrop_frames = frames;
     }
@@ -205,16 +218,16 @@ impl Timing {
             encoder.copy_buffer_to_buffer(&slot.resolve, 0, &slot.readback, 0, 16);
         }
     }
-    pub fn end(&self, renderer: &WgpuRasterizer) {
-        let end = self.acquired.elapsed().as_secs_f64() * 1000.;
-        let end_cpu = thread_cpu_ms() - self.acquired_cpu;
+    pub fn end(&mut self, renderer: &WgpuRasterizer) {
+        let end = self.render_start.elapsed().as_secs_f64() * 1000.;
+        let end_cpu = thread_cpu_ms() - self.render_cpu;
         let stages = self.stages.get();
         let [compose, encode, submit, feedback] = stages.map(|s| s[0]);
         let mut stats = self.stats.lock().unwrap();
         stats.cpu_stages.push([
             self.id as f64,
             compose,
-            encode - compose,
+            encode - compose - self.surface_acquire[0],
             submit - encode,
             feedback - submit,
             end - feedback,
@@ -222,22 +235,22 @@ impl Timing {
         let [compose, encode, submit, feedback] = stages.map(|s| s[1]);
         stats.thread_cpu.push([
             self.id as f64,
-            self.acquired_cpu - self.start_cpu,
+            self.render_cpu - self.start_cpu + self.surface_acquire[1],
             compose,
-            encode - compose,
+            encode - compose - self.surface_acquire[1],
             submit - encode,
             feedback - submit,
             end_cpu - feedback,
         ]);
         stats.cpu.push([
             self.id as f64,
-            self.acquired.duration_since(self.start).as_secs_f64() * 1000.0,
-            end,
+            self.render_start.duration_since(self.start).as_secs_f64() * 1000.0 + self.surface_acquire[0],
+            end - self.surface_acquire[0],
             self.start.elapsed().as_secs_f64() * 1000.0,
             self.queued_ns as f64,
         ]);
         drop(stats);
-        if let Some(index) = self.active {
+        if let Some(index) = self.active.take() {
             let slot = &self.slots[index];
             let buffer = slot.readback.clone();
             let stats = self.stats.clone();

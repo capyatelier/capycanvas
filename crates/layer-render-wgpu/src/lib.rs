@@ -33,6 +33,9 @@ use layer_render::{
 use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::{Arc, mpsc}, time::Duration};
 
 mod builtin_masks;
+mod bristle_table;
+#[cfg(test)]
+mod kernel_spirv;
 mod color_sample;
 mod source_access;
 mod material_sources;
@@ -80,10 +83,6 @@ mod artwork;
 mod display_mips;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
 mod display_memory;
-mod live_display;
-mod placement_drag;
-mod preparation;
-use preparation::Work;
 mod present_damage;
 mod present_screen;
 mod region_requests;
@@ -113,14 +112,6 @@ const INITIAL_TARGET_RECORDS: usize = 257;
 const READBACK_TIMEOUT: Duration = Duration::from_secs(30);
 const WHITE_MASK_ASSET: &str = "builtin:brush-tip/solid-white-v1";
 const PAGE_SIZE: u32 = 256;
-/// Source tiles one frame of recomposition may decode.
-const RECOMPOSE_DECODES: usize = 3;
-
-/// A display level a moving layer draws straight into, its compositing and,
-/// between static layers, the layer's index, whether content lies above it,
-/// and its blend.
-type DisplayTarget = (u32, pixel_transform::DisplayLevel, Option<(usize, bool, layer_core::LayerBlend)>);
-
 // Queries consume each group before its source slots can be reused. This also
 // fits the portable sixteen sampled-texture bindings per shader stage.
 const SOURCE_SLOTS: usize = 16;
@@ -129,31 +120,7 @@ const RESERVOIR_SIZE: u32 = 64;
 const PROCEDURAL_GRAIN_SIZE: u32 = 256;
 const WATERCOLOR_TRANSPORT_STEPS: u32 = 3;
 
-fn needs_scene(packet: FramePacket<'_>) -> bool {
-    // Paint operations use scene jobs while executing, but their result is
-    // baked into the ordinary paint pages. Retained undo history must not keep
-    // subsequent brush frames on the more expensive scene composition path.
-    packet.dab_batches.iter().any(|b| {
-        let DabBatchKind::LayerOperation(index) = b.kind else {
-            return false;
-        };
-        // Transforms write paint pages directly, without scene jobs.
-        !packet
-            .layers
-            .iter()
-            .find_map(|l| l.target_operations(b.layer_id))
-            .and_then(|operations| operations.get(index as usize))
-            .is_some_and(|o| matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
-    }) || packet.layers.iter().filter(|l| l.is_artwork()).any(|l| {
-        l.mask.is_some()
-            || l.source.is_some()
-            || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
-            || l.properties.clipped
-            || l.properties.parent.is_some()
-            || l.properties.blend != layer_core::LayerBlend::Normal
-            || l.properties.offset != layer_core::Point::default()
-    })
-}
+
 
 /// Uploads are encoded at their point of use on every host. Queue::write_buffer
 /// runs before submitted commands, so it cannot replace ordered copies when
@@ -252,6 +219,7 @@ impl Uploads {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GpuRasterMetrics {
     pub submissions: u64,
+    pub command_passes: u64,
     pub dabs: u64,
     pub raster_candidate_pixels: u64,
     pub composited_pixels: u64,
@@ -303,6 +271,11 @@ pub struct GpuRasterMetrics {
     pub image_window_peak_bytes: u64,
 }
 
+pub fn memory_hints() -> wgpu::MemoryHints {
+    let blocks = if cfg!(target_os = "android") { (16 << 20)..(16 << 20) } else { (64 << 20)..(128 << 20) };
+    wgpu::MemoryHints::Manual { suballocated_device_memory_block_size: blocks }
+}
+
 /// Unit tests and `software-adapter-tests` builds admit a CPU adapter while
 /// `LAYER_TEST_SOFTWARE_GPU` is set. Production hosts always require hardware.
 pub fn software_adapter_tests() -> bool {
@@ -323,6 +296,7 @@ pub struct GpuAdapterInfo {
 pub enum GpuRasterError {
     Color(String),
     CaptureBudget { required: u64, limit: u64 },
+    SourceWorkingSetExceeded,
     AdapterUnavailable,
     HardwareAdapterRequired,
     DeviceRequest(String),
@@ -346,6 +320,7 @@ impl fmt::Display for GpuRasterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Color(message) => write!(formatter, "color: {message}"),
+            Self::SourceWorkingSetExceeded => formatter.write_str("Source working set exceeds the decoded tile budget"),
             Self::CaptureBudget { required, limit } => write!(formatter,
                 "Snapshot dependency plan requires {required} bytes; limit is {limit}"),
             Self::Effect(message) => write!(formatter, "effect shader: {message}"),
@@ -808,6 +783,7 @@ struct TextureSet {
 
 struct Pipelines {
     dry_material: dry_material::Pipelines,
+    dry_display: dry_material::Pipelines,
     dry_in_place: Option<dry_material::Pipelines>,
     direct: [Deferred<wgpu::RenderPipeline>; DirectPipelineKind::COUNT],
     material: [Deferred<wgpu::RenderPipeline>;
@@ -821,26 +797,6 @@ struct Pipelines {
 }
 
 impl Pipelines {
-    fn compile_all(&self) {
-        for p in &self.dry_material.kernels { p.compile(); }
-        for p in self
-            .direct
-            .iter()
-            .chain(&self.material)
-            .chain(&self.material_gather)
-            .chain(&self.watercolor_transport)
-        {
-            p.compile();
-        }
-        for p in [
-            &self.reservoir,
-            &self.stroke_edge,
-            &self.watercolor_composite,
-            &self.export,
-        ] {
-            p.compile();
-        }
-    }
     fn direct(&self, kind: DirectPipelineKind) -> &wgpu::RenderPipeline {
         &self.direct[kind as usize]
     }
@@ -859,7 +815,7 @@ impl Pipelines {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Initialization {
-    Warm,
+    Headless,
     Interactive,
     /// A worker compiles only the dependencies of its immutable capture.
     Snapshot,
@@ -902,35 +858,11 @@ pub struct WgpuRasterizer {
     transform_damage: Vec<(LayerId, PixelRect)>,
     /// Document regions to recompose whose layers' own pixels are unchanged.
     document_damage: Vec<PixelRect>,
-    /// The document region a transform preview drew straight into the
-    /// display, still to be recomposed at full resolution; empty while its
-    /// drag waits for what it draws with.
-    displayed_transform: Option<(LayerId, PixelRect)>,
-    /// The static layers around a moving layer at a display level.
-    layered_display: Option<paint_transform::layers::LayeredDisplay>,
-    /// Whether a transform's layer is still being reduced to the display
-    /// level its drag frames resample.
-    reducing: bool,
-    /// A layer whose placement moves, drawn straight into the display.
-    placement_drag: Option<placement_drag::PlacementDrag>,
-    /// The dragged layer's reduced pixels, while nothing else changes.
-    placement_copy: Option<placement_drag::PlacementCopy>,
-    /// The layer a transaction that began may move, and whether what its
-    /// drags need is still being prepared.
-    moving_hint: Option<LayerId>,
-    /// The layer and the selection of it a Move drag may move next.
-    moving_pixels: Option<(LayerId, layer_core::Selection)>,
-    preparing_moving: bool,
     /// A warp preview waits, showing the frame before it, until what draws
     /// meshes has compiled in the background.
     awaiting_meshes: bool,
-    preparation: preparation::Preparation,
-    /// The pending recomposition follows a placement drag, a few tiles per
-    /// frame while nothing else changes.
-    recompose_placement: bool,
-    /// Tiles drawn straight into the display still to recompose, a few per
-    /// frame.
-    recompose: Option<(LayerId, Vec<[u32; 2]>)>,
+    background_ready: Arc<std::sync::atomic::AtomicBool>,
+    moving_pixels: Option<(LayerId, layer_core::Selection)>,
     #[cfg(test)]
     test: TestHooks,
     thumbnails: thumbnails::Thumbnails,
@@ -938,9 +870,10 @@ pub struct WgpuRasterizer {
     ui_rendition: Option<layer_core::color::hdr::SdrRendition>,
     ui_preview_pipeline: Option<wgpu::RenderPipeline>,
     display_pipelines: Option<display_mips::Pipelines>,
-    live_display: Option<live_display::Cache>,
+    scale_display: Option<scene::scale::Cache>,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
+    artwork_revision: u64,
     composite_damage: PixelRect,
     /// The composite's blend space, from the latest frame.
     blend_space: layer_core::BlendSpace,
@@ -952,9 +885,6 @@ pub struct WgpuRasterizer {
     effect_clocks: effects::Clocks,
     filter_source_epoch: u64,
     tiled_sources: std::collections::BTreeMap<LayerId, Arc<layer_core::color::source::SourceImage>>,
-    composite_texture: Option<wgpu::Texture>,
-    composite_view: Option<wgpu::TextureView>,
-    composite_bind_group: Option<wgpu::BindGroup>,
     preview_pages: Vec<LayerPage>,
     preview_coverage_pages: Vec<StrokeCoveragePage>,
     preview_watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
@@ -962,6 +892,7 @@ pub struct WgpuRasterizer {
     preview_contact_tiles: Option<std::collections::BTreeSet<[u32; 2]>>,
     preview_layer_id: Option<LayerId>,
     preview_requires_base: bool,
+    preview_level: u32,
     masks: Vec<MaskAsset>,
     texture_sets: Vec<TextureSet>,
     sampler: wgpu::Sampler,
@@ -985,6 +916,7 @@ pub struct WgpuRasterizer {
     style_bind_group: wgpu::BindGroup,
     style_stride: u64,
     style_capacity: usize,
+    preview_block: u32,
     style_upload: Vec<u8>,
     dab_upload: Vec<DabGpu>,
     target_buffer: wgpu::Buffer,
@@ -1015,6 +947,8 @@ struct TestHooks {
     /// Recompose every change, as a reference for layers drawn straight into
     /// the display.
     reference: bool,
+    /// Exercise the exact display fallback independently of scale eligibility.
+    exact_display: bool,
     pages_created: std::cell::Cell<u64>,
     reduced_pages: std::cell::Cell<u64>,
     reduced_exactly: std::cell::Cell<u64>,
@@ -1075,11 +1009,11 @@ impl WgpuRasterizer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("layer canvas device"),
-                required_features: (adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | blendable))
+                required_features: (adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS | blendable))
                     | wgpu::Features::FLOAT32_FILTERABLE
                     | native_tiles::native_in_place_features(&adapter),
                 required_limits: limits,
-                memory_hints: wgpu::MemoryHints::Manual { suballocated_device_memory_block_size: (64 * 1024 * 1024)..(128 * 1024 * 1024) },
+                memory_hints: memory_hints(),
                 ..Default::default()
             })
             .await
@@ -1216,7 +1150,6 @@ impl WgpuRasterizer {
         let scene_pipelines = scene::Pipelines::new(&device);
         let portable_blend = portable_blend::Renderer::new(&device);
         let transforms = Some(paint_transform::PaintTransforms::new(&device));
-        let preparation = preparation::Preparation::new(&device, &queue, !cfg!(test));
         let mut renderer = Self {
             #[cfg(not(target_arch = "wasm32"))]
             snapshot_worker: initialization == Initialization::Snapshot,
@@ -1245,18 +1178,9 @@ impl WgpuRasterizer {
             transform_preview: None,
             transform_damage: Vec::with_capacity(2),
             document_damage: Vec::new(),
-            displayed_transform: None,
-            layered_display: None,
-            reducing: false,
-            placement_drag: None,
-            placement_copy: None,
-            moving_hint: None,
-            moving_pixels: None,
-            preparing_moving: false,
             awaiting_meshes: false,
-            preparation,
-            recompose_placement: false,
-            recompose: None,
+            background_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            moving_pixels: None,
             #[cfg(test)]
             test: Default::default(),
             filter_previews: None,
@@ -1267,9 +1191,10 @@ impl WgpuRasterizer {
             effect_clocks: Default::default(),
             filter_source_epoch: 0,
             display_pipelines: None,
-            live_display: None,
+            scale_display: None,
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
+            artwork_revision: 0,
             composite_damage: PixelRect::EMPTY,
             thumbnails: thumbnails::Thumbnails::new(),
             ui_preview_space: layer_core::color::RgbSpace::Srgb,
@@ -1281,9 +1206,6 @@ impl WgpuRasterizer {
             document_color: Default::default(),
             native_edit: None,
             raster_buffers: std::sync::Arc::new(raster::BufferPool::default()),
-            composite_texture: None,
-            composite_view: None,
-            composite_bind_group: None,
             blend_space: layer_core::BlendSpace::Linear,
             preview_pages: Vec::with_capacity(16),
             preview_coverage_pages: Vec::with_capacity(8),
@@ -1292,6 +1214,7 @@ impl WgpuRasterizer {
             preview_contact_tiles: None,
             preview_layer_id: None,
             preview_requires_base: false,
+            preview_level: 0,
             masks: Vec::with_capacity(8),
             texture_sets: Vec::with_capacity(16),
             sampler,
@@ -1315,6 +1238,7 @@ impl WgpuRasterizer {
             style_bind_group,
             style_stride,
             style_capacity,
+            preview_block: 1,
             style_upload: Vec::with_capacity(style_stride as usize * style_capacity),
             dab_upload: Vec::new(),
             target_buffer,
@@ -1336,23 +1260,7 @@ impl WgpuRasterizer {
             last_submission: None,
             metrics: GpuRasterMetrics::default(),
         };
-        if initialization == Initialization::Warm {
-            renderer.install_builtin_masks()?;
-            for pipeline in &renderer.scene_pipelines.pipeline {
-                pipeline.compile();
-            }
-            renderer.pipelines.compile_all();
-            if renderer.device.portable_blend() { for pipeline in &renderer.portable_blend.pipelines { pipeline.compile(); } }
-            renderer.layer_masks.compile_all();
-            for pipeline in renderer.selection_clip.pipelines() { pipeline.compile(); }
-            let transforms = renderer.transforms.as_ref().unwrap();
-            for pipeline in transforms.pipelines() {
-                pipeline.compile();
-            }
-            for pipeline in transforms.display_pipelines() {
-                pipeline.compile();
-            }
-        }
+        if initialization == Initialization::Headless { renderer.install_builtin_masks()?; }
         if initialization == Initialization::Interactive {
             renderer.upload_mask(&AssetId::from(WHITE_MASK_ASSET), 1, 1, 1, &[255])?;
             renderer.validated_effects = Some(renderer.scene_pipelines.effects(&renderer));
@@ -1410,7 +1318,7 @@ impl WgpuRasterizer {
 
     /// Changes only when document composition changes, never for camera motion.
     pub fn canvas_preview_revision(&self) -> u64 {
-        self.composite_revision
+        self.artwork_revision
     }
 
     /// Benchmark/export synchronization only. Live drawing never calls this.
@@ -1555,6 +1463,13 @@ impl WgpuRasterizer {
             .as_ref()
             .map(|grain| grain.asset.clone())
             .unwrap_or_else(|| white.clone());
+        if style.contact.is_some_and(|c| c.bristles.is_some()) {
+            return TextureSetKey {
+                primary: AssetId::from(bristle_table::HAIRS_ASSET),
+                grain,
+                transport: AssetId::from(bristle_table::FIELD_ASSET),
+            };
+        }
         TextureSetKey {
             primary,
             grain,
@@ -1594,19 +1509,6 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    /// Recompose what a placement drag drew straight into the display, a few
-    /// tiles per frame while nothing else changes.
-    fn finish_placement(&mut self, drag: placement_drag::PlacementDrag) {
-        let mut tiles: std::collections::BTreeSet<_> = page_coordinates(drag.touched).collect();
-        if let Some((_, pending)) = self.recompose.take() {
-            tiles.extend(pending);
-        }
-        if !tiles.is_empty() {
-            self.recompose = Some((drag.layer, tiles.into_iter().collect()));
-            self.recompose_placement = true;
-        }
-    }
-
     /// Whether warp meshes draw without compiling on this thread, asking the
     /// background compiler for what they draw with. Without one, a frame
     /// compiles it.
@@ -1615,7 +1517,7 @@ impl WgpuRasterizer {
             return true;
         };
         startup.compiler.require(transforms.mesh_pipelines(), startup::BRUSH)
-            & startup.compiler.require([&transforms.resample().pipeline], startup::BRUSH)
+            & startup.compiler.require(self.scene_pipelines.resample.mesh.iter(), startup::BRUSH)
     }
 
     pub(crate) fn background_pipeline_ready(&self, pipeline: &deferred::Deferred<wgpu::ComputePipeline>) -> bool {
@@ -1623,221 +1525,6 @@ impl WgpuRasterizer {
         let ready = startup.compiler.require([pipeline], startup::VALIDATION);
         startup.compiler.start();
         ready
-    }
-
-    /// Whether placed layers compose without compiling on this thread.
-    /// Without a background compiler, a frame compiles what they draw with.
-    fn placement_ready(&self) -> bool {
-        self.startup.is_none() || self.transforms.as_ref().is_none_or(|t| t.pipelines()[0].ready())
-    }
-
-    /// The region of `id`'s own pixels that covers `document` pixels.
-    fn layer_damage(&self, layers: &[Layer], id: LayerId, document: PixelRect) -> PixelRect {
-        let placement = layer_core::target_transform(layers, id);
-        if placement == layer_core::Affine::IDENTITY {
-            return document;
-        }
-        let extent = self.target_extent(id);
-        placement
-            .inverse()
-            .map_or(PixelRect::full(extent), |inverse| pixel_rect(inverse.bounds(document.to_rect()), extent))
-    }
-
-    /// A transform preview draws straight into the display, as
-    /// `display_target` describes, when nothing else changed.
-    fn display_preview(
-        &self,
-        packet: &FramePacket<'_>,
-        preview: &layer_render::TransformPreview,
-        background: [f32; 4],
-    ) -> Option<DisplayTarget> {
-        if packet.composite_all || !self.artwork_frame.as_ref()?.same_artwork(*packet, background) {
-            return None;
-        }
-        self.display_target(packet, preview.layer)
-    }
-
-    /// The one layer whose placement alone changed since the last frame, and
-    /// how it draws straight into the display.
-    fn placement_display(&self, packet: &FramePacket<'_>, background: [f32; 4]) -> Option<(LayerId, DisplayTarget)> {
-        let layer = self.artwork_frame.as_ref()?.moved_placement(*packet, background)?;
-        Some((layer, self.display_target(packet, layer)?))
-    }
-
-    /// A moving unmasked top-level layer, between static layers below and
-    /// static layers above that composite as Normal over the document (inside
-    /// isolated groups, anything), can draw straight into the display level
-    /// the view samples, at most sixteen layer pixels per texel side, rather
-    /// than into full-resolution pages that are then recomposed. Returns that
-    /// level, its compositing and, unless the layer is the only content over
-    /// the paper, the layer's index, whether content lies above it, and its
-    /// blend.
-    fn display_target(&self, packet: &FramePacket<'_>, layer: LayerId) -> Option<DisplayTarget> {
-        #[cfg(test)]
-        if self.test.reference {
-            return None;
-        }
-        let cache = self.live_display.as_ref()?;
-        let index = packet.layers.iter().position(|l| l.id == layer)?;
-        let layer = &packet.layers[index];
-        let empty = |l: &Layer| {
-            !l.visible
-                || !l.is_artwork()
-                || l.kind == LayerKind::Background
-                || (l.kind == LayerKind::Paint
-                    && l.source.is_none()
-                    && self.native_color_coordinates(l.id).next().is_none()
-                    && self.paint_layers.iter().all(|p| p.id != l.id || p.pages.is_empty()))
-        };
-        let above = packet.layers[..index].iter().any(|l| !empty(l));
-        let below = packet.layers[index + 1..].iter().any(|l| !empty(l));
-        let stackable = packet.layers[..index].iter().all(|l| {
-            !l.visible
-                || (l.kind != LayerKind::Effect
-                    && (matches!(l.properties.blend, layer_core::LayerBlend::Normal | layer_core::LayerBlend::PassThrough)
-                        || layer_core::isolated_scope(packet.layers, l.properties.parent).is_some()))
-        }) && packet.layers[..index]
-            .iter()
-            .rev()
-            .find(|l| l.properties.parent.is_none())
-            .is_none_or(|l| !l.properties.clipped);
-        let alone = self
-            .transforms
-            .as_ref()
-            .is_some_and(|t| self.startup.is_none() || t.display_pipelines().iter().all(|p| p.ready()))
-            && self.native_edit.is_some()
-            && packet.dabs.is_empty()
-            && packet.dab_batches.is_empty()
-            && packet.restore_rasters.is_empty()
-            && !packet.reset_layers
-            && layer.visible
-            && layer.kind == LayerKind::Paint
-            && layer.mask.is_none()
-            && layer.effect.is_none()
-            && layer.pending_operations.is_empty()
-            && layer.properties.parent.is_none()
-            && !layer.properties.clipped
-            && self
-                .paint_layers
-                .iter()
-                .find(|p| p.id == layer.id)
-                .is_none_or(|p| p.watercolor.is_none())
-            && stackable
-            && packet
-                .layers
-                .iter()
-                .all(|l| l.mask.as_ref().is_none_or(|m| !(m.enabled && m.show_area)));
-        if !alone {
-            return None;
-        }
-        let level = cache.sampled_level()?.min(4);
-        let lone = !above && !below && layer.properties.blend == layer_core::LayerBlend::Normal;
-        if !lone && level == 0 {
-            return None;
-        }
-        let [r, g, b, a] = packet.view.background_rgba_linear;
-        let backdrop = packet.blend_space.composite(self.device.working_space(), [r * a, g * a, b * a, a]);
-        Some((
-            level,
-            pixel_transform::DisplayLevel {
-                side: 1 << level,
-                opacity: layer.opacity,
-                extent: packet.document_extent,
-                backdrop: if lone { backdrop } else { [0.; 4] },
-                encode: packet.blend_space == layer_core::BlendSpace::Perceptual,
-            },
-            (!lone).then_some((index, above, layer.properties.blend)),
-        ))
-    }
-
-    /// Draw a moving layer at display `level` with `draw`, straight into the
-    /// level or, between static layers, into their moving image, then placed
-    /// between them with `blend`. Returns the document region drawn, or None
-    /// when `draw` could not draw the layer.
-    fn draw_into_display(
-        &mut self,
-        encoder: &mut crate::submission::CommandEncoder,
-        level: u32,
-        side: u32,
-        blend: Option<layer_core::LayerBlend>,
-        draw: impl FnOnce(
-            &mut Self,
-            &mut paint_transform::PaintTransforms,
-            &mut crate::submission::CommandEncoder,
-            &wgpu::TextureView,
-        ) -> Result<Option<PixelRect>, GpuRasterError>,
-    ) -> Result<Option<PixelRect>, GpuRasterError> {
-        let mut transforms = self.transforms.take().expect("retained transform renderer");
-        let mut cache = self.live_display.take().expect("complete display");
-        if level == 0 {
-            cache.make_writable(self, self.display_pipelines.as_ref().unwrap(), encoder);
-        }
-        let view = cache.level_view(level).expect("sampled level").clone();
-        let target = match &self.layered_display {
-            Some(layers) if blend.is_some() => layers.moving().clone(),
-            _ => view.clone(),
-        };
-        let mut drawn = draw(self, &mut transforms, encoder, &target);
-        if let Ok(Some(region)) = drawn
-            && !region.is_empty()
-        {
-            if let Some(blend) = blend {
-                let mut layers = self.layered_display.take().unwrap();
-                let texels = paint_transform::texel_rect(region, side);
-                let composited = layers.composite(self, transforms.composite(), encoder, &view, texels, blend);
-                self.layered_display = Some(layers);
-                drawn = composited.and(drawn);
-            }
-            cache.tiles_written_at(encoder, level, &page_coordinates(region).collect::<Vec<_>>());
-            self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
-            self.composite_revision = self.composite_revision.wrapping_add(1);
-        }
-        self.transforms = Some(transforms);
-        self.live_display = Some(cache);
-        drawn
-    }
-
-    /// Compose, within this frame's preparation, the static layers around
-    /// the layer `key` moves at its display level: those below its `index`
-    /// and, when there are any, those `above` it. Returns whether they are
-    /// complete.
-    fn prepare_layers(
-        &mut self,
-        encoder: &mut crate::submission::CommandEncoder,
-        packet: FramePacket<'_>,
-        key: paint_transform::layers::LayeredKey,
-        index: usize,
-        above: bool,
-    ) -> Result<bool, GpuRasterError> {
-        let mut layers = self
-            .layered_display
-            .take()
-            .filter(|l| l.key == key)
-            .unwrap_or_else(|| paint_transform::layers::LayeredDisplay::new(self, packet.document_extent, key, above));
-        let built = layers.build(self, packet, index, encoder);
-        let ready = layers.ready();
-        self.layered_display = Some(layers);
-        built.map(|()| ready)
-    }
-
-    /// Reduce, within this frame's preparation, `layer`'s own pixels to
-    /// `local` for its placement drags. Returns whether they are complete.
-    fn prepare_copy(
-        &mut self,
-        encoder: &mut crate::submission::CommandEncoder,
-        packet: FramePacket<'_>,
-        layer: &Layer,
-        local: u32,
-    ) -> Result<bool, GpuRasterError> {
-        let mut copy = self
-            .placement_copy
-            .take()
-            .filter(|copy| copy.matches(layer, local))
-            .unwrap_or_else(|| placement_drag::PlacementCopy::new(self, layer, local));
-        let prepared = copy.prepare(self, packet, encoder);
-        let ready = copy.ready();
-        self.placement_copy = Some(copy);
-        prepared.map(|()| ready)
     }
 
     fn validate_and_prepare_brush_resources(
@@ -1858,37 +1545,6 @@ impl WgpuRasterizer {
             self.ensure_texture_set(Self::texture_set_key(&batch.style))?;
         }
         Ok(())
-    }
-
-    fn ensure_document(
-        &mut self,
-        extent: [u32; 2],
-        layers: &[Layer],
-    ) -> Result<(bool, bool), GpuRasterError> {
-        let resized = self.ensure_document_metadata(extent, layers)?;
-        if let Some(native) = &self.native_edit
-            && u64::from(extent[0]) * u64::from(extent[1]) * 16 > native.display_dense_bytes
-        {
-            let limit = native.display_cache_bytes;
-            let allowance = native.display_allowance(layers, extent);
-            let rebuilt = self.live_display.as_ref().is_none_or(|cache| cache.allowance != allowance);
-            if rebuilt {
-                self.display_pipelines.get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
-                self.live_display = Some(live_display::Cache::new(self, self.display_pipelines.as_ref().unwrap(), limit, allowance)?);
-            }
-            return Ok((resized, rebuilt));
-        }
-        let rebuilt = resized || self.composite_texture.is_none();
-        if rebuilt {
-            let (texture, view) = create_color_target(&self.device, extent, "layer composite");
-            self.composite_bind_group = Some(create_texture_bind_group(
-                &self.device, &self.texture_layout, &view, &self.sampler,
-                "layer composite export binding",
-            ));
-            self.composite_texture = Some(texture);
-            self.composite_view = Some(view);
-        }
-        Ok((resized, rebuilt))
     }
 
     /// Set the document topology independently of full-composite allocation.
@@ -1928,10 +1584,7 @@ impl WgpuRasterizer {
             self.preview_pages.clear();
             self.preview_coverage_pages.clear();
             self.preview_watercolor_wetness_pages.clear();
-            self.composite_texture = None;
-            self.composite_view = None;
-            self.composite_bind_group = None;
-            self.live_display = None;
+            self.scale_display = None;
             self.preview_damage = PixelRect::EMPTY;
             self.preview_contact_tiles = None;
             self.preview_layer_id = None;
@@ -2009,6 +1662,14 @@ impl WgpuRasterizer {
         )
     }
 
+    fn stroke_finish_pages<'a>(&'a self, batch: &'a DabBatch) -> impl Iterator<Item = [u32; 2]> + 'a {
+        self.paint_layers.iter()
+            .filter(move |layer| batch.stroke_end && revisits_stroke(&batch.style) && layer.id == batch.layer_id)
+            .flat_map(|layer| &layer.coverage_pages)
+            .filter(move |page| page.owner == Some(batch.stroke_id))
+            .map(|page| page.coordinate)
+    }
+
     fn destination_pages(
         &self,
         batches: &[DabBatch],
@@ -2019,20 +1680,11 @@ impl WgpuRasterizer {
             batch.kind == DabBatchKind::Persistent
                 && BrushPassPlan::for_device(&batch.style, &self.device).requires_destination()
         }) {
-            // Pen-up edges and healing revisit the whole stroke, including
-            // companions retired since the pointer left those pages.
             let revisits = batch.stroke_end && revisits_stroke(&batch.style);
             if !self.in_place_dry_material(batch) || revisits {
                 destination_pages.extend(tiles.iter().map(|tile| (batch.layer_id, tile.coordinate)));
             }
-            if revisits {
-                destination_pages.extend(
-                    self.paint_layers.iter().filter(|l| l.id == batch.layer_id)
-                        .flat_map(|l| &l.coverage_pages)
-                        .filter(|p| p.owner == Some(batch.stroke_id))
-                        .map(|p| (batch.layer_id, p.coordinate)),
-                );
-            }
+            destination_pages.extend(self.stroke_finish_pages(batch).map(|page| (batch.layer_id, page)));
         }
         destination_pages
     }
@@ -2300,7 +1952,12 @@ impl WgpuRasterizer {
                     page.coordinate = coordinate;
                     page.active_secondary = false;
                 } else {
-                    let page = self.create_page(coordinate, "layer sparse preview page");
+                    let page = LayerPage {
+                        coordinate,
+                        primary: create_page_surface(&self.device, &self.texture_layout, &self.sampler,
+                            [PAGE_SIZE >> self.preview_level; 2], self.device.working_format(), "prediction page"),
+                        secondary: None, active_secondary: false, primary_needs_clear: true,
+                    };
                     self.preview_pages.push(page);
                 }
             }
@@ -2449,7 +2106,7 @@ impl WgpuRasterizer {
         self.metrics.material_pages = material_pages;
         self.metrics.paint_storage_bytes = paint_pages.saturating_mul(page_bytes);
         self.metrics.preview_storage_bytes = preview_pages
-            .saturating_mul(page_bytes)
+            .saturating_mul(page_bytes >> (2 * self.preview_level))
             .saturating_add(preview_coverage_pages.saturating_mul(scalar_bytes * 2))
             .saturating_add(preview_watercolor_wetness_pages.saturating_mul(scalar_bytes * 2));
         self.metrics.destination_storage_bytes =
@@ -2466,16 +2123,7 @@ impl WgpuRasterizer {
         self.metrics.retouch_storage_bytes =
             self.retouch.as_ref().map_or(0, |retouch| retouch.storage_bytes());
         self.metrics.composite_storage_bytes =
-            self.composite_texture.as_ref().map_or(0, texture_bytes)
-                + self.live_display.as_ref().map_or(0, live_display::Cache::storage_bytes)
-                + self
-                    .layered_display
-                    .as_ref()
-                    .map_or(0, paint_transform::layers::LayeredDisplay::storage_bytes)
-                + self
-                    .placement_copy
-                    .as_ref()
-                    .map_or(0, placement_drag::PlacementCopy::storage_bytes);
+            self.scale_display.as_ref().map_or(0, scene::scale::Cache::storage_bytes);
     }
 
     fn ensure_upload_capacity(&mut self, dabs: usize, styles: usize) -> Result<(), GpuRasterError> {
@@ -2545,12 +2193,11 @@ impl WgpuRasterizer {
         let used = self.style_stride as usize * records;
         self.style_upload.clear();
         self.style_upload.resize(used, 0);
+        self.preview_block = preview_block(packet.view.document_to_surface);
         for index in 0..packet.dab_batches.len() {
-            let record = StyleGpu::brush(
-                self.target_extent(packet.dab_batches[index].layer_id),
-                &packet.dab_batches[index],
-                &self.device,
-            );
+            let batch = &packet.dab_batches[index];
+            let block = if self.compute_dry_material(batch) { self.dry_material_block(batch) } else { 1 };
+            let record = StyleGpu::brush(self.target_extent(batch.layer_id), batch, block, &self.device);
             let offset = index * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
@@ -3427,33 +3074,24 @@ impl CanvasRenderer for WgpuRasterizer {
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
         self.raster_restore_ready(packet)
     }
+    fn can_submit(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        if !self.background_ready.load(Ordering::Acquire) {
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = self.device.poll(wgpu::PollType::Poll);
+        }
+        self.background_ready.load(Ordering::Acquire) && self.raster_ready()
+    }
     fn can_capture_raster(&self) -> bool {
         self.raster_ready()
     }
-    fn prepare_moving_layer(&mut self, layer: Option<LayerId>) {
-        if layer.is_none() {
-            self.placement_copy = None;
-            self.layered_display = None;
-        }
-        self.moving_hint = layer;
-    }
     fn prepare_moving_pixels(&mut self, pixels: Option<(LayerId, layer_core::Selection)>) {
-        if pixels.is_none()
-            && let Some(transforms) = &mut self.transforms
-        {
-            transforms.release_standby();
-        }
+        if self.moving_pixels != pixels { self.transforms.as_mut().unwrap().release_standby(); }
         self.moving_pixels = pixels;
     }
     fn has_pending_work(&self) -> bool {
-        self.displayed_transform.is_some()
-            || self.reducing
-            || self.placement_drag.is_some()
-            || self.preparing_moving
-            || self.awaiting_meshes
-            || self.recompose.is_some()
-            || self.layered_display.as_ref().is_some_and(|layers| !layers.ready())
-            || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
+        self.awaiting_meshes || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
+            || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work())
     }
     fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
         self.prepare_retouch_sources(retouch);
@@ -3643,11 +3281,17 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        let display_request = scene::scale::request(self, packet)?;
         let mut trace_phase = performance_trace::Span::new(c"capy.prepare");
         if let Some(native) = &self.native_edit {
             // Reject unsupported global dependencies before clearing/restoring
             // paint, allocating the composite, or submitting any part of a frame.
-            scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(self, packet.layers, packet.document_extent)?)?;
+            let resident = self.scale_display.as_ref().map_or(0, |c| c.resident_bytes());
+            let admitted = scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(resident));
+            if resident > 0 && admitted.is_err() {
+                scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(0))?;
+                self.scale_display = None;
+            } else { admitted?; }
         }
         if packet.layers.iter().any(|l| l.source.is_some()) {
             // Source-backed photos own no paint initially. Prepare their bounded
@@ -3737,9 +3381,17 @@ impl CanvasRenderer for WgpuRasterizer {
             ..packet
         };
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
-        let (resized, display_rebuilt) = self.ensure_document(packet.document_extent, packet.layers)?;
         let blending_changed = std::mem::replace(&mut self.blend_space, packet.blend_space) != packet.blend_space;
-        let packet = FramePacket { composite_all: packet.composite_all || display_rebuilt || blending_changed, ..packet };
+        let unchanged = self.artwork_frame.as_ref().is_some_and(|frame|
+            frame.same_artwork(packet, requested_view.background_rgba_linear));
+        let resized = self.ensure_document_metadata(packet.document_extent, packet.layers)?;
+        let display_rebuilt = if packet.commit_rasters {
+            let previous = self.scale_display.take();
+            let (cache, rebuilt) = scene::scale::Cache::select(previous, self, packet, display_request, unchanged);
+            self.scale_display = Some(cache);
+            rebuilt
+        } else { false };
+        let packet = FramePacket { composite_all: packet.composite_all || blending_changed, ..packet };
         self.prepare_selection_previews(packet.layers)?;
         let mut batch_tiles = original_batches.iter().map(|batch| {
             let start = batch.first_dab as usize;
@@ -3777,12 +3429,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 label: Some("layer incremental sparse frame"),
             },
         );
-        self.telemetry.begin(&self.device, &self.queue, &mut encoder);
-        let display_missing = if let Some(mut cache) = self.live_display.take() {
-            let result = cache.prepare(self, packet.view, &mut encoder);
-            self.live_display = Some(cache);
-            result?
-        } else { std::collections::BTreeSet::new() };
+        self.telemetry.begin(&self.device, &self.queue, &mut encoder, self.metrics.submissions + 1);
         let committed_preview = if self.transform_preview.is_none() {
             self.transforms.as_mut().unwrap().consume_commit(packet)
         } else {
@@ -3845,26 +3492,9 @@ impl CanvasRenderer for WgpuRasterizer {
             } else {
                 batch_dirty
             };
-            if batch.stroke_end && revisits_stroke(&batch.style) {
-                let edge_dirty = self
-                    .paint_layers
-                    .iter()
-                    .find(|layer| layer.id == batch.layer_id)
-                    .map(|layer| {
-                        layer
-                            .coverage_pages
-                            .iter()
-                            .filter(|page| page.owner == Some(batch.stroke_id))
-                            .fold(PixelRect::EMPTY, |damage, page| {
-                                damage.union(
-                                    page_rect(page.coordinate)
-                                        .intersect(PixelRect::full(packet.document_extent)),
-                                )
-                            })
-                    })
-                    .unwrap_or(PixelRect::EMPTY);
-                dirty = dirty.union(edge_dirty);
-            }
+            dirty = self.stroke_finish_pages(batch).fold(dirty, |damage, page| {
+                damage.union(page_rect(page).intersect(PixelRect::full(packet.document_extent)))
+            });
             if batch_dirty.is_empty() || dabs.is_empty() {
                 continue;
             }
@@ -3912,6 +3542,14 @@ impl CanvasRenderer for WgpuRasterizer {
                 .all(|batch| {
                     BrushPassPlan::for_device(&batch.style, &self.device).requires_destination()
                 });
+        let preview_level = self.scale_display.as_ref().filter(|_| new_preview_from_persistent
+            && packet.dab_batches.iter().filter(|b| b.kind == DabBatchKind::Preview && b.dab_count != 0)
+                .all(|b| dry_material::display_preview_eligible(&b.style)))
+            .map_or(0, |cache| new_preview_layer.map_or(0, |id| cache.preview_level(packet, id)));
+        if self.preview_level != preview_level {
+            self.preview_pages.clear();
+            self.preview_level = preview_level;
+        }
         if new_preview_layer.is_none() {
             // Preview is disposable by contract. Release its high-water pool
             // when the tail commits or is cancelled instead of retaining pages
@@ -3933,10 +3571,6 @@ impl CanvasRenderer for WgpuRasterizer {
             }
         }
 
-        // Style records serve brush batches, then composition layers.
-        if let Some(cache) = &self.live_display {
-            self.uploads.write(&mut encoder, &cache.geometry, &cache.geometry_bytes())?;
-        }
         self.prepare_uploads(packet, &mut batch_tiles, &mut encoder)?;
         self.layer_masks.prepare(
             &self.device,
@@ -3965,6 +3599,7 @@ impl CanvasRenderer for WgpuRasterizer {
                         | layer_core::LayerOperationKind::Gradient { .. }
                         | layer_core::LayerOperationKind::Figure(_)
                         | layer_core::LayerOperationKind::Bake { .. }
+                        | layer_core::LayerOperationKind::FrequencyDetail { .. }
                 ) || (masking && (layer.source.is_some() || self.native_backing(layer.id).is_some()))
                 {
                     // Coverage may be translated or inverted: its source mask
@@ -4159,6 +3794,29 @@ impl CanvasRenderer for WgpuRasterizer {
         self.telemetry.phase_end(0, &mut encoder);
         let native_commit = self.encode_native_rasters(packet.layers, &mut encoder)?;
         if let Some(started) = started { cpu_phases[2] = started.elapsed().as_secs_f64() * 1000.; }
+        if !packet.commit_rasters {
+            self.uploads.finish(&encoder);
+            self.telemetry.end(&mut encoder);
+            self.metrics.command_passes += encoder.pass_count();
+            self.last_submission = Some(encoder.submit(&self.queue));
+            self.telemetry.submitted(&self.queue);
+            if let Some(commit) = native_commit {
+                self.finish_native_rasters(commit, false)?;
+            }
+            self.background_ready.store(false, std::sync::atomic::Ordering::Release);
+            let ready = self.background_ready.clone();
+            self.queue.on_submitted_work_done(move || ready.store(true, std::sync::atomic::Ordering::Release));
+            self.metrics.submissions = self.metrics.submissions.saturating_add(1);
+            self.refresh_storage_metrics();
+            if let Some(started) = started {
+                cpu_phases[3] = cpu_phases[2];
+                cpu_phases[4] = cpu_phases[2];
+                cpu_phases[5] = started.elapsed().as_secs_f64() * 1000.;
+                for i in (1..cpu_phases.len()).rev() { cpu_phases[i] -= cpu_phases[i - 1]; }
+                self.metrics.frame_cpu_ms = cpu_phases;
+            }
+            return Ok(());
+        }
         trace_phase.next(c"capy.prediction");
         self.telemetry.phase_begin(1, &self.device, &self.queue, &mut encoder);
 
@@ -4381,258 +4039,15 @@ impl CanvasRenderer for WgpuRasterizer {
         self.preview_layer_id = new_preview_layer;
         self.preview_requires_base = new_preview_requires_base;
 
-        let mut displayed = false;
-        let mut drew = false;
-        self.preparation.begin(&self.device, &self.queue);
-        self.awaiting_meshes = self
-            .transform_preview
-            .as_ref()
+        self.awaiting_meshes = self.transform_preview.as_ref()
             .is_some_and(|p| matches!(p.transform.map, layer_core::TransformMap::Mesh(_)))
             && !self.mesh_pipelines_ready();
-        let eligible = self.transform_preview.clone().filter(|_| !self.awaiting_meshes).and_then(|preview| {
-            (dirty.is_empty() && self.transform_damage.is_empty())
-                .then(|| self.display_preview(&packet, &preview, requested_view.background_rgba_linear))
-                .flatten()
-                .map(|eligible| (preview, eligible))
-        });
-        let background = requested_view.background_rgba_linear;
-        let composable = self.transform_preview.is_none()
-            && !display_rebuilt
-            && dirty.is_empty()
-            && self.transform_damage.is_empty();
-        let placing = composable.then(|| self.placement_display(&packet, background)).flatten();
-        let held = placing.is_none()
-            && composable
-            && self.artwork_frame.as_ref().is_some_and(|f| f.same_artwork(packet, background))
-            && self.placement_drag.as_mut().is_some_and(placement_drag::PlacementDrag::hold);
-        if !held
-            && self.placement_drag.as_ref().is_some_and(|drag| {
-                placing.as_ref().is_none_or(|(layer, (level, ..))| drag.layer != *layer || drag.level != *level)
-            })
-        {
-            let drag = self.placement_drag.take().unwrap();
-            self.finish_placement(drag);
-        }
-        let quiet = |r: &Self, layer| r.artwork_frame.as_ref().is_some_and(|f| f.unchanged_except(packet, background, layer));
-        if self.placement_copy.as_ref().is_some_and(|copy| !quiet(self, copy.layer())) {
-            self.placement_copy = None;
-        }
-        if let Some((layer, (level, _, stack))) = &placing
-            && self.placement_drag.is_none()
-        {
-            let shown = layer_core::target_transform(&self.artwork_frame.as_ref().unwrap().layers, *layer);
-            let moving = packet.layers.iter().find(|l| l.id == *layer).unwrap();
-            let display = stack
-                .is_none()
-                .then(|| self.live_display.as_ref().and_then(|cache| cache.level_texture(*level)).cloned())
-                .flatten();
-            let drag = placement_drag::PlacementDrag::new(self, &mut encoder, moving, *level, shown, display.as_ref());
-            self.placement_drag = Some(drag);
-        }
-        let layered = eligible
-            .as_ref()
-            .map(|(preview, (level, _, stack))| (preview.layer, *level, *stack))
-            .or_else(|| placing.as_ref().map(|(layer, (level, _, stack))| (*layer, *level, *stack)))
-            .and_then(|(layer, level, stack)| stack.map(|(index, above, _)| ((layer, level), index, above)));
-        if self.layered_display.as_ref().is_some_and(|l| {
-            display_rebuilt || !quiet(self, l.key.0) || layered.is_some_and(|(key, ..)| key != l.key)
-        }) {
-            self.layered_display = None;
-        }
-        if let Some((key, index, above)) = layered {
-            self.prepare_layers(&mut encoder, packet, key, index, above)?;
-        }
-        let built = |r: &Self, stack: &Option<(usize, bool, layer_core::LayerBlend)>| {
-            stack.is_none() || r.layered_display.as_ref().is_some_and(|l| l.ready())
-        };
-        let ending_held = |r: &Self, layer| r.displayed_transform == Some((layer, PixelRect::EMPTY));
-        self.reducing = false;
-        if let Some((preview, (level, _, stack))) = &eligible
-            && built(self, stack)
-        {
+        if let Some(preview) = self.transform_preview.clone().filter(|_| !self.awaiting_meshes) {
+            let level = self.scale_display.as_ref().filter(|cache| cache.evaluation == scene::scale::Evaluation::Display).map(|cache| cache.plan.level).filter(|level| *level > 0);
             let mut transforms = self.transforms.take().expect("retained transform renderer");
-            let spares = !ending_held(self, preview.layer);
-            let reducing = transforms.prepare_reduced(self, &mut encoder, preview, packet.layers, *level, spares);
+            let result = transforms.update_preview(self, &mut encoder, &preview, packet.layers, level);
             self.transforms = Some(transforms);
-            self.reducing = reducing?;
-        }
-        let preparing = eligible.as_ref().is_some_and(|(_, (_, _, stack))| !built(self, stack) || self.reducing);
-        if let Some((preview, _)) = &eligible
-            && (preview.moving || ending_held(self, preview.layer))
-            && preparing
-        {
-            displayed = true;
-            self.displayed_transform.get_or_insert((preview.layer, PixelRect::EMPTY));
-        }
-        let reducible = eligible.as_ref().map(|(preview, _)| preview.clone());
-        if let Some((preview, (level, display, stack))) = eligible
-            && !displayed
-            && (preview.moving
-                || self.displayed_transform.is_some_and(|(id, _)| id == preview.layer)
-                || self.recompose.as_ref().is_some_and(|(id, _)| *id == preview.layer))
-            && built(self, &stack)
-        {
-            let blend = stack.map(|(.., blend)| blend);
-            let drawn = self.draw_into_display(&mut encoder, level, display.side, blend, |r, transforms, encoder, target| {
-                transforms.render_display(r, encoder, &preview, packet.layers, target, display)
-            })?;
-            displayed = drawn.is_some();
-            if let Some(drawn) = drawn.filter(|d| !d.is_empty()) {
-                drew = true;
-                let region = self.displayed_transform.map_or(drawn, |(_, shown)| shown.union(drawn));
-                self.displayed_transform = Some((preview.layer, region));
-            } else if displayed && !preview.moving && self.recompose.is_none() {
-                let mut transforms = self.transforms.take().expect("retained transform renderer");
-                let settled = transforms.settle(self, &mut encoder, &preview, packet.layers);
-                self.transforms = Some(transforms);
-                if let Some(damage) = settled? {
-                    let shown = self.displayed_transform.take().map_or(PixelRect::EMPTY, |(_, shown)| shown);
-                    let region = damage.into_iter().fold(shown, |region, (_, damage)| region.union(damage));
-                    self.recompose = (!region.is_empty()).then(|| (preview.layer, page_coordinates(region).collect()));
-                    self.recompose_placement = false;
-                }
-            }
-        }
-        let placing_frame = placing.is_some();
-        if let Some((layer, (level, display, stack))) = placing {
-            displayed = true;
-            let mut drag = self.placement_drag.take().expect("placement drag");
-            if let Some((_, pending)) = self.recompose.take() {
-                let full = PixelRect::full(packet.document_extent);
-                drag.touched = pending.into_iter().fold(drag.touched, |t, c| t.union(page_rect(c).intersect(full)));
-                self.recompose_placement = false;
-            }
-            let moving = packet.layers.iter().find(|l| l.id == layer).unwrap();
-            let drawn = (|| {
-                let drawable = self.placement_copy.as_ref().is_some_and(placement_drag::PlacementCopy::drawable)
-                    || self.prepare_copy(&mut encoder, packet, moving, drag.local)?;
-                if !drawable || !built(self, &stack) {
-                    return Ok(None);
-                }
-                let placement = layer_core::target_transform(packet.layers, layer);
-                let blend = stack.map(|(.., blend)| blend);
-                self.draw_into_display(&mut encoder, level, display.side, blend, |r, transforms, encoder, target| {
-                    let mut copy = r.placement_copy.take().expect("placement copy");
-                    let drawn = drag.draw(r, &mut copy, transforms.resample(), encoder, target, placement, display);
-                    r.placement_copy = Some(copy);
-                    drawn.map(Some)
-                })
-            })();
-            self.placement_drag = Some(drag);
-            drew |= drawn?.is_some_and(|d| !d.is_empty());
-        }
-        self.preparing_moving = false;
-        if let Some(layer) = self.moving_hint
-            && !placing_frame
-            && !display_rebuilt
-            && self.placement_drag.is_none()
-            && self.transform_preview.is_none()
-            && dirty.is_empty()
-            && let Some((level, _, stack)) = self.display_target(&packet, layer)
-            && let Some(moving) = packet.layers.iter().find(|l| l.id == layer)
-        {
-            let placement = layer_core::target_transform(packet.layers, layer);
-            let placed = placement.bounds(PixelRect::full(self.target_extent(layer)).to_rect());
-            let [width, height] = packet.document_extent.map(|n| n as f32);
-            let drawn_from_display =
-                stack.is_none() && placed.min.x >= 0. && placed.min.y >= 0. && placed.max.x <= width && placed.max.y <= height;
-            if !drawn_from_display {
-                let local = paint_transform::local_level(level, placement);
-                self.preparing_moving = !self.prepare_copy(&mut encoder, packet, moving, local)?;
-            }
-            if let Some((index, above, _)) = stack {
-                self.preparing_moving |= !self.prepare_layers(&mut encoder, packet, (layer, level), index, above)?;
-            }
-        }
-        if let Some((layer, selection)) = &self.moving_pixels
-            && !placing_frame
-            && !display_rebuilt
-            && self.placement_drag.is_none()
-            && self.transform_preview.is_none()
-            && dirty.is_empty()
-            && let Some((level, _, stack)) = self.display_target(&packet, *layer)
-        {
-            let (layer, selection) = (*layer, selection.clone());
-            let mut transforms = self.transforms.take().expect("retained transform renderer");
-            let standby = transforms.prepare_standby(self, &mut encoder, packet.layers, layer, &selection, level);
-            self.transforms = Some(transforms);
-            self.preparing_moving |= standby?;
-            if let Some((index, above, _)) = stack {
-                self.preparing_moving |= !self.prepare_layers(&mut encoder, packet, (layer, level), index, above)?;
-            }
-        }
-        let settling_placement = self.recompose_placement
-            && self
-                .artwork_frame
-                .as_ref()
-                .is_some_and(|frame| frame.same_artwork(packet, requested_view.background_rgba_linear));
-        let packet = FramePacket {
-            composite_all: packet.composite_all && !placing_frame && !held && !settling_placement,
-            ..packet
-        };
-        if let Some(preview) = self.transform_preview.clone() {
-            if !displayed && !self.awaiting_meshes {
-                let mut transforms = self.transforms.take().expect("retained transform renderer");
-                let result = transforms.update_preview(
-                    self,
-                    &mut encoder,
-                    &preview,
-                    packet.layers,
-                );
-                self.transforms = Some(transforms);
-                self.transform_damage.extend(result?);
-            }
-            if self.transform_damage.iter().any(|(_, damage)| !damage.is_empty()) {
-                scene::Scene::submit_commands(self, &mut encoder, "transform preview");
-            }
-        }
-        if let Some(preview) = &reducible {
-            self.reducing |= self.transforms.as_ref().unwrap().reduces(preview);
-        }
-        if !displayed && let Some((layer, shown)) = self.displayed_transform.take() {
-            self.transform_damage.push((layer, self.layer_damage(packet.layers, layer, shown)));
-        }
-        if let Some((layer, mut tiles)) = self.recompose.take() {
-            let full = PixelRect::full(packet.document_extent);
-            let settling = self.recompose_placement && dirty.is_empty() && !packet.composite_all;
-            if drew {
-                let region = tiles.iter().fold(PixelRect::EMPTY, |region, c| region.union(page_rect(*c).intersect(full)));
-                let shown = self.displayed_transform.map_or(region, |(_, shown)| shown.union(region));
-                self.displayed_transform = Some((layer, shown));
-            } else if preparing || (settling && !self.placement_ready()) {
-                self.recompose = Some((layer, tiles));
-            } else {
-                let count = if displayed || settling {
-                    let units = self.preparation.start(&mut encoder, Work::Recompose);
-                    let mut decodes = 0;
-                    let scene = self.scene.as_ref();
-                    tiles
-                        .iter()
-                        .take(units)
-                        .take_while(|c| {
-                            decodes += scene.map_or(0, |scene| scene.source_decodes(self, packet.layers, **c));
-                            decodes <= RECOMPOSE_DECODES
-                        })
-                        .count()
-                        .max(1)
-                } else {
-                    tiles.len()
-                };
-                if self.recompose_placement {
-                    self.document_damage.extend(tiles.drain(..count).map(|c| page_rect(c).intersect(full)));
-                } else {
-                    let damage: Vec<_> = tiles
-                        .drain(..count)
-                        .map(|c| (layer, self.layer_damage(packet.layers, layer, page_rect(c).intersect(full))))
-                        .collect();
-                    self.transform_damage.extend(damage);
-                }
-                if tiles.is_empty() {
-                    self.recompose_placement = false;
-                } else {
-                    self.recompose = Some((layer, tiles));
-                }
-            }
+            self.transform_damage.extend(result?);
         }
         // Pointwise edits need only their touched tiles, not the rectangle
         // enclosing a fast curved stroke. Global effects and full rebuilds
@@ -4715,19 +4130,9 @@ impl CanvasRenderer for WgpuRasterizer {
             .layers
             .iter()
             .any(|l| l.visible && l.effect.as_ref().is_some_and(|e| e.animated()));
-        if let Some(cache) = &mut self.live_display {
-            cache.note_artwork_change(!dirty.is_empty() || animated);
-        }
-        if !display_missing.is_empty() {
-            if dirty.is_empty() && !animated { composite_tiles = Some(display_missing.clone()); }
-            else if let Some(tiles) = &mut composite_tiles { tiles.extend(&display_missing); }
-            for coordinate in &display_missing {
-                dirty = dirty.union(page_rect(*coordinate).intersect(PixelRect::full(packet.document_extent)));
-            }
-        }
         // Newly populated display pages change visible pixels too, even when
         // the document itself did not change (for example after navigation).
-        if !dirty.is_empty() || animated {
+        if !dirty.is_empty() || animated || display_rebuilt || !unchanged {
             self.composite_revision = self.composite_revision.wrapping_add(1);
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             // A moved target's damage is stored in image coordinates. Round to
@@ -4747,46 +4152,71 @@ impl CanvasRenderer for WgpuRasterizer {
                     dirty = dirty.union(pixel_rect(rect, packet.document_extent));
                 }
             }
-            scene.compose(self, packet, dirty, &mut encoder, composite_tiles.as_ref())?;
+            let published = scene.compose(self, packet, &batch_tiles, dirty, &mut encoder, composite_tiles.as_ref())?;
             self.scene = Some(scene);
-            let pointwise_scene = packet.layers.iter().all(|layer| {
-                matches!(layer.kind, LayerKind::Paint | LayerKind::Background)
-                    && layer.effect.is_none()
-                    && layer_core::target_transform(packet.layers, layer.id) == layer_core::Affine::IDENTITY
-                    && layer.mask.as_ref().is_none_or(|mask|
-                        layer_core::target_transform(packet.layers, mask.id) == layer_core::Affine::IDENTITY)
-            });
-            self.composite_damage = if (needs_scene(packet) && !pointwise_scene) || animated {
-                PixelRect::full(packet.document_extent)
-            } else { dirty };
+            self.composite_damage = published;
+        }
+        let mut refined = false;
+        if dirty.is_empty() && !animated && original_batches.is_empty() && packet.dabs.is_empty()
+            && self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work())
+            && self.artwork_frame.as_ref().is_some_and(|old|
+                old.view.document_to_surface == packet.view.document_to_surface
+                    && old.same_artwork(packet, requested_view.background_rgba_linear))
+        {
+            let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
+            let result = scene.refine_display(self, packet, &mut encoder);
+            self.scene = Some(scene);
+            let changed = result?;
+            if !changed.is_empty() {
+                refined = true;
+                self.composite_damage = self.composite_damage.union(changed);
+                self.composite_revision = self.composite_revision.wrapping_add(1);
+            }
+        }
+        if self.transform_preview.is_none() && !reset && packet.dabs.is_empty()
+            && packet.dab_batches.is_empty() && packet.restore_rasters.is_empty()
+            && let Some((layer, selection)) = self.moving_pixels.clone()
+            && let Some(level) = self.scale_display.as_ref().filter(|cache| cache.evaluation == scene::scale::Evaluation::Display).map(|cache| cache.plan.level).filter(|level| *level > 0)
+        {
+            let mut transforms = self.transforms.take().unwrap();
+            let result = transforms.prepare_standby(self, &mut encoder, packet.layers, layer, &selection, level);
+            self.transforms = Some(transforms);
+            result?;
         }
         let frame = Arc::new(artwork::Frame::new(packet, requested_view.background_rgba_linear));
         let moving = !original_batches.is_empty()
             || animated
             || self.transform_preview.is_some()
-            || self.placement_drag.is_some();
+            || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear));
         self.prefetch_retouch(&frame, moving, &mut encoder);
         self.uploads.finish(&encoder);
         if let Some(started) = started { cpu_phases[4] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.publication");
         self.telemetry.phase_end(2, &mut encoder);
         self.telemetry.end(&mut encoder);
-        self.preparation.finish(&mut encoder);
+        self.metrics.command_passes += encoder.pass_count();
         let submission = encoder.submit(&self.queue);
-        self.preparation.submitted(&self.queue);
         self.telemetry.submitted(&self.queue);
         self.last_submission = Some(submission.clone());
-        if let Some(commit) = native_commit {
-            self.finish_native_rasters(commit, submission)?;
+        if refined {
+            self.background_ready.store(false, std::sync::atomic::Ordering::Release);
+            let ready = self.background_ready.clone();
+            self.queue.on_submitted_work_done(move || ready.store(true, std::sync::atomic::Ordering::Release));
         }
-        if let Some(cache) = &mut self.live_display { cache.finish_frame(); }
-        if (animated || packet.reset_layers || !packet.dabs.is_empty() || !packet.restore_rasters.is_empty()
-            || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear)))
-            && let Some(regions) = &mut self.regions { regions.raw.invalidate_tonal(); }
+        if let Some(commit) = native_commit {
+            self.finish_native_rasters(commit, true)?;
+        }
+        if animated || reset || !packet.dabs.is_empty() || !packet.restore_rasters.is_empty()
+            || self.transform_damage.iter().any(|(_, bounds)| !bounds.is_empty()) || !self.document_damage.is_empty()
+            || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear)) {
+            self.artwork_revision = self.artwork_revision.wrapping_add(1);
+            if let Some(regions) = &mut self.regions { regions.raw.invalidate_tonal(); }
+        }
         self.artwork_frame = Some(frame);
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();
         performance_trace::counter(c"Capy renderer frames", self.metrics.submissions);
+        performance_trace::counter(c"Capy command passes", self.metrics.command_passes);
         performance_trace::counter(c"Capy dabs", self.metrics.dabs);
         performance_trace::counter(c"Capy composited pixels", self.metrics.composited_pixels);
         performance_trace::counter(c"Capy display batches", self.metrics.display_composition_submissions);
@@ -4858,10 +4288,12 @@ struct StyleGpu {
     contact_a: [f32; 4],
     contact_b: [f32; 4],
     contact_c: [f32; 4],
+    bristles: [f32; 4],
     brush_to_layer_linear: [f32; 4],
     brush_to_layer_offset: [f32; 4],
     layer_to_brush_linear: [f32; 4],
     layer_to_brush_offset: [f32; 4],
+    bristle_streak: [f32; 4],
 }
 
 #[repr(C)]
@@ -4908,6 +4340,8 @@ impl StyleGpu {
             contact_a: [0.0; 4],
             contact_b: [0.0; 4],
             contact_c: [0.0; 4],
+            bristles: [0.0; 4],
+            bristle_streak: [0.0; 4],
             brush_to_layer_linear: [1., 0., 0., 1.],
             brush_to_layer_offset: [0.; 4],
             layer_to_brush_linear: [1., 0., 0., 1.],
@@ -4928,20 +4362,14 @@ impl StyleGpu {
         result
     }
 
-    fn brush(extent: [u32; 2], batch: &DabBatch, device: &PipelineDevice) -> Self {
+    fn brush(extent: [u32; 2], batch: &DabBatch, block: u32, device: &PipelineDevice) -> Self {
         let mut style = Self::for_brush(extent, &batch.style, batch.first_dab, batch.dab_count, device);
         style.canvas_opacity[3] = f32::from(batch.stroke_start);
+        style.operation[2] = block;
         style
     }
 
-    fn for_brush(
-        extent: [u32; 2],
-        style: &layer_render::DabStyle,
-        first: u32,
-        count: u32,
-        device: &PipelineDevice,
-    ) -> Self {
-        let plan = BrushPassPlan::for_style(style);
+    fn for_brush(extent: [u32; 2], style: &layer_render::DabStyle, first: u32, count: u32, device: &PipelineDevice) -> Self {
         let grain = style.grain.as_ref();
         let (grain_cos, grain_sin) = grain
             .map(|grain| (grain.rotation_radians.cos(), grain.rotation_radians.sin()))
@@ -4983,12 +4411,7 @@ impl StyleGpu {
             style.wet_mix.blur,
             style.wet_mix.wetness_jitter,
         ];
-        result.operation = [
-            first,
-            count,
-            plan.material as u32,
-            u32::from(style.mode == DabMode::Erase),
-        ];
+        result.operation = [first, count, 1, u32::from(style.mode == DabMode::Erase)];
         result.deformation = [
             liquify_mode_code(style.deform.mode),
             style.deform.strength,
@@ -5017,6 +4440,10 @@ impl StyleGpu {
             ];
         }
         if let Some(contact) = style.contact {
+            if let Some(bristles) = contact.bristles {
+                result.bristles = [1., bristles.texture_scale, bristles.load, bristles.splay];
+                result.bristle_streak = bristles.streak_rgba_linear;
+            }
             let paper = contact.paper * grain.map_or(1., |grain| grain.depth);
             result.contact_a = [1.0, paper, contact.tip_bias, contact.edge_roughness];
             result.contact_b = [
@@ -5204,7 +4631,7 @@ fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     let storage = wgpu::BufferBindingType::Storage { read_only: true };
     let entries = (0..12).map(|binding| match binding {
         9 => bindings::buffer(9, stages, storage, false, None),
-        _ => bindings::texture(binding, stages, false),
+        _ => bindings::texture(binding, stages, binding == 4 || binding == 10),
     })
     .chain([bindings::buffer(12, stages, wgpu::BufferBindingType::Uniform, true, NonZeroU64::new(160))])
     .collect::<Vec<_>>();
@@ -5417,12 +4844,14 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             })
         })
     };
-    let material_shader = dry_material::shader(device, false);
-    let dry_material = dry_material::Pipelines::new(device, &layouts, &material_shader, false);
+    let material_shader = dry_material::shader(device, dry_material::Target::Exact);
+    let dry_material = dry_material::Pipelines::new(device, &layouts, &material_shader, dry_material::Target::Exact);
+    let dry_display = dry_material::Pipelines::new(device, &layouts,
+        &dry_material::shader(device, dry_material::Target::Display), dry_material::Target::Display);
     // Native hosts request this feature only after checking Float32 read/write
     // storage support. Each dry invocation owns exactly one destination texel.
     let dry_in_place = device.features().contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
-        .then(|| dry_material::Pipelines::new(device, &layouts, &dry_material::shader(device, true), true));
+        .then(|| dry_material::Pipelines::new(device, &layouts, &dry_material::shader(device, dry_material::Target::InPlace), dry_material::Target::InPlace));
     let stroke_edge_shader = {
         let device = device.clone();
         Deferred::new(move || {
@@ -5773,6 +5202,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     };
     Pipelines {
         dry_material,
+        dry_display,
         dry_in_place,
         direct,
         material,
@@ -5936,6 +5366,10 @@ fn target_bytes(target: &TargetGpu) -> &[u8] {
             mem::size_of::<TargetGpu>(),
         )
     }
+}
+
+fn preview_block(document_to_surface: [f32; 6]) -> u32 {
+    1 << display_mips::view_level(document_to_surface, 3).unwrap_or(0).saturating_sub(1).min(2)
 }
 
 fn dab_bytes(dabs: &[DabGpu]) -> &[u8] {
@@ -6314,10 +5748,21 @@ mod tests {
     }
 
     #[test]
+    fn zoomed_out_previews_evaluate_paint_in_blocks_under_half_a_surface_pixel() {
+        let scaled = |scale: f32| [scale, 0., 0., scale, 0., 0.];
+        assert_eq!(preview_block(scaled(1.)), 1);
+        assert_eq!(preview_block(scaled(0.3)), 1);
+        assert_eq!(preview_block(scaled(0.2)), 2);
+        assert_eq!(preview_block(scaled(0.1)), 4);
+        let (sin, cos) = 0.7_f32.sin_cos();
+        assert_eq!(preview_block([0.1 * cos, 0.1 * sin, -0.1 * sin, 0.1 * cos, 40., 9.]), 4);
+    }
+
+    #[test]
     fn gpu_records_match_shader_layouts() {
         assert_eq!(mem::size_of::<Dab>(), 128);
         assert_eq!(mem::size_of::<DabGpu>(), 160);
-        assert_eq!(mem::size_of::<StyleGpu>(), 304);
+        assert_eq!(mem::size_of::<StyleGpu>(), 336);
         assert_eq!(mem::size_of::<TargetGpu>(), 32);
     }
 

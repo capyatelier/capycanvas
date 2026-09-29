@@ -209,6 +209,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
             else InputDevice.SOURCE_CLASS_POINTER
         )
         if (event.actionMasked == MotionEvent.ACTION_HOVER_EXIT) {
+            barrelTwistDevice = -1
             host.chrome(obj("kind" to "leave", "touch" to false))
             host.input(obj("type" to "cursor_leave"))
         } else {
@@ -241,7 +242,12 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         val count = if (history) event.historySize else 0
         val used = (count + 1) * 9
         val samples = host.pointerBuffer(used)
-        packPointerSamples(event, index, phase, count, tool == 1, samples)
+        val twist = tool == 0 && measuresBarrelTwist(event, index)
+        packPointerSamples(event, index, phase, count, tool == 1, twist, samples)
+        if (twist) {
+            if (predicted) for (h in 0..count) samples[h * 9 + 5] = lastBarrelTwist
+            else lastBarrelTwist = samples[count * 9 + 5]
+        }
         val id = (event.deviceId.toLong().and(0xffffffffL) shl 16) or event.getPointerId(index).toLong()
         if (!predicted) {
             val x = samples[count * 9]; val y = samples[count * 9 + 1]
@@ -251,13 +257,24 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
                 3, 4 -> contacts.remove(id)
             }
         }
-        host.pointer(id, tool, button, samples, used, predicted)
+        host.pointer(id, tool, button, samples, used, predicted, twist)
+    }
+
+    private var barrelTwistDevice = -1
+    private var lastBarrelTwist = 0.0
+
+    private fun measuresBarrelTwist(event: MotionEvent, index: Int): Boolean {
+        if (event.device?.getMotionRange(MotionEvent.AXIS_RZ, event.source) == null) return false
+        if (barrelTwistDevice != event.deviceId && event.getAxisValue(MotionEvent.AXIS_RZ, index) != 0f) {
+            barrelTwistDevice = event.deviceId
+        }
+        return barrelTwistDevice == event.deviceId
     }
 }
 
 /** Shared packing for real, historical and Android-predicted samples. */
 internal fun packPointerSamples(event: MotionEvent, index: Int, phase: Int, historySize: Int,
-    mouse: Boolean, samples: DoubleArray) {
+    mouse: Boolean, barrelTwist: Boolean, samples: DoubleArray) {
     for (h in 0..historySize) {
         val historical = h < historySize
         fun axis(axis: Int): Float = if (historical) event.getHistoricalAxisValue(axis, index, h) else event.getAxisValue(axis, index)
@@ -273,7 +290,7 @@ internal fun packPointerSamples(event: MotionEvent, index: Int, phase: Int, hist
         // Android azimuth points toward the tip; shared tilt points toward the barrel.
         samples[offset + 3] = (-sin(orientation) * tilt).toDouble()
         samples[offset + 4] = (cos(orientation) * tilt).toDouble()
-        samples[offset + 5] = 0.0 // Android stylus orientation is tilt azimuth, not barrel twist.
+        samples[offset + 5] = if (barrelTwist) axis(MotionEvent.AXIS_RZ).toDouble() else 0.0
         samples[offset + 6] = axis(MotionEvent.AXIS_DISTANCE).toDouble()
         samples[offset + 7] = time.toDouble()
         samples[offset + 8] = (if (historical) { if (phase == 0) 0 else 2 } else phase).toDouble()

@@ -37,6 +37,8 @@ class AndroidCanvasBarBenchmarkTest {
         val interval = args.getString("intervalMs", "4.166667")!!.toDouble()
         val width = args.getString("width", "6000")!!.toInt()
         val height = args.getString("height", "4000")!!.toInt()
+        val photoPath = args.getString("photo")
+        val zoomOut = args.getString("zoomOut", "true") == "true"
         val transparency = listOf("off", "low", "medium", "high").indexOf(args.getString("transparency", "low"))
         val only = args.getString("scenarios")?.split(',')
         val refine = args.getString("refine", "feather")!!
@@ -56,17 +58,31 @@ class AndroidCanvasBarBenchmarkTest {
             fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
             fun waitFor(label: String, condition: () -> Boolean) = host.awaitMain(label, 120_000, condition = condition)
             fun action(value: JSONObject) = host.drain(value, 30)
-            fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
             fun state() = host.snapshot!!.getJSONObject("state")
+            fun invoke(command: String) {
+                val deadline = SystemClock.uptimeMillis() + 120_000
+                while (native { Native.query(it, obj("type" to "command_reason", "command" to command).toString()) } != "null") {
+                    check(SystemClock.uptimeMillis() < deadline) { "$command stayed unavailable" }
+                    SystemClock.sleep(16)
+                }
+                action(obj("type" to "invoke", "command" to command))
+            }
             var documentExtent = "${width}x$height"
             fun newDocument(extent: Pair<Int, Int> = width to height) {
                 documentExtent = "${extent.first}x${extent.second}"
                 host.newDocument(extent.first, extent.second)
                 blending?.let { invoke("blend_$it") }
-                invoke("fit_canvas"); invoke("zoom_out")
+                invoke("fit_canvas")
+                if (zoomOut) invoke("zoom_out")
                 SystemClock.sleep(800)
             }
             fun photo(): File {
+                if (photoPath != null) return File(photoPath).also { file ->
+                    check(file.isFile)
+                    val size = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    android.graphics.BitmapFactory.decodeFile(file.path, size)
+                    check(size.outWidth == width && size.outHeight == height)
+                }
                 val file = File(instrumentation.targetContext.cacheDir, "canvas-bar-${width}x$height.jpg")
                 if (file.exists()) return file
                 val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
@@ -85,21 +101,25 @@ class AndroidCanvasBarBenchmarkTest {
                 waitFor("placement bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "placement" }
                 waitFor("canvas ready") { host.snapshot?.let { it.optBoolean("canvas_ready") && it.optBoolean("brush_ready") } == true }
             }
-            fun corner(): Pair<Double, Double> {
+            fun anchorPoint(fraction: Double): Pair<Double, Double> {
                 val anchor = state().getJSONObject("canvas_bar").getJSONArray("anchor")
                 val camera = state().getJSONObject("camera")
                 val zoom = camera.getDouble("zoom"); val translation = camera.getJSONArray("translation")
-                return anchor.getDouble(2) * zoom + translation.getDouble(0) to anchor.getDouble(3) * zoom + translation.getDouble(1)
+                return (anchor.getDouble(0) + fraction * (anchor.getDouble(2) - anchor.getDouble(0))) * zoom + translation.getDouble(0) to
+                    (anchor.getDouble(1) + fraction * (anchor.getDouble(3) - anchor.getDouble(1))) * zoom + translation.getDouble(1)
             }
+            fun corner() = anchorPoint(1.0)
             fun inject(action: Int, down: Long, x: Double, y: Double, pressure: Float) {
                 val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 5; toolType = MotionEvent.TOOL_TYPE_STYLUS })
                 val coords = arrayOf(MotionEvent.PointerCoords().apply {
                     this.x = x.toFloat() + host.surfaceOrigin.x; this.y = y.toFloat() + host.surfaceOrigin.y; this.pressure = pressure
                 })
                 val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_STYLUS, 0)
-                try { check(instrumentation.uiAutomation.injectInputEvent(event, false)) } finally { event.recycle() }
+                try { check(instrumentation.uiAutomation.injectInputEvent(event, action == MotionEvent.ACTION_UP)) } finally { event.recycle() }
             }
             fun drag(start: Pair<Double, Double>, milliseconds: Int, path: (Double) -> Pair<Double, Double>) {
+                val initial = path(0.0)
+                check(initial.first == 0.0 && initial.second == 0.0) { "The gesture must press its requested handle" }
                 val count = (milliseconds / interval).toInt()
                 val began = System.nanoTime(); val down = SystemClock.uptimeMillis()
                 for (i in 0..count) {
@@ -116,7 +136,7 @@ class AndroidCanvasBarBenchmarkTest {
                 while (SystemClock.uptimeMillis() - began < milliseconds) {
                     val start = corner()
                     android.os.Trace.beginAsyncSection("capy-drag", ++index)
-                    drag(start, 400) { t -> (-60 - 50 * sin(2 * PI * t / .4)) to (-40 - 35 * sin(2 * PI * t / .4)) }
+                    drag(start, 400) { t -> (60 * (cos(2 * PI * t / .4) - 1)) to (40 * (cos(2 * PI * t / .4) - 1)) }
                     android.os.Trace.endAsyncSection("capy-drag", index)
                     SystemClock.sleep(900)
                 }
@@ -154,7 +174,10 @@ class AndroidCanvasBarBenchmarkTest {
                     metrics.getMetric(FrameMetrics.INTENDED_VSYNC_TIMESTAMP))) }
             }
             activity.window.addOnFrameMetricsAvailableListener(listener, Handler(metricsThread.looper))
-            val output = File(activity.getExternalFilesDir(null), "canvas-bar-benchmark").apply { mkdirs() }
+            val output = File(activity.getExternalFilesDir(null), "canvas-bar-benchmark").apply {
+                check(!exists() || deleteRecursively())
+                check(mkdirs())
+            }
             fun quantiles(values: List<Double>): JSONObject {
                 val sorted = values.sorted()
                 fun at(fraction: Double) = if (sorted.isEmpty()) JSONObject.NULL else Math.round(sorted[((sorted.size - 1) * fraction).toInt()] * 1000) / 1000.0
@@ -169,34 +192,54 @@ class AndroidCanvasBarBenchmarkTest {
                 SystemClock.sleep(600)
                 host.measurementReport(true)
                 native { Native.completionTimings(it, true) }
+                val rendererBefore = native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) }
+                val displayBefore = native { JSONObject(Native.displayStatus(it)) }
+                val cameraBefore = JSONObject(state().getJSONObject("camera").toString())
                 synchronized(uiFrames) { uiFrames.clear() }
                 val bars = mutableListOf<Boolean>()
+                val anchorBefore = state().optJSONObject("canvas_bar")?.optJSONArray("anchor")
                 measuring = true
                 val began = System.nanoTime()
+                val beganBoot = SystemClock.elapsedRealtimeNanos()
                 val sampler = Thread {
                     while (measuring) { instrumentation.runOnMainSync { bars.add(host.canvasBar != null && host.canvasBarVisible) }; SystemClock.sleep(8) }
                 }.apply { start() }
                 android.os.Trace.beginAsyncSection("canvas-bar-$label", 1)
                 try { operation() } finally { android.os.Trace.endAsyncSection("canvas-bar-$label", 1) }
                 val operated = System.nanoTime()
-                SystemClock.sleep(400)
+                val operatedBoot = SystemClock.elapsedRealtimeNanos()
+                val displayAfterInput = native { JSONObject(Native.displayStatus(it)) }
+                val deadline = SystemClock.uptimeMillis() + 120_000
+                do {
+                    check(SystemClock.uptimeMillis() < deadline) { "$label did not finish its raster work" }
+                    SystemClock.sleep(10)
+                } while (native { Native.renderingPending(it) })
                 measuring = false; sampler.join()
                 val ended = System.nanoTime()
+                val drained = native { JSONObject(Native.displayStatus(it)) }
                 instrumentation.runOnMainSync { refreshRate = activity.window.decorView.display.refreshRate }
                 val completions = native { JSONArray(Native.completionTimings(it, false)) }
                 val metrics = host.measurementReport(false)
                 val frames = metrics.getJSONArray("frames").let { a -> (0 until a.length()).map { a.getJSONArray(it) } }
                     .filter { it.getLong(1) in began..ended }
-                val submitted = frames.filter { it.getLong(6) > 0 }
+                val submitted = frames.filter { it.getLong(1) < operated && it.getLong(6) > 0 }
                 val rows = (0 until completions.length()).map { completions.getJSONArray(it) }.filter { it.getLong(1) in began..ended }
-                val completedAt = rows.map { it.getLong(2) }.sorted()
-                val ui = synchronized(uiFrames) { uiFrames.toList() }
+                val completedAt = rows.map { it.getLong(2) }.filter { it < operated }.sorted()
+                val ui = synchronized(uiFrames) { uiFrames.filter { it.vsync < operated } }
                 val vsyncs = ui.map { it.vsync }.filter { it <= operated }.distinct().sorted()
-                val seconds = (ended - began) / 1e9
+                val seconds = (operated - began) / 1e9
                 val result = obj("label" to label, "display_hz" to refreshRate, "seconds" to seconds, "transparency" to transparency,
                     "canvas" to documentExtent, "debuggable" to BuildConfig.DEBUG,
+                    "photo" to (photoPath ?: "synthetic"), "renderer_profile" to (args.getString("rendererProfile") == "true"), "camera_before" to cameraBefore,
+                    "motion" to obj("begin_ns" to began, "end_ns" to operated,
+                        "begin_boot_ns" to beganBoot, "end_boot_ns" to operatedBoot),
+                    "drained_ns" to ended, "display_after_drain" to drained, "renderer_before" to rendererBefore,
+                    "renderer_after" to native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) },
+                    "display_before" to displayBefore, "display_after_input" to displayAfterInput,
                     "bar_visible_fraction" to if (bars.isEmpty()) 0.0 else bars.count { it } / bars.size.toDouble(),
                     "bar_transitions" to bars.zipWithNext().count { (a, b) -> a != b },
+                    "anchor_before" to anchorBefore,
+                    "anchor_after" to state().optJSONObject("canvas_bar")?.optJSONArray("anchor"),
                     "renderer_submitted_hz" to submitted.size / seconds,
                     "renderer_cpu_callback_ms" to quantiles(submitted.map { it.getLong(10) / 1e6 }),
                     "renderer_owner_cpu_ms" to quantiles(submitted.map { it.getLong(17) / 1e6 }),
@@ -230,7 +273,29 @@ class AndroidCanvasBarBenchmarkTest {
             fun wanted(name: String) = only == null || name in only
             waitFor("ready") { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
-            val wiggle = { t: Double -> (-60 - 50 * sin(2 * PI * t)) to (-40 - 35 * sin(2 * PI * t)) }
+            if (args.getString("rendererProfile") == "true") {
+                action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
+                val group = host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects()
+                    .first { "stats" in it.getJSONArray("panels").values() }.getInt("id")
+                action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
+                action(obj("type" to "select_panel_tab", "group" to group, "panel" to "stats"))
+            }
+            val wiggle = { t: Double -> (60 * (cos(2 * PI * t) - 1)) to (40 * (cos(2 * PI * t) - 1)) }
+            fun primeTransform(fraction: Double = 1.0, mode: String? = null) {
+                val before = state().getJSONObject("canvas_bar").getJSONArray("anchor")
+                drag(anchorPoint(fraction), 400, wiggle)
+                if (mode == null && (fraction == 1.0 || fraction == .5)) waitFor("priming gesture changes its geometry") {
+                    val after = state().getJSONObject("canvas_bar").getJSONArray("anchor")
+                    if (fraction == .5) kotlin.math.abs(after.getDouble(0) - before.getDouble(0)) > 100
+                    else kotlin.math.abs((after.getDouble(2) - after.getDouble(0)) - (before.getDouble(2) - before.getDouble(0))) > 100
+                }
+                invoke("reset_transform")
+                if (mode != null) {
+                    invoke(mode)
+                    waitFor("$mode is selected") { state().getJSONArray("commands").objects().any { it.getString("id") == mode && it.getBoolean("selected") } }
+                }
+                SystemClock.sleep(800)
+            }
 
             if (wanted("ui")) {
                 newDocument(2048 to 1536)
@@ -271,28 +336,131 @@ class AndroidCanvasBarBenchmarkTest {
                 val radius = minOf(area.getDouble(2), area.getDouble(3)) * .3
                 measure("paint-strokes") { drag(center, duration) { t -> radius * sin(t * 3.2) to radius * .65 * sin(t * 4.7) } }
             }
+            if (wanted("effects") || wanted("spatial-effects")) {
+                data class Scrub(val id: String, val key: String, val title: String, val label: String, val start: Double, val chain: Boolean = false)
+                val scrubs = if (wanted("spatial-effects")) listOf(
+                    Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-small-drag", .2),
+                    Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-large-drag", .7),
+                ) else listOf(
+                    Scrub("exposure", "exposure", "Exposure", "effect-exposure-drag", .45),
+                    Scrub("exposure", "exposure", "Exposure", "effect-chain-exposure-drag", .45, true),
+                )
+                for (scrub in scrubs) {
+                    newDocument()
+                    place(photo())
+                    invoke("apply_transform")
+                    waitFor("placed photo") { state().optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") != "placement" }
+                    fun effect(op: JSONObject) = action(obj("type" to "effect", "action" to op))
+                    if (scrub.chain) {
+                        effect(obj("op" to "insert", "effect" to "levels"))
+                        effect(obj("op" to "set", "layer" to state().getJSONObject("layer_properties").getLong("layer"),
+                            "key" to "gamma", "value" to obj("kind" to "number", "value" to 1.25)))
+                        effect(obj("op" to "insert", "effect" to "vibrance"))
+                    }
+                    effect(obj("op" to "insert", "effect" to scrub.id))
+                    action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
+                    val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+                        .first { "properties" in it.array("panels").values() }
+                    action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
+                    if (group.optString("active") != "properties") action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to "properties"))
+                    action(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
+                    waitFor("panel configuration closed") { state().getJSONObject("customization").isNull("expanded") }
+                    waitFor("${scrub.title} control") { findTag("number-slider-${scrub.title}") != null }
+                    invoke("fit_canvas")
+                    var track = android.graphics.RectF()
+                    instrumentation.runOnMainSync {
+                        val (root, node) = findTag("number-slider-${scrub.title}")!!
+                        val origin = IntArray(2); root.view.getLocationOnScreen(origin)
+                        node.boundsInRoot.let { track = android.graphics.RectF(it.left + origin[0], it.top + origin[1], it.right + origin[0], it.bottom + origin[1]) }
+                    }
+                    check(track.width() > 40 && track.height() > 0)
+                    fun value() = state().getJSONObject("layer_properties").array("controls").objects()
+                        .first { it.getString("key") == scrub.key }.getJSONObject("value").getDouble("value")
+                    val start = track.left + track.width() * scrub.start - host.surfaceOrigin.x to track.centerY() - host.surfaceOrigin.y.toDouble()
+                    val before = value()
+                    drag(start, 250) { t -> track.width() * .1 * t / .25 to 0.0 }
+                    waitFor("${scrub.title} gesture changes its value") { kotlin.math.abs(value() - before) > .1 }
+                    waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
+                    val values = java.util.Collections.synchronizedSet(mutableSetOf<Double>())
+                    val label = scrub.label
+                    measure(label) {
+                        val sampler = Thread {
+                            val until = SystemClock.uptimeMillis() + duration
+                            while (SystemClock.uptimeMillis() < until) { values += value(); SystemClock.sleep(8) }
+                        }.apply { start() }
+                        drag(start, duration) { t -> track.width() * .1 * (1 - kotlin.math.abs(1 - (t % .5) * 4)) to 0.0 }
+                        sampler.join()
+                    }
+                    val result = File(output, "$label.json")
+                    result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted())).put("slider_bounds",
+                        JSONArray(listOf(track.left, track.top, track.right, track.bottom))).toString(2))
+                    check(values.size > 1) { "$label did not change its value during motion" }
+                    if (scrub.id == "gaussian_blur") check(values.all { it > 0 && it < 21 }) { "$label reached a stationary slider limit" }
+                }
+                if (args.getString("captureFilters") == "true") for (theme in listOf("light", "dark")) {
+                    action(obj("type" to "set_theme", "theme" to theme))
+                    waitFor("filter canvas ready") { host.snapshot?.optBoolean("brush_ready") == true }
+                    SystemClock.sleep(300)
+                    val shot = instrumentation.uiAutomation.takeScreenshot()
+                    File(output, "filter-$theme.png").outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    shot.recycle()
+                }
+            }
             if (wanted("photo")) {
                 newDocument()
                 place(photo())
                 SystemClock.sleep(3000)
                 measure("photo-bar-show-hide") { hideAndShow(duration) }
                 measure("photo-bar-contact-taps") { taps(corner().let { it.first - 200 to it.second - 200 }, duration) }
+                primeTransform(.5)
+                measure("photo-translate-drag") { drag(anchorPoint(.5), duration, wiggle) }
+                invoke("reset_transform")
+                primeTransform()
                 measure("photo-handle-drag-bar-hidden") { drag(corner(), duration, wiggle) }
+                invoke("reset_transform")
                 invoke("show_canvas_action_bar")
                 waitFor("completion-only bar") { host.canvasBar?.array("items")?.length() == 0 }
                 measure("photo-handle-drag-bar-visible") { drag(corner(), duration, wiggle) }
+                invoke("reset_transform")
                 measure("photo-handle-drags") { drags(duration) }
+                invoke("reset_transform")
                 invoke("show_canvas_action_bar")
                 invoke("apply_transform")
                 waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
                 invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
                 waitFor("photo transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
                 SystemClock.sleep(1500)
+                primeTransform(.5)
+                measure("photo-pixels-translate-drag") { drag(anchorPoint(.5), duration, wiggle) }
+                invoke("reset_transform")
+                primeTransform()
                 measure("photo-pixels-handle-drag") { drag(corner(), duration, wiggle) }
+                invoke("reset_transform")
                 measure("photo-pixels-drags") { drags(duration) }
+                invoke("reset_transform")
                 invoke("transform_distort")
                 SystemClock.sleep(1000)
+                primeTransform(mode = "transform_distort")
                 measure("photo-pixels-distort-drag") { drag(corner(), duration, wiggle) }
+                invoke("reset_transform")
+                invoke("transform_warp")
+                primeTransform(1.0 / 3, "transform_warp")
+                measure("photo-pixels-warp-drag") { drag(anchorPoint(1.0 / 3), duration, wiggle) }
+                invoke("cancel_transform")
+            }
+            if (wanted("cropped_photo")) {
+                newDocument(width / 4 to height / 4)
+                place(photo())
+                invoke("placement_original_size")
+                val anchor = state().getJSONObject("canvas_bar").getJSONArray("anchor")
+                check(kotlin.math.abs(anchor.getDouble(2) - anchor.getDouble(0) - width) < 1) { "Photo width: $anchor, expected $width" }
+                check(kotlin.math.abs(anchor.getDouble(3) - anchor.getDouble(1) - height) < 1) { "Photo height: $anchor, expected $height" }
+                repeat(4) { if (state().getJSONObject("camera").getDouble("zoom") > .35) invoke("zoom_out") }
+                check(state().getJSONObject("camera").getDouble("zoom") <= .35)
+                SystemClock.sleep(1500)
+                drag(anchorPoint(.5), 500, wiggle)
+                SystemClock.sleep(1500)
+                measure("cropped-photo-translate-drag") { drag(anchorPoint(.5), duration, wiggle) }
                 invoke("cancel_transform")
             }
             if (wanted("crop")) {
@@ -331,6 +499,7 @@ class AndroidCanvasBarBenchmarkTest {
                 invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
                 waitFor("photo transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
                 SystemClock.sleep(1500)
+                primeTransform()
                 measure("scaled-photo-pixels-handle-drag") { drag(corner(), duration, wiggle) }
                 invoke("cancel_transform")
             }

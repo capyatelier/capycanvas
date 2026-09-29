@@ -86,6 +86,14 @@ impl EffectSpace {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectResolution {
+    #[default]
+    Native,
+    Display,
+}
+
 /// WGSL functions take premultiplied color in the program's `space`, document
 /// position and a parameter offset. Empty `passes` means pointwise and permits
 /// shader fusion.
@@ -99,6 +107,8 @@ pub struct EffectProgram {
     pub alpha: EffectAlpha,
     #[serde(default, skip_serializing_if = "EffectSpace::is_linear")]
     pub space: EffectSpace,
+    #[serde(default)]
+    pub resolution: EffectResolution,
     /// Ordinary WGSL library with a uniquely named function matching the ABI.
     pub wgsl: EffectShader,
     pub entry: Arc<str>,
@@ -715,6 +725,18 @@ pub fn gradient_value(stops: &[GradientStop], x: f32, space: RgbSpace) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn display_resolution_requires_an_explicit_program_declaration() {
+        let program = fixture("exposure").program();
+        let mut json = serde_json::to_value(&program).unwrap();
+        let restored: EffectProgram = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(restored.resolution, EffectResolution::Display);
+        assert_eq!(&restored, program.as_ref());
+        json.as_object_mut().unwrap().remove("resolution");
+        assert_eq!(serde_json::from_value::<EffectProgram>(json.clone()).unwrap().resolution, EffectResolution::Native);
+        json["resolution"] = "unknown".into();
+        assert!(serde_json::from_value::<EffectProgram>(json).is_err());
+    }
     #[test]
     fn tagged_effect_colors_upload_document_coordinates_and_preserve_definitions() {
         let red = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0., 123. / 65535.]).unwrap();

@@ -123,33 +123,27 @@ fn frequency_separation_bakes_low_and_high_in_an_isolated_group_above_the_hidden
     doc.active_layer = photo;
     let filters = filters();
     let plan = doc.separation_plan(photo, &filters, ids()).unwrap();
-    let [separation, low, high, blur, high_pass, low_coverage, high_coverage] = ids();
+    let [separation, low, high, blur, low_coverage, high_coverage] = ids();
     assert_eq!(plan.active, high);
-    let bakes: Vec<_> = plan
-        .operations
-        .iter()
-        .map(|(target, operation)| {
-            let LayerOperationKind::Bake { members, offset } = &operation.kind else { panic!("a bake") };
-            assert_eq!(*offset, Point { x: 30., y: -10. }, "members move from the group into the canvas");
-            (*target, operation.coverage.id, members.clone())
-        })
-        .collect();
-    for ((target, coverage, members), (expected, expected_coverage, filter, effect)) in
-        bakes.iter().zip([(low, low_coverage, blur, &filters.blur), (high, high_coverage, high_pass, &filters.high_pass)])
-    {
-        assert_eq!((*target, *coverage), (expected, expected_coverage));
-        assert_eq!(members.len(), 2);
-        assert_eq!(members[0].id, filter);
-        assert_eq!(members[0].effect.as_ref(), Some(effect));
-        assert!(members[0].properties.clipped, "each filter acts on the layer alone and keeps its coverage");
-        let source = &members[1];
-        assert_eq!(source.id, photo);
-        assert!(source.visible && source.opacity == 1. && source.properties.parent.is_none());
-        assert_eq!(source.properties.offset, Point { x: 4., y: 5. });
-    }
+    assert_eq!(plan.operations.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [low, high]);
+    let LayerOperationKind::Bake { members, offset } = &plan.operations[0].1.kind else { panic!("Low is baked") };
+    assert_eq!(*offset, Point { x: 30., y: -10. });
+    assert_eq!(plan.operations[0].1.coverage.id, low_coverage);
+    assert_eq!(members.len(), 2);
+    assert_eq!(members[0].id, blur);
+    assert_eq!(members[0].effect.as_ref(), Some(&filters.blur));
+    assert!(members[0].properties.clipped);
+    let source = &members[1];
+    assert_eq!(source.id, photo);
+    assert!(source.visible && source.opacity == 1. && source.properties.parent.is_none());
+    assert_eq!(source.properties.offset, Point { x: 4., y: 5. });
+    let LayerOperationKind::FrequencyDetail { members: original, offset: detail_offset, low: reference } = &plan.operations[1].1.kind else {
+        panic!("High reuses Low")
+    };
+    assert_eq!((*detail_offset, *reference), (*offset, low));
+    assert_eq!(original.as_ref(), std::slice::from_ref(source));
+    assert_eq!(plan.operations[1].1.coverage.id, high_coverage);
     assert_eq!(filters.blur.value("sigma"), Some(&EffectValue::Number(6.5)));
-    assert_eq!(filters.high_pass.value("sigma"), Some(&EffectValue::Number(6.5)));
-    assert_eq!(filters.high_pass.value("amount"), Some(&EffectValue::Number(50.)));
     let before = doc.clone();
     let inverse = doc.apply(Edit::Batch(plan.edits)).unwrap();
     assert_eq!(names(&doc), ["Above", "Frequency Separation", "High", "Low", "Photo", "Under", "Paper"]);

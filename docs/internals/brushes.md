@@ -9,7 +9,9 @@ CPU engine and pixel work in the GPU renderer. Every platform uses both parts.
 The pencil, charcoal and ink presets now share a swept GPU contact model with
 stationary paper, pressure thresholds, directional shading and coherent ink
 coverage. See [Contact brush engine](contact-brush-engine.md) for
-the implementation, preset catalog, review samples and measured costs.
+the implementation, preset catalog, review samples and measured costs. The
+[Bristle Paintbrush](../development/bristle-paintbrush.md) sweeps a fan of hairs
+through the same contact path.
 
 ## Brush definitions and strokes
 
@@ -38,6 +40,8 @@ stroke so replay can reproduce its variation.
 Dabs and shared style data are collected into batches. The renderer receives those
 batches through the [render contract](../../crates/layer-render/src/lib.rs), rather
 than receiving a separate platform callback for each mark.
+Pointwise paint packs each tile's intersecting dabs in stroke order. Revisiting a
+tile does not make it evaluate intervening contacts elsewhere on the canvas.
 
 ## GPU execution
 
@@ -82,7 +86,10 @@ those distinctions in detail.
 The engine can draw temporary predicted contacts to reduce the apparent gap
 between the pen and the stroke. Prediction uses replaceable preview state, leaving
 committed paint, material state and undo history unchanged. Real input replaces
-that preview. Predictions are not saved into the document.
+that preview. Predictions are not saved into the document. When the view is
+zoomed out so far that a 4×4 or 2×2 block of document pixels covers at most
+half a surface pixel, dry preview paint is evaluated once per block; committed
+paint is always evaluated per pixel.
 
 Replay uses the stored real samples and brush snapshot. Any brush change should
 therefore be tested both while drawing and after undo/redo or reopening a project.
@@ -120,7 +127,8 @@ are captured a few per still frame. While the pen is down the sources never
 upload or wait for the GPU: a reference page that would need filter images, a
 decode or a wait stays empty, and the stroke is reported as a miss. The engine
 replays it once contact ends, as it replays an end taper, and the replay stays
-one undo step.
+one undo step. Completed-stroke replay restores only its target raster on
+renderers that track raster damage; untouched composition pages remain valid.
 
 ## Clone Stamp
 

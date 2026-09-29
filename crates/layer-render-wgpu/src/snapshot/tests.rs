@@ -16,6 +16,16 @@ fn capture(project: Project) -> Result<SnapshotRenderer, GpuRasterError> {
 }
 
 #[test]
+fn read_only_capture_does_not_compile_paint_publication_pipelines() {
+    let document = Document::new("Read-only capture", 33, 17);
+    let color = [0.25, 0.5, 0.75, 1.];
+    let mut capture = gpu().capture(Project { document }, color, 0., Default::default()).unwrap();
+    assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
+    assert!(capture.read_region([0, 0, 33, 17]).unwrap().iter().all(|p| *p == color));
+    assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
+}
+
+#[test]
 fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
     let mut doc = Document::new("Animation phase", 32, 32);
     let program = crate::tests::fixture("domain_warp").program();
@@ -254,7 +264,7 @@ fn frame(project: &Project) -> (WgpuRasterizer, Vec<[f32; 4]>) {
         ..packet(&project.document.layers, extent)
     })
     .unwrap();
-    let bytes = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+    let bytes = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
     let pixels = bytes
         .chunks_exact(16)
         .map(|p| {
@@ -291,7 +301,7 @@ fn snapshot_identity_png_tiff_preserve_every_code_and_hidden_rgb() {
                     expected,
                     "{space:?} {depth:?} tiff={tiff}"
                 );
-                assert!(reader.renderer.composite_texture.is_none());
+                assert!(reader.renderer.scale_display.is_none());
                 assert!(
                     reader
                         .renderer
@@ -712,7 +722,7 @@ fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
             }
             let mut reader =
                 capture(project).unwrap();
-            assert!(reader.renderer.composite_texture.is_none());
+            assert!(reader.renderer.scale_display.is_none());
             for rect in [
                 [257, 19, 31, 33],
                 [0, 0, 97, 79],
@@ -734,7 +744,7 @@ fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
                         }
                     }
                 }
-                assert!(reader.renderer.composite_texture.is_none());
+                assert!(reader.renderer.scale_display.is_none());
                 assert_eq!(reader.renderer.metrics().composite_storage_bytes, 0);
                 assert!(reader.renderer.selection_clip.storage_bytes() < 641 * 389 / 2);
             }
@@ -819,7 +829,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
     );
     reader.planned_pixel_bytes = 1;
     assert!(reader.read_region([0, 0, 17, 17]).is_err());
-    assert!(reader.renderer.composite_texture.is_none());
+    assert!(reader.renderer.scale_display.is_none());
     reader.control().cancel();
     let mut out = Vec::new();
     assert!(

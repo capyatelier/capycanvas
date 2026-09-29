@@ -3,8 +3,6 @@
 use super::*;
 use paint_transform::snapshot::Splitter;
 use pixel_transform::{BatchDraw, TiledTransformRecord, TransformTile};
-mod mips;
-pub(super) use mips::Mip;
 
 #[derive(Clone)]
 pub(super) struct PlacementJob {
@@ -56,18 +54,20 @@ impl Scene {
         packet: FramePacket<'_>,
         index: usize,
         tile: [u32; 2],
+        source_level: u32,
     ) -> Result<usize, GpuRasterError> {
         let layer = &packet.layers[index];
         let extent = layer.local_extent(r.document_extent);
         let affine = layer_core::target_transform(packet.layers, layer.id);
         if self.placement_display
-            && let Some(mip) = self.placement_mips.get(&layer.id).filter(|m| m.usable)
+            && source_level > 0
+            && let Some((plan, view)) = self.scale_sources.sample(layer.id, source_level)
         {
-            let (level, view, size) = mip.image.sample(mip.sample_level);
-            let scale = (1 << level) as f32;
+            let scale = (1 << plan.level) as f32;
+            let size = plan.size;
             let view = view.clone();
             let transform = layer_core::ImageTransform::affine(
-                layer_core::Affine([scale, 0., 0., scale, 0., 0.]).then(affine),
+                layer_core::Affine([scale, 0., 0., scale, plan.bounds.min_x() as f32, plan.bounds.min_y() as f32]).then(affine),
             );
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             self.jobs.push(Job::Placement(Box::new(PlacementJob {

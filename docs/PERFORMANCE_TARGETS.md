@@ -41,6 +41,31 @@ tables and hardware specifications.
 
 ## How to test
 
+### Engineering budgets
+
+These budgets leave time for presentation and scheduling within the tier's frame
+period. They guide optimization; passing them does not replace the moving-frame
+measurements below.
+
+| Work per moving frame | Low | Mid | Top |
+| --- | --- | --- | --- |
+| CPU input, update and submission | 4 ms | 3 ms | 2 ms |
+| GPU painting, composition and presentation | 12 ms | 8 ms | 6 ms |
+
+Background refinement must yield to fresh input. Aim for at most one frame of
+additional delay when drawing resumes. On the low tier, aim to finish ordinary
+stroke refinement within 100–250 ms and broad composition damage within
+250–500 ms. Measure both completion and interrupted refinement; a fast completion
+time cannot justify a long input stall.
+
+Model each workload from its changed pixels, texture reads and writes, filter
+taps, and submissions. Compare it with the same kernels and formats measured on
+the reference device. Investigate costs above 1.5 times that calibrated estimate.
+Peak memory bandwidth alone is not an adequate model for conversion, filtering,
+small dispatches, or CPU submission overhead.
+
+### Qualification
+
 **When a target is met:**
 
 - Brushes: at least the target in completed canvas updates per second, with a
@@ -67,28 +92,21 @@ Record each result in the tier's table with its value, date and commit.
 
 ## Where we stand
 
-Measured on 2026-09-27 at `be5a7c38`:
+The integrated compositor has current moving-stroke measurements on all three
+reference tablets (2026-09-29):
 
-- **Brushes.** One of the 114 brush-and-tier combinations meets its target: the
-  Calligraphy Pen on the top tier.
-  - The G-Pen at its guaranteed size completes 88 updates/s on the top tier
-    (target 120), 17 on the mid tier (target 90) and 37 on the low tier (target
-    60).
-  - On the top tier, complex brushes are close at 76–118 updates/s.
-  - On the mid and low tiers, complex brushes reach only 3–25.
-- **Wet, smudge and blending brushes run out of memory on every tier at 512 px.**
-  They are killed, abort in the allocator, or crash in the GPU driver.
-- **Transforms and placement.**
-  - At 24 MP the renderer has headroom on the mid tier (188–217 submissions/s)
-    and the low tier (130–141).
-  - One exception: pixel-transform handle drags on the TCL manage only 24/s.
-  - The top tier has no on-device transform measurements.
-- **Navigation.**
-  - The top tier meets pinch zoom on 61 MP (119 fps).
-  - The low and mid tiers are unmeasured on their canvases.
-  - The MovinkPad 11 presents at 60 Hz, not 90 Hz.
-- **UI.** Moving the canvas bar and changing panel content take 21–63 ms per UI
-  frame at p50, which misses the target on every tier.
+- TCL G-Pen 1024 px on 12 MP reaches 53.6 fresh updates/s; **60 is not met**.
+- Clone, Healing and Spot Healing at 512 px reach 114–120 fresh updates/s on
+  the mid tier and 185–192 on the top tier. Their completion gaps meet the
+  moving-stroke criterion. Healing's work after pen-up remains open.
+- The XP-Pen 6 GB memory journey completes 24 MP Frequency Separation around
+  2.0 GiB peak PSS, with more than 1 GiB available. Its roughly 10-second
+  completion time remains above the 2–5-second engineering aim.
+
+The tier tables identify the exact frozen builds and measurement conditions.
+Other brush, navigation, transform and UI rows retain their previous measurements
+or remain unmeasured; improvements above do not qualify them. Exact refinement,
+startup and host presentation still need their complete qualification matrices.
 
 [Known gaps](performance/known-gaps.md) lists the details and open measurements.
 

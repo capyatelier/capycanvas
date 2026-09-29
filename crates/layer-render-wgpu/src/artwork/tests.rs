@@ -84,12 +84,9 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         r.native_edit.as_mut().unwrap().color_cache_bytes = 0;
         r.submit(frame(&doc)).unwrap();
-        let visible = r.composite_texture.clone().unwrap();
+        let visible = r.scale_display.as_ref().unwrap().texture().clone();
         let before = crate::layer_tests::page_bytes(&r, &visible);
-        // Display storage can be removed/replaced without changing query input.
-        r.composite_texture = None;
-        r.composite_view = None;
-        r.composite_bind_group = None;
+        r.scale_display = None;
         for position in [[20u32, 20], [255, 255], [512, 272]] {
             for area in [ColorSampleArea::Point, ColorSampleArea::Average5] {
                 let radius = area.width() / 2;
@@ -150,7 +147,7 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
             r.paint_layers[0].pages.is_empty(),
             "queries do not materialize cold paint"
         );
-        assert!(r.composite_texture.is_none());
+        assert!(r.scale_display.is_none());
     }
 }
 
@@ -166,12 +163,12 @@ fn filtered_query_crops_match_full_resolution_and_reject_excessive_dependencies(
         .insert(0, crate::tests::image_windows::effect(21, false, false));
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     r.submit(frame(&doc)).unwrap();
-    let visible = r.composite_texture.clone().unwrap();
+    let visible = crate::test_support::document_texture(&r).clone();
     let full = crate::layer_tests::page_bytes(&r, &visible);
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
     r.encode_clear_value(
         &mut encoder,
-        r.composite_view.as_ref().unwrap(),
+        r.scale_display.as_ref().unwrap().view(),
         "poison display only",
         1.,
     );

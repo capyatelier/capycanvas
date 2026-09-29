@@ -47,7 +47,7 @@ pub(crate) struct Surface {
     trace_timings: bool,
     // One surface-owned completion source for startup and update admission.
     completed_frames: Arc<AtomicU64>,
-    completion_observer: Option<Arc<Mutex<Vec<[u64; 4]>>>>,
+    completion_observer: Option<Arc<Mutex<Vec<[u64; 5]>>>>,
     logical_extent: [u32; 2],
     quarter_turns: u32,
     last_view: Option<layer_render::ViewState>,
@@ -142,6 +142,8 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "color_space": format!("{:?}", surface.config.color_space),
                 "present_mode": format!("{:?}", surface.config.present_mode),
                 "retained_target": surface.presenter.retains_target(),
+                "pending_composition": layer_render::CanvasRenderer::has_pending_work(gpu.as_ref()),
+                "pending_edits": a.host.session.engine().has_pending_document_edits(),
                 "overview_count": a.navigators.count(),
                 "glass_regions": a.glass.len(),
                 "backdrop_frames": surface.presenter.backdrop_frames(),
@@ -165,9 +167,44 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 })).collect::<Vec<_>>(),
             })
         }
-        _ => serde_json::json!({"error": "Canvas surface is unavailable"}),
+        _ => serde_json::json!({"error": "Canvas surface is unavailable", "gpu_failure": a.gpu_watch.failure()}),
     };
     string(&mut env, Ok(value.to_string()))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_renderingPending(
+    _: JNIEnv, _: JClass, handle: jlong,
+) -> jboolean {
+    let a = unsafe { app(handle) };
+    let engine = a.host.session.engine();
+    (engine.has_pending_document_edits()
+        || layer_render::CanvasRenderer::has_pending_work(engine.backend())
+        || a.surface.as_ref().is_some_and(|surface|
+            surface.completed_frames.load(Ordering::Acquire) < surface.submitted_frames)) as jboolean
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_rendererMemory(
+    mut env: JNIEnv, _: JClass, handle: jlong,
+) -> jstring {
+    let a = unsafe { app(handle) };
+    let report = a.host.session.engine().backend().0.as_ref()
+        .and_then(|gpu| gpu.device().generate_allocator_report())
+        .map(|report| {
+            let mut labels = std::collections::BTreeMap::<String, (u64, u64)>::new();
+            for allocation in report.allocations {
+                let entry = labels.entry(allocation.name).or_default();
+                entry.0 += 1;
+                entry.1 += allocation.size;
+            }
+            serde_json::json!({
+                "allocated_bytes": report.total_allocated_bytes,
+                "reserved_bytes": report.total_reserved_bytes,
+                "allocations": labels,
+            })
+        });
+    string(&mut env, Ok(serde_json::to_string(&report).unwrap()))
 }
 
 #[unsafe(no_mangle)]
@@ -356,10 +393,11 @@ impl App {
                 pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                     label: Some("Capy Canvas Android"),
                     required_features: adapter.features()
-                        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE
+                        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS | wgpu::Features::PIPELINE_CACHE
                             | wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE
                             | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
                     required_limits: limits,
+                    memory_hints: layer_render_wgpu::memory_hints(),
                     ..Default::default()
                 }))
                 .map_err(error)?;
@@ -488,7 +526,7 @@ impl App {
         // Still propagate its error so the host offers renderer recovery.
         self.check_gpu()?;
         if self.host.session.engine().backend().0.is_none() { return Ok(false); }
-        self.frame_cost = [0; 5];
+        self.frame_cost.fill(0);
         if (!self.host.dirty && self.host.startup.complete) || self.surface.is_none() {
             return Ok(false);
         }
@@ -537,6 +575,7 @@ impl App {
         let scale = self.host.session.state().camera.viewport[0] as f32 / self.host.logical[0];
         let tone = self.tone.current(&self.host);
         let presented_tone = tone.is_some().then(|| self.tone.publications());
+        let consumed_paint_ns = self.host.session.engine().metrics().last_consumed_paint_ns;
         let hdr_output=self.hdr_output();
         let color=if hdr_output {SdrSurfaceColor::Bt2100Pq} else {self.sdr_color()};
         let screen = &self.host.session.state().screen;
@@ -572,6 +611,9 @@ impl App {
             surface.configure(gpu, extent)?;
         }
         self.frame_cost[0] = elapsed();
+        if !surface.presenter.needs_present(gpu, view, surround) {
+            return Ok(self.host.dirty);
+        }
         let target = match surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -601,6 +643,7 @@ impl App {
             )
             .map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
+        let submitted_ns = surface.completion_observer.as_ref().map_or(0, |_| monotonic_ns());
         gpu.queue().present(target);
         surface.last_view = Some(view);
         surface.last_paint_start = paint_start;
@@ -609,14 +652,13 @@ impl App {
             let complete = surface.completed_frames.clone();
             let frame = surface.submitted_frames;
             let observer = surface.completion_observer.clone();
-            let submitted_ns = observer.as_ref().map_or(0, |_| monotonic_ns());
             let raster_frame = observer.as_ref().map_or(0, |_| gpu.submitted_updates());
             gpu.queue().on_submitted_work_done(move || {
                 complete.fetch_max(frame, Ordering::Release);
                 if let Some(observer) = observer {
                     let completed_ns = monotonic_ns();
                     let mut rows = observer.lock().unwrap();
-                    if rows.len() < 32768 { rows.push([frame, submitted_ns, completed_ns, raster_frame]); }
+                    if rows.len() < 32768 { rows.push([frame, submitted_ns, completed_ns, raster_frame, consumed_paint_ns]); }
                 }
                 // Callback service time is an upper bound on GPU completion,
                 // not scanout or physical pen-to-photon latency.
@@ -684,15 +726,8 @@ pub extern "system" fn Java_art_capycanvas_Native_frameCost(
     array: jni::objects::JLongArray,
 ) {
     let app = unsafe { app(handle) };
-    let mut costs = [0i64; 11];
-    costs[..5].copy_from_slice(&app.frame_cost);
-    if let Some(gpu) = &app.host.session.engine().backend().0 {
-        for (target, ms) in costs[5..].iter_mut().zip(gpu.metrics().frame_cpu_ms) {
-            *target = (ms * 1_000_000.) as i64;
-        }
-    }
     let result = env
-        .set_long_array_region(&array, 0, &costs)
+        .set_long_array_region(&array, 0, &app.frame_cost)
         .map_err(error);
     fail(&mut env, result);
 }
@@ -910,6 +945,7 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
     records: JDoubleArray,
     count: jint,
     predicted: jboolean,
+    barrel_twist: jboolean,
 ) {
     let result = (|| {
         if count <= 0
@@ -925,13 +961,16 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
             .get_double_array_region(&records, 0, &mut data)
             .map_err(error)
             .and_then(|()| {
-                app.host.pointer(
-                    id.max(0) as u64,
-                    tool as u8,
-                    button as u8,
-                    &data,
-                    predicted != 0,
-                )
+                let view_revision = app.host.session.state().camera.revision;
+                app.host.pointer_batch(layer_host::PointerBatch {
+                    id: id.max(0) as u64,
+                    tool: tool as u8,
+                    button: button as u8,
+                    records: &data,
+                    predicted: predicted != 0,
+                    view_revision,
+                    barrel_twist: barrel_twist != 0,
+                })
             });
         app.pointer_records = data;
         result
@@ -958,8 +997,15 @@ pub extern "system" fn Java_art_capycanvas_Native_frame(
     let clock = app.profiling.then(std::time::Instant::now);
     app.observe_gpu_failure(true);
     let poll = clock.map_or(0, |clock| clock.elapsed().as_nanos() as i64);
+    let previous_submission = app.host.session.engine().backend().0.as_ref().map(|gpu| gpu.submitted_updates());
     let result = app.render(now.max(0) as u64, presentation.max(now).max(0) as u64);
     app.frame_cost[4] = poll;
+    if let Some(gpu) = &app.host.session.engine().backend().0
+        && previous_submission != Some(gpu.submitted_updates()) {
+        for (target, ms) in app.frame_cost[5..].iter_mut().zip(gpu.metrics().frame_cpu_ms) {
+            *target = (ms * 1_000_000.) as i64;
+        }
+    }
     match result {
         Ok(wake) => wake as jboolean,
         Err(e) => {

@@ -54,6 +54,7 @@ impl SelectionPainter {
                 include_str!("analytic_coverage.wgsl"),
                 include_str!("brush_coverage.wgsl"),
                 include_str!("contact.wgsl"),
+                include_str!("bristle.wgsl"),
                 include_str!("brush_footprint.wgsl"),
                 &shader_source("before", 6),
                 &shader_source("enclosed", 7),

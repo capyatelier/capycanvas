@@ -221,6 +221,36 @@ fn clone_reads_over_the_strokes_own_dabs_see_the_pixels_it_started_on() {
 }
 
 #[test]
+fn retouch_source_preserves_unmixed_perceptual_pixels() {
+    for opacity in [0., 1.] {
+        let mut doc = document(SIZE);
+        doc.blend_space = layer_core::BlendSpace::Perceptual;
+        doc.reference_layers = [PHOTO, LayerId(2)].into();
+        let (mut input, mut engine) = engine(doc, false);
+        engine.append_layer_operation(TARGET, LayerOperation {
+            placement: layer_core::Affine::IDENTITY,
+            coverage: LayerMask::reveal_all(LayerId(21), Point::default()),
+            kind: LayerOperationKind::Fill { color: [0.1433, 0.27534, 0.423, 1.], alpha_locked: false },
+        }).unwrap();
+        engine.set_layer_opacity(TARGET, opacity).unwrap();
+        engine.set_retouch(Some(RetouchSource::References));
+        engine.set_retouch_points(&[Point { x: 40., y: 40. }]);
+        flush(&mut engine);
+        draw(&mut engine, &mut input, pen(1, PenPhase::Down, [600., 400.], SampleFlags::PRIMARY));
+        let (actual, complete) = sample(engine.backend_mut(), [0, 0], [0.; 2]);
+        assert!(complete);
+        let r = engine.backend();
+        let expected = if opacity == 0. {
+            let cache = &r.retouch.as_ref().unwrap().cache;
+            let texture = &cache.slots[cache.pages[&[0, 0]]].page.texture;
+            floats(&crate::layer_tests::page_bytes(r, texture))
+        } else { live_page(r, [0, 0]) };
+        let error = actual.iter().flatten().zip(expected.iter().flatten()).map(|(a,b)| (a-b).abs()).fold(0., f32::max);
+        assert_eq!(error, 0., "opacity {opacity}: an unmixed source must keep its exact pixels");
+    }
+}
+
+#[test]
 fn current_and_below_lays_the_target_at_its_opacity_over_the_references() {
     for space in layer_core::BlendSpace::ALL {
         current_and_below_in(space);

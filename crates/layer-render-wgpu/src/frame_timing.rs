@@ -35,12 +35,15 @@ pub struct GpuFrameTimingStats {
 // Metal can omit timestamp writes for empty passes. Keep a tiny storage write
 // in each marker pass. Created only when telemetry is enabled; its GPU overhead
 // is part of the measured span, and must be calibrated by the caller.
-struct TimestampMarker {
-    pipeline: wgpu::ComputePipeline,
-    bind_group: wgpu::BindGroup,
+enum TimestampMarker {
+    Encoder,
+    Pass { pipeline: wgpu::ComputePipeline, bind_group: wgpu::BindGroup },
 }
 impl TimestampMarker {
     pub fn new(device: &wgpu::Device) -> Self {
+        if device.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS) {
+            return Self::Encoder;
+        }
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("timestamp marker"),
             source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var<storage, read_write> marker: u32; @compute @workgroup_size(1) fn main() { marker = marker + 1u; }".into()),
@@ -62,12 +65,13 @@ impl TimestampMarker {
         let bind_group = crate::bindings::group(device, "timestamp marker", &pipeline.get_bind_group_layout(0), [
             buffer.as_entire_binding(),
         ]);
-        Self {
-            pipeline,
-            bind_group,
-        }
+        Self::Pass { pipeline, bind_group }
     }
     pub fn write(&self, encoder: &mut wgpu::CommandEncoder, query: &wgpu::QuerySet, index: u32) {
+        let Self::Pass { pipeline, bind_group } = self else {
+            encoder.write_timestamp(query, index);
+            return;
+        };
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("timestamp marker"),
             timestamp_writes: Some(wgpu::ComputePassTimestampWrites {
@@ -76,8 +80,8 @@ impl TimestampMarker {
                 end_of_pass_write_index: None,
             }),
         });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, bind_group, &[]);
         pass.dispatch_workgroups(1, 1, 1);
     }
 }
@@ -333,8 +337,9 @@ mod tests {
     fn encoded_span_excludes_cpu_delay_before_the_drawing_is_submitted() {
         let instance = crate::WgpuRasterizer::headless_instance();
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        for extra in [wgpu::Features::empty(), adapter.features() & wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS] {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: wgpu::Features::TIMESTAMP_QUERY,
+            required_features: wgpu::Features::TIMESTAMP_QUERY | extra,
             ..Default::default()
         }))
         .unwrap();
@@ -365,6 +370,7 @@ mod tests {
             samples[0]
         );
         assert_eq!(timer.stats().pending, 0);
+        }
     }
 
     #[test]

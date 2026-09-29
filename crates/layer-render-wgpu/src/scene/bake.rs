@@ -21,11 +21,13 @@ impl Scene {
         members: &[Layer],
         offset: layer_core::Point,
         damage: PixelRect,
+        low: Option<&Layer>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         let layers = layer_core::bake_layers(members, offset);
         let extent = layer.local_extent(packet.document_extent);
         let source = FramePacket {
+            commit_rasters: true,
             view: layer_render::ViewState { background_rgba_linear: [0.; 4], ..packet.view },
             document_extent: extent,
             layers: &layers,
@@ -43,37 +45,42 @@ impl Scene {
             .filter(|stored| stored.id == layer.id)
             .flat_map(|stored| &stored.pages)
             .filter(|page| !damage.page_local(page.coordinate).is_empty())
-            .map(|page| (page.coordinate, page.active().texture.clone()))
+            .map(|page| (page.coordinate, Image {
+                texture: page.active().texture.clone(), view: page.active().view.clone(),
+                plan: display_mips::Plan::window(extent, 0, page_rect(page.coordinate).intersect(PixelRect::full(extent))),
+            }))
             .collect();
         self.placement_display = false;
         self.stop_before = None;
-        let full = PixelRect::full(extent);
         let budget = match &r.native_edit {
-            Some(native) => native.image_pixel_budget(r, &layers, extent)?.min(windows::DEFAULT_IMAGE_PIXEL_BYTES),
+            Some(native) => native.image_pixel_budget(r.scale_display.as_ref().map_or(0, |c| c.resident_bytes())).min(windows::DEFAULT_IMAGE_PIXEL_BYTES),
             None => windows::DEFAULT_IMAGE_PIXEL_BYTES,
         };
-        let plan = windows::Plan::new(&layers, extent, budget).ok().flatten();
-        let regions: Vec<_> = plan.map_or_else(|| vec![(full, full)], |plan| plan.regions(full).collect());
+        let plan = windows::Plan::new(&layers, extent, budget)?;
+        let regions: Vec<_> = plan.map_or_else(|| vec![(damage, Self::capture_window(&layers, damage, extent))], |plan| plan.regions(damage).collect());
+        let multiple = regions.len() > 1;
         let result = (|| {
             for (output, window) in regions {
                 let pages: Vec<_> = pages.iter().filter(|(c, _)| !output.page_local(*c).is_empty()).collect();
                 if pages.is_empty() {
                     continue;
                 }
-                self.images = images::ImageStages::default();
+                self.retire_images(|scene| scene.images = images::ImageStages::default());
                 self.image_window = Some(window);
                 self.update_images(r, source, window, encoder)?;
-                self.bake_pages(r, source, &pages, extent, encoder)?;
+                self.bake_pages(r, source, &pages, low, encoder)?;
                 if plan.is_some() {
                     r.metrics.image_window_peak_bytes = r.metrics.image_window_peak_bytes.max(self.images.storage_bytes());
-                    Self::submit_chunk(r, encoder, "after bounded bake window")?;
-                    r.metrics.image_window_submissions += 1;
+                    if multiple {
+                        Self::submit_chunk(r, encoder, "after bounded bake window")?;
+                        r.metrics.image_window_submissions += 1;
+                    }
                 }
             }
             Ok(())
         })();
         self.image_window = None;
-        self.images = images::ImageStages::default();
+        self.retire_images(|scene| scene.images = images::ImageStages::default());
         result
     }
 
@@ -83,25 +90,28 @@ impl Scene {
         &mut self,
         r: &mut WgpuRasterizer,
         source: FramePacket<'_>,
-        pages: &[&([u32; 2], wgpu::Texture)],
-        extent: [u32; 2],
+        pages: &[&([u32; 2], Image)],
+        low: Option<&Layer>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         for batch in pages.chunks(TILES_PER_BATCH) {
             self.jobs.clear();
             self.used.fill(false);
             for (coordinate, destination) in batch.iter().copied() {
-                let output = self.group(r, source, None, *coordinate)?;
+                let mut output = self.group(r, source, None, *coordinate)?;
+                if let Some(low) = low {
+                    let view = r.paint_layers.iter().find(|layer| layer.id == low.id)
+                        .and_then(|layer| layer.pages.iter().find(|page| page.coordinate == *coordinate))
+                        .map(|page| page.active().view.clone());
+                    let low = match view { Some(view) => view, None => self.source_tile(r, low, *coordinate)?.unwrap_or_else(|| r.empty_view.clone()) };
+                    let detail = self.alloc(r, wgpu::Color::TRANSPARENT);
+                    self.draw(r, detail, self.pool[output].view.clone(), Some(low),
+                        [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32], [17., 1., 0., 0.], false, Convert::None);
+                    self.free(output);
+                    output = detail;
+                }
                 let output = self.converted(r, output, Convert::stored(source));
-                self.jobs.push(Job::Copy {
-                    source: self.pool[output].texture.clone(),
-                    source_origin: [0; 2],
-                    destination: destination.clone(),
-                    origin: [0; 2],
-                    width: PAGE_SIZE.min(extent[0].saturating_sub(coordinate[0] * PAGE_SIZE)),
-                    height: PAGE_SIZE.min(extent[1].saturating_sub(coordinate[1] * PAGE_SIZE)),
-                });
-                self.free(output);
+                self.copy_window_tile(output, destination, *coordinate);
             }
             self.encode_jobs(r, encoder)?;
         }

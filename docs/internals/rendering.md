@@ -90,7 +90,11 @@ removes the merged layers, so the engine appends them, hidden, to that frame's
 layers, and the renderer keeps their pages, masks and photo tiles until the bake
 has run (`frame_layers` in
 [`canvas.rs`](../../crates/layer-engine/src/canvas.rs)). The bake is frame work
-on the render owner; the UI thread only plans it.
+on the render owner; the UI thread only plans it. Large bakes advance through
+512 × 512 regions. Each submission captures its native tiles before cache
+eviction can discard them. Intermediate native backing belongs to the renderer;
+history publishes the complete edit after the last region. Hosts poll readiness
+without waiting on the GPU and keep the previous artwork visible during the bake.
 
 A bake keeps no filter images. When its members' filters would need more
 image memory than the default image budget, it runs them in the bounded windows
@@ -101,9 +105,12 @@ kept within 0–1, which a blur of translucent pixels can round past. A new,
 empty layer that an operation writes into reserves in history only the pages
 it can write (`RasterRevision::pending_within`).
 
-Frequency Separation bakes Low and High with the same operation: each bake's
-members are the layer and one filter clipped to it, and both fit one undo step
-because their new layers reserve only their pages. The dialog's blur preview is
+Frequency Separation bakes Low with a clipped Gaussian blur, then computes High
+from the original and the captured Low with `FrequencyDetail`. High stores
+`0.5 + (original - Low) / 2` in the document's blend space; its Linear Light blend
+reconstructs the original. The blur runs once, and High uses Low's native
+quantization. Both layers fit one undo step because they reserve only their
+pages. The dialog's blur preview is
 a layer the document does not hold: `CanvasEngine::set_layer_preview` places it
 directly above its target in each frame's layers until the dialog closes.
 
@@ -178,7 +185,7 @@ profiled delivery is a separate output conversion and is still being integrated.
 
 ## Blend modes
 
-`LayerBlend` has 24 modes. Each variant's discriminant is its *code*: Normal,
+`LayerBlend` has 24 pixel blend modes and Pass Through for groups. Each variant's discriminant is its *code*: Normal,
 Multiply, Screen, Add, Overlay, Soft Light and Color are 0 to 6, and Darken to
 Luminosity follow from 7. Documents store the variant name, not the code.
 `LayerBlend::MENU` groups the modes as Photoshop does (Normal, darken, lighten,
@@ -194,8 +201,8 @@ base's coverage. They serve every place a layer's blend applies:
 - a clipping stack's final composite over a constant backdrop, folded into its
   last adjustment (`effects.rs`);
 - effect layers over their input (`fx_adjustment` in `effects_color.wgsl`);
-- the layered display that places a moving layer during a transform drag
-  (`display_layers.wgsl`);
+- region and scale composition, including transform previews
+  (`scene/scale/compose.wgsl`);
 - brushes with a blend mode other than Normal (`material_brush.wgsl`), with the
   brush's mode mapped to the layer mode of the same name. The Normal brush keeps
   its direct source-over form because the general expression draws dark contact
@@ -206,14 +213,15 @@ Perceptual blend space in bit 8 and float documents in bit 9. A layer's Normal i
 always 0; a brush sets bit 8 for Normal too, because its dabs lay over paint in
 the document's blend space ([brushes](#brushes-and-healing)).
 
-**Pass Through** has no formula. `Scene::group_into` composes a group's layers
+**Pass Through** has no pixel blend formula. The shared traversal in
+[`scene/stack.rs`](../../crates/layer-render-wgpu/src/scene/stack.rs) composes a group's layers
 onto a running composite, so a Pass Through group
 ([documents](documents.md#groups-and-pass-through)) continues its parent's
 composite with its own layers, and a composition that stops before a layer
 (`stop_before`) stops inside it too. At opacity below 1 or with a mask, the group
-starts from a copy of the backdrop tile and then fades to its result,
-`backdrop + opacity × mask × (result − backdrop)`, with weighted sums of two tiles
-(scene op 16) and, for a mask, a product with its coverage (op 3). A clipped Pass
+retains the backdrop and then fades to its result,
+`backdrop + opacity × mask × (result − backdrop)`. Exact tiles and reduced graph
+expressions evaluate the same weighted sums and coverage product. A clipped Pass
 Through group composites isolated, and `blend_code` passes it as Normal.
 
 **Ranges.** Float documents clamp no result. Modes defined only on [0, 1]
@@ -293,10 +301,9 @@ reduced first and converted after.
   and `display_main` in `pixel_transform.wgsl`), which encode the layer's
   resampled color when `DisplayLevel::encode` is set.
 
-**What holds the composite.** Group and clipping scratch tiles, the live
-composite and display pyramid, image-filter outputs and checkpoints
-(`scene_images`), clipping backdrops and cached clipping compositions, the static
-layers of the layered display, the folded constant backdrop, and the backdrop
+**What holds the composite.** Group and clipping scratch tiles, retained display windows and their mips,
+image-filter outputs and checkpoints
+(`scene_images`), clipping backdrops and cached clipping compositions, retained graph branches, the folded constant backdrop, and the backdrop
 and result a Pass Through group fades between hold the document's composite
 values. Their caches include the blend space
 (`ImageStages`, `artwork::Frame`, the filter-preview source key and the
@@ -317,7 +324,7 @@ the upper one reads the composite as it is.
 | Filter previews | `capture_filter_source` in [`filter_previews.rs`](../../crates/layer-render-wgpu/src/filter_previews.rs) | decoded; encoded once more for filters that follow the document's Blending, whose previews decode their result |
 | Merges | [`scene/bake.rs`](../../crates/layer-render-wgpu/src/scene/bake.rs) | composed in the document space, stored decoded |
 | Image filter input windows | `capture_tile` in [`scene_images.rs`](../../crates/layer-render-wgpu/src/scene_images.rs) | decoded, or composite values for filters that follow the document's Blending |
-| Layered display during drags | [`display_layers.wgsl`](../../crates/layer-render-wgpu/src/display_layers.wgsl) | composite values; blends with the document's blend code |
+| Layered display during drags | [`scene/scale/compose.wgsl`](../../crates/layer-render-wgpu/src/scene/scale/compose.wgsl) | composite values; blends with the document's blend code |
 | Layer and paper thumbnails, brushes | layer pages | linear layer pixels, not the composite; brushes encode them to lay dabs over them ([brushes](#brushes-and-healing)) |
 
 The export matte, and resizing on export, apply to the decoded rows in linear
@@ -357,6 +364,16 @@ Spot Healing scores its candidates on linear values in both spaces.
 The *compositor* combines paint and image layers, groups, masks, clipping and
 blend modes. Its [scene code](../../crates/layer-render-wgpu/src/scene.rs) tracks
 *damage*: regions whose previously rendered pixels are no longer valid.
+Stroke-finalization passes, including healing and wet edges, invalidate every
+page they revisit. Destination storage, redraw regions and reduced source caches
+use the same stroke coverage pages, including pages far from the final dab.
+
+Eligible paint stacks use [region and scale composition](../rendering/display-composition.md).
+The scene retains local source levels across camera and placement changes. Reduced
+views compose at the requested resolution; native views fill a bounded viewport
+window and reuse its overlap while panning. A lone affine source over a constant
+backdrop can be sampled directly by the presenter and Navigator. These display
+pixels never become document, history or export backing.
 
 A simple paint update rasterizes new dabs into the relevant layer pages and
 recomposes affected regions. More complex layer structures need intermediate
@@ -385,45 +402,39 @@ rectangle, so filter definitions describe their sampling footprint. Global effec
 layer reordering and invalidated caches can require much larger updates than a
 single brush mark. Animated effects also need updates without new pen input.
 
-A transform or placement drag skips both the full-resolution pages and
-composition when a native document keeps a complete display pyramid and the
-moving layer is an unmasked top-level layer under normal static layers.
-[`render_display`](../../crates/layer-render-wgpu/src/paint_transform.rs) draws the
-moving layer into the level the view samples, at most sixteen layer pixels per
-texel side, and the coarser levels are reduced from it. While the Transform is
-still, the layer is reduced once per transaction as the exact area mean of its
-full-resolution pixels, to the level of its own pixels that matches the display
-under its placement. It is reduced a page at a time, decoding a photo's
-original tiles as it reaches them. When the selection keeps some pixels in
-place, those are reduced apart from the pixels it moves: a page the selection
-covers or leaves out entirely is reduced whole, and one its edge crosses is
-drawn exactly. A transform that keeps its source, as Move's Leave Copy does,
-cuts nothing: its `keep_source` flag makes
-[`pixel_transform.wgsl`](../../crates/layer-render-wgpu/src/pixel_transform.wgsl)
-leave the original under the moved pixels, and drag frames add the moved
-pixels back to the kept ones in place. A whole placed photo is copied instead
-from its placement preview when that preview is current and holds the level.
-Move opens its transaction at the press, so while Move is active over a
-selection the session names the layer and selection a press would move
-(`prepare_moving_pixels`), and idle frames capture and reduce them ahead of the
-drag; its transaction adopts them when the layer's pixels and the selection are
-unchanged, so its first frames draw at once. Paint, a restore or leaving Move
-drops them.
-Each drag frame
-[resamples](../../crates/layer-render-wgpu/src/paint_transform/resample.rs) the
-copy with one bilinear sample per texel, the moved pixels through the transform
-and the placement and the kept ones through the placement alone. With content
-above or below, the
-[layered display](../../crates/layer-render-wgpu/src/paint_transform/layers.rs)
-composes the static layers once at that level, then places the moving layer
-between them with its blend. The layers above must composite as Normal over the
-document: a layer inside an isolated group may use any mode, and a layer inside
-Pass Through groups counts as the document's own. They are kept for the moving layer and level
-while nothing else changes, across drags and transactions. A drag waits for
-them and the reduced copy, and so does the frame that ends a drag that waited.
-The frame that releases a drag resamples the still preview too. Later frames
-draw the preview's pages at full resolution and then recompose what the drag
-touched a few tiles at a time, reporting pending work so hosts keep drawing.
+Pointwise filters declaring display-resolution support use effect nodes in the
+shared region graph. These nodes reuse the same fused shaders as native tiles;
+changing a parameter invalidates the effect result while retaining unchanged
+paint inputs. Masks are sampled in the output grid and shader positions remain
+document coordinates. Exact queries evaluate document-resolution pixels.
+The exact presentation executor remains for other effects and persistent watercolor.
+Active paint transforms use the shared region graph. A transaction captures
+immutable original tiles and reduces its moving pixels and any unselected
+remainder once per input level. Whole-layer transactions can reuse a current
+reduced source. The scene's [resampler](../../crates/layer-render-wgpu/src/scene/resample.rs)
+places these inputs into requested graph regions, with opacity and a constant
+backdrop folded into the same pass. Groups, masks, clipping and other blends
+use the ordinary composition rules and branch cache. Mask transactions still
+evaluate native coverage before that composition.
+
+Display reconstruction selects prefiltered source detail from the local
+transform footprint. Split selections and footprint boundaries use four samples;
+partial edge texels retain their actual centers. Mesh triangles draw color
+directly into the graph target, with later triangles replacing earlier ones
+where the mesh folds. Reconstruction remains approximate while a transform is
+active. Native views evaluate native preview pixels;
+exact queries materialize the source tiles their dependency window reads and
+retire previous query tiles. Apply evaluates the authoritative transform, and
+Cancel restores only native pixels that a preview or query changed. There is
+no separate placement-drag composite or post-release settling queue.
+
+Move's Leave Copy retains the original under the moved selection. Selected and
+unselected captures reconstruct that original without another image allocation.
+While Move is active over a selection, `prepare_moving_pixels` names the layer
+and selection for the next press. Idle frames prepare those inputs within the
+composition budget, and the transaction adopts them only while their source
+identity and selection match. Painting, restoring or leaving Move releases
+prepared inputs. There is no post-release settling work.
 
 A Warp transform is a [mesh](../../crates/layer-render-wgpu/src/paint_transform/mesh.rs)
 of Bézier patches. Its pages are drawn a window of four by four pages at a
@@ -440,36 +451,6 @@ at those positions. A pixel selection moved by a warp is resampled on the GPU
 the same way, a window at a time. What draws meshes compiles in the background
 when a warp is first shown, and until then the preview keeps the frame before
 it.
-
-A [placement drag](../../crates/layer-render-wgpu/src/placement_drag.rs) is a
-frame in which only one layer's placement changed. Its layer's own pixels are
-reduced once and kept between drags while they are unchanged, together with the
-static layers around it. Until that copy is complete, a lone layer over the
-paper is drawn from the display level as the drag began, within the canvas that
-level showed. Each drag frame resamples the copy through the new placement, and
-the frame's full recomposition is skipped. Frames in which nothing moves keep
-the drag; once the placement has stayed still for a few frames, what the drag
-drew is recomposed a few tiles at a time. What drags draw with and what
-composes placed layers compile in the background while input is quiet after
-startup, and that recomposition waits for them.
-
-[Preparation](../../crates/layer-render-wgpu/src/preparation.rs) for a drag and
-the work after one, including the layer's copy, the static layers around it, a
-still preview's settled pages and the recomposition, is spread over frames by
-the GPU time that earlier work of the same kind took, measured with timestamps.
-Each measured frame sets the next frames' units from its own cost per unit, to
-fit 10 ms of GPU time for work a drag waits for and 5 ms for work after a
-release. Timestamps arrive a few frames late, so a count never grows past twice
-what the measured frame was allowed, and late measurements do not compound. A
-frame also stops preparing once its preparation has taken 4 ms of CPU time,
-after at least one unit of each kind; without timestamps that deadline alone
-sets how much a frame prepares. A drag that starts meanwhile waits behind at
-most a frame of that work. Neither drag frames nor the frame that ends a drag
-allocate pages: once the layer is reduced, still frames reserve the pages its
-preview settles into, a few each, and settling waits for them.
-
-Drag frames and still previews until they settle resample; pages, Apply,
-commits and the settled display are exact.
 
 ### Resampling
 
@@ -490,8 +471,10 @@ Bicubic or Lanczos preview draws bilinearly until it stops.
 
 Exact capture (export, snapshots and the artwork readback) draws placed photos
 through the same pass with the exact cap, and with `Bicubic` where the placement
-magnifies. The live display samples the photo's placement mips instead, and the
-fused display path stays bilinear.
+magnifies. Display composition uses the scene's reduced source levels. Affine
+display sampling accounts for the output footprint and partially covered edge
+texels; the direct Navigator subdivides footprints larger than its retained
+coarse source can represent with one sample grid.
 
 ## Filters
 
@@ -542,22 +525,28 @@ retains reusable GPU images, tracks input changes and reuses compatible precedin
 results where possible. Each image has document-coordinate bounds independent of
 its texture size. Region capture expands its window by the accumulated declared
 filter support, and applies the existing group, clipping, mask and effect logic
-inside that window. Shaders keep document coordinates for their calculations;
-current-pass and original-input sampling each carry their own texture origin.
-Native one-to-one image reads use fragment positions directly, avoiding a
+inside that window. Shaders keep document coordinates for their calculations.
+Output, current-pass input and original input each carry their own bounds and
+texel footprint through the shared image-grid descriptor. Reduced inputs use
+the centers of their actual covered cells, including partial boundary cells.
+Filter-picker previews use the same coordinate contract. Native one-to-one
+image reads use fragment positions directly, avoiding a
 window-size-dependent interpolation error from reconstructed UV coordinates.
 
 Filter previews scan four source tiles per asynchronous completion, including
 the probe's corner-sampling halo. Preview rows then share a source crop expanded
 by their required support. A document edit cancels an unfinished scan after its
 in-flight completion; no result may combine source revisions. Global samplers
-retain their full declared input. Their scheduling and allocation limits still
-need qualification. Live composition also still uses full-document image stages
-and a full composite. Sparse storage and cropped previews therefore do not yet
-bound the total cost of large filters or densely painted documents.
+retain their full declared input. Live display composition uses bounded windows
+and reduced sources; native-resolution filter dependencies execute through the
+same region executor and publish into that display cache. Native filter images
+and display pixels share one composition allowance. Oversized global dependencies
+are rejected before a frame changes the document. See
+[display composition](../rendering/display-composition.md) for admission, moving
+previews and exact idle refinement.
 
 The native [snapshot renderer](../../crates/layer-render-wgpu/src/snapshot.rs)
-prepares document metadata independently of the live full composite. A file or
+prepares document metadata independently of the live display cache. A file or
 inspection worker owns an immutable project snapshot and a native Float32
 renderer. Region requests restore only the translated paint, material and mask
 pages needed by composition and its halos. Compressed backing remains shared;
@@ -613,6 +602,10 @@ in a small stroke update. A contact that begins before its brush is ready stays
 suppressed until release.
 Changing paint color or HDR intensity leaves brush readiness intact when the
 tip, texture assets and shader pass requirements stay the same.
+
+Headless capture compiles the dependencies its requested regions execute.
+Creating a read-only snapshot does not compile paint-publication kernels.
+Interactive brush readiness still prepares those kernels before accepting paint.
 
 On Web, GPU initialization waits for the workspace (at most 1 s), and pipelines
 are created through the asynchronous WebGPU APIs, a few at a time: synchronous

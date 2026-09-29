@@ -150,6 +150,36 @@ fn painting_white_on_a_dodge_and_burn_layer_dodges_and_black_burns() {
 }
 
 #[test]
+fn a_large_separation_yields_without_publishing_partial_rasters() {
+    let extent = [1280, 768];
+    let mut document = Document::new("bounded separation", extent[0], extent[1]);
+    document.blend_space = BlendSpace::Perceptual;
+    document.layers[0].source = Some(color::source::rgba8_source(extent, |x, y| {
+        [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
+    }));
+    let (mut engine, _input) = engine(document);
+    let before = image(&mut engine, 0);
+    let photo = engine.document().active_layer;
+    let filters = SeparationFilters::new(bundled_effect_catalog(), 21.).unwrap();
+    let ids = std::array::from_fn(|_| engine.allocate_layer_id());
+    let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+    let targets: Vec<_> = plan.operations.iter().map(|(id, _)| *id).collect();
+    insert(&mut engine, plan);
+    engine.render_frame_at(1).unwrap();
+    assert!(engine.has_pending_document_edits(), "a bake must yield between bounded regions");
+    assert!(!engine.can_undo(), "an incomplete bake cannot enter undo");
+    for id in targets {
+        assert!(engine.document().layer(id).unwrap().raster.try_data().is_none(),
+            "partial pixels must not become saveable");
+    }
+    image(&mut engine, 2).assert_near(&before, 2, "bounded separation reconstructs the photo");
+    assert!(engine.undo().unwrap());
+    image(&mut engine, 3).assert_eq(&before, "bounded separation is one undo step");
+    assert!(engine.redo().unwrap());
+    image(&mut engine, 4).assert_near(&before, 2, "redo restores the complete separation");
+}
+
+#[test]
 fn frequency_separation_recombines_into_the_original_layer() {
     for (depth, maximum) in DEPTHS {
         for radius in [2., 7.5, 21.] {
@@ -208,21 +238,30 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
     let settle = |engine: &mut Engine| {
         let start = std::time::Instant::now();
         engine.render_frame_at(0).unwrap();
-        while engine.has_pending_document_edits() {
+        while engine.wants_continuous_frames() {
+            assert!(start.elapsed().as_secs() < 60, "retouching did not settle");
+            engine.backend_mut().wait_idle().unwrap();
             engine.render_frame_at(0).unwrap();
         }
         engine.backend_mut().wait_idle().unwrap();
         start.elapsed()
     };
+    let held = |engine: &Engine| engine.backend().device().generate_allocator_report()
+        .map(|report| report.allocations.iter().map(|allocation| allocation.size).sum::<u64>()).unwrap();
     let now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
     let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
-    settle(&mut engine);
+    let initial = settle(&mut engine);
+    let loaded = held(&engine);
+    println!("Photo settled: {:.1} ms, {:.1} MiB allocated", ms(initial), loaded as f64 / 1048576.);
     std::thread::sleep(std::time::Duration::from_secs(1));
     let preview = engine.allocate_layer_id();
     for radius in [4., 4.5, 21.] {
         let filters = SeparationFilters::new(bundled_effect_catalog(), radius).unwrap();
         engine.set_layer_preview(Some(layer_engine::LayerPreview { above: photo, layer: SeparationFilters::clipped(preview, &filters.blur) }));
-        println!("Preview radius {radius}: frame to GPU idle {:.1} ms", ms(settle(&mut engine)));
+        let elapsed = settle(&mut engine);
+        let allocated = held(&engine);
+        println!("Preview radius {radius}: frame to settled GPU {:.1} ms, {:.1} MiB above the photo", ms(elapsed), (allocated as i64 - loaded as i64) as f64 / 1048576.);
+        assert!(allocated <= loaded + (200 << 20), "preview retains excessive working images");
     }
     engine.set_layer_preview(None);
     settle(&mut engine);
@@ -232,6 +271,7 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
         let start = std::time::Instant::now();
         let ids = std::array::from_fn(|_| engine.allocate_layer_id());
         let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+        let low = plan.operations[0].0;
         insert(&mut engine, plan);
         let apply = start.elapsed();
         let windows = engine.backend().metrics().image_window_submissions;
@@ -245,6 +285,20 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
             metrics.image_window_submissions - windows,
             metrics.image_window_peak_bytes as f64 / 1048576.
         );
+        let allocated = held(&engine);
+        println!("Frequency Separation radius {radius}: {:.1} MiB above the photo", (allocated as i64 - loaded as i64) as f64 / 1048576.);
+        assert!(allocated <= loaded + (2 * 384 + 300) * (1 << 20), "separation retains more than its pages and scratch");
+        if radius == 4. {
+            let ids = std::array::from_fn(|_| engine.allocate_layer_id());
+            let plan = engine.document().separation_plan(low, &filters, ids).unwrap();
+            insert(&mut engine, plan);
+            let elapsed = settle(&mut engine);
+            let second = held(&engine);
+            println!("Second separation: {:.1} ms, {:.1} MiB above the first", ms(elapsed), (second as i64 - allocated as i64) as f64 / 1048576.);
+            assert!(second <= allocated + (2 * 384) * (1 << 20), "another separation retains more than its own pages");
+            engine.undo().unwrap();
+            settle(&mut engine);
+        }
         engine.undo().unwrap();
         settle(&mut engine);
         std::thread::sleep(std::time::Duration::from_secs(1));

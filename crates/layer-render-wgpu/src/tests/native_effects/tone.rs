@@ -150,7 +150,7 @@ fn table_probe(name: &str, image: bool, component: usize) -> Layer {
 }
 fn samples(r: &mut WgpuRasterizer, layer: &Layer) -> Vec<f32> {
     frame(r, std::slice::from_ref(layer));
-    crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap())
+    crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
         .chunks_exact(16)
         .map(|p| f32::from_le_bytes(p[..4].try_into().unwrap()))
         .collect()
@@ -290,7 +290,7 @@ fn native_profiled_curves_match_integer16_reference_through_fused_and_physical_p
             let mut curves = effect(2, "curves", image);
             set(&mut curves, "curve_0", EffectValue::Curve(points.clone()));
             frame(&mut r, &[curves, input]);
-            let bytes = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+            let bytes = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
             for (code, pixel) in bytes.chunks_exact(16).enumerate() {
                 let value = f32::from_le_bytes(pixel[..4].try_into().unwrap());
                 let coverage = f32::from_le_bytes(pixel[12..].try_into().unwrap());
@@ -350,8 +350,8 @@ fn final_effect_covers_partial_document_tiles_without_overwriting_neighbors() {
         let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space:RgbSpace::Srgb,depth}).unwrap();
         let layers=[effect(2,"exposure",false),source([0.25,2.,-0.125],1.)];
         for extent in [[512,384],[513,385],[385,513]] {
-            r.submit(FramePacket{view:ViewState{width_px:extent[0],height_px:extent[1],background_rgba_linear:[0.;4],..test_view()},document_extent:extent,layers:&layers,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:true,composite_all:true,time_seconds:0.,blend_space:Default::default()}).unwrap();
-            let pixels=crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap());
+            r.submit(FramePacket{ commit_rasters: true,view:ViewState{width_px:extent[0],height_px:extent[1],background_rgba_linear:[0.;4],..test_view()},document_extent:extent,layers:&layers,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:true,composite_all:true,time_seconds:0.,blend_space:Default::default()}).unwrap();
+            let pixels=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));
             for (i,p) in pixels.chunks_exact(16).enumerate() {
                 let actual: [f32;4]=std::array::from_fn(|c| f32::from_le_bytes(p[c*4..c*4+4].try_into().unwrap()));
                 assert_eq!(actual,[0.25,2.,-0.125,1.],"{depth:?} {extent:?} {},{}",i%extent[0] as usize,i/extent[0] as usize);

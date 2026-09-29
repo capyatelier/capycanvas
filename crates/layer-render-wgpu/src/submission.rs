@@ -12,8 +12,11 @@ pub(crate) struct CacheWrite {
 }
 impl CacheWrite {
     pub fn new() -> Self {
+        Self::shared(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)))
+    }
+    pub fn shared(valid: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
         Self {
-            valid: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            valid,
             tracked: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -54,6 +57,7 @@ pub(crate) struct CommandEncoder {
     current: wgpu::CommandEncoder,
     earlier: Vec<wgpu::CommandEncoder>,
     passes: usize,
+    total_passes: u64,
 }
 
 impl CommandEncoder {
@@ -67,6 +71,7 @@ impl CommandEncoder {
             current: device.create_command_encoder(descriptor),
             earlier: Vec::new(),
             passes: 0,
+            total_passes: 0,
         }
     }
     fn begin_pass(&mut self) {
@@ -87,7 +92,9 @@ impl CommandEncoder {
             self.passes = 0;
         }
         self.passes += count;
+        self.total_passes += count as u64;
     }
+    pub fn pass_count(&self) -> u64 { self.total_passes }
     pub fn begin_render_pass<'a>(
         &'a mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,

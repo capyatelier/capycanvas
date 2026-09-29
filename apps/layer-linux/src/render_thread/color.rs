@@ -196,6 +196,7 @@ impl Worker {
             })
             .collect();
         let packet = FramePacket {
+            commit_rasters: true,
             time_seconds: request.time,
             view: request.view,
             document_extent: [document.width, document.height],

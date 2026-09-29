@@ -54,6 +54,7 @@ pub(super) fn damage(rect: PixelRect, view: ViewState, turns: u32) -> PixelRect 
 pub(super) struct Retained {
     pub valid: bool,
     pub revision: u64,
+    pub artwork_revision: u64,
     pub selection_revision: u64,
     pub outline_revision: u64,
     pub hdr: [f32; 8],
@@ -68,6 +69,7 @@ impl Default for Retained {
         Self {
             valid: false,
             revision: u64::MAX,
+            artwork_revision: u64::MAX,
             selection_revision: u64::MAX,
             outline_revision: u64::MAX,
             hdr: [f32::NAN; 8],

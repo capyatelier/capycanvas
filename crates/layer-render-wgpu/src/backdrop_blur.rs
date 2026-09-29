@@ -268,6 +268,10 @@ impl BackdropBlur {
         self.hold = hold;
     }
 
+    pub fn needs_refresh(&self) -> bool {
+        !self.hold && (!self.held.is_empty() || self.moving)
+    }
+
     pub fn interiors(&self) -> &[PixelRect] {
         &self.interiors
     }
@@ -548,6 +552,7 @@ impl BackdropBlur {
         valid.dedup();
         self.valid = valid;
         let work: Vec<PixelRect> = whole.into_iter().chain(self.work_for(&affected, reach)).collect();
+        crate::performance_trace::counter(c"Capy backdrop work pixels", work.iter().map(|r| r.area()).sum());
         if work.is_empty() {
             self.frames[1] += 1;
             return false;

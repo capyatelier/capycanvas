@@ -2139,6 +2139,7 @@ class AndroidInteractionTest {
         }.array("sections").getJSONArray(0).objects().map { it.getString("label") }
         fun preference(value: Boolean) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "pass_through_groups", "value" to value)))
         fun spread(name: String): Int {
+            waitFor("the canvas is ready for a pixel check", 120_000) { snapshot().optBoolean("shaders_ready") && snapshot().optBoolean("brush_ready") }
             var spread = 0
             captureCanvasBar(name, "pass-through") { image, origin ->
                 val center = bounds("workspace").center
@@ -4236,7 +4237,11 @@ class AndroidInteractionTest {
                 assertFalse("Reset Offset waits for an offset", commandState("clone_reset_offset").getBoolean("enabled"))
                 for (theme in listOf("light", "dark")) {
                     action(obj("type" to "set_theme", "theme" to theme))
-                    captureCanvasBar("clone-bar-$theme", "clone")
+                    copied("$theme keeps the reference visible", at(.25, .4))
+                    captureCanvasBar("clone-bar-$theme", "clone") { image, origin ->
+                        val p = point(at(.25, .4)) + origin
+                        assertTrue("$theme keeps the reference in the captured canvas", blue(image.getPixel(p.x.toInt(), p.y.toInt())))
+                    }
                 }
                 action(obj("type" to "set_theme", "theme" to originalTheme))
                 pick("Editing layer")

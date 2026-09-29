@@ -442,6 +442,7 @@ impl WebApp {
             .resize_surface(surface.config.width, surface.config.height)
             .map_err(js)?;
         surface.surface.configure(renderer.device(), &surface.config);
+        surface.presenter.set_target_retention(false);
         self.session
             .replace_renderer(AttachedRenderer(Some(Box::new(renderer))))
             .map_err(js)?;
@@ -931,6 +932,7 @@ impl WebApp {
             surface.config.width = width;
             surface.config.height = height;
             surface.surface.configure(gpu.device(), &surface.config);
+            surface.presenter.set_target_retention(false);
         }
         serialize(&change)
     }
@@ -1066,6 +1068,7 @@ impl WebApp {
                 surface.presenter_color = gpu.document_color();
                 surface.color = color;
                 surface.surface.configure(gpu.device(), &surface.config);
+                surface.presenter.set_target_retention(false);
             } else if surface.presenter_color != gpu.document_color() {
                 surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, color).map_err(js)?;
                 surface.presenter_color = gpu.document_color();
@@ -1101,6 +1104,9 @@ impl WebApp {
             layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
             stroke,
         );
+        if !surface.presenter.needs_present(gpu, view, surround) {
+            return serialize(&change);
+        }
         let target = match surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)
             | wgpu::CurrentSurfaceTexture::Suboptimal(target) => target,
@@ -1110,6 +1116,7 @@ impl WebApp {
                     .create_surface(wgpu::SurfaceTarget::Canvas(self.canvas.clone()))
                     .map_err(js)?;
                 surface.surface.configure(gpu.device(), &surface.config);
+                surface.presenter.set_target_retention(false);
                 return serialize(&layer_ui::UiChange {
                     canvas_wake: true,
                     ..change
@@ -1117,6 +1124,7 @@ impl WebApp {
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 surface.surface.configure(gpu.device(), &surface.config);
+                surface.presenter.set_target_retention(false);
                 return serialize(&layer_ui::UiChange {
                     canvas_wake: true,
                     ..change

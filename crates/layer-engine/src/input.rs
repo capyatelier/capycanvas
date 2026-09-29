@@ -51,6 +51,8 @@ impl SampleFlags {
     /// The host confirmed that this pen controls an indirect, screenless tablet.
     /// This affects cursor presentation only; the device is still a pen.
     pub const INDIRECT_POINTER: Self = Self(1 << 6);
+    /// `twist_radians` is a measured barrel rotation, not a missing axis.
+    pub const BARREL_TWIST: Self = Self(1 << 7);
 
     pub const fn contains(self, flag: Self) -> bool {
         self.0 & flag.0 != 0

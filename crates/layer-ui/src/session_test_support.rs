@@ -172,7 +172,7 @@ impl CanvasRenderer for Recorder {
             self.last_style = Some(batch.style.clone());
         }
         self.recorded_dabs.extend_from_slice(packet.dabs);
-        for layer in packet.layers {
+        for layer in packet.layers.iter().filter(|_| packet.commit_rasters) {
             for (mask, revision) in std::iter::once((false, &layer.raster))
                 .chain(layer.mask.iter().map(|m| (true, &m.raster)))
             {

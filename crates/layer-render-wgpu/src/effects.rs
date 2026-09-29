@@ -55,6 +55,42 @@ pub(super) enum Execution {
 /// the effect blends onto. Linear variants convert nothing.
 type Stage = (Execution, layer_core::BlendSpace);
 
+pub(super) fn image_grid(output: display_mips::Plan, front: display_mips::Plan, original: display_mips::Plan) -> [f32; 32] {
+    let mut data = [0.; 32];
+    let [w, h] = output.size.map(|n| n as f32);
+    data[..6].copy_from_slice(&[0., 0., w, h, w, h]);
+    data[12..16].copy_from_slice(&[output.bounds.min_x() as f32, output.bounds.min_y() as f32,
+        output.extent[0] as f32, output.extent[1] as f32]);
+    for (offset, plan) in [(16, front), (20, original)] {
+        data[offset..offset + 4].copy_from_slice(&[plan.bounds.min_x() as f32, plan.bounds.min_y() as f32,
+            plan.bounds.width() as f32, plan.bounds.height() as f32]);
+    }
+    data[24..27].copy_from_slice(&[front, original, output].map(|p| (1 << p.level) as f32));
+    data[28..30].copy_from_slice(&[output.bounds.width() as f32, output.bounds.height() as f32]);
+    data
+}
+
+pub(super) fn pass_radius(pass: &layer_core::EffectPass, effect: &EffectInstance, level: u32) -> Option<u32> {
+    pass.sampling.radius(effect)?.checked_add((1 << level) - 1)
+}
+
+pub(super) fn damage_radius(effect: &EffectInstance, level: u32) -> Option<u32> {
+    effect.program.passes.iter().try_fold(0u32, |radius, pass| radius.checked_add(pass_radius(pass, effect, level)?))
+}
+
+pub(super) fn dependency(region: PixelRect, radius: Option<u32>, plan: display_mips::Plan) -> PixelRect {
+    if region.is_empty() { return region; }
+    radius.map_or(plan.bounds, |radius| region.expand(radius, plan.extent).intersect(plan.bounds))
+}
+
+pub(super) fn pass_regions(effect: &EffectInstance, output: PixelRect, plan: display_mips::Plan) -> Vec<PixelRect> {
+    let mut regions = vec![output; effect.program.passes.len().max(1) + 1];
+    for (i, pass) in effect.program.passes.iter().enumerate().rev() {
+        regions[i] = dependency(regions[i + 1], pass_radius(pass, effect, plan.level), plan);
+    }
+    regions
+}
+
 #[derive(Clone)]
 pub(super) struct PreparedEffect {
     pub pipeline: Deferred<wgpu::RenderPipeline>,
@@ -80,9 +116,9 @@ pub(super) struct Effects {
         Deferred<wgpu::RenderPipeline>,
     )>,
     // Parameters and GPU tables are shared by every pass of the same chain.
-    instances: HashMap<Vec<LayerId>, Instance>,
+    instances: HashMap<(Vec<LayerId>, u32), Instance>,
     // Reuse the lookup key; ordinary painting/animation does not repack inputs.
-    ids: Vec<LayerId>,
+    ids: (Vec<LayerId>, u32),
     preparation: preparation::Preparation,
     pub compilations: u64,
 }
@@ -157,7 +193,7 @@ impl Effects {
             pipeline_layout: self.pipeline_layout.clone(),
             pipelines: self.pipelines.clone(),
             instances: HashMap::new(),
-            ids: Vec::new(),
+            ids: (Vec::new(), 0),
             preparation: self.preparation.fork(),
             compilations: 0,
         }
@@ -219,14 +255,14 @@ impl Effects {
             pipeline_layout,
             pipelines: Vec::new(),
             instances: HashMap::new(),
-            ids: Vec::new(),
+            ids: (Vec::new(), 0),
             preparation: preparation::Preparation::new(&r.device),
             compilations: 0,
         }
     }
     pub fn retain(&mut self, layers: &[Layer]) {
         self.instances
-            .retain(|ids, _| ids.iter().all(|id| layers.iter().any(|l| l.id == *id)));
+            .retain(|(ids, _), _| ids.iter().all(|id| layers.iter().any(|l| l.id == *id)));
     }
     pub fn prepare(
         &mut self,
@@ -234,13 +270,15 @@ impl Effects {
         layers: &[&Layer],
         stage: Execution,
         time: f32,
+        level: u32,
         space: layer_core::BlendSpace,
     ) -> Result<PreparedEffect, GpuRasterError> {
         let execution = stage;
         let stage = (execution, space);
-        self.ids.clear();
-        self.ids.extend(layers.iter().map(|l| l.id));
-        if let Some(old) = self.instances.get_mut(self.ids.as_slice())
+        self.ids.0.clear();
+        self.ids.0.extend(layers.iter().map(|l| l.id));
+        self.ids.1 = level;
+        if let Some(old) = self.instances.get_mut(&self.ids)
             && old
                 .effects
                 .iter()
@@ -282,6 +320,7 @@ impl Effects {
             offsets.push(data.len() as u32);
             data.push(*properties);
             data.extend(effect.gpu_parameters(r.device().working_space()).map_err(GpuRasterError::Effect)?);
+            data[*offsets.last().unwrap() as usize + 1][2] = (1 << level) as f32;
         }
         let programs: Vec<_> = effects.iter().map(|e| e.program.clone()).collect();
         let bytes: Vec<_> = data
@@ -365,6 +404,7 @@ impl Effects {
                     .collect();
                 let key = preparation::Key {
                     definition: definition.clone(),
+                    geometry: base + 1,
                     inputs: indices.iter().map(|i| parameters[*i]).collect(),
                     output: base + 1 + data[directory + i][0] as u32,
                 };
@@ -580,15 +620,27 @@ fn fx_lookup(base:u32,table:u32,index:u32)->vec4<f32> {
 }
 fn fx_time(base:u32)->f32 { return effect_data[base-1u].w; }
 fn fx_extent()->vec2<f32> { return settings.color.zw; }
+fn fx_position(local:vec2<f32>)->vec2<f32> {
+    let side=settings.operation_linear.z;
+    if side<=1. {return settings.color.xy+local;}
+    let low=floor(local)*side;
+    return settings.color.xy+(low+min(low+side,settings.operation_offset.xy))*.5;
+}
+fn fx_grid_sample(image:texture_2d<f32>,point:vec2<f32>,grid:vec4<f32>,step:f32)->vec4<f32> {
+    if grid.z<=0. {return working_sample_float(image,point);}
+    if step<=1. {return working_sample_float(image,clamp(point-grid.xy,vec2(.5),grid.zw-.5));}
+    let q=(point-grid.xy)/step;let extent=grid.zw/step;
+    let last=ceil(extent)-1.;let previous=last-.5;
+    let adjusted=select(q,previous+(q-previous)/((extent-last+1.)*.5),q>previous);
+    return textureSampleLevel(image,sampling,clamp(adjusted,vec2(.5),last+.5)/vec2<f32>(textureDimensions(image)),0.);
+}
 fn fx_sample(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
-    if settings.source_over.z>0. {return working_sample_float(front,point-settings.source_over.xy);}
-    return working_sample_float(front,point);
+    return fx_grid_sample(front,point,settings.source_over,settings.operation_linear.x);
 }
 fn fx_original(p:vec2<f32>)->vec4<f32> {
     let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
-    if settings.backdrop.z>0. {return working_sample_float(back,point-settings.backdrop.xy);}
-    return working_sample_float(back,point);
+    return fx_grid_sample(back,point,settings.backdrop,settings.operation_linear.y);
 }
 @fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {
     return effect_result(v);
@@ -615,7 +667,7 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
         let p = &programs[0];
         let base = offsets[0] + 1;
         let shown = |expression: String| if input_encoded { format!("working_decode({expression})") } else { expression };
-        source.push_str("fn effect_result(v:Vertex)->vec4<f32> {let position=v.position.xy+settings.color.xy;let c=fx_sample(position);\n");
+        source.push_str("fn effect_result(v:Vertex)->vec4<f32> {let position=fx_position(v.position.xy);let c=fx_sample(position);\n");
         for (j, pass) in p.passes.iter().enumerate() {
             let result = format!("{}(c,position,{base}u)", pass.entry);
             let result = if j + 1 == p.passes.len() { shown(result) } else { result };
@@ -630,7 +682,7 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
         let last = stage + 1 >= p.passes.len();
         let adjusted = format!("{entry}(fx_sample(position),position,1u)");
         let adjusted = if last { encoded(adjusted) } else { adjusted };
-        source.push_str(&format!("fn effect_result(v:Vertex)->vec4<f32> {{ let position=v.position.xy+settings.color.xy; let adjusted={adjusted};\n"));
+        source.push_str(&format!("fn effect_result(v:Vertex)->vec4<f32> {{ let position=fx_position(v.position.xy); let adjusted={adjusted};\n"));
         if last && p.kind == EffectKind::Adjustment {
             source.push_str(&format!("let c={};let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {{coverage=textureLoad(effect_mask_0,vec2<i32>(v.position.xy),0).a;}}let rgb=fx_output_range(blend(fx_unassociate(adjusted),fx_unassociate(c),u32(controls.y)));", encoded("fx_original(position)".into())));
             if p.alpha == layer_core::EffectAlpha::Filter {
@@ -645,7 +697,7 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
     source.push_str(
         r#"
 fn effect_result(v:Vertex)->vec4<f32> {
-    let local=v.position.xy-settings.rect.xy;
+    let local=select(v.position.xy-settings.rect.xy,v.position.xy,settings.operation_linear.z>0.);
     var c=textureLoad(front,vec2<i32>(local),0);
     if settings.source_over.w>.5 {
 "#,
@@ -659,7 +711,7 @@ fn effect_result(v:Vertex)->vec4<f32> {
         if settings.source_over.w<1.5 {c+=settings.backdrop*(1.-c.a);}
     }
     let mask=select(1.,textureLoad(back,vec2<i32>(local),0).a,settings.options.w>.5);
-    let position=settings.color.xy+local;
+    let position=fx_position(local);
 "#,
     );
     for (i, (p, offset)) in programs.iter().zip(offsets).enumerate() {

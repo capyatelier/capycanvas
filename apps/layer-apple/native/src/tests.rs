@@ -1118,6 +1118,7 @@ impl App {
                     engine.document(), engine.brush(), engine.transform_preview().is_some())
                 && (active_operation || session.require_document_idle().is_ok())
                 && !engine.has_pending_document_edits()
+                && !layer_render::CanvasRenderer::has_pending_work(engine.backend())
             {
                 return;
             }

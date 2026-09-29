@@ -18,6 +18,7 @@
         "abi": 3,
         "entry": "capy_curves",
         "id": "curves",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Curves",
         "parameters": [
@@ -70,6 +71,7 @@
         "constraints": [{"gap":0.001,"kind":"ordered_numbers","lower":"black","upper":"white"}],
         "entry": "capy_levels",
         "id": "levels",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Levels",
         "parameters": [
@@ -134,6 +136,7 @@
         "abi": 3,
         "entry": "capy_brightness_contrast",
         "id": "brightness_contrast",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Brightness / Contrast",
         "parameters": [
@@ -161,6 +164,7 @@
         "abi": 3,
         "entry": "capy_hue_saturation",
         "id": "hue_saturation",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Hue / Saturation",
         "parameters": [
@@ -194,6 +198,7 @@
         "abi": 3,
         "entry": "capy_color_balance",
         "id": "color_balance",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Color Balance",
         "parameters": [
@@ -278,6 +283,7 @@
         "abi": 3,
         "entry": "capy_exposure",
         "id": "exposure",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Exposure",
         "parameters": [
@@ -311,6 +317,7 @@
         "abi": 3,
         "entry": "capy_vibrance",
         "id": "vibrance",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Vibrance",
         "parameters": [
@@ -343,6 +350,7 @@
         "abi": 3,
         "entry": "capy_black_white",
         "id": "black_white",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Black & White",
         "parameters": [
@@ -405,6 +413,7 @@
         "abi": 3,
         "entry": "capy_gradient_map",
         "id": "gradient_map",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Gradient Map",
         "parameters": [
@@ -440,6 +449,7 @@
         "abi": 3,
         "entry": "capy_posterize",
         "id": "posterize",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Posterize",
         "parameters": [
@@ -461,6 +471,7 @@
         "alpha": "filter",
         "entry": "capy_gaussian_blur",
         "id": "gaussian_blur",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Gaussian Blur",
         "lookups": [
@@ -1201,6 +1212,7 @@
         "abi": 3,
         "entry": "capy_solarize",
         "id": "solarize",
+        "resolution": "display",
         "kind": "adjustment",
         "label": "Solarize",
         "parameters": [
@@ -1822,6 +1834,7 @@
         "abi": 3,
         "entry": "capy_solid_color",
         "id": "solid_color",
+        "resolution": "display",
         "kind": "generator",
         "label": "Solid Color",
         "parameters": [
@@ -1842,6 +1855,7 @@
         "abi": 3,
         "entry": "capy_gradient_fill",
         "id": "gradient_fill",
+        "resolution": "display",
         "kind": "generator",
         "label": "Gradient Fill",
         "parameters": [

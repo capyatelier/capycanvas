@@ -60,12 +60,14 @@ impl Masks {
 
 // Recipes are cheap to enumerate. Procedural textures are generated only when
 // selected by the startup dependency queue (or immediately by eager hosts).
-pub(super) fn builtin_masks() -> [(&'static str, Generate); 8] {
+pub(super) fn builtin_masks() -> [(&'static str, Generate); 10] {
     fn square(pixels: Vec<u8>) -> Result<Pixels, GpuRasterError> {
         Ok((PROCEDURAL_GRAIN_SIZE, PROCEDURAL_GRAIN_SIZE, pixels))
     }
     [
         (WHITE_MASK_ASSET, || Ok((1, 1, vec![255]))),
+        (bristle_table::HAIRS_ASSET, || Ok(bristle_table::hairs())),
+        (bristle_table::FIELD_ASSET, || Ok(bristle_table::field())),
         (PAPER_GRAIN_TEXTURE_ASSET, || {
             square(procedural_paper_grain())
         }),

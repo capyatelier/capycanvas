@@ -660,6 +660,7 @@ unsafe fn apple_pointer(
                 records,
                 predicted: predicted != 0,
                 view_revision,
+                barrel_twist: false,
             },
             updates,
             correction != 0,

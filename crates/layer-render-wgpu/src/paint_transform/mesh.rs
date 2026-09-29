@@ -323,6 +323,78 @@ impl Bins {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct MeshBuffers {
+    vertices: Option<wgpu::Buffer>,
+    indices: Option<wgpu::Buffer>,
+    uploaded: Option<Arc<MeshGeometry>>,
+    bytes: Vec<u8>,
+}
+impl MeshBuffers {
+    pub fn storage_bytes(&self) -> u64 {
+        self.vertices.as_ref().map_or(0, wgpu::Buffer::size) + self.indices.as_ref().map_or(0, wgpu::Buffer::size)
+    }
+    pub fn count(&self) -> u32 { self.uploaded.as_ref().map_or(0, |g| g.indices.len() as u32) }
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, triangles: Range<u32>) {
+        if triangles.is_empty() { return; }
+        pass.set_vertex_buffer(0, self.vertices.as_ref().unwrap().slice(..));
+        pass.set_index_buffer(self.indices.as_ref().unwrap().slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(triangles, 0, 0..1);
+    }
+    /// Upload the geometry drawn by later windows, unless it is already there.
+    pub fn upload(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        geometry: &Arc<MeshGeometry>,
+    ) -> Result<(), GpuRasterError> {
+        if self
+            .uploaded
+            .as_ref()
+            .is_some_and(|g| Arc::ptr_eq(g, geometry))
+        {
+            return Ok(());
+        }
+        self.uploaded = None;
+        for (buffer, (floats, integers), usage, label) in [
+            (
+                &mut self.vertices,
+                (geometry.vertices.as_flattened(), &[][..]),
+                wgpu::BufferUsages::VERTEX,
+                "mesh vertices",
+            ),
+            (
+                &mut self.indices,
+                (&[][..], &geometry.indices[..]),
+                wgpu::BufferUsages::INDEX,
+                "mesh triangles",
+            ),
+        ] {
+            let bytes = &mut self.bytes;
+            bytes.clear();
+            bytes.extend(floats.iter().flat_map(|v| v.to_le_bytes()));
+            bytes.extend(integers.iter().flat_map(|v| v.to_le_bytes()));
+            if bytes.is_empty() {
+                continue;
+            }
+            if buffer
+                .as_ref()
+                .is_none_or(|b| b.size() < bytes.len() as u64)
+            {
+                *buffer = Some(r.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: (bytes.len() as u64).next_power_of_two().max(256),
+                    usage: usage | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            r.uploads.write(encoder, buffer.as_ref().unwrap(), bytes)?;
+        }
+        self.uploaded = Some(geometry.clone());
+        Ok(())
+    }
+}
+
 /// Window origin and size, and the rows mapping destination pixels into it
 /// with the scale of the source positions.
 const WINDOW_BYTES: u64 = 48;
@@ -334,10 +406,7 @@ pub(crate) struct Positions {
     layout: wgpu::BindGroupLayout,
     window: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     target: Option<(wgpu::Texture, wgpu::TextureView)>,
-    vertices: Option<wgpu::Buffer>,
-    indices: Option<wgpu::Buffer>,
-    uploaded: Option<Arc<MeshGeometry>>,
-    bytes: Vec<u8>,
+    buffers: MeshBuffers,
 }
 impl Positions {
     pub fn new(device: &PipelineDevice) -> Self {
@@ -398,10 +467,7 @@ impl Positions {
             layout,
             window: None,
             target: None,
-            vertices: None,
-            indices: None,
-            uploaded: None,
-            bytes: Vec::new(),
+            buffers: MeshBuffers::default(),
         }
     }
     pub fn fork(&self) -> Self {
@@ -410,10 +476,7 @@ impl Positions {
             layout: self.layout.clone(),
             window: None,
             target: None,
-            vertices: None,
-            indices: None,
-            uploaded: None,
-            bytes: Vec::new(),
+            buffers: MeshBuffers::default(),
         }
     }
     /// Positions drawn with the transforms' pipeline.
@@ -422,8 +485,7 @@ impl Positions {
     }
     pub fn storage_bytes(&self) -> u64 {
         self.target.as_ref().map_or(0, |(t, _)| texture_bytes(t))
-            + self.vertices.as_ref().map_or(0, wgpu::Buffer::size)
-            + self.indices.as_ref().map_or(0, wgpu::Buffer::size)
+            + self.buffers.storage_bytes()
             + self.window.as_ref().map_or(0, |(b, _)| b.size())
     }
     /// A positions texture for windows of at least `size` destination pixels.
@@ -451,58 +513,9 @@ impl Positions {
         }
         self.target.as_ref().unwrap().1.clone()
     }
-    /// Upload the geometry drawn by later windows, unless it is already there.
-    pub fn upload(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        encoder: &mut crate::submission::CommandEncoder,
+    pub fn upload(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         geometry: &Arc<MeshGeometry>,
-    ) -> Result<(), GpuRasterError> {
-        if self
-            .uploaded
-            .as_ref()
-            .is_some_and(|g| Arc::ptr_eq(g, geometry))
-        {
-            return Ok(());
-        }
-        self.uploaded = None;
-        for (buffer, (floats, integers), usage, label) in [
-            (
-                &mut self.vertices,
-                (geometry.vertices.as_flattened(), &[][..]),
-                wgpu::BufferUsages::VERTEX,
-                "mesh vertices",
-            ),
-            (
-                &mut self.indices,
-                (&[][..], &geometry.indices[..]),
-                wgpu::BufferUsages::INDEX,
-                "mesh triangles",
-            ),
-        ] {
-            let bytes = &mut self.bytes;
-            bytes.clear();
-            bytes.extend(floats.iter().flat_map(|v| v.to_le_bytes()));
-            bytes.extend(integers.iter().flat_map(|v| v.to_le_bytes()));
-            if bytes.is_empty() {
-                continue;
-            }
-            if buffer
-                .as_ref()
-                .is_none_or(|b| b.size() < bytes.len() as u64)
-            {
-                *buffer = Some(r.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(label),
-                    size: (bytes.len() as u64).next_power_of_two().max(256),
-                    usage: usage | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-            r.uploads.write(encoder, buffer.as_ref().unwrap(), bytes)?;
-        }
-        self.uploaded = Some(geometry.clone());
-        Ok(())
-    }
+    ) -> Result<(), GpuRasterError> { self.buffers.upload(r, encoder, geometry) }
     /// Rasterize the uploaded mesh for the window whose first page is `page`.
     pub fn draw(
         &mut self,
@@ -510,23 +523,9 @@ impl Positions {
         encoder: &mut crate::submission::CommandEncoder,
         page: [u32; 2],
     ) -> Result<(), GpuRasterError> {
-        let triangles = self.uploaded.as_ref().map_or(0..0, |g| g.window(page));
+        let triangles = self.buffers.uploaded.as_ref().map_or(0..0, |g| g.window(page));
         let origin = page.map(|v| (v * PAGE_SIZE) as f32 - 1.);
         self.draw_window(r, encoder, triangles, origin, layer_core::Affine::IDENTITY, 1.)
-    }
-    /// Rasterize the whole uploaded mesh at display texels, whose first is
-    /// `origin` beyond the border: `to_texels` maps its destination pixels to
-    /// them and `source_scale` its source pixels to the texels stored.
-    pub fn draw_display(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        encoder: &mut crate::submission::CommandEncoder,
-        origin: [f32; 2],
-        to_texels: layer_core::Affine,
-        source_scale: f32,
-    ) -> Result<(), GpuRasterError> {
-        let triangles = 0..self.uploaded.as_ref().map_or(0, |g| g.indices.len() as u32);
-        self.draw_window(r, encoder, triangles, origin, to_texels, source_scale)
     }
     fn draw_window(
         &mut self,
@@ -563,12 +562,7 @@ impl Positions {
         if !triangles.is_empty() {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, binding, &[]);
-            pass.set_vertex_buffer(0, self.vertices.as_ref().unwrap().slice(..));
-            pass.set_index_buffer(
-                self.indices.as_ref().unwrap().slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            pass.draw_indexed(triangles, 0, 0..1);
+            self.buffers.draw(&mut pass, triangles);
         }
         Ok(())
     }

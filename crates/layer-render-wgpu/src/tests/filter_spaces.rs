@@ -43,9 +43,9 @@ fn composite(space: BlendSpace, layers: &[Layer]) -> Image {
     let packet = FramePacket { view, reset_layers: true, blend_space: space, ..packet(layers, EXTENT) };
     r.submit(packet).unwrap();
     while layer_render::CanvasRenderer::has_pending_work(&r) {
-        r.submit(FramePacket { reset_layers: false, ..packet }).unwrap();
+        r.submit(FramePacket { reset_layers: false, composite_all: false, ..packet }).unwrap();
     }
-    crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap())
+    crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r))
         .chunks_exact(16)
         .map(|p| std::array::from_fn(|c| f64::from(f32::from_le_bytes(p[c * 4..][..4].try_into().unwrap()))))
         .collect()

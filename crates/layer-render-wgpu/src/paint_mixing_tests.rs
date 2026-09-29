@@ -68,7 +68,7 @@ fn pickup(color: DocumentColor, execution: BrushExecution, mix: ColorMixSpace, s
 }
 
 fn composite(r: &WgpuRasterizer) -> [f32; 3] {
-    let bytes = page_bytes(r, r.composite_texture.as_ref().unwrap());
+    let bytes = page_bytes(r, crate::test_support::document_texture(r));
     let texel = &bytes[(PROBE[1] * 128 + PROBE[0]) * 16..][..12];
     std::array::from_fn(|i| f32::from_le_bytes(texel[i * 4..][..4].try_into().unwrap()))
 }

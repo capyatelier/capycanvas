@@ -12,6 +12,12 @@ frames:
   counts GPU-completed, nonempty canvas updates inside the input window. Android
   draws ink into the front buffer, so this rate can exceed the display's refresh
   rate.
+  Record `input_updates_per_s` and `input_completion_gap_p99_ms` alongside it.
+  These count the first completed update consuming each new down or move input;
+  prediction and refinement can produce further canvas updates between inputs.
+  Each completion records the engine's last consumed paint timestamp. An input
+  waiting in the queue cannot turn a refinement or cursor update into new ink.
+  A high canvas update rate alone does not establish fresh input throughput.
 - Navigation, drags, sliders, animations and other display-paced motion use
   **presented frames per second**: SurfaceFlinger actual-present times,
   `FrameMetrics`, or the host's presentation timestamps.
@@ -117,6 +123,32 @@ smudge and Liquify presets. The photo opens as a Perceptual document;
 `--blending linear` measures it in linear light. The benchmark draws a 200 Hz
 stylus ellipse at Fit zoom, three 10 s strokes, with the default 16 ms
 prediction.
+Qualification runs keep the default workspace. `--stats` opens Stats and enables
+GPU timestamp sampling; use it with `--trace` for phase attribution. Record these
+diagnostic runs separately: the panel and timing queries add work. Older runs
+without a `stats_panel` field always opened Stats.
+Keep the whole stroke footprint inside the photo for sustained painting tests.
+Choose `--radius-x` and `--radius-y` from the photo's displayed bounds and brush
+radius; the default work-area ellipse can leave a small Fit-view canvas. Compare
+the observed camera, radii, layer count and settings in each `*-info.json`, even
+when both invocations use identical command-line arguments.
+The runner waits for pending composition and queued GPU frames after each stroke.
+Reports include `settled_after_input_ms`; completed updates per second still count
+only nonempty updates completed inside the input window. Keep settling and the
+next input's latency separate from that throughput measurement. `--mode pauses`
+alternates 100 ms of drawing with 100 ms gaps. Its throughput excludes the gaps
+and work completed after each contact; report contact queue delay, presentation
+queued after consuming the contact, and GPU completion separately. Input records mark contacts that reached the
+renderer while composition was pending. The GPU completion metric is not scanout
+latency.
+
+**Memory (Android).** Run a separate diagnostic with `--memory` to save GPU
+allocator snapshots. Sampling allocations adds CPU work, so do not use that run
+to qualify frame rates. Keep process PSS, allocator allocated/reserved bytes and
+system `MemAvailable` together. Android drivers can hold GPU allocations outside
+process PSS; PSS alone cannot establish the memory bound. These measurements
+overlap and must not be added together. Monitor the entire operation through
+completion, including warm-up, pen-up, undo and deferred captures.
 
 **Navigation (Android).**
 

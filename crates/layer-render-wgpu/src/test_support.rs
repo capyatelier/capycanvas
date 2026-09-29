@@ -12,6 +12,7 @@ pub(crate) fn view(extent: [u32; 2]) -> ViewState {
 
 pub(crate) fn packet(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
     FramePacket {
+        commit_rasters: true,
         restore_rasters: &[],
         time_seconds: 0.,
         view: view(extent),
@@ -44,6 +45,13 @@ pub(crate) fn complete(r: &WgpuRasterizer) {
     r.device
         .poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(READBACK_TIMEOUT) })
         .unwrap();
+}
+
+pub(crate) fn document_texture(r: &WgpuRasterizer) -> &wgpu::Texture {
+    let cache = r.scale_display.as_ref().unwrap();
+    assert_eq!(cache.plan.level, 0);
+    assert_eq!(cache.plan.bounds, PixelRect::full(r.document_extent));
+    cache.texture()
 }
 
 pub(crate) fn receive_request(r: &mut WgpuRasterizer, request: layer_render::RegionRequest) -> layer_render::RegionResult {

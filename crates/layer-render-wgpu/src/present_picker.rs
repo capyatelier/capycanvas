@@ -10,6 +10,8 @@ pub(super) struct Picker {
     dirty: bool,
 }
 impl Picker {
+    pub fn changed(&self) -> bool { self.dirty }
+
     pub fn set(
         &mut self,
         overlay: Option<ColorPickerOverlay>,

@@ -113,8 +113,29 @@ Measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how
 | Liquify Pinch (37) | Very complex | 512 px | 3.8 updates/s (3.8–4.1); gap p99 429.0 ms | **Not met** |
 | Liquify Expand (38) | Very complex | 512 px | 3.8 updates/s (3.7–3.9); gap p99 456.8 ms | **Not met** |
 | Liquify Crystals (39) | Very complex | 512 px | 1.4 updates/s (1.4–1.4); gap p99 2078.1 ms | **Not met** |
-| Clone Stamp (40) | Very complex | 512 px | 57.8 updates/s (57.6–58.4); gap p99 31.1 ms | **Not met** |
-| Healing Brush (41) | Very complex | 512 px | 57.4 updates/s (57.2–57.4); gap p99 31.4 ms | **Not met** |
-| Spot Healing Brush (42) | Very complex | 512 px | 62.1 updates/s (61.5–62.8); gap p99 27.9 ms | **Not met** |
+| Clone Stamp (40) | Very complex | 512 px | 115.7 fresh updates/s; completion gap p99 15.2 ms | **Met for drawing** |
+| Healing Brush (41) | Very complex | 512 px | 113.7 fresh updates/s; completion gap p99 15.2 ms | **Met for drawing** |
+| Spot Healing Brush (42) | Very complex | 512 px | 119.7 fresh updates/s; completion gap p99 13.6 ms | **Met for drawing** |
 
-The retouching brushes were measured on 2026-09-28 at the commit that made them contact brushes, copying from the photo marked as a reference layer.
+Retouching rows use the integrated-compositor measurements below, copying from the photo marked as a reference layer.
+
+## Retouching with the integrated compositor
+
+Measured on 2026-09-29 on the reference tablet: 24 MP Perceptual photo,
+512 px brushes, Fit zoom, 479.7 × 240 px trajectory, 16 ms prediction, three
+five-second strokes per brush. Stats is closed. Fresh
+updates count completed frames that consumed new real pen samples.
+
+| Brush | Fresh updates/s, median | Completion gap p99, median | Moving-stroke rate |
+| --- | ---: | ---: | --- |
+| Clone Stamp | 115.7 | 15.2 ms | Meets 90/s |
+| Healing Brush | 113.7 | 15.2 ms | Meets 90/s |
+| Spot Healing Brush | 119.7 | 13.6 ms | Meets 90/s |
+
+These measurements cover drawing. Clone settles in 470–566 ms; Healing in
+1633–1830 ms and Spot Healing in 2702–2821 ms. Completion after pen-up remains an
+open gate. They do not qualify presentation-paced navigation or the other
+brushes. The measured build integrates `64036b643` with `13720d303`, bounded
+bakes, the healing solver optimization and sparse stroke replay. Its APK SHA-256
+is `be9a9ad367b9a0215ea5f57ac9d14028818d1f029fe8787324b66d3d4ac71e48`.
+Raw reports are in `artifacts/integration/source-record-batch/mid`.

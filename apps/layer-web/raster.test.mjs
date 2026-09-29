@@ -66,7 +66,7 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   await evaluate(`layerApp.app.save_recovery('abandoned-raster-test')`);
   await call('Page.reload',{ignoreCache:true});
   await new Promise(resolve=>setTimeout(resolve,1000));
-  await wait('window.layerApp?.startupTimes.complete!==null && !![...document.querySelectorAll(".document-dialog h2")].find(n=>n.textContent==="Recover drawing?")');
+  await wait('!![...document.querySelectorAll("dialog[open].document-dialog h2")].find(n=>n.textContent==="Recover drawing?")');
   await evaluate('[...document.querySelectorAll(".document-dialog button")].find(n=>n.textContent==="Recover").click()');
   await wait('layerApp.state().document_file.modified && layerApp.app.brush_ready()');
   assert.equal(await evaluate('layerApp.state().document_file.location??null'),null,'Recovery has no durable user save location');

@@ -839,6 +839,11 @@ pub enum LayerOperationKind {
         members: Arc<[Layer]>,
         offset: Point,
     },
+    FrequencyDetail {
+        members: Arc<[Layer]>,
+        offset: Point,
+        low: LayerId,
+    },
 }
 impl LayerOperation {
     /// Conservative affected area in layer coordinates. Inverted coverage and
@@ -846,7 +851,8 @@ impl LayerOperation {
     pub fn bounds(&self, extent: [u32; 2]) -> Rect {
         let mut bounds = match &self.kind {
             LayerOperationKind::Figure(figure) => self.placement.bounds(figure.bounds()),
-            LayerOperationKind::Bake { members, offset } => crate::merge::bake_bounds(members, *offset, extent),
+            LayerOperationKind::Bake { members, offset }
+            | LayerOperationKind::FrequencyDetail { members, offset, .. } => crate::merge::bake_bounds(members, *offset, extent),
             _ => Rect {
                 min: Point::default(),
                 max: Point {
@@ -904,7 +910,7 @@ impl LayerOperation {
             LayerOperationKind::ApplyMask | LayerOperationKind::Erase { .. } => {
                 self.placement == Affine::IDENTITY
             }
-            LayerOperationKind::Bake { offset, .. } => {
+            LayerOperationKind::Bake { offset, .. } | LayerOperationKind::FrequencyDetail { offset, .. } => {
                 self.placement == Affine::IDENTITY
                     && offset.x.is_finite()
                     && offset.y.is_finite()

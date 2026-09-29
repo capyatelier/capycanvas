@@ -171,13 +171,6 @@ impl MaskRenderer {
             }),
         }
     }
-    pub fn compile_all(&self) {
-        self.initialize.compile();
-        for pipeline in &self.brush {
-            pipeline.compile();
-        }
-    }
-
     pub fn is_mask(layers: &[Layer], id: LayerId) -> bool {
         Self::masks(layers).any(|m| m.id == id)
     }

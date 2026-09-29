@@ -597,17 +597,16 @@ impl RetouchSources {
         if let Some(slot) = self.cache.get(coordinate) {
             return Ok(Some(self.cache.slots[slot].page.view.clone()));
         }
-        if self.live.is_some()
-            && let Some(layer) = self.cache.frame.as_deref().and_then(lone_layer)
-        {
-            return Ok(match lone_page(r, layer, coordinate) {
-                Prepared::View(view) => Some(view),
-                Prepared::Absent => None,
-                Prepared::Decode => {
+        if let Some(layer) = self.cache.frame.as_deref().and_then(lone_layer) {
+            match lone_page(r, layer, coordinate) {
+                Prepared::View(view) => return Ok(Some(view)),
+                Prepared::Absent => return Ok(None),
+                Prepared::Decode if self.live.is_some() => {
                     self.miss();
-                    None
+                    return Ok(None);
                 }
-            });
+                Prepared::Decode => {}
+            }
         }
         let slot = self.capture_reference(r, coordinate, self.live.is_none(), encoder)?;
         if slot.is_none() && self.live.is_some() {
@@ -715,12 +714,13 @@ impl RetouchSources {
                     .any(|l| l.id == mapping.target && l.pages.iter().any(|p| p.coordinate == coordinate))
                 || !matches!(raw_prepared_view(r, mapping.target, coordinate), Prepared::Decode)
         });
-        let lone = self.live.is_some() && self.cache.frame.as_deref().and_then(lone_layer).is_some();
+        let lone = self.cache.frame.as_deref().and_then(lone_layer);
         let references = mapping.references.as_ref().is_none_or(|members| {
             r.artwork_frame.as_ref().is_some_and(|frame| {
                 self.cache.key.as_ref().is_some_and(|key| key.matches(frame, members, r.document_extent))
             }) && block_pages(mapping.blocks[1]).into_iter().flatten().all(|coordinate| {
-                lone || page_rect(coordinate).intersect(PixelRect::full(r.document_extent)).is_empty()
+                lone.is_some_and(|layer| self.live.is_some() || !matches!(lone_page(r, layer, coordinate), Prepared::Decode))
+                    || page_rect(coordinate).intersect(PixelRect::full(r.document_extent)).is_empty()
                     || self.cache.pages.contains_key(&coordinate)
             })
         });

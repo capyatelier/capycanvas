@@ -37,9 +37,10 @@ fn photo(pixel: impl Fn(u32, u32) -> [u8; 4]) -> Document {
 }
 
 fn healer(doc: Document, preset: DefaultBrushPreset, diameter: f32, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
+    let extent = [doc.width, doc.height];
     let r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let (input, consumer) = input_queue(256);
-    let mut engine = CanvasEngine::new(r, doc, consumer, view(EXTENT), ViewTransform::IDENTITY).unwrap();
+    let mut engine = CanvasEngine::new(r, doc, consumer, view(extent), ViewTransform::IDENTITY).unwrap();
     engine
         .set_brush(BrushSnapshot { diameter, hardness: 1., opacity: 1., mappings: Arc::from([]), ..default_brush(preset) })
         .unwrap();
@@ -47,6 +48,53 @@ fn healer(doc: Document, preset: DefaultBrushPreset, diameter: f32, feedback: bo
     engine.set_retouch(Some(RetouchSource::References));
     flush(&mut engine);
     (input, engine)
+}
+
+#[test]
+#[ignore = "24 MP physical GPU memory measurement"]
+fn broad_spot_healing_has_bounded_memory() {
+    let extent = [6000, 4000];
+    let mut doc = document(extent);
+    doc.blend_space = layer_core::BlendSpace::Perceptual;
+    let (mut input, mut engine) = healer(doc, DefaultBrushPreset::SpotHealingBrush, 512., false);
+    let mut fit = view(extent);
+    fit.width_px = 1500;
+    fit.height_px = 1000;
+    fit.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    engine.set_view(fit, ViewTransform { revision: 1, surface_to_document: [4., 0., 0., 4., 0., 0.] });
+    flush(&mut engine);
+    engine.backend_mut().wait_idle().unwrap();
+    let device = engine.backend().device.clone();
+    let allocated = |device: &wgpu::Device| device.generate_allocator_report().unwrap().allocations.iter().map(|a| a.size).sum::<u64>();
+    let before = allocated(&device);
+    let started = std::time::Instant::now();
+    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done = finished.clone();
+    let monitor = std::thread::spawn(move || {
+        let mut peak = before;
+        while !done.load(std::sync::atomic::Ordering::Acquire) {
+            peak = peak.max(allocated(&device));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        peak
+    });
+    for step in 0..=120 {
+        let angle = step as f32 * std::f32::consts::TAU / 120.;
+        let phase = if step == 0 { PenPhase::Down } else if step == 120 { PenPhase::Up } else { PenPhase::Move };
+        let mut event = pen(step + 1, phase, [750. + 450. * angle.cos(), 500. + 280. * angle.sin()], SampleFlags::PRIMARY);
+        event.view_revision = 1;
+        draw(&mut engine, &mut input, event);
+        engine.backend_mut().wait_idle().unwrap();
+    }
+    flush(&mut engine);
+    engine.backend_mut().wait_idle().unwrap();
+    finished.store(true, std::sync::atomic::Ordering::Release);
+    let peak = monitor.join().unwrap();
+    eprintln!("broad spot heal: {:.1} ms, before {:.1} MiB, peak {:.1} MiB, after {:.1} MiB, {:?}",
+        started.elapsed().as_secs_f64() * 1000., before as f64 / 1048576., peak as f64 / 1048576.,
+        allocated(&engine.backend().device) as f64 / 1048576., counts(&engine));
+    assert_eq!(counts(&engine).heals, 1);
+    assert!(peak <= before + (1024 << 20), "healing scratch exceeds one GiB");
 }
 
 fn stroke(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut InputProducer<PenEvent>, sequence: u64, from: [f32; 2], to: [f32; 2]) {
@@ -62,6 +110,23 @@ fn stroke(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut InputProducer<P
 
 fn source_at(engine: &mut CanvasEngine<WgpuRasterizer>, x: f32, y: f32) {
     engine.set_clone_source(CloneSource { point: Some(Point { x, y }), ..CloneSource::default() });
+}
+
+#[test]
+fn spot_healing_batches_resident_candidates_across_pages() {
+    let (mut input, mut engine) = healer(document([2048, 1024]), DefaultBrushPreset::SpotHealingBrush, 512., false);
+    for step in 0..20 {
+        draw(&mut engine, &mut input, pen(step + 1, if step == 0 { PenPhase::Down } else { PenPhase::Move },
+            [600. + step as f32 * 40., 450. + step as f32 * 8.], SampleFlags::PRIMARY));
+    }
+    let before = engine.backend().metrics.command_passes;
+    draw(&mut engine, &mut input, pen(21, PenPhase::Up, [1360., 602.], SampleFlags::PRIMARY));
+    flush(&mut engine);
+    assert_eq!(counts(&engine).heals, 1);
+    let pages = engine.backend().paint_layers.iter().find(|l| l.id == TARGET).unwrap().pages.len() as u64;
+    let passes = engine.backend().metrics.command_passes - before;
+    assert!(pages >= 12);
+    assert!(passes <= 6 * pages + 80, "{passes} passes for {pages} pages");
 }
 
 /// The target's pixels, read back page by page.
@@ -135,6 +200,42 @@ fn heals_texture_and_tone(blend_space: layer_core::BlendSpace) {
     let r = correlation(&result, &source);
     assert!(r > 0.9, "{blend_space:?}: the healed texture follows its source: correlation {r}");
     assert_eq!(counts(&engine).heals, 1);
+}
+
+#[test]
+fn healing_pen_up_refreshes_every_painted_display_page() {
+    for preset in [DefaultBrushPreset::HealingBrush, DefaultBrushPreset::SpotHealingBrush] {
+        let doc = photo(|x, y| grey(texture_and_gradient(x, y)));
+        let (mut input, mut engine) = healer(doc, preset, 64., false);
+        let mut fit = view(EXTENT);
+        fit.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        engine.set_view(fit, ViewTransform { revision: 1, surface_to_document: [4., 0., 0., 4., 0., 0.] });
+        source_at(&mut engine, 150., 256.);
+        for i in 0..9 {
+            let phase = if i == 0 { PenPhase::Down } else if i == 8 { PenPhase::Up } else { PenPhase::Move };
+            let mut event = pen(i + 1, phase, [(580. + i as f32 * 40.) * 0.25, 64.], SampleFlags::PRIMARY);
+            event.view_revision = 1;
+            draw(&mut engine, &mut input, event);
+        }
+        assert_eq!(counts(&engine).heals, 1);
+        let r = engine.backend();
+        let cache = r.scale_display.as_ref().unwrap();
+        assert_eq!(cache.plan.level, 2);
+        let output = floats(&crate::layer_tests::page_bytes(r, cache.texture()));
+        let healed = target(r);
+        for y in 62..66 {
+            for x in 152..180 {
+                let mut expected = [0.; 4];
+                for dy in 0..4 { for dx in 0..4 {
+                    let p = healed(x * 4 + dx, y * 4 + dy);
+                    assert!(p[3] > 0.999);
+                    for c in 0..4 { expected[c] += p[c] / 16.; }
+                }}
+                let actual = output[(y * cache.plan.size[0] + x) as usize];
+                assert!(close(actual, expected), "{preset:?} ({x},{y}): displayed {actual:?}, healed {expected:?}");
+            }
+        }
+    }
 }
 
 #[test]

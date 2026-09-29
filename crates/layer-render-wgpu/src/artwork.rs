@@ -12,6 +12,7 @@ pub(super) struct Frame {
     pub blend_space: layer_core::BlendSpace,
     pub time: f32,
     pub previews: Vec<DabBatch>,
+    preview_dabs: Vec<Dab>,
 }
 /// Whether two composite snapshots draw the same pixels: the same raster,
 /// source, mask, effect, placement and appearance.
@@ -35,59 +36,31 @@ impl Frame {
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
     /// Source identity and raster publication catch edits without scanning pixels.
     pub fn same_artwork(&self, packet: FramePacket<'_>, background: [f32; 4]) -> bool {
-        self.placed(packet, background).is_some_and(|moved| moved.is_empty())
-    }
-    /// The one layer whose placement alone changed since this frame.
-    pub fn moved_placement(&self, packet: FramePacket<'_>, background: [f32; 4]) -> Option<LayerId> {
-        match self.placed(packet, background)?[..] {
-            [layer] => Some(layer),
-            _ => None,
-        }
-    }
-    /// Whether nothing but `layer`'s placement changed since this frame.
-    pub fn unchanged_except(&self, packet: FramePacket<'_>, background: [f32; 4], layer: LayerId) -> bool {
-        self.placed(packet, background).is_some_and(|moved| moved.iter().all(|id| *id == layer))
-    }
-    /// The layers placed differently, when nothing else about the artwork
-    /// changed.
-    fn placed(&self, packet: FramePacket<'_>, background: [f32; 4]) -> Option<Vec<LayerId>> {
         let artwork = |l: &&Layer| l.kind != LayerKind::Selection;
         let same = self.background == background
             && self.blend_space == packet.blend_space
+            && (self.time == packet.time_seconds || !packet.layers.iter()
+                .any(|l| l.visible && l.effect.as_ref().is_some_and(|e| e.animated())))
             && self.previews.is_empty()
             && packet.dab_batches.is_empty()
             && self.layers.iter().filter(artwork).count()
                 == packet.layers.iter().filter(artwork).count();
-        let mut moved = Vec::new();
         for (a, b) in self.layers.iter().filter(artwork).zip(packet.layers.iter().filter(artwork)) {
-            let same_layer = a.id == b.id
-                && a.kind == b.kind
-                && a.visible == b.visible
-                && a.opacity == b.opacity
-                && a.raster == b.raster
-                && a.properties
-                    == layer_core::LayerProperties {
-                        placement: a.properties.placement,
-                        offset: a.properties.offset,
-                        ..b.properties.clone()
-                    }
-                && a.mask == b.mask
-                && a.effect == b.effect
-                && match (&a.source, &b.source) {
-                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                    (None, None) => true,
-                    _ => false,
-                };
-            if !same_layer {
-                return None;
-            }
-            if a.properties != b.properties {
-                moved.push(b.id);
+            if !same_layer(a, b) {
+                return false;
             }
         }
-        same.then_some(moved)
+        same
     }
     pub fn new(packet: FramePacket<'_>, background: [f32; 4]) -> Self {
+        let mut preview_dabs = Vec::new();
+        let previews = packet.dab_batches.iter().filter(|b| b.kind == DabBatchKind::Preview)
+            .map(|batch| {
+                let mut retained = batch.clone();
+                retained.first_dab = preview_dabs.len() as u32;
+                preview_dabs.extend_from_slice(&packet.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize]);
+                retained
+            }).collect();
         Self {
             layers: packet
                 .layers
@@ -98,21 +71,18 @@ impl Frame {
             background,
             blend_space: packet.blend_space,
             time: packet.time_seconds,
-            previews: packet
-                .dab_batches
-                .iter()
-                .filter(|b| b.kind == DabBatchKind::Preview)
-                .cloned()
-                .collect(),
+            previews,
+            preview_dabs,
         }
     }
     pub fn packet(&self, extent: [u32; 2]) -> FramePacket<'_> {
         FramePacket {
+            commit_rasters: true,
             layers: &self.layers,
             view: self.view,
             document_extent: extent,
             time_seconds: self.time,
-            dabs: &[],
+            dabs: &self.preview_dabs,
             dab_batches: &self.previews,
             restore_rasters: &[],
             reset_layers: false,
@@ -191,6 +161,7 @@ impl Capture {
         if region.width() > destination.width() || region.height() > destination.height() {
             return Err(GpuRasterError::InvalidExtent);
         }
+        r.ensure_exact_preview(encoder)?;
         let (window, bytes) = self.image_bytes(packet, region)?;
         // Retire previous image windows before replacing their storage. Exact
         // query scheduling/cancellation will move these drains off interaction.
@@ -201,7 +172,7 @@ impl Capture {
             }
         }
         let scene = self.scene.get_or_insert_with(|| query_scene(r));
-        scene.capture_region(r, packet, destination, region, None, encoder)?;
+        scene.capture_region(r, packet, destination, region, scene::Output::Artwork(None), encoder)?;
         self.window = Some(window);
         self.peak_image_bytes = self.peak_image_bytes.max(bytes);
         Ok(())
@@ -238,19 +209,47 @@ impl Capture {
         let resident = |id: LayerId| {
             r.paint_layers.iter().any(|l| l.id == id && l.pages.iter().any(|p| p.coordinate == tile))
         };
-        scene.source_decodes(r, layers, tile) > 0
-            || scene.uploads_full()
+        scene.uploads_full()
             || layers.iter().filter(|l| l.visible && l.is_artwork()).any(|l| {
+                let placed = layer_core::target_transform(layers, l.id) != layer_core::Affine::IDENTITY;
+                let source = l.source.as_ref().is_some_and(|source| placed
+                    || (tile[0] * PAGE_SIZE < source.extent[0] && tile[1] * PAGE_SIZE < source.extent[1]
+                        && !resident(l.id) && scene.prepared_source_view(source, tile).is_none()));
                 let native = r.native_backing(l.id).is_some()
                     || l.mask.as_ref().is_some_and(|m| r.native_backing(m.id).is_some());
-                native
-                    && (layer_core::target_transform(layers, l.id) != layer_core::Affine::IDENTITY
+                source || (native
+                    && (placed
                         || l.mask.is_some()
                         || (!resident(l.id)
                             && r.native_color_tile(l.id, tile).map_or(true, |blob| {
                                 blob.is_some_and(|blob| scene.prepared_raster_view(&blob, space).is_none())
-                            })))
+                            }))))
             })
+    }
+}
+
+impl WgpuRasterizer {
+    pub(super) fn ensure_exact_preview(&mut self, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        if self.preview_level == 0 { return Ok(()); }
+        let frame = self.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
+        let packet = frame.packet(self.document_extent);
+        let mut tiles = packet.dab_batches.iter().map(|batch| {
+            let dabs = &packet.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize];
+            brush_tiles::plan(batch, dabs, self.target_extent(batch.layer_id))
+        }).collect::<Vec<_>>();
+        self.preview_level = 0;
+        self.preview_pages.clear();
+        self.ensure_preview_pages(self.preview_damage, self.preview_contact_tiles.clone().as_ref());
+        self.prepare_uploads(packet, &mut tiles, encoder)?;
+        for (index, batch) in packet.dab_batches.iter().enumerate() {
+            self.encode_brush_batch(encoder, index, batch, BrushEncodingContext {
+                batches: packet.dab_batches, dabs: packet.dabs, tiles: &tiles[index],
+                document_extent: self.target_extent(batch.layer_id),
+                target: BrushEncodingTarget::Preview { from_persistent: true },
+            })?;
+        }
+        self.refresh_storage_metrics();
+        Ok(())
     }
 }
 

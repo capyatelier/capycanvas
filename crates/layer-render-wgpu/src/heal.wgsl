@@ -43,6 +43,7 @@ struct Params {
 @group(1) @binding(2) var coverage: texture_2d<f32>;
 @group(1) @binding(3) var painted: texture_2d<f32>;
 @group(1) @binding(4) var start: texture_2d<f32>;
+@group(1) @binding(5) var healed_page: texture_storage_2d<rgba32float, write>;
 // Spot Healing's candidate source for one page: the target and reference
 // pages its mapping reads, the page's first pixel in the target, and where
 // the chosen candidate is laid down.
@@ -179,8 +180,10 @@ fn seed(@builtin(global_invocation_id) id: vec3<u32>) {
                 continue;
             }
             let w = weight_of(texel);
-            sum += w * (blend_space(field(destination, texel)) - blend_space(field(source, texel)));
-            weight += w;
+            if w > 0.0 {
+                sum += w * (blend_space(field(destination, texel)) - blend_space(field(source, texel)));
+                weight += w;
+            }
             inside += 1.0;
         }
     }
@@ -301,12 +304,11 @@ fn inside(i: u32) -> bool {
 
 const BLOCK: u32 = 16u;
 const BLOCK_SWEEPS: u32 = 8u;
+const BLOCK_PITCH: u32 = BLOCK + 2u;
+var<workgroup> block_values: array<vec4<f32>, 324>;
+var<workgroup> block_inside: array<u32, 324>;
 
-// Relax the 16 x 16 blocks of the windows whose colour, alternating like a
-// checkerboard, is p.parity: BLOCK_SWEEPS red-black sweeps within each block,
-// with the blocks around it, of the other colour, held still. Cells outside
-// every window hold no membrane, so an edge of a window is free.
-@compute @workgroup_size(16, 16)
+@compute @workgroup_size(8, 16)
 fn relax(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let l = level(0u);
     let blocks = p.windows + 5u * p.pages + 1u;
@@ -321,31 +323,55 @@ fn relax(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) 
     if ((origin.x + origin.y) / BLOCK + block.x + block.y) % 2u != p.parity {
         return;
     }
-    let local = block * BLOCK + lid.xy;
-    let at = found.x * l.tile * l.tile + local.y * l.tile + local.x;
-    let g = vec2<i32>(origin + local);
-    var w = -1.0;
-    if all(local >= window.xy) && all(local < window.zw) {
-        w = bitcast<f32>(words[at]);
-    }
-    let relaxed = w >= 0.0 && w < 1.0;
-    let offsets = array<vec2<i32>, 4>(vec2<i32>(-1, 0), vec2<i32>(1, 0), vec2<i32>(0, -1), vec2<i32>(0, 1));
-    for (var sweep = 0u; sweep < 2u * BLOCK_SWEEPS; sweep++) {
-        if relaxed && u32(g.x + g.y) % 2u == sweep % 2u {
-            var sum = vec4<f32>(0.0);
-            var count = 0.0;
-            for (var k = 0; k < 4; k++) {
-                let i = cell(l, g + offsets[k]);
-                if inside(i) {
-                    sum += membrane[i];
-                    count += 1.0;
-                }
-            }
-            let average = select(membrane[at], sum / count, count > 0.0);
-            membrane[at] = w * values[at] + (1.0 - w) * average;
+    let block_origin = vec2<i32>(origin + block * BLOCK);
+    for (var i = lid.y * (BLOCK / 2u) + lid.x; i < BLOCK_PITCH * BLOCK_PITCH; i += BLOCK * BLOCK / 2u) {
+        let offset = vec2<u32>(i % BLOCK_PITCH, i / BLOCK_PITCH);
+        let corner = (offset.x == 0u || offset.x == BLOCK_PITCH - 1u) && (offset.y == 0u || offset.y == BLOCK_PITCH - 1u);
+        var valid = false;
+        var value = vec4<f32>(0.0);
+        if !corner {
+            let source = cell(l, block_origin + vec2<i32>(offset) - 1);
+            valid = inside(source);
+            if valid { value = membrane[source]; }
         }
-        storageBarrier();
+        block_values[i] = value;
+        block_inside[i] = u32(valid);
     }
+    workgroupBarrier();
+    let local = block * BLOCK + vec2<u32>(2u * lid.x, lid.y);
+    let at = found.x * l.tile * l.tile + local.y * l.tile + local.x;
+    var weight = vec2<f32>(-1.0);
+    var fixed0 = vec4<f32>(0.0);
+    var fixed1 = vec4<f32>(0.0);
+    if all(local >= window.xy) && all(local < window.zw) {
+        weight.x = bitcast<f32>(words[at]);
+        fixed0 = weight.x * values[at];
+    }
+    if all(local + vec2<u32>(1u, 0u) >= window.xy) && all(local + vec2<u32>(1u, 0u) < window.zw) {
+        weight.y = bitcast<f32>(words[at + 1u]);
+        fixed1 = weight.y * values[at + 1u];
+    }
+    let first = (lid.y + 1u) * BLOCK_PITCH + 2u * lid.x + 1u;
+    let count0 = f32(block_inside[first - 1u] + block_inside[first + 1u]
+        + block_inside[first - BLOCK_PITCH] + block_inside[first + BLOCK_PITCH]);
+    let count1 = f32(block_inside[first] + block_inside[first + 2u]
+        + block_inside[first + 1u - BLOCK_PITCH] + block_inside[first + 1u + BLOCK_PITCH]);
+    let inverse_count = vec2<f32>(1.0) / max(vec2<f32>(count0, count1), vec2<f32>(1.0));
+    for (var sweep = 0u; sweep < 2u * BLOCK_SWEEPS; sweep++) {
+        let parity = (lid.y + sweep) % 2u;
+        let center = first + parity;
+        let w = select(weight.x, weight.y, parity == 1u);
+        if w >= 0.0 && w < 1.0 {
+            let sum = block_values[center - 1u] + block_values[center + 1u]
+                + block_values[center - BLOCK_PITCH] + block_values[center + BLOCK_PITCH];
+            let count = select(count0, count1, parity == 1u);
+            let average = select(block_values[center], sum * select(inverse_count.x, inverse_count.y, parity == 1u), count > 0.0);
+            block_values[center] = select(fixed0, fixed1, parity == 1u) + (1.0 - w) * average;
+        }
+        workgroupBarrier();
+    }
+    if weight.x >= 0.0 && weight.x < 1.0 { membrane[at] = block_values[first]; }
+    if weight.y >= 0.0 && weight.y < 1.0 { membrane[at + 1u] = block_values[first + 1u]; }
 }
 
 var<workgroup> partial: array<vec2<f32>, 256>;
@@ -382,8 +408,10 @@ fn score(
         let texel = block_texel(block, lid, i);
         if windowed(texel) {
             let w = weight_of(texel);
-            let d = field(destination, texel) - candidate_at(texel);
-            sum += vec2<f32>(w * dot(d, d), w);
+            if w > 0.0 {
+                let d = field(destination, texel) - candidate_at(texel);
+                sum += vec2<f32>(w * dot(d, d), w);
+            }
         }
     }
     lanes[lane] = sum;
@@ -454,12 +482,6 @@ fn pick(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) l
     }
 }
 
-@vertex
-fn vertex_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let uv = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
-    return vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
-}
-
 // The level 0 membrane at page pixel `texel`, bilinear between cells when
 // they span several pixels.
 fn membrane_at(texel: vec2<i32>) -> vec4<f32> {
@@ -498,9 +520,7 @@ fn over(x: vec4<f32>, below: vec4<f32>, c: f32, locked: bool) -> vec4<f32> {
 // Healing's page already holds S over it, so only h's share is added; Spot
 // Healing's holds a tint, so S is laid down from the source field. Where h
 // changes a pixel of an integer document, its color stays within its alpha.
-@fragment
-fn apply_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let texel = vec2<i32>(floor(position.xy));
+fn applied(texel: vec2<i32>) -> vec4<f32> {
     let current = textureLoad(painted, texel, 0);
     let c = 1.0 - weight_of(texel);
     if c <= 0.0 || !windowed(texel) {
@@ -532,4 +552,11 @@ fn apply_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> 
         return working_decode(vec4<f32>(rgb, alpha));
     }
     return vec4<f32>(rgb, alpha);
+}
+
+@compute @workgroup_size(8, 8)
+fn apply_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if all(id.xy < textureDimensions(healed_page)) {
+        textureStore(healed_page, vec2<i32>(id.xy), applied(vec2<i32>(id.xy)));
+    }
 }

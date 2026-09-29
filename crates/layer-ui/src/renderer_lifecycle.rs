@@ -62,6 +62,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine
             .backend_mut()
             .submit(layer_render::FramePacket {
+                commit_rasters: true,
                 time_seconds: 0.,
                 view,
                 document_extent: extent,
@@ -134,7 +135,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let destination = self.engine.document().color.space;
         let transform = previous.engine.document().color.space.linear_transform(destination);
         let mut brush = previous.engine.configured_brush().clone();
-        brush.color_rgba_linear = previous.state.colors.definition().linear_in(destination)?;
+        previous.state.colors.load_paint(&mut brush, destination)?;
         let secondary = &mut brush.color_dynamics.secondary_color_rgba_linear;
         let rgb = layer_core::color::rgb::apply(transform, [secondary[0],secondary[1],secondary[2]].map(f64::from));
         secondary[..3].copy_from_slice(&rgb.map(|v|v as f32));

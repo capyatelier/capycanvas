@@ -8,7 +8,7 @@ import pathlib
 import statistics
 import subprocess
 import sys
-from android_brush_metrics import completion_window
+from android_brush_metrics import completion_window, contact_latencies, input_completions
 
 
 def distribution(values):
@@ -32,6 +32,8 @@ def main():
         if not (args.directory / f"{label}-complete.json").is_file():
             continue
         info = json.loads(infofile.read_text())
+        if "repeats" not in info:  # Navigation uses its separate measurements file.
+            continue
         runs = []
         markers = []
         for i in range(info["repeats"]):
@@ -50,21 +52,32 @@ def main():
             rows_before = {r["label"]: r["value"] for r in data["renderer_before"]["rows"]}
             rows_after = {r["label"]: r["value"] for r in data["renderer_after"]["rows"]}
             progress = completion_window(data)
+            input_updates = input_completions(data)
             submitted = progress["submitted"]
             stamps = int(rows_after["Dabs"]) - int(rows_before["Dabs"])
             times = [f["start_ns"] for f in frames]
+            contacts = contact_latencies(data)
             runs.append({"run": i, **progress, "cpu_update_count": len(frames),
+                "input_completed_per_s": sum(map(len, input_updates)) / progress["active_input_seconds"],
+                "input_completion_gap_ms": distribution([(b[2] - a[2]) / 1e6 for interval in input_updates for a, b in zip(interval, interval[1:])]),
                 "callback_count": len(callbacks), "cpu_ms": cpu,
                 "owner_core_occupancy": sum(f["owner_thread_cpu_ns"] for f in callbacks) / (end - begin),
                 "update_start_gap_ms": distribution([(b - a) / 1e6 for a, b in zip(times, times[1:])]),
                 "input_queue_ms": distribution([(r[2] - r[1]) / 1e6 for r in inputs]),
                 "input_delivery_ms": distribution([(r[1] - r[0]) / 1e6 for r in inputs]),
+                "contacts": contacts,
+                "contact_queue_ms": distribution([r["queue_ms"] for r in contacts]),
+                "contact_present_queued_ms": distribution([r["present_queued_ms"] for r in contacts if r["present_queued_ms"] is not None]),
+                "contact_next_gpu_ms": distribution([r["next_gpu_ms"] for r in contacts if r["next_gpu_ms"] is not None]),
+                "refining_contact_queue_ms": distribution([r["queue_ms"] for r in contacts if r["pending_composition"]]),
+                "refining_contact_next_gpu_ms": distribution([r["next_gpu_ms"] for r in contacts if r["pending_composition"] and r["next_gpu_ms"] is not None]),
                 "input_injected": len(motion["injected"]), "input_records": sum(r[4] for r in inputs),
                 "dabs": stamps, "dabs_per_submitted_update": stamps / max(1, submitted),
                 "raster_updates": int(rows_after["Frames"]) - int(rows_before["Frames"]),
                 "rolling_gpu_ms": distribution(data["renderer_after"]["gpu_samples"]),
                 "viewport_gpu_ms": distribution([r[1] / 1e6 for r in data["presentation"] if r[2] == 1]),
                 "resident_bytes": data["renderer_after"]["resident_bytes"],
+                "settled_after_input_ms": (data["settled_ns"] - end) / 1e6 if "settled_ns" in data else None,
                 "process_mappings": data["resources_after"]["process_mappings"]})
         trace = args.directory / f"{label}.perfetto-trace"
         trace_data = None
@@ -72,15 +85,23 @@ def main():
             markerfile = args.directory / f"{label}-markers.txt"
             markerfile.write_text("\n".join(markers) + "\n")
             reportfile = args.directory / f"{label}-trace-report.json"
-            if not reportfile.exists():
-                with reportfile.open("w") as out:
-                    subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("android-pen-report.py")),
-                        str(trace), str(markerfile), "--processor", args.processor, "--package", args.package],
-                        check=True, stdout=out)
+            if not reportfile.exists() or not reportfile.stat().st_size:
+                pending = reportfile.with_suffix(".tmp")
+                try:
+                    with pending.open("w") as out:
+                        subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("android-pen-report.py")),
+                            str(trace), str(markerfile), "--processor", args.processor, "--package", args.package],
+                            check=True, stdout=out)
+                    json.loads(pending.read_text())
+                    pending.replace(reportfile)
+                finally:
+                    pending.unlink(missing_ok=True)
             trace_data = json.loads(reportfile.read_text())
         summary = {"label": label, "preset": info["preset"], "size": info["brush_size"], "mode": info["mode"],
             "prediction": info["prediction"], "speed": info["speed"], "trace": bool(trace_data),
             "trace_kind": info.get("host_trace_kind", "full" if trace_data else "none"),
+            "memory_snapshots": info.get("memory_snapshots", False),
+            "stats_panel": info.get("stats_panel", True),
             "completed_per_s_median": statistics.median(r["completed_per_s"] for r in runs),
             "completed_per_s_range": [min(r["completed_per_s"] for r in runs), max(r["completed_per_s"] for r in runs)],
             "runs": runs}
@@ -88,16 +109,20 @@ def main():
             summary["trace_errors"] = trace_data["trace_errors"]
             summary["trace_actions"] = trace_data["actions"]
         summaries.append(summary)
-        print(f"{label:48} updates/s={summary['completed_per_s_median']:.1f} "
+        summary["input_completed_per_s_median"] = statistics.median(r["input_completed_per_s"] for r in runs)
+        gpu = [r["rolling_gpu_ms"]["p50"] for r in runs if r["rolling_gpu_ms"].get("n")]
+        gpu_time = f"{statistics.median(gpu):.2f}ms" if gpu else "not sampled"
+        print(f"{label:48} input updates/s={summary['input_completed_per_s_median']:.1f} canvas updates/s={summary['completed_per_s_median']:.1f} "
               f"CPU={statistics.median(r['cpu_ms']['cpu_callback']['p50'] for r in runs):.2f}ms "
-              f"rolling GPU={statistics.median(r['rolling_gpu_ms'].get('p50',0) for r in runs):.2f}ms "
+              f"rolling GPU={gpu_time} "
               f"dabs/update={statistics.median(r['dabs_per_submitted_update'] for r in runs):.1f}")
     (args.directory / "summary.json").write_text(json.dumps(summaries, indent=2))
     with (args.directory / "summary.csv").open("w", newline="") as out:
         columns = ["label", "preset", "size", "mode", "prediction", "trace", "speed", "completed_updates_per_s",
+                   "input_updates_per_s", "input_completion_gap_p99_ms",
                    "minimum_run_updates_per_s", "maximum_run_updates_per_s", "cpu_callback_p50_ms",
                    "update_start_gap_p95_ms", "update_start_gap_p99_ms", "input_queue_p95_ms",
-                   "rolling_gpu_p50_ms", "viewport_gpu_p50_ms", "dabs_per_update", "resident_mib"]
+                   "rolling_gpu_p50_ms", "viewport_gpu_p50_ms", "dabs_per_update", "resident_mib", "stats_panel"]
         writer = csv.DictWriter(out, fieldnames=columns)
         writer.writeheader()
         for s in summaries:
@@ -107,6 +132,8 @@ def main():
                 return statistics.median(values) if values else ""
             writer.writerow({**{k: s[k] for k in columns[:7]},
                 "completed_updates_per_s": s["completed_per_s_median"],
+                "input_updates_per_s": s["input_completed_per_s_median"],
+                "input_completion_gap_p99_ms": median(lambda r: r["input_completion_gap_ms"].get("p99", 0)),
                 "minimum_run_updates_per_s": s["completed_per_s_range"][0],
                 "maximum_run_updates_per_s": s["completed_per_s_range"][1],
                 "cpu_callback_p50_ms": median(lambda r: r["cpu_ms"]["cpu_callback"]["p50"]),
@@ -116,7 +143,7 @@ def main():
                 "rolling_gpu_p50_ms": observed_median("rolling_gpu_ms"),
                 "viewport_gpu_p50_ms": observed_median("viewport_gpu_ms"),
                 "dabs_per_update": median(lambda r: r["dabs_per_submitted_update"]),
-                "resident_mib": median(lambda r: r["resident_bytes"] / 1048576)})
+                "resident_mib": median(lambda r: r["resident_bytes"] / 1048576), "stats_panel": s["stats_panel"]})
 
 
 if __name__ == "__main__":

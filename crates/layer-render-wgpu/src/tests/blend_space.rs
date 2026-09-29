@@ -167,13 +167,13 @@ fn settle(r: &mut WgpuRasterizer, packet: FramePacket<'_>) {
         if !layer_render::CanvasRenderer::has_pending_work(r) {
             break;
         }
-        r.submit(FramePacket { reset_layers: false, dabs: &[], dab_batches: &[], ..packet }).unwrap();
+        r.submit(FramePacket { reset_layers: false, composite_all: false, dabs: &[], dab_batches: &[], ..packet }).unwrap();
     }
     assert!(!layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
 }
 
 fn composite(r: &WgpuRasterizer) -> Vec<u8> {
-    crate::layer_tests::page_bytes(r, r.composite_texture.as_ref().unwrap())
+    crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
 }
 
 fn exported(r: &WgpuRasterizer, document: &Document) -> Vec<u8> {

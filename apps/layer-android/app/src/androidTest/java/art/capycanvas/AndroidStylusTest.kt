@@ -31,7 +31,7 @@ class AndroidStylusTest {
             for (i in 1..3) event.addBatch(100L + i * 5, arrayOf(coordinates(orientations[i])), 0)
             assertEquals(3, event.historySize)
             val samples = DoubleArray(4 * 9)
-            packPointerSamples(event, 0, 2, event.historySize, false, samples)
+            packPointerSamples(event, 0, 2, event.historySize, false, false, samples)
             for (i in expected.indices) {
                 val offset = i * 9
                 assertEquals("Barrel X for azimuth ${orientations[i]}", expected[i][0], samples[offset + 3], .000001)
@@ -43,7 +43,7 @@ class AndroidStylusTest {
                 assertEquals(2.0, samples[offset + 8], 0.0)
             }
             // Hover/cancellation can omit history; use the current pose only.
-            packPointerSamples(event, 0, 4, 0, false, samples)
+            packPointerSamples(event, 0, 4, 0, false, false, samples)
             assertEquals(.8, samples[3], .000001)
             assertEquals(0.0, samples[4], .000001)
             assertEquals(4.0, samples[8], 0.0)

@@ -1247,7 +1247,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if phase == ContactPhase::Down
                         && self.interaction.pointer.is_none()
                         && !self.state.settings_open
-                        && (paint || self.require_idle().is_ok())
+                        && (paint || self.canvas_idle())
                         && button != PointerButton::Other
                     {
                         self.touch.clear();
@@ -2078,7 +2078,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .layers
             .get(index)
             .is_some_and(|layer| layer.kind == LayerKind::Paint);
-        let idle = self.require_idle().is_ok();
+        let idle = self.canvas_idle();
 
         let enabled = match id {
             CommandId::SearchCommands => idle && !self.state.settings_open && !self.state.customization.blocks_shortcuts() && !self.state.customization.header_editing,
@@ -4070,6 +4070,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.notices.publishing()
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
+        let pending_edits = self.engine.has_pending_document_edits();
+        let command_activity = (self.canvas_idle(), self.engine.can_undo(), self.engine.can_redo());
         self.update_shader_idle();
         let mut changed = self.poll_filter_installation();
         let revision = self.engine.document().revision;
@@ -4093,7 +4095,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let modified = self.state.document_file.modified;
         self.refresh_file_state();
         self.files.pending_modified_change |= modified != self.state.document_file.modified;
-        if self.files.pending_modified_change && self.require_idle().is_ok() {
+        if self.files.pending_modified_change && self.canvas_idle() {
             self.files.pending_modified_change = false;
             changed |= regions::DOCUMENT;
         }
@@ -4106,7 +4108,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             changed |= regions::BRUSH;
         }
         let sample_space = self.engine.document().color.space;
-        if let Some(color) = self.eyedropper.poll(self.engine.backend_mut(), sample_space)? {
+        if !self.engine.has_pending_document_edits()
+            && let Some(color) = self.eyedropper.poll(self.engine.backend_mut(), sample_space)? {
             if self.eyedropper.picking.previous.is_some() {
                 self.state.color_picker.preview = Some(color);
                 changed |= regions::COLOR_PREVIEW;
@@ -4147,7 +4150,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let tonal_changed = std::mem::take(&mut self.tonal_tools.changed)
             | std::mem::take(&mut self.selection_masks.refine_changed);
         if tonal_changed {self.refresh_tools();changed |= regions::DOCUMENT | regions::BRUSH | regions::COMMANDS;}
-        if self.refresh_commands() {
+        let commands_changed = changed != 0 || !pending_edits || !self.engine.has_pending_document_edits()
+            || command_activity != (self.canvas_idle(), self.engine.can_undo(), self.engine.can_redo());
+        if commands_changed && self.refresh_commands() {
             changed |= regions::COMMANDS;
         }
         Ok(self.changed(
@@ -4953,11 +4958,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn apply_brush(&mut self) -> Result<(), String> {
         self.cursor.hover.reset();
         let state = &self.state.brush;
-        let (color, tool) = stroke_paint(state.tool, &self.state.colors, self.engine.document().color.space)?;
         let mut brush = self.engine.configured_brush().clone();
         brush.diameter = state.diameter;
         brush.opacity = state.opacity;
-        brush.color_rgba_linear = color;
+        let tool = stroke_paint(state.tool, &self.state.colors, self.engine.document().color.space, &mut brush)?;
         self.engine.set_brush(brush).map_err(error)?;
         self.engine.set_paint_color(self.state.colors.definition());
         self.engine.set_tool(tool);
@@ -5139,19 +5143,17 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn object_touch_hit(&self, position: [f32; 2]) -> bool {
         self.transform_touch_hit(position) || self.clone_disc_hit(position)
     }
+    fn canvas_idle(&self) -> bool {
+        !self.painted_selections.has_contact()
+            && !self.input_pending
+            && self.effect_gesture.is_none()
+            && self.selection_masks.quick_property_gesture.is_none()
+            && self.sdr_gesture.is_none()
+            && !self.engine.has_active_stroke()
+            && self.layer_interaction.path.is_empty()
+    }
     fn require_idle(&self) -> Result<(), String> {
-        if self.painted_selections.has_contact()
-            || self.input_pending
-            || self.effect_gesture.is_some()
-            || self.selection_masks.quick_property_gesture.is_some()
-            || self.sdr_gesture.is_some()
-            || self.engine.has_active_stroke()
-            || !self.layer_interaction.path.is_empty()
-        {
-            Err("Finish the canvas interaction first".into())
-        } else {
-            Ok(())
-        }
+        self.canvas_idle().then_some(()).ok_or_else(|| "Finish the canvas interaction first".into())
     }
     fn sync_camera(&mut self) {
         self.sync_ruler_snapping();
@@ -5235,7 +5237,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_commands(&mut self) -> bool {
-        let canvas_idle = self.require_idle().is_ok();
+        let canvas_idle = self.canvas_idle();
         let mut changed = false;
         for (index, id) in CommandId::ALL.into_iter().enumerate() {
             let (enabled, selected) = self.command_flags(id);
@@ -5507,12 +5509,14 @@ fn valid_viewport(viewport: [f32; 2]) -> Result<(), String> {
 }
 /// The brush color and stroke kind `tool` paints with. A retouching tool
 /// copies pixels, so it has no color of its own and never erases.
-fn stroke_paint(tool: Tool, colors: &ColorState, space: layer_core::color::RgbSpace) -> Result<([f32; 4], StrokeTool), String> {
+fn stroke_paint(tool: Tool, colors: &ColorState, space: layer_core::color::RgbSpace, brush: &mut layer_core::BrushSnapshot) -> Result<StrokeTool, String> {
     if tools::is_retouching(tool) {
-        return Ok(([0., 0., 0., 1.], StrokeTool::Brush));
+        brush.color_rgba_linear = [0., 0., 0., 1.];
+        return Ok(StrokeTool::Brush);
     }
     let erases = tool == Tool::Eraser || colors.transparent();
-    Ok((colors.definition().linear_in(space)?, if erases { StrokeTool::Eraser } else { StrokeTool::Brush }))
+    colors.load_paint(brush, space)?;
+    Ok(if erases { StrokeTool::Eraser } else { StrokeTool::Brush })
 }
 
 fn pen_phase(phase: ContactPhase) -> PenPhase {
@@ -14602,6 +14606,21 @@ mod tests {
             }
             assert_eq!(segment.marker, 0.0);
         }
+    }
+
+    #[test]
+    fn hovering_a_bristle_brush_outlines_its_fan() {
+        let mut s = session(Platform::Gtk);
+        let mut brush = default_brush(DefaultBrushPreset::BristlePaintbrush);
+        brush.diameter = 200.0;
+        s.engine.set_brush(brush).unwrap();
+        s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.0)));
+        let cursor = s.canvas_cursor().unwrap();
+        let reach = cursor.segments.iter()
+            .filter(|segment| segment.marker == 0.0)
+            .map(|segment| (segment.from[0] - cursor.center[0]).hypot(segment.from[1] - cursor.center[1]))
+            .fold(0.0_f32, f32::max);
+        assert!(reach > 20.0, "the hover outline spans the fan: {reach}");
     }
 
     #[test]
