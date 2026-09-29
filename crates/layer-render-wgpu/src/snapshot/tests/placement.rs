@@ -139,7 +139,7 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
         }
         assert!(painted > 100);
         assert_eq!(project.document.layers[1].source, source);
-        assert!(capture.renderer.composite_texture.is_none());
+        assert!(capture.renderer.scale_display.is_none());
         assert!(capture.renderer.scene.as_ref().unwrap()
             .placement_cache(project.document.layers[1].id).is_none());
     }

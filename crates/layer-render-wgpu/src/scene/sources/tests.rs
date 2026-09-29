@@ -37,7 +37,7 @@ fn source_residency_and_upload_window_follow_admitted_headroom() {
         let limits = SourceLimits::admitted(allowance);
         assert_eq!(limits.slots, slots);
         assert_eq!(limits.upload_bytes, (slots as u64 * FLOAT_TILE_BYTES / 4).min(64 * 1024 * 1024));
-        let mut cache = DecodedTiles { limits, ..Default::default() };
+        let cache = DecodedTiles { limits, ..Default::default() };
         // Simulate already-admitted mixed uploads without a GPU allocation.
         // The next worst-case tile always fits; completion releases the charge.
         let mut charges = Vec::new();
@@ -50,21 +50,16 @@ fn source_residency_and_upload_window_follow_admitted_headroom() {
         drop(charges);
         assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
         assert!(!cache.uploads_full());
-        let original = cache.admitted_bytes();
-        let display = cache.split_display_cache();
-        assert_eq!(cache.admitted_bytes()[0] + display.admitted_bytes()[0], original[0]);
-        assert_eq!(cache.admitted_bytes()[1], original[1]);
-        assert!(Arc::ptr_eq(&cache.in_flight, &display.in_flight));
+        assert_eq!(cache.admitted_bytes(), [limits.slots as u64 * FLOAT_TILE_BYTES, limits.upload_bytes]);
     }
 }
 
 #[test]
-fn compact_display_sources_preserve_srgb_codes_and_padding() {
+fn decoded_sources_preserve_srgb_codes_and_padding() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let scene = Scene::new(&r);
+    let mut scene = Scene::new(&r);
     let mut exact = DecodedTiles::new(RgbSpace::Srgb);
     exact.admit(2 * 1024 * 1024 * 1024);
-    let mut display = exact.split_display_cache();
     let mut builder = SourceBuilder::new([255, 19], SourceInterpretation {
         channels: SourceChannels::Rgb, depth: SampleDepth::U8,
         profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
@@ -74,9 +69,9 @@ fn compact_display_sources_preserve_srgb_codes_and_padding() {
         builder.push_row(&row).unwrap();
     }
     let source = Arc::new(builder.finish().unwrap());
-    assert!(display.accepts_display(&source));
-    let (_, pending) = display.plan(&r, &source, [0, 0]).unwrap();
+    let (_, pending) = exact.plan(&r, &source, [0, 0]).unwrap();
     let pending = pending.unwrap();
+    let source_view = pending.view.clone();
     let (output, view) = create_target(&r.device, [PAGE_SIZE; 2], wgpu::TextureFormat::Rgba32Float, "sampled display codes");
     let shader = r.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("display source sampling oracle"),
@@ -97,9 +92,7 @@ fn compact_display_sources_preserve_srgb_codes_and_padding() {
         ],
     });
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    let bytes = exact.encode(&mut r, &mut encoder, &pending, &scene.binding, 0).unwrap();
-    assert_eq!(bytes, FLOAT_TILE_BYTES / 4);
-    exact.charge_upload(&encoder, bytes);
+    scene.encode_decode(&mut r, Some(pending), &mut encoder).unwrap();
     {
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline); pass.set_bind_group(0, &binding, &[]);
@@ -120,10 +113,10 @@ fn compact_display_sources_preserve_srgb_codes_and_padding() {
         }
     }
     eprintln!("maximum display source error {maximum_error} of one 8-bit code");
-    // Queries request a distinct, full-precision texture for the same source.
     let (query, pending_query) = exact.plan(&r, &source, [0, 0]).unwrap();
     assert_eq!(query.texture.format(), wgpu::TextureFormat::Rgba32Float);
-    assert!(pending_query.is_some());
+    assert_eq!(query.view, source_view);
+    assert!(pending_query.is_none());
     drop(r);
     startup::finish_shader_compiler_shutdown();
 }

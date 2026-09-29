@@ -340,14 +340,6 @@ impl WgpuRasterizer {
                 required.compute.push(self.scene_pipelines.scale.compose.clone());
                 required.compute.push(self.scene_pipelines.resample.area.clone());
             }
-            if self.native_edit.as_ref().is_some_and(|native| {
-                u64::from(document.width) * u64::from(document.height) * 16 > native.display_dense_bytes
-            }) {
-                let mip = self.display_pipelines
-                    .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
-                required.compute.push(mip.reduce.clone());
-                required.compute.push(mip.fused_reduce.clone());
-            }
             if shader.key.source {
                 required.render.push(self.scene_pipelines.source.pipeline.clone());
             }

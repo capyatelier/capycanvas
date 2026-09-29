@@ -237,7 +237,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val startupTimes = LongArray(4)
     private var documentEpoch = 0L
     private val measuredFrames = if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) LongArray(8192 * 18) else null
-    private val measuredInputs = if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) LongArray(8192 * 5) else null
+    private val measuredInputs = if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) LongArray(8192 * 7) else null
     private val frameCosts = if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) LongArray(11) else null
     private var frameCount = 0
     private var inputCount = 0
@@ -555,6 +555,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     android.os.Trace.setCounter("Capy input age ns", started - samples[count - 2].toLong())
                     android.os.Trace.setCounter("Capy input samples", (count / 9).toLong())
                     val phase = samples[count - 1].toInt()
+                    val refining = phase == 1 && measuredInputs != null &&
+                        JSONObject(Native.displayStatus(handle)).optBoolean("pending_composition")
                     if (phase == 1 && !predicted) main.post(hideNotice)
                     if (phase == 1 && !predicted && documentInputBlocked) suppressedContacts.add(id)
                     if (phase == 1 && !predicted && !documentInputBlocked) {
@@ -567,12 +569,14 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     if (!predicted) syncCanvasBar()
                     if (phase == 3 || phase == 4) suppressedContacts.remove(id)
                     if (!predicted && measuredInputs != null && inputCount < 8192) {
-                        val offset = inputCount++ * 5
+                        val offset = inputCount++ * 7
                         measuredInputs[offset] = samples[count - 2].toLong()
                         measuredInputs[offset + 1] = arrival
                         measuredInputs[offset + 2] = started
                         measuredInputs[offset + 3] = System.nanoTime() - started
                         measuredInputs[offset + 4] = (count / 9).toLong()
+                        measuredInputs[offset + 5] = phase.toLong()
+                        measuredInputs[offset + 6] = if (refining) 1 else 0
                     }
                     wake()
                 }
@@ -668,7 +672,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val report = obj("startup_boot_ns" to JSONArray(startupTimes.toList()),
             "ui_first_draw_boot_ns" to firstUiDraw, "surface_ready_boot_ns" to firstSurfaceReady,
             "frames" to rows(measuredFrames, frameCount, 18),
-            "inputs" to rows(measuredInputs, inputCount, 5),
+            "inputs" to rows(measuredInputs, inputCount, 7),
             "snapshot_attempts" to snapshotAttempts, "snapshots_published" to snapshotsPublished,
             "camera_updates_published" to cameraUpdatesPublished,
             "workspace_updates_published" to workspaceUpdatesPublished,
@@ -677,7 +681,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             "panel_content_changes" to panelContentChanges,
             "pointer_allocations" to pointerAllocations,
             "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "viewport_ns", "queue_present_ns", "poll_ns", "publish_schedule_ns", "cpu_callback_ns", "prepare_ns", "committed_paint_ns", "capture_ns", "prediction_ns", "composition_ns", "submission_ns", "owner_thread_cpu_ns")),
-            "input_fields" to JSONArray(listOf("event_ns", "arrival_ns", "worker_start_ns", "cpu_input_ns", "sample_count")))
+            "input_fields" to JSONArray(listOf("event_ns", "arrival_ns", "worker_start_ns", "cpu_input_ns", "sample_count", "phase", "pending_composition")))
         if (reset) { publicationCount = 0; panelContentChanges = 0; frameCount = 0; inputCount = 0; snapshotAttempts = 0; snapshotsPublished = 0; cameraUpdatesPublished = 0; workspaceUpdatesPublished = 0 }
         main.post { reply(report) }
     }

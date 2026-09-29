@@ -141,7 +141,7 @@ fn snapshot_resized_composition_matches_area_before_profile_quantization_and_mat
                 .write_png(&mut Vec::new(), &target, Default::default(), None)
                 .is_err()
         );
-        assert!(renderer.renderer.composite_texture.is_none());
+        assert!(renderer.renderer.scale_display.is_none());
         renderer.control().cancel();
         let mut output = Vec::new();
         assert!(

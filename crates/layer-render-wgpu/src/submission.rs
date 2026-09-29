@@ -12,8 +12,11 @@ pub(crate) struct CacheWrite {
 }
 impl CacheWrite {
     pub fn new() -> Self {
+        Self::shared(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)))
+    }
+    pub fn shared(valid: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
         Self {
-            valid: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            valid,
             tracked: std::sync::atomic::AtomicBool::new(false),
         }
     }

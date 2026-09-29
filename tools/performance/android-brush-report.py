@@ -8,7 +8,7 @@ import pathlib
 import statistics
 import subprocess
 import sys
-from android_brush_metrics import completion_window
+from android_brush_metrics import completion_window, contact_latencies
 
 
 def distribution(values):
@@ -55,12 +55,18 @@ def main():
             submitted = progress["submitted"]
             stamps = int(rows_after["Dabs"]) - int(rows_before["Dabs"])
             times = [f["start_ns"] for f in frames]
+            contacts = contact_latencies(data)
             runs.append({"run": i, **progress, "cpu_update_count": len(frames),
                 "callback_count": len(callbacks), "cpu_ms": cpu,
                 "owner_core_occupancy": sum(f["owner_thread_cpu_ns"] for f in callbacks) / (end - begin),
                 "update_start_gap_ms": distribution([(b - a) / 1e6 for a, b in zip(times, times[1:])]),
                 "input_queue_ms": distribution([(r[2] - r[1]) / 1e6 for r in inputs]),
                 "input_delivery_ms": distribution([(r[1] - r[0]) / 1e6 for r in inputs]),
+                "contacts": contacts,
+                "contact_queue_ms": distribution([r["queue_ms"] for r in contacts]),
+                "contact_next_gpu_ms": distribution([r["next_gpu_ms"] for r in contacts if r["next_gpu_ms"] is not None]),
+                "refining_contact_queue_ms": distribution([r["queue_ms"] for r in contacts if r["pending_composition"]]),
+                "refining_contact_next_gpu_ms": distribution([r["next_gpu_ms"] for r in contacts if r["pending_composition"] and r["next_gpu_ms"] is not None]),
                 "input_injected": len(motion["injected"]), "input_records": sum(r[4] for r in inputs),
                 "dabs": stamps, "dabs_per_submitted_update": stamps / max(1, submitted),
                 "raster_updates": int(rows_after["Frames"]) - int(rows_before["Frames"]),

@@ -74,9 +74,7 @@ impl Plan {
     pub fn level_bytes(self, level: u32) -> u64 {
         self.level_size(level).map(u64::from).into_iter().product::<u64>() * 16
     }
-    pub fn pixel_bytes(self) -> u64 {
-        self.pixel_bytes_through(self.level)
-    }
+
     pub fn pixel_bytes_through(self, last: u32) -> u64 {
         let scratch = (0..=self.level)
             .map(|level| u64::from(PAGE_SIZE >> level).pow(2) * 16)
@@ -159,7 +157,6 @@ struct Record {
 /// Each dispatch writes one tile region; each level reads the completed finer
 /// level. The same reduction kernel also serves the bounded scratch path.
 pub(super) struct CompleteUpdates {
-    records: wgpu::Buffer,
     bindings: Vec<wgpu::BindGroup>,
     fused_bindings: Vec<wgpu::BindGroup>,
     pipeline: Deferred<wgpu::ComputePipeline>,
@@ -172,18 +169,7 @@ pub(super) struct CompleteUpdates {
 impl CompleteUpdates {
     pub(super) const BATCH: usize = 128;
 
-    pub fn record_bytes(device: &wgpu::Device, plan: Plan) -> u64 {
-        u64::from(plan.extent[0].div_ceil(PAGE_SIZE))
-            * u64::from(plan.extent[1].div_ceil(PAGE_SIZE))
-            * u64::from(plan.level)
-            * u64::from(device.limits().min_uniform_buffer_offset_alignment.max(16))
-    }
-
-    pub fn new(device: &PipelineDevice, pipelines: &Pipelines, plan: Plan,
-        views: &[&wgpu::TextureView]) -> Self {
-        Self::from_level(device, pipelines, plan, 0, views)
-    }
-    fn from_level(device: &PipelineDevice, pipelines: &Pipelines, plan: Plan, first: u32,
+    pub(crate) fn from_level(device: &PipelineDevice, pipelines: &Pipelines, plan: Plan, first: u32,
         views: &[&wgpu::TextureView]) -> Self {
         assert_eq!(views.len(), (plan.level-first) as usize + 1);
         let stride = device.limits().min_uniform_buffer_offset_alignment.max(16);
@@ -226,14 +212,10 @@ impl CompleteUpdates {
                 label: Some("four retained display mip levels"), layout: &pipelines.fused_layout, entries: &entries,
             })
         }).collect();
-        Self { records, bindings, fused_bindings, pipeline: pipelines.reduce.clone(),
+        Self { bindings, fused_bindings, pipeline: pipelines.reduce.clone(),
             fused_pipeline: pipelines.fused_reduce.clone(), columns, stride,
             first, pending: Vec::with_capacity(Self::BATCH) }
     }
-
-    pub fn storage_bytes(&self) -> u64 { self.records.size() }
-
-    pub fn discard_pending(&mut self) { self.pending.clear(); }
 
     pub fn tile(&mut self, encoder: &mut crate::submission::CommandEncoder, coordinate: [u32; 2]) {
         self.pending.push(coordinate);
@@ -286,9 +268,7 @@ pub(super) struct Image {
     records: BTreeMap<[u32; 2], Vec<Record>>,
 }
 impl Image {
-    pub fn new(r: &WgpuRasterizer, plan: Plan) -> Self {
-        Self::with_mips(r, plan, plan.level)
-    }
+
     /// Allocate a sampled pyramid; generate_mips derives its coarser levels.
     pub fn with_mips(r: &WgpuRasterizer, plan: Plan, last: u32) -> Self {
         assert!(last >= plan.level && last < MIP_COUNT);
@@ -364,43 +344,7 @@ impl Image {
         for coordinate in page_coordinates(PixelRect::full(plan.extent)) { updates.tile(encoder, coordinate); }
         updates.flush(encoder);
     }
-    pub fn copy_mip(
-        &self,
-        encoder: &mut crate::submission::CommandEncoder,
-        level: u32,
-        coordinate: [u32; 2],
-        destination: &wgpu::Texture,
-        origin: [u32; 2],
-    ) {
-        assert!(level <= self.plan.level);
-        let valid: [u32; 2] = std::array::from_fn(|i| {
-            (self.plan.extent[i] - coordinate[i] * PAGE_SIZE)
-                .min(PAGE_SIZE)
-                .div_ceil(1 << level)
-        });
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                mip_level: level,
-                ..self.scratch.as_image_copy()
-            },
-            wgpu::TexelCopyTextureInfo {
-                origin: wgpu::Origin3d {
-                    x: origin[0],
-                    y: origin[1],
-                    z: 0,
-                },
-                ..destination.as_image_copy()
-            },
-            wgpu::Extent3d {
-                width: valid[0],
-                height: valid[1],
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-    pub fn tile_target(&self) -> (&wgpu::Texture, &wgpu::TextureView) {
-        (&self.scratch, &self.views[0])
-    }
+
 
     /// Consume one completed full-resolution composition tile. `source_origin`
     /// supports both a temporary tile and the current full composite during its

@@ -335,6 +335,7 @@ fn native_large_photo_navigation() {
         Instant::now() + Duration::from_nanos(due.saturating_sub(now))
     } else { Instant::now() };
     let mut requests = Vec::new();
+    let motion_begin_ns = glib::monotonic_time() as u64 * 1000;
     for (phase, fixed_scale) in [
         ("fit-pan-rotate", fit),
         ("half-pan-rotate", 0.5),
@@ -385,12 +386,17 @@ fn native_large_photo_navigation() {
             }
         }
     }
+    let motion_end_ns = glib::monotonic_time() as u64 * 1000;
     tick.remove();
     frame_clock.disconnect(before_paint);
     frame_clock.disconnect(after_paint);
     frame_clock.disconnect(layout);
     frame_clock.disconnect(paint);
     pump(300);
+    let idle_after_300_ms = w.frame_timer.borrow().is_none();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while w.frame_timer.borrow().is_some() && Instant::now() < deadline { pump(5); }
+    let settled_after_input_ms = (glib::monotonic_time() as u64 * 1000 - motion_end_ns) as f64 / 1e6;
     let idle = w.frame_timer.borrow().is_none();
     let suspended = w.gpu.borrow().as_ref().unwrap().session.rendering_suspended();
     let document_unchanged = w.gpu.borrow().as_ref().unwrap().session.engine().document() == &original;
@@ -405,6 +411,8 @@ fn native_large_photo_navigation() {
     let telemetry = w.gpu.borrow().as_ref().unwrap().session.engine().backend().telemetry();
     let mut report = serde_json::json!({
         "startup_ready_ms": startup_ms,
+        "motion_begin_ns": motion_begin_ns, "motion_end_ns": motion_end_ns,
+        "idle_after_300_ms": idle_after_300_ms, "settled_after_input_ms": settled_after_input_ms,
         "idle_navigation": idle, "rendering_suspended": suspended,
         "document_unchanged": document_unchanged, "preview_revision_unchanged": revision_unchanged,
         "hdr": original.color.depth.is_float(),

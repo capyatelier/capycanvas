@@ -7,7 +7,7 @@ use layer_core::{LayerMask, Selection};
 
 fn packet(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
     FramePacket {
-        view: ViewState { background_rgba_linear: [0.; 4], ..test_view() },
+        view: ViewState { width_px: extent[0], height_px: extent[1], background_rgba_linear: [0.; 4], ..test_view() },
         ..crate::test_support::packet(layers, extent)
     }
 }
@@ -135,7 +135,7 @@ fn native_live_global_limit_rejects_before_document_or_submission_changes() {
     let mut layers = vec![effect(2, false, true), effect(1, true, false)];
     r.submit(packet(&layers, extent)).unwrap();
     let before = pixels(&r);
-    let texture = r.composite_texture.clone();
+    let texture = r.scale_display.as_ref().map(|c| c.texture().clone());
     let metrics = r.metrics();
     r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(1024);
     // Includes a resize and reset: rejection must precede both.
@@ -147,7 +147,7 @@ fn native_live_global_limit_rejects_before_document_or_submission_changes() {
         .unwrap_err();
     assert!(error.to_string().contains("Document-wide"));
     assert_eq!(r.document_extent, extent);
-    assert_eq!(r.composite_texture, texture);
+    assert_eq!(r.scale_display.as_ref().map(|c| c.texture().clone()), texture);
     assert_eq!(r.metrics(), metrics);
     assert_eq!(
         pixels(&r),

@@ -14,11 +14,9 @@ mod validate;
 pub(crate) struct NativeEdit {
     pub(super) backing: BTreeMap<LayerId, Arc<RasterData>>,
     pub(crate) color_cache_bytes: u64,
-    pub(crate) display_dense_bytes: u64,
-    pub(crate) display_cache_bytes: u64,
     /// Optional view/source caches keep the host's existing fast-residency policy.
     pub(crate) display_complete_bytes: u64,
-    /// Shared allowance for retained filter images and completed display pixels.
+    /// Shared allowance for retained filter images and display levels.
     /// Zero uses the original bounded display + filter-window allocation.
     pub(crate) composition_bytes: u64,
     #[cfg(test)]
@@ -72,8 +70,6 @@ impl NativeEdit {
         Self {
             backing: BTreeMap::new(),
             color_cache_bytes: 256 * 1024 * 1024,
-            display_dense_bytes: crate::live_display::DENSE_BYTES,
-            display_cache_bytes: crate::live_display::CACHE_BYTES,
             display_complete_bytes,
             composition_bytes: {
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
@@ -125,27 +121,14 @@ impl NativeEdit {
             + self.scalars.iter().map(texture_bytes).sum::<u64>()
         // Transfer storage is owned/accounted by the shared scene decoder cache.
     }
-    pub(crate) fn display_allowance(&self, layers: &[Layer], extent: [u32; 2]) -> u64 {
-        if crate::scene::Scene::capture_image_bound(layers, PixelRect::full(extent)) == 0 {
-            self.display_complete_bytes
-        } else {
-            self.composition_bytes.saturating_sub(crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES)
-        }
-    }
-    pub(crate) fn image_pixel_budget(&self, r: &WgpuRasterizer, layers: &[Layer], extent: [u32; 2]) -> Result<u64, GpuRasterError> {
+    pub(crate) fn image_pixel_budget(&self, resident: u64) -> u64 {
         #[cfg(test)]
-        if let Some(bytes) = self.image_pixel_bytes { return Ok(bytes); }
-        let pixels = u64::from(extent[0]) * u64::from(extent[1]) * 16;
-        let display = if pixels <= self.display_dense_bytes { pixels } else {
-            crate::live_display::Cache::allocation_bound(r, extent, self.display_cache_bytes,
-                self.display_allowance(layers, extent))?
-        };
-        // Borrow the allowance left by this document's actual display plan.
-        // A fixed, independent image cap evicted reusable filter inputs even
-        // when the much larger display allowance was mostly unoccupied.
-        let floor = crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES + self.display_cache_bytes;
-        Ok(self.composition_bytes.max(floor).saturating_sub(display))
+        if let Some(bytes) = self.image_pixel_bytes { return bytes; }
+        let display = crate::scene::scale::CACHE_BYTES;
+        let floor = crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES + display;
+        self.composition_bytes.max(floor).saturating_sub(display.saturating_add(resident))
     }
+
 }
 
 struct Publication {
@@ -188,7 +171,7 @@ impl WgpuRasterizer {
         {
             native.display_complete_bytes = bytes;
             native.composition_bytes = bytes.saturating_add(crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES);
-            self.live_display = None;
+            self.scale_display = None;
         }
     }
 

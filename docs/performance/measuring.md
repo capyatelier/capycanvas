@@ -125,7 +125,12 @@ when both invocations use identical command-line arguments.
 The runner waits for pending composition and queued GPU frames after each stroke.
 Reports include `settled_after_input_ms`; completed updates per second still count
 only nonempty updates completed inside the input window. Keep settling and the
-next input's latency separate from that throughput measurement.
+next input's latency separate from that throughput measurement. `--mode pauses`
+alternates 100 ms of drawing with 100 ms gaps. Its throughput excludes the gaps
+and work completed after each contact; report contact queue delay and arrival to
+the next GPU completion separately. Input records mark contacts that reached the
+renderer while composition was pending. The GPU completion metric is not scanout
+latency.
 
 **Navigation (Android).**
 

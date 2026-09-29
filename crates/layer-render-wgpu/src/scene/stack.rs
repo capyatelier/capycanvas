@@ -174,7 +174,7 @@ impl Compositor for Tile<'_> {
     fn checkpoint(&mut self, parent: Option<LayerId>) -> Option<(usize, usize, Option<(usize, usize)>)> {
         let stop = stop_root(self.packet.layers, parent, self.scene.stop_before);
         let (i, layer) = self.packet.layers.iter().enumerate().find(|(i, l)| {
-            self.scene.cached_composition() && l.visible && l.properties.parent == parent
+            l.visible && l.properties.parent == parent
                 && l.effect.as_ref().is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
                 && stop.is_none_or(|stop| *i > stop)
                 && self.scene.images.checkpoint(*i, l).is_some()

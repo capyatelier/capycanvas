@@ -49,7 +49,7 @@ impl Scene {
         self.stop_before = None;
         let full = PixelRect::full(extent);
         let budget = match &r.native_edit {
-            Some(native) => native.image_pixel_budget(r, &layers, extent)?.min(windows::DEFAULT_IMAGE_PIXEL_BYTES),
+            Some(native) => native.image_pixel_budget(r.scale_display.as_ref().map_or(0, |c| c.resident_bytes())).min(windows::DEFAULT_IMAGE_PIXEL_BYTES),
             None => windows::DEFAULT_IMAGE_PIXEL_BYTES,
         };
         let plan = windows::Plan::new(&layers, extent, budget).ok().flatten();

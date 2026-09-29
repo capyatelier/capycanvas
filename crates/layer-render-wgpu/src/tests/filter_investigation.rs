@@ -309,9 +309,6 @@ fn photo_filter_frame_time() {
     {
         native.image_pixel_bytes = Some(mib.parse::<u64>().unwrap() * 1024 * 1024);
     }
-    if std::env::var("CAPY_FILTER_DISPLAY").as_deref() == Ok("dense") {
-        r.native_edit.as_mut().unwrap().display_dense_bytes = u64::MAX;
-    }
     if let Ok(mib) = std::env::var("CAPY_FILTER_SOURCE_MIB") {
         r.scene
             .as_mut()

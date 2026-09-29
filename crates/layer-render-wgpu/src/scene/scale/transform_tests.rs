@@ -30,10 +30,10 @@ fn pass_through_children_above_a_transform_keep_shared_display_composition() {
             for renderer in [&mut r, &mut exact] {
                 renderer.set_transform_preview(Some(&transform)).unwrap(); renderer.submit(frame).unwrap();
             }
-            assert!(r.live_display.is_none() && r.composite_texture.is_none());
+
             if transform.moving { assert!(!r.has_pending_work()); }
             let cache = r.scale_display.as_ref().expect("group children stay on the display graph");
-            let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), cache.plan);
+            let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
             assert!(error[0] < 0.004 && error[1] < 0.06, "{blend:?} step={step} error={error:?}");
         }
         for renderer in [&mut r, &mut exact] {
@@ -92,12 +92,12 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
                 for renderer in [&mut r, &mut exact] {
                     renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
                 }
-                assert!(r.scale_display.is_some() && r.live_display.is_none() && r.composite_texture.is_none());
+                assert!(r.scale_display.is_some());
                 assert!(r.paint_layers.iter().all(|l| l.pages.is_empty()), "display motion does not allocate native preview pages");
                 assert!(!r.has_pending_work(), "moving transforms defer exact refinement");
                 assert_eq!(r.test.source_captures.get(), 1);
                 let displayed = display_pixels(&r);
-                let exact_pixels = pixels(&exact, exact.composite_texture.as_ref().unwrap());
+                let exact_pixels = pixels(&exact, crate::test_support::document_texture(&exact));
                 let error = quality_linear(&displayed, &exact_pixels, r.scale_display.as_ref().unwrap().plan,
                     |color| linear_color(color, space, doc.color.space));
                 eprintln!("{space:?} placement={placement:?} selection={} step={step} error={error:?}", selection.is_some());
@@ -175,11 +175,11 @@ fn transform_zoom_release_and_commit_preserve_native_pixels() {
         }
         assert!(r.scale_display.is_some());
         if moving { assert!(!r.has_pending_work()); }
-        let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), r.scale_display.as_ref().unwrap().plan);
+        let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
         assert!(error[0] < 0.004 && error[1] < 0.06, "scale={scale} moving={moving} {error:?}");
         assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
         assert_eq!(r.test.source_captures.get(), 1);
-        if !moving { assert_settled(&mut r, frame, &pixels(&exact, exact.composite_texture.as_ref().unwrap())); }
+        if !moving { assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact))); }
     }
     let expected = exact.readback_srgb_rgba8().unwrap();
     let mut coverage = layer_core::LayerMask::reveal_all(LayerId(50), Point::default());
@@ -231,7 +231,7 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
                 renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
             }
             assert!(r.scale_display.is_some());
-            let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), r.scale_display.as_ref().unwrap().plan);
+            let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
             assert!(error[0] < 0.004 && error[1] < 0.06, "mask={mask_target} linked={linked} {error:?}");
             assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
         }
@@ -284,12 +284,12 @@ fn whole_image_selections_reserve_one_transform_input_pyramid() {
         moving: true, selection: None, transform: ImageTransform::affine(Affine([4.,0.,0.,4.,0.,0.])) };
     r.set_transform_preview(Some(&preview)).unwrap();
     let no_selection = allocation(&r, plan, frame, None);
-    assert_eq!(level(&r, frame), Some(2));
+    assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(2));
     preview.selection = Some(Selection::polygon([[0.,0.],[4248.,0.],[4248.,2832.],[0.,2832.]]
         .map(|[x,y]| Point { x,y }).to_vec()).unwrap());
     r.set_transform_preview(Some(&preview)).unwrap();
     assert_eq!(allocation(&r, plan, frame, None), no_selection);
-    assert_eq!(level(&r, frame), Some(2));
+    assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(2));
     preview.selection = Some(Selection::polygon([[0.,0.],[2124.,0.],[2124.,2832.],[0.,2832.]]
         .map(|[x,y]| Point { x,y }).to_vec()).unwrap());
     r.set_transform_preview(Some(&preview)).unwrap();
@@ -340,7 +340,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
                     let mismatches:Vec<_>=actual.iter().zip(&original_display).enumerate().filter(|(_, (a,b))|a.iter().zip(b.iter()).any(|(a,b)|(a-b).abs()>1e-5)).take(8).collect();
                     assert!(largest<1e-5, "an unchanged transform preserves displayed coverage: {largest} keep={keep_source} selection={} {mismatches:?}", selection.is_some());
                 }
-                let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), r.scale_display.as_ref().unwrap().plan);
+                let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
                 assert!(error[0] < 0.004 && error[1] < 0.06, "map={map:?} keep={keep_source} selection={} {error:?}",selection.is_some());
                 assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
                 assert_eq!(r.test.source_captures.get(),1);
@@ -426,7 +426,7 @@ fn moving_pixels_invalidate_the_cut_only_when_its_coverage_changes() {
                 assert_eq!(r.composite_damage.intersect(cut),cut,
                     "changed cut scale={scale} step={step}");
             }
-            let error = quality(&display_pixels(&r), &pixels(&exact,exact.composite_texture.as_ref().unwrap()),r.scale_display.as_ref().unwrap().plan);
+            let error = quality(&display_pixels(&r), &pixels(&exact,crate::test_support::document_texture(&exact)),r.scale_display.as_ref().unwrap().plan);
             assert!(error[0] < 0.004 && error[1] < 0.06, "scale={scale} step={step} {error:?}");
             assert_eq!(r.readback_srgb_rgba8().unwrap(),exact.readback_srgb_rgba8().unwrap());
         }

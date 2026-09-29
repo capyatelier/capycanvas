@@ -99,6 +99,15 @@ impl Expression {
             _ => false,
         }
     }
+    pub(super) fn fused_transform(&self, r: &WgpuRasterizer) -> bool {
+        match self {
+            Self::Source { id, .. } => r.transforms.as_ref().is_some_and(|t| t.display_source(*id)),
+            Self::Opacity { input, .. } => input.fused_transform(r),
+            Self::Combine { front, back, blend: 0, flags: 0 } =>
+                matches!(back.as_ref(), Self::Color(_)) && front.fused_transform(r),
+            _ => false,
+        }
+    }
 }
 
 pub(super) struct Branch {
@@ -114,6 +123,10 @@ pub(super) struct Graph {
     blend_space: layer_core::BlendSpace,
 }
 impl Graph {
+    pub fn without_pixels(&self) -> Self {
+        Self { root: self.root.clone(), branches: HashMap::new(), effects: self.effects.clone(),
+            revision: self.revision, blend_space: self.blend_space }
+    }
     pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, plan: display_mips::Plan, budget: u64) -> Result<(), GpuRasterError> {
         if std::mem::replace(&mut self.blend_space, packet.blend_space) != packet.blend_space { self.branches.clear(); }
         self.effects.retain(|id, _| packet.layers.iter().any(|l| l.id == *id && l.effect.is_some()));
@@ -237,10 +250,9 @@ impl Evaluator<'_> {
         let deferred = if direct && self.cache.plan.level > 0 && node.deferred() && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
             && self.r.transform_preview.is_none() { Some(self.evaluate(node)?) } else { None };
         if matches!(deferred, Some(Value::Placed(_))) { return Ok(deferred.unwrap()); }
-        if self.cache.output.is_empty() { self.cache.allocate(self.r); }
-        self.cache.used[0] = true;
-        let view = self.cache.output[0].view.clone();
-        let output = Target { view, slot: Some(Slot::Cache(0)), plan: self.cache.plan };
+        self.cache.pixels.ensure(self.r, self.cache.plan);
+        let image = self.cache.pixels.root().unwrap();
+        let output = Target { view: image.view.clone(), slot: Some(Slot::Root), plan: image.plan };
         let value = match deferred { Some(value) => value, None => self.evaluate_into(node, Some(output.clone()))? };
         self.materialize(value, Some(output))
     }

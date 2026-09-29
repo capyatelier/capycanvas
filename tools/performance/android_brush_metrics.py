@@ -2,6 +2,22 @@
 import math
 
 
+def contact_latencies(report):
+    fields = report["input_fields"]
+    begin, end = report["motion"]["begin_ns"], report["motion"]["end_ns"]
+    contacts = []
+    for row in report["inputs"]:
+        event = dict(zip(fields, row))
+        if event.get("phase") != 1 or not begin <= event["arrival_ns"] < end:
+            continue
+        finished = event["worker_start_ns"] + event["cpu_input_ns"]
+        next_frame = next((r for r in report["completions"] if r[1] >= finished), None)
+        contacts.append(dict(pending_composition=bool(event.get("pending_composition")),
+                             queue_ms=(event["worker_start_ns"] - event["arrival_ns"]) / 1e6,
+                             next_gpu_ms=(next_frame[2] - event["arrival_ns"]) / 1e6 if next_frame else None))
+    return contacts
+
+
 def validate_setup(info, requested):
     state = info["state"]
     camera = state["camera"]
@@ -42,6 +58,8 @@ def validate_setup(info, requested):
 def completion_window(report):
     begin, end = report["motion"]["begin_ns"], report["motion"]["end_ns"]
     seconds = (end - begin) / 1e9
+    intervals = report["motion"].get("active_intervals_ns", [[begin, end]])
+    active_seconds = sum(b - a for a, b in intervals) / 1e9
     before, after = report["display_before"], report["display_after_input"]
     snapshot_submitted = after["submitted_frames"] - before["submitted_frames"]
     snapshot_completed = after["completed_frames"] - before["completed_frames"]
@@ -55,17 +73,19 @@ def completion_window(report):
     for _, queued_ns, done_ns, raster in report["completions"]:
         changed = raster > last_raster
         last_raster = max(last_raster, raster)
-        if not begin <= queued_ns < end:
+        interval_end = next((b for a, b in intervals if a <= queued_ns < b), None)
+        if interval_end is None:
             continue
         if not changed:
             empty += 1
             continue
         submitted += 1
-        if done_ns < end:
+        if done_ns < interval_end:
             completed += 1
         else:
             pending += 1
-    return dict(result, accounting="input-window-nonempty",
+    return dict(result, accounting="active-input-intervals-nonempty" if "active_intervals_ns" in report["motion"] else "input-window-nonempty",
+                active_input_seconds=active_seconds,
                 submitted=submitted, completed=completed, pending_at_input_end=pending,
-                empty_updates=empty, submitted_per_s=submitted / seconds,
-                completed_per_s=completed / seconds)
+                empty_updates=empty, submitted_per_s=submitted / active_seconds,
+                completed_per_s=completed / active_seconds)

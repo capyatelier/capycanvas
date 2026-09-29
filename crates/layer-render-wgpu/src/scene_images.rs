@@ -146,24 +146,6 @@ impl ImageStages {
         self.scratch.clear();
         self.backdrops.clear();
     }
-    pub(super) fn metadata_changed(&self, layers: &[Layer], background: [f32; 4], blend_space: layer_core::BlendSpace) -> bool {
-        self.background != background
-            || self.blend_space != blend_space
-            || self.metadata.len() != layers.len()
-            || self.metadata.iter().zip(layers).any(|(old, layer)| *old != Metadata::new(layer))
-    }
-    pub fn scene_texture(&self, layer: &Layer) -> Option<&wgpu::Texture> {
-        let stage = self.stages.iter().find(|s| s.id == layer.id && s.valid)?;
-        if layer.properties.clipped {
-            stage
-                .composition
-                .as_ref()
-                .filter(|c| c.valid)
-                .map(|c| &c.output.texture)
-        } else {
-            Some(&stage.output.texture)
-        }
-    }
     pub fn checkpoint(
         &self,
         index: usize,

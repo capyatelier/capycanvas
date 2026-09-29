@@ -336,7 +336,6 @@ fn live_at(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], level
     } else {
         let display = r.scale_display.as_ref().unwrap();
         assert_eq!(display.plan.level, level);
-        assert!(r.composite_texture.is_none() && r.live_display.is_none());
         display.texture()
     };
     crate::layer_tests::page_bytes(r, texture)

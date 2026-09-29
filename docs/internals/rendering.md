@@ -288,10 +288,9 @@ reduced first and converted after.
   and `display_main` in `pixel_transform.wgsl`), which encode the layer's
   resampled color when `DisplayLevel::encode` is set.
 
-**What holds the composite.** Group and clipping scratch tiles, the live
-composite and display pyramid, image-filter outputs and checkpoints
-(`scene_images`), clipping backdrops and cached clipping compositions, the static
-layers of the layered display, the folded constant backdrop, and the backdrop
+**What holds the composite.** Group and clipping scratch tiles, retained display windows and their mips,
+image-filter outputs and checkpoints
+(`scene_images`), clipping backdrops and cached clipping compositions, retained graph branches, the folded constant backdrop, and the backdrop
 and result a Pass Through group fades between hold the document's composite
 values. Their caches include the blend space
 (`ImageStages`, `artwork::Frame`, the filter-preview source key and the
@@ -312,7 +311,7 @@ the upper one reads the composite as it is.
 | Filter previews | `capture_filter_source` in [`filter_previews.rs`](../../crates/layer-render-wgpu/src/filter_previews.rs) | decoded; encoded once more for filters that follow the document's Blending, whose previews decode their result |
 | Merges | [`scene/bake.rs`](../../crates/layer-render-wgpu/src/scene/bake.rs) | composed in the document space, stored decoded |
 | Image filter input windows | `capture_tile` in [`scene_images.rs`](../../crates/layer-render-wgpu/src/scene_images.rs) | decoded, or composite values for filters that follow the document's Blending |
-| Layered display during drags | [`display_layers.wgsl`](../../crates/layer-render-wgpu/src/display_layers.wgsl) | composite values; blends with the document's blend code |
+| Layered display during drags | [`scene/scale/compose.wgsl`](../../crates/layer-render-wgpu/src/scene/scale/compose.wgsl) | composite values; blends with the document's blend code |
 | Layer and paper thumbnails, brushes | layer pages | linear layer pixels, not the composite; brushes encode them to lay dabs over them ([brushes](#brushes-and-healing)) |
 
 The export matte, and resizing on export, apply to the decoded rows in linear
@@ -525,13 +524,16 @@ Filter previews scan four source tiles per asynchronous completion, including
 the probe's corner-sampling halo. Preview rows then share a source crop expanded
 by their required support. A document edit cancels an unfinished scan after its
 in-flight completion; no result may combine source revisions. Global samplers
-retain their full declared input. Their scheduling and allocation limits still
-need qualification. Live composition also still uses full-document image stages
-and a full composite. Sparse storage and cropped previews therefore do not yet
-bound the total cost of large filters or densely painted documents.
+retain their full declared input. Live display composition uses bounded windows
+and reduced sources; native-resolution filter dependencies execute through the
+same region executor and publish into that display cache. Native filter images
+and display pixels share one composition allowance. Oversized global dependencies
+are rejected before a frame changes the document. See
+[display composition](../rendering/display-composition.md) for admission, moving
+previews and exact idle refinement.
 
 The native [snapshot renderer](../../crates/layer-render-wgpu/src/snapshot.rs)
-prepares document metadata independently of the live full composite. A file or
+prepares document metadata independently of the live display cache. A file or
 inspection worker owns an immutable project snapshot and a native Float32
 renderer. Region requests restore only the translated paint, material and mask
 pages needed by composition and its halos. Compressed backing remains shared;

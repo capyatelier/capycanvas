@@ -70,7 +70,6 @@ pub struct ViewportPresenter {
     coarse_view: Option<wgpu::TextureView>,
     next_view: Option<wgpu::TextureView>,
     display_geometry: Option<wgpu::Buffer>,
-    plain_display: wgpu::Buffer,
     document_extent: [u32; 2],
     encode_srgb: bool,
     corner_radius: f32,
@@ -424,7 +423,7 @@ impl ViewportPresenter {
                 wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: true },
                 false,
-                std::num::NonZeroU64::new(64),
+                std::num::NonZeroU64::new(32),
             ),
             crate::bindings::texture(6, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
             crate::bindings::buffer(
@@ -556,12 +555,7 @@ impl ViewportPresenter {
             coarse_view: None,
             next_view: None,
             display_geometry: None,
-            plain_display: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("dense display geometry"),
-                size: 64,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            }),
+
             document_extent: [0; 2],
             encode_srgb: color
                 .shader_encoding(format)
@@ -798,26 +792,11 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
-        let Some(composite) = renderer.scale_display.as_ref().map(|cache| cache.view()).or_else(|| renderer
-            .live_display
-            .as_ref()
-            .map(|cache| cache.detail_view())
-            .or(renderer.composite_view.as_ref()))
-        else {
-            return Ok(());
-        };
-        let coarse = renderer.scale_display.as_ref().map(|cache| cache.coarse_view())
-            .or_else(|| renderer.live_display.as_ref().map(|cache| &cache.coarse.view))
-            .unwrap_or(composite);
-        let next = renderer.scale_display.as_ref().map(|cache| cache.next_view()).or_else(|| renderer
-            .live_display
-            .as_ref()
-            .and_then(|c| c.next_view()))
-            .unwrap_or(coarse);
-        let geometry = renderer.scale_display.as_ref().map(|cache| &cache.geometry).unwrap_or_else(|| renderer
-            .live_display
-            .as_ref()
-            .map_or(&self.plain_display, |cache| &cache.geometry));
+        let Some(cache) = &renderer.scale_display else { return Ok(()); };
+        let composite = cache.view();
+        let coarse = cache.coarse_view();
+        let next = cache.next_view();
+        let geometry = &cache.geometry;
         let device = &renderer.device;
         let selection = renderer.display_selection.as_ref();
         let coverage = selection.map_or(&renderer.unclipped, |(_, buffer)| buffer);

@@ -54,7 +54,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val blending = arguments.getString("blending")
             check(blending == null || blending in listOf("linear", "perceptual"))
             check(duration in 1000..60000 && repeats in 1..10)
-            check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "visual", "pinch"))
+            check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "pauses", "visual", "pinch"))
+            check(mode != "pauses" || duration % 200 == 0)
             output = File(targetContext.getExternalFilesDir(null), "brush-benchmark").apply { mkdirs() }
             val root = File(targetContext.cacheDir, "brush-benchmark-$label-${System.nanoTime()}")
             CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
@@ -217,15 +218,18 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 val boot = SystemClock.elapsedRealtimeNanos()
                 var down = SystemClock.uptimeMillis()
                 val delivered = JSONArray()
+                val active = JSONArray()
+                var contactBegin = 0L
                 val count = milliseconds / 5
                 for (i in 0..count) {
                     val delay = begun + i * sampleInterval - System.nanoTime()
                     if (delay > 0) LockSupport.parkNanos(delay)
+                    if (kind == "pauses" && (i == count || i % 40 > 20)) continue
                     val t = i * .005
                     val progress = i.toDouble() / count
                     val angle = t * speed * 2 * PI
-                    val lift = kind == "lifts" && i > 0 && i % 40 == 0
-                    val restart = kind == "lifts" && i > 1 && i % 40 == 1
+                    val lift = (kind == "lifts" && i > 0 && i % 40 == 0) || (kind == "pauses" && i % 40 == 20)
+                    val restart = (kind == "lifts" && i > 1 && i % 40 == 1) || (kind == "pauses" && i % 40 == 0)
                     val phase = if (i == count || lift) MotionEvent.ACTION_UP else if (i == 0 || restart) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_MOVE
                     if (phase == MotionEvent.ACTION_DOWN) down = SystemClock.uptimeMillis()
                     coords[0].x = (cx + (if (kind == "stationary") 0.0 else rx * cos(angle))).toFloat() + host.surfaceOrigin.x
@@ -242,11 +246,16 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     }
                     val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), phase, 1, properties, coords,
                         0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_STYLUS, 0)
+                    val sent = System.nanoTime()
+                    if (phase == MotionEvent.ACTION_DOWN) contactBegin = sent
+                    if (phase == MotionEvent.ACTION_UP) active.put(JSONArray(listOf(contactBegin, sent)))
                     try { check(uiAutomation.injectInputEvent(event, false)) } finally { event.recycle() }
                     delivered.put(JSONArray(listOf(System.nanoTime(), phase, coords[0].pressure)))
                 }
                 return obj("begin_ns" to begun, "begin_boot_ns" to boot, "end_ns" to System.nanoTime(),
-                    "end_boot_ns" to SystemClock.elapsedRealtimeNanos(), "injected" to delivered)
+                    "end_boot_ns" to SystemClock.elapsedRealtimeNanos(), "injected" to delivered).also {
+                    if (kind == "pauses") it.put("active_intervals_ns", active)
+                }
             }
             // Erase actual paint along the replay path. Preparing a wider ink
             // stroke keeps the photo visible and avoids timing empty erasure.
@@ -344,7 +353,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     invoke("fit_canvas")
                 }
                 sendStatus(0, Bundle().apply { putString("stream", "BRUSH_RUN $label $run\n") })
-                if (mode == "lifts") repeat(duration / 200) { invoke("undo") } else invoke("undo")
+                if (mode in listOf("lifts", "pauses")) repeat(duration / 200) { invoke("undo") } else invoke("undo")
                 SystemClock.sleep(2000)
             }
             result.putString("stream", "\nBRUSH_COMPLETE $label\n")

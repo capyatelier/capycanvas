@@ -132,14 +132,12 @@ Retained windows are admitted again when their source requirements change.
 Presentation regeneration advances display damage independently of the artwork
 revision used by document previews; camera motion does not publish an artwork edit.
 
-The cache replaces the full composite, live display pyramid/detail atlas,
-transform static copies and obsolete scene image intermediates for its supported
-stack. It does not keep these allocations alive underneath the new display.
-Shader recipes belong to the device and survive cache or level replacement.
-The original scene executor is the exact-query and unsupported-stack fallback;
-`live_display.rs` is explicitly an exact-composition presentation fallback.
-There is no runtime benchmark switch or second legacy copy of the supported
-paint compositor.
+One display hierarchy owns the visible window, overview and adjacent levels.
+Drawing and idle refinement write the same images. The separate full composite, detail atlas and duplicate display-only source cache
+have been removed. Native filter evaluation and exact queries reuse the region
+executor and its paint, mask, blend, placement and filter kernels. Shader recipes
+belong to the device and survive cache or level replacement. Unsupported view
+sizes fail admission before document or paint mutations.
 
 Paint-transform transactions retain immutable originals and selected/unselected
 input levels. The graph evaluates a transformed source only where output is
@@ -198,6 +196,28 @@ overlap. Directly presented placements switch to a materialized display only
 when that output is complete. Refinement advances presentation damage without
 changing the artwork revision, and pending work remains visible to the shared
 frame scheduler. Unchanged global filter dependencies are reused across pages.
+When the device's display allowance covers the working cache and full-document
+residency, the same hierarchy retains every level down to native resolution.
+Existing full-size level images are reused; bounded windows are copied into
+their resident levels and released. The requested region remains independent of
+the allocated image bounds, so drawing evaluates only missing or dirty regions.
+Refinement writes each exact native page once and repairs its ancestors in place.
+There is no separate settled pyramid or handoff after the final page.
+Subsequent pan, rotation and zoom select these resident levels. An edit
+invalidates affected pages across the hierarchy; finer detail is repaired before
+reuse. Devices without that allowance retain bounded visible windows and their
+overview. Admission checks current device headroom, and artwork changes release
+optional residency when that headroom no longer covers it. Snapshot workers do
+not allocate optional display levels.
+Exact filter image pixels and retained display pixels share one composition
+allowance; the filter budget reserves the full bounded display cache before
+admitting native dependencies, plus the actual resident hierarchy. Optional residency is released when an effect's
+required images fit only without it; unsupported dependencies are rejected before
+any artwork changes.
+
+Display outputs and their scene dependencies share submission validity. Discarding
+GPU commands invalidates both, so the next frame rebuilds them instead of reusing
+pixels that were never written. View and resource admission precede artwork changes.
 
 ## Supported contract
 
@@ -208,10 +228,12 @@ display-resolution support execute in the reduced graph with document coordinate
 layer masks and clipping. Image passes expand dependency regions and damage by
 their sampling footprints; intermediate results populate the halo needed by
 later passes. Gaussian Blur prepares scaled kernels for the evaluation grid.
-Native-resolution effects and native views of image-boundary effects, along
-with persistent watercolor state, still use the exact presentation executor;
-these dependencies have not yet migrated. Insufficient admission also retains
-that executor. Advanced brushes keep their exact temporary evaluator; simple
+Native-resolution effects and native views of image-boundary effects evaluate
+native regions into the same display cache. Native evaluation also handles
+source requests that exceed the reduced graph's admission limits. Region windows
+include the complete filter halo; document-wide dependencies retain their whole
+input. Watercolor resolves its native pigment state before source reduction.
+Both evaluation modes share presentation geometry, exact validity and mip updates. Advanced brushes keep their exact temporary evaluator; simple
 analytic dry contacts without grain, selection, alpha lock or edge effects can
 use compact tails.
 
@@ -267,7 +289,7 @@ resolution changes, window overlap, active pixel transforms, cancellation,
 zoom transitions, release, exact commit and linked mask/group/clipping semantics,
 bounded exact queries, affine source and mask placement, sparse
 source derivation across different window origins, bounded source storage,
-prediction cancellation and entry/exit through the filter fallback.
+prediction cancellation and transitions between native and reduced evaluation.
 A 32-layer test edits the beginning, middle and end of the stack, checks exact
 output agreement and bounds the command count while preserving untouched pages. Direct
 placement presentation is compared with supersampled exact output through

@@ -425,22 +425,92 @@ They precede perceptual dab blending and exact idle refinement. Raw reports,
 traces and source provenance are under `artifacts/display-production/perceptual-graph-tcl`
 and `perceptual-graph-provenance.json`.
 
-An initial comparison against main `c707c379` uses the same Perceptual 12 MP
-G-Pen 1024 px Fit trajectory and explicitly drains idle composition and GPU work.
-Candidate APK `a14ee9b7785537f9f9d667ff04c8438e35dd7837f961ba52a56c241bf093963f`
-adds exact idle refinement. Both thermal snapshots for each build report status 0.
+Three alternating pairs against main `c707c379` use Perceptual 12 MP photos,
+G-Pen 1024 px, a 240 × 140 px trajectory, 16 ms prediction, and five seconds
+of input per run. Candidate APK
+`a14ee9b7785537f9f9d667ff04c8438e35dd7837f961ba52a56c241bf093963f`
+adds exact idle refinement. All 36 thermal snapshots report status 0.
 
-| One warmed five-second diagnostic | Main | Candidate |
-| --- | --- | --- |
-| Completed drawing updates/s | 14.93 | 46.50 |
-| Input-end to drained composition, ms | 549 | 1952 |
-| Input queue p99, ms | 82.09 | 25.94 |
-| Renderer resident bytes after draining, MiB | 795.0 | 582.2 |
+| Journey | Main completed updates/s | Candidate | Speedup | Main settling, ms | Candidate settling, ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fit, one photo | 14.96 | 43.38 | 2.90× | 569 | 2035 |
+| 50%, eight photos | 1.791 | 26.68 | 14.89× | 1067 | 5575 |
+| 100%, eight photos | 2.588 | 17.92 | 6.92× | 701 | 3246 |
 
-This single pair shows a drawing-throughput gain and a settling regression;
-it is not a repeated qualification or a 60 updates/s result. The candidate
-refines one native page per idle submission. Raw reports and frozen source/APK
-provenance are in `artifacts/display-production/idle-exact-smoke` and
-`idle-exact-provenance.json`. The APK predates the overview scheduling correction
-for a cache created during an active transform; this painting fixture has no
-transform preview.
+These are medians of three runs. Completed updates count only the input window;
+settling ends when both composition and submitted GPU work drain. Input queue
+p99 medians improve from 79.96/577.13/382.62 ms to 48.10/60.63/66.86 ms in the
+same order. Renderer residency after draining changes from 795/648/620 MiB to
+582/880/790 MiB; this excludes other process allocations.
+
+Drawing is faster, while settling and eight-photo residency regress. The candidate
+refines one native page per idle submission. These measurements do not establish
+the long-term 60 updates/s target or responsiveness to a new stroke during
+refinement. Raw reports and frozen source/APK provenance are in
+`artifacts/display-production/idle-exact-pairs` and `idle-exact-provenance.json`.
+The APK predates the overview scheduling correction for a cache created during
+an active transform and the native-effect migration; these painting fixtures
+have neither transform previews nor effects.
+
+
+## Resuming while composition settles
+
+Three alternating pairs use the same Perceptual 12 MP G-Pen fixture, with
+100 ms contact followed by 100 ms lifted, repeated for five seconds. Each run
+records 25 pen-down events. All 36 thermal snapshots report status 0. Values
+below are medians of the three per-run p99 values.
+
+| Journey | Main input queue, ms | Candidate input queue, ms | Main arrival to next GPU completion, ms | Candidate arrival to next GPU completion, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Fit, one photo | 141.92 | 21.37 | 353.50 | 116.12 |
+| 50%, eight photos | 370.14 | 48.90 | 799.33 | 194.32 |
+| 100%, eight photos | 298.93 | 67.84 | 662.94 | 184.95 |
+
+The candidate has pending composition at 24–25 of the 25 contacts per run;
+the old compositor has none. Next completion means the first GPU completion
+whose frame was queued after the contact's input processing finished; it does
+not measure scanout or guarantee that frame contains the contact's pixels.
+Final settling medians are 131/4876/3352 ms on main and 1474/3743/2579 ms on
+the candidate. The one-photo settling regression remains.
+
+The control is main `c707c379` with identical input diagnostics. Candidate is
+`eef34e7c` plus shared native evaluation, before legacy deletion and source-cache
+consolidation. APK SHA-256 is
+`30628d17dc905f891e18f54718e45baade92ab0429eac39ce1d3b483531c2d02`.
+Raw data, immutable APKs and source provenance are under
+`artifacts/display-production/resume-pairs` and `common-native-provenance.json`.
+These measurements establish a relative responsiveness improvement for this
+fixture, not the long-term tier target or final-tree qualification.
+
+
+## Shared composition hierarchy motion diagnostics
+
+Single five-second gestures on 2026-09-28 use the TCL 12 MP Perceptual photo at
+Fit, default glass and thermal status 0 before and after each run. The control
+is main `c707c379`; the candidate uses one hierarchy for drawing and exact idle
+repair, APK SHA-256
+`7ab5761cade1c50394e1d8a66198a29f900d492dc2c77c45274bac4c883b0299`.
+These are diagnostic comparisons, not three-run tier qualification.
+
+| Journey | Main GPU updates/s | Candidate GPU updates/s | Main presented fps | Candidate presented fps | Candidate present gap p99, ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Crop | 99.35 | 96.13 | 59.45 | 59.43 | 16.84 |
+| Move all | 59.94 | 60.79 | 55.56 | 59.79 | 16.72 |
+| Move part | 90.69 | 84.66 | 58.40 | 59.96 | 16.84 |
+| Move part with copy | 94.78 | 81.84 | 57.94 | 59.08 | 16.88 |
+| Photo placement | 73.02 | 69.14 | 59.49 | 58.38 | 33.32 |
+| Photo resize, bar hidden | 71.84 | 60.69 | 59.30 | 57.51 | 49.95 |
+| Photo resize, bar visible | 71.29 | 61.77 | 59.34 | 57.19 | 49.98 |
+| Pixel translation | 73.30 | 64.96 | 59.36 | 59.58 | 16.91 |
+| Pixel resize | 71.41 | 60.78 | 59.28 | 59.59 | 16.94 |
+| Distort | 70.18 | 49.73 | 59.22 | 50.33 | 33.34 |
+| Warp | 46.20 | 41.61 | 47.80 | 44.00 | 33.36 |
+| Scaled pixel resize | 81.61 | 83.26 | 59.91 | 58.96 | 16.90 |
+
+Distort and Warp retain relative regressions; placement resize has long gaps.
+The other motions generally remain near the panel's refresh rate despite some
+lower GPU update rates. These results do not establish a tier target or qualify
+the final branch. The APK predates the correction for a shared overview alias
+and optional-residency eviction for global filters. Reports, traces and source
+provenance are under `artifacts/display-production/shared-hierarchy-geometry`
+and `shared-hierarchy-android-provenance.json`.

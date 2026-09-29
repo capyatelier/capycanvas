@@ -87,12 +87,13 @@ fn resample_color(t:vec2<u32>,mesh:bool,keeps:bool,source:vec2<f32>,dx:vec2<f32>
     if inside_clip && (empty || resample.options.z==2.) {
         return composite_color(remainder(vec3(center,1.),original_lod,keeps));
     }
-    if !keeps && resample.options.z==0. && covered && inside_clip {
+    if covered && inside_clip {
         var color=vec4(0.);
         if mesh {
             if q.x>UNCOVERED {color=bilinear_at(moved,q,moved_lod);}
         } else {color=bilinear(moved,resample.x,resample.y,resample.w,vec3(center,1.),moved_lod);}
-        return composite_color(color);
+        if (!keeps && resample.options.z==0.) || color.a==1. {return composite_color(color);}
+        if color.a==0. {return composite_color(remainder(vec3(center,1.),original_lod,keeps));}
     }
     var sum=vec4(0.);
     moved_lod=max(moved_lod-1.,0.);

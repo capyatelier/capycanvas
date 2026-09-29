@@ -83,7 +83,6 @@ mod artwork;
 mod display_mips;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
 mod display_memory;
-mod live_display;
 mod present_damage;
 mod present_screen;
 mod region_requests;
@@ -121,31 +120,7 @@ const RESERVOIR_SIZE: u32 = 64;
 const PROCEDURAL_GRAIN_SIZE: u32 = 256;
 const WATERCOLOR_TRANSPORT_STEPS: u32 = 3;
 
-fn needs_scene(packet: FramePacket<'_>) -> bool {
-    // Paint operations use scene jobs while executing, but their result is
-    // baked into the ordinary paint pages. Retained undo history must not keep
-    // subsequent brush frames on the more expensive scene composition path.
-    packet.dab_batches.iter().any(|b| {
-        let DabBatchKind::LayerOperation(index) = b.kind else {
-            return false;
-        };
-        // Transforms write paint pages directly, without scene jobs.
-        !packet
-            .layers
-            .iter()
-            .find_map(|l| l.target_operations(b.layer_id))
-            .and_then(|operations| operations.get(index as usize))
-            .is_some_and(|o| matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
-    }) || packet.layers.iter().filter(|l| l.is_artwork()).any(|l| {
-        l.mask.is_some()
-            || l.source.is_some()
-            || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
-            || l.properties.clipped
-            || l.properties.parent.is_some()
-            || l.properties.blend != layer_core::LayerBlend::Normal
-            || l.properties.offset != layer_core::Point::default()
-    })
-}
+
 
 /// Uploads are encoded at their point of use on every host. Queue::write_buffer
 /// runs before submitted commands, so it cannot replace ordered copies when
@@ -888,7 +863,6 @@ pub struct WgpuRasterizer {
     ui_rendition: Option<layer_core::color::hdr::SdrRendition>,
     ui_preview_pipeline: Option<wgpu::RenderPipeline>,
     display_pipelines: Option<display_mips::Pipelines>,
-    live_display: Option<live_display::Cache>,
     scale_display: Option<scene::scale::Cache>,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
@@ -904,9 +878,6 @@ pub struct WgpuRasterizer {
     effect_clocks: effects::Clocks,
     filter_source_epoch: u64,
     tiled_sources: std::collections::BTreeMap<LayerId, Arc<layer_core::color::source::SourceImage>>,
-    composite_texture: Option<wgpu::Texture>,
-    composite_view: Option<wgpu::TextureView>,
-    composite_bind_group: Option<wgpu::BindGroup>,
     preview_pages: Vec<LayerPage>,
     preview_coverage_pages: Vec<StrokeCoveragePage>,
     preview_watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
@@ -1212,7 +1183,6 @@ impl WgpuRasterizer {
             effect_clocks: Default::default(),
             filter_source_epoch: 0,
             display_pipelines: None,
-            live_display: None,
             scale_display: None,
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
@@ -1228,9 +1198,6 @@ impl WgpuRasterizer {
             document_color: Default::default(),
             native_edit: None,
             raster_buffers: std::sync::Arc::new(raster::BufferPool::default()),
-            composite_texture: None,
-            composite_view: None,
-            composite_bind_group: None,
             blend_space: layer_core::BlendSpace::Linear,
             preview_pages: Vec::with_capacity(16),
             preview_coverage_pages: Vec::with_capacity(8),
@@ -1572,37 +1539,6 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    fn ensure_document(
-        &mut self,
-        extent: [u32; 2],
-        layers: &[Layer],
-    ) -> Result<(bool, bool), GpuRasterError> {
-        let resized = self.ensure_document_metadata(extent, layers)?;
-        if let Some(native) = &self.native_edit
-            && u64::from(extent[0]) * u64::from(extent[1]) * 16 > native.display_dense_bytes
-        {
-            let limit = native.display_cache_bytes;
-            let allowance = native.display_allowance(layers, extent);
-            let rebuilt = self.live_display.as_ref().is_none_or(|cache| cache.allowance != allowance);
-            if rebuilt {
-                self.display_pipelines.get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
-                self.live_display = Some(live_display::Cache::new(self, self.display_pipelines.as_ref().unwrap(), limit, allowance)?);
-            }
-            return Ok((resized, rebuilt));
-        }
-        let rebuilt = resized || self.composite_texture.is_none();
-        if rebuilt {
-            let (texture, view) = create_color_target(&self.device, extent, "layer composite");
-            self.composite_bind_group = Some(create_texture_bind_group(
-                &self.device, &self.texture_layout, &view, &self.sampler,
-                "layer composite export binding",
-            ));
-            self.composite_texture = Some(texture);
-            self.composite_view = Some(view);
-        }
-        Ok((resized, rebuilt))
-    }
-
     /// Set the document topology independently of full-composite allocation.
     /// Snapshot/window consumers prepare only their own pixel dependencies.
     fn ensure_document_metadata(
@@ -1640,10 +1576,6 @@ impl WgpuRasterizer {
             self.preview_pages.clear();
             self.preview_coverage_pages.clear();
             self.preview_watercolor_wetness_pages.clear();
-            self.composite_texture = None;
-            self.composite_view = None;
-            self.composite_bind_group = None;
-            self.live_display = None;
             self.scale_display = None;
             self.preview_damage = PixelRect::EMPTY;
             self.preview_contact_tiles = None;
@@ -2183,10 +2115,7 @@ impl WgpuRasterizer {
         self.metrics.retouch_storage_bytes =
             self.retouch.as_ref().map_or(0, |retouch| retouch.storage_bytes());
         self.metrics.composite_storage_bytes =
-            self.composite_texture.as_ref().map_or(0, texture_bytes)
-                + self.live_display.as_ref().map_or(0, live_display::Cache::storage_bytes)
-                + self.scale_display.as_ref().map_or(0, scene::scale::Cache::storage_bytes)
-;
+            self.scale_display.as_ref().map_or(0, scene::scale::Cache::storage_bytes);
     }
 
     fn ensure_upload_capacity(&mut self, dabs: usize, styles: usize) -> Result<(), GpuRasterError> {
@@ -3336,11 +3265,17 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        let display_request = scene::scale::request(self, packet)?;
         let mut trace_phase = performance_trace::Span::new(c"capy.prepare");
         if let Some(native) = &self.native_edit {
             // Reject unsupported global dependencies before clearing/restoring
             // paint, allocating the composite, or submitting any part of a frame.
-            scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(self, packet.layers, packet.document_extent)?)?;
+            let resident = self.scale_display.as_ref().map_or(0, |c| c.resident_bytes());
+            let admitted = scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(resident));
+            if resident > 0 && admitted.is_err() {
+                scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_budget(0))?;
+                self.scale_display = None;
+            } else { admitted?; }
         }
         if packet.layers.iter().any(|l| l.source.is_some()) {
             // Source-backed photos own no paint initially. Prepare their bounded
@@ -3431,25 +3366,13 @@ impl CanvasRenderer for WgpuRasterizer {
         };
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
         let blending_changed = std::mem::replace(&mut self.blend_space, packet.blend_space) != packet.blend_space;
-        let (resized, display_rebuilt) = if let Some(level) = scene::scale::level(self, packet) {
-            let unchanged = self.artwork_frame.as_ref().is_some_and(|frame|
-                frame.same_artwork(packet, requested_view.background_rgba_linear));
-            let resized = self.ensure_document_metadata(packet.document_extent, packet.layers)?;
-            let previous = self.scale_display.take();
-            let (cache, rebuilt) = scene::scale::Cache::select(previous, self, packet, level, unchanged);
-            self.scale_display = Some(cache);
-            // Presentation has exactly one owner. The supported path supersedes
-            // the full composite/pyramid and transform-specific static copies.
-            self.live_display = None;
-            self.composite_texture = None;
-            self.composite_view = None;
-            self.composite_bind_group = None;
-            (resized, rebuilt)
-        } else {
-            self.scale_display = None;
-            self.ensure_document(packet.document_extent, packet.layers)?
-        };
-        let packet = FramePacket { composite_all: packet.composite_all || display_rebuilt || blending_changed, ..packet };
+        let unchanged = self.artwork_frame.as_ref().is_some_and(|frame|
+            frame.same_artwork(packet, requested_view.background_rgba_linear));
+        let resized = self.ensure_document_metadata(packet.document_extent, packet.layers)?;
+        let previous = self.scale_display.take();
+        let (cache, display_rebuilt) = scene::scale::Cache::select(previous, self, packet, display_request, unchanged);
+        self.scale_display = Some(cache);
+        let packet = FramePacket { composite_all: packet.composite_all || blending_changed, ..packet };
         self.prepare_selection_previews(packet.layers)?;
         let mut batch_tiles = original_batches.iter().map(|batch| {
             let start = batch.first_dab as usize;
@@ -3488,11 +3411,6 @@ impl CanvasRenderer for WgpuRasterizer {
             },
         );
         self.telemetry.begin(&self.device, &self.queue, &mut encoder);
-        let display_missing = if let Some(mut cache) = self.live_display.take() {
-            let result = cache.prepare(self, packet.view, &mut encoder);
-            self.live_display = Some(cache);
-            result?
-        } else { std::collections::BTreeSet::new() };
         let committed_preview = if self.transform_preview.is_none() {
             self.transforms.as_mut().unwrap().consume_commit(packet)
         } else {
@@ -3634,10 +3552,6 @@ impl CanvasRenderer for WgpuRasterizer {
             }
         }
 
-        // Style records serve brush batches, then composition layers.
-        if let Some(cache) = &self.live_display {
-            self.uploads.write(&mut encoder, &cache.geometry, &cache.geometry_bytes())?;
-        }
         self.prepare_uploads(packet, &mut batch_tiles, &mut encoder)?;
         self.layer_masks.prepare(
             &self.device,
@@ -4086,7 +4000,7 @@ impl CanvasRenderer for WgpuRasterizer {
             .is_some_and(|p| matches!(p.transform.map, layer_core::TransformMap::Mesh(_)))
             && !self.mesh_pipelines_ready();
         if let Some(preview) = self.transform_preview.clone().filter(|_| !self.awaiting_meshes) {
-            let level = self.scale_display.as_ref().map(|cache| cache.plan.level).filter(|level| *level > 0);
+            let level = self.scale_display.as_ref().filter(|cache| cache.evaluation == scene::scale::Evaluation::Display).map(|cache| cache.plan.level).filter(|level| *level > 0);
             let mut transforms = self.transforms.take().expect("retained transform renderer");
             let result = transforms.update_preview(self, &mut encoder, &preview, packet.layers, level);
             self.transforms = Some(transforms);
@@ -4173,19 +4087,9 @@ impl CanvasRenderer for WgpuRasterizer {
             .layers
             .iter()
             .any(|l| l.visible && l.effect.as_ref().is_some_and(|e| e.animated()));
-        if let Some(cache) = &mut self.live_display {
-            cache.note_artwork_change(!dirty.is_empty() || animated);
-        }
-        if !display_missing.is_empty() {
-            if dirty.is_empty() && !animated { composite_tiles = Some(display_missing.clone()); }
-            else if let Some(tiles) = &mut composite_tiles { tiles.extend(&display_missing); }
-            for coordinate in &display_missing {
-                dirty = dirty.union(page_rect(*coordinate).intersect(PixelRect::full(packet.document_extent)));
-            }
-        }
         // Newly populated display pages change visible pixels too, even when
         // the document itself did not change (for example after navigation).
-        if !dirty.is_empty() || animated {
+        if !dirty.is_empty() || animated || display_rebuilt || !unchanged {
             self.composite_revision = self.composite_revision.wrapping_add(1);
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             // A moved target's damage is stored in image coordinates. Round to
@@ -4205,18 +4109,9 @@ impl CanvasRenderer for WgpuRasterizer {
                     dirty = dirty.union(pixel_rect(rect, packet.document_extent));
                 }
             }
-            scene.compose(self, packet, dirty, &mut encoder, composite_tiles.as_ref())?;
+            let published = scene.compose(self, packet, dirty, &mut encoder, composite_tiles.as_ref())?;
             self.scene = Some(scene);
-            let pointwise_scene = packet.layers.iter().all(|layer| {
-                matches!(layer.kind, LayerKind::Paint | LayerKind::Background)
-                    && layer.effect.is_none()
-                    && layer_core::target_transform(packet.layers, layer.id) == layer_core::Affine::IDENTITY
-                    && layer.mask.as_ref().is_none_or(|mask|
-                        layer_core::target_transform(packet.layers, mask.id) == layer_core::Affine::IDENTITY)
-            });
-            self.composite_damage = if (needs_scene(packet) && !pointwise_scene) || animated {
-                PixelRect::full(packet.document_extent)
-            } else { dirty };
+            self.composite_damage = published;
         }
         if dirty.is_empty() && !animated && original_batches.is_empty() && packet.dabs.is_empty()
             && self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work())
@@ -4236,7 +4131,7 @@ impl CanvasRenderer for WgpuRasterizer {
         if self.transform_preview.is_none() && !reset && packet.dabs.is_empty()
             && packet.dab_batches.is_empty() && packet.restore_rasters.is_empty()
             && let Some((layer, selection)) = self.moving_pixels.clone()
-            && let Some(level) = self.scale_display.as_ref().map(|cache| cache.plan.level).filter(|level| *level > 0)
+            && let Some(level) = self.scale_display.as_ref().filter(|cache| cache.evaluation == scene::scale::Evaluation::Display).map(|cache| cache.plan.level).filter(|level| *level > 0)
         {
             let mut transforms = self.transforms.take().unwrap();
             let result = transforms.prepare_standby(self, &mut encoder, packet.layers, layer, &selection, level);
@@ -4260,7 +4155,6 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(commit) = native_commit {
             self.finish_native_rasters(commit, submission)?;
         }
-        if let Some(cache) = &mut self.live_display { cache.finish_frame(); }
         if animated || reset || !packet.dabs.is_empty() || !packet.restore_rasters.is_empty()
             || self.transform_damage.iter().any(|(_, bounds)| !bounds.is_empty()) || !self.document_damage.is_empty()
             || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear)) {

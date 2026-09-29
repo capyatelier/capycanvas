@@ -165,49 +165,6 @@ impl Sources {
         (current && image.image.plan.bounds == PixelRect::full(extent)
             && page_coordinates(PixelRect::full(extent)).all(|c| image.valid.contains(&c))).then_some(&image.image.texture)
     }
-    pub fn placement_levels(&mut self, requested: &BTreeMap<LayerId, u32>, budget: u64, max_side: u32) -> BTreeMap<LayerId, u32> {
-        let cost = |id: LayerId, level: u32| display_mips::Plan::at(self.entries[&id].extent, level).level_bytes(level);
-        let mut selected = BTreeMap::new();
-        let mut remaining = budget;
-        for (&id, &level) in requested {
-            if level == 0 { continue; }
-            let plan = display_mips::Plan::at(self.entries[&id].extent, level);
-            let bytes = cost(id, level);
-            if bytes <= remaining && plan.size.iter().all(|n| *n <= max_side) {
-                selected.insert(id, level);
-                remaining -= bytes;
-            }
-        }
-        for (&id, &requested) in requested {
-            let mut level = selected.get(&id).copied().or_else(|| {
-                (requested == 0).then(|| self.entries[&id].levels.keys().next().copied()).flatten()
-                    .filter(|level| cost(id, *level) <= remaining)
-            });
-            if requested == 0 && let Some(l) = level { remaining -= cost(id, l); }
-            while let Some(l) = level.filter(|l| requested > 0 && *l > 1) {
-                let plan = display_mips::Plan::at(self.entries[&id].extent, l - 1);
-                let additional = cost(id, l - 1) - cost(id, l);
-                if additional > remaining || plan.size.iter().any(|n| *n > max_side) { break; }
-                remaining -= additional;
-                level = Some(l - 1);
-            }
-            if let Some(l) = level { selected.insert(id, l); }
-        }
-        for (&id, source) in &mut self.entries {
-            if requested.contains_key(&id) {
-                let selected = selected.get(&id).copied();
-                source.levels.retain(|level, image| {
-                    if Some(*level) == selected { return true; }
-                    let bytes = texture_bytes(&image.image.texture);
-                    if selected.is_some_and(|l| *level > l) && bytes <= remaining {
-                        remaining -= bytes;
-                        true
-                    } else { false }
-                });
-            }
-        }
-        selected
-    }
     pub(super) fn image(&self, id: LayerId, level: u32) -> &Level { &self.entries[&id].levels[&level] }
     pub(super) fn resident_plan(&self, id: LayerId, requested: display_mips::Plan) -> display_mips::Plan {
         self.entries.get(&id).and_then(|s| s.levels.get(&requested.level)).map(|l| l.image.plan)
@@ -454,33 +411,5 @@ impl Scene {
     pub fn reduced_layer(&self, _r: &WgpuRasterizer, layer: &Layer, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
         self.scale_sources.complete_texture(layer, extent, level)
     }
-    pub(in crate::scene) fn prepare_placed_sources(
-        &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoder: &mut crate::submission::CommandEncoder, commands: &mut Commands,
-    ) -> Result<(), GpuRasterError> {
-        let budget = if let Some(native) = &r.native_edit {
-            native.image_pixel_budget(r, packet.layers, packet.document_extent)?
-                .min(native.display_complete_bytes.saturating_sub(PixelRect::full(packet.document_extent).area() * 16))
-                .saturating_sub(Self::capture_image_bound(packet.layers, PixelRect::full(packet.document_extent)))
-        } else { 0 };
-        let requested: BTreeMap<_, _> = packet.layers.iter()
-            .filter(|layer| layer.source.is_some() && images::visible(packet.layers, layer))
-            .map(|layer| (layer.id, placement_level(packet.layers, layer.id))).collect();
-        let selected = self.scale_sources.placement_levels(&requested, budget, r.device.limits().max_texture_dimension_2d);
-        for (id, level) in selected {
-            if requested[&id] == 0 { continue; }
-            let layer = packet.layers.iter().find(|l| l.id == id).unwrap();
-            let extent = layer.local_extent(packet.document_extent);
-            self.prepare_scale_color(commands, r, packet, encoder, layer, SourceRequest {
-                plan: display_mips::Plan::at(extent, level), required: PixelRect::full(extent), covered: PixelRect::EMPTY })?;
-            for next in level + 1..=8 {
-                let source = &self.scale_sources.entries[&id];
-                let bytes = display_mips::Plan::at(source.extent, next).level_bytes(next);
-                if source.levels.contains_key(&next) || self.scale_sources.storage_bytes() + bytes <= budget {
-                    self.scale_sources.ensure_level(commands, r, encoder, id, display_mips::Plan::at(extent, next))?;
-                }
-            }
-        }
-        self.placement_display = true;
-        Ok(())
-    }
+
 }

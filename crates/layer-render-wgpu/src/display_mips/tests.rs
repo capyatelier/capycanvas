@@ -15,7 +15,7 @@ fn large_photo_display_plans_bound_pixels_without_changing_document_dimensions()
         assert_eq!(plan.extent, extent);
         assert!(plan.size.into_iter().all(|v| v <= MAX_SIDE));
         assert_eq!(plan.size, extent.map(|v| v.div_ceil(1 << plan.level)));
-        assert!(plan.pixel_bytes() <= 6 * 1024 * 1024);
+        assert!(plan.pixel_bytes_through(plan.level) <= 6 * 1024 * 1024);
         if plan.level > 0 {
             assert!(
                 extent

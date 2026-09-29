@@ -301,7 +301,7 @@ fn snapshot_identity_png_tiff_preserve_every_code_and_hidden_rgb() {
                     expected,
                     "{space:?} {depth:?} tiff={tiff}"
                 );
-                assert!(reader.renderer.composite_texture.is_none());
+                assert!(reader.renderer.scale_display.is_none());
                 assert!(
                     reader
                         .renderer
@@ -722,7 +722,7 @@ fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
             }
             let mut reader =
                 capture(project).unwrap();
-            assert!(reader.renderer.composite_texture.is_none());
+            assert!(reader.renderer.scale_display.is_none());
             for rect in [
                 [257, 19, 31, 33],
                 [0, 0, 97, 79],
@@ -744,7 +744,7 @@ fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
                         }
                     }
                 }
-                assert!(reader.renderer.composite_texture.is_none());
+                assert!(reader.renderer.scale_display.is_none());
                 assert_eq!(reader.renderer.metrics().composite_storage_bytes, 0);
                 assert!(reader.renderer.selection_clip.storage_bytes() < 641 * 389 / 2);
             }
@@ -829,7 +829,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
     );
     reader.planned_pixel_bytes = 1;
     assert!(reader.read_region([0, 0, 17, 17]).is_err());
-    assert!(reader.renderer.composite_texture.is_none());
+    assert!(reader.renderer.scale_display.is_none());
     reader.control().cancel();
     let mut out = Vec::new();
     assert!(

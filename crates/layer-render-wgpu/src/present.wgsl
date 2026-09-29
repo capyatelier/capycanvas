@@ -20,7 +20,7 @@ struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(3) var<storage, read> selection: Selection;
 @group(0) @binding(11) var saved_selection: texture_2d<u32>;
 @group(0) @binding(4) var coarse: texture_2d<f32>;
-struct DisplayCache { info: vec4<u32>, window: vec4<u32>, grid: vec4<u32>, pages: array<u32> }
+struct DisplayCache { scale: u32, coarse_scale: u32, next_scale: u32, padding: u32, window: vec4<u32> }
 @group(0) @binding(5) var<storage, read> cache: DisplayCache;
 @group(0) @binding(6) var next_mip: texture_2d<f32>;
 
@@ -58,7 +58,7 @@ fn mip_coordinate(p: f32, extent: f32, scale: f32) -> f32 {
 }
 fn coarse_point(p: vec2<f32>) -> vec4<f32> {
     let extent = camera.offset_document.zw;
-    let scale = f32(cache.info.y);
+    let scale = f32(cache.coarse_scale);
     let q = vec2(mip_coordinate(p.x, extent.x, scale), mip_coordinate(p.y, extent.y, scale));
     let low = vec2<u32>(floor(q));
     let high = min(low+1u, textureDimensions(coarse)-1u);
@@ -66,39 +66,14 @@ fn coarse_point(p: vec2<f32>) -> vec4<f32> {
     return mix(mix(textureLoad(coarse, vec2<i32>(low), 0), textureLoad(coarse, vec2<i32>(i32(high.x), i32(low.y)), 0), t.x),
         mix(textureLoad(coarse, vec2<i32>(i32(low.x), i32(high.y)), 0), textureLoad(coarse, vec2<i32>(high), 0), t.x), t.y);
 }
-fn detail_coordinate(p: vec2<u32>) -> vec2<i32> {
-    if cache.grid.z == 0u { return vec2<i32>(p); }
-    let page = p / 256u;
-    let entry = cache.pages[page.y * cache.info.w + page.x];
-    if entry == 0u { return vec2<i32>(-1); }
-    let width = cache.grid.x / 256u;
-    let origin = vec2((entry-1u) % width, (entry-1u) / width) * 256u;
-    return vec2<i32>(origin + p % 256u);
-}
 fn detail_point(p: vec2<f32>) -> vec4<f32> {
-    if cache.info.z == 0u { return coarse_point(p); }
     let extent = camera.offset_document.zw;
-    let scale = f32(cache.info.z);
+    let scale = f32(cache.scale);
     let q = vec2(mip_coordinate(p.x, extent.x, scale), mip_coordinate(p.y, extent.y, scale));
-    // Retained levels are contiguous textures. The filtering unit can sample
-    // these directly; only the page atlas needs explicit cross-page gathers.
-    if cache.grid.z == 0u {
-        if any(q < vec2<f32>(cache.window.xy)) || any(q > vec2<f32>(cache.window.zw - 1u)) { return coarse_point(p); }
-        return textureSampleLevel(canvas, canvas_sampler, (q - vec2<f32>(cache.window.xy) + .5) / vec2<f32>(textureDimensions(canvas)), 0.);
-    }
-    let low = vec2<u32>(floor(q));
-    let high = min(low+1u, vec2<u32>(ceil(extent / scale))-1u);
-    if any(low < cache.window.xy) || any(high >= cache.window.zw) { return coarse_point(p); }
-    let a = detail_coordinate(low);
-    let b = detail_coordinate(vec2(high.x, low.y));
-    let c = detail_coordinate(vec2(low.x, high.y));
-    let d = detail_coordinate(high);
-    if a.x < 0 || b.x < 0 || c.x < 0 || d.x < 0 { return coarse_point(p); }
-    let t = fract(q);
-    return mix(mix(textureLoad(canvas, a, 0), textureLoad(canvas, b, 0), t.x),
-        mix(textureLoad(canvas, c, 0), textureLoad(canvas, d, 0), t.x), t.y);
+    if any(q < vec2<f32>(cache.window.xy)) || any(q > vec2<f32>(cache.window.zw - 1u)) { return coarse_point(p); }
+    return textureSampleLevel(canvas, canvas_sampler, (q - vec2<f32>(cache.window.xy) + .5) / vec2<f32>(textureDimensions(canvas)), 0.);
 }
-fn placed_at(p:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
+fn placed_at(p:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>,linear:bool)->vec4<f32> {
     let span=abs(dx)+abs(dy);
     let low=max(p-span*.5,vec2(0.));
     let high=min(p+span*.5,camera.offset_document.zw);
@@ -120,35 +95,29 @@ fn placed_at(p:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
         let ratio=camera.placed_extent.z;
         color=area_sample(coarse,canvas_sampler,extent/ratio,outside,center/ratio,u/ratio,v/ratio);
     }
+    if linear && camera.placed_options.w!=0. && (color.a*camera.placed_options.x==1. || camera.placed_backdrop.a==0.) {
+        return color*camera.placed_options.x;
+    }
     if camera.placed_options.w!=0. && color.a>0. { color=vec4(sdr_encode(color.rgb/color.a,CANVAS_SPACE)*color.a,color.a); }
     let layer=color*camera.placed_options.x;
-    return layer+camera.placed_backdrop*(1.-layer.a);
+    let result=layer+camera.placed_backdrop*(1.-layer.a);
+    if linear {return canvas_linear(result);}
+    return result;
 }
 fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
-    if camera.placed_options.y!=0. { return placed_at(p,dx,dy); }
-    if cache.info.x == 0u { return textureSampleLevel(canvas, canvas_sampler, p / camera.offset_document.zw, 0.); }
-    let scale = f32(select(cache.info.z, cache.info.y, cache.info.z == 0u));
+    if camera.placed_options.y!=0. { return placed_at(p,dx,dy,false); }
+    return grid_artwork_at(p,dx,dy);
+}
+fn grid_artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    let scale = f32(cache.scale);
     let footprint = max(length(dx), length(dy));
     if footprint <= scale { return detail_point(p); }
-    if cache.grid.w != 0u {
-        // Adjacent levels contain the completed presentation composition.
-        // Trilinear display sampling avoids supersampling every screen pixel;
-        // no source/filter input or editable pixel is reduced.
-        let next_scale = f32(cache.grid.w);
-        let extent = camera.offset_document.zw;
-        let q = vec2(mip_coordinate(p.x, extent.x, next_scale), mip_coordinate(p.y, extent.y, next_scale));
-        let origin = select(vec2<f32>(cache.window.xy), vec2(0.), cache.grid.z != 0u) * (scale / next_scale);
-        let reduced = textureSampleLevel(next_mip, canvas_sampler, (q - origin + .5) / vec2<f32>(textureDimensions(next_mip)), 0.);
-        return mix(detail_point(p), reduced, clamp(log2(footprint / scale), 0., 1.));
-    }
-    var color = vec4(0.);
-    for (var y = 0u; y < 4u; y++) {
-        for (var x = 0u; x < 4u; x++) {
-            let offset = (vec2(f32(x), f32(y))+.5)/4.-.5;
-            color += detail_point(p + dx * offset.x + dy * offset.y);
-        }
-    }
-    return color / 16.;
+    let next_scale = f32(cache.next_scale);
+    let extent = camera.offset_document.zw;
+    let q = vec2(mip_coordinate(p.x, extent.x, next_scale), mip_coordinate(p.y, extent.y, next_scale));
+    let origin = vec2<f32>(cache.window.xy) * (scale / next_scale);
+    let reduced = textureSampleLevel(next_mip, canvas_sampler, (q - origin + .5) / vec2<f32>(textureDimensions(next_mip)), 0.);
+    return mix(detail_point(p), reduced, clamp(log2(footprint / scale), 0., 1.));
 }
 // Linear premultiplied artwork from the composite, which holds the
 // document's encoded values when it blends perceptually (composite.x).
@@ -164,17 +133,16 @@ fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>) -> vec4<f32> {
         let u=vec2(dot(camera.placed_x.xy,dx),dot(camera.placed_y.xy,dx));
         let v=vec2(dot(camera.placed_x.xy,dy),dot(camera.placed_y.xy,dy));
         let grid=max(vec2(1u),vec2<u32>(ceil(vec2(length(u),length(v))/(4.*camera.placed_extent.z))));
-        if all(grid==vec2(1u)) {return placed_at(uv*extent,dx,dy);}
+        if all(grid==vec2(1u)) {return placed_at(uv*extent,dx,dy,false);}
         let count=vec2<f32>(grid);
         var color=vec4(0.);
         for(var y=0u;y<grid.y;y++) {for(var x=0u;x<grid.x;x++) {
             let offset=(vec2(f32(x),f32(y))+.5)/count-.5;
-            color+=placed_at(uv*extent+offset.x*dx+offset.y*dy,dx/count.x,dy/count.y);
+            color+=placed_at(uv*extent+offset.x*dx+offset.y*dy,dx/count.x,dy/count.y,false);
         }}
         return color/f32(grid.x*grid.y);
     }
-    if cache.info.x == 0u { return sample_overview(canvas, canvas_sampler, uv, footprint); }
-    let extent = camera.offset_document.zw / f32(cache.info.y);
+    let extent = camera.offset_document.zw / f32(cache.coarse_scale);
     let low = clamp((uv-footprint*.5)*extent, vec2(0.), extent);
     let high = clamp((uv+footprint*.5)*extent, low, extent);
     let start = vec2<u32>(floor(low));
@@ -309,7 +277,10 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
         return view_store(vec4<f32>(rgb * coverage, coverage));
     }
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
-    let paint = proof_artwork(canvas_linear(artwork_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint)),p);
+    var artwork: vec4<f32>;
+    if camera.placed_options.y!=0. { artwork = placed_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint, true); }
+    else { artwork = canvas_linear(grid_artwork_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint)); }
+    let paint = proof_artwork(artwork,p);
     let checker = select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0);
     var rgb = screen_marked(paint, view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a), checker);
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}

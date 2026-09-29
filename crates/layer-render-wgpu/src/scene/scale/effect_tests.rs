@@ -55,9 +55,9 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
             updates = Some(work);
             let plan = r.scale_display.as_ref().expect("qualified effects use graph composition").plan;
             assert_eq!(plan.level, level);
-            assert!(r.live_display.is_none() && r.composite_texture.is_none());
+
             assert_eq!(r.scene.as_ref().unwrap().image_cache_bytes(), 0);
-            let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), plan);
+            let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), plan);
             assert!(error[0] < 0.002 && error[1] < 0.015, "level={level} state={state} error={error:?}");
             assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
             r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
@@ -75,7 +75,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
     frame.dab_batches = std::slice::from_ref(&batch);
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
     let plan = r.scale_display.as_ref().unwrap().plan;
-    let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), plan);
+    let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), plan);
     assert!(error[0] < 0.002 && error[1] < 0.015, "partial paint error={error:?}");
     assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
     }
@@ -103,7 +103,7 @@ fn window_effects_preserve_document_coordinates_and_shifted_masks() {
     let mut whole = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut frame = packet(&doc.layers, extent);
     exact.submit(frame).unwrap();
-    let oracle = pixels(&exact, exact.composite_texture.as_ref().unwrap());
+    let oracle = pixels(&exact, crate::test_support::document_texture(&exact));
     frame.view.width_px = 192;
     frame.view.height_px = 128;
     frame.composite_all = false;
@@ -192,7 +192,7 @@ fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
             frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
             r.submit(frame).unwrap();
             assert_eq!(r.scale_display.as_ref().unwrap().plan.level, level);
-            assert!(r.live_display.is_none() && r.composite_texture.is_none());
+
             display_pixels(&r)
         };
         let mut flat = doc.layers.clone();
@@ -248,7 +248,7 @@ fn spatial_graph_updates_dependency_halos_and_preserves_exact_output() {
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
     assert!(r.scale_display.is_some(), "spatial programs execute in the shared graph");
-    assert!(r.live_display.is_none() && r.composite_texture.is_none());
+
     assert_eq!(r.scene.as_ref().unwrap().image_cache_bytes(), 0);
     for center in [[510., 255.], [765., 510.], [1020., 769.]] {
         let mut dab = crate::tests::test_dab(center, [0.9, 0.1, 0.2, 1.], 1.);
@@ -264,7 +264,7 @@ fn spatial_graph_updates_dependency_halos_and_preserves_exact_output() {
         let difference = incremental.iter().flatten().zip(full.iter().flatten())
             .map(|(a, b)| (a - b).abs()).fold(0., f32::max);
         assert!(difference < 1e-5, "halo at {center:?}: {difference}");
-        let error = quality(&full, &pixels(&exact, exact.composite_texture.as_ref().unwrap()), r.scale_display.as_ref().unwrap().plan);
+        let error = quality(&full, &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
         assert!(error[0] < 0.003 && error[1] < 0.03, "spatial quality at {center:?}: {error:?}");
         assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
     }
@@ -294,10 +294,10 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
         frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
         for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
         let plan = r.scale_display.as_ref().unwrap().plan;
-        let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), plan);
+        let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), plan);
         assert!(error[0] < 0.004 && error[1] < 0.04, "level={level} sigma={sigma} clipped={clipped}: {error:?}");
         assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
-        assert_settled(&mut r, frame, &pixels(&exact, exact.composite_texture.as_ref().unwrap()));
+        assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         let preparations = r.scene.as_ref().unwrap().effects.preparation_count();
         let work = r.metrics.composited_pixels;
         r.submit(FramePacket { composite_all: false, ..frame }).unwrap();

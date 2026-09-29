@@ -47,11 +47,10 @@ pub(crate) fn complete(r: &WgpuRasterizer) {
 }
 
 pub(crate) fn document_texture(r: &WgpuRasterizer) -> &wgpu::Texture {
-    if let Some(cache) = &r.scale_display {
-        assert_eq!(cache.plan.level, 0);
-        assert_eq!(cache.plan.bounds, PixelRect::full(r.document_extent));
-        cache.texture()
-    } else { r.composite_texture.as_ref().unwrap() }
+    let cache = r.scale_display.as_ref().unwrap();
+    assert_eq!(cache.plan.level, 0);
+    assert_eq!(cache.plan.bounds, PixelRect::full(r.document_extent));
+    cache.texture()
 }
 
 pub(crate) fn receive_request(r: &mut WgpuRasterizer, request: layer_render::RegionRequest) -> layer_render::RegionResult {

@@ -1,6 +1,6 @@
 import copy
 import unittest
-from android_brush_metrics import completion_window, validate_setup
+from android_brush_metrics import completion_window, contact_latencies, validate_setup
 
 
 class SetupTests(unittest.TestCase):
@@ -58,6 +58,34 @@ class SetupTests(unittest.TestCase):
 
 
 class CompletionWindowTests(unittest.TestCase):
+    def test_contacts_use_a_frame_queued_after_the_input_was_processed(self):
+        report = {
+            "motion": {"begin_ns": 10, "end_ns": 100},
+            "input_fields": ["event_ns", "arrival_ns", "worker_start_ns", "cpu_input_ns", "phase", "pending_composition"],
+            "inputs": [[9, 14, 20, 5, 1, 1], [30, 31, 32, 2, 2, 0], [80, 81, 85, 2, 1, 0]],
+            "completions": [[1, 24, 40, 1], [2, 26, 50, 2]],
+        }
+        contacts = contact_latencies(report)
+        self.assertEqual(contacts, [dict(pending_composition=True, queue_ms=6e-6, next_gpu_ms=36e-6),
+                                    dict(pending_composition=False, queue_ms=4e-6, next_gpu_ms=None)])
+
+    def test_pauses_exclude_refinement_and_completion_after_each_contact(self):
+        report = {
+            "motion": {"begin_ns": 0, "end_ns": 100, "active_intervals_ns": [[10, 30], [60, 90]]},
+            "display_before": {"submitted_frames": 0, "completed_frames": 0},
+            "display_after_input": {"submitted_frames": 6, "completed_frames": 6},
+            "renderer_before": {"rows": [{"label": "Frames", "value": "0"}]},
+            "completions": [[1, 10, 20, 1], [2, 25, 32, 2], [3, 35, 45, 3],
+                            [4, 65, 75, 4], [5, 85, 90, 5], [6, 95, 99, 6]],
+        }
+        result = completion_window(report)
+        self.assertEqual(result["submitted"], 4)
+        self.assertEqual(result["completed"], 2)
+        self.assertEqual(result["pending_at_input_end"], 2)
+        self.assertEqual(result["active_input_seconds"], 50 / 1e9)
+        self.assertEqual(result["completed_per_s"], 2 / (50 / 1e9))
+        self.assertEqual(result["accounting"], "active-input-intervals-nonempty")
+
     def test_excludes_boundary_and_empty_updates_and_retains_pending(self):
         report = {
             "motion": {"begin_ns": 100, "end_ns": 200},
