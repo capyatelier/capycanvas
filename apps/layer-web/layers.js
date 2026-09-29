@@ -308,6 +308,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
             // idle. Start deferred compilation without waiting for canvas input.
             wake();
           }
+          return;
         }
       }
     } catch (error) { message(error); }

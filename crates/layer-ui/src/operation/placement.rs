@@ -92,10 +92,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(cause);
         }
         self.operation.aspect = true;
-        let single = self.operation.current.as_ref().is_some_and(|t| {
-            t.placement.as_ref().is_some_and(|p| p.members.len() == 1)
-        });
-        self.engine.backend_mut().prepare_moving_layer(single.then_some(layer.id));
+        self.engine.backend_mut().prepare_moving_layer(Some(layer.id));
         self.layer_interaction.editing = Some(layer.id);
         self.layer_interaction.selected = ids.into_iter().collect();
         self.layer_interaction.tool = LayerCanvasTool::Transform;

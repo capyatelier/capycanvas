@@ -579,6 +579,14 @@ snapshot API streams bounded strips. Thumbnails and color sampling use separate
 bounded requests. Source bytes and immutable compressed
 tile backing are shared with save snapshots. See the [raster project contract](../reference/project-format.md).
 
+Layer-thumbnail preparation shares a four-page budget across original
+photo tiles, painted overrides, alpha-bounds scans and thumbnail drawing.
+Incomplete images stay private. Artwork revisions, selection paint and SDR
+rendition changes invalidate prepared work; discarded command buffers invalidate
+their cache entries. Each host poll advances one request; up to eight partial
+requests can be retained, and layers sharing a photo reuse its integrated
+original contributions.
+
 On unified-memory hardware, CPU and GPU share physical RAM. Keeping separate
 copies solely to move an image between processors can waste both memory and
 bandwidth; older pipelines built around discrete GPU memory need to account for

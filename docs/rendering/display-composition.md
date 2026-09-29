@@ -159,6 +159,21 @@ kept coverage using the capture's coverage decision. Whole-image
 transforms reconstruct prefiltered color from a retained mip pyramid. Each output
 footprint selects detail from its local Jacobian; partial edge cells use their
 actual centers. Finer transaction inputs persist across scale oscillations.
+An affine or perspective transform with one input over a constant backdrop can
+reach the presenter directly when no Navigator consumes the composition. The viewport samples that pyramid
+with its own rotated footprints, sharing the graph's resampling functions.
+Interior pixels need one trilinear sample; pixels crossing source or layer edges
+use eight samples per axis. The Navigator averages composed samples at the
+display grid resolution, including fractional edge cells. This preserves the
+order of filtering, encoding and blending on the first frame after a Navigator
+opens. A presenter with visible overviews holds a source lease; subsequent
+artwork frames materialize the graph once for both consumers. Closing the
+Navigator or dropping its presenter releases the lease, allowing direct
+presentation again. Reconstructing the whole grid inside each Navigator frame
+duplicates composition work and is slower on the tablet GPUs.
+Partial selections and copies compose moved and
+retained inputs before presentation, preserving their correlated coverage.
+Switching to a materialized root invalidates the formerly virtual pixels.
 Mesh triangles rasterize color directly into the graph's target. Fragment
 derivatives choose the source footprint, and later triangles replace earlier
 ones where a mesh folds. Kept coverage and the mesh share one render pass.
@@ -173,6 +188,8 @@ requested dependency window, retiring tiles from the previous window. Display
 motion has no full-layer native preview. Idle display refinement evaluates exact
 transform regions after the gesture stops. Scalar-mask
 transactions currently provide native coverage to the same graph.
+Photo placement keeps exact refinement deferred until Apply or Cancel, including
+batch imports. Repeated pointer positions during a drag cannot start idle work.
 
 Transform motion invalidates the previous and next destination bounds. The
 stationary cut also changes when a transaction starts, its source changes, Leave
@@ -266,6 +283,12 @@ native view need not reread a previously reduced photo. Unretained finer content
 still requires authoritative pixels. Composition currently uses bounded damage
 rectangles rather than a separate pixel scheduler.
 
+Materialized projective transforms use the same render-pass layout as Warp,
+with one immutable source binding. Direct and materialized transforms share
+the sampling functions. Main-view shader entries specialize composed, placed
+and mapped sources before compilation; the host selects the entry using the
+existing presentation kind. This changes neither filtering nor pixel formats.
+
 ## Why display composition is approximate
 
 Reduction and source-over do not generally commute, even with normal blending.
@@ -315,7 +338,11 @@ prediction cancellation and transitions between native and reduced evaluation.
 A 32-layer test edits the beginning, middle and end of the stack, checks exact
 output agreement and bounds the command count while preserving untouched pages. Direct
 placement presentation is compared with supersampled exact output through
-rotated and nonuniform cameras. The tests
+rotated and nonuniform cameras. Direct transformed roots are compared with both
+supersampled native output and intermediate-image presentation, including small
+Navigator views, smooth ramps, fine color patterns, opacity and both blend spaces. Perceptual encoding and final
+surface averaging do not commute; those comparisons retain the existing
+transformed-source encoding rule. The tests
 assert that superseded presentation allocations are absent. Project tests cover
 all brush presets, save/reopen and exact undo/redo; the source-backed test also
 compares the same committed stroke drawn at 12.5% and 100%.

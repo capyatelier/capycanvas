@@ -81,8 +81,8 @@ impl Cache {
             .chain(self.hierarchy.iter().flat_map(|h| h.missing_pages()))
     }
 
-    pub fn has_pending_work(&self) -> bool {
-        self.ready && !self.transform.as_ref().is_some_and(|p| p.moving)
+    pub fn has_pending_work(&self, r: &WgpuRasterizer) -> bool {
+        self.ready && r.moving_layer.is_none() && !self.transform.as_ref().is_some_and(|p| p.moving)
             && self.next_missing_page().is_some()
     }
 

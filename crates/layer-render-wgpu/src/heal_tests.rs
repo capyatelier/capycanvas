@@ -119,8 +119,13 @@ fn spot_healing_batches_resident_candidates_across_pages() {
         draw(&mut engine, &mut input, pen(step + 1, if step == 0 { PenPhase::Down } else { PenPhase::Move },
             [600. + step as f32 * 40., 450. + step as f32 * 8.], SampleFlags::PRIMARY));
     }
+    for page in &mut engine.backend_mut().paint_layers.iter_mut().find(|l| l.id == TARGET).unwrap().pages {
+        page.discard_inactive();
+    }
     let before = engine.backend().metrics.command_passes;
     draw(&mut engine, &mut input, pen(21, PenPhase::Up, [1360., 602.], SampleFlags::PRIMARY));
+    let pages = &engine.backend().paint_layers.iter().find(|l| l.id == TARGET).unwrap().pages;
+    assert!(pages.iter().filter(|p| p.secondary.is_some()).count() < pages.len(), "pen-up allocates every Healing destination before its batch");
     flush(&mut engine);
     assert_eq!(counts(&engine).heals, 1);
     let pages = engine.backend().paint_layers.iter().find(|l| l.id == TARGET).unwrap().pages.len() as u64;

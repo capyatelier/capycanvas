@@ -101,7 +101,15 @@ reference tablets (2026-09-29):
 - TCL G-Pen 1024 px on 12 MP reaches 53.3 fresh updates/s; **60 is not met**.
 - Clone, Healing and Spot Healing at 512 px reach 114–120 fresh updates/s on
   the mid tier and 185–192 on the top tier. Their completion gaps meet the
-  moving-stroke criterion. Healing's work after pen-up remains open.
+  moving-stroke criterion. Bounded Healing finalization keeps navigation input
+  queue p95 at 14–21 ms on the low and mid tablets; dependent painting waits
+  for publication. See [responsiveness](performance/responsiveness.md) for
+  maximum delays, tool actions and the remaining ordinary-stroke latency misses.
+- With Navigator closed, measured low-tier pixel transforms and placement exceed
+  the old compositor and meet screen cadence; the measured crop gap is closed.
+  With Navigator open, Distort, Free resize and visible-bar placement retain
+  17.4%, 8.0% and 0.8% throughput gaps. See the
+  [matched comparison](performance/low-tier.md#current-drag-comparison).
 - The XP-Pen 6 GB memory journey completes 24 MP Frequency Separation around
   2.0 GiB peak PSS, with more than 1 GiB available. Its roughly 10-second
   completion time remains above the 2–5-second engineering aim.

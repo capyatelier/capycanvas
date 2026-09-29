@@ -3,6 +3,11 @@ use crate::submission::ColorPass;
 
 pub(crate) const UNIFORM_BYTES: u64 = 256;
 
+pub(crate) struct Mapped {
+    pub view: wgpu::TextureView,
+    pub values: [u8; UNIFORM_BYTES as usize],
+}
+
 pub(crate) struct Request<'a> {
     pub moved: &'a layer_core::ImageTransform,
     pub kept: &'a layer_core::ImageTransform,
@@ -18,15 +23,12 @@ pub(crate) struct Request<'a> {
     pub identity: bool,
 }
 
-pub(crate) enum Sampling { MappedArea { kept: bool }, AffineArea }
-
 #[derive(Clone)]
 pub(crate) struct Resample {
     layout: wgpu::BindGroupLayout,
     mesh_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    pub mapped: [Deferred<wgpu::ComputePipeline>; 2],
-    pub mesh: [Deferred<wgpu::RenderPipeline>; 4],
+    pub mesh: [Deferred<wgpu::RenderPipeline>; 6],
     pub area: Deferred<wgpu::ComputePipeline>,
 }
 impl Resample {
@@ -54,9 +56,7 @@ impl Resample {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = Deferred::wgsl(device, "display resample", compose_wgsl(&[&crate::working_color::shader(device), include_str!("../area_sample.wgsl"), include_str!("../display_resample.wgsl")]));
-        let mapped = ["resample_projective", "resample_projective_kept"]
-            .map(|entry| Deferred::compute(device, "display resample", &pipeline_layout, &shader, entry));
+        let shader = Deferred::wgsl(device, "display resample", compose_wgsl(&[&crate::working_color::shader(device), include_str!("../area_sample.wgsl"), include_str!("../mapped_sample.wgsl"), include_str!("../display_resample.wgsl")]));
         let mesh_layout = crate::bindings::layout(device, "mesh resample", &[
             crate::bindings::texture(0, wgpu::ShaderStages::FRAGMENT, true),
             crate::bindings::buffer(2, wgpu::ShaderStages::VERTEX_FRAGMENT, wgpu::BufferBindingType::Uniform,
@@ -67,7 +67,7 @@ impl Resample {
         let mesh_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh resample"), bind_group_layouts: &[Some(&mesh_layout)], immediate_size: 0,
         });
-        let mesh = ["background_color", "background_color_kept", "mesh_color", "mesh_color_kept"].map(|entry| {
+        let mesh = ["background_color", "background_color_kept", "mesh_color", "mesh_color_kept", "resample_projective", "resample_projective_kept"].map(|entry| {
             let (device, layout, shader) = (device.clone(), mesh_pipeline_layout.clone(), shader.clone());
             Deferred::pipeline(move |mode| {
                 let buffers = [Some(wgpu::VertexBufferLayout {
@@ -99,7 +99,7 @@ impl Resample {
             ..Default::default()
         });
         let area = Deferred::compute(device, "display area resample", &pipeline_layout, &shader, "resample_affine_area");
-        Self { layout, mesh_layout, sampler, mapped, mesh, area }
+        Self { layout, mesh_layout, sampler, mesh, area }
     }
     pub fn values(request: Request<'_>) -> Result<[u8; UNIFORM_BYTES as usize], GpuRasterError> {
         let Request { moved, kept, clip, extent, texels, display, target, source, max_lod, outside, keep_source, identity } = request;
@@ -147,14 +147,11 @@ impl Resample {
             wgpu::BindingResource::Sampler(&self.sampler),
         ])
     }
-    pub fn encode(&self, encoder: &mut crate::submission::CommandEncoder, binding: &wgpu::BindGroup, texels: [u32; 4], sampling: Sampling) {
+    pub fn encode(&self, encoder: &mut crate::submission::CommandEncoder, binding: &wgpu::BindGroup, texels: [u32; 4]) {
         let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("display resample"), timestamp_writes: None,
         });
-        compute.set_pipeline(match sampling {
-            Sampling::MappedArea { kept } => &self.mapped[usize::from(kept)],
-            Sampling::AffineArea => &self.area,
-        });
+        compute.set_pipeline(&self.area);
         compute.set_bind_group(0, binding, &[]);
         compute.dispatch_workgroups(texels[2].div_ceil(8), texels[3].div_ceil(8), 1);
     }
@@ -170,15 +167,17 @@ impl Resample {
         })
     }
     pub fn encode_mesh(&self, encoder: &mut crate::submission::CommandEncoder, binding: &wgpu::BindGroup,
-        target: &wgpu::TextureView, texels: [u32; 4], mesh: &paint_transform::MeshBuffers, kept: bool,
+        target: &wgpu::TextureView, texels: [u32; 4], mesh: Option<&paint_transform::MeshBuffers>, kept: bool,
     ) {
         let mut pass = encoder.color_pass("mesh resample", target, wgpu::LoadOp::Load);
         pass.set_scissor_rect(texels[0], texels[1], texels[2], texels[3]);
         pass.set_bind_group(0, binding, &[]);
-        pass.set_pipeline(&self.mesh[usize::from(kept)]);
+        pass.set_pipeline(&self.mesh[if mesh.is_some() { 0 } else { 4 } + usize::from(kept)]);
         pass.draw(0..3, 0..1);
-        pass.set_pipeline(&self.mesh[2+usize::from(kept)]);
-        mesh.draw(&mut pass, 0..mesh.count());
+        if let Some(mesh) = mesh {
+            pass.set_pipeline(&self.mesh[2+usize::from(kept)]);
+            mesh.draw(&mut pass, 0..mesh.count());
+        }
     }
 
 }

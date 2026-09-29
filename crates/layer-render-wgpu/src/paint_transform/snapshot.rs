@@ -579,10 +579,9 @@ pub(crate) struct DisplayInputs {
     pub level: u32,
     pub image: display_mips::Image,
     pub kept: Option<display_mips::Image>,
-    sampling: [wgpu::TextureView; 2],
+    pub sampling: [wgpu::TextureView; 2],
     uniforms: wgpu::Buffer,
-    binding: crate::bindings::CachedBinding<wgpu::TextureView>,
-    mesh_binding: Option<wgpu::BindGroup>,
+    binding: Option<wgpu::BindGroup>,
 }
 impl DisplayInputs {
     pub fn new(
@@ -604,18 +603,12 @@ impl DisplayInputs {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            binding: Default::default(),
-            mesh_binding: None,
+            binding: None,
         }
     }
     pub fn storage_bytes(&self) -> u64 {
         self.image.storage_bytes() + self.kept.as_ref().map_or(0, display_mips::Image::storage_bytes) + resample::UNIFORM_BYTES
     }
-    /// Draw `texels` of the display `level` from this layer. `moved` maps
-    /// reduced layer texels of the pixels that move to display texels, or
-    /// with a warp mesh `positions` holds them for each texel, and `kept`
-    /// maps those of the pixels kept in place. `clip` maps display texels to
-    /// layer pixels, which the layer keeps within `extent`.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
@@ -623,29 +616,13 @@ impl DisplayInputs {
         pass: &resample::Resample,
         encoder: &mut crate::submission::CommandEncoder,
         level: &wgpu::TextureView,
-        moved: &layer_core::ImageTransform,
-        kept: &layer_core::ImageTransform,
-        clip: layer_core::Affine,
-        extent: [u32; 2],
+        values: &[u8; resample::UNIFORM_BYTES as usize],
         texels: [u32; 4],
-        display: pixel_transform::DisplayLevel,
-        target: display_mips::Plan,
         mesh: Option<&MeshBuffers>,
-        keep_source: bool,
-        identity: bool,
     ) -> Result<(), GpuRasterError> {
-        let values = resample::Resample::values(resample::Request { moved, kept, clip, extent, texels, display, target,
-            source: self.image.plan, keep_source, identity, max_lod: self.image.last_level()-self.image.plan.level, outside: 0. })?;
-        r.uploads.write(encoder, &self.uniforms, &values)?;
-        if let Some(mesh) = mesh {
-            let binding = self.mesh_binding.get_or_insert_with(|| pass.mesh_binding(&r.device, &self.uniforms, &self.sampling));
-            pass.encode_mesh(encoder, binding, level, texels, mesh, self.kept.is_some());
-        } else {
-            let binding = self.binding.get(level.clone(), || {
-                pass.binding(&r.device, &self.uniforms, 0, [&self.sampling[0], level, &self.sampling[1]])
-            });
-            pass.encode(encoder, &binding, texels, resample::Sampling::MappedArea { kept: self.kept.is_some() });
-        }
+        r.uploads.write(encoder, &self.uniforms, values)?;
+        let binding = self.binding.get_or_insert_with(|| pass.mesh_binding(&r.device, &self.uniforms, &self.sampling));
+        pass.encode_mesh(encoder, binding, level, texels, mesh, self.kept.is_some());
         Ok(())
     }
 }

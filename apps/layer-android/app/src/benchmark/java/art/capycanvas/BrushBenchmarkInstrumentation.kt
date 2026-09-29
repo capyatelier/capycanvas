@@ -61,6 +61,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "pauses", "visual", "pinch", "settle"))
             val pauseMs = arguments.getString("pauseMs", "100")!!.toInt()
             val contactMs = arguments.getString("contactMs", "100")!!.toInt()
+            val settleDelayMs = arguments.getString("settleDelayMs", "0")!!.toInt()
+            check(settleDelayMs in 0..10000)
             check(pauseMs in 5..5000 && pauseMs % 5 == 0)
             check(contactMs in 5..10000 && contactMs % 5 == 0)
             val contactSamples = contactMs / 5
@@ -338,6 +340,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
                 "pause_ms" to pauseMs,
                 "contact_ms" to contactMs,
+                "settle_delay_ms" to settleDelayMs,
                 "state" to state(), "display" to displayInfo, "resources" to resources(),
                 "center" to JSONArray(listOf(cx, cy)), "radii" to JSONArray(listOf(rx, ry))).toString(2))
             val unprimed = state().getJSONObject("document_file").getLong("revision")
@@ -366,24 +369,19 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 val beforeRevision = state().getJSONObject("document_file").getLong("revision")
                 val before = stats()
                 val displayBefore = display()
+                val cameraBefore = if (mode == "settle") state().getJSONObject("camera") else null
                 report(true)
                 native { Native.presentationTimings(it, true) }
                 native { Native.completionTimings(it, true) }
                 val motion = stroke(duration, if (mode == "settle") "constant" else mode)
                 if (mode == "settle") {
-                    SystemClock.sleep(100)
+                    if (settleDelayMs > 0) SystemClock.sleep(settleDelayMs.toLong())
                     val probe = JSONObject()
                     fun timed(name: String, block: () -> Unit) {
                         val start = System.nanoTime()
                         block()
                         probe.put(name, JSONArray(listOf(start, System.nanoTime())))
                     }
-                    probe.put("pending_before", native { Native.renderingPending(it) })
-                    timed("select_paint") { action(obj("type" to "select_brush", "id" to 1)) }
-                    timed("paint_size") { action(obj("type" to "set_brush_size", "value" to 64)) }
-                    probe.put("queued_contact", stroke(100, "stationary"))
-                    timed("restore_tool") { action(obj("type" to "select_brush", "id" to preset)) }
-                    timed("restore_size") { action(obj("type" to "set_brush_size", "value" to size)) }
                     val properties = Array(2) { i -> MotionEvent.PointerProperties().apply { id = i + 11; toolType = MotionEvent.TOOL_TYPE_FINGER } }
                     val coordinates = Array(2) { MotionEvent.PointerCoords().apply { pressure = 1f; this.size = .1f } }
                     val down = SystemClock.uptimeMillis()
@@ -399,7 +397,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     val cameras = JSONArray()
                     val begin = System.nanoTime()
                     probe.put("navigation_begin_ns", begin)
-                    probe.put("camera_before", state().getJSONObject("camera"))
+                    probe.put("camera_before", cameraBefore)
                     pinch(MotionEvent.ACTION_DOWN, 1, 160.0)
                     pinch(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2, 160.0)
                     for (i in 1..120) {
@@ -407,10 +405,16 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                         if (delay > 0) LockSupport.parkNanos(delay)
                         pinch(MotionEvent.ACTION_MOVE, 2, 160.0 + 70.0 * sin(i * PI / 120))
                         if (i % 12 == 0) cameras.put(obj("observed_ns" to System.nanoTime(), "camera" to state().getJSONObject("camera")))
+                        if (i == 12) probe.put("pending_at_first_navigation_sample", native { Native.renderingPending(it) })
                     }
                     pinch(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2, 160.0)
                     pinch(MotionEvent.ACTION_UP, 1, 160.0)
                     probe.put("navigation_end_ns", System.nanoTime()).put("cameras", cameras)
+                    timed("select_paint") { action(obj("type" to "select_brush", "id" to 1)) }
+                    timed("paint_size") { action(obj("type" to "set_brush_size", "value" to 64)) }
+                    probe.put("queued_contact", stroke(100, "stationary"))
+                    timed("restore_tool") { action(obj("type" to "select_brush", "id" to preset)) }
+                    timed("restore_size") { action(obj("type" to "set_brush_size", "value" to size)) }
                     motion.put("settle_probe", probe)
                 }
                 val displayAfterInput = display()

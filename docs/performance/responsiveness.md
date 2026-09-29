@@ -108,3 +108,64 @@ costs, so interruptible batches retain the solver's resolution and fixed sweeps.
 Scheduling increases elapsed settling time while allowing navigation between
 batches; it does not reduce the solver's operation count. The baseline diagnostic
 is in `artifacts/latency-investigation/mid-heal-interrupt`.
+
+
+### Immediate input after pen-up
+
+The delayed probe above misses work starting at pen-up. The current benchmark
+injects its pinch as soon as the pen-up injection returns, with no intentional
+sleep or synchronous owner query first. Callback maxima include callbacks that
+start before the navigation window and overlap its beginning. The pending-work
+flag sampled during navigation includes camera work; it alone does not prove
+that Healing is pending. The shared and native journeys separately assert that
+navigation and queued painting occur before healed raster publication.
+
+A matched MovinkPad 11 Clone diagnostic found a 94–98 ms presentation callback:
+changing from shared presentation to FIFO synchronously drained outstanding GPU
+work. The Android host now uses its existing completion counter to defer the
+mode switch, returning to input processing until the preceding frame completes.
+Three immediate probes then had 20–29 ms callback maxima and navigation queue
+p95 of 16.1–18.5 ms, versus 38.5–46.6 ms before. The two-second controls remained
+at 16.0–16.8 ms queue p95. Total measured owner CPU time across each one-second
+pinch was 180–203 ms, versus 193–204 ms before. These are input-service
+measurements, not physical pen-to-photon latency.
+
+Thumbnail preparation also bypassed its budget for ordinary paint layers and
+painted overrides of photos. Both passes now share the four-page preparation
+budget; each native-host poll advances one request. Completed original-photo
+contributions remain shared. Maximum thumbnail-query time in the matched
+mid-tier Clone traces fell from 89.5 ms to 5.5 ms. The low-tier immediate probes
+peaked at 12.5 ms; a settled control reached 21.4 ms. Pixel resolution and
+integration are unchanged. This bounds preparation work, not an absolute
+wall-clock guarantee on every callback.
+
+Immediate Healing exposed a separate eager allocation of every destination
+page at pen-up. Output companions now allocate within the existing eight-page
+Apply batches. In three mid-tier runs, navigation queue p95 fell from
+45.9–53.4 ms to 15.6–17.8 ms and the maximum fell from 107.5 to 27.3 ms.
+Low-tier Healing queue p95 was 18.6–21.0 ms, maximum 33.4 ms. Mid-tier initial
+callback maxima were 34.8–59.0 ms, including solver-buffer allocation; low-tier
+maxima were 23.1–25.3 ms. Tool round trips reached 120 ms on TCL, so the separate
+100 ms tools target remains unmet. Dependent paint still waits for publication.
+
+Spot Healing candidate gathering allocated 64 MiB of companion textures in one
+batch. Reducing that existing batch from 32 pages to eight preserves its pixel
+work and limits each allocation batch to 16 MiB. Three mid-tier immediate probes
+then had navigation queue p95 of 15.9–18.3 ms, versus 25.5–29.9 ms with the
+destination-allocation fix alone. Maximum queue delay was 35.3 ms and maximum
+overlapping callback was 52.5 ms; initial solver-buffer allocation remains.
+Low-tier queue p95 was 14.0–20.3 ms, maximum 43.6 ms, with a 29.2 ms maximum
+callback. Tool round trips still reached 117.1 ms on TCL. Gathering has the same
+number of pixels and candidate evaluations, with more submission boundaries;
+this is an interruption improvement, not a reduction in solver work.
+
+These 2026-09-29 runs use the same 512 px, Perceptual, Fit workloads as above.
+Clone records are in `artifacts/latency-investigation/{thumbnail-13-mid-0,switch-14-mid-0,switch-14-mid-2000,switch-14-low-0,switch-14-low-2000}`;
+Healing records are in `heal-15-{low,mid}-healing`. The destination-allocation
+build's optimized APK SHA-256 is
+`3cf1dcd937b7ef4e1362b7dac2bc14c7c6e106f60682af38bfec0b7a55c18f80`.
+The first mid-tier pinch's screen timestamps are absent from the retained trace;
+those runs provide input/callback data, not presentation qualification. Remaining
+one-second pinch records do not replace three sustained navigation gestures.
+The eight-page gathering runs are in `heal-17-{low,mid}-healing`, optimized APK
+SHA-256 `66cbb5126ab2ec80be2d0714ebac06b45615ea715fee6d2e21233128f3c1a1a6`.

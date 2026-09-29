@@ -253,7 +253,7 @@ impl WebApp {
             return Ok(false);
         }
         if !self.rasterizer()?
-            .prepare_selection_thumbnail(layer_core::LayerId(target)).map_err(js)? {
+            .prepare_thumbnail_batch(layer_core::LayerId(target)).map_err(js)? {
             return Ok(false);
         }
         self.session

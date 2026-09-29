@@ -873,6 +873,7 @@ pub struct WgpuRasterizer {
     ui_preview_pipeline: Option<wgpu::RenderPipeline>,
     display_pipelines: Option<display_mips::Pipelines>,
     scale_display: Option<scene::scale::Cache>,
+    overview_consumers: Arc<()>,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
     artwork_revision: u64,
@@ -1198,6 +1199,7 @@ impl WgpuRasterizer {
             filter_source_epoch: 0,
             display_pipelines: None,
             scale_display: None,
+            overview_consumers: Arc::new(()),
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
             artwork_revision: 0,
@@ -1684,11 +1686,11 @@ impl WgpuRasterizer {
             batch.kind == DabBatchKind::Persistent
                 && BrushPassPlan::for_device(&batch.style, &self.device).requires_destination()
         }) {
-            let revisits = batch.stroke_end && revisits_stroke(&batch.style);
+            let revisits = batch.stroke_end && batch.style.rendering.edge_after_stroke;
             if !self.in_place_dry_material(batch) || revisits {
                 destination_pages.extend(tiles.iter().map(|tile| (batch.layer_id, tile.coordinate)));
             }
-            destination_pages.extend(self.stroke_finish_pages(batch).map(|page| (batch.layer_id, page)));
+            if revisits { destination_pages.extend(self.stroke_finish_pages(batch).map(|page| (batch.layer_id, page))); }
         }
         destination_pages
     }
@@ -3154,7 +3156,7 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn has_pending_work(&self) -> bool {
         self.settling.is_some() || self.awaiting_meshes || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
-            || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work())
+            || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
     }
     fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
         self.prepare_retouch_sources(retouch);
@@ -4239,7 +4241,7 @@ impl WgpuRasterizer {
         }
         let mut refined = false;
         if dirty.is_empty() && !animated && original_batches.is_empty() && packet.dabs.is_empty()
-            && self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work())
+            && self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
             && self.artwork_frame.as_ref().is_some_and(|old|
                 old.view.document_to_surface == packet.view.document_to_surface
                     && old.same_artwork(packet, requested_view.background_rgba_linear))

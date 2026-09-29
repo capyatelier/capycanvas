@@ -41,7 +41,7 @@ class SetupTests(unittest.TestCase):
             validate_setup(self.info, self.requested)
 
     def test_rejects_missing_or_unmatched_contact_timing(self):
-        for key in ("pause_ms", "contact_ms"):
+        for key in ("pause_ms", "contact_ms", "settle_delay_ms"):
             self.requested[key] = 1100
             for duration in (None, 100):
                 self.info[key] = duration

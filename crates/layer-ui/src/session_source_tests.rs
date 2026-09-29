@@ -63,6 +63,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     session.place_layer_sources(images(), Some(Point { x: 75., y: 55. }), None).unwrap();
     let doc = session.engine.document();
     let ids: Vec<_> = doc.layers[..2].iter().map(|layer| layer.id).collect();
+    assert_eq!(session.engine.backend().moving_layer, Some(doc.active_layer));
     assert_eq!(doc.layers[..2].iter().map(|l| l.name.as_ref()).collect::<Vec<_>>(), ["First", "Second"]);
     assert_eq!(session.layer_interaction.selected, ids.iter().copied().collect());
     assert!(!session.engine.can_undo());
@@ -83,6 +84,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
         assert_eq!(&layer.properties.placement.0[..4], &Affine::IDENTITY.0[..4]);
     }
     invoke(&mut session, CommandId::CancelTransform);
+    assert_eq!(session.engine.backend().moving_layer, None);
     assert_eq!(session.engine.document().layers, original.layers);
     assert_eq!(session.layer_interaction.selected, selected);
     assert!(!session.engine.can_undo());
@@ -90,6 +92,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     session.place_layer_sources(images(), None, None).unwrap();
     let committed = session.engine.document().layers.clone();
     invoke(&mut session, CommandId::ApplyTransform);
+    assert_eq!(session.engine.backend().moving_layer, None);
     invoke(&mut session, CommandId::Undo);
     assert_eq!(session.engine.document().layers, original.layers);
     assert!(!session.engine.can_undo(), "the whole batch is one artwork history entry");

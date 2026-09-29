@@ -25,10 +25,10 @@ canvas is 6000 × 4000.
 | Two-finger rotate | 90 | | |
 | Navigator drag | 90 | | |
 | Brush-cursor hover | 90 | | |
-| Placed-photo drag (24 MP photo) | 90 | Renderer 216 submissions/s, GPU p50 4.8 ms Linear; 202 and 5.2 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
-| Pixel transform handle drag: Free, Uniform, Skew or Rotate | 90 | Renderer 181 submissions/s, GPU p50 5.6 ms Linear; 174 and 5.9 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
-| Pixel transform: Distort or Perspective | 90 | Renderer 190 submissions/s, GPU p50 5.6 ms Linear; 180 and 5.9 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
-| Pixel transform: Warp | 90 | | |
+| Placed-photo drag (24 MP photo) | 90 | screen 59.0/s; renderer 99.4 completed updates/s, Navigator closed | Transform presentation below; 90 Hz not met |
+| Pixel transform handle drag: Free, Uniform, Skew or Rotate | 90 | Free: screen 59.2/s; renderer 182.1 completed updates/s, Navigator closed | Transform presentation below; 90 Hz not met |
+| Pixel transform: Distort or Perspective | 90 | Distort: screen 59.2/s; renderer 168.2 completed updates/s, Navigator closed | Transform presentation below; 90 Hz not met |
+| Pixel transform: Warp | 90 | screen 59.0/s; renderer 72.5 completed updates/s, Navigator closed | Transform presentation below; 90 Hz not met |
 | Selection transform, full canvas | 90 | Renderer 217 submissions/s (handle and Distort); worst frame after release 16.4–27.1 ms | `6fcc6fba`, 2026-09-27 |
 | Move tool layer drag | 90 | | |
 | Marquee, Lasso or Polygon drag | 90 | | |
@@ -139,6 +139,45 @@ brushes. The measured build integrates `64036b643` with `13720d303`, bounded
 bakes, the healing solver optimization and sparse stroke replay. Its APK SHA-256
 is `be9a9ad367b9a0215ea5f57ac9d14028818d1f029fe8787324b66d3d4ac71e48`.
 Raw reports are in `artifacts/integration/source-record-batch/mid`.
+
+## Transform presentation
+
+Measured 2026-09-29 on the 24 MP Perceptual reference photo at Fit, release Rust,
+default glass and Stats closed. Each row contains three warmed five-second
+gestures, with thermal status zero. Values are medians across runs. The harness
+sets Navigator visibility explicitly and asserts the renderer's overview count.
+
+| Journey | Navigator closed, completed updates/s | Navigator open, completed updates/s |
+| --- | ---: | ---: |
+| Placed-photo translation | 99.42 | 82.08 |
+| Placed-photo resize, bar hidden | 90.87 | 79.23 |
+| Placed-photo resize, bar visible | 90.64 | 78.90 |
+| Pixel transform translation | 186.54 | 79.90 |
+| Pixel transform resize: Free | 182.14 | 77.72 |
+| Pixel transform: Distort | 168.17 | 73.10 |
+| Pixel transform: Warp | 72.48 | 69.36 |
+
+Median screen rates are 58.88–59.19 presents/s with Navigator closed and
+58.87–59.20 with it open; median screen interval p99 is 16.78–16.81 ms.
+These rates do not qualify the 90 Hz tier: the panel presents at 60 Hz.
+SurfaceFlinger screen timestamps do not independently establish canvas scanout.
+
+Single-input affine and perspective previews sample their retained source
+directly into presentation when Navigator is closed. A visible Navigator shares
+a materialized composition with the main canvas to preserve area-filtered
+preview quality. Opening its panel also changes the Fit camera and work area;
+open/closed rates are different workloads, not an isolated panel-cost estimate.
+
+Closed-panel build: `e41ee80fe` plus direct transform presentation, Navigator
+materialization and placement refinement scheduling, benchmark APK SHA-256
+`ede35aa5b23bd8770d1207929e1b633a25b481f7987eb7201645125a11e013e3`.
+Raw runs: `artifacts/latency-investigation/deferred-9-mid-closed-fixed`.
+Open-Navigator rows also include fragment materialization and source-specific
+main-view shader entries, APK SHA-256
+`1dbac0ef1dcf9208709ba3e7df71f0a028e99d6d25e4c60356e7413a270f1208`.
+Those runs are in `present-18-mid-navigator`, including its `extra` directory.
+Earlier default-panel runs retained Navigator;
+they are not evidence for the closed-panel workload.
 
 ## Input during Healing finalization
 

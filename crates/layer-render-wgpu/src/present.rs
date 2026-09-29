@@ -3,8 +3,8 @@
 use crate::{BackdropBlurStyle, BackdropRegion, GpuRasterError, SdrSurfaceColor, Uploads, WgpuRasterizer};
 use layer_render::{CanvasRenderer, CursorSegment, ViewState};
 
-const CAMERA_SIZE: u64 = 256;
-const SOURCE_CAMERA: u32 = 256;
+const CAMERA_SIZE: u64 = 512;
+const SOURCE_CAMERA: u32 = 512;
 
 /// A native UI's document overview, sampled from the existing GPU image.
 /// Bounds and work-area corners use physical target-surface pixels. Hosts can
@@ -47,7 +47,7 @@ impl OverviewPlacement {
 
 pub struct ViewportPresenter {
     timing: Option<crate::frame_timing::GpuFrameTimer>,
-    pipeline: wgpu::RenderPipeline,
+    pipeline: [wgpu::RenderPipeline; 3],
     layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
     proof_buffer: wgpu::Buffer,
@@ -78,20 +78,21 @@ pub struct ViewportPresenter {
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
     uploads: Uploads,
-    camera_data: Option<[f32; 64]>,
+    camera_data: Option<[f32; 128]>,
     quarter_turns: u32,
     retained: bool,
     history: crate::present_damage::Retained,
     presented_view: Option<(ViewState, [f32; 4], u32, f32)>,
     overlays_changed: bool,
     backdrop: Option<crate::backdrop_blur::BackdropBlur>,
-    source_camera: Option<[f32; 64]>,
+    source_camera: Option<[f32; 128]>,
     presented_area: u64,
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
     color: SdrSurfaceColor,
-    overview_pipeline: Option<wgpu::RenderPipeline>,
+    overview_pipeline: Option<[wgpu::RenderPipeline; 2]>,
+    overview_source: Option<std::sync::Arc<()>>,
     overview_buffer: Option<wgpu::Buffer>,
     overviews: Vec<[f32; 24]>,
     overviews_changed: bool,
@@ -480,13 +481,14 @@ impl ViewportPresenter {
                     include_str!("hdr_view.wgsl"),
                     include_str!("proof_view.wgsl"),
                     include_str!("overview_sample.wgsl"),
-                    concat!(include_str!("area_sample.wgsl"), "\n", include_str!("present.wgsl")),
+                    concat!(include_str!("area_sample.wgsl"), "\n", include_str!("mapped_sample.wgsl"), "\n", include_str!("present.wgsl")).replace("resample.", "camera.mapped."),
                     include_str!("present_screen.wgsl")
                 )
                 .into(),
             ),
         });
-        let pipeline = surface_pipeline(device, "viewport presentation", &pipeline_layout, &shader, ["vs_main", "fs_main"], None, format, None);
+        let pipeline = ["fs_main", "fs_placed", "fs_mapped"].map(|entry|
+            surface_pipeline(device, "viewport presentation", &pipeline_layout, &shader, ["vs_main", entry], None, format, None));
         let cursor_pipeline = surface_pipeline(device, "display-only cursor", &pipeline_layout, &shader, ["cursor_vertex", "cursor_fragment"],
             Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<CursorSegment>() as u64,
@@ -582,6 +584,7 @@ impl ViewportPresenter {
             format,
             color,
             overview_pipeline: None,
+            overview_source: None,
             overview_buffer: None,
             overviews: Vec::new(),
             overviews_changed: false,
@@ -611,8 +614,9 @@ impl ViewportPresenter {
                 wgpu::BlendComponent { src_factor:wgpu::BlendFactor::Zero, dst_factor:wgpu::BlendFactor::One, operation:wgpu::BlendOperation::Add }
             },
         };
-        self.overview_pipeline = Some(surface_pipeline(device, "in-surface document overviews", &self.pipeline_layout, &self.shader,
-            ["overview_vertex", "overview_fragment"], Some(instance), self.format, Some(blend)));
+        self.overview_pipeline = Some(["overview_fragment", "mapped_overview_fragment"].map(|entry|
+            surface_pipeline(device, "in-surface document overviews", &self.pipeline_layout, &self.shader,
+                ["overview_vertex", entry], Some(instance.clone()), self.format, Some(blend))));
     }
 
     /// Reuses the composition, bindings and current presentation pass. An
@@ -624,6 +628,7 @@ impl ViewportPresenter {
         }
         self.overviews.clear();
         self.overviews.extend(data);
+        self.overview_source = (!self.overviews.is_empty()).then(|| renderer.overview_consumers.clone());
         self.overviews_changed = true;
         if !self.overviews.is_empty() {
             self.prepare_overviews(renderer);
@@ -718,7 +723,7 @@ impl ViewportPresenter {
         !previous.valid
             || self.presented_view != Some((view, surround_linear, self.quarter_turns, self.corner_radius))
             || (previous.revision != renderer.composite_revision
-                && (previous.artwork_revision != renderer.artwork_revision || !cache.has_pending_work()))
+                && (previous.artwork_revision != renderer.artwork_revision || !cache.has_pending_work(renderer)))
             || previous.selection_revision != renderer.selection_paint_revision
             || previous.outline_revision != renderer.display_selection_revision
             || previous.hdr != self.hdr_options
@@ -883,7 +888,7 @@ impl ViewportPresenter {
         let overlay_color = overlay.map_or([0.;4],|o| o.color);
         let crop = renderer.crop_overlay.filter(|c| c.to_crop.inverse().is_some());
         let [ca, cb, cc, cd, cx, cy] = crop.map_or([0.; 6], |c| c.to_crop.0);
-        let mut data = [0.; 64];
+        let mut data = [0.; 128];
         data[..40].copy_from_slice(&[
             d / det,
             -b / det,
@@ -914,7 +919,10 @@ impl ViewportPresenter {
             ca, cb, cc, cd,
             cx, cy, crop.map_or(0., |c| c.dim.clamp(0., 1.)), f32::from(crop.is_some()),
         ]);
-        if let Some(cache) = &renderer.scale_display { data[40..60].copy_from_slice(&cache.placement_values()); }
+        data[40..60].copy_from_slice(&cache.placement_values());
+        for (value, bytes) in data[64..].iter_mut().zip(cache.resample_values().chunks_exact(4)) {
+            *value = f32::from_le_bytes(bytes.try_into().unwrap());
+        }
         data[60] = f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual);
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {
@@ -1101,8 +1109,9 @@ impl ViewportPresenter {
             })
         };
         let mut began = false;
+        let pipeline = &self.pipeline[data[53] as usize];
         if let Some(backdrop) = self.backdrop.as_mut().filter(|_| !overview_only) {
-            let (pipeline, group) = (&self.pipeline, self.bind_group.as_ref().unwrap());
+            let group = self.bind_group.as_ref().unwrap();
             let mut glass = Vec::new();
             began = backdrop.encode(
                 renderer,
@@ -1200,7 +1209,7 @@ impl ViewportPresenter {
             );
             pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[0]);
             if !overview_only {
-                pass.set_pipeline(&self.pipeline);
+                pass.set_pipeline(pipeline);
                 let mut visible = vec![*repaint];
                 for hole in self.backdrop.iter().flat_map(|b| b.interiors()) {
                     visible = visible.into_iter().flat_map(|r| r.subtract(*hole)).filter(|r| !r.is_empty()).collect();
@@ -1222,7 +1231,7 @@ impl ViewportPresenter {
                 }
             }
             if !self.overviews.is_empty() {
-                pass.set_pipeline(self.overview_pipeline.as_ref().unwrap());
+                pass.set_pipeline(&self.overview_pipeline.as_ref().unwrap()[usize::from(data[53] == 2.)]);
                 pass.set_vertex_buffer(0, self.overview_buffer.as_ref().unwrap().slice(..));
                 pass.draw(0..6, 0..self.overviews.len() as u32);
             }

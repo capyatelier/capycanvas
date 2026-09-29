@@ -91,11 +91,16 @@ impl Expression {
             _ => {}
         }
     }
-    fn deferred(&self, moving: Option<LayerId>) -> bool {
+    pub(super) fn deferred(&self, r: &WgpuRasterizer) -> bool {
         match self {
-            Self::Source { id, placement, .. } => moving == Some(*id) || *placement != layer_core::Affine::IDENTITY.0.map(f32::to_bits),
-            Self::Opacity { input, .. } => input.deferred(moving),
-            Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(moving),
+            Self::Source { id, placement, .. } => {
+                if let Some(transforms) = r.transforms.as_ref().filter(|t| t.display_source(*id)) {
+                    return Arc::strong_count(&r.overview_consumers) == 1 && transforms.direct_source(*id);
+                }
+                r.moving_layer == Some(*id) || *placement != layer_core::Affine::IDENTITY.0.map(f32::to_bits)
+            }
+            Self::Opacity { input, .. } => input.deferred(r),
+            Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(r),
             _ => false,
         }
     }
@@ -247,9 +252,9 @@ impl stack::Compositor for Builder<'_> {
 
 impl Evaluator<'_> {
     pub(super) fn evaluate_root(&mut self, node: &Node, direct: bool) -> Result<Value, GpuRasterError> {
-        let deferred = if direct && self.cache.plan.level > 0 && node.deferred(self.r.moving_layer) && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
-            && self.r.transform_preview.is_none() { Some(self.evaluate(node)?) } else { None };
-        if matches!(deferred, Some(Value::Placed(_))) { return Ok(deferred.unwrap()); }
+        let deferred = if direct && self.cache.plan.level > 0 && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
+            && node.deferred(self.r) { Some(self.evaluate(node)?) } else { None };
+        if matches!(deferred, Some(Value::Placed(_) | Value::Transform(_))) { return Ok(deferred.unwrap()); }
         self.cache.pixels.ensure(self.r, self.cache.plan);
         let image = self.cache.pixels.root().unwrap();
         let output = Target { view: image.view.clone(), slot: Some(Slot::Root), plan: image.plan };

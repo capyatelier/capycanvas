@@ -535,9 +535,6 @@ impl App {
         if self.surface.as_ref().is_some_and(|s| s.submitted_frames.saturating_sub(s.completed_frames.load(Ordering::Acquire)) >= 2) { return Ok(true); }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
-        // Reconfigure before submitting new brush work: Vulkan configuration
-        // drains the old swapchain. Doing it afterward serializes the first ink
-        // update behind that drain and delays pen-down by its GPU execution time.
         let view = self.host.session.state().camera.view();
         let paint_start = self.host.paint_start_sequence();
         {
@@ -554,6 +551,7 @@ impl App {
                 surface.config.present_mode
             };
             if surface.config.present_mode != present_mode {
+                if surface.completed_frames.load(Ordering::Acquire) < surface.submitted_frames { return Ok(true); }
                 surface.config.present_mode = present_mode;
                 surface.config.desired_maximum_frame_latency = if present_mode == wgpu::PresentMode::Fifo {
                     surface.navigation_latency

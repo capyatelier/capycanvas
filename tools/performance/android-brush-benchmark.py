@@ -42,6 +42,7 @@ def main():
     p.add_argument("--mode", default="constant")
     p.add_argument("--pause-ms", type=int, default=100, help="Gap between identical contacts in pauses mode")
     p.add_argument("--contact-ms", type=int, default=100, help="Contact duration in pauses mode")
+    p.add_argument("--settle-delay-ms", type=int, default=0, help="Delay before navigation in settle mode")
     p.add_argument("--paint-load", type=float, help="Bristle paint supply, 0 to 1; omit for the preset default")
     p.add_argument("--speed", type=float, default=1)
     p.add_argument("--prediction", choices=["true", "false"], default="true")
@@ -81,6 +82,8 @@ def main():
         if args.mode == "pauses":
             requested["pause_ms"] = args.pause_ms
             requested["contact_ms"] = args.contact_ms
+        if args.mode == "settle":
+            requested["settle_delay_ms"] = args.settle_delay_ms
         if (args.output / f"{label}-complete.json").exists():
             if args.mode != "pinch":
                 validate_setup(json.loads((args.output / f"{label}-info.json").read_text()), requested)
@@ -97,6 +100,7 @@ def main():
                                speed=args.speed, prediction=args.prediction, horizon=args.horizon,
                                radiusX=args.radius_x, radiusY=args.radius_y, photo=args.photo,
                                photoLayers=args.photo_layers, pauseMs=args.pause_ms, contactMs=args.contact_ms,
+                               settleDelayMs=args.settle_delay_ms,
                                memorySnapshots=str(args.memory).lower(), statsPanel=str(args.stats).lower(),
                                waitForTrace="true").items():
             cmd += ["-e", key, str(value)]

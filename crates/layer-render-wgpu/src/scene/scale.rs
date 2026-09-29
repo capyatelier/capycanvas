@@ -491,6 +491,7 @@ impl Cache {
             return (cache, true);
         };
         let unchanged = unchanged && old.transform == r.transform_preview;
+        let materialize = matches!(old.placed, Some(Presentation::Mapped(_))) && Arc::strong_count(&r.overview_consumers) > 1;
         old.transform = r.transform_preview.clone();
         let hierarchy = old.hierarchy.take().filter(|c| old.plan.extent == plan.extent
             && (unchanged || !old.residency_checked || c.fits(r)));
@@ -508,12 +509,12 @@ impl Cache {
             old.hierarchy = hierarchy;
             old.admit_source_overlap(r, packet);
             old.unchanged = unchanged;
-            old.reuse_output = unchanged && old.ready;
+            old.reuse_output = unchanged && old.ready && !materialize;
             if let Some(overview) = &mut old.overview {
                 overview.unchanged = unchanged;
                 overview.reuse_output = unchanged && overview.ready;
             }
-            return (old, false);
+            return (old, materialize);
         }
         let reusable = old.spare.take().filter(|cache| matches(cache));
         let mut next = reusable.map(|cache| *cache)
@@ -615,7 +616,7 @@ impl Cache {
                 .filter_map(|(p, _)| source_plan(p, placement, layer.local_extent(p.extent), r.moving_layer == Some(id)).ok().filter(|s| p.level > 0 || s.level > 0))
                 .filter(|p| !p.bounds.is_empty()).map(|p| (p.level, self.source_plan(sources, id, p))).collect())
         }).collect();
-        if let Some(root) = &self.placed && let Some(levels) = requested.get_mut(&root.value.id) {
+        if let Some(Presentation::Placed(root)) = &self.placed && let Some(levels) = requested.get_mut(&root.value.id) {
             if let Some(plan) = levels.get(&root.value.plan.level).copied() {
                 for level in [plan.level + 1, source_coarse_level(plan)] {
                     levels.insert(level, display_mips::Plan::window(plan.extent, level, plan.bounds));
@@ -650,6 +651,9 @@ impl Cache {
         let previous = self.graph.root.clone();
         let plan = if self.evaluation == Evaluation::Native { display_mips::Plan::window(self.plan.extent, 0, self.plan.bounds) } else { self.plan };
         self.graph.prepare(r, packet, sources, plan, budget)?;
+        if self.placed.is_some() && !self.graph.root.as_ref().unwrap().deferred(r) {
+            self.valid.clear(); self.reuse_output = false;
+        }
         if previous != self.graph.root {
             let tiles = tiles.filter(|_| r.artwork_frame.as_ref().is_some_and(|old|
                 old.blend_space == packet.blend_space
@@ -667,7 +671,7 @@ impl Cache {
     }
 
     pub fn view(&self) -> &wgpu::TextureView {
-        self.placed.as_ref().map_or_else(|| &self.pixels.root().expect("composed output").view, |root| &root.value.view)
+        self.placed.as_ref().map_or_else(|| &self.pixels.root().expect("composed output").view, |root| root.view())
     }
     pub fn texture(&self) -> &wgpu::Texture {
         &self.pixels.root().expect("composed output").texture
@@ -676,13 +680,15 @@ impl Cache {
         if self.placed.is_none() && let hierarchy::Pixels::Resident { levels, .. } = &self.pixels {
             return &levels.last().unwrap().view;
         }
-        self.placed.as_ref().map_or_else(|| self.overview.as_ref().map_or_else(|| if coarse_level(self.plan) > self.plan.level { self.next_view() } else { self.view() }, |c| c.coarse_view()), |root| &root.coarse)
+        self.placed.as_ref().map_or_else(|| self.overview.as_ref().map_or_else(|| if coarse_level(self.plan) > self.plan.level { self.next_view() } else { self.view() }, |c| c.coarse_view()), |root| root.coarse())
     }
     pub fn next_view(&self) -> &wgpu::TextureView {
-        self.placed.as_ref().map_or_else(|| &self.pixels.next().expect("composed output mip").view, |root| &root.next)
+        self.placed.as_ref().map_or_else(|| &self.pixels.next().expect("composed output mip").view, |root| root.next())
     }
     pub fn placement_values(&self) -> [f32; 20] {
-        let Some(root) = &self.placed else { return [0.; 20]; };
+        let mut values = [0.; 20];
+        let Some(presentation) = &self.placed else { return values; };
+        let Presentation::Placed(root) = presentation else { values[13] = 2.; return values; };
         let [x, y, _] = pixel_transform::inverse_rows(&root.value.transform).expect("validated placement");
         let side = (1 << self.plan.level) as f32;
         let source_side = (1 << root.value.plan.level) as f32;
@@ -691,6 +697,9 @@ impl Cache {
         [x[0] / side, x[1] / side, x[2], 0., y[0] / side, y[1] / side, y[2], 0.,
             width, height, (1 << (root.coarse_level - root.value.plan.level)) as f32, 2.,
             root.value.opacity, 1., root.value.outside, f32::from(root.value.encode), r, g, b, a]
+    }
+    pub fn resample_values(&self) -> [u8; scene::resample::UNIFORM_BYTES as usize] {
+        match &self.placed { Some(Presentation::Mapped(mapped)) => mapped.values, _ => [0; scene::resample::UNIFORM_BYTES as usize] }
     }
     pub fn storage_bytes(&self) -> u64 {
         self.output
@@ -797,28 +806,33 @@ impl Cache {
             let mut compositor = Evaluator { cache: self, commands, scene, packet, r, encoder, region, tiled };
             let root = compositor.cache.graph.root.clone().expect("prepared composition graph");
             let output = compositor.evaluate_root(&root, finer.is_none())?;
-            let output = match output {
+            let presentation = match &output {
                 Value::Placed(value) if finer.is_none() => {
-                    drop(compositor);
                     let coarse_level = source_coarse_level(value.plan);
                     for level in [value.plan.level + 1, coarse_level] {
-                        scene.scale_sources.ensure_level(commands, r, encoder, value.id,
+                        compositor.scene.scale_sources.ensure_level(compositor.commands, compositor.r, compositor.encoder, value.id,
                             display_mips::Plan::window(value.plan.extent, level, value.plan.bounds))?;
                     }
-                    let next = scene.scale_sources.image(value.id, value.plan.level + 1).image.view.clone();
-                    let coarse = scene.scale_sources.image(value.id, coarse_level).image.view.clone();
-                    self.placed = Some(Presentation { value, next, coarse, coarse_level });
-                    self.output.clear();
-                    self.used.clear();
-                    self.valid.clear();
-                    self.refined.clear();
-                    if matches!(self.pixels, hierarchy::Pixels::Window { .. }) { self.pixels = Default::default(); }
-                    self.ready = true;
-                    return Ok(self.plan.bounds);
+                    let next = compositor.scene.scale_sources.image(value.id, value.plan.level + 1).image.view.clone();
+                    let coarse = compositor.scene.scale_sources.image(value.id, coarse_level).image.view.clone();
+                    Some(Presentation::Placed(Placement { value: value.clone(), next, coarse, coarse_level }))
                 }
-                output => output,
+                Value::Transform(source) if finer.is_none() => Some(Presentation::Mapped(compositor.r.transforms.as_ref().unwrap()
+                    .presentation(source.id, source.placement, compositor.r.target_extent(source.id), source.opacity, source.backdrop, source.encode)?)),
+                _ => None,
             };
-            compositor.cache.placed = None;
+            compositor.cache.placed = presentation;
+            if compositor.cache.placed.is_some() {
+                drop(compositor);
+                self.output.clear(); self.used.clear(); self.refined.clear();
+                let changed = if matches!(self.placed, Some(Presentation::Mapped(_))) {
+                    self.valid.extend(page_coordinates(self.plan.bounds));
+                    changed
+                } else { self.valid.clear(); self.plan.bounds };
+                if matches!(self.pixels, hierarchy::Pixels::Window { .. }) { self.pixels = Default::default(); }
+                self.ready = true;
+                return Ok(changed);
+            }
             let output = compositor.materialize(output, None)?;
             assert!(matches!(output.slot(), Some(Slot::Root)));
             compositor.cache.valid.extend(page_coordinates(region));
@@ -931,7 +945,16 @@ impl Cache {
     }
 }
 
-struct Presentation {
+enum Presentation {
+    Placed(Placement),
+    Mapped(scene::resample::Mapped),
+}
+impl Presentation {
+    fn view(&self) -> &wgpu::TextureView { match self { Self::Placed(p) => &p.value.view, Self::Mapped(p) => &p.view } }
+    fn next(&self) -> &wgpu::TextureView { match self { Self::Placed(p) => &p.next, Self::Mapped(p) => &p.view } }
+    fn coarse(&self) -> &wgpu::TextureView { match self { Self::Placed(p) => &p.coarse, Self::Mapped(p) => &p.view } }
+}
+struct Placement {
     value: Placed,
     next: wgpu::TextureView,
     coarse: wgpu::TextureView,
@@ -1143,7 +1166,7 @@ impl Evaluator<'_> {
         let offset = self.commands.write(self.r, self.encoder, &values)?;
         let resample = &self.r.scene_pipelines.resample;
         let binding = resample.binding(&self.r.device, &self.commands.records, u64::from(offset), [&placed.view, &view, &placed.view]);
-        resample.encode(self.encoder, &binding, texels, scene::resample::Sampling::AffineArea);
+        resample.encode(self.encoder, &binding, texels);
         Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }
     fn materialize(&mut self, value: Value, output: Option<Target>) -> Result<Value, GpuRasterError> {

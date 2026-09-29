@@ -12,17 +12,18 @@ struct Camera {
     placed_x: vec4<f32>, placed_y: vec4<f32>, placed_extent: vec4<f32>,
     placed_options: vec4<f32>, placed_backdrop: vec4<f32>,
     composite: vec4<f32>,
+    mapped: Resample,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
-@group(0) @binding(1) var canvas: texture_2d<f32>;
-@group(0) @binding(2) var canvas_sampler: sampler;
+@group(0) @binding(1) var moved: texture_2d<f32>;
+@group(0) @binding(2) var linear_sampler: sampler;
 struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(3) var<storage, read> selection: Selection;
 @group(0) @binding(11) var saved_selection: texture_2d<u32>;
 @group(0) @binding(4) var coarse: texture_2d<f32>;
 struct DisplayCache { scale: u32, coarse_scale: u32, next_scale: u32, padding: u32, window: vec4<u32> }
 @group(0) @binding(5) var<storage, read> cache: DisplayCache;
-@group(0) @binding(6) var next_mip: texture_2d<f32>;
+@group(0) @binding(6) var kept: texture_2d<f32>;
 
 // The backing buffer follows the display's native orientation. All artwork,
 // cursor and UI geometry continues to use the host's logical viewport.
@@ -71,7 +72,7 @@ fn detail_point(p: vec2<f32>) -> vec4<f32> {
     let scale = f32(cache.scale);
     let q = vec2(mip_coordinate(p.x, extent.x, scale), mip_coordinate(p.y, extent.y, scale));
     if any(q < vec2<f32>(cache.window.xy)) || any(q > vec2<f32>(cache.window.zw - 1u)) { return coarse_point(p); }
-    return textureSampleLevel(canvas, canvas_sampler, (q - vec2<f32>(cache.window.xy) + .5) / vec2<f32>(textureDimensions(canvas)), 0.);
+    return textureSampleLevel(moved, linear_sampler, (q - vec2<f32>(cache.window.xy) + .5) / vec2<f32>(textureDimensions(moved)), 0.);
 }
 fn placed_at(p:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>,linear:bool)->vec4<f32> {
     let span=abs(dx)+abs(dy);
@@ -87,24 +88,35 @@ fn placed_at(p:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>,linear:bool)->vec4<f32> {
     let outside=camera.placed_options.z;
     var color:vec4<f32>;
     if footprint<=1. {
-        color=area_sample(canvas,canvas_sampler,extent,outside,center,u,v);
+        color=area_sample(moved,linear_sampler,extent,outside,center,u,v);
     } else if footprint<=camera.placed_extent.w {
         let ratio=camera.placed_extent.w;
-        color=area_sample(next_mip,canvas_sampler,extent/ratio,outside,center/ratio,u/ratio,v/ratio);
+        color=area_sample(kept,linear_sampler,extent/ratio,outside,center/ratio,u/ratio,v/ratio);
     } else {
         let ratio=camera.placed_extent.z;
-        color=area_sample(coarse,canvas_sampler,extent/ratio,outside,center/ratio,u/ratio,v/ratio);
+        color=area_sample(coarse,linear_sampler,extent/ratio,outside,center/ratio,u/ratio,v/ratio);
     }
-    if linear && camera.placed_options.w!=0. && (color.a*camera.placed_options.x==1. || camera.placed_backdrop.a==0.) {
-        return color*camera.placed_options.x;
-    }
-    if camera.placed_options.w!=0. && color.a>0. { color=vec4(sdr_encode(color.rgb/color.a,CANVAS_SPACE)*color.a,color.a); }
-    let layer=color*camera.placed_options.x;
-    let result=layer+camera.placed_backdrop*(1.-layer.a);
+    return presentation_color(color,camera.placed_options.x,camera.placed_options.w,camera.placed_backdrop,linear);
+}
+fn presentation_color(color:vec4<f32>,opacity:f32,encode:f32,backdrop:vec4<f32>,linear:bool)->vec4<f32> {
+    if linear && encode!=0. && (color.a*opacity==1. || backdrop.a==0.) {return color*opacity;}
+    var layer=color;
+    if encode!=0. && color.a>0. {layer=vec4(sdr_encode(color.rgb/color.a,CANVAS_SPACE)*color.a,color.a);}
+    layer*=opacity;
+    let result=layer+backdrop*(1.-layer.a);
     if linear {return canvas_linear(result);}
     return result;
 }
+fn mapped_at(p:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>,linear:bool)->vec4<f32> {
+    let span=abs(dx)+abs(dy);
+    let low=max(p-span*.5,vec2(0.));
+    let high=min(p+span*.5,camera.offset_document.zw);
+    let fraction=(high-low)/max(span,vec2(1e-20));
+    let color=mapped_color(8u,(low+high)*.5,dx*fraction,dy*fraction,false,false,vec2(0.),vec2(0.),vec2(0.));
+    return presentation_color(color,camera.mapped.options.x,camera.mapped.encoding.x,camera.mapped.backdrop,linear);
+}
 fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    if camera.placed_options.y==2. {return mapped_at(p,dx,dy,false);}
     if camera.placed_options.y!=0. { return placed_at(p,dx,dy,false); }
     return grid_artwork_at(p,dx,dy);
 }
@@ -116,7 +128,7 @@ fn grid_artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
     let extent = camera.offset_document.zw;
     let q = vec2(mip_coordinate(p.x, extent.x, next_scale), mip_coordinate(p.y, extent.y, next_scale));
     let origin = vec2<f32>(cache.window.xy) * (scale / next_scale);
-    let reduced = textureSampleLevel(next_mip, canvas_sampler, (q - origin + .5) / vec2<f32>(textureDimensions(next_mip)), 0.);
+    let reduced = textureSampleLevel(kept, linear_sampler, (q - origin + .5) / vec2<f32>(textureDimensions(kept)), 0.);
     return mix(detail_point(p), reduced, clamp(log2(footprint / scale), 0., 1.));
 }
 // Linear premultiplied artwork from the composite, which holds the
@@ -125,8 +137,8 @@ fn canvas_linear(c: vec4<f32>) -> vec4<f32> {
     if camera.composite.x == 0. || c.a <= 0. { return c; }
     return vec4<f32>(sdr_decode(c.rgb / c.a, CANVAS_SPACE) * c.a, c.a);
 }
-fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>) -> vec4<f32> {
-    if camera.placed_options.y!=0. {
+fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>, mapped:bool) -> vec4<f32> {
+    if !mapped && camera.placed_options.y==1. {
         let extent=camera.offset_document.zw;
         let dx=vec2(footprint.x*extent.x,0.);
         let dy=vec2(0.,footprint.y*extent.y);
@@ -142,11 +154,12 @@ fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>) -> vec4<f32> {
         }}
         return color/f32(grid.x*grid.y);
     }
-    let extent = camera.offset_document.zw / f32(cache.coarse_scale);
+    let scale = f32(select(cache.coarse_scale,cache.scale,mapped));
+    let extent = camera.offset_document.zw / scale;
     let low = clamp((uv-footprint*.5)*extent, vec2(0.), extent);
     let high = clamp((uv+footprint*.5)*extent, low, extent);
     let start = vec2<u32>(floor(low));
-    let end = min(vec2<u32>(ceil(high)), textureDimensions(coarse));
+    let end = vec2<u32>(ceil(high));
     var color = vec4(0.);
     var weight = 0.;
     for (var y = start.y; y < end.y; y++) {
@@ -154,7 +167,13 @@ fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>) -> vec4<f32> {
             let p = vec2(f32(x), f32(y));
             let overlap = max(vec2(0.), min(high, p+1.) - max(low, p));
             let area = overlap.x * overlap.y;
-            color += textureLoad(coarse, vec2<i32>(i32(x), i32(y)), 0) * area;
+            var sample:vec4<f32>;
+            if mapped {
+                let span=min(vec2(1.),extent-p)*scale;
+                let layer=mapped_color(2u,p*scale+span*.5,vec2(span.x,0.),vec2(0.,span.y),false,false,vec2(0.),vec2(0.),vec2(0.));
+                sample=presentation_color(layer,camera.mapped.options.x,camera.mapped.encoding.x,camera.mapped.backdrop,false);
+            } else {sample=textureLoad(coarse, vec2<i32>(i32(x), i32(y)), 0);}
+            color += sample * area;
             weight += area;
         }
     }
@@ -261,7 +280,10 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     let distance = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
     return select(1.0, clamp(0.5 - distance, 0.0, 1.0), radius > 0.0);
 }
-@fragment fn fs_main(vertex: Vertex) -> @location(0) vec4<f32> {
+@fragment fn fs_main(vertex: Vertex) -> @location(0) vec4<f32> {return surface_color(vertex,0u);}
+@fragment fn fs_placed(vertex: Vertex) -> @location(0) vec4<f32> {return surface_color(vertex,1u);}
+@fragment fn fs_mapped(vertex: Vertex) -> @location(0) vec4<f32> {return surface_color(vertex,2u);}
+fn surface_color(vertex:Vertex,source:u32)->vec4<f32> {
     let footprint = camera.rotation.w;
     let surface = logical_surface(vertex.position.xy * footprint);
     let p = vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy;
@@ -278,7 +300,8 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     }
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
     var artwork: vec4<f32>;
-    if camera.placed_options.y!=0. { artwork = placed_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint, true); }
+    if source==2u { artwork = mapped_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint, true); }
+    else if source==1u { artwork = placed_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint, true); }
     else { artwork = canvas_linear(grid_artwork_at(p, camera.inverse.xy * footprint, camera.inverse.zw * footprint)); }
     let paint = proof_artwork(artwork,p);
     let checker = select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0);
@@ -420,11 +443,13 @@ fn segment_distance(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let d = b-a;
     return length(p-a-d*clamp(dot(p-a,d)/max(dot(d,d),.000001),0.,1.));
 }
-@fragment fn overview_fragment(v: OverviewVertex) -> @location(0) vec4<f32> {
+@fragment fn overview_fragment(v: OverviewVertex) -> @location(0) vec4<f32> {return overview_color(v,false);}
+@fragment fn mapped_overview_fragment(v: OverviewVertex) -> @location(0) vec4<f32> {return overview_color(v,true);}
+fn overview_color(v:OverviewVertex,mapped:bool)->vec4<f32> {
     let footprint = fwidth(v.uv);
     let p = logical_surface(v.position.xy);
     if any(p < v.clip.xy) || any(p >= v.clip.xy+v.clip.zw) { discard; }
-    let paint = proof_artwork(canvas_linear(coarse_area(v.uv, footprint)),v.uv*camera.offset_document.zw);
+    let paint = proof_artwork(canvas_linear(coarse_area(v.uv, footprint,mapped)),v.uv*camera.offset_document.zw);
     var rgb = view_working_rgb(paint.rgb) + view_ui_rgb(v.background_scale.rgb) * (1.-paint.a);
     let edge = min(min(segment_distance(p,v.ab.xy,v.ab.zw),segment_distance(p,v.ab.zw,v.cd.xy)),
                    min(segment_distance(p,v.cd.xy,v.cd.zw),segment_distance(p,v.cd.zw,v.ab.xy)));

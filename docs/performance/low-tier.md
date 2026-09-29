@@ -27,16 +27,16 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Two-finger rotate | 60 | | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
-| Placed-photo translation | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 99.4 completed updates/s | Current drag comparison below, `photo-translate-drag` |
-| Placed-photo corner resize | 60 | Screen 59.1 presents/s, p99 16.9 ms; renderer 90.1 completed updates/s | Current drag comparison below, `photo-handle-drag-bar-hidden` |
-| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 78.6 completed updates/s | Current drag comparison below, `photo-pixels-handle-drag` |
+| Placed-photo translation | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 122.9 completed updates/s | Current drag comparison below, `photo-translate-drag` |
+| Placed-photo corner resize | 60 | Screen 59.4 presents/s, p99 16.7 ms; renderer 113.2 completed updates/s | Current drag comparison below, `photo-handle-drag-bar-hidden` |
+| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.8 ms; renderer 169.6 completed updates/s | Current drag comparison below, `photo-pixels-handle-drag` |
 | Pixel transform: Uniform, Skew or Rotate | 60 | | |
-| Pixel transform translation | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 85.5 completed updates/s | Current drag comparison below, `photo-pixels-translate-drag` |
-| Pixel transform: Distort | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 66.7 completed updates/s | Current drag comparison below, `photo-pixels-distort-drag` |
+| Pixel transform translation | 60 | Screen 59.5 presents/s, p99 16.7 ms; renderer 175.1 completed updates/s | Current drag comparison below, `photo-pixels-translate-drag` |
+| Pixel transform: Distort | 60 | Screen 59.5 presents/s, p99 16.8 ms; renderer 152.3 completed updates/s | Current drag comparison below, `photo-pixels-distort-drag` |
 | Pixel transform: Perspective | 60 | | |
-| Pixel transform: Warp | 60 | Screen 59.4 presents/s, p99 16.8 ms; renderer 65.1 completed updates/s | Warp contour qualification below, `photo-pixels-warp-drag` |
-| Crop corner drag | 60 | Screen 59.2 presents/s, p99 16.9 ms; renderer 110.5 completed updates/s | Current drag comparison below, `crop-handle-drag` |
-| Pixel resize after placing the photo at 45% size | 60 | Screen 58.6 presents/s, p99 16.7 ms; renderer 140.4 completed updates/s | Current drag comparison below, `scaled-photo-pixels-handle-drag` |
+| Pixel transform: Warp | 60 | Screen 59.2 presents/s, p99 16.7 ms; renderer 70.0 completed updates/s | Current drag comparison below, `photo-pixels-warp-drag` |
+| Crop corner drag | 60 | Screen 59.2 presents/s, p99 16.7 ms; renderer 130.1 completed updates/s | Current drag comparison below, `crop-handle-drag` |
+| Pixel resize after placing the photo at 45% size | 60 | Screen 58.6 presents/s, p99 16.8 ms; renderer 224.6 completed updates/s | Current drag comparison below, `scaled-photo-pixels-handle-drag` |
 | Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
 | Move tool layer drag | 60 | | |
 | Move selected pixels: whole image | 60 | Screen 59.1 presents/s, p99 16.8 ms; renderer 86.6 completed updates/s | Transform damage build below, `move-all-drag` |
@@ -76,46 +76,60 @@ Measured 2026-09-29 on the 12 MP Perceptual reference photo at Fit: release Rust
 default glass, Stats closed and three warmed five-second gestures per row.
 Thermal status is zero before and after all runs. Both renderers use the same
 600 ms warm-up through the complete motion range and the same test APK.
-Values are medians across runs. No allocator or process-memory sampler runs
-inside qualification; a separate safety guard observes system available RAM.
+The harness explicitly sets Navigator visibility and asserts the overview count.
+Opening Navigator also changes the work area and Fit camera, so each comparison
+pairs the same panel configuration. Values are medians across runs.
 
-| Journey | Old compositor, completed updates/s | Current, completed updates/s |
-| --- | --- | --- |
-| Placed-photo translation | 94.50 | 99.43 |
-| Placed-photo corner resize | 91.67 | 90.12 |
-| Pixel transform corner resize: Free | 86.80 | 78.57 |
-| Pixel transform translation | 87.67 | 85.53 |
-| Pixel transform: Distort | 85.34 | 66.73 |
-| Pixel transform: Warp | 42.46 | 65.06 (contour fix below) |
-| Crop corner drag | 113.77 | 110.46 |
-| Pixel resize after placing the photo at 45% size | 108.81 | 140.42 |
+| Journey | Old, Navigator closed | Current, Navigator closed | Old, Navigator open | Current, Navigator open |
+| --- | ---: | ---: | ---: | ---: |
+| Placed-photo translation | 96.45 | 122.86 | 83.30 | 98.48 |
+| Placed-photo corner resize, bar hidden | 94.82 | 113.20 | 82.37 | 89.27 |
+| Placed-photo corner resize, bar visible | 96.58 | 113.25 | 90.59 | 89.88 |
+| Pixel transform translation | 89.41 | 175.10 | 79.47 | 80.30 |
+| Pixel transform resize: Free | 87.82 | 169.59 | 78.80 | 72.47 |
+| Pixel transform: Distort | 85.92 | 152.25 | 77.33 | 63.85 |
+| Pixel transform: Warp | 46.53 | 70.03 | 38.64 | 61.54 |
+| Crop corner drag | 129.23 | 130.05 | — | — |
+| Pixel resize after 45% placement | 117.78 | 224.55 | — | — |
 
-The current build shares decoded sources, retains placement sources through
-identity crossings, holds glass backdrops during drags and checks optional
-hierarchy headroom once per motion sequence. Placement resize no longer rebuilds
-source mips each time the pose crosses identity. A separate trace observes one
-hierarchy-budget query per five-second pixel drag instead of roughly 300, and
-one backdrop refresh instead of 278 during Distort. These reduce CPU and GPU
-work without changing the artwork.
+Values are GPU-completed nonempty updates/s. Single-input affine and perspective
+previews sample the retained source directly during presentation when Navigator
+is closed, avoiding the intermediate composition. With Navigator open, both
+views share the existing materialized composition and preserve preview quality.
+Placement drags also defer exact refinement until Apply or Cancel.
 
-Pixel resize and Distort still trail the old compositor in completed-update
-throughput. Distort and Warp meet the screen-cadence criterion in this fixture.
-The current resampler filters a mip pyramid according to the
-transformed pixel footprint; the old resampler takes one bilinear sample at a
-fixed source level. That changes the work per pixel, but does not establish that
-the remaining cost is unavoidable.
+All 27 closed-Navigator gestures and all 21 open-Navigator gestures pass the
+60 Hz screen-cadence criterion. Closed-panel median screen rates span
+58.64–59.46 presents/s, with interval p99 16.71–16.94 ms. The old Warp fails in
+both configurations. Closed-panel pixel transforms and placement exceed the old
+compositor, including crop after specializing presentation by source type.
+With Navigator open, Distort remains 17.4% slower, Free resize 8.0% slower
+and visible-bar placement resize 0.8% slower. Meeting screen cadence does not
+close these throughput gaps.
 
 Screen rates use SurfaceFlinger actual-present timestamps. This device provides
 no separate SurfaceView timeline, so screen records do not independently
 establish canvas scanout. Renderer counts exclude empty updates and terminal
-polling. Setup waits for command availability outside timing.
+polling. Setup waits for command availability outside timing. No allocator or
+process-memory sampler runs inside qualification; a separate safety guard
+observes system available RAM. The first specialized-presentation Navigator
+run lacked continuous RAM sampling because its monitor could not locate adb;
+its frame records are complete, but it provides no continuous memory bound.
 
 Old renderer: `7382bd260` with read-only benchmark observers, APK SHA-256
 `d60230a701dd4edcd6e7e0346898893122669da72447784304b72f27d4e3c718`.
-Current: `bf534b8e8` plus the drag fixes, APK SHA-256
-`89ad253df04ed082393f9b134766427b49f133da3794f34c990b855394879926`.
-Raw runs are in `artifacts/latency-investigation/{old-warm-2,stable-drag-warm}`;
-phase diagnostics are in `drag-budget-profile` and `specialized-profile`.
+Closed-panel transforms and placement: `e41ee80fe` plus direct transform
+presentation, Navigator materialization and placement refinement scheduling,
+APK SHA-256
+`ede35aa5b23bd8770d1207929e1b633a25b481f7987eb7201645125a11e013e3`.
+Raw runs are in `artifacts/latency-investigation/{old-closed-fixed,deferred-9-closed-fixed}`
+and `old-navigator`. Current crop and open-Navigator rows include fragment
+materialization and source-specific main-view shader entries, APK SHA-256
+`1dbac0ef1dcf9208709ba3e7df71f0a028e99d6d25e4c60356e7413a270f1208`.
+Their records are `present-18-crop` and `present-18-navigator`, including its
+`extra` directory. The open-Navigator screen medians span 59.35–59.49/s,
+with p99 intervals 16.74–16.92 ms. Earlier default-panel records retained
+Navigator and are not evidence for a closed-panel workload.
 
 ### Warp contour qualification
 

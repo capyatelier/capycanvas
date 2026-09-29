@@ -781,8 +781,8 @@ fn placement_crossing_identity_keeps_the_prepared_source() {
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     r.prepare_moving_layer(Some(id));
     let mut prepared = None;
-    for x in [10., 0., -10., 0., 10., 0.] {
-        doc.layers[0].properties.placement = layer_core::Affine([1., 0., 0., 1., x, 0.]);
+    for (x, scale) in [(10., 1.), (0., 1.), (0., 0.9), (0., 0.9), (0., 1.), (-10., 1.), (0., 1.)] {
+        doc.layers[0].properties.placement = layer_core::Affine([scale, 0., 0., scale, x, 0.]);
         let mut frame = packet(&doc.layers, extent);
         frame.blend_space = layer_core::BlendSpace::Perceptual;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
@@ -791,6 +791,11 @@ fn placement_crossing_identity_keeps_the_prepared_source() {
         let current = (source.updates, source.levels[&2].image.texture.clone());
         assert_eq!(prepared.get_or_insert_with(|| current.clone()), &current,
             "moving an unchanged photo through its original pose must reuse its pixels");
+        assert!(!r.has_pending_work(), "an unfinished placement must not schedule exact refinement");
+        let work = r.metrics.composited_pixels;
+        frame.composite_all = false;
+        r.submit(frame).unwrap();
+        assert_eq!(r.metrics.composited_pixels, work, "an unchanged placement pose must not refine");
     }
     r.prepare_moving_layer(None);
     doc.layers[0].properties.placement = layer_core::Affine::IDENTITY;
@@ -799,6 +804,7 @@ fn placement_crossing_identity_keeps_the_prepared_source() {
     frame.composite_all = false;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     r.submit(frame).unwrap();
+    assert!(r.has_pending_work(), "finishing placement must allow exact refinement");
     let mut fresh = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     fresh.submit(frame).unwrap();
     assert_eq!(display_pixels(&r), display_pixels(&fresh));
@@ -1236,15 +1242,38 @@ fn materialized_display(r: &WgpuRasterizer) -> Image {
     if let Some(root) = &cache.placed {
         let [width, height] = cache.plan.size;
         let texels = [0, 0, width, height];
+        let values = match root {
+            Presentation::Placed(p) => p.value.record(cache.plan, texels).unwrap(),
+            Presentation::Mapped(p) => {
+                let mut values = p.values;
+                let side = (1 << cache.plan.level) as f32;
+                for row in values[..128].chunks_exact_mut(16) { for component in row[..8].chunks_exact_mut(4) {
+                    let n = f32::from_le_bytes(component.try_into().unwrap()) * side;
+                    component.copy_from_slice(&n.to_le_bytes());
+                }}
+                for (dst, n) in values[144..160].chunks_exact_mut(4).zip(texels) { dst.copy_from_slice(&n.to_le_bytes()); }
+                for (dst, n) in values[208..216].chunks_exact_mut(4).zip(cache.plan.extent) { dst.copy_from_slice(&(n as f32 / side).to_le_bytes()); }
+                values
+            }
+        };
         let uniforms = r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("materialized display query"), contents: &root.value.record(cache.plan, texels).unwrap(),
+            label: Some("materialized display query"), contents: &values,
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let (texture, view) = create_color_target(&r.device, cache.plan.size, "materialized display query");
         let pass = &r.scene_pipelines.resample;
-        let binding = pass.binding(&r.device, &uniforms, 0, [&root.value.view, &view, &root.value.view]);
+        let kept = match root { Presentation::Placed(_) => root.view(), Presentation::Mapped(_) => root.next() };
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        pass.encode(&mut encoder, &binding, texels, scene::resample::Sampling::AffineArea);
+        match root {
+            Presentation::Placed(_) => {
+                let binding = pass.binding(&r.device, &uniforms, 0, [root.view(), &view, kept]);
+                pass.encode(&mut encoder, &binding, texels);
+            }
+            Presentation::Mapped(_) => {
+                let binding = pass.mesh_binding(&r.device, &uniforms, &[root.view().clone(), kept.clone()]);
+                pass.encode_mesh(&mut encoder, &binding, &view, texels, None, false);
+            }
+        }
         encoder.submit(&r.queue);
         Image { texture, view, plan: cache.plan }
     } else {
@@ -1268,7 +1297,7 @@ fn window_pixels(r: &WgpuRasterizer, image: &Image, plan: display_mips::Plan) ->
 
 fn assert_presentation_mip(r: &WgpuRasterizer) {
     let cache = r.scale_display.as_ref().unwrap();
-    let (input, actual, plan) = if let Some(root) = &cache.placed {
+    let (input, actual, plan) = if let Some(Presentation::Placed(root)) = &cache.placed {
         let source = &r.scene.as_ref().unwrap().scale_sources;
         (pixels(r, &source.image(root.value.id, root.value.plan.level).image.texture),
             pixels(r, &source.image(root.value.id, root.value.plan.level + 1).image.texture), root.value.plan)

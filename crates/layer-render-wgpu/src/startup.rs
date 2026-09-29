@@ -444,7 +444,6 @@ impl WgpuRasterizer {
             current.compute.extend([mip.reduce.clone(), mip.fused_reduce.clone()]);
             current.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
             current.compute.extend(self.transforms.as_ref().unwrap().display_pipelines().into_iter().cloned());
-            current.compute.extend(self.scene_pipelines.resample.mapped.iter().cloned());
             current.render.extend(self.scene_pipelines.resample.mesh.iter().cloned());
             current.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
         }
@@ -457,7 +456,7 @@ impl WgpuRasterizer {
         let transforms = self.transforms.as_ref().unwrap();
         startup.compiler.require(transforms.pipelines(), OTHER);
         startup.compiler.require(self.selection_clip.pipelines(), OTHER);
-        startup.compiler.require(transforms.display_pipelines().into_iter().chain(self.scene_pipelines.resample.mapped.iter()).chain([&self.scene_pipelines.resample.area]), OTHER);
+        startup.compiler.require(transforms.display_pipelines().into_iter().chain([&self.scene_pipelines.resample.area]), OTHER);
         startup.compiler.require(transforms.mesh_pipelines(), OTHER);
         startup.compiler.require(&self.scene_pipelines.resample.mesh, OTHER);
         let mip = self.display_pipelines

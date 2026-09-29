@@ -29,17 +29,27 @@ struct Overview {
     remaining: VecDeque<[u32; 2]>,
 }
 
+struct Prepared {
+    layer: LayerId,
+    revision: u64,
+    source: Weak<SourceImage>,
+    extent: [u32; 2],
+    pixels: wgpu::Buffer,
+    remaining: VecDeque<[u32; 2]>,
+    valid: Arc<std::sync::atomic::AtomicBool>,
+}
+
 pub(super) struct SourceThumbnails {
     layout: wgpu::BindGroupLayout,
     horizontal: wgpu::ComputePipeline,
     vertical: wgpu::ComputePipeline,
     display: wgpu::RenderPipeline,
-    display_binding: wgpu::BindGroup,
+    display_layout: wgpu::BindGroupLayout,
     display_parameters: wgpu::Buffer,
     parameters: wgpu::Buffer,
     rows: wgpu::Buffer,
-    working: wgpu::Buffer,
     cache: VecDeque<Overview>,
+    prepared: VecDeque<Prepared>,
 }
 impl SourceThumbnails {
     pub fn new(r: &WgpuRasterizer) -> Self {
@@ -127,25 +137,19 @@ impl SourceThumbnails {
             d.working_format(),
             "photo overview display",
         );
-        let working = overview_buffer(d);
         let display_parameters = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("photo thumbnail orientation and rendition"),
             size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let display_binding = crate::bindings::group(d, "photo overview display", &display_layout, [
-            working.as_entire_binding(),
-            display_parameters.as_entire_binding(),
-        ]);
         Self {
             horizontal: pipeline("horizontal"),
             vertical: pipeline("vertical"),
             layout,
             display,
-            display_binding,
+            display_layout,
             display_parameters,
-            working,
             parameters: d.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ordered photo overview parameters"),
                 size: 48,
@@ -159,28 +163,28 @@ impl SourceThumbnails {
                 mapped_at_creation: false,
             }),
             cache: VecDeque::new(),
+            prepared: VecDeque::new(),
         }
     }
     pub fn storage_bytes(&self) -> u64 {
         ROW_BYTES
             + 48
             + 16
-            + OVERVIEW_BYTES
+            + self.prepared.len() as u64 * OVERVIEW_BYTES
             + self
                 .cache
                 .iter()
                 .map(|c| OVERVIEW_BYTES + c.contributions.size())
                 .sum::<u64>()
     }
-    /// Prepare a bounded batch of original-photo contributions. Each call's
-    /// encoder must be submitted or dropped before continuing the same build.
-    /// Partial pixels stay private until every original tile is integrated.
+    /// Prepare at most `tile_limit` original or painted tiles. Submit or drop
+    /// the encoder before preparing another batch.
     pub fn prepare(
         &mut self,
         r: &mut WgpuRasterizer,
         layer: LayerId,
         encoder: &mut crate::submission::CommandEncoder,
-        tile_limit: usize,
+        mut tile_limit: usize,
     ) -> Result<bool, GpuRasterError> {
         let source = r.tiled_sources[&layer].clone();
         // The layer's finite local backing, including original pixels beyond
@@ -217,10 +221,11 @@ impl SourceThumbnails {
         };
         if !overview.remaining.is_empty() {
             let write = crate::submission::CacheWrite::new();
-            for _ in 0..tile_limit {
+            while tile_limit > 0 {
                 let Some(coordinate) = overview.remaining.pop_front() else {
                     break;
                 };
+                tile_limit -= 1;
                 let tile = r
                     .original_source_tile(&source, coordinate, encoder)?
                     .unwrap();
@@ -239,11 +244,59 @@ impl SourceThumbnails {
             write.track(encoder);
             overview.valid = write.validity();
         }
-        let ready = overview.remaining.is_empty();
+        let ready = overview.remaining.is_empty()
+            && self.prepare_paint(r, layer, &overview, encoder, tile_limit)?;
         self.cache.push_back(overview);
         while self.cache.len() > OVERVIEWS {
             self.cache.pop_front();
         }
+        Ok(ready)
+    }
+    fn prepare_paint(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        layer: LayerId,
+        overview: &Overview,
+        encoder: &mut crate::submission::CommandEncoder,
+        tile_limit: usize,
+    ) -> Result<bool, GpuRasterError> {
+        self.prepared.retain(|p| p.revision == r.artwork_revision && p.source.strong_count() > 0
+            && p.valid.load(std::sync::atomic::Ordering::Acquire));
+        let cached = self.prepared.iter().position(|p| p.layer == layer
+            && p.source.ptr_eq(&overview.source) && p.extent == overview.extent);
+        let write = crate::submission::CacheWrite::new();
+        let mut prepared = if let Some(index) = cached {
+            self.prepared.remove(index).unwrap()
+        } else {
+            let pixels = overview_buffer(&r.device);
+            encoder.copy_buffer_to_buffer(&overview.pixels, 0, &pixels, 0, OVERVIEW_BYTES);
+            let mut coordinates: std::collections::BTreeSet<_> = r.paint_layers.iter()
+                .find(|l| l.id == layer).into_iter().flat_map(|l| l.pages.iter().map(|p| p.coordinate)).collect();
+            coordinates.extend(r.native_color_coordinates(layer));
+            Prepared { layer, revision: r.artwork_revision, source: overview.source.clone(), extent: overview.extent,
+                pixels, remaining: coordinates.into_iter().filter(|c| !page_rect(*c)
+                    .intersect(PixelRect::full(overview.extent)).is_empty()).collect(), valid: write.validity() }
+        };
+        let changed = cached.is_none() || (!prepared.remaining.is_empty() && tile_limit > 0);
+        for _ in 0..tile_limit {
+            let Some(coordinate) = prepared.remaining.pop_front() else { break };
+            let tile = r.raw_layer_tile(layer, coordinate, encoder)?.unwrap();
+            self.integrate(
+                r,
+                encoder,
+                overview.extent,
+                coordinate,
+                &tile.view,
+                true,
+                &prepared.pixels,
+                &overview.contributions,
+                overview.tiles.get(&coordinate).copied().unwrap_or_default(),
+            )?;
+        }
+        if changed { write.track(encoder); prepared.valid = write.validity(); }
+        let ready = prepared.remaining.is_empty();
+        self.prepared.push_back(prepared);
+        while self.prepared.len() > OVERVIEWS { self.prepared.pop_front(); }
         Ok(ready)
     }
     pub fn render(
@@ -253,47 +306,14 @@ impl SourceThumbnails {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PageSurface, GpuRasterError> {
         self.prepare(r, layer, encoder, usize::MAX)?;
-        // prepare moves this source to the back; only complete originals can
-        // reach the display/correction pass. GTK prepares it in small batches.
-        let overview = self.cache.pop_back().unwrap();
-        encoder.copy_buffer_to_buffer(&overview.pixels, 0, &self.working, 0, OVERVIEW_BYTES);
-        // Bindings live only through their ordered dispatch. Keeping paint
-        // handles in this cache would retain retired document generations.
-        let mut coordinates: std::collections::BTreeSet<_> = r
-            .paint_layers
-            .iter()
-            .find(|l| l.id == layer)
-            .into_iter()
-            .flat_map(|l| l.pages.iter().map(|p| p.coordinate))
-            .collect();
-        coordinates.extend(r.native_color_coordinates(layer));
-        for coordinate in coordinates {
-            if page_rect(coordinate)
-                .intersect(PixelRect::full(overview.extent))
-                .is_empty()
-            {
-                continue;
-            }
-            let tile = r.raw_layer_tile(layer, coordinate, encoder)?.unwrap();
-            self.integrate(
-                r,
-                encoder,
-                overview.extent,
-                coordinate,
-                &tile.view,
-                true,
-                &self.working,
-                &overview.contributions,
-                overview.tiles.get(&coordinate).copied().unwrap_or_default(),
-            )?;
-        }
+        let prepared = self.prepared.back().unwrap();
         let placement = r
             .thumbnails
             .source_placements
             .get(&layer)
             .copied()
             .unwrap_or_default();
-        let mapping = overview_mapping(overview.extent, placement);
+        let mapping = overview_mapping(prepared.extent, placement);
         r.uploads.write(
             encoder,
             &self.display_parameters,
@@ -302,10 +322,9 @@ impl SourceThumbnails {
                 .flat_map(f32::to_le_bytes)
                 .collect::<Vec<_>>(),
         )?;
-        self.cache.push_back(overview);
-        while self.cache.len() > OVERVIEWS {
-            self.cache.pop_front();
-        }
+        let binding = crate::bindings::group(&r.device, "photo overview display", &self.display_layout, [
+            prepared.pixels.as_entire_binding(), self.display_parameters.as_entire_binding(),
+        ]);
         let result = create_page_surface(
             &r.device,
             &r.texture_layout,
@@ -321,7 +340,7 @@ impl SourceThumbnails {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             );
             pass.set_pipeline(&self.display);
-            pass.set_bind_group(0, &self.display_binding, &[]);
+            pass.set_bind_group(0, &binding, &[]);
             pass.draw(0..3, 0..1);
         }
         Ok(result)

@@ -265,6 +265,10 @@ APK calls, so test-APK benchmarks use the unminified build.
   `-e rendererProfile true` opens the Stats panel to collect renderer GPU phase
   timestamps. Use these runs for attribution; the panel changes the workload,
   so compare motion rates with the ordinary runs separately.
+  `-e panel navigator` opens the Navigator for a separate drag qualification;
+  record this workload separately from runs with the panel closed. The harness
+  sets Stats/Navigator visibility explicitly and asserts the overview count.
+  Combining it with `rendererProfile` keeps both panels open.
 - **Canvas navigation and drawing.** `AndroidViewportBenchmarkTest` runs with
   `-e viewportBenchmark true`. `-e width 4248 -e height 2832` selects the low-tier
   canvas; `-e canvasSize` supplies both dimensions when they are omitted.
@@ -310,8 +314,10 @@ reference layer.
 Increase only the gap to measure the same contacts after settling, or increase
 contact duration to test finalization after a broad stroke. The runner checks
 both durations in the observed setup; older APKs that ignore them are rejected.
-`--mode settle` draws a broad stroke, waits 100 ms, changes tools, queues a
-short paint contact and injects a one-second pinch while finalization is pending.
+`--mode settle` injects a one-second pinch immediately after a broad stroke,
+then changes tools and queues a short paint contact. The first 100 ms of input
+has no synchronous state query; the probe observes pending work at its first
+camera sample. Use `--settle-delay-ms` for a matched control after settling.
 The raw `settle_probe` records action times and camera revisions. Use
 `--presentation-trace` for screen cadence; completed artwork updates do not
 count camera-only frames. Brush preview PNGs load off the UI thread and share a

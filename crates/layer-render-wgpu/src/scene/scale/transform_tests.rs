@@ -2,6 +2,145 @@ use super::*;
 use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Point, Projective, Rect, Selection, TransformMap};
 
 #[test]
+fn navigator_consumers_share_transform_composition_until_closed_or_dropped() {
+    let doc = document();
+    let extent = [doc.width, doc.height];
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, extent);
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    r.submit(frame).unwrap();
+    frame.composite_all = false;
+    let mut presenter = Some(crate::ViewportPresenter::for_renderer(&r, wgpu::TextureFormat::Rgba8Unorm));
+    let overview = crate::OverviewPlacement {
+        bounds: [0., 0., 100., 50.], clip: None, work_area: [[0.; 2]; 4],
+        outline_linear: [0.; 3], background_linear: [1.; 3], scale: 1., opacity: 1.,
+    };
+    for (step, (visible, x)) in [(false, 10.), (true, 10.), (true, 20.), (false, 30.), (true, 40.), (false, 50.)].into_iter().enumerate() {
+        if step == 5 { drop(presenter.take()); }
+        else if let Some(presenter) = &mut presenter {
+            presenter.set_overviews(&r, if visible { std::slice::from_ref(&overview) } else { &[] });
+        }
+        r.set_transform_preview(Some(&layer_render::TransformPreview {
+            transaction: 1, layer: doc.layers[0].id, moving: true, selection: None,
+            transform: ImageTransform::affine(Affine::translation(Point { x, y: 0. })),
+        })).unwrap();
+        r.submit(frame).unwrap();
+        let cache = r.scale_display.as_ref().unwrap();
+        assert_eq!(matches!(cache.placed, Some(Presentation::Mapped(_))), !visible);
+        assert_eq!(cache.pixels.root().is_some(), visible);
+    }
+}
+
+#[test]
+fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate_pixels() {
+    let extent = [517, 259];
+    let bounds = Rect { min: Point::default(), max: Point { x: 517., y: 259. } };
+    let projective = Projective::rect_to_quad(bounds,
+        [[28., 4.], [489., 41.], [512., 235.], [8., 251.]].map(|[x,y]| Point { x,y })).unwrap();
+    let selection = Selection::polygon(vec![bounds.min, Point { x: 517., y: 0. }, bounds.max, Point { x: 0., y: 259. }]).unwrap();
+    let render = |r: &WgpuRasterizer, view: layer_render::ViewState, overview: bool| {
+        let size = [view.width_px, view.height_px];
+        let (texture, target) = create_color_target(&r.device, size, "mapped presentation oracle");
+        let mut presenter = if overview { crate::ViewportPresenter::for_overview_surface }
+            else { crate::ViewportPresenter::for_surface }(
+                r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+        if overview {
+            presenter.set_overviews(r, &[crate::OverviewPlacement {
+                bounds: [0., 0., size[0] as f32, size[1] as f32], clip: None,
+                work_area: [[-1000.; 2]; 4], outline_linear: [0.; 3], background_linear: [1.; 3], scale: 1., opacity: 1.,
+            }]);
+            presenter.present_overviews(r, &target, size).unwrap();
+        } else { presenter.present(r, &target, view, [1.; 4]).unwrap(); }
+        pixels(r, &texture)
+    };
+    for patterned in [false, true] {
+    for space in layer_core::BlendSpace::ALL {
+    for (selected, opacity) in [(false, 1.), (true, 0.71)] {
+        let mut doc = document();
+        if patterned { doc.layers[0].source = Some(layer_core::color::source::rgba8_source(extent, |x, y|
+            [if (x / 5 + y / 7) % 2 == 0 { 40 } else { 220 },
+             if (x / 13 + y / 17) % 2 == 0 { 40 } else { 220 },
+             if (x / 2 + y / 3) % 2 == 0 { 40 } else { 220 }, 255])); }
+        doc.layers[0].opacity = opacity;
+        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        exact.test.reference = true;
+        let mut frame = packet(&doc.layers, extent);
+        frame.blend_space = space;
+        frame.view.background_rgba_linear = [1.; 4];
+        frame.view.width_px = 160; frame.view.height_px = 100;
+        frame.view.document_to_surface = [0.19, 0., 0., 0.19, 8.25, 7.5];
+        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        frame.composite_all = false;
+        for map in [TransformMap::Affine(Affine([0.8, 0.12, -0.1, 0.9, 40., 0.])), TransformMap::Projective(projective)] {
+            let preview = layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id, moving: true,
+                selection: selected.then(|| selection.clone()), transform: ImageTransform { map, ..Default::default() } };
+            let work = r.metrics.composited_pixels;
+            for renderer in [&mut r, &mut exact] {
+                renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
+            }
+            let cache = r.scale_display.as_ref().unwrap();
+            assert!(matches!(cache.placed, Some(Presentation::Mapped(_))));
+            assert!(cache.output.is_empty() && cache.pixels.root().is_none());
+            assert_eq!(work, r.metrics.composited_pixels);
+            for (camera, overview) in [([0.19, 0., 0., 0.19, 8.25, 7.5], false),
+                ([0.17, 0.075, -0.075, 0.17, 37.5, 6.25], false), ([0.04, 0., 0., 0.04, 0., 0.], true)] {
+                let mut view = frame.view;
+                view.document_to_surface = camera;
+                if overview { view.width_px = 23; view.height_px = 13; }
+                let actual = render(&r, view, overview);
+                let intermediate = materialized_display(&r);
+                let mut cache = r.scale_display.take().unwrap();
+                let presentation = cache.placed.take();
+                cache.pixels = hierarchy::Pixels::Window { root: Some(intermediate), next: None };
+                let mut commands = Commands::new(&r);
+                let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+                cache.reduce_output(&mut r, &mut encoder, PixelRect::full(cache.plan.size), &mut commands).unwrap();
+                r.uploads.finish(&encoder); encoder.submit(&r.queue);
+                r.scale_display = Some(cache);
+                let prior = render(&r, view, overview);
+                let cache = r.scale_display.as_mut().unwrap();
+                cache.placed = presentation; cache.pixels = Default::default();
+                let inverse = Affine(camera).inverse().unwrap();
+                let inside = |x, y| {
+                    let p = inverse.map(Point { x, y });
+                    overview || (p.x >= 0. && p.y >= 0. && p.x < extent[0] as f32 && p.y < extent[1] as f32)
+                };
+                let mut high = view;
+                high.width_px *= 8; high.height_px *= 8;
+                high.document_to_surface = high.document_to_surface.map(|n| n * 8.);
+                let reference = render(&exact, high, overview);
+                let mut errors = Vec::new();
+                let mut prior_errors = Vec::new();
+                for y in 0..view.height_px { for x in 0..view.width_px {
+                    if !inside(x as f32 + 0.5, y as f32 + 0.5) { continue; }
+                    let mut expected = [0.; 4];
+                    let mut count = 0.;
+                    for yy in y * 8..(y + 1) * 8 { for xx in x * 8..(x + 1) * 8 {
+                        if !inside((xx as f32 + 0.5) / 8., (yy as f32 + 0.5) / 8.) { continue; }
+                        for c in 0..4 { expected[c] += reference[(yy * high.width_px + xx) as usize][c]; }
+                        count += 1.;
+                    }}
+                    errors.push(actual[(y * view.width_px + x) as usize].iter().zip(expected).map(|(a,b)| (a-b/count).abs()).fold(0., f32::max));
+                    prior_errors.push(prior[(y * view.width_px + x) as usize].iter().zip(expected).map(|(a,b)| (a-b/count).abs()).fold(0., f32::max));
+                }}
+                errors.sort_by(f32::total_cmp);
+                let mean = errors.iter().sum::<f32>() / errors.len() as f32;
+                let p99 = errors[errors.len() * 99 / 100];
+                prior_errors.sort_by(f32::total_cmp);
+                let prior_mean = prior_errors.iter().sum::<f32>() / prior_errors.len() as f32;
+                let prior_p99 = prior_errors[prior_errors.len()*99/100];
+                assert!((mean < 0.004 && p99 < 0.04) || (mean <= prior_mean * 1.05 + 0.0001 && p99 <= prior_p99 + 0.01),
+                    "patterned={patterned} {space:?} selected={selected} overview={overview} camera={camera:?}: mean={mean} p99={p99}; prior={prior_mean}/{prior_p99}");
+                if !patterned && space == layer_core::BlendSpace::Linear {
+                    assert!(mean < 0.004 && p99 < 0.04, "linear area error: mean={mean} p99={p99}");
+                }
+            }
+        }
+    }}}
+}
+
+#[test]
 fn pass_through_children_above_a_transform_keep_shared_display_composition() {
     let mut doc = document();
     let extent = [doc.width, doc.height];

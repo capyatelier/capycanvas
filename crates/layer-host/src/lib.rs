@@ -255,7 +255,7 @@ impl NativeHost {
             && self.session.background_readback_idle()
             && self.session.engine().backend().0.as_ref().is_some_and(|gpu| gpu.ui_readback_ready())
         {
-            for (request, target) in requests.into_iter().take(8) {
+            for (request, target) in requests.into_iter().take(1) {
                 // Match GTK's bounded cold-photo work. The UI retries requests
                 // that are not yet accepted, leaving input/frame opportunities
                 // between batches instead of scanning an entire photo here.

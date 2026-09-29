@@ -199,6 +199,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val rendererBefore = native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) }
                 val memoryBefore = if (memory) native { JSONObject(Native.rendererMemory(it)) } else null
                 val displayBefore = native { JSONObject(Native.displayStatus(it)) }
+                check(displayBefore.getInt("overview_count") == if (args.getString("panel") == "navigator") 1 else 0) { "Navigator visibility differs from the requested workload" }
                 val cameraBefore = JSONObject(state().getJSONObject("camera").toString())
                 synchronized(uiFrames) { uiFrames.clear() }
                 val bars = mutableListOf<Boolean>()
@@ -281,12 +282,16 @@ class AndroidCanvasBarBenchmarkTest {
             inject(MotionEvent.ACTION_CANCEL, SystemClock.uptimeMillis(), 0.0, 0.0, 0f)
             waitFor("ready") { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
-            if (args.getString("rendererProfile") == "true") {
-                action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
+            val panels = listOfNotNull(args.getString("panel"), if (args.getString("rendererProfile") == "true") "stats" else null).distinct()
+            for (name in listOf("stats", "navigator")) {
+                action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to name, "visible" to (name in panels))))
+            }
+            for (panel in panels) {
+                if (panel !in listOf("stats", "navigator")) action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panel, "visible" to true)))
                 val group = host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects()
-                    .first { "stats" in it.getJSONArray("panels").values() }.getInt("id")
+                    .first { panel in it.getJSONArray("panels").values() }.getInt("id")
                 action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
-                action(obj("type" to "select_panel_tab", "group" to group, "panel" to "stats"))
+                action(obj("type" to "select_panel_tab", "group" to group, "panel" to panel))
             }
             val wiggle = { t: Double -> (60 * (cos(2 * PI * t) - 1)) to (40 * (cos(2 * PI * t) - 1)) }
             fun primeTransform(fraction: Double = 1.0, mode: String? = null) {

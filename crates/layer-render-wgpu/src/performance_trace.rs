@@ -48,12 +48,6 @@ pub(crate) fn counter(name: &'static std::ffi::CStr, value: u64) {
     #[cfg(not(target_os = "android"))]
     let _ = (name, value);
 }
-pub(crate) fn memory(device: &wgpu::Device) {
-    if enabled() && let Some(report) = device.generate_allocator_report() {
-        counter(c"capy.gpu_allocated_bytes", report.total_allocated_bytes);
-        counter(c"capy.gpu_reserved_bytes", report.total_reserved_bytes);
-    }
-}
 #[cfg(target_os = "android")]
 #[link(name = "android")]
 unsafe extern "C" {

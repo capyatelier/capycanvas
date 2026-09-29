@@ -96,6 +96,21 @@ fn backing(root: &RasterRevision) -> std::collections::BTreeMap<TileKey, Vec<u8>
 }
 
 #[test]
+fn native_thumbnail_preparation_bounds_both_page_passes() {
+    let p = project(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
+    let id = p.document.layers[0].id;
+    let mut cold = renderer(&p, 0);
+    let mut preparations = 1;
+    while !cold.prepare_thumbnail_batch(id).unwrap() {
+        preparations += 1;
+        assert!(preparations < 100);
+    }
+    assert!(preparations >= (33usize * 2 + 1).div_ceil(4), "bounds and drawing share the four-page budget: {preparations}");
+    let mut resident = renderer(&p, u64::MAX);
+    assert_eq!(thumbnail(&mut cold, id), thumbnail(&mut resident, id));
+}
+
+#[test]
 fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() {
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16] {
@@ -289,6 +304,12 @@ fn cold_native_overrides_keep_the_original_photo_and_its_thumbnail_contributions
     let mut resident = renderer(&p, u64::MAX);
     let mut cold = renderer(&p, 0);
     close(&image(&cold), &image(&resident));
+    let mut preparations = 1;
+    while !cold.prepare_thumbnail_batch(id).unwrap() {
+        preparations += 1;
+        assert!(preparations < 100);
+    }
+    assert!(preparations >= (34usize + 33).div_ceil(4), "photo overrides must share the four-tile preparation budget: {preparations}");
     let a = thumbnail(&mut cold, id);
     let b = thumbnail(&mut resident, id);
     assert!(a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1));

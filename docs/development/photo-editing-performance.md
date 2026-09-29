@@ -30,7 +30,7 @@ Apply and the complete merge/undo memory matrix remain to be qualified.
 
 ## 2. Brush and composite rates on Mali
 
-- **Retouching brushes at 512 px** reach the moving-stroke rate on the mid and top reference tablets with the integrated compositor. See the [mid](../performance/mid-tier.md#retouching-with-the-integrated-compositor) and [top](../performance/top-tier.md#retouching-with-the-integrated-compositor) tables. Pen-up healing completion remains open.
+- **Retouching brushes at 512 px** reach the moving-stroke rate on the mid and top reference tablets with the integrated compositor. See the [mid](../performance/mid-tier.md#retouching-with-the-integrated-compositor) and [top](../performance/top-tier.md#retouching-with-the-integrated-compositor) tables. Healing interruption and dependent painting follow section 3 below.
 - **Soft brushes in Perceptual documents:** encoding and decoding each pixel a dab touches costs about 0.5 ms of GPU time per update on the Huion. A 512 px Airbrush drops from 81 to 76 updates/s.
 - **Perceptual presentation and drags** cost 0.25–0.7 ms more GPU time on Mali. A Float32-accurate fitted curve cost more than `pow`. Try a lookup table, or an sRGB-encoded texture format for the composite where the document's curve is sRGB.
 - **Top tier:** retouching has moving-stroke measurements; the complete ordinary-brush, drag, pan and zoom matrix remains unqualified.

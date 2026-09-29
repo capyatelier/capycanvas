@@ -51,7 +51,7 @@ def validate_setup(info, requested):
     expected = {key: requested[key] for key in
                 ("preset", "brush_size", "mode", "prediction", "speed", "duration_ms", "repeats")}
     actual = {key: info.get(key) for key in expected}
-    for key in ("pause_ms", "contact_ms"):
+    for key in ("pause_ms", "contact_ms", "settle_delay_ms"):
         if key in requested:
             expected[key] = requested[key]
             actual[key] = info.get(key)

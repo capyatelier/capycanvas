@@ -368,7 +368,6 @@ impl RetouchSources {
         }
         let _trace = crate::performance_trace::Span::new(c"capy.heal_prepare");
         crate::performance_trace::counter(c"capy.heal_pages", pages.len() as u64);
-        crate::performance_trace::memory(&r.device);
         let spot = batch.style.execution == BrushExecution::SpotHeal;
         let device = r.device.clone();
         let pyramid = Pyramid::new(&pages, device.limits().max_storage_buffer_binding_size);
@@ -465,7 +464,7 @@ impl RetouchSources {
         let mut work = VecDeque::new();
         let ranges = |count: usize, size: usize| (0..count).step_by(size).map(move |start| start..(start + size).min(count));
         if spot {
-            for pages in ranges(pages.len(), 32) { work.push_back(Work::Candidate(CANDIDATES, CandidatePass::Gather, pages)); }
+            for pages in ranges(pages.len(), 8) { work.push_back(Work::Candidate(CANDIDATES, CandidatePass::Gather, pages)); }
             for (c, &slot) in judges.iter().enumerate() {
                 for pages in ranges(pages.len(), 32) { work.push_back(Work::Candidate(c, CandidatePass::Score, pages)); }
                 work.push_back(Work::Plane(PlanePass::Judge, slot, 1));
@@ -701,6 +700,9 @@ impl Job {
                         Some(Some(slot)) => sources.pool[*slot].view.clone(), _ => r.empty_view.clone(),
                     };
                     let Some(index) = r.paint_layers[layer].pages.iter().position(|p| p.coordinate == page) else { continue; };
+                    if r.paint_layers[layer].pages[index].secondary.is_none() {
+                        r.paint_layers[layer].pages[index].secondary = Some(r.create_page_surface("layer sparse destination companion"));
+                    }
                     let painted = &r.paint_layers[layer].pages[index];
                     let secondary = !painted.active_secondary;
                     let coverage = self.coverage(r, i);

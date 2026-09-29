@@ -130,6 +130,11 @@ impl PaintTransforms {
     pub fn display_source(&self, id: LayerId) -> bool {
         self.0.iter().any(|t| t.preview.as_ref().is_some_and(|p| p.layer == id) && !t.native_preview)
     }
+    pub fn direct_source(&self, id: LayerId) -> bool {
+        self.0.iter().any(|t| t.preview.as_ref().is_some_and(|p| p.layer == id
+            && !p.transform.keep_source && !matches!(p.transform.map, layer_core::TransformMap::Mesh(_)))
+            && !t.native_preview && t.reduced.as_ref().is_some_and(|input| input.kept.is_none()))
+    }
     pub fn input_requirements(&self, preview: &layer_render::TransformPreview, requested: u32, extent: [u32; 2]) -> (u32, bool) {
         let state = self.0.iter().find(|t| t.displayable(preview));
         let level = state.and_then(|t| t.reduced.as_ref()).map_or(requested, |input| input.level.min(requested));
@@ -160,6 +165,15 @@ impl PaintTransforms {
             state.queried = pages;
         }
         Ok(())
+    }
+    pub fn presentation(&self, id: LayerId, placement: layer_core::Affine, extent: [u32; 2], opacity: f32, backdrop: [f32; 4], encode: bool)
+        -> Result<resample::Mapped, GpuRasterError> {
+        let state = self.0.iter().find(|t| t.preview.as_ref().is_some_and(|p| p.layer == id)).unwrap();
+        let preview = state.preview.as_ref().unwrap();
+        let inputs = state.reduced.as_ref().unwrap();
+        let display = pixel_transform::DisplayLevel { side: 1, extent, opacity, backdrop, encode };
+        let values = state.display_record(preview, extent, placement, display, display_mips::Plan::at(extent, 0), [0; 4])?;
+        Ok(resample::Mapped { view: inputs.sampling[0].clone(), values })
     }
     pub fn render_region(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
@@ -1315,38 +1329,31 @@ impl ImageTransformState {
         resample: &resample::Resample,
     ) -> Result<(), GpuRasterError> {
         let side = display.side;
-        let display_level = side.trailing_zeros();
-        let local = self.reduced.as_ref().unwrap().level;
         let mesh = match &next.transform.map {
             layer_core::TransformMap::Mesh(map) => Some(map.clone()), _ => None,
         };
         let texels = texel_rect(region.window_local(target.bounds), side);
-        let transform = resample_map(&next.transform, placement, local, display_level)?;
-        let kept = resample_map(&layer_core::ImageTransform::default(), placement, local, display_level)?;
-        let clip = layer_core::Affine([side as f32, 0., 0., side as f32, 0., 0.])
-            .then(placement.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid layer placement"))?);
+        let values = self.display_record(next, extent, placement, display, target, texels)?;
         if let Some(map) = &mesh {
             let tolerance = 0.5 * side as f32 / magnification(placement).max(1e-6);
             let geometry = self.mesh_geometry(map, Some(tolerance));
             self.display_mesh.upload(r, encoder, &geometry)?;
         }
-        self.reduced.as_mut().unwrap().draw(
-            r,
-            resample,
-            encoder,
-            level,
-            &transform,
-            &kept,
-            clip,
-            extent,
-            texels,
-            display,
-            target,
-            mesh.as_ref().map(|_| &self.display_mesh),
-            next.transform.keep_source,
-            next.transform.is_identity(),
-        )?;
-        Ok(())
+        self.reduced.as_mut().unwrap().draw(r, resample, encoder, level, &values, texels, mesh.as_ref().map(|_| &self.display_mesh))
+    }
+    fn display_record(&self, next: &layer_render::TransformPreview, extent: [u32; 2], placement: layer_core::Affine,
+        display: pixel_transform::DisplayLevel, target: display_mips::Plan, texels: [u32; 4],
+    ) -> Result<[u8; resample::UNIFORM_BYTES as usize], GpuRasterError> {
+        let inputs = self.reduced.as_ref().unwrap();
+        let display_level = display.side.trailing_zeros();
+        let moved = resample_map(&next.transform, placement, inputs.level, display_level)?;
+        let kept = resample_map(&layer_core::ImageTransform::default(), placement, inputs.level, display_level)?;
+        let side = display.side as f32;
+        let clip = layer_core::Affine([side, 0., 0., side, 0., 0.])
+            .then(placement.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid layer placement"))?);
+        resample::Resample::values(resample::Request { moved: &moved, kept: &kept, clip, extent, texels, display, target,
+            source: inputs.image.plan, max_lod: inputs.image.last_level()-inputs.image.plan.level, outside: 0.,
+            keep_source: next.transform.keep_source, identity: next.transform.is_identity() })
     }
     /// Draw `part` of `drawn`, whose corners lie on texel corners, by
     /// evaluating every layer pixel of every texel from the captured originals.

@@ -31,10 +31,12 @@ impl Thumbnails {
         Some(image)
     }
     pub fn storage_bytes(&self) -> u64 {
+        let paint = self.gpu.as_ref().map_or(0, |gpu| gpu.prepared.iter()
+            .map(|p| p.records.size() + 16 + texture_bytes(&p.result.texture)).sum());
         #[cfg(not(target_arch = "wasm32"))]
-        return self.sources.as_ref().map_or(0, |s| s.storage_bytes());
+        return paint + self.sources.as_ref().map_or(0, |s| s.storage_bytes());
         #[cfg(target_arch = "wasm32")]
-        0
+        paint
     }
 }
 impl WgpuRasterizer {
@@ -80,28 +82,33 @@ impl WgpuRasterizer {
     pub fn thumbnails_pending(&self) -> bool {
         self.thumbnails.pending > 0
     }
-    /// Give a cold photo thumbnail bounded background time before requesting
-    /// its readback. Hosts can service camera/paint commands between batches.
-    /// Existing completed originals are reused; document pixels are unchanged.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Prepare at most four source or paint pages before requesting readback.
     pub fn prepare_thumbnail_batch(&mut self, target: LayerId) -> Result<bool, GpuRasterError> {
         if !self.prepare_selection_thumbnail(target)? {return Ok(false)}
-        if !self.tiled_sources.contains_key(&target) {
-            return Ok(true);
-        }
-        let mut gpu = self
-            .thumbnails
-            .sources
-            .take()
-            .unwrap_or_else(|| crate::source_thumbnails::SourceThumbnails::new(self));
         let mut encoder = crate::submission::CommandEncoder::new(
             &self.device,
             &wgpu::CommandEncoderDescriptor {
                 label: Some("background photo thumbnail batch"),
             },
         );
-        let result = gpu.prepare(self, target, &mut encoder, 4);
-        self.thumbnails.sources = Some(gpu);
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = if self.tiled_sources.contains_key(&target) {
+            let mut gpu = self.thumbnails.sources.take()
+                .unwrap_or_else(|| crate::source_thumbnails::SourceThumbnails::new(self));
+            let result = gpu.prepare(self, target, &mut encoder, 4);
+            self.thumbnails.sources = Some(gpu);
+            Some(result)
+        } else { None };
+        #[cfg(target_arch = "wasm32")]
+        let source = None;
+        let result = if self.selection_previews.definitions.contains_key(&target) { Ok(true) }
+        else if let Some(source) = source { source }
+        else {
+            let mut gpu = self.thumbnails.gpu.take().unwrap_or_else(|| PreviewPipeline::new(self));
+            let result = gpu.prepare(self, target, &mut encoder, 4);
+            self.thumbnails.gpu = Some(gpu);
+            result
+        };
         let ready = result?;
         self.uploads.finish(&encoder);
         encoder.submit(&self.queue);
@@ -138,7 +145,7 @@ impl WgpuRasterizer {
         } else if let Some(source) = source {
             source
         } else {
-            let gpu = self
+            let mut gpu = self
                 .thumbnails
                 .gpu
                 .take()
@@ -304,6 +311,22 @@ struct PreviewPipeline {
     read_bounds: wgpu::BindGroupLayout,
     measure: wgpu::ComputePipeline,
     draw: wgpu::RenderPipeline,
+    prepared: std::collections::VecDeque<PreparedPreview>,
+}
+struct PreparedPreview {
+    id: LayerId,
+    revision: (u64, u64),
+    rendition: [f32; 8],
+    sources: Vec<Option<[u32; 2]>>,
+    mask: bool,
+    records: wgpu::Buffer,
+    stride: u32,
+    read: wgpu::BindGroup,
+    write: wgpu::BindGroup,
+    result: PageSurface,
+    measure: usize,
+    draw: usize,
+    valid: Arc<std::sync::atomic::AtomicBool>,
 }
 impl PreviewPipeline {
     fn new(r: &WgpuRasterizer) -> Self {
@@ -372,14 +395,14 @@ impl PreviewPipeline {
             read_bounds,
             measure,
             draw,
+            prepared: Default::default(),
         }
     }
-    fn render(
+    fn begin(
         &self,
-        r: &mut WgpuRasterizer,
+        r: &WgpuRasterizer,
         id: LayerId,
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<PageSurface, GpuRasterError> {
+    ) -> PreparedPreview {
         let mask = r.layer_masks.definitions.get(&id).cloned();
         let gray = mask.as_ref().map_or(0., |m| {
             if m.inverted {
@@ -472,8 +495,23 @@ impl PreviewPipeline {
                 contents: &bytes,
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        // Decode and consume each bounded set before another cache reservation.
-        // Records remain immutable for both native staging and browser writes.
+        let result = create_page_surface(&r.device, &r.texture_layout, &r.sampler, [32, 32],
+            r.device.working_format(), "layer thumbnail");
+        PreparedPreview { id, revision: (r.artwork_revision, r.selection_paint_revision),
+            rendition: r.ui_rendition_parameters(), measure: if full { sources.len() } else { 1 },
+            sources, mask: mask.is_some(), records, stride: stride as u32, read, write, result, draw: 0,
+            valid: Arc::new(std::sync::atomic::AtomicBool::new(true)) }
+    }
+    fn prepare(&mut self, r: &mut WgpuRasterizer, id: LayerId,
+        encoder: &mut crate::submission::CommandEncoder, mut limit: usize,
+    ) -> Result<bool, GpuRasterError> {
+        let revision = (r.artwork_revision, r.selection_paint_revision);
+        let rendition = r.ui_rendition_parameters();
+        self.prepared.retain(|p| p.revision == revision && p.rendition == rendition
+            && p.valid.load(std::sync::atomic::Ordering::Acquire));
+        let cached = self.prepared.iter().position(|p| p.id == id);
+        let mut prepared = if let Some(i) = cached { self.prepared.remove(i).unwrap() } else { self.begin(r, id) };
+        let write = crate::submission::CacheWrite::new();
         let inputs = |r: &mut WgpuRasterizer,
                       encoder: &mut crate::submission::CommandEncoder,
                       chunk: &[Option<[u32; 2]>]|
@@ -483,7 +521,7 @@ impl PreviewPipeline {
                 .map(|coordinate| {
                     let view = match coordinate {
                         None => r.empty_view.clone(),
-                        Some(c) if mask.is_some() => r.layer_masks.pages[&(id, *c)].view.clone(),
+                        Some(c) if prepared.mask => r.layer_masks.pages[&(id, *c)].view.clone(),
                         Some(c) => {
                             r.raw_layer_tile(id, *c, encoder)?
                                 .ok_or(GpuRasterError::MissingPaintLayer(id))?
@@ -491,65 +529,74 @@ impl PreviewPipeline {
                         }
                     };
                     Ok(crate::bindings::group(&r.device, "thumbnail page", &self.records, [
-                        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &records, offset: 0, size: NonZeroU64::new(80), }),
+                        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &prepared.records, offset: 0, size: NonZeroU64::new(80), }),
                         wgpu::BindingResource::TextureView(&view),
                         wgpu::BindingResource::Sampler(&r.sampler),
                     ]))
                 })
                 .collect()
         };
-        if !full && sources.len() > 1 {
-            for (batch, chunk) in sources[1..].chunks(SOURCE_SLOTS).enumerate() {
-                let bindings = inputs(r, encoder, chunk)?;
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("thumbnail bounds scan"),
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(&self.measure);
-                pass.set_bind_group(0, &write, &[]);
-                for (i, source) in bindings.iter().enumerate() {
-                    pass.set_bind_group(
-                        1,
-                        source,
-                        &[((1 + batch * SOURCE_SLOTS + i) * stride) as u32],
-                    );
-                    pass.dispatch_workgroups(8, 8, 1);
-                }
+        while limit > 0 && prepared.measure < prepared.sources.len() {
+            let end = (prepared.measure + limit.min(SOURCE_SLOTS)).min(prepared.sources.len());
+            let chunk = &prepared.sources[prepared.measure..end];
+            let bindings = inputs(r, encoder, chunk)?;
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("thumbnail bounds scan"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.measure);
+            pass.set_bind_group(0, &prepared.write, &[]);
+            for (i, source) in bindings.iter().enumerate() {
+                pass.set_bind_group(
+                    1,
+                    source,
+                    &[(prepared.measure + i) as u32 * prepared.stride],
+                );
+                pass.dispatch_workgroups(8, 8, 1);
             }
+            limit -= end - prepared.measure;
+            prepared.measure = end;
         }
-        let result = create_page_surface(
-            &r.device,
-            &r.texture_layout,
-            &r.sampler,
-            [32, 32],
-            r.device.working_format(),
-            "layer thumbnail",
-        );
-        for (batch, chunk) in sources.chunks(SOURCE_SLOTS).enumerate() {
+        while limit > 0 && prepared.draw < prepared.sources.len() {
+            let end = (prepared.draw + limit.min(SOURCE_SLOTS)).min(prepared.sources.len());
+            let chunk = &prepared.sources[prepared.draw..end];
             let bindings = inputs(r, encoder, chunk)?;
             if r.device.portable_blend() {
-                if batch == 0 { r.encode_clear(encoder,&result.view,"clear portable thumbnail"); }
-                let temporary=r.portable_blend.source(&r.device,&result.view,r.device.working_format());
+                if prepared.draw == 0 { r.encode_clear(encoder,&prepared.result.view,"clear portable thumbnail"); }
+                let temporary=r.portable_blend.source(&r.device,&prepared.result.view,r.device.working_format());
                 for (i,source) in bindings.iter().enumerate() {
                     let mut pass=encoder.color_pass("portable thumbnail",&temporary,wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
-                    pass.set_pipeline(&self.draw);pass.set_bind_group(0,&read,&[]);
-                    pass.set_bind_group(1,source,&[((batch*SOURCE_SLOTS+i)*stride) as u32]);pass.draw(0..3,0..1);drop(pass);
-                    r.portable_blend.apply(&r.device,encoder,&temporary,&result.view,PixelRect::full([32,32]),0);
+                    pass.set_pipeline(&self.draw);pass.set_bind_group(0,&prepared.read,&[]);
+                    pass.set_bind_group(1,source,&[(prepared.draw+i) as u32*prepared.stride]);pass.draw(0..3,0..1);drop(pass);
+                    r.portable_blend.apply(&r.device,encoder,&temporary,&prepared.result.view,PixelRect::full([32,32]),0);
                 }
-                continue;
+            } else {
+                let mut pass = encoder.color_pass(
+                    "thumbnail framing and checkerboard",
+                    &prepared.result.view,
+                    if prepared.draw == 0 { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
+                );
+                pass.set_pipeline(&self.draw);
+                pass.set_bind_group(0, &prepared.read, &[]);
+                for (i, source) in bindings.iter().enumerate() {
+                    pass.set_bind_group(1, source, &[(prepared.draw + i) as u32 * prepared.stride]);
+                    pass.draw(0..3, 0..1);
+                }
             }
-            let mut pass = encoder.color_pass(
-                "thumbnail framing and checkerboard",
-                &result.view,
-                if batch == 0 { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
-            );
-            pass.set_pipeline(&self.draw);
-            pass.set_bind_group(0, &read, &[]);
-            for (i, source) in bindings.iter().enumerate() {
-                pass.set_bind_group(1, source, &[((batch * SOURCE_SLOTS + i) * stride) as u32]);
-                pass.draw(0..3, 0..1);
-            }
+            limit -= end - prepared.draw;
+            prepared.draw = end;
         }
-        Ok(result)
+        write.track(encoder);
+        prepared.valid = write.validity();
+        let ready = prepared.draw == prepared.sources.len();
+        self.prepared.push_back(prepared);
+        while self.prepared.len() > 8 { self.prepared.pop_front(); }
+        Ok(ready)
+    }
+    fn render(&mut self, r: &mut WgpuRasterizer, id: LayerId,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<PageSurface, GpuRasterError> {
+        self.prepare(r, id, encoder, usize::MAX)?;
+        Ok(self.prepared.pop_back().unwrap().result)
     }
 }
