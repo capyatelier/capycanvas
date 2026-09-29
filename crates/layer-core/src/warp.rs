@@ -169,14 +169,15 @@ impl MeshMap {
     }
 
     /// Map closed polygons placed by `placement` in source pixels, clipped to
-    /// the mesh's rectangle and subdivided to at most one source pixel per edge.
+    /// the mesh's rectangle and subdivided by destination curvature.
     pub(crate) fn map_polygons(
         &self,
         polygons: &[Arc<[Point]>],
         placement: Affine,
     ) -> Option<Vec<Arc<[Point]>>> {
         let to_unit = placement.then(self.frame.inverse()?);
-        let [a, b, c, d, _, _] = self.frame.0.map(f64::from);
+        let steps = self.subdivisions(0.25);
+        let grid = [0, 1].map(|axis| f64::from(u32::from(self.cells[axis]) * steps[axis]));
         Some(
             polygons
                 .iter()
@@ -195,10 +196,16 @@ impl MeshMap {
                     let mut dense = Vec::with_capacity(clipped.len());
                     for (i, p) in clipped.iter().enumerate() {
                         let q = clipped[(i + 1) % clipped.len()];
-                        let [du, dv] = [q[0] - p[0], q[1] - p[1]];
-                        let steps = (a * du + c * dv).hypot(b * du + d * dv).ceil().max(1.) as usize;
-                        dense.extend((0..steps).map(|k| {
-                            let t = k as f64 / steps as f64;
+                        let mut cuts = vec![0.];
+                        for axis in 0..2 {
+                            let [a, b] = [p[axis], q[axis]].map(|v| v * grid[axis]);
+                            for k in a.min(b).floor() as u32 + 1..a.max(b).ceil() as u32 {
+                                cuts.push((f64::from(k) - a) / (b - a));
+                            }
+                        }
+                        cuts.sort_by(f64::total_cmp);
+                        cuts.dedup();
+                        dense.extend(cuts.into_iter().map(|t| {
                             let [u, v] = [0, 1].map(|axis| (p[axis] + (q[axis] - p[axis]) * t).clamp(0., 1.) as f32);
                             self.evaluate(u, v)
                         }));
@@ -217,9 +224,7 @@ impl MeshMap {
         }
     }
 
-    /// A triangle surface whose vertices lie on the patches, spaced so that
-    /// its chords stay within `tolerance` destination pixels of them.
-    pub fn tessellate(&self, tolerance: f32) -> Tessellation {
+    fn subdivisions(&self, tolerance: f32) -> [u32; 2] {
         let [width, height] = [self.width(), self.net.len() / self.width()];
         let mut bend = [0f32; 3];
         let length = |p: Point| p.x.hypot(p.y);
@@ -262,7 +267,13 @@ impl MeshMap {
             let scale = (twist / (steps[0] * steps[1])).sqrt();
             steps = steps.map(|n| n * scale);
         }
-        let steps = steps.map(|n| (n.ceil() as u32).clamp(1, 64));
+        steps.map(|n| (n.ceil() as u32).clamp(1, 64))
+    }
+
+    /// A triangle surface whose vertices lie on the patches, spaced so that
+    /// its chords stay within `tolerance` destination pixels of them.
+    pub fn tessellate(&self, tolerance: f32) -> Tessellation {
+        let steps = self.subdivisions(tolerance);
         let [columns, rows] = [
             (u32::from(self.cells[0]) * steps[0]).min(1024),
             (u32::from(self.cells[1]) * steps[1]).min(1024),
@@ -284,7 +295,7 @@ impl MeshMap {
             positions: Vec::with_capacity(vertices),
             sources: Vec::with_capacity(vertices),
         };
-        let mut curves = vec![[0f32; 2]; width];
+        let mut curves = vec![[0f32; 2]; self.width()];
         for (j, (row, weights)) in down.iter().enumerate() {
             for (i, curve) in curves.iter_mut().enumerate() {
                 *curve = weights.iter().enumerate().fold([0.; 2], |sum, (n, w)| {
@@ -632,10 +643,7 @@ mod tests {
         let [contour] = mapped.contours() else {
             panic!("one ring")
         };
-        assert!(
-            contour.len() > 800,
-            "edges follow the patches pixel by pixel"
-        );
+        assert!((3..800).contains(&contour.len()));
         assert!(contour.iter().all(|p| p.x >= hull.min.x - 1e-3
             && p.x <= hull.max.x + 1e-3
             && p.y >= hull.min.y - 1e-3
@@ -652,6 +660,36 @@ mod tests {
         ])
         .unwrap();
         assert!(outside.mapped(&map).unwrap().contours().is_empty());
+    }
+
+    #[test]
+    fn mapped_contours_bound_destination_error_without_sampling_every_source_pixel() {
+        let bounds = rect(0., 0., 4248., 2832.);
+        let identity = MeshMap::identity(bounds, [3, 3]).unwrap();
+        let bent = identity.move_node(1, Point { x: 190., y: 270. }).unwrap()
+            .move_tangent(5, 1, Point { x: -360., y: 150. }).unwrap();
+        let ring = [[0., 0.], [4248., 0.], [4248., 2832.], [0., 2832.]].map(|[x, y]| Point { x, y });
+        for mesh in [&identity, &bent] {
+            for ring in [ring.to_vec(), vec![ring[0], ring[2], ring[3]]] {
+                let selection = Selection::polygon(ring.clone()).unwrap();
+                let mapped = selection.mapped(&TransformMap::Mesh(Arc::new(mesh.clone()))).unwrap();
+                let contour = &mapped.contours()[0];
+                assert!(contour.len() < 1000, "{} segments for four source edges", contour.len());
+                if std::ptr::eq(mesh, &identity) { assert!(contour.len() <= 24); }
+                for (a, b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+                    for k in 0..=2000 {
+                        let t = k as f32 / 2000.;
+                        let p = mesh.map(Point { x: a.x + (b.x - a.x)*t, y: a.y + (b.y - a.y)*t }).unwrap();
+                        let error = contour.iter().zip(contour.iter().cycle().skip(1)).map(|(a, b)| {
+                            let d = Point { x: b.x - a.x, y: b.y - a.y };
+                            let t = (((p.x-a.x)*d.x + (p.y-a.y)*d.y) / (d.x*d.x + d.y*d.y).max(1e-12)).clamp(0., 1.);
+                            distance(p, Point { x: a.x+t*d.x, y: a.y+t*d.y })
+                        }).fold(f32::INFINITY, f32::min);
+                        assert!(error <= 0.26, "mapped contour error {error} at {p:?}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

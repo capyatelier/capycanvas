@@ -162,6 +162,10 @@ actual centers. Finer transaction inputs persist across scale oscillations.
 Mesh triangles rasterize color directly into the graph's target. Fragment
 derivatives choose the source footprint, and later triangles replace earlier
 ones where a mesh folds. Kept coverage and the mesh share one render pass.
+Selection contours reuse the mesh's curvature subdivisions with a requested
+quarter destination-pixel tolerance and the same 64-step cap per patch axis.
+Their edges split at subdivision boundaries, retaining clipped corners without
+sampling every source pixel along straight edges.
 Split selections use finer
 inputs and four samples to limit moved/unmoved coverage error; edge texels
 use their actual extent. Exact queries evaluate native source tiles for their

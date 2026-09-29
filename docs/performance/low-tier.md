@@ -34,7 +34,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Pixel transform translation | 60 | Screen 59.4 presents/s, p99 16.9 ms; renderer 85.5 completed updates/s | Current drag comparison below, `photo-pixels-translate-drag` |
 | Pixel transform: Distort | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 66.7 completed updates/s | Current drag comparison below, `photo-pixels-distort-drag` |
 | Pixel transform: Perspective | 60 | | |
-| Pixel transform: Warp | 60 | **Not met.** Screen 47.9 presents/s, p99 33.4 ms; renderer 47.9 completed updates/s | Current drag comparison below, `photo-pixels-warp-drag` |
+| Pixel transform: Warp | 60 | Screen 59.4 presents/s, p99 16.8 ms; renderer 65.1 completed updates/s | Warp contour qualification below, `photo-pixels-warp-drag` |
 | Crop corner drag | 60 | Screen 59.2 presents/s, p99 16.9 ms; renderer 110.5 completed updates/s | Current drag comparison below, `crop-handle-drag` |
 | Pixel resize after placing the photo at 45% size | 60 | Screen 58.6 presents/s, p99 16.7 ms; renderer 140.4 completed updates/s | Current drag comparison below, `scaled-photo-pixels-handle-drag` |
 | Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
@@ -86,7 +86,7 @@ inside qualification; a separate safety guard observes system available RAM.
 | Pixel transform corner resize: Free | 86.80 | 78.57 |
 | Pixel transform translation | 87.67 | 85.53 |
 | Pixel transform: Distort | 85.34 | 66.73 |
-| Pixel transform: Warp | 42.46 | 47.88 |
+| Pixel transform: Warp | 42.46 | 65.06 (contour fix below) |
 | Crop corner drag | 113.77 | 110.46 |
 | Pixel resize after placing the photo at 45% size | 108.81 | 140.42 |
 
@@ -99,8 +99,8 @@ one backdrop refresh instead of 278 during Distort. These reduce CPU and GPU
 work without changing the artwork.
 
 Pixel resize and Distort still trail the old compositor in completed-update
-throughput. Distort meets the screen-cadence criterion in this fixture; Warp
-still misses it. The current resampler filters a mip pyramid according to the
+throughput. Distort and Warp meet the screen-cadence criterion in this fixture.
+The current resampler filters a mip pyramid according to the
 transformed pixel footprint; the old resampler takes one bilinear sample at a
 fixed source level. That changes the work per pixel, but does not establish that
 the remaining cost is unavoidable.
@@ -116,6 +116,21 @@ Current: `bf534b8e8` plus the drag fixes, APK SHA-256
 `89ad253df04ed082393f9b134766427b49f133da3794f34c990b855394879926`.
 Raw runs are in `artifacts/latency-investigation/{old-warm-2,stable-drag-warm}`;
 phase diagnostics are in `drag-budget-profile` and `specialized-profile`.
+
+### Warp contour qualification
+
+Three subsequent matched runs with curvature-bounded selection contours raise
+Warp from 47.88 to 65.06 completed updates/s. Screen cadence is 59.37 presents/s
+with a 16.84 ms p99 interval; all three runs meet the screen target, with thermal
+status zero. This removes per-source-pixel contour subdivision: the previous
+12 MP rectangular selection generated 14,160 points even along straight edges.
+The editable grid and the pixel resampler are unchanged.
+
+Build: `255309151` plus the contour fix, APK SHA-256
+`643f97510b32802ab72f2ee9c30a7c52e0b1a104c2b044a2aaeb39cd33e9c96d`.
+Raw runs: `artifacts/latency-investigation/warp-contour-warm`.
+The cursor attribution trace is `cursor-count-profile`; it measures about
+14,200 line segments during Warp versus eight during Distort.
 
 ### Earlier selected-pixel Move measurements
 
