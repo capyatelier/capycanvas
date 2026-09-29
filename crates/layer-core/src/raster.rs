@@ -428,9 +428,14 @@ impl RasterRevision {
         matches!(self.try_data(), Some(Ok(data)) if data.tiles.is_empty() && data.watercolor.is_none())
     }
     pub fn pending() -> Self {
+        Self::pending_within(MAX_CAPTURE_BYTES)
+    }
+    /// A pending revision whose capture holds at most `bytes`, such as an
+    /// empty new layer that operations write known pages into.
+    pub fn pending_within(bytes: u64) -> Self {
         Self(Arc::new(RasterPublication {
             data: Publication::default(),
-            pending_bytes: AtomicU64::new(MAX_CAPTURE_BYTES),
+            pending_bytes: AtomicU64::new(bytes),
         }))
     }
     /// A producer admitting a larger native publication must account its

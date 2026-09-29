@@ -92,6 +92,15 @@ has run (`with_bake_members` in
 [`canvas.rs`](../../crates/layer-engine/src/canvas.rs)). The bake is frame work
 on the render owner; the UI thread only plans it.
 
+A bake keeps no filter images. When its members' filters would need more
+image memory than the default image budget, it runs them in the bounded windows
+the display uses for filters (`windows::Plan`), each with its filters' halos
+and retired before the next, so a windowed bake stores the same pixels as a
+whole one. Pages keep only the part inside the result's extent, with coverage
+kept within 0–1, which a blur of translucent pixels can round past. A new,
+empty layer that an operation writes into reserves in history only the pages
+it can write (`RasterRevision::pending_within`).
+
 The Crop tool's shield is drawn by the presentation pass itself. `set_crop_overlay`
 passes a `CropOverlay` (the map from document pixels onto the crop's unit square,
 and the shield opacity) to the renderer, which folds it into the presentation

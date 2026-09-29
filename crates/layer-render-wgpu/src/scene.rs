@@ -62,6 +62,8 @@ pub(super) enum Convert {
     None,
     Encode,
     Decode,
+    Store,
+    DecodeStore,
 }
 impl Convert {
     fn code(self) -> f32 {
@@ -69,7 +71,15 @@ impl Convert {
             Self::None => 0.,
             Self::Encode => 1.,
             Self::Decode => 2.,
+            Self::Store => 3.,
+            Self::DecodeStore => 4.,
         }
+    }
+    /// How the composite of `packet` becomes pixels a layer's pages store:
+    /// linear, with coverage within 0–1, which filters that spread coverage
+    /// can round past.
+    pub(super) fn stored(packet: FramePacket<'_>) -> Self {
+        if packet.blend_space == layer_core::BlendSpace::Perceptual { Self::DecodeStore } else { Self::Store }
     }
     /// How a layer's own pixels enter the composite of `packet`.
     pub(super) fn layers(packet: FramePacket<'_>) -> Self {

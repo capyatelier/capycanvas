@@ -654,6 +654,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let mut batches = Vec::with_capacity(operations.len());
         let mut restores = Vec::new();
         let mut reservations = std::collections::BTreeMap::<LayerId, Rect>::new();
+        let mut inserted_empty = std::collections::BTreeSet::new();
         for (id, operation) in operations {
             let owner = document
                 .target_owner(id)
@@ -666,6 +667,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 ));
             }
             let pixels = document.target_raster(id).cloned().unwrap_or_default();
+            if self.document().target_owner(id).is_none() && pixels.is_empty() {
+                inserted_empty.insert(id);
+            }
             let replaced = self.document().target_raster(id).is_none_or(|current| *current != pixels);
             if replaced && !restores.iter().any(|(target, _)| *target == id) {
                 restores.push((id, pixels.clone()));
@@ -708,15 +712,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let color = document.color;
         for (id, damage) in reservations {
             let owner = document.target_owner(id).unwrap().id;
-            let layer = &layers[&owner];
+            let layer = layers.get_mut(&owner).unwrap();
             let (raster, plane) = if id == owner {
-                (&layer.raster, layer_core::raster::RasterPlane::Color)
+                (&mut layer.raster, layer_core::raster::RasterPlane::Color)
             } else {
-                (&layer.mask.as_ref().unwrap().raster, layer_core::raster::RasterPlane::Mask)
+                (&mut layer.mask.as_mut().unwrap().raster, layer_core::raster::RasterPlane::Mask)
             };
             let tile = layer_core::raster::TileBlob::max_compressed_len(plane.descriptor(color))
                 .unwrap_or(0) as u64;
-            raster.reserve_pending_bytes(layer_core::raster::page_count(damage, document.target_extent(id)) * tile);
+            let bytes = layer_core::raster::page_count(damage, document.target_extent(id)) * tile;
+            if inserted_empty.contains(&id) {
+                *raster = layer_core::raster::RasterRevision::pending_within(bytes);
+            } else {
+                raster.reserve_pending_bytes(bytes);
+            }
         }
         let mut edits = prefix;
         for edit in &mut edits {

@@ -342,3 +342,48 @@ fn merge_timing_on_a_24_megapixel_photo_with_ten_layers() {
         settle(&mut engine);
     }
 }
+
+/// Blurs spread coverage, so their bakes can round alpha past one. Every
+/// result must still save and reopen as it looked, in both blend spaces at
+/// 8 and 16 bits.
+#[test]
+fn bakes_of_blurs_save_and_reopen() {
+    for depth in [color::SampleDepth::U8, color::SampleDepth::U16] {
+        for space in BlendSpace::ALL {
+            let mut doc = document(&["Blur", "Photo"], space);
+            doc.color.depth = depth;
+            doc.layers[1].source = Some(color::source::rgba8_source(SIZE, |x, y| {
+                let inside = (60..320).contains(&x) && (40..210).contains(&y);
+                [(x * 3 % 256) as u8, (y * 5 % 256) as u8, 200, if inside { 255 } else if (x + y) % 7 == 0 { 90 } else { 0 }]
+            }));
+            let mut blur = EffectInstance::new(bundled_effect_catalog().get("gaussian_blur").unwrap().program());
+            blur.set("sigma", EffectValue::Number(6.)).unwrap();
+            doc.layers[0].kind = LayerKind::Effect;
+            doc.layers[0].effect = Some(std::sync::Arc::new(blur));
+            let (mut engine, _input) = engine(doc);
+            let original = image(&mut engine, 0);
+            let steps: Vec<(&str, Box<dyn Fn(&mut Engine)>)> = vec![
+                ("Merge Down", Box::new(|engine: &mut Engine| { merge(engine, MergeKind::Down); })),
+                ("Merge Visible", Box::new(|engine: &mut Engine| { merge(engine, MergeKind::Visible); })),
+                ("Stamp Visible", Box::new(|engine: &mut Engine| { merge(engine, MergeKind::Stamp); })),
+                ("Flatten Image", Box::new(|engine: &mut Engine| { merge(engine, MergeKind::Flatten); })),
+            ];
+            for (name, step) in steps {
+                let what = format!("{depth:?} {space:?} {name}");
+                step(&mut engine);
+                let changed = image(&mut engine, 1);
+                for layer in &engine.document().layers {
+                    for tile in layer.raster.wait_data().unwrap().tiles.values() {
+                        tile.wait_backing().unwrap_or_else(|e| panic!("{what}: {} did not save: {e}", layer.name));
+                    }
+                }
+                let mut bytes = Vec::new();
+                Project::snapshot(engine.document()).unwrap().write(&mut bytes).unwrap();
+                let (mut reopened, _) = support::engine(Project::read(bytes.as_slice(), ProjectLimits::default()).unwrap().document);
+                image(&mut reopened, 0).assert_near(&changed, TOLERANCE, &format!("{what}: reopened"));
+                assert!(engine.undo().unwrap());
+                image(&mut engine, 2).assert_eq(&original, &format!("{what}: undo"));
+            }
+        }
+    }
+}

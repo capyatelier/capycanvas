@@ -23,9 +23,14 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
 }
 // operation_offset.w converts the color a layer draw contributes: 1 encodes
 // linear layer pixels into the Perceptual composite, 2 decodes the composite.
+// 3 keeps a composite's coverage within 0–1 for a layer's pages, and 4 also
+// decodes it.
 fn scene_space(c:vec4<f32>)->vec4<f32> {
-    if settings.operation_offset.w==1. {return working_encode(c);}
-    if settings.operation_offset.w==2. {return working_decode(c);}
+    let convert=settings.operation_offset.w;
+    if convert==1. {return working_encode(c);}
+    if convert==2. {return working_decode(c);}
+    if convert==3. {return working_clamp(c);}
+    if convert==4. {return working_clamp(working_decode(c));}
     return c;
 }
 fn scene_sample(image:texture_2d<f32>,uv:vec2<f32>)->vec4<f32> {

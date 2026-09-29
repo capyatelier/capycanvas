@@ -55,7 +55,9 @@ impl Plan {
         )))
     }
 
-    fn regions(self, dirty: PixelRect) -> impl Iterator<Item = (PixelRect, PixelRect)> {
+    /// Output regions covering `dirty`, each with the window of input its
+    /// filters read.
+    pub(super) fn regions(self, dirty: PixelRect) -> impl Iterator<Item = (PixelRect, PixelRect)> {
         let extent = self.extent;
         let radius = self.radius;
         let side = self.side;
