@@ -11,6 +11,33 @@ fn interpretation(space: RgbSpace, depth: SampleDepth) -> SourceInterpretation {
 }
 
 #[test]
+fn integer_matrix_curves_match_the_float_transform_at_every_code() {
+    let mut profile = open(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
+    profile.green_trc = Some(ToneReprCurve::Parametric(vec![1.8]));
+    profile.blue_trc = Some(ToneReprCurve::Lut(vec![0, 1800, 12000, 32000, 65535]));
+    let bytes = profile.encode().unwrap();
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
+        for intent in [RenderingIntent::RelativeColorimetric, RenderingIntent::AbsoluteColorimetric] {
+            let mut source = interpretation(RgbSpace::Srgb, depth);
+            source.profile = ColorProfile::Icc(bytes.clone().into());
+            let options = ConversionOptions { intent, ..Default::default() };
+            let decoder = WorkingDecoder::new(&source, RgbSpace::ProPhoto, options).unwrap();
+            let reference = CompiledTransform::<4, 4>::new(&open(&source.profile).unwrap(),
+                &linear_profile(RgbSpace::ProPhoto).unwrap(), options).unwrap();
+            let max = depth.maximum();
+            let codes: Vec<_> = (0..=max).map(|c| [c, (c * 173 + 19) & max, max - c, c]).collect();
+            let input: Vec<_> = codes.iter().map(|p| p.map(|c| c as f32 / max as f32)).collect();
+            let encoded: Vec<_> = codes.iter().flatten().flat_map(|c| c.to_le_bytes()[..depth.bytes()].to_vec()).collect();
+            let mut expected = vec![[0.; 4]; codes.len()];
+            let mut actual = expected.clone();
+            reference.transform_pixels(&input, &mut expected);
+            decoder.decode_pixels(&encoded, &mut actual).unwrap();
+            assert_eq!(actual, expected, "{depth:?} {intent:?}");
+        }
+    }
+}
+
+#[test]
 fn wide_gamut_working_conversion_retains_negative_and_above_one_values() {
     let options = ConversionOptions {
         black_point_compensation: false,

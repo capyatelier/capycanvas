@@ -88,6 +88,11 @@ available budget among simultaneous operations.
 RGB matrix/TRC, grayscale and supported CMYK/LUT profiles use portable code.
 Matrix transforms retain extended RGB and independent alpha. Generated profile
 headers are deterministic; imported profile bytes are retained exactly.
+Integer RGB sources with matrix profiles decode through per-channel tables
+evaluated at every possible source code, followed by the profile's Float64
+matrix into linear working RGB. Tables use at most 768 KiB per decoder and are
+reused across tiles. This preserves the floating transform's results without
+evaluating tone-curve powers for every pixel.
 Linear RGB is shaped before compiling device LUTs to avoid coarse sampling of
 dark colors. Absolute intent applies media-white scaling at matrix endpoints;
 absolute conversions between two non-matrix profiles with different media

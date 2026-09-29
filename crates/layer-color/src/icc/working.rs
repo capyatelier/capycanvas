@@ -14,6 +14,7 @@ enum DecoderKind {
         matrix: [[f32; 3]; 3],
         identity_primaries: bool,
     },
+    IntegerMatrix { transfer: Vec<[f32; 3]>, matrix: [[f64; 3]; 3] },
     Rgb(FloatTransform<4>),
     Gray(FloatTransform<1>),
     Cmyk(FloatTransform<4>),
@@ -84,6 +85,13 @@ impl WorkingDecoder {
                 if matches!(source.profile, ColorProfile::Builtin(_))
                     || matches!(source.channels, SourceChannels::Rgb | SourceChannels::Rgba) =>
             {
+                if let Some(matrix) = MatrixTransform::new(&input, &output, options)? {
+                    let maximum = source.depth.maximum() as f32;
+                    let transfer = (0..=source.depth.maximum()).map(|code| {
+                        std::array::from_fn(|c| matrix.input[c].evaluate_value(code as f32 / maximum))
+                    }).collect();
+                    return Ok(DecoderKind::IntegerMatrix { transfer, matrix: matrix.matrix });
+                }
                 Ok(DecoderKind::Rgb(CompiledTransform::new(
                     &input, &output, options,
                 )?))
@@ -168,6 +176,11 @@ impl WorkingDecoder {
                             alpha,
                         ];
                     }
+                    DecoderKind::IntegerMatrix { transfer, matrix } => {
+                        let linear = std::array::from_fn(|c| f64::from(transfer[codes[c]][c]));
+                        let rgb = layer_core::color::rgb::apply(*matrix, linear).map(|v| v as f32);
+                        destination[i] = [rgb[0], rgb[1], rgb[2], alpha];
+                    }
                     DecoderKind::Gray(_) => gray[i] = [codes[0] as f32 / maximum],
                     DecoderKind::Cmyk(_) => {
                         values[i] = std::array::from_fn(|c| code(pixel, c) as f32 * 100. / maximum)
@@ -176,7 +189,7 @@ impl WorkingDecoder {
             }
             match &self.kind {
                 DecoderKind::Linear { .. } => unreachable!(),
-                DecoderKind::Builtin { .. } => (),
+                DecoderKind::Builtin { .. } | DecoderKind::IntegerMatrix { .. } => (),
                 DecoderKind::Rgb(transform) => {
                     transform.transform_pixels(&values[..destination.len()], destination)
                 }
