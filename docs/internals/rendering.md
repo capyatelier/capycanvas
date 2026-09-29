@@ -88,7 +88,7 @@ photos are sampled as for export, never from the display's mip levels, and
 watercolor settles into the result, which keeps no wet state. The same edit
 removes the merged layers, so the engine appends them, hidden, to that frame's
 layers, and the renderer keeps their pages, masks and photo tiles until the bake
-has run (`with_bake_members` in
+has run (`frame_layers` in
 [`canvas.rs`](../../crates/layer-engine/src/canvas.rs)). The bake is frame work
 on the render owner; the UI thread only plans it.
 
@@ -100,6 +100,12 @@ whole one. Pages keep only the part inside the result's extent, with coverage
 kept within 0–1, which a blur of translucent pixels can round past. A new,
 empty layer that an operation writes into reserves in history only the pages
 it can write (`RasterRevision::pending_within`).
+
+Frequency Separation bakes Low and High with the same operation: each bake's
+members are the layer and one filter clipped to it, and both fit one undo step
+because their new layers reserve only their pages. The dialog's blur preview is
+a layer the document does not hold: `CanvasEngine::set_layer_preview` places it
+directly above its target in each frame's layers until the dialog closes.
 
 The Crop tool's shield is drawn by the presentation pass itself. `set_crop_overlay`
 passes a `CropOverlay` (the map from document pixels onto the crop's unit square,

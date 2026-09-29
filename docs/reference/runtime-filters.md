@@ -65,7 +65,9 @@ the x axis, Scale, Center and Reverse, with stops evaluated as in Gradient Map)
 are generators. Layer › New inserts them with a reveal-all mask, or the
 selection as the mask, so painting edits the mask; Solid Color starts from the
 current color. The Filter menu and the selection bar's Adjust menu list
-adjustments only; the effect browser lists both.
+adjustments only; the effect browser lists both. The Filter menu ends with
+Frequency Separation…, which bakes Gaussian Blur and High Pass into new layers
+([documents](../internals/documents.md#retouching-layers)).
 
 For timed programs, `fx_time` supplies accumulated playback phase in seconds.
 The shared clock integrates the numeric `speed` parameter (default 1), so speed

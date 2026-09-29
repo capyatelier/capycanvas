@@ -3336,6 +3336,112 @@ class AndroidInteractionTest {
         println("PASS Edit › Blending with mouse, finger and stylus changes the canvas in one undo step each")
     }
 
+    @Test fun dodgeBurnAndFrequencySeparationAcrossDevices() {
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        fun separation() = state().getJSONObject("layer_tools").objectOrNull("frequency_separation")
+        fun labels() = layerStates().map { it.getString("label") }
+        fun brightness(pixel: Int) = listOf(16, 8, 0).sumOf { pixel shr it and 255 }
+        fun rgb(vararg values: Double) = JSONArray(values.toList())
+        popupInput = true
+        try {
+            val (width, height) = cleanDocument(keep)
+            if (!selected("blend_perceptual")) command("blend_perceptual")
+            val stroke = { from: Offset, to: Offset ->
+                val layer = editingLayer()
+                val before = paintRevision(layer)
+                val device = tool
+                tool = MotionEvent.TOOL_TYPE_STYLUS
+                drag(from, to)
+                tool = device
+                waitFor("the stroke is committed", 5_000) { paintRevision(layer) != before }
+            }
+            fun at(x: Double, y: Double) = documentPoint(width * x, height * y)
+            command("pen"); action(obj("type" to "select_brush", "id" to 1))
+            action(obj("type" to "set_brush_size", "value" to height * .3)); action(obj("type" to "set_color", "rgba" to rgb(.2, .35, .6, 1.0)))
+            stroke(at(.15, .5), at(.85, .5))
+            action(obj("type" to "set_brush_size", "value" to height * .06)); action(obj("type" to "set_color", "rgba" to rgb(.95, .8, .2, 1.0)))
+            stroke(at(.6, .4), at(.6, .6))
+            val photo = editingLayer()
+            val count = layerStates().size
+            val flat = at(.3, .5)
+            val edge = at(.6 + height * .035 / width, .5)
+            val across = (-12..12).map { at(.6 + it * 5.0 / width, .5) }
+            val mark = at(.75, .5)
+            SystemClock.sleep(300)
+            for ((index, device) in pointerTools.withIndex()) {
+                val name = listOf("mouse", "finger", "stylus")[index]
+                tool = device
+                val original = screenPixels(listOf(flat, edge, mark))
+                val sharp = screenPixels(across)
+                chooseFromApplicationMenu("layer", listOf("New", "New Dodge & Burn Layer"))
+                waitFor("$name: a Dodge & Burn layer is added and active", 5_000) {
+                    layerStates().size == count + 1 && layerStates().first { it.getLong("id") == editingLayer() }.getString("label") == "Dodge & Burn"
+                }
+                awaitPixels("$name: the gray layer leaves the canvas as it was", listOf(flat, edge)) { pixels -> pixels.zip(original).all { (a, b) -> same(a, b) } }
+                command("airbrush"); action(obj("type" to "set_brush_size", "value" to height * .08)); action(obj("type" to "set_brush_opacity", "value" to .3))
+                action(obj("type" to "set_color", "rgba" to rgb(1.0, 1.0, 1.0, 1.0)))
+                stroke(at(.2, .45), at(.4, .45))
+                action(obj("type" to "set_color", "rgba" to rgb(0.0, 0.0, 0.0, 1.0)))
+                stroke(at(.2, .55), at(.4, .55))
+                awaitPixels("$name: white dodges and black burns", listOf(at(.3, .45), at(.3, .55))) { (dodged, burned) ->
+                    brightness(dodged) > brightness(original[0]) + 6 && brightness(burned) < brightness(original[0]) - 6
+                }
+                repeat(3) { command("undo") }
+                waitFor("$name: undo removes the strokes and the layer", 5_000) { layerStates().size == count }
+
+                layerAction(obj("op" to "select", "id" to photo, "mask" to false))
+                chooseFromApplicationMenu("filter", listOf("Frequency Separation…"))
+                waitFor("$name: the Frequency Separation panel opens", 5_000) { separation() != null && shown("frequency-separation-panel") }
+                assertEquals("Frequency Separation", separation()!!.getString("title"))
+                assertNotNull("$name: the panel names the value", textBounds("Radius"))
+                val slider = settledBounds("setting-slider-frequency-separation")
+                fun along(f: Float) = Offset(slider.left + slider.width * f, slider.center.y)
+                drag(along(.19f), along(.45f), 20)
+                waitFor("$name: dragging the slider changes the radius", 5_000) { (separation()?.number("radius") ?: 0f) > 6f }
+                assertEquals("$name: the preview adds no layer", count, layerStates().size)
+                awaitPixels("$name: the canvas previews the blur", across) { pixels -> pixels.zip(sharp).count { (a, b) -> !same(a, b) } >= 2 }
+                if (index == 0) {
+                    for (theme in listOf("light", "dark")) {
+                        action(obj("type" to "set_theme", "theme" to theme))
+                        captureCanvasBar("frequency-separation-$theme", "retouch-layers")
+                    }
+                    action(obj("type" to "set_theme", "theme" to originalTheme))
+                    tap(bounds("frequency-separation-cancel").center)
+                    waitFor("$name: Cancel closes the panel", 5_000) { separation() == null && !exists("frequency-separation-panel") }
+                    assertEquals("$name: Cancel leaves nothing", count, layerStates().size)
+                    awaitPixels("$name: Cancel leaves the canvas as it was", listOf(flat, edge)) { pixels -> pixels.zip(original).all { (a, b) -> same(a, b) } }
+                    layerAction(obj("op" to "select", "id" to photo, "mask" to false))
+                    chooseFromApplicationMenu("filter", listOf("Frequency Separation…"))
+                    waitFor("$name: the panel opens again", 5_000) { separation() != null && shown("frequency-separation-panel") }
+                }
+                tap(bounds("frequency-separation-apply").center)
+                waitFor("$name: Apply splits the layer", 10_000) {
+                    separation() == null && labels().take(3) == listOf("Frequency Separation", "High", "Low") &&
+                        layerStates().first { it.getLong("id") == editingLayer() }.getString("label") == "High"
+                }
+                assertFalse("$name: the photo stays below, hidden", layerStates().first { it.getLong("id") == photo }.getBoolean("visible"))
+                awaitPixels("$name: Low and High recombine", listOf(flat, edge, mark)) { pixels -> pixels.zip(original).all { (a, b) -> same(a, b) } }
+                command("pen"); action(obj("type" to "set_brush_size", "value" to height * .01)); action(obj("type" to "set_brush_opacity", "value" to 1.0))
+                action(obj("type" to "set_color", "rgba" to rgb(.9, .1, .1, 1.0)))
+                stroke(at(.72, .5), at(.78, .5))
+                awaitPixels("$name: a small brush paints on High", listOf(mark)) { (pixel) -> !same(pixel, original[2]) }
+                command("undo")
+                awaitPixels("$name: one undo removes the stroke", listOf(mark)) { (pixel) -> same(pixel, original[2]) }
+                command("undo")
+                waitFor("$name: one undo removes Frequency Separation", 5_000) {
+                    layerStates().size == count && layerStates().all { it.getBoolean("visible") }
+                }
+                layerAction(obj("op" to "select", "id" to photo, "mask" to false))
+                println("PASS retouch layers $name")
+            }
+        } finally {
+            popupInput = false
+            action(obj("type" to "set_theme", "theme" to originalTheme))
+        }
+        println("PASS New Dodge & Burn Layer and Frequency Separation from the menus with mouse, finger and stylus, each one undo step")
+    }
+
     @Test fun solidColorFillMasksTheSelectionAcrossDevices() {
         val keep = layerStates().map { it.getLong("id") }.toSet()
         val colors = listOf(listOf(.85, .08, .05, 1.0), listOf(.05, .6, .1, 1.0), listOf(.8, .1, .7, 1.0))

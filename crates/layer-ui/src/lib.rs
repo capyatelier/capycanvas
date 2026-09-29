@@ -132,6 +132,7 @@ pub use session::{Notice, NoticeAction};
 pub use session::{ScreenChip, ScreenDetails, ScreenState};
 pub use session::{CanvasAnchor, CanvasAnchorChoice, CanvasSizeAction, CanvasSizeUnit, CanvasSizeView, CanvasUnitChoice};
 pub use session::{ImageResample, ImageResampleChoice, ImageSizeAction, ImageSizeView};
+pub use session::{FrequencySeparationAction, FrequencySeparationView};
 pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionMenu, SelectionAction, RefineKind, SelectionRefineView, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
     ChoicePresentation, HostRequest, HostRequestKind, Platform,
@@ -543,6 +544,8 @@ command_ids! {
     SpotHeal,
     BlendPerceptual,
     BlendLinear,
+    NewDodgeBurnLayer,
+    FrequencySeparation,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -782,6 +785,8 @@ impl CommandId {
             Self::ColorMixLinear => "color-mix-linear",
             Self::ColorMixClassic => "color-mix-classic",
             Self::BlendPerceptual | Self::BlendLinear => "blend",
+            Self::NewDodgeBurnLayer => "dodge-burn",
+            Self::FrequencySeparation => "frequency-separation",
         })
     }
     pub const TOOLS: [Self; 30] = [
@@ -1034,6 +1039,8 @@ impl CommandId {
             Self::ColorMixClassic => "Classic mixing",
             Self::BlendPerceptual => "Perceptual Blending",
             Self::BlendLinear => "Linear Light Blending",
+            Self::NewDodgeBurnLayer => "New Dodge & Burn Layer",
+            Self::FrequencySeparation => "Frequency Separation…",
         }
     }
 }
@@ -1178,6 +1185,7 @@ pub enum UiAction {
     Selection { action: SelectionAction },
     CanvasSize { action: CanvasSizeAction },
     ImageSize { action: ImageSizeAction },
+    FrequencySeparation { action: FrequencySeparationAction },
     Tonal { action: TonalAction },
     ActivateHeaderItem {
         id: u32,

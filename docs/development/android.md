@@ -204,7 +204,7 @@ APK calls, so test-APK benchmarks use the unminified build.
   transparency (off to high) and restores it afterwards. Results appear in
   logcat under `CapyDragPerf` and `CapyResizePerf`.
 - **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
-  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,scaled,move,selection,menus,canvas_size,refine,crop,merge`,
+  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation`,
   `durationMs`, `width`, `height`, `transparency` (`off` to `high`) and `blending`
   (`perceptual` or `linear`, the new document's Blending) narrow or resize the run. Each scenario logs a `CapyBarPerf` line and writes
   `canvas-bar-benchmark/<label>.json` in external files; `ui_hz` and
@@ -218,7 +218,8 @@ APK calls, so test-APK benchmarks use the unminified build.
   Move: all of it, the middle half, and the middle half with Leave Copy.
   `merge` paints eight layers over a placed photo and times Merge Visible and
   Flatten Image; its `after_mark` has the dispatch time and the GPU completions
-  that follow.
+  that follow. `dodge_burn` and `frequency_separation` time New Dodge & Burn
+  Layer and Frequency Separation (radius 8) on a placed photo the same way.
   Photo drags are marked by `capy-drag` trace sections; `capy.publish.native` and `capy.publish.parse`
   time each model publication; `-e composeTrace true` adds a section per
   composable, which slows the frames it attributes.

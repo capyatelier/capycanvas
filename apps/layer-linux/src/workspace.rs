@@ -944,7 +944,8 @@ pub struct Workspace {
     pub(crate) color_editors: RefCell<Vec<std::rc::Weak<crate::color_editor::Form>>>,
     tool_settings: crate::tool_panels::ToolSettings,
     pub(crate) canvas_bar: crate::canvas_bar::CanvasBar,
-    selection_refine: crate::selection_masks::RefineDialog,
+    selection_refine: crate::preview_dialog::PreviewDialog,
+    frequency_separation: crate::preview_dialog::PreviewDialog,
     pub(crate) canvas_size: Rc<crate::canvas_size::CanvasSizeDialog>,
     pub(crate) image_size: Rc<crate::image_size::ImageSizeDialog>,
     color_panel: crate::tool_panels::ColorPanel,
@@ -1206,7 +1207,14 @@ impl Workspace {
             color_editors: RefCell::default(),
             tool_settings,
             canvas_bar,
-            selection_refine: crate::selection_masks::RefineDialog::new(),
+            selection_refine: crate::preview_dialog::PreviewDialog::new("selection-refine-dialog", "selection-refine-value", |radius| {
+                UiAction::Selection { action: layer_ui::SelectionAction::ResizeRadius { radius: radius as f32 } }
+            }),
+            frequency_separation: crate::preview_dialog::PreviewDialog::new(
+                "frequency-separation-dialog",
+                "frequency-separation-radius",
+                |radius| UiAction::FrequencySeparation { action: layer_ui::FrequencySeparationAction::Radius { radius: radius as f32 } },
+            ),
             canvas_size: Rc::new(crate::canvas_size::CanvasSizeDialog::new()),
             image_size: Rc::new(crate::image_size::ImageSizeDialog::new()),
             color_panel,
@@ -1248,7 +1256,12 @@ impl Workspace {
         this.canvas_bar.bind(&this);
         this.notice.bind(&this);
         this.view_info.bind(&this);
-        this.selection_refine.bind(&this);
+        this.selection_refine.bind(&this, |apply| UiAction::Selection {
+            action: if apply { layer_ui::SelectionAction::ApplyResize } else { layer_ui::SelectionAction::CancelResize },
+        });
+        this.frequency_separation.bind(&this, |apply| UiAction::FrequencySeparation {
+            action: if apply { layer_ui::FrequencySeparationAction::Apply } else { layer_ui::FrequencySeparationAction::Cancel },
+        });
         this.canvas_size.bind(&this);
         this.image_size.bind(&this);
         this.color_panel.bind(&this);
@@ -2623,7 +2636,14 @@ impl Workspace {
         }
         if regions & (regions::BRUSH | regions::DOCUMENT | regions::COMMANDS) != 0 {
             self.tool_settings.refresh(self, &state);
-            self.selection_refine.refresh(self, &state);
+            use crate::preview_dialog::PreviewValue;
+            let tools = &state.layer_tools;
+            self.selection_refine.refresh(self, tools.selection_resize.as_ref().map(|v| {
+                PreviewValue { title: v.title, label: v.label, value: v.radius.into(), numeric: &v.numeric }
+            }));
+            self.frequency_separation.refresh(self, tools.frequency_separation.as_ref().map(|v| {
+                PreviewValue { title: v.title, label: v.label, value: v.radius.into(), numeric: &v.numeric }
+            }));
             self.canvas_size.refresh(self, &state);
             self.image_size.refresh(self, &state);
         }

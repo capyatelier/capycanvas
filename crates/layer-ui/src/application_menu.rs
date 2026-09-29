@@ -94,9 +94,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn effect_insert_enabled(&self) -> bool {
         self.selection_masks.target().is_none() && self.require_document_idle().is_ok()
     }
-    /// Layer › New entries for the bundled fill generators.
+    /// Layer › New entries for the bundled fill generators and the Dodge &
+    /// Burn layer.
     pub(crate) fn fill_layer_items(&self) -> Vec<ContextMenuItem> {
         let enabled = self.effect_insert_enabled();
+        let dodge_burn = self.command(CommandId::NewDodgeBurnLayer);
         [("Solid Color Fill", "solid_color"), ("Gradient Fill", "gradient_fill")]
             .into_iter()
             .filter(|(_, id)| self.effect_catalog.get(id).is_some())
@@ -104,6 +106,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 enabled,
                 ..ContextMenuItem::command(label, UiAction::Effect { action: EffectAction::Insert { effect: id.into() } })
             })
+            .chain([ContextMenuItem {
+                enabled: dodge_burn.enabled,
+                ..ContextMenuItem::command(dodge_burn.label, UiAction::Invoke { command: dodge_burn.id })
+            }])
             .collect()
     }
     pub(crate) fn proof_panel_command(&self, id: CommandId) -> bool {
@@ -183,7 +189,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             M::Window => self.workspace_menu(),
             M::Filter => ContextMenu {
                 title: menu.label().into(),
-                sections: vec![self.filter_category_items()],
+                sections: vec![self.filter_category_items(), vec![command(CommandId::FrequencySeparation)]],
             },
             _ => {
                 let sections: &[&[CommandId]] = match menu {

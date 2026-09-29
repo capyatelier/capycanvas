@@ -77,6 +77,7 @@ pub struct LayersView {
     pub selection_resize: Option<super::selection_refine::SelectionRefineView>,
     pub canvas_size: Option<super::canvas_size::CanvasSizeView>,
     pub image_size: Option<super::image_size::ImageSizeView>,
+    pub frequency_separation: Option<super::retouch_layers::FrequencySeparationView>,
     pub can_reference: bool,
     pub can_delete: bool,
     pub references_selected: bool,

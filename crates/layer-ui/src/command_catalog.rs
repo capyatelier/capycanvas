@@ -325,6 +325,7 @@ fn entry(
                 | CommandId::MergeVisible
                 | CommandId::FlattenImage
                 | CommandId::StampVisible
+                | CommandId::NewDodgeBurnLayer
                 | CommandId::BlendPerceptual
                 | CommandId::BlendLinear
                 | CommandId::LoadSelectionLayer
@@ -418,6 +419,12 @@ fn entry(
         UiAction::Invoke {
             command: CommandId::PasteImage,
         } => "paste image clipboard",
+        UiAction::Invoke {
+            command: CommandId::NewDodgeBurnLayer,
+        } => "neutral gray soft light retouch lighten darken",
+        UiAction::Invoke {
+            command: CommandId::FrequencySeparation,
+        } => "skin retouch texture tone low high split",
         _ => "",
     };
     Entry {
@@ -538,6 +545,8 @@ fn action_description(action: &UiAction) -> &'static str {
             PasteImage => "Add the clipboard as a new layer. A copy from Capy Canvas keeps its position when that is in view; an image from another app opens with placement handles.",
             PasteInPlace => "Add the clipboard as a new layer where it was copied from, with no placement handles. An image from another app is centred at full size.",
             PasteInto => "Add the clipboard where it was copied from, as a new layer whose mask shows only the selection.",
+            NewDodgeBurnLayer => "Add a Soft Light layer of neutral gray above the active layer. Paint on it in white to lighten and in black to darken.",
+            FrequencySeparation => "Split the active layer into Low, its colors and tones blurred to a radius, and High, its fine texture, in a new group. The layer stays below, hidden.",
             ColorMixOklab | ColorMixLinear | ColorMixClassic => "Choose how this brush mixes the colors it picks up: Oklab blends evenly as the eye sees color, Linear light blends as light does, and Classic blends like Clip Studio Paint.",
             _ => "",
         },
@@ -1102,6 +1111,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::MergeVisible
             | C::FlattenImage
             | C::StampVisible
+            | C::NewDodgeBurnLayer
+            | C::FrequencySeparation
             | C::BlendPerceptual
             | C::BlendLinear
             | C::LoadSelectionLayer
@@ -1264,6 +1275,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 super::merges::merge_kind(command).and_then(|kind| self.merge_refusal(kind)).unwrap_or(UNAVAILABLE)
             }
             C::BlendPerceptual | C::BlendLinear => self.blending_refusal().unwrap_or(UNAVAILABLE),
+            C::NewDodgeBurnLayer => self.dodge_burn_refusal().unwrap_or(UNAVAILABLE),
+            C::FrequencySeparation => self.separation_refusal().unwrap_or(UNAVAILABLE),
             C::CanvasSize
             | C::ImageSize
             | C::RotateImageLeft

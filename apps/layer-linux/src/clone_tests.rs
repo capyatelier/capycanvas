@@ -39,7 +39,7 @@ const BLUE: [f32; 4] = [0.1, 0.3, 0.8, 1.];
 
 /// Fill the rectangle `[x0, y0, x1, y1]`, as fractions of the canvas, with
 /// `rgba`.
-fn fill(w: &Rc<Workspace>, rgba: [f32; 4], [x0, y0, x1, y1]: [f32; 4]) {
+pub(super) fn fill(w: &Rc<Workspace>, rgba: [f32; 4], [x0, y0, x1, y1]: [f32; 4]) {
     w.dispatch(UiAction::SetColor { rgba });
     let revision = document(w).revision;
     let doc = document(w);
@@ -84,7 +84,7 @@ fn clone_ready(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
     ready
 }
 
-fn press(device: &str, from: [f32; 2], to: [f32; 2]) -> Vec<serde_json::Value> {
+pub(super) fn press(device: &str, from: [f32; 2], to: [f32; 2]) -> Vec<serde_json::Value> {
     let mut events = vec![contact(device, "down", from), json!({"wait_ms": 30})];
     for i in 1..=12 {
         let t = i as f32 / 12.;
@@ -94,7 +94,7 @@ fn press(device: &str, from: [f32; 2], to: [f32; 2]) -> Vec<serde_json::Value> {
     events
 }
 
-fn lift(device: &str, at: [f32; 2]) -> Vec<serde_json::Value> {
+pub(super) fn lift(device: &str, at: [f32; 2]) -> Vec<serde_json::Value> {
     let mut events = vec![contact(device, "up", at)];
     if device == "pen" {
         events.push(json!({"pen": "leave"}));
@@ -102,7 +102,7 @@ fn lift(device: &str, at: [f32; 2]) -> Vec<serde_json::Value> {
     events
 }
 
-fn stroke(input: &mut RemoteInput, device: &str, from: [f32; 2], to: [f32; 2]) {
+pub(super) fn stroke(input: &mut RemoteInput, device: &str, from: [f32; 2], to: [f32; 2]) {
     let mut events = press(device, from, to);
     events.extend(lift(device, to));
     input.perform(json!(events));
@@ -148,7 +148,7 @@ fn drag_disc(w: &Workspace, input: &mut RemoteInput, device: &str, by: [f32; 2])
     assert!(!disc_bar(w), "a drag is not a tap");
 }
 
-fn finish(w: &Workspace, input: &RemoteInput) {
+pub(super) fn finish(w: &Workspace, input: &RemoteInput) {
     assert!(state(w).host_error.is_none(), "{:?}", state(w).host_error);
     input.finish();
     w.window.close();

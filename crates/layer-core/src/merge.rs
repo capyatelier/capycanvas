@@ -110,6 +110,16 @@ pub fn bake_layers(members: &[Layer], offset: Point) -> Vec<Layer> {
     layers
 }
 
+/// `layer` as a member of a `Bake`: as committed, without pending operations.
+pub(crate) fn bake_member(layer: &Layer) -> Layer {
+    let mut member = layer.clone();
+    member.pending_operations.clear();
+    if let Some(mask) = &mut member.mask {
+        mask.pending_operations = Arc::default();
+    }
+    member
+}
+
 /// Local pixels a paint layer may hold: its tiles and its photo.
 fn content(layer: &Layer, extent: [u32; 2]) -> Rect {
     let Some(Ok(data)) = layer.raster.try_data() else {
@@ -385,6 +395,18 @@ impl Document {
         Ok((origin, extent.map(|v| v as u32)))
     }
 
+    /// Whether the pages `operation` writes into a paint layer `extent` large
+    /// exceed the publication limit of one edit.
+    pub(crate) fn exceeds_publication(&self, operation: &LayerOperation, extent: [u32; 2]) -> bool {
+        raster::RasterPlane::Color
+            .descriptor(self.color)
+            .byte_len([raster::TILE_SIZE; 2])
+            .is_none_or(|page| {
+                raster::page_count(operation.bounds(extent), extent).saturating_mul(page as u64)
+                    > raster::MAX_PUBLICATION_BYTES
+            })
+    }
+
     /// Plan a merge into a new layer `result` whose pending bake uses the
     /// coverage identity `coverage`. Placed photos become document pixels.
     pub fn merge_plan(&self, kind: MergeKind, result: LayerId, coverage: LayerId) -> Result<MergePlan, MergeRefusal> {
@@ -395,11 +417,7 @@ impl Document {
             .iter()
             .filter(|l| merge.members.contains(&l.id))
             .map(|l| {
-                let mut layer = l.clone();
-                layer.pending_operations.clear();
-                if let Some(mask) = &mut layer.mask {
-                    mask.pending_operations = Arc::default();
-                }
+                let mut layer = bake_member(l);
                 if merge.group && Some(l.id) == merge.anchor.map(|a| a.id) {
                     layer.opacity = 1.;
                     layer.properties.blend = LayerBlend::Normal;
@@ -420,11 +438,7 @@ impl Document {
             coverage: LayerMask::reveal_all(coverage, Point::default()),
             kind: LayerOperationKind::Bake { members: members.into(), offset },
         };
-        let page = raster::RasterPlane::Color
-            .descriptor(self.color)
-            .byte_len([raster::TILE_SIZE; 2])
-            .ok_or(MergeRefusal::TooLarge)? as u64;
-        if raster::page_count(operation.bounds(extent), extent).saturating_mul(page) > raster::MAX_PUBLICATION_BYTES {
+        if self.exceeds_publication(&operation, extent) {
             return Err(MergeRefusal::TooLarge);
         }
         let mut layer = Layer::paint(result, merge.anchor.map_or_else(|| "Visible".into(), |a| a.name.clone()));

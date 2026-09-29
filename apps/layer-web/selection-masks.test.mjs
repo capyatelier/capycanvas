@@ -115,7 +115,7 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   await send({type:'selection',action:{op:'begin_refine',kind:'shrink',layer:Number(id)}});
   assert.equal(await evaluate(`document.querySelector("${refine} h2").textContent`),'Shrink Selection');
   await send({type:'selection',action:{op:'begin_refine',kind:'smooth',layer:Number(id)}});
-  assert.deepEqual(await evaluate(`(n=>[n.querySelector(".number-title").textContent,n.dataset.refineKind,!!n.querySelector(".number-slider"),layerApp.state().layer_tools.selection_resize.numeric.max])(document.querySelector("${refine} #selection-refine-value"))`),
+  assert.deepEqual(await evaluate(`(n=>[n.querySelector(".number-title").textContent,n.dataset.kind,!!n.querySelector(".number-slider"),layerApp.state().layer_tools.selection_resize.numeric.max])(document.querySelector("${refine} #selection-refine-value"))`),
     ['Smooth radius','smooth',false,64],'Another refinement rebuilds the value field');
   await evaluate(refineButton('Cancel'));await settle();
   assert.equal(await evaluate(`!!document.querySelector("${refine}")`),false);

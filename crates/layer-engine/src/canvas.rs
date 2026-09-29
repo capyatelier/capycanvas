@@ -153,6 +153,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     transform_preview: Option<layer_render::TransformPreview>,
     transform_selection: std::sync::OnceLock<Option<layer_core::Selection>>,
     selection_display: Option<Option<layer_core::Selection>>,
+    layer_preview: Option<LayerPreview>,
     rebuild_all: bool,
     composite_all: bool,
     raster_dirty: bool,
@@ -168,10 +169,19 @@ fn plain_color(raster: &layer_core::raster::RasterRevision) -> bool {
         && data.tiles.keys().all(|key| key.plane == layer_core::raster::RasterPlane::Color))
 }
 
-/// The document's layers, followed by the hidden members of pending bakes
-/// that the same edit removed, so the renderer keeps their pages until the
-/// bake has run. None when no bake is pending.
-fn with_bake_members(document: &Document) -> Option<Vec<layer_core::Layer>> {
+/// A layer the canvas shows directly above another, in its group, which the
+/// document does not hold, such as a filter previewed from a dialog.
+#[derive(Clone, Debug)]
+pub struct LayerPreview {
+    pub above: LayerId,
+    pub layer: layer_core::Layer,
+}
+
+/// The layers a frame composites: the document's with the preview in place,
+/// followed by the hidden members of pending bakes that the same edit
+/// removed, so the renderer keeps their pages until the bake has run. None
+/// when they are the document's own.
+fn frame_layers(document: &Document, preview: Option<&LayerPreview>) -> Option<Vec<layer_core::Layer>> {
     let mut removed = document
         .layers
         .iter()
@@ -183,8 +193,15 @@ fn with_bake_members(document: &Document) -> Option<Vec<layer_core::Layer>> {
         .flatten()
         .filter(|member| document.layer(member.id).is_none())
         .peekable();
-    removed.peek()?;
+    let preview = preview.and_then(|p| Some((document.layers.iter().position(|l| l.id == p.above)?, &p.layer)));
+    if preview.is_none() {
+        removed.peek()?;
+    }
     let mut layers = document.layers.clone();
+    if let Some((index, layer)) = preview {
+        let parent = layers[index].properties.parent;
+        layers.insert(index, layer_core::Layer { properties: layer_core::LayerProperties { parent, ..layer.properties.clone() }, ..layer.clone() });
+    }
     layers.extend(removed.map(|member| layer_core::Layer { visible: false, ..member.clone() }));
     Some(layers)
 }
@@ -252,6 +269,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             transform_preview: None,
             transform_selection: Default::default(),
             selection_display: None,
+            layer_preview: None,
             rebuild_all: true,
             composite_all: true,
             raster_dirty: false,
@@ -454,6 +472,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.editor.preview(edit)?;
         self.composite_all |= image;
         Ok(())
+    }
+
+    /// Show `preview` on the canvas until it is replaced or cleared. History
+    /// and the document never hold it.
+    pub fn set_layer_preview(&mut self, preview: Option<LayerPreview>) {
+        self.layer_preview = preview;
+        self.composite_all = true;
     }
 
     /// Current disposable transform, including its startup shader dependency.
@@ -1372,12 +1397,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         rebuilt: bool,
         time_seconds: f32,
     ) -> Result<(), EngineError<B::Error>> {
-        let baking = with_bake_members(self.editor.document());
+        let layers = frame_layers(self.editor.document(), self.layer_preview.as_ref());
         let packet = FramePacket {
             time_seconds,
             view: self.view(),
             document_extent: [self.editor.document().width, self.editor.document().height],
-            layers: baking.as_deref().unwrap_or(&self.editor.document().layers),
+            layers: layers.as_deref().unwrap_or(&self.editor.document().layers),
             dabs: &self.dabs,
             dab_batches: &self.batches,
             restore_rasters: &self.restore_rasters,

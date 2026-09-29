@@ -110,6 +110,36 @@ canvas: the result's extent is the union of the merged layers' extents, on whole
 tiles from the canvas origin. A merge that includes an effect layer covers the
 canvas only, because effects are defined over the canvas.
 
+### Retouching layers
+
+**New Dodge & Burn Layer**, in Layer › New, adds a Soft Light layer named Dodge &
+Burn above the active layer and the layers clipped to it, in its group, filled
+with the gray Soft Light leaves unchanged: in Perceptual documents the value
+stored as 8-bit 128 or 16-bit 32768, in Linear-light ones linear 0.5
+(`Document::soft_light_neutral` in
+[`retouch_layers.rs`](../../crates/layer-core/src/retouch_layers.rs)). White paint
+on it lightens the image below and black paint darkens it. Inserting, filling
+and activating the layer are one undo step.
+
+**Frequency Separation…**, in the Filter menu, splits the active paint layer.
+Its dialog sets a Radius, the radius of the Gaussian Blur filter, and the canvas
+previews that blur while the document stays as it is; Cancel leaves nothing, and
+an edit of the drawing closes the dialog. Apply inserts, in one undo step, an
+isolated Normal group named Frequency Separation directly above the layer, with
+its opacity and clipping, holding Low, the layer blurred, and above it High,
+High Pass at half strength against the same blur, in Linear Light. The layer
+stays below the group, hidden, as Affinity Photo keeps its original. Both are
+baked from the layer's pixels and mask over the canvas, so pixels outside the
+canvas are left out. The group is isolated whatever the
+[Use Pass Through for new groups](../ui/settings.md) preference says.
+
+High and Low add up to the layer again, within two codes at 8 and 16 bits,
+because they share one blur and Linear Light adds encoded values. That holds only
+when layers blend perceptually, so the command is refused in Linear-light and
+float documents with "Frequency Separation needs Perceptual blending. Change it
+in Edit ▸ Blending." It also needs a visible, Normal paint layer outside a
+locked group.
+
 A `Stroke` stores real pen samples and a `BrushSnapshot`, which captures the brush
 settings used for that stroke. Committed sample storage is shared rather than
 copied whenever history changes. Later sensor corrections replace the affected

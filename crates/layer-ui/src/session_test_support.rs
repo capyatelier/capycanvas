@@ -38,6 +38,7 @@ pub(crate) struct Recorder {
     pub(crate) reject_filter_previews: bool,
     pub(crate) max_dimension: Option<u32>,
     pub(crate) crop_overlay: Option<layer_render::CropOverlay>,
+    pub(crate) frame_layers: Vec<layer_core::Layer>,
 }
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
@@ -151,6 +152,7 @@ impl CanvasRenderer for Recorder {
     }
     fn release_asset(&mut self, _: &AssetId) {}
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        self.frame_layers = packet.layers.to_vec();
         self.pending_operations.clear();
         for batch in packet.dab_batches {
             if let layer_render::DabBatchKind::LayerOperation(index) = batch.kind {

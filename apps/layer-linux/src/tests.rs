@@ -54,6 +54,8 @@ mod crop;
 mod image;
 #[path = "clone_tests.rs"]
 mod clone_stamp;
+#[path = "retouch_layer_tests.rs"]
+mod retouch_layers;
 #[path = "file_launch_tests.rs"]
 mod file_launch;
 #[path = "document_tab_tests.rs"]

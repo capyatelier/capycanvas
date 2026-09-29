@@ -1070,6 +1070,8 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::StampVisible => "Add a layer holding everything visible",
                 CommandId::BlendPerceptual => "Blend layers like Photoshop and Clip Studio Paint",
                 CommandId::BlendLinear => "Blend layers in physically based linear light",
+                CommandId::NewDodgeBurnLayer => "Add a neutral Soft Light layer to lighten and darken by painting",
+                CommandId::FrequencySeparation => "Split a layer into tone and texture layers, previewed live",
                 CommandId::CanvasSize => "Add or remove canvas around the image",
                 CommandId::CropCanvasToSelection => "Crop the canvas to the selection, keeping the hidden pixels",
                 CommandId::GrowSelection => "Expand the selection or edited mask by a distance, previewed live",

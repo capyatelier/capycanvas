@@ -1,27 +1,39 @@
-//! Native presentation of shared selection destinations and menus.
+//! Native presentation of the shared one-value dialogs the session previews
+//! on the canvas: Refine (Grow, Shrink, Feather, Border or Smooth) and
+//! Frequency Separation. The canvas stays visible and undimmed behind them.
 use crate::number_control::NumberControl;
 use crate::workspace::Workspace;
 use gtk::glib;
+use layer_ui::{NumericControl, UiAction};
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
 };
 
-/// The Refine dialog: one value for Grow, Shrink, Feather, Border or Smooth.
-/// The session previews every value on the canvas, which stays visible and
-/// undimmed behind the dialog.
-pub struct RefineDialog {
-    dialog: adw::AlertDialog,
-    shown: Rc<Cell<bool>>,
-    number: RefCell<Option<(layer_ui::RefineKind, NumberControl)>>,
-    workspace: RefCell<Weak<Workspace>>,
+/// What the dialog shows: its title and one labelled value.
+pub struct PreviewValue<'a> {
+    pub title: &'a str,
+    pub label: &'a str,
+    pub value: f64,
+    pub numeric: &'a NumericControl,
 }
-impl RefineDialog {
+
+pub struct PreviewDialog {
+    dialog: adw::AlertDialog,
+    field: &'static str,
+    shown: Rc<Cell<bool>>,
+    number: RefCell<Option<(String, NumericControl, NumberControl)>>,
+    workspace: RefCell<Weak<Workspace>>,
+    value: fn(f64) -> UiAction,
+}
+impl PreviewDialog {
     pub const PREVIEW_CLASS: &'static str = "canvas-preview-dialog";
-    pub fn new() -> Self {
+    /// `name` and `field` name the dialog and its value field; `value` is the
+    /// action for a new value.
+    pub fn new(name: &'static str, field: &'static str, value: fn(f64) -> UiAction) -> Self {
         use adw::prelude::*;
         let dialog = adw::AlertDialog::new(None, None);
-        dialog.set_widget_name("selection-refine-dialog");
+        dialog.set_widget_name(name);
         dialog.set_presentation_mode(adw::DialogPresentationMode::BottomSheet);
         dialog.add_response("cancel", "Cancel");
         dialog.add_response("apply", "Apply");
@@ -29,12 +41,15 @@ impl RefineDialog {
         dialog.set_default_response(Some("apply"));
         Self {
             dialog,
+            field,
             shown: Rc::new(Cell::new(false)),
             number: RefCell::new(None),
             workspace: RefCell::new(Weak::new()),
+            value,
         }
     }
-    pub fn bind(&self, w: &Rc<Workspace>) {
+    /// `respond` is the action for Apply (true) or Cancel.
+    pub fn bind(&self, w: &Rc<Workspace>, respond: fn(bool) -> UiAction) {
         use adw::prelude::*;
         *self.workspace.borrow_mut() = Rc::downgrade(w);
         let shown = self.shown.clone();
@@ -48,44 +63,38 @@ impl RefineDialog {
                         return;
                     }
                     w.window.remove_css_class(Self::PREVIEW_CLASS);
-                    w.dispatch(layer_ui::UiAction::Selection {
-                        action: if response == "apply" {
-                            layer_ui::SelectionAction::ApplyResize
-                        } else {
-                            layer_ui::SelectionAction::CancelResize
-                        },
-                    });
+                    w.dispatch(respond(response == "apply"));
                 }
             ),
         );
     }
-    /// The value field for `view`, rebuilt when the operation changes.
-    fn number(&self, view: &layer_ui::SelectionRefineView) -> NumberControl {
+    /// The value field, rebuilt when its label or range changes.
+    fn number(&self, view: &PreviewValue) -> NumberControl {
         use adw::prelude::*;
-        if let Some((kind, number)) = self.number.borrow().as_ref()
-            && *kind == view.kind
+        if let Some((label, numeric, number)) = self.number.borrow().as_ref()
+            && label == view.label
+            && numeric == view.numeric
         {
             return number.clone();
         }
         let number = NumberControl::new(view.numeric.clone(), view.label, "");
-        number.set_widget_name("selection-refine-value");
+        number.set_widget_name(self.field);
         let workspace = self.workspace.borrow().clone();
+        let value = self.value;
         number.connect_value_changed(move |number| {
             if let Some(w) = workspace.upgrade() {
-                w.dispatch(layer_ui::UiAction::Selection {
-                    action: layer_ui::SelectionAction::ResizeRadius { radius: number.value() as f32 },
-                });
+                w.dispatch(value(number.value()));
             }
         });
         self.dialog.set_extra_child(Some(&number));
-        *self.number.borrow_mut() = Some((view.kind, number.clone()));
+        *self.number.borrow_mut() = Some((view.label.into(), view.numeric.clone(), number.clone()));
         number
     }
-    pub fn refresh(&self, w: &Workspace, state: &layer_ui::UiState) {
+    pub fn refresh(&self, w: &Workspace, view: Option<PreviewValue>) {
         use adw::prelude::*;
-        if let Some(view) = &state.layer_tools.selection_resize {
+        if let Some(view) = view {
             self.dialog.set_heading(Some(view.title));
-            self.number(view).set_value(view.radius as f64);
+            self.number(&view).set_value(view.value);
             if !self.shown.replace(true) {
                 w.window.add_css_class(Self::PREVIEW_CLASS);
                 self.dialog.present(Some(&w.window));

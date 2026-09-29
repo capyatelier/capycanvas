@@ -1,9 +1,9 @@
-//! Bakes, such as merges: a bake composites its members, isolated, into the
-//! empty pages of its target, with the sampling of export rather than of the
-//! display. A bake keeps no filter images, so when its members'
-//! filters would need more than the default image budget they run in bounded
-//! windows with their halos, each retired before the next, as the display
-//! composes them.
+//! Bakes, such as merges and Frequency Separation: a bake composites its
+//! members, isolated, into the empty pages of its target, with the sampling of
+//! export rather than of the display. A bake keeps no filter images, so when
+//! its members' filters would need more than the default image budget they
+//! run in bounded windows with their halos, each retired before the next, as
+//! the display composes them.
 use super::*;
 
 /// Tiles recorded before their jobs are encoded.

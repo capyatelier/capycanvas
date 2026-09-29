@@ -23,7 +23,7 @@ mod icons;
 mod image_selector;
 mod input;
 mod layers;
-mod selection_masks;
+mod preview_dialog;
 mod swatch_selector;
 mod swipe_row;
 mod navigator;

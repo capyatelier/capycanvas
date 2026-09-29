@@ -67,6 +67,7 @@ import { checkMoveSelection } from "./move-selection-journey.test.mjs";
 import { checkClone, checkHeal } from "./clone-journey.test.mjs";
 import { checkClipboard } from "./clipboard-journey.test.mjs";
 import { checkMerges } from "./merge-journey.test.mjs";
+import { checkRetouchLayers } from "./retouch-layers-journey.test.mjs";
 import { checkEditor } from "./editor.test.mjs";
 import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
@@ -248,6 +249,9 @@ try {
     await checkImageCommands({call,evaluate,settle});
   } else if (process.argv.includes("--merges")) {
     await checkMerges({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--retouch-layers")) {
+    await checkRetouchLayers({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--move-selection")) {
     await checkMoveSelection({call,evaluate,settle});

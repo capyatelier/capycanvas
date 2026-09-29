@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3 and M4.1–M4.6. See [Remaining work](#remaining-work).
+Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3 and M4. See [Remaining work](#remaining-work).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
@@ -731,6 +731,7 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - Merge Down needs a Normal, visible layer below. Merge Visible and Flatten accept any blend mode, with the paper kept separate, so a non-Normal layer can look different where the paper shows through.
 - **M3.7** on GTK, Web and Android: photos opened as documents keep their Exif, XMP and IPTC in `.capy` (version 10); exports keep camera, lens, exposure, dates, copyright and contact, with location removed by default; a Metadata row in each export dialog.
 - **M4.5a** on GTK, Web and Android: the document's **Blending** (Perceptual or Linear light) in New Document, Edit ▸ Blending and Document Properties; new 8/16-bit documents and photos blend perceptually, float documents in linear light, and `.capy` v11 keeps the choice (older files read as Linear light). In Perceptual documents the composite holds encoded values, Soft Light uses Photoshop's formula, and every reader of the composite decodes; Linear-light documents render as before.
+- **M4.7** on GTK, Web and Android: Layer ▸ New ▸ Dodge & Burn Layer (a Soft Light layer of the neutral grey of the document's Blending) and Filter ▸ Frequency Separation… (a Radius preview, then Low and High baked into an isolated group in one step, disabled in Linear-light documents). Bakes run their filters in bounded windows and keep coverage within range.
 - **M4.5b** on GTK, Web and Android: in Perceptual documents brush dabs, brush blend modes, healing's tone match and the retouching filters (Gaussian Blur, Unsharp Mask, High Pass, Soft Focus, Edge-Preserving Smooth) work on encoded values; filters declare their space, and undeclared and light-based filters stay linear. `.capy` v12.
 - **Retouch speed:** Clone Stamp, Healing and Spot Healing are contact brushes on the dry compute kernels and hold the Huion's panel rate at 300 px; Spot Healing's pen-up no longer gathers every candidate.
 - **M4.6** on GTK, Web and Android: Pass Through as a group blend mode, whose opacity and mask fade between the layers below and the group's result; a clipped Pass Through group composites isolated; Ungroup keeps its appearance. The **Use Pass Through for new groups** preference (off) applies to New Group and Group Layers.
@@ -804,4 +805,4 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
   - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
   - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
 
-**Remaining:** M4.7 and the M4 exit test. M2 and M3 are complete. Record milestone completion in the research record's section 7.
+**Remaining:** none for GTK, Web and Android; the performance and memory gates that M4 did not meet are in [photo editing performance](photo-editing-performance.md). M2 and M3 are complete. Record milestone completion in the research record's section 7.

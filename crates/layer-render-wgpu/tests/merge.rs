@@ -356,18 +356,27 @@ fn bakes_of_blurs_save_and_reopen() {
                 let inside = (60..320).contains(&x) && (40..210).contains(&y);
                 [(x * 3 % 256) as u8, (y * 5 % 256) as u8, 200, if inside { 255 } else if (x + y) % 7 == 0 { 90 } else { 0 }]
             }));
-            let mut blur = EffectInstance::new(bundled_effect_catalog().get("gaussian_blur").unwrap().program());
+            let mut blur = EffectInstance::new(bundled_effect_catalog().get(SeparationFilters::BLUR).unwrap().program());
             blur.set("sigma", EffectValue::Number(6.)).unwrap();
             doc.layers[0].kind = LayerKind::Effect;
             doc.layers[0].effect = Some(std::sync::Arc::new(blur));
+            let photo = doc.layers[1].id;
             let (mut engine, _input) = engine(doc);
             let original = image(&mut engine, 0);
-            let steps: Vec<(&str, Box<dyn Fn(&mut Engine)>)> = vec![
+            let mut steps: Vec<(&str, Box<dyn Fn(&mut Engine)>)> = vec![
                 ("Merge Down", Box::new(|engine: &mut Engine| { merge(engine, MergeKind::Down); })),
                 ("Merge Visible", Box::new(|engine: &mut Engine| { merge(engine, MergeKind::Visible); })),
                 ("Stamp Visible", Box::new(|engine: &mut Engine| { merge(engine, MergeKind::Stamp); })),
                 ("Flatten Image", Box::new(|engine: &mut Engine| { merge(engine, MergeKind::Flatten); })),
             ];
+            if space == BlendSpace::Perceptual {
+                steps.push(("Frequency Separation", Box::new(move |engine: &mut Engine| {
+                    let filters = SeparationFilters::new(bundled_effect_catalog(), 6.).unwrap();
+                    let ids = std::array::from_fn(|_| engine.allocate_layer_id());
+                    let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+                    engine.insert_with_operations(plan.edits, plan.operations, None).unwrap();
+                })));
+            }
             for (name, step) in steps {
                 let what = format!("{depth:?} {space:?} {name}");
                 step(&mut engine);

@@ -485,6 +485,39 @@ class AndroidCanvasBarBenchmarkTest {
                     SystemClock.sleep(3000)
                 }
             }
+            if (wanted("dodge_burn") || wanted("frequency_separation")) {
+                newDocument()
+                invoke("blend_perceptual")
+                place(photo())
+                invoke("apply_transform")
+                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                val layers = { state().array("layers").length() }
+                val count = layers()
+                SystemClock.sleep(3000)
+                if (wanted("dodge_burn")) {
+                    measure("dodge-burn-layer") {
+                        mark = System.nanoTime(); invoke("new_dodge_burn_layer"); dispatched = System.nanoTime()
+                        waitFor("New Dodge & Burn Layer adds a layer") { layers() == count + 1 }
+                        SystemClock.sleep(2500)
+                    }
+                    invoke("undo")
+                    waitFor("undo removes the layer") { layers() == count }
+                    SystemClock.sleep(3000)
+                }
+                if (wanted("frequency_separation")) {
+                    fun separate(value: JSONObject) = action(obj("type" to "frequency_separation", "action" to value))
+                    invoke("frequency_separation")
+                    separate(obj("op" to "radius", "radius" to 8))
+                    SystemClock.sleep(3000)
+                    measure("frequency-separation") {
+                        mark = System.nanoTime(); separate(obj("op" to "apply")); dispatched = System.nanoTime()
+                        waitFor("Frequency Separation adds its group") { layers() == count + 3 }
+                        SystemClock.sleep(2500)
+                    }
+                    invoke("undo")
+                    waitFor("undo removes the group") { layers() == count }
+                }
+            }
             if (wanted("refine")) for (extent in listOf(2048 to 1536, width to height).distinct()) {
                 newDocument(extent)
                 invoke("select_all"); invoke("fill_selection"); invoke("deselect"); invoke("rectangle_select")

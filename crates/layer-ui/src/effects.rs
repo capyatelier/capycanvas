@@ -354,28 +354,25 @@ pub enum PropertyKind {
     Curve,
     Gradient,
 }
+/// The number field for a numeric filter parameter.
+pub(super) fn number_control(p: &layer_core::EffectParameter) -> Option<NumericControl> {
+    let EffectParameterKind::Number { min, max, step, decimals, unit } = &p.kind else {
+        return None;
+    };
+    let mut numeric = NumericControl::number(*min as f64, *max as f64, *step as f64, *decimals as u32).unit(unit);
+    // Percentages express an amount, not an item count, even when the
+    // displayed range is short. Keep their compact slider presentation.
+    if unit.as_ref() == "%" {
+        numeric.kind = NumericKind::Slider;
+    }
+    if let EffectValue::Number(v) = p.default {
+        numeric.default_value = Some(v as f64);
+    }
+    Some(numeric)
+}
 fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue) -> PropertyControl {
     let kind = match &p.kind {
-        EffectParameterKind::Number {
-            min,
-            max,
-            step,
-            decimals,
-            unit,
-        } => {
-            let mut numeric =
-                NumericControl::number(*min as f64, *max as f64, *step as f64, *decimals as u32)
-                    .unit(unit);
-            // Percentages express an amount, not an item count, even when the
-            // displayed range is short. Keep their compact slider presentation.
-            if unit.as_ref() == "%" {
-                numeric.kind = NumericKind::Slider;
-            }
-            if let EffectValue::Number(v) = p.default {
-                numeric.default_value = Some(v as f64);
-            }
-            PropertyKind::Number { numeric }
-        }
+        EffectParameterKind::Number { .. } => PropertyKind::Number { numeric: number_control(p).unwrap() },
         EffectParameterKind::Toggle => PropertyKind::Toggle,
         EffectParameterKind::Choice { options } => PropertyKind::Choice {
             options: options.clone(),

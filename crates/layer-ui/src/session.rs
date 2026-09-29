@@ -66,6 +66,9 @@ mod selection_pixels;
 mod merges;
 #[path = "blending.rs"]
 mod blending;
+#[path = "retouch_layers.rs"]
+mod retouch_layers;
+pub use retouch_layers::{FrequencySeparationAction, FrequencySeparationView};
 #[path = "selection_refine.rs"]
 mod selection_refine;
 pub use selection_refine::{RefineKind, SelectionRefineView};
@@ -161,6 +164,7 @@ pub struct UiSession<R: CanvasRenderer> {
     selection_masks: selection_masks::SelectionMasks,
     canvas_size: Option<canvas_size::CanvasSizeDraft>,
     image_size: Option<image_size::ImageSizeDraft>,
+    frequency_separation: Option<retouch_layers::SeparationDraft>,
     content_bounds: image_geometry::ContentBounds,
     rulers: rulers::RulerInteraction,
     retouch: clone_source::RetouchState,
@@ -265,6 +269,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             selection_masks: Default::default(),
             canvas_size: None,
             image_size: None,
+            frequency_separation: None,
             content_bounds: Default::default(),
             rulers: Default::default(),
             retouch: Default::default(),
@@ -2250,6 +2255,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::BlendPerceptual | CommandId::BlendLinear => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy && self.blending_refusal().is_none()
             }
+            CommandId::NewDodgeBurnLayer => self.require_document_idle().is_ok() && self.dodge_burn_refusal().is_none(),
+            CommandId::FrequencySeparation => {
+                self.require_document_idle().is_ok() && self.separation_refusal().is_none()
+            }
             CommandId::CanvasSize
             | CommandId::ImageSize
             | CommandId::RotateImageLeft
@@ -2707,6 +2716,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let apply = action == ImageSizeAction::Apply;
                 self.image_size_action(action)?;
                 (DOCUMENT | BRUSH | COMMANDS | if apply { CAMERA } else { 0 }, apply)
+            }
+            UiAction::FrequencySeparation { action } => {
+                let radius = matches!(action, FrequencySeparationAction::Radius { .. });
+                if radius {
+                    self.require_idle()?;
+                }
+                self.frequency_separation_action(action)?;
+                (if radius { 0 } else { DOCUMENT | BRUSH | COMMANDS }, true)
             }
             UiAction::Layer { action } => {
                 self.require_idle()?;
@@ -4046,6 +4063,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.eyedropper.busy()
             || self.region_tools.busy()
             || self.selection_masks.refine.as_ref().is_some_and(|d| d.unsettled())
+            || self.frequency_separation.as_ref().is_some_and(|d| d.unpublished())
             || self.painted_selections.busy()
             || self.content_bounds.busy()
             || self.notices.publishing()
@@ -4081,6 +4099,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         changed |= self.poll_document_close();
         if self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision!=self.engine.document().revision) {self.cancel_tonal();}
         self.advance_refine(now_ns)?;
+        changed |= self.advance_frequency_separation(now_ns);
         changed |= self.poll_region_tool()?;
         if std::mem::take(&mut self.operation.changed) {
             changed |= regions::BRUSH;
@@ -4458,6 +4477,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ImageSize => {
                 self.open_image_size()?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, false))
+            }
+            CommandId::NewDodgeBurnLayer => {
+                self.new_dodge_burn_layer()?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::FrequencySeparation => {
+                self.open_frequency_separation()?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
             CommandId::RotateImageLeft
             | CommandId::RotateImageRight
@@ -5094,6 +5121,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.selection_resize = self.selection_masks.refine_view();
         self.state.layer_tools.canvas_size = self.canvas_size_view();
         self.state.layer_tools.image_size = self.image_size_view();
+        self.state.layer_tools.frequency_separation = self.frequency_separation_view();
     }
 
     /// Whether a contact of `kind` pressed with `button` at surface
@@ -5534,6 +5562,7 @@ mod tests {
     include!("clone_source_tests.rs");
     include!("color_mixing_tests.rs");
     include!("blending_tests.rs");
+    include!("retouch_layer_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

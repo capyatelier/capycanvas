@@ -19,6 +19,7 @@ import { createSystemStatus } from "./system-status.js";
 import { createHeader } from "./header.js";
 import { createNumberField } from "./numeric.js";
 import { createSelectionUi } from "./selection-masks.js";
+import { createPreviewPanel } from "./preview-panel.js";
 import { createCanvasSizeUi } from "./canvas-size.js";
 import { createImageSizeUi } from "./image-size.js";
 import { createLayerPanel } from "./layers.js";
@@ -57,7 +58,7 @@ let app,
   dragItem = null,
   statusTimer,
   shownHostError = null;
-let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, canvasSizeUi, imageSizeUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
+let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, frequencySeparationUi, canvasSizeUi, imageSizeUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
 let commandBar;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
@@ -639,6 +640,7 @@ function arrange(nextLayout, layoutOnly = false) {
   }
   canvasBar?.place();
   selectionUi?.place();
+  frequencySeparationUi?.place();
   notice?.place();
   queuePanelMeasurements();
 }
@@ -835,7 +837,7 @@ function update(regions) {
   if (regions & (1 | 2 | 4 | 8 | 16 | 128)) header?.refresh();
   if (regions & (4 | 8)) documents?.refresh();
   if (regions & (2 | 4 | 16)) palettes.refresh(regions);
-  if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); selectionUi.refresh(); canvasSizeUi.refresh(); imageSizeUi.refresh(); workspaceChrome?.refresh(); }
+  if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); selectionUi.refresh(); frequencySeparationUi.refresh(); canvasSizeUi.refresh(); imageSizeUi.refresh(); workspaceChrome?.refresh(); }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (1 | 8 | 1024)) canvasBar?.refresh(state.canvas_bar);
   if (regions & (1 | 128)) persistWorkspace();
@@ -1745,6 +1747,10 @@ try {
   // run in later tasks, after this synchronous UI construction is complete.
   workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message });
   selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
+  const separate=action=>dispatch({type:'frequency_separation',action});
+  frequencySeparationUi = createPreviewPanel({name:'frequency-separation',view:()=>state.layer_tools.frequency_separation,kind:v=>v.label,
+    value:radius=>separate({op:'radius',radius}),apply:()=>separate({op:'apply'}),cancel:()=>separate({op:'cancel'}),
+    element,button,numberField,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
   canvasSizeUi = createCanvasSizeUi({state:()=>state,element,button,icon,numberField,resolve:request=>app.number_input(request),dispatch});
   imageSizeUi = createImageSizeUi({state:()=>state,element,button,numberField,resolve:request=>app.number_input(request),dispatch});
   editor = createEditorPanels({selectionUi,app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged});
@@ -1765,8 +1771,8 @@ try {
   customization.target(capy, {kind:"zen_mode"});
   workspace.append(capy);
   canvasBar = createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, reappearMs: catalog.canvas_bar_reappear_ms,
-    openMenu: node => customization.openMenu(node), presented: () => { selectionUi.place(); notice?.place(); } });
-  notice = createNotice({ workspace, element, button, answer: answerNotice, layout: () => layout, bar: () => selectionUi.bounds() ?? canvasBar.bounds() });
+    openMenu: node => customization.openMenu(node), presented: () => { selectionUi.place(); frequencySeparationUi.place(); notice?.place(); } });
+  notice = createNotice({ workspace, element, button, answer: answerNotice, layout: () => layout, bar: () => selectionUi.bounds() ?? frequencySeparationUi.bounds() ?? canvasBar.bounds() });
   zoomReadout = createZoomReadout({ root: $("view-info"), workspace, canvas, element, numberField, control: catalog.zoom,
     menu: () => app.zoom_menu(), renderMenu: customization.renderMenu, refreshMenu: customization.refreshMenu,
     dispatch, camera: () => state.camera, toggled: updateZen });

@@ -50,6 +50,8 @@ mod content_bounds;
 pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope, ScanBudget};
 mod merge;
 pub use merge::{MergeDown, MergeKind, MergePlan, MergeRefusal, bake_layers};
+mod retouch_layers;
+pub use retouch_layers::{RetouchLayerPlan, RetouchLayerRefusal, SEPARATION_IDS, SeparationFilters};
 mod project_storage;
 pub use project_storage::SelectionIndex as ProjectSelections;
 mod history_budget;

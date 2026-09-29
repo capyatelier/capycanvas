@@ -174,6 +174,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::OpenSettings { .. } | UiAction::Preferences { .. } | UiAction::SetTheme { .. } => true,
             UiAction::CanvasSize { action } => *action == CanvasSizeAction::Cancel,
             UiAction::ImageSize { action } => *action == ImageSizeAction::Cancel,
+            UiAction::FrequencySeparation { action } => *action == FrequencySeparationAction::Cancel,
             _ => action.is_host_report(),
         }
     }

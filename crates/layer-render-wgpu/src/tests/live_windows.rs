@@ -315,7 +315,7 @@ fn native_live_animated_windows_refresh_with_empty_paint_damage_and_keep_frozen_
 /// halos, and store the same pixels as a bake of the whole layer.
 #[test]
 fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
-    use layer_core::{BlendSpace, Document, EffectInstance, EffectValue, MergeKind};
+    use layer_core::{BlendSpace, Document, EffectInstance, EffectValue, MergeKind, SeparationFilters};
     use layer_engine::{CanvasEngine, ViewTransform, input_queue};
     const CAP: u64 = 16 * 1024 * 1024;
     let extent = [1100, 700];
@@ -327,6 +327,7 @@ fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
             doc.layers[0].source = Some(layer_core::color::source::rgba8_source(extent, |x, y| {
                 [(x * 7 % 256) as u8, (y * 5 % 256) as u8, ((x ^ y) % 256) as u8, if (x / 97 + y / 61) % 3 == 0 { 140 } else { 255 }]
             }));
+            let photo = doc.layers[0].id;
             let blur = doc.allocate_layer_id();
             let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
             effect.set("sigma", EffectValue::Number(9.)).unwrap();
@@ -335,7 +336,7 @@ fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
             filter.effect = Some(Arc::new(effect));
             doc.layers.insert(0, filter);
             doc.active_layer = blur;
-            let bake = |cap: u64| {
+            let bake = |cap: u64, separate: bool| {
                 let gpu = WgpuRasterizer::new_native_headless(doc.color).unwrap();
                 let (_producer, consumer) = input_queue(8);
                 let mut engine = CanvasEngine::new(gpu, doc.clone(), consumer, test_view(), ViewTransform::IDENTITY).unwrap();
@@ -348,25 +349,42 @@ fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
                 settle(&mut engine);
                 engine.backend_mut().native_edit.as_mut().unwrap().image_pixel_bytes = Some(cap);
                 let before = engine.backend().metrics();
-                let (result, coverage) = (engine.allocate_layer_id(), engine.allocate_layer_id());
-                let plan = engine.document().merge_plan(MergeKind::Down, result, coverage).unwrap();
-                engine.insert_with_operations(plan.edits, vec![(result, plan.operation)], None).unwrap();
+                let baked: Vec<_> = if separate {
+                    let filters = SeparationFilters::new(layer_core::bundled_effect_catalog(), 7.5).unwrap();
+                    let ids = std::array::from_fn(|_| engine.allocate_layer_id());
+                    let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+                    let baked = plan.operations.iter().map(|(id, _)| *id).collect();
+                    engine.insert_with_operations(plan.edits, plan.operations, None).unwrap();
+                    baked
+                } else {
+                    let (result, coverage) = (engine.allocate_layer_id(), engine.allocate_layer_id());
+                    let plan = engine.document().merge_plan(MergeKind::Down, result, coverage).unwrap();
+                    engine.insert_with_operations(plan.edits, vec![(result, plan.operation)], None).unwrap();
+                    vec![result]
+                };
                 settle(&mut engine);
                 let after = engine.backend().metrics();
-                let data = engine.document().layer(result).unwrap().raster.wait_data().unwrap();
-                let pixels: Vec<Vec<u8>> = data.tiles.values().map(|t| t.wait_backing().unwrap().decode().unwrap()).collect();
+                let pixels: Vec<Vec<u8>> = baked
+                    .iter()
+                    .flat_map(|id| {
+                        let data = engine.document().layer(*id).unwrap().raster.wait_data().unwrap();
+                        data.tiles.values().map(|t| t.wait_backing().unwrap().decode().unwrap()).collect::<Vec<_>>()
+                    })
+                    .collect();
                 (pixels, after.image_window_submissions - before.image_window_submissions, after.image_window_peak_bytes)
             };
-            let what = format!("{depth:?} {space:?} Merge Down of a blur");
-            let (full, unbounded, _) = bake(u64::MAX);
-            assert_eq!(unbounded, 0, "{what}: a bake that fits composes its filters whole");
-            let (windowed, windows, peak) = bake(CAP);
-            assert!(windows > 2, "{what}: {windows} windows");
-            assert!(peak <= CAP, "{what}: {peak} bytes of filter images");
-            assert_eq!(windowed.len(), full.len(), "{what}");
-            for (tile, (a, b)) in windowed.iter().zip(&full).enumerate() {
-                let differ = a.iter().zip(b).filter(|(a, b)| a != b).count();
-                assert_eq!(differ, 0, "{what}: tile {tile} differs in {differ} bytes");
+            for separate in [false, true].into_iter().filter(|s| !s || space == BlendSpace::Perceptual) {
+                let what = format!("{depth:?} {space:?} {}", if separate { "Frequency Separation" } else { "Merge Down of a blur" });
+                let (full, unbounded, _) = bake(u64::MAX, separate);
+                assert_eq!(unbounded, 0, "{what}: a bake that fits composes its filters whole");
+                let (windowed, windows, peak) = bake(CAP, separate);
+                assert!(windows > 2, "{what}: {windows} windows");
+                assert!(peak <= CAP, "{what}: {peak} bytes of filter images");
+                assert_eq!(windowed.len(), full.len(), "{what}");
+                for (tile, (a, b)) in windowed.iter().zip(&full).enumerate() {
+                    let differ = a.iter().zip(b).filter(|(a, b)| a != b).count();
+                    assert_eq!(differ, 0, "{what}: tile {tile} differs in {differ} bytes");
+                }
             }
         }
     }

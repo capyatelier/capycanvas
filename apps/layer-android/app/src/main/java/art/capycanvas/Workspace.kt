@@ -355,7 +355,11 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             NoticeBubble(host, dock, layout.getJSONObject("status"))
             CanvasSizePanel(host, dock, layout.getJSONObject("work_area"), state)
             ImageSizePanel(host, dock, layout.getJSONObject("work_area"), state)
-            SelectionRefinePanel(host, dock, layout.getJSONObject("status"), state)
+            val tools = state.getJSONObject("layer_tools")
+            PreviewPanel(host, dock, layout.getJSONObject("status"), tools.objectOrNull("selection_resize"), "selection-refine",
+                PreviewOps("selection", "resize_radius", "apply_resize", "cancel_resize"))
+            PreviewPanel(host, dock, layout.getJSONObject("status"), tools.objectOrNull("frequency_separation"), "frequency-separation",
+                PreviewOps("frequency_separation", "radius", "apply", "cancel"))
             if (!hidden) layout.array("dividers").objects().filterNot { it.optBoolean("fixed") }.forEach { divider ->
                 val rect = divider.getJSONObject("bounds")
                 val horizontal = divider.getString("axis") == "horizontal"

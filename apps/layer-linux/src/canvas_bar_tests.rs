@@ -956,7 +956,7 @@ fn native_canvas_bar_refine() {
             &format!("{device:?}: Feather… opens the Refine dialog"),
         );
         assert!(mapped_label(&field, "Feather radius").is_some(), "the dialog names the value");
-        assert!(w.window.has_css_class(crate::selection_masks::RefineDialog::PREVIEW_CLASS), "the canvas stays undimmed");
+        assert!(w.window.has_css_class(crate::preview_dialog::PreviewDialog::PREVIEW_CLASS), "the canvas stays undimmed");
         until(|| selection(&w).is_some_and(|s| soft_edged(&s)), "the default radius previews live");
         let previewed = selection(&w);
         let slider = find_css(&field, "number-track").and_then(|t| find_type::<gtk::Scale>(&t)).expect("the value slider");
@@ -991,7 +991,7 @@ fn native_canvas_bar_refine() {
             || state(&w).layer_tools.selection_resize.is_none() && find_named(w.window.upcast_ref(), "selection-refine-value").is_none_or(|f| !f.is_mapped()),
             &format!("{device:?}: Apply closes the dialog"),
         );
-        assert!(!w.window.has_css_class(crate::selection_masks::RefineDialog::PREVIEW_CLASS));
+        assert!(!w.window.has_css_class(crate::preview_dialog::PreviewDialog::PREVIEW_CLASS));
         let feathered = selection(&w).unwrap();
         assert!(soft_edged(&feathered));
         w.dispatch(UiAction::Invoke { command: CommandId::Undo });
