@@ -142,6 +142,7 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "color_space": format!("{:?}", surface.config.color_space),
                 "present_mode": format!("{:?}", surface.config.present_mode),
                 "retained_target": surface.presenter.retains_target(),
+                "pending_composition": layer_render::CanvasRenderer::has_pending_work(gpu.as_ref()),
                 "overview_count": a.navigators.count(),
                 "glass_regions": a.glass.len(),
                 "backdrop_frames": surface.presenter.backdrop_frames(),

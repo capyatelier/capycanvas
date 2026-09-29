@@ -67,6 +67,7 @@ def main():
                 "rolling_gpu_ms": distribution(data["renderer_after"]["gpu_samples"]),
                 "viewport_gpu_ms": distribution([r[1] / 1e6 for r in data["presentation"] if r[2] == 1]),
                 "resident_bytes": data["renderer_after"]["resident_bytes"],
+                "settled_after_input_ms": (data["settled_ns"] - end) / 1e6 if "settled_ns" in data else None,
                 "process_mappings": data["resources_after"]["process_mappings"]})
         trace = args.directory / f"{label}.perfetto-trace"
         trace_data = None

@@ -233,8 +233,8 @@ impl stack::Compositor for Builder<'_> {
 }
 
 impl Evaluator<'_> {
-    pub(super) fn evaluate_root(&mut self, node: &Node) -> Result<Value, GpuRasterError> {
-        let deferred = if self.cache.plan.level > 0 && node.deferred() && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
+    pub(super) fn evaluate_root(&mut self, node: &Node, direct: bool) -> Result<Value, GpuRasterError> {
+        let deferred = if direct && self.cache.plan.level > 0 && node.deferred() && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
             && self.r.transform_preview.is_none() { Some(self.evaluate(node)?) } else { None };
         if matches!(deferred, Some(Value::Placed(_))) { return Ok(deferred.unwrap()); }
         if self.cache.output.is_empty() { self.cache.allocate(self.r); }

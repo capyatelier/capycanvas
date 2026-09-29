@@ -122,6 +122,10 @@ Choose `--radius-x` and `--radius-y` from the photo's displayed bounds and brush
 radius; the default work-area ellipse can leave a small Fit-view canvas. Compare
 the observed camera, radii, layer count and settings in each `*-info.json`, even
 when both invocations use identical command-line arguments.
+The runner waits for pending composition and queued GPU frames after each stroke.
+Reports include `settled_after_input_ms`; completed updates per second still count
+only nonempty updates completed inside the input window. Keep settling and the
+next input's latency separate from that throughput measurement.
 
 **Navigation (Android).**
 

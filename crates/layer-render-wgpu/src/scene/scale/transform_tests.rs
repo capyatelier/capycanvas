@@ -31,7 +31,7 @@ fn pass_through_children_above_a_transform_keep_shared_display_composition() {
                 renderer.set_transform_preview(Some(&transform)).unwrap(); renderer.submit(frame).unwrap();
             }
             assert!(r.live_display.is_none() && r.composite_texture.is_none());
-            assert!(!r.has_pending_work());
+            if transform.moving { assert!(!r.has_pending_work()); }
             let cache = r.scale_display.as_ref().expect("group children stay on the display graph");
             let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), cache.plan);
             assert!(error[0] < 0.004 && error[1] < 0.06, "{blend:?} step={step} error={error:?}");
@@ -44,7 +44,7 @@ fn pass_through_children_above_a_transform_keep_shared_display_composition() {
 }
 
 #[test]
-fn transform_sources_compose_with_the_stack_without_native_preview_or_settling() {
+fn transform_sources_compose_with_the_stack_without_native_preview_during_motion() {
     for space in layer_core::BlendSpace::ALL {
     let extent = [517, 259];
     let bounds = Rect { min: Point::default(), max: Point { x: 517., y: 259. } };
@@ -94,7 +94,7 @@ fn transform_sources_compose_with_the_stack_without_native_preview_or_settling()
                 }
                 assert!(r.scale_display.is_some() && r.live_display.is_none() && r.composite_texture.is_none());
                 assert!(r.paint_layers.iter().all(|l| l.pages.is_empty()), "display motion does not allocate native preview pages");
-                assert!(!r.has_pending_work(), "a displayed transform has no settling queue");
+                assert!(!r.has_pending_work(), "moving transforms defer exact refinement");
                 assert_eq!(r.test.source_captures.get(), 1);
                 let displayed = display_pixels(&r);
                 let exact_pixels = pixels(&exact, exact.composite_texture.as_ref().unwrap());
@@ -110,7 +110,8 @@ fn transform_sources_compose_with_the_stack_without_native_preview_or_settling()
                 assert_eq!(displayed, display_pixels(&r), "an exact query preserves the displayed approximation");
                 r.submit(frame).unwrap();
                 assert_eq!(displayed, display_pixels(&r));
-                assert!(r.paint_layers.iter().all(|l| l.pages.is_empty()));
+                assert!(r.paint_layers.iter().map(|l| l.pages.len()).sum::<usize>() <= 9,
+                    "an exact query retains only its final native dependency window");
             }
             for renderer in [&mut r, &mut exact] {
                 renderer.set_transform_preview(None).unwrap(); renderer.submit(frame).unwrap();
@@ -172,11 +173,13 @@ fn transform_zoom_release_and_commit_preserve_native_pixels() {
         for renderer in [&mut r, &mut exact] {
             renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
         }
-        assert!(r.scale_display.is_some() && !r.has_pending_work());
+        assert!(r.scale_display.is_some());
+        if moving { assert!(!r.has_pending_work()); }
         let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), r.scale_display.as_ref().unwrap().plan);
         assert!(error[0] < 0.004 && error[1] < 0.06, "scale={scale} moving={moving} {error:?}");
         assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
         assert_eq!(r.test.source_captures.get(), 1);
+        if !moving { assert_settled(&mut r, frame, &pixels(&exact, exact.composite_texture.as_ref().unwrap())); }
     }
     let expected = exact.readback_srgb_rgba8().unwrap();
     let mut coverage = layer_core::LayerMask::reveal_all(LayerId(50), Point::default());

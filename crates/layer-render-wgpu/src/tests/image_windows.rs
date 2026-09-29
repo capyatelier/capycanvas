@@ -59,7 +59,7 @@ fn capture(
         &wgpu::CommandEncoderDescriptor::default(),
     );
     scene
-        .capture_region(r, packet, &target, crop, None, &mut encoder)
+        .capture_region(r, packet, &target, crop, scene::Output::Artwork(None), &mut encoder)
         .unwrap();
     r.uploads.finish(&encoder);
     encoder.submit(&r.queue);

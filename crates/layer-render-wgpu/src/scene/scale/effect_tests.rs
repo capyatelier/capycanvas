@@ -297,6 +297,7 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
         let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), plan);
         assert!(error[0] < 0.004 && error[1] < 0.04, "level={level} sigma={sigma} clipped={clipped}: {error:?}");
         assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
+        assert_settled(&mut r, frame, &pixels(&exact, exact.composite_texture.as_ref().unwrap()));
         let preparations = r.scene.as_ref().unwrap().effects.preparation_count();
         let work = r.metrics.composited_pixels;
         r.submit(FramePacket { composite_all: false, ..frame }).unwrap();

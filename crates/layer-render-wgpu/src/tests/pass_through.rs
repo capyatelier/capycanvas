@@ -121,7 +121,7 @@ fn render(r: &mut WgpuRasterizer, document: &Document) -> Vec<[f32; 4]> {
         if !layer_render::CanvasRenderer::has_pending_work(r) {
             break;
         }
-        r.submit(frame).unwrap();
+        r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
     }
     assert!(!layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
     crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))

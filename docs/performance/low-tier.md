@@ -424,3 +424,23 @@ they do not establish a speedup or reach the long-term 60 updates/s target.
 They precede perceptual dab blending and exact idle refinement. Raw reports,
 traces and source provenance are under `artifacts/display-production/perceptual-graph-tcl`
 and `perceptual-graph-provenance.json`.
+
+An initial comparison against main `c707c379` uses the same Perceptual 12 MP
+G-Pen 1024 px Fit trajectory and explicitly drains idle composition and GPU work.
+Candidate APK `a14ee9b7785537f9f9d667ff04c8438e35dd7837f961ba52a56c241bf093963f`
+adds exact idle refinement. Both thermal snapshots for each build report status 0.
+
+| One warmed five-second diagnostic | Main | Candidate |
+| --- | --- | --- |
+| Completed drawing updates/s | 14.93 | 46.50 |
+| Input-end to drained composition, ms | 549 | 1952 |
+| Input queue p99, ms | 82.09 | 25.94 |
+| Renderer resident bytes after draining, MiB | 795.0 | 582.2 |
+
+This single pair shows a drawing-throughput gain and a settling regression;
+it is not a repeated qualification or a 60 updates/s result. The candidate
+refines one native page per idle submission. Raw reports and frozen source/APK
+provenance are in `artifacts/display-production/idle-exact-smoke` and
+`idle-exact-provenance.json`. The APK predates the overview scheduling correction
+for a cache created during an active transform; this painting fixture has no
+transform preview.

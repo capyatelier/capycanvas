@@ -3146,6 +3146,7 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn has_pending_work(&self) -> bool {
         self.awaiting_meshes || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
+            || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work())
     }
     fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
         self.prepare_retouch_sources(retouch);
@@ -4216,6 +4217,21 @@ impl CanvasRenderer for WgpuRasterizer {
             self.composite_damage = if (needs_scene(packet) && !pointwise_scene) || animated {
                 PixelRect::full(packet.document_extent)
             } else { dirty };
+        }
+        if dirty.is_empty() && !animated && original_batches.is_empty() && packet.dabs.is_empty()
+            && self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work())
+            && self.artwork_frame.as_ref().is_some_and(|old|
+                old.view.document_to_surface == packet.view.document_to_surface
+                    && old.same_artwork(packet, requested_view.background_rgba_linear))
+        {
+            let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
+            let result = scene.refine_display(self, packet, &mut encoder);
+            self.scene = Some(scene);
+            let changed = result?;
+            if !changed.is_empty() {
+                self.composite_damage = self.composite_damage.union(changed);
+                self.composite_revision = self.composite_revision.wrapping_add(1);
+            }
         }
         if self.transform_preview.is_none() && !reset && packet.dabs.is_empty()
             && packet.dab_batches.is_empty() && packet.restore_rasters.is_empty()

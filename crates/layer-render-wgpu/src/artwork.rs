@@ -39,25 +39,14 @@ impl Frame {
         let artwork = |l: &&Layer| l.kind != LayerKind::Selection;
         let same = self.background == background
             && self.blend_space == packet.blend_space
+            && (self.time == packet.time_seconds || !packet.layers.iter()
+                .any(|l| l.visible && l.effect.as_ref().is_some_and(|e| e.animated())))
             && self.previews.is_empty()
             && packet.dab_batches.is_empty()
             && self.layers.iter().filter(artwork).count()
                 == packet.layers.iter().filter(artwork).count();
         for (a, b) in self.layers.iter().filter(artwork).zip(packet.layers.iter().filter(artwork)) {
-            let same_layer = a.id == b.id
-                && a.kind == b.kind
-                && a.visible == b.visible
-                && a.opacity == b.opacity
-                && a.raster == b.raster
-                && a.properties == b.properties
-                && a.mask == b.mask
-                && a.effect == b.effect
-                && match (&a.source, &b.source) {
-                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                    (None, None) => true,
-                    _ => false,
-                };
-            if !same_layer {
+            if !same_layer(a, b) {
                 return false;
             }
         }
@@ -182,7 +171,7 @@ impl Capture {
             }
         }
         let scene = self.scene.get_or_insert_with(|| query_scene(r));
-        scene.capture_region(r, packet, destination, region, None, encoder)?;
+        scene.capture_region(r, packet, destination, region, scene::Output::Artwork(None), encoder)?;
         self.window = Some(window);
         self.peak_image_bytes = self.peak_image_bytes.max(bytes);
         Ok(())
@@ -239,11 +228,7 @@ impl Capture {
 }
 
 impl WgpuRasterizer {
-    /// A display prediction owns only coarse pages. Explicit artwork queries
-    /// replay its retained contacts through the same exact tile executor, once
-    /// per tail. This work is absent from painting/presentation and introduces
-    /// no background settling backlog or duplicate permanent preview cache.
-    fn ensure_exact_preview(&mut self, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
+    pub(super) fn ensure_exact_preview(&mut self, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
         if self.preview_level == 0 { return Ok(()); }
         let frame = self.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
         let packet = frame.packet(self.document_extent);

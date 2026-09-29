@@ -116,6 +116,9 @@ fn composite_color(r: &WgpuRasterizer, packet: FramePacket<'_>, [red, green, blu
     let [red, green, blue, alpha] = packet.blend_space.composite(r.device.working_space(), [red * alpha, green * alpha, blue * alpha, alpha]);
     wgpu::Color { r: f64::from(red), g: f64::from(green), b: f64::from(blue), a: f64::from(alpha) }
 }
+#[derive(Clone, Copy)]
+pub(super) enum Output { Artwork(Option<LayerId>), Display }
+
 pub(super) struct Scene {
     placement: pixel_transform::PixelTransform,
     placement_display: bool,
@@ -1326,7 +1329,7 @@ impl Scene {
         packet: FramePacket<'_>,
         destination: &wgpu::Texture,
         region: PixelRect,
-        parent: Option<LayerId>,
+        output: Output,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         if self.placement_display {
@@ -1348,14 +1351,20 @@ impl Scene {
         self.image_window = Some(window);
         self.effects.retain(packet.layers);
         let result = (|| {
-            self.update_images(r, packet, window, encoder)?;
+            let dirty = match output { Output::Artwork(_) => window, Output::Display => PixelRect::EMPTY };
+            self.update_images(r, packet, dirty, encoder)?;
             self.jobs.clear();
             self.used.fill(false);
             self.stop_before = None;
             for tile in page_coordinates(region) {
-                let output = self.group(r, packet, parent, tile)?;
-                let output = self.converted(r, output, Convert::linear(packet));
-                self.copy_window_tile(output, destination, tile, region);
+                let image = match output {
+                    Output::Artwork(parent) => {
+                        let image = self.group(r, packet, parent, tile)?;
+                        self.converted(r, image, Convert::linear(packet))
+                    }
+                    Output::Display => self.display_tile(r, packet, tile)?,
+                };
+                self.copy_window_tile(image, destination, tile, region);
             }
             self.encode_jobs(r, encoder)
         })();

@@ -16,7 +16,7 @@ impl Evaluator<'_> {
         let input = self.with_region(regions[0], |compositor| {
             let value = compositor.evaluate(input)?;
             let value = compositor.effect_input(value)?;
-            if boundary && compositor.packet.blend_space == layer_core::BlendSpace::Perceptual {
+            if boundary && Convert::filter_input(compositor.packet, effect.program.space) == Convert::Decode {
                 compositor.draw(value, Value::Color([0.; 4]), layer_core::LayerBlend::Normal, 4096, None)
             } else { Ok(value) }
         })?;

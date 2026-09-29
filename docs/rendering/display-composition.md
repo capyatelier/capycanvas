@@ -73,7 +73,9 @@ remain expression boundaries. Exact and reduced composition share blend formulas
 and document-depth flags, including clipped layers and extended float colors.
 The document blend space invalidates composed branches and selects the shared
 blend formulas. Pointwise effects decode and encode at their fused boundary;
-image-boundary effects receive linear inputs and encode only their final output.
+image-boundary effects receive their declared linear or document-blending inputs.
+Linear effects encode their final output for a perceptual composite; effects
+already operating on encoded values retain that representation.
 Paper and mask-inspection colors use the composite representation, while scalar
 coverage stays unencoded. Presentation decodes the completed composite before
 applying the output color transform.
@@ -158,7 +160,8 @@ Split selections use finer
 inputs and four samples to limit moved/unmoved coverage error; edge texels
 use their actual extent. Exact queries evaluate native source tiles for their
 requested dependency window, retiring tiles from the previous window. Display
-motion has no full-layer preview or post-release settling queue. Scalar-mask
+motion has no full-layer native preview. Idle display refinement evaluates exact
+transform regions after the gesture stops. Scalar-mask
 transactions currently provide native coverage to the same graph.
 
 Transform motion invalidates the previous and next destination bounds. The
@@ -181,8 +184,20 @@ using retained preview contacts. Replay preserves the existing full-size preview
 semantics, including its view-dependent block evaluation. This happens on demand,
 once for that tail, replacing the compact scratch pages. The already-composed display stays valid;
 the next live tail returns to compact scratch. Save/undo history contains only
-committed native pixels. There is no background exact-paint queue or settling
-backlog to hide from the benchmark.
+committed native pixels. Idle display refinement composes those authoritative
+pixels; it never delays committing paint or adds work to undo history.
+
+Once the view and artwork stop changing, the renderer refines one native page
+per idle submission through the same region executor used by exact queries.
+It reduces the exact composite into the retained display window and overview,
+then updates the adjacent presentation mip. Native identity composition already
+contains exact pixels. Moving transform previews defer refinement until release.
+Each cache tracks exact validity alongside ordinary display validity; edits
+invalidate both through the same dependency regions. Navigation retains exact
+overlap. Directly presented placements switch to a materialized display only
+when that output is complete. Refinement advances presentation damage without
+changing the artwork revision, and pending work remains visible to the shared
+frame scheduler. Unchanged global filter dependencies are reused across pages.
 
 ## Supported contract
 

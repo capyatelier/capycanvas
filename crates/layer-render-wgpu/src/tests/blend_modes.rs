@@ -314,9 +314,9 @@ fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
 }
 
 fn live(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], blend_space: BlendSpace) -> Vec<Rgba> {
-    live_at(r, layers, background, 0, blend_space)
+    live_at(r, layers, background, 0, blend_space, true)
 }
-fn live_at(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], level: u32, blend_space: BlendSpace) -> Vec<Rgba> {
+fn live_at(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], level: u32, blend_space: BlendSpace, settled: bool) -> Vec<Rgba> {
     let scale = 1. / (1 << level) as f32;
     let view = ViewState {
         background_rgba_linear: background,
@@ -325,12 +325,12 @@ fn live_at(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], level
     };
     r.submit(FramePacket { view, reset_layers: true, blend_space, ..packet(layers, EXTENT) }).unwrap();
     for _ in 0..16 {
-        if !layer_render::CanvasRenderer::has_pending_work(r) {
+        if !settled || !layer_render::CanvasRenderer::has_pending_work(r) {
             break;
         }
-        r.submit(FramePacket { view, blend_space, ..packet(layers, EXTENT) }).unwrap();
+        r.submit(FramePacket { view, blend_space, composite_all: false, ..packet(layers, EXTENT) }).unwrap();
     }
-    assert!(!layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
+    assert!(!settled || !layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
     let texture = if level == 0 {
         crate::test_support::document_texture(r)
     } else {
@@ -463,19 +463,27 @@ fn reduced_blend_modes_match_the_reference_at_every_depth() {
                 };
                 for mode in LayerBlend::ALL.into_iter().filter(|m| *m != LayerBlend::PassThrough) {
                     document.layers[blended].properties.blend = mode;
-                    let actual = live_at(&mut r, &document.layers, background, level, document.blend_space);
-                    assert_eq!(actual.len(), (extent[0] * extent[1]) as usize);
-                    for (i, actual) in actual.iter().enumerate() {
-                        let (x, y) = (i as u32 % extent[0], i as u32 / extent[0]);
-                        let top = average(&inputs[0], x, y);
-                        let bottom = average(&inputs[1], x, y);
-                        let form = if matches!(path, Path::Clip) { Form::Clip } else { Form::Composite };
-                        let [low, high] = expected(form, straight(top), top[3] * f64::from(OPACITY), bottom, mode, depth.is_float(), weights, document.blend_space);
-                        for c in 0..4 {
-                            let tol = tolerance(depth, high[c]);
-                            assert!(actual[c] >= low[c] - tol && actual[c] <= high[c] + tol,
-                                "{depth:?} {space:?} {path:?} {mode:?} level={level} at ({x}, {y}) channel {c}: {} outside [{}, {}]",
-                                actual[c], low[c], high[c]);
+                    let form = if matches!(path, Path::Clip) { Form::Clip } else { Form::Composite };
+                    let native: Vec<_> = inputs[0].iter().zip(&inputs[1]).map(|(top, bottom)|
+                        expected(form, straight(*top), top[3] * f64::from(OPACITY), *bottom, mode, depth.is_float(), weights, space)).collect();
+                    let native_low: Vec<_> = native.iter().map(|range| range[0]).collect();
+                    let native_high: Vec<_> = native.iter().map(|range| range[1]).collect();
+                    for settled in [false, true] {
+                        let actual = live_at(&mut r, &document.layers, background, level, document.blend_space, settled);
+                        assert_eq!(actual.len(), (extent[0] * extent[1]) as usize);
+                        for (i, actual) in actual.iter().enumerate() {
+                            let (x, y) = (i as u32 % extent[0], i as u32 / extent[0]);
+                            let top = average(&inputs[0], x, y);
+                            let bottom = average(&inputs[1], x, y);
+                            let [low, high] = if settled {
+                                [average(&native_low, x, y), average(&native_high, x, y)]
+                            } else { expected(form, straight(top), top[3] * f64::from(OPACITY), bottom, mode, depth.is_float(), weights, space) };
+                            for c in 0..4 {
+                                let tol = tolerance(depth, high[c]);
+                                assert!(actual[c] >= low[c] - tol && actual[c] <= high[c] + tol,
+                                    "{depth:?} {space:?} {path:?} {mode:?} level={level} settled={settled} at ({x}, {y}) channel {c}: {} outside [{}, {}]",
+                                    actual[c], low[c], high[c]);
+                            }
                         }
                     }
                 }

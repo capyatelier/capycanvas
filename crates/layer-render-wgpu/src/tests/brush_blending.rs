@@ -41,7 +41,7 @@ impl Canvas {
     /// The composite, as the document's blend space holds it.
     fn composite(&mut self) -> Vec<[f64; 4]> {
         self.r.submit(FramePacket { blend_space: self.space, ..packet(&self.layers, EXTENT) }).unwrap();
-        crate::layer_tests::page_bytes(&self.r, self.r.composite_texture.as_ref().unwrap())
+        crate::layer_tests::page_bytes(&self.r, crate::test_support::document_texture(&self.r))
             .chunks_exact(16)
             .map(|p| std::array::from_fn(|c| f64::from(f32::from_le_bytes(p[c * 4..][..4].try_into().unwrap()))))
             .collect()

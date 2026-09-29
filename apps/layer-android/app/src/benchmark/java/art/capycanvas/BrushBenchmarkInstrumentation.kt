@@ -302,6 +302,13 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 val displayAfterInput = display()
                 check(displayAfterInput.getString("present_mode") == "SharedDemandRefresh")
                 check(displayAfterInput.getBoolean("retained_target"))
+                var drained = displayAfterInput
+                waitFor {
+                    drained = display()
+                    !drained.getBoolean("pending_composition") &&
+                        drained.getLong("completed_frames") >= drained.getLong("submitted_frames")
+                }
+                val settled = System.nanoTime()
                 SystemClock.sleep(1000)
                 val data = report(false)
                 val present = native { JSONArray(Native.presentationTimings(it, false)) }
@@ -313,6 +320,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 check(host.actionError == null) { host.actionError!! }
                 check(data.getJSONArray("frames").length() > 0)
                 data.put("motion", motion).put("presentation", present).put("renderer_before", before)
+                    .put("settled_ns", settled)
                     .put("completions", completions)
                     .put("renderer_after", stats()).put("display_before", displayBefore)
                     .put("display_after_input", displayAfterInput).put("display_after_drain", display())

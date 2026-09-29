@@ -754,7 +754,7 @@ impl Scene {
             composite_all: false,
             blend_space: request.blend_space,
         };
-        self.capture_region(r, packet, destination, region, parent, encoder)
+        self.capture_region(r, packet, destination, region, scene::Output::Artwork(parent), encoder)
     }
 }
 impl WgpuRasterizer {

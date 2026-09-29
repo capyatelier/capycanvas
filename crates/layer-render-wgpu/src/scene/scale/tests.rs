@@ -6,6 +6,35 @@ use layer_core::{DefaultBrushPreset, Document};
 #[path = "effect_tests.rs"]
 mod effects;
 
+#[path = "refinement_tests.rs"]
+mod refinement;
+
+fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
+    let revision = r.artwork_revision;
+    let pages = page_coordinates(PixelRect::full(frame.document_extent)).count();
+    let idle = FramePacket { composite_all: false, reset_layers: false, dabs: &[], dab_batches: &[], restore_rasters: &[], ..frame };
+    for step in 0..=pages + 1 {
+        if !r.has_pending_work() { break; }
+        assert!(step < pages + 1, "refinement must finish within one visit per native page");
+        let work = r.metrics.composited_pixels;
+        r.submit(idle).unwrap();
+        assert!(r.metrics.composited_pixels - work <= u64::from(PAGE_SIZE).pow(2));
+        assert_eq!(r.artwork_revision, revision, "idle refinement does not edit artwork");
+    }
+    let cache = r.scale_display.as_ref().unwrap();
+    let error = quality(&display_pixels(r), reference, cache.plan);
+    assert!(error[2] < 2e-5, "settled display {error:?}");
+    if let Some(overview) = &cache.overview {
+        let error = quality(&pixels(r, overview.texture()), reference, overview.plan);
+        assert!(error[2] < 2e-5, "settled overview {error:?}");
+    }
+    assert_presentation_mip(r);
+    assert!(r.live_display.is_none() && r.composite_texture.is_none());
+    let work = r.metrics.composited_pixels;
+    r.submit(idle).unwrap();
+    assert_eq!(r.metrics.composited_pixels, work, "completed refinement has no further work");
+}
+
 fn document() -> Document {
     document_at([517, 259])
 }
@@ -33,6 +62,40 @@ fn document_at(extent: [u32; 2]) -> Document {
     }
     doc.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
     doc
+}
+
+#[test]
+fn idle_display_converges_to_exact_composition_after_edits() {
+    for space in layer_core::BlendSpace::ALL {
+        let mut doc = document();
+        let extent = [doc.width, doc.height];
+        doc.layers[0].source = Some(layer_core::color::source::rgba8_source(extent, |x, y|
+            [if (x / 3 + y / 2) % 2 == 0 { 40 } else { 220 }, 128, 70, 255]));
+        let mut top = Layer::paint(LayerId(90), "correlated coverage");
+        top.source = Some(layer_core::color::source::rgba8_source(extent, |x, y|
+            [180, 20, 100, if (x / 3 + y / 2) % 2 == 0 { 40 } else { 220 }]));
+        doc.layers.insert(0, top);
+        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        exact.test.reference = true;
+        for (step, opacity) in [0.8, 0.3, 0.9].into_iter().enumerate() {
+            doc.layers[0].opacity = opacity;
+            let mut frame = packet(&doc.layers, extent);
+            frame.blend_space = space;
+            frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+            r.submit(frame).unwrap();
+            exact.submit(frame).unwrap();
+            let reference = pixels(&exact, exact.composite_texture.as_ref().unwrap());
+            let before = quality(&display_pixels(&r), &reference, r.scale_display.as_ref().unwrap().plan);
+            assert!(before[2] > 1e-4, "fixture must need refinement: {before:?}");
+            if step == 0 {
+                r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
+                assert!(r.has_pending_work(), "the next edit interrupts partial refinement");
+                continue;
+            }
+            assert_settled(&mut r, frame, &reference);
+        }
+    }
 }
 
 #[test]
@@ -947,9 +1010,7 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
             assert!(error[2] < 2e-5, "{mode:?} state={state}: {error:?}");
             assert_presentation_mip(&reduced);
             assert!(reduced.live_display.is_none() && reduced.composite_texture.is_none());
-            let work = reduced.metrics.composited_pixels;
-            reduced.submit(frame).unwrap();
-            assert_eq!(work, reduced.metrics.composited_pixels);
+            assert_settled(&mut reduced, frame, &pixels(&exact, exact.composite_texture.as_ref().unwrap()));
         }
     }
 }
@@ -1334,16 +1395,7 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
     .unwrap();
     let final_pixels = display_pixels(&r);
     assert_ne!(original, final_pixels);
-    let work = r.metrics.composited_pixels;
-    r.submit(FramePacket {
-        composite_all: false,
-        ..p
-    })
-    .unwrap();
-    assert_eq!(
-        r.metrics.composited_pixels, work,
-        "an unchanged display does no composition"
-    );
+    assert_settled(&mut r, p, &pixels(&exact, exact.composite_texture.as_ref().unwrap()));
     p.view.document_to_surface = [1., 0., 0., 1., 0., 0.];
     r.submit(p).unwrap();
     assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 0);

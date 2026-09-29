@@ -1255,7 +1255,7 @@ impl ImageTransformState {
         next: &layer_render::TransformPreview,
         layer: Option<&Layer>, extent: [u32; 2], native: bool,
     ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
-        if self.preview.as_ref() == Some(next) && self.native_preview == native && self.queried.is_empty() {
+        if self.preview.as_ref() == Some(next) && self.native_preview == native {
             return Ok(Vec::new());
         }
         let same_source = self.preview.as_ref().is_some_and(|p| {

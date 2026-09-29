@@ -167,7 +167,7 @@ fn settle(r: &mut WgpuRasterizer, packet: FramePacket<'_>) {
         if !layer_render::CanvasRenderer::has_pending_work(r) {
             break;
         }
-        r.submit(FramePacket { reset_layers: false, dabs: &[], dab_batches: &[], ..packet }).unwrap();
+        r.submit(FramePacket { reset_layers: false, composite_all: false, dabs: &[], dab_batches: &[], ..packet }).unwrap();
     }
     assert!(!layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
 }

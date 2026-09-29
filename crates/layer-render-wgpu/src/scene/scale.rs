@@ -6,6 +6,7 @@ use wgpu::util::DeviceExt;
 mod sources;
 mod graph;
 mod effects;
+mod refinement;
 pub(crate) use sources::Sources;
 
 /// Device recipes survive level changes; display cache retirement drops pixels only.
@@ -227,6 +228,8 @@ pub(crate) struct Cache {
     overview: Option<Box<Cache>>,
     shifted: Option<Box<Cache>>,
     valid: BTreeSet<[u32; 2]>,
+    refined: BTreeSet<[u32; 2]>,
+    exact_tile: Option<Image>,
     unchanged: bool,
     graph: graph::Graph,
     transform: Option<layer_render::TransformPreview>,
@@ -386,7 +389,8 @@ fn allocation_for(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePac
     let working = if bounded(layers) {
         u64::from(PAGE_SIZE).pow(2) * 16 * (images + pixel_transform::TRANSFORM_SLOTS as u64)
     } else { output * (images - 1) };
-    let own = [source_bytes, output + working + root_mips + plan.level_bytes(plan.level + 1) + records + 64 + transform];
+    let own = [source_bytes, output + working + root_mips + plan.level_bytes(plan.level + 1) + records + 64 + transform
+        + u64::from(PAGE_SIZE).pow(2) * 16];
     if plan.bounds == PixelRect::full(plan.extent) { own }
     else {
         let overview = allocation(r, overview_plan(plan), packet, sources);
@@ -547,7 +551,8 @@ impl Cache {
             spare: None,
             ready: false, source_overlap: false, streamed_sources: false,
             reuse_output: false,
-            overview, shifted: None, valid: BTreeSet::new(), unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(),
+            overview, shifted: None, valid: BTreeSet::new(), refined: BTreeSet::new(), exact_tile: None,
+            unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(),
         }
     }
     fn admit_source_overlap(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>) {
@@ -598,9 +603,20 @@ impl Cache {
         let retained_records = commands.storage_bytes().saturating_sub(records_for(r, self.plan, packet.layers).next_power_of_two());
         let budget = live_display::CACHE_BYTES.saturating_sub(allocation_for(r, self.plan, packet, self.source_overlap.then_some(sources), self.streamed_sources).into_iter().sum::<u64>()
             + retained_records + self.spare.as_ref().map_or(0, |c| c.storage_bytes()) + self.shifted.as_ref().map_or(0, |c| c.storage_bytes()));
-        self.graph.prepare(r, packet, sources, self.plan, budget)?;
+        self.prepare_root(r, packet, sources, budget)?;
         if let Some(overview) = &mut self.overview {
-            overview.graph.prepare(r, packet, sources, overview.plan, budget.saturating_sub(self.graph.reserved_bytes(self.plan)))?;
+            overview.prepare_root(r, packet, sources, budget.saturating_sub(self.graph.reserved_bytes(self.plan)))?;
+        }
+        Ok(())
+    }
+
+    fn prepare_root(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, budget: u64) -> Result<(), GpuRasterError> {
+        let previous = self.graph.root.clone();
+        self.graph.prepare(r, packet, sources, self.plan, budget)?;
+        if previous != self.graph.root {
+            self.valid.clear();
+            self.refined.clear();
+            self.reuse_output = false;
         }
         Ok(())
     }
@@ -637,6 +653,7 @@ impl Cache {
             + self.overview.as_ref().map_or(0, |cache| cache.storage_bytes())
             + self.shifted.as_ref().map_or(0, |cache| cache.storage_bytes())
             + self.graph.storage_bytes()
+            + self.exact_tile.as_ref().map_or(0, |image| texture_bytes(&image.texture))
     }
     fn allocate(&mut self, r: &WgpuRasterizer) -> usize {
         let slot = self.used.iter().position(|used| !used).unwrap_or_else(|| {
@@ -678,6 +695,7 @@ impl Cache {
         let root = self.graph.root.clone().expect("prepared composition graph");
         let invalid = dirty.union(root.damage(&scene.scale_sources, self.plan));
         self.valid.retain(|c| page_rect(*c).intersect(invalid).is_empty() || tiles.is_some_and(|tiles| !tiles.contains(c)));
+        self.refined.retain(|c| page_rect(*c).intersect(invalid).is_empty() || tiles.is_some_and(|tiles| !tiles.contains(c)));
         let regions = page_regions(page_coordinates(self.plan.bounds).filter(|c| !self.valid.contains(c)), self.plan.bounds);
         let changed = regions.iter().fold(PixelRect::EMPTY, |a, b| a.union(*b));
         let required = if scene.scale_sources.reset { self.plan.bounds } else { root.required(changed, self.plan).union(changed) };
@@ -726,7 +744,7 @@ impl Cache {
             self.used.fill(false);
             let mut compositor = Evaluator { cache: self, commands, scene, packet, r, encoder, region, tiled };
             let root = compositor.cache.graph.root.clone().expect("prepared composition graph");
-            let output = compositor.evaluate_root(&root)?;
+            let output = compositor.evaluate_root(&root, finer.is_none())?;
             let output = match output {
                 Value::Placed(value) if finer.is_none() => {
                     drop(compositor);
@@ -740,6 +758,8 @@ impl Cache {
                     self.placed = Some(Presentation { value, next, coarse, coarse_level });
                     self.output.clear();
                     self.used.clear();
+                    self.valid.clear();
+                    self.refined.clear();
                     self.next = None;
                     self.ready = true;
                     return Ok(self.plan.bounds);
@@ -777,7 +797,13 @@ impl Cache {
                 drop(pass);
                 written = written.union(PixelRect::new(x, y, x + width, y + height));
                 self.valid.extend(page_coordinates(region));
+                self.refined.extend(finer.refined.iter().copied().filter(|c| page_rect(*c).intersect(region) == page_rect(*c).intersect(self.plan.bounds)));
             }
+        }
+        if self.plan.level == 0 && self.transform.is_none()
+            && targets(r, packet).all(|(_, id)| layer_core::target_transform(packet.layers, id) == layer_core::Affine::IDENTITY)
+        {
+            self.refined.clone_from(&self.valid);
         }
         self.reduce_output(r, encoder, written, commands)?;
         Ok(if written.is_empty() { written } else { PixelRect::new(
@@ -804,6 +830,7 @@ impl Cache {
                     wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
                 );
                 self.valid.extend(old.valid.iter().copied().filter(|c| !page_rect(*c).intersect(overlap).is_empty()));
+                self.refined.extend(old.refined.iter().copied().filter(|c| !page_rect(*c).intersect(overlap).is_empty()));
                 changed = overlap;
             }
         }
