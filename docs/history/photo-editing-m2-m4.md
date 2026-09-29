@@ -1,15 +1,15 @@
 # Photo editing M2–M4: quick wins, foundations and retouching
 
-[Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Phase 1 plan](canvas-action-bar-transforms.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
+[Design history](README.md) · [Photo editing research](photo-editing-research.md) · [Photo editing performance](../development/photo-editing-performance.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **in progress** (2026-09-27), written against `origin/main` at `6fcc6fba`. Done: M2, M3 and M4. See [Remaining work](#remaining-work).
+Status: **landed** on GTK, Web and Android (2026-09-28), planned against `origin/main` at `6fcc6fba`. This record keeps the plan's decisions, design notes and steps as they were written; the guides describe the current behaviour. [Outcome](#outcome) lists what landed. The performance and memory gates M4 did not meet are in [photo editing performance](../development/photo-editing-performance.md).
 
-This plan turns milestones M2, M3 and M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
+This plan turns milestones M2, M3 and M4 of the [research record's sequencing](photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
 - the decisions the research left open;
 - the steps, their tests and each milestone's exit test.
 
-Hosts in scope are GTK, Web and Android. Apple and Windows follow later through the [Apple](../APPLE_PORTING_GUIDE.md) and [Windows](../WINDOWS_PORTING_GUIDE.md) porting guides; [Apple and Windows](#apple-and-windows) lists what each step leaves for them.
+Hosts in scope are GTK, Web and Android. Apple and Windows follow later through the [Apple](../APPLE_PORTING_GUIDE.md) and [Windows](../WINDOWS_PORTING_GUIDE.md) porting guides; the [photo editing roadmap](../development/photo-editing-roadmap.md#apple-and-windows) lists what each step leaves for them.
 
 Follow [AGENTS.md](../../AGENTS.md) and the [commit guide](../COMMIT_GUIDE.md) throughout:
 - Keep rules, validation and history in shared Rust.
@@ -592,60 +592,6 @@ Sizes: S ≤ ½ day, M ≈ 1 day, L 2–3 days, XL > 3 days.
 - **Tablet:** on the MovinkPad 14, clone, heal and ordinary strokes, drags, pan and zoom hold 120 fps.
 - **Composition:** 24 MP composition with non-Normal layers and Pass Through holds 120 fps on GTK while panning and zooming, in both blend spaces.
 
-## Order if time runs short
-
-- **Milestones:** land in order: M2, then M3, then M4. Stop only at a step-group boundary, with that group committed, pushed and recorded in [Remaining work](#remaining-work).
-- **M3:** geometry (M3.1–M3.3) opens journeys 1–4, so it goes first. SEL-3 and SEL-1 finish journey 26. LYR-2 must land before M4.7. IO-1 is independent.
-- **M4:** the named feature, Clone, goes first (M4.1–M4.3), then compositing (M4.4–M4.7).
-- **Units that can be cut whole:**
-  - Transform Outline;
-  - Trim, Reveal All and Fit Content, together with P-8;
-  - GEO-4;
-  - Paste Into;
-  - IO-1;
-  - Pass Through;
-  - Spot Healing.
-
-## Execution
-
-- **Branch:** `git fetch`, then branch from `origin/main`. Install the hooks (`sh tools/git/install-hooks.sh`) and never bypass them.
-- **Tracks:**
-  - One implementer takes shared Rust and GTK.
-  - Web and Android agents then work in parallel, each in its own worktree.
-  - No more than three agents run at once.
-- **Verify before pushing:** check each agent's commit yourself (build, suites, and a tree that matches what was measured).
-- **Tablets:** reserve and run through `tools/devices/devices.py` ([devices](devices.md)). Performance targets count only on each tier's reference tablet ([performance targets](../PERFORMANCE_TARGETS.md)); the Huion Kamvas Pad 12 serves pen-input journeys.
-- **Shared renderer changes:** after any of them (M2.2 `Erase`, M3.1, M3.3, M4.1–M4.6), run the Android journey `AndroidInteractionTest#canvasActionBarJourneysAcrossDevices`, not only GTK.
-- **Cargo:** run `cargo test -p layer-core -p layer-engine -p layer-render-wgpu -p layer-ui -p layer-host`, then Clippy. [Known failures on main](testing.md#known-failures-on-main) are not this work's to chase.
-- **Performance gaps that already exist on main:** GTK `native_frame_pacing` with `photo24` presents the Transform scenario slower than GPen, Pan and Hand.
-
-## Apple and Windows
-
-Record each step's host needs in `apps/layer-apple/README.md`, the Windows README and the bar guide's host sections.
-- **M2:**
-  - bar menu items;
-  - the notice, and the command reason key;
-  - mode and guide bar labels;
-  - the Refine dialog label;
-  - the zoom readout control;
-  - WebP in the export format list and file types;
-  - the labelled Color row with `color_action`.
-  - Apple also does not show errors raised during a gesture; the notice fixes that.
-- **M3:**
-  - the Canvas Size and Image Size dialogs with the anchor picker;
-  - the Edit ▸ Image submenu;
-  - the crop tool icon (the overlay is shared renderer code);
-  - clipboard image writers;
-  - the export metadata row.
-- **M4:**
-  - retouch tool icons;
-  - the grouped blend menu;
-  - the New Document Blending field (the menu and Properties row are shared);
-  - the Colour mixing brush choice;
-  - the Use Pass Through for new groups setting.
-  - The disc and its bar are shared.
-- **Label-based tests:** Apple has them (for example the preset count in `CanvasToolChecks.swift`), and they need updating.
-
 ## Risks
 
 - **The notice and the reason field:** they add to every publication. Keeping reasons frozen during contacts and always serializing the key keeps diffs small; measure both.
@@ -670,7 +616,7 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **A larger shader include:** `blend_modes.wgsl` grows in every effect pipeline, which raises register pressure on Adreno and Mali. Measure with the filter microbench.
 - **Scope:** by the audits' estimates, M2 is about the size of Phase 1, M3 about half as large again, and M4 larger still now that Perceptual blending covers Normal layers and brushes. [Order if time runs short](#order-if-time-runs-short) defines the stopping points.
 
-## Remaining work
+## Outcome
 
 **Done**
 - **M2.1** on GTK, Web and Android:
@@ -740,69 +686,4 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **M4.5, Color mixing** on GTK, Web and Android: a per-brush Color mixing choice (Oklab, Linear light, Classic) in the Tool Options of brushes that mix paint; Classic mixes encoded values. Smudge and Natural Blender now mix in the Oklab their presets declare.
 - **M4.4** on GTK, Web and Android: 17 more blend modes (24 in all) from one shared set of formulas on every composite path and for brushes; a grouped blend menu from shared Rust; modes defined only on 0–1 hidden in float documents.
 
-**Follow-ups**
-- **Erase right after a stroke:** an Erase on a raster that is still pending, or that holds watercolor or wet state, damages the whole layer so the layer settles. Clearing right after a stroke therefore rewrites every page. It is a still-frame cost.
-- **Copy to New Layer** drops the source's mask and clipping, and the copy is unlocked. Copying from a locked layer is allowed; cutting is not.
-- **Liquify render rate:** a 240 Hz stylus Liquify stroke renders more often than its input rate on Android. Check whether contacts are rendered more than once.
-- **Stale Web filter copy:** `apps/layer-web/filters` was committed in `3618b3c2`, although nothing reads it (filters load from `assets/filters`). It is out of date; delete it or regenerate it.
-- **Headless Web `--selection-tools`:** it now stops at its first workspace submit on `origin/main` too.
-- **GTK tablet proxy:** GTK `--tablet` runs lose their Wayland connection whenever Quick Mask or Selection Layer rows change (also on `origin/main`), so `native_canvas_bar_modes` runs with mouse and touch only.
-- **Android bar captions** clip their last glyph (for example "Apply", "Disable" and "Edit Content").
-- **Accessible names:** relabelled bar buttons are announced by their command's label ("Enable Layer Mask" for a button reading "Disable").
-- **Headless Web `--layers`** stops at "Delete mask" because `add_mask` is refused right after a Lasso Fill stroke; this also happens on `origin/main`.
-- **Canvas size changes rebuild every layer:** the renderer's resize reset re-uploads every layer after a canvas size change, even when only the canvas window moves. Keep layer textures when their extents are unchanged; scheduled before M3.2 ships.
-- **Undo after a canvas change** is briefly disabled and says "Nothing to undo".
-- **Hidden pixels** can still be written by brush dabs past the canvas edge and by a fill through an inverted selection.
-- **Reselect** keeps the selection's position on undo of a canvas change.
-- **Eyedropper:** choosing another tool while the Eyedropper is active returns to the previous tool (also on `origin/main`).
-- **Web frame rate on tablets:** the Web host redraws the whole WebGPU canvas every animation frame, which limits motion on the Huion even without other work. Skip unchanged presents.
-- **Canvas size changes:** the first frame after one recomposes the whole display. Recompose visible tiles first, and show the shifted old display meanwhile. Keeping layer pages across the change (local branch `canvas-resize-textures`) did not shorten it.
-- **Flaky test:** `live_display::tests::moving_transforms_drawn_into_the_display_match_recomposition_and_release_exactly` fails intermittently under heavy parallel GPU load, also on `origin/main`.
-- **Straighten and Delete Cropped Pixels** leave vacated transparent pages until M3.3's pruning. Delete Cropped Pixels trims masks by tile, so a band under 256 px of mask coverage can remain.
-- **Web on a tablet:** twice, interior tiles drew white after a crop or straighten Apply in the Huion's Chrome; it did not recur in six later runs.
-- **Android Tool Options numbers** that are not sliders need two taps: one shows the field, one focuses it.
-- **Image commands:** undo of a turn or resize does not re-centre the view, and the resampled-tile prediction can overcount by one row or column.
-- **Android Tool Set** lists Crop twice while the Crop tool is active.
-- **Moving a Select All selection:** releasing the drag on a 24 MP photo replays the commit in one still frame, long enough on tablets to delay a drag started right after. Spread the replay across frames.
-- **Leave Copy** is not remembered across sessions.
-- **Copying on tablets:** a composed 24 MP copy on the Huion spends most of its time reading the composite back from the GPU in bands.
-- **Disabled shortcuts:** a shortcut pressed while its command is disabled gives no notice (for example Ctrl+C while a selection is still being prepared).
-- **GTK pen clipboard journey:** under `--tablet`, the proxy loses the Wayland connection at the first clipboard write, so pen is covered on Web and Android.
-- **Merging on tablets:** a 24 MP merge takes one to two seconds on the Huion's canvas thread, and the Android UI shows a 150–250 ms frame afterwards, probably the layer list. Trace it.
-- **Metadata:** writing IPTC-IIM, and Extended XMP for packets larger than one JPEG segment.
-- **Soft Light** uses the W3C formula; Photoshop's differs. Decide in M4.5 whether Perceptual documents use Photoshop's.
-- **Properties panel** still offers a flat blend choice in code order, including modes hidden from the menu in float documents.
-- **Short retouching strokes** commit their swept span only in their last frame, which lengthens a small heal's pen-up.
-- **Contact brushes without a release limit** (the Eraser, for example) still taper the last span when pressure falls without motion.
-- **Clone source bar on tablets** sits at the bottom of the work area instead of beside the disc.
-- **Web tests on tablets:** after a run leaves an unsaved document, the next `device.test.mjs` load waits on "Recover drawing?".
-- **Preference actions** sent while Settings is closed are refused with no visible error.
-- **Brush previews** 10 (Smudge) and 24 (Natural Blender) still show their linear mixing; regenerating them on this machine changes every preview slightly.
-- **GTK Tool Options** put every grouped checkbox option in one radio group, which would misbehave if two groups ever showed at once.
-- **Healing on large strokes** runs in one pen-up frame: a heal of a 1 MP stroke blocks the canvas thread for about a third of a second on the Huion, and Spot Healing for about a second; long strokes take several seconds. Split the pyramid levels and sweeps across frames, holding back the raster capture until the heal finishes.
-- **Pass Through checkpoints:** the renderer's checkpoints stay on a group's direct children, so a Pass Through group recomposes more of its surroundings than needed.
-- **Ungroup of an isolated group** ignores adjustment children below its layers.
-- **Apple and Windows** list Pass Through in their flat blend pickers for every layer, where non-groups refuse it; they need the grouped menu or the `offered` filter, and the new-group preference row.
-- **Perceptual on Mali:** encoding and decoding the composite adds 0.25–0.7 ms of GPU time to presentation and drags on the Huion and the MovinkPad 11. A Float32-accurate fitted curve cost more than `pow`.
-- **Soft brushes in Perceptual on Mali:** encoding and decoding each pixel a dab touches costs about 0.5 ms of GPU time per update; a 512 px Airbrush drops from 81 to 76 updates/s on the Huion.
-- **Brush previews** are rendered in Linear light, while new documents blend perceptually.
-- **Spot Healing** scores its candidates on linear values; only its tone match follows the document's Blending.
-- **GTK Document Properties** builds its rows in the host instead of from `DocumentInfo::describe`, as Web and Android do.
-- **Export matte and resize** run in linear light in Perceptual documents.
-- **GTK resize journey:** with the runner's `color-mgmt`, headless Mutter presents a window resize at 45–55 Hz instead of 80–100 Hz. GTK's colour-managed presentation needs a performance look.
-- **Apple command coverage** (`command-coverage.json`) lacks the M2–M4 commands, and Apple's Selection Mask checks may wait for a Grow flow that the Refine panel replaced.
-- **Headless Web** screenshots leave out WebGPU pixels, so the Clone and Heal live-preview checks need a headed run or a tablet.
-- **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
-- **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.
-- **Apple and Windows:**
-  - present `UiState.notice` and answer `UiAction::Notice`;
-  - read `CommandState.disabled_reason`;
-  - retire `canvas_bar_reason` once Apple reads the field;
-  - open bar menu items (`CanvasBarItem.menu` and `icon`, through `canvas_bar_choice_menu`);
-  - add icons for the new commands to Apple's coverage list;
-  - draw a `checkable: false` action unpressed even when its command is selected (Android did not);
-  - the Canvas Size dialog (`layer_tools.canvas_size`) with its anchor picker;
-  - the labelled Color row with a "use current colour" bucket; Apple's `CanvasToolChecks.swift` must expect the new Liquify labels (Push, Twirl Counterclockwise, Twirl Clockwise, Pinch, Expand, Crystals);
-  - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`), and WebP in the export lists and file types. The WebP edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested.
-
-**Remaining:** none for GTK, Web and Android; the performance and memory gates that M4 did not meet are in [photo editing performance](photo-editing-performance.md). M2 and M3 are complete. Record milestone completion in the research record's section 7.
+**Remaining:** none for GTK, Web and Android. What is left of the epic, including the Apple and Windows ports and the open items found during M2–M4, is in the [photo editing roadmap](../development/photo-editing-roadmap.md); the performance and memory gates are in [photo editing performance](../development/photo-editing-performance.md).

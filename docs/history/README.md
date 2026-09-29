@@ -20,6 +20,8 @@ Progress notes, validation reports and other work records are not committed
 
 ## Design records
 
+- [Photo editing M2–M4](photo-editing-m2-m4.md): the decisions, design notes
+  and steps of the quick wins, foundations and retouching milestones.
 - [Pencil, charcoal and ink brush redesign](dry-media-brush-design.md).
 - [GTK and Wayland canvas subsurface](wayland-subsurface-feasibility.md).
 - [Vulkan rendering with native Windows presentation](windows-vulkan-presentation.md),

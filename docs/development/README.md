@@ -57,7 +57,9 @@ and how parity is checked.
 
 ## Work in progress
 
-- [Photo editing, milestones 2 to 4](photo-editing-m2-m4.md) continues the
-  [photo editing build list](../history/photo-editing-research.md).
+- [Photo editing roadmap](photo-editing-roadmap.md) lists what is left of the
+  [photo editing build list](../history/photo-editing-research.md) after M4, and
+  [photo editing performance](photo-editing-performance.md) the performance and
+  memory gates M2–M4 did not meet.
 - [Canvas action bar and transforms](canvas-action-bar-transforms.md) is Phase 1
   of the same list.
