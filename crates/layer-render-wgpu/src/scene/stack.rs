@@ -127,15 +127,13 @@ impl Compositor for Tile<'_> {
     type Image = usize;
     fn clear(&mut self, paper: bool) -> usize {
         let c = if paper { self.packet.view.background_rgba_linear } else { [0.; 4] };
-        self.scene.alloc(self.r, wgpu::Color {
-            r: f64::from(c[0] * c[3]), g: f64::from(c[1] * c[3]), b: f64::from(c[2] * c[3]), a: f64::from(c[3]),
-        })
+        self.scene.alloc(self.r, composite_color(self.r, self.packet, c))
     }
     fn discard(&mut self, image: usize) { self.scene.free(image); }
     fn duplicate(&mut self, image: &usize) -> usize {
         let output = self.scene.reserve(self.r);
         self.scene.draw(self.r, output, self.scene.pool[*image].view.clone(), None,
-            [0., 0., 256., 256.], [1., 1., 0., 0.], false);
+            [0., 0., 256., 256.], [1., 1., 0., 0.], false, Convert::None);
         output
     }
     fn fade(&mut self, front: usize, back: usize, index: usize) -> Result<usize, GpuRasterError> {
@@ -146,7 +144,7 @@ impl Compositor for Tile<'_> {
             let change = self.weighted_sum(front, back, [1., -1.]);
             let masked = self.scene.reserve(self.r);
             self.scene.draw(self.r, masked, self.scene.pool[change].view.clone(), Some(self.scene.pool[coverage].view.clone()),
-                [0., 0., 256., 256.], [3., 1., 0., 0.], false);
+                [0., 0., 256., 256.], [3., 1., 0., 0.], false, Convert::None);
             self.scene.free(change);
             self.scene.free(coverage);
             let output = self.weighted_sum(masked, back, [group.opacity, 1.]);
@@ -162,7 +160,7 @@ impl Compositor for Tile<'_> {
     }
     fn blend(&mut self, front: usize, back: usize, index: usize, clipped: bool) -> Result<usize, GpuRasterError> {
         let layer = &self.packet.layers[index];
-        Ok(self.scene.combine(self.r, front, back, layer.opacity, layer.properties.blend, clipped))
+        Ok(self.scene.combine(self.r, front, back, layer.opacity, layer.properties.blend, clipped, self.packet.blend_space))
     }
     fn effect(&mut self, chain: &[usize], input: usize) -> Result<usize, GpuRasterError> {
         self.scene.effect(self.r, self.packet, chain, self.coordinate, input)
@@ -193,7 +191,7 @@ impl Tile<'_> {
     fn weighted_sum(&mut self, front: usize, back: usize, weights: [f32; 2]) -> usize {
         let output = self.scene.reserve(self.r);
         self.scene.draw(self.r, output, self.scene.pool[front].view.clone(), Some(self.scene.pool[back].view.clone()),
-            [0., 0., 256., 256.], [16., weights[0], weights[1], 0.], false);
+            [0., 0., 256., 256.], [16., weights[0], weights[1], 0.], false, Convert::None);
         output
     }
 }

@@ -45,6 +45,7 @@ fn pass_through_children_above_a_transform_keep_shared_display_composition() {
 
 #[test]
 fn transform_sources_compose_with_the_stack_without_native_preview_or_settling() {
+    for space in layer_core::BlendSpace::ALL {
     let extent = [517, 259];
     let bounds = Rect { min: Point::default(), max: Point { x: 517., y: 259. } };
     let selected = Selection::polygon(vec![Point { x: 50.5, y: 20.25 }, Point { x: 490., y: 50.5 },
@@ -80,6 +81,7 @@ fn transform_sources_compose_with_the_stack_without_native_preview_or_settling()
             let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
             exact.test.reference = true;
             let mut frame = packet(&doc.layers, extent);
+        frame.blend_space = space;
             frame.composite_all = false;
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
             r.submit(frame).unwrap(); exact.submit(frame).unwrap();
@@ -96,8 +98,9 @@ fn transform_sources_compose_with_the_stack_without_native_preview_or_settling()
                 assert_eq!(r.test.source_captures.get(), 1);
                 let displayed = display_pixels(&r);
                 let exact_pixels = pixels(&exact, exact.composite_texture.as_ref().unwrap());
-                let error = quality(&displayed, &exact_pixels, r.scale_display.as_ref().unwrap().plan);
-                eprintln!("placement={placement:?} selection={} step={step} error={error:?}", selection.is_some());
+                let error = quality_linear(&displayed, &exact_pixels, r.scale_display.as_ref().unwrap().plan,
+                    |color| linear_color(color, space, doc.color.space));
+                eprintln!("{space:?} placement={placement:?} selection={} step={step} error={error:?}", selection.is_some());
                 assert!(error[0] < 0.004 && error[1] < 0.06, "transform reduction quality {error:?}");
                 let mut a = vec![0; extent[0] as usize * extent[1] as usize * 4];
                 let mut b = a.clone();
@@ -116,6 +119,7 @@ fn transform_sources_compose_with_the_stack_without_native_preview_or_settling()
         }
     }
 }
+    }
 }
 
 #[test]

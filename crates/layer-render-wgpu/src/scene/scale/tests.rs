@@ -36,6 +36,68 @@ fn document_at(extent: [u32; 2]) -> Document {
 }
 
 #[test]
+fn blend_space_changes_refresh_branches_and_source_representations() {
+    use layer_core::{Affine, BlendSpace};
+    let mut doc = document();
+    let extent = [doc.width, doc.height];
+    let photo = doc.layers[0].clone();
+    doc.layers = (0..12).map(|i| {
+        let mut layer = photo.clone();
+        layer.id = LayerId(100 + i);
+        layer.opacity = 0.15 + i as f32 * 0.04;
+        layer
+    }).collect();
+    doc.layers[0].properties.blend = layer_core::LayerBlend::SoftLight;
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut fresh = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    let shifted = Affine([1., 0., 0., 1., 8., -4.]);
+    for (step, (space, placement, level)) in [
+        (BlendSpace::Linear, Affine::IDENTITY, 3),
+        (BlendSpace::Perceptual, Affine::IDENTITY, 3),
+        (BlendSpace::Linear, Affine::IDENTITY, 3),
+        (BlendSpace::Perceptual, shifted, 3),
+        (BlendSpace::Perceptual, Affine::IDENTITY, 3),
+        (BlendSpace::Perceptual, Affine::IDENTITY, 0),
+        (BlendSpace::Linear, Affine::IDENTITY, 0),
+    ].into_iter().enumerate() {
+        doc.layers[0].properties.placement = placement;
+        let mut frame = packet(&doc.layers, extent);
+        frame.blend_space = space;
+        frame.composite_all = matches!(step, 3 | 4);
+        frame.view.background_rgba_linear = [0.17, 0.39, 0.81, 0.7];
+        let scale = 1. / (1 << level) as f32;
+        frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+        r.submit(frame).unwrap();
+        fresh.submit(FramePacket { reset_layers: true, ..frame }).unwrap();
+        exact.submit(FramePacket { composite_all: true, ..frame }).unwrap();
+        let actual = display_pixels(&r);
+        let expected = display_pixels(&fresh);
+        let error = actual.iter().flatten().zip(expected.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+        assert!(error < 2e-5, "step={step} {space:?} {placement:?} level={level}: {error}");
+        let cache = r.scale_display.as_ref().unwrap();
+        assert!(cache.graph.storage_bytes() > 0);
+        let sources = &r.scene.as_ref().unwrap().scale_sources;
+        let encoding = if placement == Affine::IDENTITY { space } else { BlendSpace::Linear };
+        assert_eq!(sources.entries[&doc.layers[0].id].blend_space, encoding);
+        if encoding == BlendSpace::Perceptual {
+            assert!(sources.complete_texture(&doc.layers[0], extent, level).is_none());
+        }
+        if level == 0 {
+            let reference = pixels(&exact, exact.composite_texture.as_ref().unwrap());
+            let error = actual.iter().flatten().zip(reference.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+            assert!(error < 2e-5, "native {space:?}: {error}");
+        }
+        let mut actual = vec![0; extent[0] as usize * extent[1] as usize * 4];
+        let mut expected = actual.clone();
+        r.copy_rgba8_srgb(&mut actual, extent[0] as usize * 4).unwrap();
+        exact.copy_rgba8_srgb(&mut expected, extent[0] as usize * 4).unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
 fn clipped_contacts_do_not_require_unmaterialized_source_levels() {
     let doc = Document::new("clipped contact", 517, 259);
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
@@ -1127,6 +1189,18 @@ fn assert_presentation_mip(r: &WgpuRasterizer) {
 }
 
 fn quality(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mips::Plan) -> [f32; 3] {
+    quality_linear(actual, exact, plan, |color| color)
+}
+
+fn linear_color(color: [f32; 4], space: layer_core::BlendSpace, rgb: layer_core::color::RgbSpace) -> [f32; 4] {
+    let a = color[3];
+    if space == layer_core::BlendSpace::Linear || a <= 0. { return color; }
+    [rgb.decode(f64::from(color[0] / a)) as f32 * a,
+     rgb.decode(f64::from(color[1] / a)) as f32 * a,
+     rgb.decode(f64::from(color[2] / a)) as f32 * a, a]
+}
+
+fn quality_linear(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mips::Plan, linear: impl Fn([f32; 4]) -> [f32; 4]) -> [f32; 3] {
     let side = 1 << plan.level;
     let mut errors = Vec::new();
     for y in 0..plan.size[1] {
@@ -1141,9 +1215,9 @@ fn quality(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mips::Plan) ->
                     count += 1.;
                 }
             }
-            for c in 0..4 {
-                errors.push((actual[(y * plan.size[0] + x) as usize][c] - sum[c] / count).abs());
-            }
+            let a = linear(actual[(y * plan.size[0] + x) as usize]);
+            let b = linear(sum.map(|v| v / count));
+            for c in 0..4 { errors.push((a[c] - b[c]).abs()); }
         }
     }
     errors.sort_by(f32::total_cmp);
@@ -1478,7 +1552,9 @@ fn photographic_preview_and_committed_display_quality() {
     exact.test.reference = true;
     let mut p = packet(&doc.layers, extent);
     p.view.document_to_surface = [0.071382575, 0., 0., 0.071382575, 0., 0.];
-    for diameter in [50., 460., 1000., 2000.] {
+    for space in layer_core::BlendSpace::ALL {
+      p.blend_space = space;
+      for diameter in [50., 460., 1000., 2000.] {
         r.submit(FramePacket {
             reset_layers: true,
             ..p
@@ -1511,12 +1587,13 @@ fn photographic_preview_and_committed_display_quality() {
             r.submit(stroke).unwrap();
             exact.submit(stroke).unwrap();
             let cache = r.scale_display.as_ref().unwrap();
-            let errors = quality(
+            let errors = quality_linear(
                 &display_pixels(&r),
                 &pixels(&exact, exact.composite_texture.as_ref().unwrap()),
                 cache.plan,
+                |color| linear_color(color, space, doc.color.space),
             );
-            eprintln!("photo {diameter}px {kind:?} mean/p99/max linear channel error: {errors:?}");
+            eprintln!("photo {space:?} {diameter}px {kind:?} mean/p99/max linear channel error: {errors:?}");
             assert!(
                 errors[0] < 0.003 && errors[1] < 0.03,
                 "photographic display quality regressed"
@@ -1530,9 +1607,10 @@ fn photographic_preview_and_committed_display_quality() {
                 .unwrap();
             assert_eq!(
                 actual, expected,
-                "photographic exact output at {diameter}px {kind:?}"
+                "photographic exact output at {space:?} {diameter}px {kind:?}"
             );
         }
+    }
     }
 }
 

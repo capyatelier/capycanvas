@@ -44,7 +44,7 @@ fn effect_grids_preserve_document_coordinates_and_partial_edge_centers() {
         let original_image = upload(original);
         for execution in [effects::Execution::Image(0), effects::Execution::Preview] {
             let result = Image::new(&r, output, "effect grid result");
-            let prepared = scene.effects.prepare(&r, &[&layer], execution, 0., 0).unwrap();
+            let prepared = scene.effects.prepare(&r, &[&layer], execution, 0., 0, Default::default()).unwrap();
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             scene.begin_frame();
             scene.jobs.push(Job::Effect {

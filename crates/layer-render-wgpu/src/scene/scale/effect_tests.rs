@@ -16,6 +16,7 @@ fn exact_pixels(r: &mut WgpuRasterizer, extent: [u32; 2]) -> Vec<u8> {
 
 #[test]
 fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries() {
+    for space in layer_core::BlendSpace::ALL {
     let mut doc = document();
     let extent = [doc.width, doc.height];
     let paint = doc.layers[0].id;
@@ -45,6 +46,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
             doc.layers[1].mask.as_mut().unwrap().inverted = state >= 2;
             doc.layers[1].mask.as_mut().unwrap().offset.x = if state == 3 { 17. } else { 0. };
             let mut frame = packet(&doc.layers, extent);
+        frame.blend_space = space;
             let scale = 1. / (1 << level) as f32;
             frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
             r.submit(frame).unwrap(); exact.submit(frame).unwrap();
@@ -66,6 +68,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
     let dab = crate::tests::test_dab([400., 210.], [0.8, 0.2, 0.1, 1.], 0.6);
     let batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
     let mut frame = packet(&doc.layers, extent);
+        frame.blend_space = space;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     frame.composite_all = false;
     frame.dabs = std::slice::from_ref(&dab);
@@ -75,6 +78,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
     let error = quality(&display_pixels(&r), &pixels(&exact, exact.composite_texture.as_ref().unwrap()), plan);
     assert!(error[0] < 0.002 && error[1] < 0.015, "partial paint error={error:?}");
     assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
+    }
 }
 
 #[test]
@@ -161,6 +165,7 @@ fn qualified_pointwise_catalog_uses_display_graph_and_keeps_native_output() {
 
 #[test]
 fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
+    for space in layer_core::BlendSpace::ALL {
     let mut doc = document();
     let extent = [doc.width, doc.height];
     let mut group = Layer::paint(LayerId(90), "pass through");
@@ -182,6 +187,7 @@ fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
     for level in [1, 2, 3] {
         let mut draw = |layers: &[Layer]| {
             let mut frame = packet(layers, extent);
+        frame.blend_space = space;
             let scale = 1. / (1 << level) as f32;
             frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
             r.submit(frame).unwrap();
@@ -217,10 +223,12 @@ fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
         clipped[0].properties.blend = layer_core::LayerBlend::Normal;
         assert!(error(&passing, &draw(&clipped)) < 2e-5, "clipped groups remain isolated");
     }
+    }
 }
 
 #[test]
 fn spatial_graph_updates_dependency_halos_and_preserves_exact_output() {
+    for space in layer_core::BlendSpace::ALL {
     let mut doc = document_at([1027, 773]);
     let extent = [doc.width, doc.height];
     let paint = doc.layers[0].id;
@@ -236,6 +244,7 @@ fn spatial_graph_updates_dependency_halos_and_preserves_exact_output() {
     let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     exact.test.reference = true;
     let mut frame = packet(&doc.layers, extent);
+        frame.blend_space = space;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
     assert!(r.scale_display.is_some(), "spatial programs execute in the shared graph");
@@ -259,10 +268,12 @@ fn spatial_graph_updates_dependency_halos_and_preserves_exact_output() {
         assert!(error[0] < 0.003 && error[1] < 0.03, "spatial quality at {center:?}: {error:?}");
         assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
     }
+    }
 }
 
 #[test]
 fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation() {
+    for space in layer_core::BlendSpace::ALL {
     let mut doc = document();
     let extent = [doc.width, doc.height];
     let mut blur = effect(80, "gaussian_blur");
@@ -278,6 +289,7 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
         Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("sigma", EffectValue::Number(sigma)).unwrap();
         doc.layers[0].properties.clipped = clipped;
         let mut frame = packet(&doc.layers, extent);
+        frame.blend_space = space;
         let scale = 1. / (1 << level) as f32;
         frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
         for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
@@ -299,6 +311,7 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
     program.lookups = Arc::new([]);
     program.passes = vec![layer_core::EffectPass { entry: program.entry.clone(), sampling: layer_core::EffectSampling::Document }].into();
     let mut frame = packet(&doc.layers, extent);
+        frame.blend_space = space;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
     let dab = crate::tests::test_dab([73., 81.], [0.8, 0.1, 0.2, 1.], 1.);
@@ -308,4 +321,5 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
     r.scale_display.as_mut().unwrap().graph = Default::default();
     r.submit(frame).unwrap();
     assert_eq!(incremental, display_pixels(&r), "global dependencies update pixels far from paint damage");
+    }
 }

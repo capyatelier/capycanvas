@@ -120,6 +120,7 @@ fn placed_at(p:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
         let ratio=camera.placed_extent.z;
         color=area_sample(coarse,canvas_sampler,extent/ratio,outside,center/ratio,u/ratio,v/ratio);
     }
+    if camera.placed_options.w!=0. && color.a>0. { color=vec4(sdr_encode(color.rgb/color.a,CANVAS_SPACE)*color.a,color.a); }
     let layer=color*camera.placed_options.x;
     return layer+camera.placed_backdrop*(1.-layer.a);
 }

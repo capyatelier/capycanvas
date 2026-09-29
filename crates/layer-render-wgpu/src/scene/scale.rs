@@ -598,9 +598,9 @@ impl Cache {
         let retained_records = commands.storage_bytes().saturating_sub(records_for(r, self.plan, packet.layers).next_power_of_two());
         let budget = live_display::CACHE_BYTES.saturating_sub(allocation_for(r, self.plan, packet, self.source_overlap.then_some(sources), self.streamed_sources).into_iter().sum::<u64>()
             + retained_records + self.spare.as_ref().map_or(0, |c| c.storage_bytes()) + self.shifted.as_ref().map_or(0, |c| c.storage_bytes()));
-        self.graph.prepare(packet, sources, self.plan, budget)?;
+        self.graph.prepare(r, packet, sources, self.plan, budget)?;
         if let Some(overview) = &mut self.overview {
-            overview.graph.prepare(packet, sources, overview.plan, budget.saturating_sub(self.graph.reserved_bytes(self.plan)))?;
+            overview.graph.prepare(r, packet, sources, overview.plan, budget.saturating_sub(self.graph.reserved_bytes(self.plan)))?;
         }
         Ok(())
     }
@@ -624,7 +624,7 @@ impl Cache {
         let [r, g, b, a] = root.value.backdrop;
         [x[0] / side, x[1] / side, x[2], 0., y[0] / side, y[1] / side, y[2], 0.,
             width, height, (1 << (root.coarse_level - root.value.plan.level)) as f32, 2.,
-            root.value.opacity, 1., root.value.outside, 0., r, g, b, a]
+            root.value.opacity, 1., root.value.outside, f32::from(root.value.encode), r, g, b, a]
     }
     pub fn storage_bytes(&self) -> u64 {
         self.output
@@ -861,6 +861,7 @@ struct Placed {
     outside: f32,
     opacity: f32,
     backdrop: [f32; 4],
+    encode: bool,
 }
 
 impl Placed {
@@ -870,13 +871,13 @@ impl Placed {
         scene::resample::Resample::values(scene::resample::Request {
             moved: &self.transform, kept: &self.transform,
             clip: layer_core::Affine([scale, 0., 0., scale, 0., 0.]), extent: output.extent, texels,
-            display: pixel_transform::DisplayLevel { side, opacity: self.opacity, extent: output.extent, backdrop: self.backdrop },
+            display: pixel_transform::DisplayLevel { side, opacity: self.opacity, extent: output.extent, backdrop: self.backdrop, encode: self.encode },
             target: output, source: self.plan, max_lod: 0, outside: self.outside, keep_source: false, identity: false,
         })
     }
 }
 
-struct TransformSource { id: LayerId, placement: layer_core::Affine, opacity: f32, backdrop: [f32; 4] }
+struct TransformSource { id: LayerId, placement: layer_core::Affine, opacity: f32, backdrop: [f32; 4], encode: bool }
 
 #[derive(Clone)]
 enum Slot { Cache(usize), Scene(usize), Decoded(Arc<()>) }
@@ -888,16 +889,21 @@ struct Target {
     plan: display_mips::Plan,
 }
 impl Target {
-    fn value(self) -> Value { Value::Image { view: self.view, slot: self.slot, opacity: 1., plan: self.plan, preview: None } }
+    fn value(self) -> Value { Value::Image { view: self.view, slot: self.slot, opacity: 1., plan: self.plan, preview: None, encode: false } }
 }
 
 enum Value {
     Color([f32; 4]),
-    Image { view: wgpu::TextureView, slot: Option<Slot>, opacity: f32, plan: display_mips::Plan, preview: Option<wgpu::TextureView> },
+    Image { view: wgpu::TextureView, slot: Option<Slot>, opacity: f32, plan: display_mips::Plan, preview: Option<wgpu::TextureView>, encode: bool },
     Placed(Placed),
     Transform(TransformSource),
 }
 impl Value {
+    fn needs_encode(&self) -> bool { matches!(self, Self::Image { encode: true, .. }) }
+    fn with_encoding(mut self, value: bool) -> Self {
+        if let Self::Image { encode, .. } = &mut self { *encode = value; }
+        self
+    }
     fn slot(&self) -> Option<Slot> { if let Self::Image { slot, .. } = self { slot.clone() } else { None } }
     fn view(&self) -> Option<&wgpu::TextureView> { if let Self::Image { view, .. } = self { Some(view) } else { None } }
     fn preview(&self) -> Option<&wgpu::TextureView> { if let Self::Image { preview, .. } = self { preview.as_ref() } else { None } }
@@ -953,8 +959,10 @@ impl Evaluator<'_> {
         paint_transform::texel_rect(self.region.window_local(plan.bounds), 1 << plan.level)
     }
     fn source(&mut self, id: LayerId, placement: layer_core::Affine, extent: [u32; 2], outside: f32) -> Result<Value, GpuRasterError> {
+        let encode = self.packet.blend_space == layer_core::BlendSpace::Perceptual
+            && self.packet.layers.iter().any(|layer| layer.id == id);
         if self.r.transforms.as_ref().is_some_and(|t| t.display_source(id)) {
-            return Ok(Value::Transform(TransformSource { id, placement, opacity: 1., backdrop: [0.; 4] }));
+            return Ok(Value::Transform(TransformSource { id, placement, opacity: 1., backdrop: [0.; 4], encode }));
         }
         let plan = source_plan(self.cache.plan, placement, extent)?;
         if self.cache.plan.level == 0 && plan.level == 0 {
@@ -979,7 +987,7 @@ impl Evaluator<'_> {
                         [None, None] => return Ok(Value::Color([0.; 4])),
                     };
                     return Ok(Value::Image { view: base.view, slot: base.lease.map(Slot::Decoded),
-                        opacity: 1., plan: self.working_plan(), preview });
+                        opacity: 1., plan: self.working_plan(), preview, encode });
                 }
                 self.commands.flush(self.r, self.encoder)?;
                 self.scene.paint_tile(self.r, self.packet, index, tile, plan.level)?
@@ -988,15 +996,16 @@ impl Evaluator<'_> {
                 self.scene.mask_at(self.r, mask, placement, extent, tile)?
             };
             self.encode_scene_jobs()?;
-            return Ok(Target { view: self.scene.pool[slot].view.clone(), slot: Some(Slot::Scene(slot)), plan: self.working_plan() }.value());
+            return Ok(Target { view: self.scene.pool[slot].view.clone(), slot: Some(Slot::Scene(slot)), plan: self.working_plan() }.value().with_encoding(encode));
         }
         if plan.bounds.is_empty() { return Ok(Value::Color([outside; 4])); }
+        let encode = encode && self.scene.scale_sources.entries[&id].blend_space == layer_core::BlendSpace::Linear;
         if self.cache.streamed_sources && placement == layer_core::Affine::IDENTITY {
             let cached = self.scene.scale_sources.entries[&id].levels.get(&plan.level).filter(|level|
                 self.region.intersect(level.image.plan.bounds) == self.region
                     && page_coordinates(self.region).all(|c| level.valid.contains(&c)));
             if let Some(level) = cached {
-                return Ok(Value::Image { view: level.image.view.clone(), slot: None, opacity: 1., plan: level.image.plan, preview: None });
+                return Ok(Value::Image { view: level.image.view.clone(), slot: None, opacity: 1., plan: level.image.plan, preview: None, encode });
             }
             self.commands.flush(self.r, self.encoder)?;
             let target = self.target();
@@ -1009,18 +1018,18 @@ impl Evaluator<'_> {
                 let mask = self.packet.layers.iter().find_map(|l| l.mask.as_ref().filter(|m| m.id == id)).unwrap();
                 self.scene.reduce_mask_pages(self.commands, self.r, self.encoder, mask, target.plan, &target.view, &pages)?;
             }
-            return Ok(target.value());
+            return Ok(target.value().with_encoding(encode));
         }
         let image = &self.scene.scale_sources.image(id, plan.level).image;
         let plan = image.plan;
         let view = image.view.clone();
         if placement == layer_core::Affine::IDENTITY && plan.level == self.cache.plan.level
             && (outside == 0. || self.region.intersect(plan.bounds) == self.region) {
-            return Ok(Value::Image { view, slot: None, opacity: 1., plan, preview: None });
+            return Ok(Value::Image { view, slot: None, opacity: 1., plan, preview: None, encode });
         }
         let placement = layer_core::Affine::translation(layer_core::Point { x: plan.bounds.min_x() as f32, y: plan.bounds.min_y() as f32 }).then(placement);
         let transform = paint_transform::resample_map(&layer_core::ImageTransform::default(), placement, plan.level, self.cache.plan.level)?;
-        Ok(Value::Placed(Placed { id, view, transform, plan, outside, opacity: 1., backdrop: [0.; 4] }))
+        Ok(Value::Placed(Placed { id, view, transform, plan, outside, opacity: 1., backdrop: [0.; 4], encode }))
     }
     fn encode_scene_jobs(&mut self) -> Result<(), GpuRasterError> {
         if self.scene.jobs.is_empty() { return Ok(()); }
@@ -1032,12 +1041,12 @@ impl Evaluator<'_> {
         let Target { view, slot, plan } = output.unwrap_or_else(|| self.target());
         let side = 1 << self.cache.plan.level;
         let region = self.region;
-        let display = pixel_transform::DisplayLevel { side, extent: self.cache.plan.extent, opacity: source.opacity, backdrop: source.backdrop };
+        let display = pixel_transform::DisplayLevel { side, extent: self.cache.plan.extent, opacity: source.opacity, backdrop: source.backdrop, encode: source.encode };
         let mut transforms = self.r.transforms.take().unwrap();
         let result = transforms.render_region(self.r, self.encoder, source.id, source.placement, &view, display, plan, region);
         self.r.transforms = Some(transforms);
         result?;
-        Ok(Value::Image { view, slot, opacity: 1., plan, preview: None })
+        Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }
     fn resample(&mut self, value: Value) -> Result<Value, GpuRasterError> {
         if let Value::Transform(source) = value { return self.transform(source, None); }
@@ -1049,12 +1058,12 @@ impl Evaluator<'_> {
         let resample = &self.r.scene_pipelines.resample;
         let binding = resample.binding(&self.r.device, &self.commands.records, u64::from(offset), [&placed.view, &view, &placed.view]);
         resample.encode(self.encoder, &binding, texels, scene::resample::Sampling::AffineArea);
-        Ok(Value::Image { view, slot, opacity: 1., plan, preview: None })
+        Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }
     fn materialize(&mut self, value: Value, output: Option<Target>) -> Result<Value, GpuRasterError> {
         if let Value::Transform(source) = value { return self.transform(source, output); }
         let value = self.resample(value)?;
-        if value.preview().is_none() && value.opacity() == 1. && output.as_ref().map_or_else(|| value.slot().is_some(), |target| value.view() == Some(&target.view)) { return Ok(value); }
+        if !value.needs_encode() && value.preview().is_none() && value.opacity() == 1. && output.as_ref().map_or_else(|| value.slot().is_some(), |target| value.view() == Some(&target.view)) { return Ok(value); }
         let (front, back) = if matches!(value, Value::Color(_)) { (Value::Color([0.; 4]), value) } else { (value, Value::Color([0.; 4])) };
         self.draw(front, back, layer_core::LayerBlend::Normal, 0, output)
     }
@@ -1085,9 +1094,11 @@ impl Evaluator<'_> {
         ]);
         values[8..12].copy_from_slice(&back.color().map(f32::to_bits));
         values[12] = if front.view().is_some() { front.opacity() } else { 0. }.to_bits();
-        values[13] = (blend_code(blend, &self.r.device) as f32).to_bits();
+        values[13] = (blend_code(blend, &self.r.device, self.packet.blend_space) as f32).to_bits();
         values[14] = back.opacity().to_bits();
         values[7] |= if front.preview().is_some() { 256 } else { 0 } | if back.preview().is_some() { 512 } else { 0 };
+        values[7] |= if front.needs_encode() { 1024 } else { 0 } | if back.needs_encode() { 2048 } else { 0 }
+            | if self.packet.blend_space == layer_core::BlendSpace::Perceptual { 8192 } else { 0 };
         for (offset, input) in [(16, &front), (18, &back)] {
             let Value::Image { plan: source, .. } = input else { continue; };
             let target = plan;
@@ -1102,6 +1113,6 @@ impl Evaluator<'_> {
         }).collect();
         self.commands.compose(self.r, self.encoder, Composition { values, binding, leases })?;
         for slot in [front.slot(), back.slot()] { self.release(slot); }
-        Ok(Value::Image { view, slot, opacity: 1., plan, preview: None })
+        Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }
 }

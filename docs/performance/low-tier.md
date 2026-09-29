@@ -403,3 +403,24 @@ candidate's Fit and native painting regression. That comparison remains in
 `artifacts/display-production/source-admission-paired-summary.json`.
 These runs precede streamed source preparation and do not qualify its performance
 or photo navigation.
+
+## Perceptual composition
+
+Measured on the TCL after integrating perceptual layer blending, using the same
+12 MP photo, inside-photo G-Pen 1024 px trajectory, 16 ms prediction and three
+warmed five-second strokes per case. The benchmark explicitly selects and checks
+the document blend space before timing. Candidate is `810a125d` plus the graph
+color-representation integration, APK SHA-256
+`885ce8bc0de36f46bcb322d462c12b843f8dd567807b6fe927e1a5d60755ec29`.
+
+| Photo layers | Zoom | Perceptual completed updates/s |
+| --- | --- | --- |
+| 1 | Fit | 46.36 |
+| 8 | 50% | 26.65 |
+| 8 | 100% | 17.89 |
+
+These are current-path measurements without an alternating old-compositor control;
+they do not establish a speedup or reach the long-term 60 updates/s target.
+They precede perceptual dab blending and exact idle refinement. Raw reports,
+traces and source provenance are under `artifacts/display-production/perceptual-graph-tcl`
+and `perceptual-graph-provenance.json`.

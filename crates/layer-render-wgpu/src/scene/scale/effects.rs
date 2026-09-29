@@ -15,7 +15,10 @@ impl Evaluator<'_> {
         let regions = if boundary { crate::effects::pass_regions(effect, region, plan) } else { vec![region; 2] };
         let input = self.with_region(regions[0], |compositor| {
             let value = compositor.evaluate(input)?;
-            compositor.effect_input(value)
+            let value = compositor.effect_input(value)?;
+            if boundary && compositor.packet.blend_space == layer_core::BlendSpace::Perceptual {
+                compositor.draw(value, Value::Color([0.; 4]), layer_core::LayerBlend::Normal, 4096, None)
+            } else { Ok(value) }
         })?;
         let mut views = Box::new(std::array::from_fn(|_| self.r.empty_view.clone()));
         let mut slots = Vec::new();
@@ -48,7 +51,7 @@ impl Evaluator<'_> {
                 data[16..24].fill(0.);
             }
             let stage = if boundary { crate::effects::Execution::Image(pass) } else { crate::effects::Execution::Fused };
-            let prepared = self.scene.effects.prepare(self.r, &layers, stage, self.packet.time_seconds, plan.level)?;
+            let prepared = self.scene.effects.prepare(self.r, &layers, stage, self.packet.time_seconds, plan.level, self.packet.blend_space)?;
             self.scene.jobs.push(Job::Effect {
                 target: target.clone(), sources: [previous, input.view().unwrap().clone(), self.r.empty_view.clone()],
                 data, prepared, masks: views.clone(),
@@ -59,7 +62,7 @@ impl Evaluator<'_> {
             previous = target;
         }
         for slot in input.slot().into_iter().chain(slots) { self.release(Some(slot)); }
-        self.materialize(Value::Image { view, slot, opacity: 1., plan, preview: None }, output)
+        self.materialize(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false }, output)
     }
 
     fn with_region<T>(&mut self, region: PixelRect, evaluate: impl FnOnce(&mut Self) -> Result<T, GpuRasterError>) -> Result<T, GpuRasterError> {
@@ -71,7 +74,7 @@ impl Evaluator<'_> {
 
     fn effect_input(&mut self, value: Value) -> Result<Value, GpuRasterError> {
         let value = self.resample(value)?;
-        if matches!(&value, Value::Image { opacity: 1., plan, preview: None, .. } if *plan == self.working_plan()) { Ok(value) }
+        if matches!(&value, Value::Image { opacity: 1., plan, preview: None, encode: false, .. } if *plan == self.working_plan()) { Ok(value) }
         else { self.draw(value, Value::Color([0.; 4]), layer_core::LayerBlend::Normal, 0, None) }
     }
 }

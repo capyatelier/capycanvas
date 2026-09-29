@@ -43,6 +43,7 @@ fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {
             if (region.flags & 1u) != 0u {
                 value += textureLoad(base, p, 0) * (1. - value.a);
             }
+            if (region.flags & 2u) != 0u { value = working_encode(value); }
             // A final compact texel may represent fewer document pixels.
             // Weight its average accordingly at odd document boundaries.
             let footprint = min(vec2<u32>(step), remaining - vec2<u32>(x, y) * step);

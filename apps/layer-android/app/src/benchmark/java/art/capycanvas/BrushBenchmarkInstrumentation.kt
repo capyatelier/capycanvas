@@ -138,7 +138,13 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true &&
                 host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any { it.optInt("width") == photoWidth } == true }
             stage("photo-ready")
-            blending?.let { invoke("blend_$it") }
+            blending?.let {
+                val command = "blend_$blending"
+                invoke(command)
+                check(state().array("commands").objects().filter {
+                    it.getString("id") in listOf("blend_linear", "blend_perceptual") && it.optBoolean("selected")
+                }.map { it.getString("id") } == listOf(command))
+            }
             action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
             val group = snapshot().getJSONObject("layout")
                 .array("groups").objects().first { "stats" in it.array("panels").values() }.getInt("id")

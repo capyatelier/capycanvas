@@ -9,6 +9,7 @@ pub(super) struct Level {
 pub(super) struct Source {
     pub extent: [u32; 2],
     pub updates: u64,
+    pub blend_space: layer_core::BlendSpace,
     raster: u64,
     watercolor: Option<WatercolorLayerStyle>,
     pub levels: BTreeMap<u32, Level>,
@@ -100,16 +101,20 @@ impl Sources {
         let (id, plane, image, mask) = if is_mask {
             (layer.mask.as_ref().unwrap().id, RasterPlane::Mask, None, metadata::mask_metadata(&layer.mask))
         } else { (layer.id, RasterPlane::Color, layer.source.clone(), None) };
+        let blend_space = if is_mask || layer_core::target_transform(packet.layers, id) != layer_core::Affine::IDENTITY {
+            layer_core::BlendSpace::Linear
+        } else { packet.blend_space };
         self.reset |= !self.entries.contains_key(&id);
         let source = self.entries.entry(id).or_insert_with(|| Source {
-            extent, updates: 0, raster: 0, watercolor: None, levels: BTreeMap::new(), source: None, backing: None, mask: None, preview: BTreeSet::new(), damage: PixelRect::EMPTY,
+            extent, updates: 0, blend_space, raster: 0, watercolor: None, levels: BTreeMap::new(), source: None, backing: None, mask: None, preview: BTreeSet::new(), damage: PixelRect::EMPTY,
         });
         let resized = source.extent != extent;
         if resized { source.extent = extent; source.levels.clear(); self.reset = true; }
         let same_image = match (&source.source, &image) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false,
         };
-        let reset = resized || packet.reset_layers || !same_image || source.mask != mask;
+        let reset = resized || packet.reset_layers || !same_image || source.mask != mask || source.blend_space != blend_space;
+        source.blend_space = blend_space;
         if reset {
             for level in source.levels.values_mut() { level.valid.clear(); }
             self.reset = true;
@@ -148,12 +153,13 @@ impl Sources {
     }
     pub fn sample(&self, id: LayerId, requested: u32) -> Option<(display_mips::Plan, &wgpu::TextureView)> {
         let source = self.entries.get(&id)?;
+        if source.blend_space != layer_core::BlendSpace::Linear { return None; }
         let (_, image) = source.levels.range(..=requested).next_back()?;
         Some((image.image.plan, &image.image.view))
     }
     pub fn complete_texture(&self, layer: &Layer, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
         let source = self.entries.get(&layer.id)?;
-        let current = source.extent == extent && source.raster == layer.raster.identity() && source.preview.is_empty()
+        let current = source.blend_space == layer_core::BlendSpace::Linear && source.extent == extent && source.raster == layer.raster.identity() && source.preview.is_empty()
             && match (&source.source, &layer.source) { (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false };
         let image = source.levels.get(&level)?;
         (current && image.image.plan.bounds == PixelRect::full(extent)
@@ -372,7 +378,8 @@ impl Scene {
                     valid.width(),
                     valid.height(),
                     1 << (level - input_level),
-                    u32::from(over) | if empty { 4 } else { 0 } | (input_level << 8),
+                    u32::from(over) | if empty { 4 } else { 0 } | (input_level << 8)
+                        | if self.scale_sources.entries[&layer.id].blend_space == layer_core::BlendSpace::Perceptual { 2 } else { 0 },
                 ]);
                 let offset = commands.record(r, encoder, values)?;
                 jobs.push((Commands::binding(r, &source, &base, &output), offset, size));

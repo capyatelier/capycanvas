@@ -300,6 +300,9 @@ reference layer.
 `--photo-layers` creates 1–32 photos with translucent duplicates. The runner
 checks the observed trajectory, layer count, brush, prediction and requested
 zoom before starting the timed window, including when reusing completed output.
+`--blending linear` or `--blending perceptual` selects the document's blend space
+and verifies the selected shared command; omitting it keeps the imported default.
+Comparisons across blend-space defaults must explicitly select the same space.
 Use the same instrumentation source in comparison APKs: older runners can ignore
 arguments they do not recognize. Each build and configuration needs its own
 output directory. The private benchmark restores its prediction settings

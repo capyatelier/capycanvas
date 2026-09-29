@@ -111,9 +111,11 @@ pub(super) struct Graph {
     branches: HashMap<Node, Branch>,
     effects: HashMap<LayerId, (metadata::Metadata, u64)>,
     revision: u64,
+    blend_space: layer_core::BlendSpace,
 }
 impl Graph {
-    pub fn prepare(&mut self, packet: FramePacket<'_>, sources: &Sources, plan: display_mips::Plan, budget: u64) -> Result<(), GpuRasterError> {
+    pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, plan: display_mips::Plan, budget: u64) -> Result<(), GpuRasterError> {
+        if std::mem::replace(&mut self.blend_space, packet.blend_space) != packet.blend_space { self.branches.clear(); }
         self.effects.retain(|id, _| packet.layers.iter().any(|l| l.id == *id && l.effect.is_some()));
         for layer in packet.layers.iter().filter(|l| l.effect.is_some()) {
             let metadata = metadata::Metadata::new(layer);
@@ -122,7 +124,7 @@ impl Graph {
                 self.effects.insert(layer.id, (metadata, self.revision));
             }
         }
-        let mut builder = Builder { packet, sources, effects: &self.effects, level: plan.level };
+        let mut builder = Builder { packet, sources, effects: &self.effects, level: plan.level, space: r.device.working_space() };
         let output = stack::compose(&mut builder, packet.layers, None, None)?;
         let mut root = Expression::over(&output);
         for layer in packet.layers {
@@ -157,6 +159,7 @@ struct Builder<'a> {
     sources: &'a Sources,
     effects: &'a HashMap<LayerId, (metadata::Metadata, u64)>,
     level: u32,
+    space: layer_core::color::RgbSpace,
 }
 impl Builder<'_> {
     fn source(&self, layer: &Layer, mask: bool) -> Node {
@@ -172,7 +175,7 @@ impl stack::Compositor for Builder<'_> {
     fn clear(&mut self, paper: bool) -> Self::Image {
         if !paper { return Vec::new(); }
         let p = self.packet.view.background_rgba_linear;
-        vec![Expression::color([p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]])]
+        vec![Expression::color(self.packet.blend_space.composite(self.space, [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]))]
     }
     fn discard(&mut self, _: Self::Image) {}
     fn duplicate(&mut self, image: &Self::Image) -> Self::Image { image.clone() }
@@ -249,7 +252,7 @@ impl Evaluator<'_> {
         if let Some(branch) = self.cache.graph.branches.get(node)
             && page_coordinates(region).all(|c| branch.valid.contains(&c))
             && let Some(image) = &branch.image {
-                return Ok(Value::Image { view: image.view.clone(), slot: None, opacity: 1., plan: self.cache.plan, preview: None });
+                return Ok(Value::Image { view: image.view.clone(), slot: None, opacity: 1., plan: self.cache.plan, preview: None, encode: false });
         }
         let output = if let Some(branch) = self.cache.graph.branches.get_mut(node) {
             Some(Target { view: branch.image.get_or_insert_with(|| Image::new(self.r, self.cache.plan, "composition branch")).view.clone(), slot: None, plan: self.cache.plan })

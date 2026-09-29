@@ -23,6 +23,11 @@ def validate_setup(info, requested):
     if requested["zoom"] is not None:
         expected["zoom"] = requested["zoom"]
         actual["zoom"] = camera["zoom"]
+    if requested.get("blending") is not None:
+        expected["blending"] = ["blend_" + requested["blending"]]
+        actual["blending"] = [command["id"] for command in state.get("commands", [])
+                              if command.get("id") in ("blend_linear", "blend_perceptual")
+                              and command.get("selected") is True]
     mismatches = []
     for key, value in expected.items():
         observed = actual[key]

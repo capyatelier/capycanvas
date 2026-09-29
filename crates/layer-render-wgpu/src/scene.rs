@@ -984,7 +984,7 @@ impl Scene {
                 if !intersects(rect) {
                     continue;
                 }
-                self.paint_page(r, packet, layer, stored, c, out, rect)?;
+                self.paint_page(r, packet, layer, stored, c, out, rect, Convert::None)?;
             }
         }
         Ok(out)
@@ -1424,6 +1424,7 @@ impl Scene {
                     [0., 0., 256., 256.],
                     [5., 1., 0., 0.],
                     false,
+                    Convert::layers(packet),
                 );
                 self.free(m);
                 output = self.combine(
@@ -1433,6 +1434,7 @@ impl Scene {
                     1.,
                     layer_core::LayerBlend::Normal,
                     false,
+                    packet.blend_space,
                 );
             }
         }

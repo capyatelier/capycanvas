@@ -438,11 +438,15 @@ fn every_blend_mode_matches_the_reference_on_every_path_and_depth() {
 
 #[test]
 fn reduced_blend_modes_match_the_reference_at_every_depth() {
-    let weights = RgbSpace::Srgb.to_xyz()[1];
-    for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+    for (depth, space) in [
+        (SampleDepth::U8, BlendSpace::Linear), (SampleDepth::U8, BlendSpace::Perceptual),
+        (SampleDepth::U16, BlendSpace::Linear), (SampleDepth::U16, BlendSpace::Perceptual),
+        (SampleDepth::F16, BlendSpace::Linear), (SampleDepth::F32, BlendSpace::Linear),
+    ] {
+        let weights = if space == BlendSpace::Perceptual { [0.3, 0.59, 0.11] } else { RgbSpace::Srgb.to_xyz()[1] };
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth }).unwrap();
         for path in [Path::Layer, Path::Clip] {
-            let Case { mut document, background, blended } = case(depth, path);
+            let Case { mut document, background, blended } = case(depth, path, space);
             let inputs = [alone(&mut r, &document, 0), alone(&mut r, &document, 1)];
             for level in [1, 3] {
                 let step = 1 << level;
@@ -466,11 +470,11 @@ fn reduced_blend_modes_match_the_reference_at_every_depth() {
                         let top = average(&inputs[0], x, y);
                         let bottom = average(&inputs[1], x, y);
                         let form = if matches!(path, Path::Clip) { Form::Clip } else { Form::Composite };
-                        let [low, high] = expected(form, straight(top), top[3] * f64::from(OPACITY), bottom, mode, depth.is_float(), weights);
+                        let [low, high] = expected(form, straight(top), top[3] * f64::from(OPACITY), bottom, mode, depth.is_float(), weights, document.blend_space);
                         for c in 0..4 {
                             let tol = tolerance(depth, high[c]);
                             assert!(actual[c] >= low[c] - tol && actual[c] <= high[c] + tol,
-                                "{depth:?} {path:?} {mode:?} level={level} at ({x}, {y}) channel {c}: {} outside [{}, {}]",
+                                "{depth:?} {space:?} {path:?} {mode:?} level={level} at ({x}, {y}) channel {c}: {} outside [{}, {}]",
                                 actual[c], low[c], high[c]);
                         }
                     }

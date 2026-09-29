@@ -43,12 +43,12 @@ def main():
     p.add_argument("--paint-load", type=float, help="Bristle paint supply, 0 to 1; omit for the preset default")
     p.add_argument("--speed", type=float, default=1)
     p.add_argument("--prediction", choices=["true", "false"], default="true")
-    p.add_argument("--blending", choices=["linear", "perceptual"], help="Document blend space; default uses the imported document")
     p.add_argument("--horizon", type=int, default=16, help="Engine prediction lookahead in ms")
     p.add_argument("--radius-x", type=float, default=520, help="Ellipse radius in surface pixels")
     p.add_argument("--radius-y", type=float, default=299, help="Ellipse radius in surface pixels")
     p.add_argument("--photo", default="/data/local/tmp/capy-brush-photo.jpg")
     p.add_argument("--zoom", type=float, help="Absolute view scale; default fits the canvas")
+    p.add_argument("--blending", choices=["linear", "perceptual"], help="Document blend space; default uses the imported document")
     p.add_argument("--photo-layers", type=int, default=1, help="Photo layer count, with translucent duplicates")
     tracing = p.add_mutually_exclusive_group()
     tracing.add_argument("--trace", action="store_true", help="Full CPU/GPU phase attribution")
@@ -73,7 +73,7 @@ def main():
                          prediction=args.prediction == "true", speed=args.speed,
                          duration_ms=args.duration, repeats=args.repeats,
                          radii=[args.radius_x, args.radius_y], photo_layers=args.photo_layers,
-                         horizon=args.horizon, zoom=args.zoom)
+                         horizon=args.horizon, zoom=args.zoom, blending=args.blending)
         if (args.output / f"{label}-complete.json").exists():
             if args.mode != "pinch":
                 validate_setup(json.loads((args.output / f"{label}-info.json").read_text()), requested)
@@ -92,12 +92,12 @@ def main():
                                photoLayers=args.photo_layers,
                                waitForTrace="true").items():
             cmd += ["-e", key, str(value)]
-        if args.blending:
-            cmd += ["-e", "blending", args.blending]
         if args.paint_load is not None:
             cmd += ["-e", "paintLoad", str(args.paint_load)]
         if args.zoom is not None:
             cmd += ["-e", "zoom", str(args.zoom)]
+        if args.blending is not None:
+            cmd += ["-e", "blending", args.blending]
         cmd += [f"{args.package}/art.capycanvas.BrushBenchmarkInstrumentation"]
         trace = None
         profile = None

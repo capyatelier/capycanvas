@@ -38,6 +38,24 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duration_ms"):
             validate_setup(self.info, self.requested)
 
+    def test_requires_the_requested_blend_space_to_be_selected(self):
+        for blending in ("linear", "perceptual"):
+            self.requested["blending"] = blending
+            self.info["state"]["commands"] = [dict(id="blend_" + space, selected=space == blending)
+                                               for space in ("linear", "perceptual")]
+            validate_setup(self.info, self.requested)
+            for commands in ([], [dict(id="blend_" + blending, selected=False)],
+                             [dict(id="blend_linear", selected=True), dict(id="blend_perceptual", selected=True)],
+                             [dict(id="blend_" + ("linear" if blending == "perceptual" else "perceptual"), selected=True)]):
+                with self.subTest(blending=blending, commands=commands):
+                    info = copy.deepcopy(self.info)
+                    info["state"]["commands"] = commands
+                    with self.assertRaisesRegex(ValueError, "blending"):
+                        validate_setup(info, self.requested)
+        del self.info["state"]["commands"]
+        with self.assertRaisesRegex(ValueError, "blending"):
+            validate_setup(self.info, self.requested)
+
 
 class CompletionWindowTests(unittest.TestCase):
     def test_excludes_boundary_and_empty_updates_and_retains_pending(self):

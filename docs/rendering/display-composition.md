@@ -20,8 +20,13 @@ the existing display component budget.
 
 The scene owns each layer's reduced local pixels independently of the view.
 A source can retain several levels within the display allowance; each records
-which local pages are valid. Paint uses premultiplied working color and masks
-use scalar coverage. Source identity, immutable native captures, brush damage
+which local pages are valid. Authoritative paint uses linear premultiplied working
+color and masks use scalar coverage. In perceptual documents, identity-source
+reduction encodes each input color before averaging; encoding an averaged linear
+color would change the composite. Transformed sources retain linear samples for
+resampling and encode their result before opacity and blending. Each source level
+records its representation; a change invalidates all retained pages. Encoded
+levels cannot supply linear transform inputs. Source identity, immutable native captures, brush damage
 and retired prediction footprints invalidate the affected pages at every level.
 One current native backing is retained per source, rather than per level.
 Each image carries its native extent, resident bounds and texel footprint.
@@ -50,7 +55,8 @@ regions; gaps in a partial finer image cannot overwrite valid coarse pixels.
 Required previews take priority over spare detail when several photos compete
 for the admitted memory. Admission reserves composition scratch and command
 capacity before retaining optional source levels, including images allocated
-later in the frame. Pose changes preserve local pixels.
+later in the frame. Pose changes preserve local pixels while their representation
+remains valid.
 Cold sources may prepare one adjacent finer level from the remaining
 source allowance, deriving the required level without decoding twice. Existing
 finer detail is refreshed with source damage and retained across scale boundaries;
@@ -65,6 +71,12 @@ positions preserve existing branches when painting starts; transparent operands
 require no image or blend pass. Group opacity, masks, clipping and non-normal blends
 remain expression boundaries. Exact and reduced composition share blend formulas
 and document-depth flags, including clipped layers and extended float colors.
+The document blend space invalidates composed branches and selects the shared
+blend formulas. Pointwise effects decode and encode at their fused boundary;
+image-boundary effects receive linear inputs and encode only their final output.
+Paper and mask-inspection colors use the composite representation, while scalar
+coverage stays unencoded. Presentation decodes the completed composite before
+applying the output color transform.
 Pass Through children continue the enclosing composite. Group opacity and masks
 interpolate between its retained backdrop and the completed children; clipped
 groups remain isolated. The same traversal serves transform previews and exact
