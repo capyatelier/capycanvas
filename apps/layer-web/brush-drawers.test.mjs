@@ -65,7 +65,7 @@ export async function checkBrushDrawers({call, evaluate, settle}) {
     const drawing=await evaluate('layerApp.state().brush.preset');
     for(const theme of ['light','dark']) {await send({type:'set_theme',theme}); await capture(`brush-${theme}`);}
     await contact(header('sculpt'),'pen'); await check('sculpt_sets');
-    assert.deepEqual(await evaluate('layerApp.state().tool_panels.sculpt_sets.groups.map(s=>s.label)'),['Blend','Liquify']);
+    assert.deepEqual(await evaluate('layerApp.state().tool_panels.sculpt_sets.groups.map(s=>s.label)'),['Blend','Liquify','Clone','Heal','Spot Heal']);
     for(const device of ['mouse','touch','pen']) for(const label of ['Liquify','Blend']) {
       await contact(set('sculpt_sets',label),device); await check('sculpt_sets');
       assert.equal(await evaluate('layerApp.state().brush.tool'),label.toLowerCase());

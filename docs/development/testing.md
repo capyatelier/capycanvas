@@ -87,16 +87,28 @@ brush previews with `cargo run --locked --release -p layer-bench -- --brush-prev
 These fail on `main` independently of your change. Don't chase them unless they
 are your task, and remove an entry when you fix it.
 
-- GTK `native_selection_pen_input`.
+- GTK `native_selection_pen_input`, `native_toolbar_components_narrow_input`,
+  `native_workspace_motion_input`, and `native_workspace_switcher_input`
+  (intermittent). `native_workspace_resize_input` presents below its rate
+  threshold under the runner's `color-mgmt`.
 - Android: 7 of 15 `AndroidTitleBarTest` cases;
   `detachedPanelsKeepBodiesAndWiderResizeTargets`;
   `AndroidInteractionTest#cachedPanelsMatchDirectDrawing` (light docked panels);
   the last assertion of `AndroidHostTest#cameraNavigationPublishesOnlyReadoutUpdates`;
   `AndroidInteractionTest#menuBodyAndExtendedTabDropsAcrossDevices` and
-  `#drawerTabsKeepActiveColorsAndPadding`.
+  `#drawerTabsKeepActiveColorsAndPadding`; `AndroidHostTest` cases
+  `shortcutPageRecordsMultipleBindingsAndPersists`,
+  `shortcutSearchFindsModifiedKeysAndMarksChangedBindings`,
+  `settingsPanesShareTopEdgeAndUseAppScale`,
+  `workspaceUsesNativeMouseAndPenCursors`,
+  `workspaceMenusManageVisibilityNamesAndHistory`,
+  `toolbarManagerSelectsConfirmsDeletesAndRestores`,
+  `filterLayerIconsUsePackagedNames` and
+  `toolbarConfigurationAndGroupCollapseUseTheSharedDefault`.
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and
   `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
-- Headless Web `--toolbar-components`, `--tonal-selection`, `--editor` and
-  `--layers`, and 8 pen side-button cases in `pointer.test.mjs`.
+- Headless Web `--toolbar-components`, `--tonal-selection`, `--editor`, `--hdr`,
+  `--proof`, `--raster`, `--selection-tools` and `--shared-workflows`, and 8 pen
+  side-button cases in `pointer.test.mjs`.
 - `cargo clippy -- -D warnings` stops in `layer-core` on lints new in Clippy 1.96.
   New code adds no warnings.

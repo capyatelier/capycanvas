@@ -656,7 +656,8 @@ class AndroidHostTest {
             canvasEvent(MotionEvent.ACTION_UP, listOf(androidx.compose.ui.geometry.Offset(x+.03f,.6f)), MotionEvent.TOOL_TYPE_STYLUS)
         }
         val choices=state().array("adjustments").objects().map { it.getString("id") }
-        assertEquals(40, choices.size)
+        assertEquals(42, choices.size)
+        assertEquals("The picker lists both fill generators", listOf("solid_color","gradient_fill"), choices.filter { it in listOf("solid_color","gradient_fill") })
         action(obj("type" to "select_panel_tab", "group" to group("adjustments").getLong("id"), "panel" to "adjustments"))
         compose.waitUntil(20_000) { host.filterPreviewCache.images[choices.first()] != null }
         compose.onNodeWithTag("filter-preview-${choices.first()}", useUnmergedTree=true).assertHeightIsEqualTo(40.dp)
@@ -699,7 +700,7 @@ class AndroidHostTest {
                 waitState {it.getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").getJSONArray("value").length()==3}
                 action(obj("type" to "effect", "action" to obj("op" to "gradient_stop", "layer" to view.getLong("layer"),
                     "key" to "gradient", "index" to 1, "position" to .5, "color" to obj("space" to "Srgb", "rgba" to JSONArray(listOf(.8,.2,.1,1))), "remove" to false)))
-                action(obj("type" to "effect", "action" to obj("op" to "reset", "layer" to view.getLong("layer"), "key" to "amount")))
+                if(controls.any { it.getString("key")=="amount" }) action(obj("type" to "effect", "action" to obj("op" to "reset", "layer" to view.getLong("layer"), "key" to "amount")))
             }
             capture("adjustment-$id")
             action(obj("type" to "set_layer_visibility", "id" to view.getLong("layer"), "visible" to false))

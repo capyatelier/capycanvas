@@ -28,6 +28,7 @@ export WAYLAND_DISPLAY=layer-bench-motion
 export GDK_BACKEND=wayland GSK_RENDERER=vulkan GTK_A11Y=none
 if [[ "$motion_platform" == gtk ]]; then
     export GDK_DEBUG="${GDK_DEBUG:+$GDK_DEBUG:}no-portals:color-mgmt"
+    export XDG_CONFIG_DIRS="$PWD/tools/performance/gtk-config:${XDG_CONFIG_DIRS:-/etc/xdg}"
 fi
 export LAYER_NATIVE_INPUT_DIR="$motion_run_dir/input"
 export LAYER_SETTINGS_FILE="$motion_run_dir/settings.json"

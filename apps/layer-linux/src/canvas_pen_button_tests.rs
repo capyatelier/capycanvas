@@ -436,7 +436,11 @@ fn native_shortcut_page() {
     shot(&d, "modifier-alt");
     named(&d, "modifier-same").downcast::<adw::SwitchRow>().unwrap().set_active(false);
     pump(400);
-    assert_eq!(modifier(&d).unwrap().actions.len(), 10, "one row per kind of tool");
+    assert_eq!(
+        modifier(&d).unwrap().actions.len(),
+        page(&d).contexts.iter().filter(|c| c.category.is_some()).count(),
+        "one row per kind of tool"
+    );
     shot(&d, "modifier-alt-per-tool");
     named(&d, "modifier-action-selection").emit_by_name::<()>("activated", &[]);
     pump(400);

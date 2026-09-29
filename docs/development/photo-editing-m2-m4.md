@@ -788,6 +788,8 @@ Record each step's host needs in `apps/layer-apple/README.md`, the Windows READM
 - **Spot Healing** scores its candidates on linear values; only its tone match follows the document's Blending.
 - **GTK Document Properties** builds its rows in the host instead of from `DocumentInfo::describe`, as Web and Android do.
 - **Export matte and resize** run in linear light in Perceptual documents.
+- **GTK resize journey:** with the runner's `color-mgmt`, headless Mutter presents a window resize at 45–55 Hz instead of 80–100 Hz. GTK's colour-managed presentation needs a performance look.
+- **Apple command coverage** (`command-coverage.json`) lacks the M2–M4 commands, and Apple's Selection Mask checks may wait for a Grow flow that the Refine panel replaced.
 - **Headless Web** screenshots leave out WebGPU pixels, so the Clone and Heal live-preview checks need a headed run or a tablet.
 - **Test timing:** the Android notices test raced a pending Move pointer-up; it now waits for the canvas to be idle before invoking Hand.
 - **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first". The notice test waits for `add_layer` to be enabled.

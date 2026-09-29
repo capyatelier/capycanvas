@@ -95,8 +95,12 @@ Rules and pitfalls:
   color-management protocol only with `color-mgmt` and has no public API for it.
   The app adds it in `main()` before GTK starts, but tests do not run `main()`.
   `no-portals` makes file dialogs use GTK's in-process chooser, which tests can
-  drive, instead of the desktop portal. `gtk-raster.sh` and
-  `workspace-motion.sh gtk` set both; plain `cargo test` sets neither.
+  drive, instead of the desktop portal. Without the portal GTK also loses the
+  desktop's font and window settings and falls back to fontconfig's `Sans`, so
+  the runners give GTK GNOME's defaults from
+  [`gtk-config`](../../tools/performance/gtk-config/gtk-4.0/settings.ini)
+  through `XDG_CONFIG_DIRS`. `gtk-raster.sh` and `workspace-motion.sh gtk` set
+  all of this; plain `cargo test` sets none of it.
 - **Tablet proxy limits.** `--tablet` pen serials cannot authorize compositor
   drag-and-drop; use mouse and touch for those journeys. The proxy also drops its
   connection when Quick Mask or Selection Layer rows change, so journeys through

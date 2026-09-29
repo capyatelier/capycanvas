@@ -4106,13 +4106,14 @@ fn native_runtime_filter_packages() {
             state(&w).filter_load.error
         );
     };
+    let bundled = layer_core::bundled_effect_catalog().filters().len();
     load("../../assets/filters", layer_core::EffectInstallMode::Merge);
-    assert_eq!(state(&w).adjustments.len(), 40);
+    assert_eq!(state(&w).adjustments.len(), bundled);
     load(
         "../../examples/filters/tent-blur",
         layer_core::EffectInstallMode::Merge,
     );
-    assert_eq!(state(&w).adjustments.len(), 41);
+    assert_eq!(state(&w).adjustments.len(), bundled + 1);
     let checker = layer_core::color::source::rgba8_source([1024, 768], |x, y| {
         if (x / 32 + y / 32) % 2 == 0 {
             [230, 50, 80, 255]
@@ -4320,6 +4321,10 @@ fn native_adjustment_panels_review() {
                 ]),
             ),
             "posterize" => ("levels", EffectValue::Number(4.)),
+            "solid_color" => (
+                "color",
+                EffectValue::Color(layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0.8, 0.2, 0.1, 1.]).unwrap()),
+            ),
             _ => {
                 let parameter = program
                     .parameters
@@ -7531,8 +7536,8 @@ fn native_menu_sections() {
                     assert!(!find_menu_item(menu.upcast_ref(), label).unwrap().is_sensitive());
                 }
                 assert!(find_menu_item(menu.upcast_ref(), "Modify").is_none());
-                assert!(find_menu_item(menu.upcast_ref(), "Grow…").is_some());
-                assert!(find_menu_item(menu.upcast_ref(), "Shrink…").is_some());
+                assert!(find_menu_item(menu.upcast_ref(), CommandId::GrowSelection.label()).is_some());
+                assert!(find_menu_item(menu.upcast_ref(), CommandId::ShrinkSelection.label()).is_some());
             }
             if id == ApplicationMenu::View {
                 assert!(

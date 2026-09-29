@@ -1492,7 +1492,10 @@ fn native_brush_drawer_input() {
     let sculpt = d.header_tool(ToolbarControl::Command { command: CommandId::Sculpt });
     d.click_name(&sculpt);
     let sculpt_sets = d.named("drawer-panel-SculptSets");
-    assert_eq!(state(&d.w).tool_panels.sculpt_sets.groups.len(), 2);
+    assert_eq!(
+        state(&d.w).tool_panels.sculpt_sets.groups.iter().map(|s| s.label).collect::<Vec<_>>(),
+        ["Blend", "Liquify", "Clone", "Heal", "Spot Heal"]
+    );
     let liquify = find_named(&sculpt_sets, "sculpt-set-liquify").unwrap();
     let p = d.point(&liquify);
     d.input
