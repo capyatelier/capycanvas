@@ -124,27 +124,34 @@ struct ActiveStroke {
     barrel_twist: bool,
 }
 
-pub struct CanvasEngine<B: CanvasRenderer> {
+#[derive(Clone)]
+struct ContactSettings {
+    brush: BrushSnapshot,
+    tool: StrokeTool,
+    retouch: Option<RetouchSource>,
+    clone_source: CloneSource,
+    clone_generation: u64,
     paint_color: Option<layer_core::color::RgbColor>,
+    pressure: PressureCurve,
+    instant_feedback: InstantFeedbackConfig,
+    ruler_snapping: Option<f32>,
+}
+pub struct CanvasEngine<B: CanvasRenderer> {
+    settings: ContactSettings,
     used_colors: Vec<layer_core::color::RgbColor>,
     pub recording: crate::recording::Recording,
     backend: B,
     editor: Editor,
     input: InputConsumer<PenEvent>,
+    queued_contacts: VecDeque<((u64, u64), ContactSettings)>,
+    contact_settings: Option<ContactSettings>,
     view: ViewState,
     transforms: VecDeque<ViewTransform>,
     document_view_revision: u64,
-    pressure: PressureCurve,
-    brush: BrushSnapshot,
-    tool: StrokeTool,
-    retouch: Option<RetouchSource>,
-    clone_source: CloneSource,
     /// The live clone stroke's document offset.
     clone_stroke: Option<[f32; 2]>,
     retouch_points: Vec<layer_core::Point>,
     prepared_retouch: Option<(Arc<str>, layer_core::Revision, RetouchPreparation)>,
-    instant_feedback: InstantFeedbackConfig,
-    ruler_snapping: Option<f32>,
     builder: StrokeBuilder,
     dab_generator: DabGenerator,
     finalized_real_points: usize,
@@ -244,24 +251,23 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         transforms.push_back(input_transform);
         let dab_generator = DabGenerator::new(document.color.space);
         Ok(Self {
-            paint_color: None,
+            settings: ContactSettings {
+                brush: BrushSnapshot::default(), tool: StrokeTool::Brush, retouch: None,
+                clone_source: CloneSource::default(), clone_generation: 0, paint_color: None,
+                pressure: PressureCurve::default(), instant_feedback: InstantFeedbackConfig::default(), ruler_snapping: Some(12.),
+            },
             used_colors: Vec::new(),
             recording: Default::default(),
             backend,
             editor: Editor::new(document),
             input,
+            queued_contacts: VecDeque::new(),
+            contact_settings: None,
             view,
             transforms,
-            pressure: PressureCurve::default(),
-            brush: BrushSnapshot::default(),
-            tool: StrokeTool::Brush,
-            retouch: None,
-            clone_source: CloneSource::default(),
             clone_stroke: None,
             retouch_points: Vec::new(),
             prepared_retouch: None,
-            instant_feedback: InstantFeedbackConfig::default(),
-            ruler_snapping: Some(12.),
             builder: StrokeBuilder::with_capacity(STROKE_POINT_CAPACITY),
             dab_generator,
             finalized_real_points: 0,
@@ -380,11 +386,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn can_undo(&self) -> bool {
-        self.pending_frame.is_none() && self.editor.can_undo()
+        self.pending_frame.is_none() && !self.backend.has_pending_submission() && self.editor.can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        self.pending_frame.is_none() && self.editor.can_redo()
+        self.pending_frame.is_none() && !self.backend.has_pending_submission() && self.editor.can_redo()
     }
 
     pub fn has_active_stroke(&self) -> bool {
@@ -394,13 +400,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn brush(&self) -> &BrushSnapshot {
         self.active_stroke
             .as_ref()
-            .map_or(&self.brush, |active| &active.brush)
+            .map_or(&self.settings.brush, |active| &active.brush)
     }
 
     /// Optional source definition, captured alongside the brush at contact down.
     /// It is metadata for completed artwork, never a display RGB approximation.
     pub fn set_paint_color(&mut self, color: layer_core::color::RgbColor) {
-        self.paint_color = Some(color);
+        self.settings.paint_color = Some(color);
     }
     pub fn take_used_colors(&mut self) -> impl Iterator<Item = layer_core::color::RgbColor> + '_ {
         self.used_colors.drain(..)
@@ -409,7 +415,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// Editable configuration for the next stroke, independent of an active
     /// stroke's immutable snapshot. UI edits must not restore old stroke values.
     pub fn configured_brush(&self) -> &BrushSnapshot {
-        &self.brush
+        &self.settings.brush
     }
 
     /// Cursor-only evaluation at current input, sharing the live stroke's
@@ -423,12 +429,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let mut point = crate::input::to_stroke_point(
             event,
             *self.transforms.back().unwrap(),
-            self.pressure,
+            self.settings.pressure,
             hover_start_ns,
         );
         let ruler = self.active_stroke.as_ref().map_or_else(
             || {
-                self.ruler_snapping.and_then(|reach| {
+                self.settings.ruler_snapping.and_then(|reach| {
                     layer_core::choose_ruler(&self.document().rulers, point.position, reach)
                 })
             },
@@ -847,6 +853,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// old GPU pixels under the new document revision.
     pub fn has_pending_document_edits(&self) -> bool {
         self.pending_frame.is_some()
+            || self.backend.has_pending_submission()
             || self.rebuild_all
             || self.rebuild_completed
             || self.composite_all
@@ -873,18 +880,18 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     pub fn set_brush(&mut self, brush: BrushSnapshot) -> Result<(), BrushError> {
         brush.validate()?;
-        self.brush = brush;
+        self.settings.brush = brush;
         Ok(())
     }
 
     pub fn set_tool(&mut self, tool: StrokeTool) {
-        self.tool = tool;
+        self.settings.tool = tool;
     }
 
     /// Strokes copy from `source` while a retouching tool is selected; None
     /// returns to ordinary painting. The renderer prepares before pen-down.
     pub fn set_retouch(&mut self, source: Option<RetouchSource>) {
-        self.retouch = source;
+        self.settings.retouch = source;
         self.refresh_retouch();
     }
 
@@ -904,11 +911,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// Where the Clone tool copies from. Strokes anchor and move an aligned
     /// source as they start and end.
     pub fn clone_source(&self) -> CloneSource {
-        self.clone_source
+        self.settings.clone_source
     }
 
     pub fn set_clone_source(&mut self, source: CloneSource) {
-        self.clone_source = source;
+        self.settings.clone_generation = self.settings.clone_generation.wrapping_add(1);
+        self.settings.clone_source = source;
     }
 
     /// The document offset the Clone stroke in contact copies with.
@@ -923,10 +931,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let fresh = self.prepared_retouch.as_ref().is_some_and(|(id, revision, prepared)| {
             *id == document.id && *revision == document.revision && prepared.points == self.retouch_points
         });
-        if self.retouch.is_some() && fresh {
+        if self.settings.retouch.is_some() && fresh {
             return;
         }
-        let prepared = self.retouch.zip(document.try_drawing_content().ok()).map(|(source, target)| RetouchPreparation {
+        let prepared = self.settings.retouch.zip(document.try_drawing_content().ok()).map(|(source, target)| RetouchPreparation {
             target,
             retouch: Retouch::for_target(document, target, source),
             points: self.retouch_points.clone(),
@@ -944,11 +952,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let Some(active) = self.active_stroke.as_mut().filter(|a| a.brush.execution.copies_from_source()) else {
             return;
         };
-        active.clone_start = Some(self.clone_source);
+        active.clone_start = Some(self.settings.clone_source);
         let first = layer_core::Point { x: first.x + offset.x, y: first.y + offset.y };
-        self.clone_stroke = self.clone_source.begin_stroke(first);
+        self.clone_stroke = self.settings.clone_source.begin_stroke(first);
         if let (Some(offset), Some(retouch)) = (self.clone_stroke, active.style.retouch.take()) {
-            active.style.retouch = Some(clone_mapping(self.editor.document(), active.layer_id, retouch, offset, self.clone_source.flip));
+            active.style.retouch = Some(clone_mapping(self.editor.document(), active.layer_id, retouch, offset, self.settings.clone_source.flip));
         }
     }
 
@@ -956,7 +964,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     fn reanchor_clone_stroke(&mut self) {
         let Some(active) = self.active_stroke.as_ref() else { return };
         if let Some(start) = active.clone_start {
-            self.clone_source = start;
+            self.settings.clone_source = start;
             let first = self.builder.real_points()[0].position;
             self.begin_clone_stroke(first, self.document().layer_offset(active.layer_id));
         }
@@ -1009,14 +1017,14 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     /// Why a retouching stroke on `target` would copy nothing.
     fn retouch_refusal(&self, target: LayerId) -> Option<StrokeRefusal> {
-        let source = self.retouch?;
+        let source = self.settings.retouch?;
         let document = self.document();
         let layer = document.layer(target)?;
         let layer_core::Affine([a, b, c, d, ..]) = document.layer_transform(target);
         if [a, b, c, d] != [1., 0., 0., 1.] {
             return Some(StrokeRefusal::TransformedLayer);
         }
-        if self.brush.execution.copies_from_source() && self.clone_source.point.is_none() {
+        if self.settings.brush.execution.copies_from_source() && self.settings.clone_source.point.is_none() {
             return Some(StrokeRefusal::NoCloneSource);
         }
         let empty = layer.source.is_none()
@@ -1031,7 +1039,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         match self.stroke_target(self.stroke_tool(event)) {
             Err(refusal) => Some(refusal),
             Ok(target)
-                if target.mask && self.brush.execution_class() != BrushExecution::Dry =>
+                if target.mask && self.settings.brush.execution_class() != BrushExecution::Dry =>
             {
                 Some(StrokeRefusal::DryMask)
             }
@@ -1043,13 +1051,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if matches!(event.tool, ToolKind::Eraser) || event.flags.contains(SampleFlags::INVERTED) {
             StrokeTool::Eraser
         } else {
-            self.tool
+            self.settings.tool
         }
     }
 
     fn stroke_target(&self, tool: StrokeTool) -> Result<StrokeTarget, StrokeRefusal> {
         let document = self.document();
-        let layer = if self.retouch.is_some() {
+        let layer = if self.settings.retouch.is_some() {
             document.try_drawing_content()
         } else {
             document.try_drawing_target()
@@ -1079,17 +1087,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .find(|t| t.revision == event.view_revision)
             .copied()
             .unwrap_or(transform);
-        self.recording.raw(event, transform, self.pressure);
+        self.recording.raw(event, transform, self.settings.pressure);
     }
 
     pub fn set_pressure_curve(&mut self, pressure: PressureCurve) {
-        self.pressure = pressure;
+        self.settings.pressure = pressure;
     }
 
     /// UI supplies a logical hit distance converted into document units.
     /// A stroke's selected guide remains fixed until that stroke ends.
     pub fn set_ruler_snapping(&mut self, reach: Option<f32>) {
-        self.ruler_snapping = reach.filter(|r| r.is_finite() && *r >= 0.);
+        self.settings.ruler_snapping = reach.filter(|r| r.is_finite() && *r >= 0.);
     }
     pub fn active_ruler_constraint(&self) -> Option<layer_core::RulerConstraint> {
         self.active_stroke.as_ref().and_then(|s| s.ruler)
@@ -1100,7 +1108,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         config: InstantFeedbackConfig,
     ) -> Result<(), FeedbackConfigError> {
         config.validate()?;
-        self.instant_feedback = config;
+        self.settings.instant_feedback = config;
         Ok(())
     }
 
@@ -1109,7 +1117,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.composite_all |= self.view.background_rgba_linear != view.background_rgba_linear;
         self.view = view;
         if self.transforms.back().map(|item| item.revision) != Some(input_transform.revision) {
-            if self.transforms.len() == TRANSFORM_HISTORY {
+            while self.input.is_empty() && self.transforms.len() >= TRANSFORM_HISTORY {
                 self.transforms.pop_front();
             }
             self.transforms.push_back(input_transform);
@@ -1122,6 +1130,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// its own clock/view; neither may leak into the interactive session.
     pub fn start_document_view(&mut self, view: ViewState, input_transform: ViewTransform) {
         self.transforms.clear();
+        self.queued_contacts.clear();
+        self.contact_settings = None;
         self.estimates.clear();
         self.document_view_revision = input_transform.revision;
         self.animation_origin_ns = None;
@@ -1283,6 +1293,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     fn flush_pending_edits(&mut self) -> Result<(), DocumentError> {
+        if self.backend.has_pending_submission() {
+            return Err(DocumentError::InvalidLayerOperation("Raster backing is busy; retry the edit"));
+        }
         if self.pending_frame.is_some()
             || self
                 .batches
@@ -1334,6 +1347,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         timestamp_ns: Option<u64>,
         presentation_timestamp_ns: Option<u64>,
     ) -> Result<(), EngineError<B::Error>> {
+        let view = self.view();
+        self.backend.poll_pending(view).map_err(EngineError::Backend)?;
         if !self.backend.can_submit() {
             return Ok(());
         }
@@ -1356,7 +1371,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.end_corrections();
         }
         self.replay_retouch_misses().map_err(EngineError::Document)?;
-        if self.retouch.is_some() {
+        if self.settings.retouch.is_some() {
             self.refresh_retouch();
         }
         if self.builder.real_points().len() >= MAX_CONTACT_POINTS {
@@ -1570,6 +1585,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.restore_rasters.clear();
         }
         while self.input.pop().is_some() {}
+        self.queued_contacts.clear();
+        self.contact_settings = None;
         if self.has_active_stroke() {
             self.cancel_active();
         }
@@ -1587,6 +1604,34 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.rebuild_all = true;
         self.composite_all = true;
         Ok(discarded)
+    }
+
+    pub fn capture_queued_contact(&mut self, event: PenEvent) {
+        if event.phase == PenPhase::Down && !event.flags.contains(SampleFlags::CORRECTION) {
+            self.queued_contacts.push_back(((event.device_id, event.sequence), self.settings.clone()));
+        }
+    }
+
+    fn process_captured_event(&mut self, event: PenEvent) -> Result<(), EngineError<B::Error>> {
+        if event.phase == PenPhase::Down && !event.flags.contains(SampleFlags::CORRECTION) {
+            let key = (event.device_id, event.sequence);
+            self.contact_settings = Some(if self.queued_contacts.front().is_some_and(|(found, _)| *found == key) {
+                self.queued_contacts.pop_front().unwrap().1
+            } else { self.settings.clone() });
+        }
+        let Some(mut settings) = self.contact_settings.take() else { return self.process_event(event); };
+        std::mem::swap(&mut settings, &mut self.settings);
+        let source = self.settings.clone_source;
+        let result = self.process_event(event);
+        if source != self.settings.clone_source {
+            for (_, queued) in &mut self.queued_contacts {
+                if queued.clone_generation == self.settings.clone_generation { queued.clone_source = self.settings.clone_source; }
+            }
+            if settings.clone_generation == self.settings.clone_generation { settings.clone_source = self.settings.clone_source; }
+        }
+        std::mem::swap(&mut settings, &mut self.settings);
+        self.contact_settings = Some(settings);
+        result
     }
 
     fn process_input(&mut self) -> Result<(), EngineError<B::Error>> {
@@ -1608,7 +1653,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     "Stroke exceeded the live input budget and was cancelled",
                 )));
             }
-            self.process_event(event)?;
+            self.process_captured_event(event)?;
             // Publish one contact boundary before consuming the next contact.
             // This keeps each undo revision tied to its exact GPU queue point.
             if matches!(event.phase, PenPhase::Up | PenPhase::Cancel) {
@@ -1646,7 +1691,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
         let point = transform.map(event.surface_position);
         let mut ruler = if event.phase == PenPhase::Down {
-            self.ruler_snapping
+            self.settings.ruler_snapping
                 .and_then(|reach| layer_core::choose_ruler(&self.document().rulers, point, reach))
         } else {
             self.active_ruler_constraint()
@@ -1689,14 +1734,14 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return Ok(());
                 }
                 let id = self.editor.allocate_stroke_id();
-                let mut brush = self.brush.clone();
+                let mut brush = self.settings.brush.clone();
                 if !matches!(
                     event.tool,
                     ToolKind::Pen | ToolKind::Brush | ToolKind::Pencil | ToolKind::Airbrush
                 ) {
                     brush.stabilization.pressure_fall_micros = 0;
                 }
-                let mut feedback = self.instant_feedback;
+                let mut feedback = self.settings.instant_feedback;
                 if is_mask {
                     // Coverage brushes use the same tip/dynamics, not pigment or fluid state.
                     brush.color_rgba_linear = [1.0, 1.0, 1.0, brush.color_rgba_linear[3]];
@@ -1725,7 +1770,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .then(self.document().layer_transform(layer_id).inverse().expect("validated layer geometry"));
                 style.alpha_locked = alpha_locked;
                 style.blend_space = if is_mask { layer_core::BlendSpace::Linear } else { self.document().blend_space };
-                style.retouch = self.retouch.map(|source| Retouch::for_target(self.document(), layer_id, source));
+                style.retouch = self.settings.retouch.map(|source| Retouch::for_target(self.document(), layer_id, source));
                 style.selection = self.document().selection.as_ref().map(|selection| {
                     std::sync::Arc::new(selection.transformed(
                         self.document().layer_transform(layer_id).inverse().expect("validated layer geometry")
@@ -1739,7 +1784,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         && brush.opacity > 0.
                         && brush.flow > 0.
                         && brush.color_rgba_linear[3] > 0.)
-                        .then_some(self.paint_color)
+                        .then_some(self.settings.paint_color)
                         .flatten(),
                     before: self.document().target_raster(layer_id).unwrap().clone(),
                     id,
@@ -1775,7 +1820,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 }
                 self.pending_smudge_dabs.clear();
                 self.finalized_real_points = 0;
-                self.builder.begin(event, transform, self.pressure);
+                self.builder.begin(event, transform, self.settings.pressure);
                 self.record_builder_sample(event);
                 self.track_estimate(event, transform);
                 let active = self.active_stroke.as_ref().expect("set above");
@@ -1801,7 +1846,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 if self.active_stroke.is_none() {
                     return Ok(());
                 }
-                self.builder.push(event, transform, self.pressure);
+                self.builder.push(event, transform, self.settings.pressure);
                 self.record_builder_sample(event);
                 let active = self.active_stroke.as_mut().unwrap();
                 if active.feedback.enabled {
@@ -1829,7 +1874,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 if self.active_stroke.is_none() {
                     return Ok(());
                 }
-                self.builder.push(event, transform, self.pressure);
+                self.builder.push(event, transform, self.settings.pressure);
                 self.record_builder_sample(event);
                 self.track_estimate(event, transform);
                 if !event.flags.contains(SampleFlags::PREDICTED) {
@@ -1856,7 +1901,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 if self.clone_stroke.take().is_some()
                     && let Some(last) = points.last()
                 {
-                    self.clone_source
+                    self.settings.clone_source
                         .end_stroke(layer_core::Point { x: last.position.x + offset.x, y: last.position.y + offset.y });
                 }
                 let replay = active.brush.taper.end_distance_diameters > 0.0 || active.replay_after_contact;
@@ -2931,6 +2976,33 @@ mod tests {
         moved.properties.placement = layer_core::Affine([2., 0., 0., 2., 0., 0.]);
         engine.apply_edit(Edit::ReplaceLayer(Box::new(moved))).unwrap();
         assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::TransformedLayer));
+    }
+
+    #[test]
+    fn queued_clone_contacts_share_alignment_without_overwriting_a_later_source() {
+        let (mut input, mut engine) = engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
+        engine.apply_edit(Edit::SetReferences([LayerId(40)].into())).unwrap();
+        engine.set_brush(default_brush(DefaultBrushPreset::CloneStamp)).unwrap();
+        engine.set_retouch(Some(RetouchSource::References));
+        let source = |x| CloneSource { point: Some(Point { x, y: 30. }), ..CloneSource::default() };
+        engine.set_clone_source(source(40.));
+        for (sequence, x) in [(10, 8.), (20, 20.), (30, 30.)] {
+            if sequence == 30 { engine.set_clone_source(source(20.)); }
+            for (i, phase) in [PenPhase::Down, PenPhase::Move, PenPhase::Up].into_iter().enumerate() {
+                let event = event(sequence + i as u64, phase, x + 6. * i as f32);
+                input.push(event).unwrap();
+                engine.capture_queued_contact(event);
+            }
+        }
+        engine.set_clone_source(source(7.));
+        engine.render_frame().unwrap();
+        let offset = engine.completed_stroke.as_ref().unwrap().retouch.as_ref().unwrap().offset;
+        engine.render_frame().unwrap();
+        assert_eq!(engine.completed_stroke.as_ref().unwrap().retouch.as_ref().unwrap().offset, offset);
+        engine.render_frame().unwrap();
+        let third = engine.completed_stroke.as_ref().unwrap();
+        assert_eq!(third.retouch.as_ref().unwrap().offset, [20. - third.points[0].position.x, 30. - third.points[0].position.y]);
+        assert_eq!(engine.clone_source(), source(7.));
     }
 
     #[test]
@@ -4490,6 +4562,47 @@ mod tests {
     }
 
     #[test]
+    fn queued_contacts_keep_their_brush_pressure_and_camera() {
+        let (mut input, mut engine) = engine("queued contacts", 512, 512);
+        engine.settings.instant_feedback.enabled = false;
+        engine.settings.brush.diameter = 19.;
+        engine.settings.pressure.gamma = 2.;
+        for event in [event(1, PenPhase::Down, 20.), event(2, PenPhase::Up, 24.)] {
+            input.push(event).unwrap();
+            engine.capture_queued_contact(event);
+        }
+        engine.settings.brush.diameter = 43.;
+        engine.settings.pressure.gamma = 3.;
+        for revision in 2..100 {
+            engine.set_view(view(512, 512), ViewTransform { revision, surface_to_document: [1., 0., 0., 1., 100., 80.] });
+        }
+        for mut event in [event(3, PenPhase::Down, 30.), event(4, PenPhase::Up, 34.)] {
+            event.view_revision = 99;
+            input.push(event).unwrap();
+            engine.capture_queued_contact(event);
+        }
+        engine.settings.brush.diameter = 7.;
+        engine.settings.pressure.gamma = 1.;
+        engine.render_frame().unwrap();
+        let first = engine.completed_stroke.as_ref().unwrap();
+        assert_eq!(first.brush.diameter, 19.);
+        assert_eq!(first.points[0].position, Point { x: 20., y: 16. });
+        assert!((first.points[0].pressure - 0.64).abs() < 1e-6);
+        engine.render_frame().unwrap();
+        let second = engine.completed_stroke.as_ref().unwrap();
+        assert_eq!(second.brush.diameter, 43.);
+        assert_eq!(second.points[0].position, Point { x: 130., y: 96. });
+        assert!((second.points[0].pressure - 0.512).abs() < 1e-6);
+        assert_eq!(engine.brush().diameter, 7.);
+        assert_eq!(engine.settings.pressure.gamma, 1.);
+        assert_eq!(engine.metrics.stale_transform_fallbacks, 0);
+        assert!(engine.queued_contacts.is_empty());
+        assert!(engine.undo().unwrap());
+        assert!(engine.undo().unwrap());
+        assert!(!engine.undo().unwrap());
+    }
+
+    #[test]
     fn completed_contact_estimates_expire_without_retaining_historical_input() {
         let (mut input, mut engine) = engine("expiry", 64, 64);
         let mut down = event(1, PenPhase::Down, 8.);
@@ -4516,7 +4629,7 @@ mod tests {
     fn estimated_samples_use_original_transforms_and_close_the_window_on_undo() {
         for feedback in [false, true] {
             let (mut input, mut engine) = engine("estimates", 64, 64);
-            engine.instant_feedback.enabled = feedback;
+            engine.settings.instant_feedback.enabled = feedback;
             let mut down = event(1, PenPhase::Down, 8.);
             down.pressure = 0.2;
             down.flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
@@ -4533,7 +4646,7 @@ mod tests {
                     },
                 );
             }
-            engine.pressure.gamma = 3.;
+            engine.settings.pressure.gamma = 3.;
             let mut correction = down;
             correction.flags = SampleFlags(SampleFlags::CORRECTION.0 | SampleFlags::ESTIMATED.0);
             correction.surface_position.x = 12.;
@@ -4634,7 +4747,7 @@ mod tests {
     #[test]
     fn estimated_stationary_airbrush_samples_and_cancellation_keep_contact_ownership() {
         let (mut input, mut engine) = engine("stationary", 64, 64);
-        engine.brush.path.continuous_rate_hz = 60.;
+        engine.settings.brush.path.continuous_rate_hz = 60.;
         let mut down = event(1, PenPhase::Down, 8.);
         down.flags = SampleFlags::ESTIMATED;
         input.push(down).unwrap();

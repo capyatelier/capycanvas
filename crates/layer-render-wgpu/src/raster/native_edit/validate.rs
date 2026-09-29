@@ -55,14 +55,7 @@ impl Validator {
             tiles_per_dispatch,
         }
     }
-    pub fn encode(
-        &self,
-        r: &WgpuRasterizer,
-        encoder: &mut submission::CommandEncoder,
-        inputs: &[(&wgpu::Texture, RasterTile)],
-        status: &NativeEncodeStatus,
-        views: &mut crate::native_tiles::PublicationViews,
-    ) -> Result<(), GpuRasterError> {
+    pub fn validate(inputs: &[(&wgpu::Texture, RasterTile)]) -> Result<(), GpuRasterError> {
         // Reject unexpected/aliased live storage before recording any promotion.
         let mut identities = std::collections::HashSet::new();
         for (texture, _) in inputs {
@@ -89,6 +82,16 @@ impl Validator {
                 ));
             }
         }
+        Ok(())
+    }
+    pub fn encode(
+        &self,
+        r: &WgpuRasterizer,
+        encoder: &mut submission::CommandEncoder,
+        inputs: &[(&wgpu::Texture, RasterTile)],
+        status: &NativeEncodeStatus,
+        views: &mut crate::native_tiles::PublicationViews,
+    ) -> Result<(), GpuRasterError> {
         // Group read-only inputs by their validity rule. Each z workgroup sees
         // one complete tile. Repeated padding views are never dispatched and
         // add no writable aliases; the same status accumulates across all groups.

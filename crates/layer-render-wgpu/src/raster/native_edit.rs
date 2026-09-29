@@ -141,6 +141,17 @@ pub(crate) struct NativeFrame {
     publications: Vec<Publication>,
     pub(crate) canonical_pages: Vec<(LayerId, [u32; 2])>,
 }
+pub(crate) struct NativeJob {
+    pub frame: NativeFrame,
+    inputs: Vec<(wgpu::Texture, RasterTile)>,
+    views: crate::native_tiles::PublicationViews,
+    validated: usize,
+    encoded: usize,
+    started: bool,
+}
+impl NativeJob {
+    pub fn complete(&self) -> bool { self.started && self.encoded == self.inputs.len() }
+}
 impl Drop for NativeFrame {
     fn drop(&mut self) {
         for publication in &self.publications {
@@ -267,11 +278,13 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    pub(crate) fn encode_native_rasters(
-        &mut self,
-        layers: &[Layer],
-        encoder: &mut submission::CommandEncoder,
-    ) -> Result<Option<NativeFrame>, GpuRasterError> {
+    pub(crate) fn encode_native_rasters(&mut self, layers: &[Layer], encoder: &mut submission::CommandEncoder) -> Result<Option<NativeFrame>, GpuRasterError> {
+        let Some(mut job) = self.prepare_native_rasters(layers)? else { return Ok(None); };
+        while self.step_native_rasters(&mut job, encoder)? {}
+        Ok(Some(job.frame))
+    }
+
+    pub(crate) fn prepare_native_rasters(&mut self, layers: &[Layer]) -> Result<Option<NativeJob>, GpuRasterError> {
         if self.native_edit.is_none()
             || !layers.iter().any(|l| {
                 l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
@@ -321,7 +334,7 @@ impl WgpuRasterizer {
                         tile.clone()
                     } else {
                         let tile = RasterTile::pending(key.plane.descriptor(self.document_color()));
-                        inputs.push((texture, tile.clone()));
+                        inputs.push((texture.clone(), tile.clone()));
                         frame.canonical_pages.push((id, key.coordinate));
                         tile
                     };
@@ -356,10 +369,6 @@ impl WgpuRasterizer {
                 .sum::<u64>();
             publication.revision.reserve_pending_bytes(pending_bytes);
         }
-        // Full views live only through this publication's command recording;
-        // the view cache never pins working or encoded pixels between frames.
-        let mut views = crate::native_tiles::PublicationViews::default();
-        let native = self.native_edit.as_ref().unwrap();
         frame.capture = Some(NativeCapture {
             outputs: Vec::with_capacity(inputs.len()),
             status: NativeEncodeStatus::new(&self.device),
@@ -367,16 +376,27 @@ impl WgpuRasterizer {
             device: (*self.device).clone(),
             queue: self.queue.clone(),
         });
-        let capture = frame.capture.as_mut().unwrap();
+        validate::Validator::validate(&inputs.iter().map(|(t, tile)| (t, tile.clone())).collect::<Vec<_>>())?;
+        Ok(Some(NativeJob { frame, inputs, views: Default::default(), validated: 0, encoded: 0, started: false }))
+    }
+
+    pub(crate) fn step_native_rasters(&mut self, job: &mut NativeJob, encoder: &mut submission::CommandEncoder) -> Result<bool, GpuRasterError> {
+        let native = self.native_edit.as_ref().unwrap();
+        let capture = job.frame.capture.as_mut().unwrap();
         let status = &capture.status;
-        status.reset(encoder);
-        native
-            .validator
-            .encode(self, encoder, &inputs, status, &mut views)?;
-        // Every input is validated before any working write. On supporting
-        // devices, quantization writes back in place; otherwise only canonical
-        // Float32 scratch is reused. Encoded samples belong to this publication.
-        for chunk in inputs.chunks(MAX_BATCH_TILES) {
+        if !job.started { status.reset(encoder); job.started = true; }
+        else if job.encoded == job.inputs.len() { return Ok(false); }
+        let views = &mut job.views;
+        if job.validated < job.inputs.len() {
+            let end = (job.validated + MAX_BATCH_TILES).min(job.inputs.len());
+            let inputs = job.inputs[job.validated..end].iter().map(|(t, tile)| (t, tile.clone())).collect::<Vec<_>>();
+            native.validator.encode(self, encoder, &inputs, status, views)?;
+            job.validated = end;
+            return Ok(true);
+        }
+        let end = (job.encoded + MAX_BATCH_TILES).min(job.inputs.len());
+        let chunk = &job.inputs[job.encoded..end];
+        if !chunk.is_empty() {
             let first = capture.outputs.len();
             capture.outputs.extend(chunk.iter().map(|(_, tile)| {
                 NativeOutput {
@@ -428,16 +448,16 @@ impl WgpuRasterizer {
             let color =
                 native
                     .color
-                    .prepare(&self.device, &color, status, &mut views)?;
+                    .prepare(&self.device, &color, status, views)?;
             let scalar =
                 native
                     .scalar
-                    .prepare(&self.device, &scalar, status, &mut views)?;
+                    .prepare(&self.device, &scalar, status, views)?;
             let promotions = native
                 .promoter
                 .as_ref()
                 .map(|promoter| {
-                    promoter.prepare(&self.device, &promotions, status, &mut views)
+                    promoter.prepare(&self.device, &promotions, status, views)
                 })
                 .transpose()?;
             {
@@ -450,7 +470,8 @@ impl WgpuRasterizer {
                 promoter.encode(encoder, &promotions);
             }
         }
-        Ok(Some(frame))
+        job.encoded = end;
+        Ok(true)
     }
 
     pub(crate) fn finish_native_rasters(

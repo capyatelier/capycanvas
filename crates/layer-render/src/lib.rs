@@ -693,6 +693,8 @@ pub trait CanvasRenderer {
     fn max_document_dimension(&self) -> u32 {
         u32::MAX
     }
+    fn poll_pending(&mut self, _view: ViewState) -> Result<(), Self::Error> { Ok(()) }
+    fn has_pending_submission(&self) -> bool { false }
     /// Host frame-mailbox backpressure before consuming input.
     fn can_submit(&self) -> bool {
         true

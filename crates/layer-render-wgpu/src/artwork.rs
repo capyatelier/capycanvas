@@ -14,6 +14,18 @@ pub(super) struct Frame {
     pub previews: Vec<DabBatch>,
     preview_dabs: Vec<Dab>,
 }
+pub(super) struct PendingFrame {
+    pub frame: Arc<Frame>,
+    pub view: ViewState,
+    pub capture: Option<raster::native_edit::NativeJob>,
+}
+impl Drop for PendingFrame {
+    fn drop(&mut self) {
+        for root in self.frame.layers.iter().flat_map(|l| std::iter::once(&l.raster).chain(l.masks().map(|m| &m.raster))) {
+            if root.try_data().is_none() { let _ = root.publish(Err("Healing stopped before raster capture".into())); }
+        }
+    }
+}
 /// Whether two composite snapshots draw the same pixels: the same raster,
 /// source, mask, effect, placement and appearance.
 pub(super) fn same_layer(a: &Layer, b: &Layer) -> bool {

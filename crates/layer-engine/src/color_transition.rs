@@ -7,6 +7,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if self.has_active_stroke()
             || self.has_pending_input()
             || self.pending_frame.is_some()
+            || self.backend.has_pending_submission()
             || !self.batches.is_empty()
             || !self.dabs.is_empty()
             || self.transform_preview.is_some()
@@ -42,7 +43,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let target = prepared.document().color;
         // Tool colors and the canvas background keep their color appearance;
         // the document operation only changes artwork interpretation/backing.
-        let mut brush = self.brush.clone();
+        let mut brush = self.settings.brush.clone();
         let mut view = self.view;
         layer_render::remap_document_colors(old.space, target.space, &mut brush, &mut view);
         brush.validate().map_err(DocumentError::InvalidBrush)?;
@@ -64,7 +65,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             }
             Ok(())
         })?;
-        self.brush = brush;
+        self.settings.brush = brush;
         self.view = view;
         self.dab_generator.set_space(target.space);
         self.dab_generator.reset();

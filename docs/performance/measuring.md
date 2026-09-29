@@ -144,6 +144,12 @@ queued after consuming the contact, and GPU completion separately. Input records
 renderer while composition was pending. The GPU completion metric is not scanout
 latency.
 
+`--mode settle` exercises navigation and tool changes during Healing finalization
+while a following paint contact waits for its source pixels. Record input queue
+delay, tool action latency, camera changes, screen presentation and total settling
+time separately. Its one-second pinch probes interruption; it does not qualify
+the separate sustained five-second navigation target.
+
 **Memory (Android).** Run a separate diagnostic with `--memory` to save GPU
 allocator snapshots. Sampling allocations adds CPU work, so do not use that run
 to qualify frame rates. Keep process PSS, allocator allocated/reserved bytes and

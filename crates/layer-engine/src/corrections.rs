@@ -44,7 +44,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 copies: Vec::new(),
                 point,
                 transform,
-                curve: self.pressure,
+                curve: self.settings.pressure,
             },
         );
     }

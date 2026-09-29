@@ -132,7 +132,7 @@ def main():
                     process.wait(timeout=30)
                     raise
             if args.trace or args.presentation_trace:
-                milliseconds = args.repeats * (args.duration + 3500) + 8000
+                milliseconds = args.repeats * (args.duration + (15000 if args.mode == "settle" else 3500)) + 8000
                 app_trace = (f'ftrace_events: "sched/sched_switch"\n'
                              f'ftrace_events: "sched/sched_waking"\n'
                              f'atrace_apps: "{args.package}"' if args.trace else "")

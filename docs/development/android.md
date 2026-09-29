@@ -298,7 +298,7 @@ another JPEG under `/data/local/tmp`, such as a
 size. Then
 `python3 tools/performance/android-brush-benchmark.py OUT --serial "$CAPY_ANDROID_SERIAL" --presets 1 --size 1000`
 passes `-e preset`, `-e brushSize` and `-e mode` (`constant`, `pressure`, `tilt`,
-`stationary`, `lifts`, `pauses`, `visual` or `pinch`); `--trace` and `--profile` add
+`stationary`, `lifts`, `pauses`, `settle`, `visual` or `pinch`); `--trace` and `--profile` add
 Perfetto and simpleperf captures. The default preset list is the dry brushes;
 the default workspace keeps Stats closed. `--stats` opens Stats and enables GPU
 timing; use `--trace --stats` for GPU phase diagnostics. Report these runs
@@ -310,6 +310,12 @@ reference layer.
 Increase only the gap to measure the same contacts after settling, or increase
 contact duration to test finalization after a broad stroke. The runner checks
 both durations in the observed setup; older APKs that ignore them are rejected.
+`--mode settle` draws a broad stroke, waits 100 ms, changes tools, queues a
+short paint contact and injects a one-second pinch while finalization is pending.
+The raw `settle_probe` records action times and camera revisions. Use
+`--presentation-trace` for screen cadence; completed artwork updates do not
+count camera-only frames. Brush preview PNGs load off the UI thread and share a
+bounded cache across panel lifetimes.
 `--radius-x` and `--radius-y` set the ellipse radii in surface pixels;
 `--photo-layers` creates 1–32 photos with translucent duplicates. The runner
 checks the observed trajectory, layer count, brush, prediction and requested

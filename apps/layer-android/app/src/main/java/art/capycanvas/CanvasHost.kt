@@ -221,6 +221,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val saved = application.getSharedPreferences(preferencesName, 0)
     private var handle = 0L
     internal val filterPreviewCache = FilterPreviewCache(this)
+    internal val brushPreviews = object : android.util.LruCache<String, androidx.compose.ui.graphics.ImageBitmap>(4 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: androidx.compose.ui.graphics.ImageBitmap) = value.width * value.height * 4
+    }
     private var choreographer: Choreographer? = null
     private var attached = false
     private var currentSurface: Surface? = null

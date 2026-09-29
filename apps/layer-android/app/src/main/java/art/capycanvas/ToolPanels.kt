@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
 import org.json.JSONArray
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** The selected tool determines groups, subtools and settings in Rust. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -67,10 +69,17 @@ import org.json.JSONArray
             .clickable { host.dispatch(action) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
             if (preview != null) {
                 val id = preview.toInt()
-                val swatch = remember(id, colors.dark) {
-                    context.assets.open("$id-${if (colors.dark) "dark" else "light"}.png").use { BitmapFactory.decodeStream(it).asImageBitmap() }
+                val name = "$id-${if (colors.dark) "dark" else "light"}.png"
+                var swatch by remember(host, name) { mutableStateOf(host.brushPreviews.get(name)) }
+                LaunchedEffect(host, name) {
+                    if (swatch == null) swatch = withContext(Dispatchers.IO) {
+                        host.brushPreviews.get(name) ?: context.assets.open(name).use { BitmapFactory.decodeStream(it).asImageBitmap() }
+                            .also { host.brushPreviews.put(name, it) }
+                    }
                 }
-                Image(swatch, null, Modifier.fillMaxWidth().height(40.dp).testTag("brush-preview-$id"), contentScale = ContentScale.FillBounds)
+                Box(Modifier.fillMaxWidth().height(40.dp)) {
+                    swatch?.let { Image(it, null, Modifier.fillMaxSize().testTag("brush-preview-$id"), contentScale = ContentScale.FillBounds) }
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
                     Text(label, Modifier.weight(1f), textAlign = TextAlign.End, fontWeight = FontWeight.Bold)

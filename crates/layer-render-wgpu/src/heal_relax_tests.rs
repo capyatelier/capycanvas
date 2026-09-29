@@ -71,7 +71,9 @@ fn relaxation_matches_sparse_block_reference() {
         layout.extend(std::iter::repeat_n(0, pages.len() + 1));
         layout.extend(counts);
         let mut slots = Slots { stride: u64::from(r.device.limits().min_uniform_buffer_offset_alignment), bytes: Vec::new() };
-        let offsets = [0, 1].map(|parity| slots.push(Params { parity, pages: pages.len() as u32, windows: windows_at, ..Default::default() }));
+        let offsets = [0, 1].map(|parity| (0..blocks.len()).step_by(37).map(|start| {
+            (slots.push(Params { parity, candidate: start as u32, pages: pages.len() as u32, windows: windows_at, ..Default::default() }), (blocks.len() - start).min(37) as u32)
+        }).collect::<Vec<_>>());
         let buffer = |label, contents: &[u8], usage| r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label), contents, usage,
         });
@@ -93,10 +95,10 @@ fn relaxation_matches_sparse_block_reference() {
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&k.relax);
-            for _ in 0..SWEEPS / BLOCK_SWEEPS { for offset in offsets {
+            for _ in 0..SWEEPS / BLOCK_SWEEPS { for colour in &offsets { for &(offset, groups) in colour {
                 pass.set_bind_group(0, &group, &[offset]);
-                pass.dispatch_workgroups(blocks.len() as u32, 1, 1);
-            } }
+                pass.dispatch_workgroups(groups, 1, 1);
+            } } }
         }
         encoder.copy_buffer_to_buffer(&membrane, 0, &readback, 0, membrane.size());
         r.queue.submit([encoder.finish()]);

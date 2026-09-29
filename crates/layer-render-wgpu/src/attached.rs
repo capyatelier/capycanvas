@@ -41,6 +41,11 @@ impl CanvasRenderer for AttachedRenderer {
     fn can_capture_raster(&self) -> bool {
         self.0.as_ref().is_none_or(|gpu| gpu.can_capture_raster())
     }
+    fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
+        if let Some(gpu) = self.0.as_mut() { gpu.poll_pending(view)?; }
+        Ok(())
+    }
+    fn has_pending_submission(&self) -> bool { self.0.as_ref().is_some_and(|gpu| gpu.has_pending_submission()) }
     fn can_submit(&self) -> bool {
         self.0.as_ref().is_none_or(|gpu| gpu.can_submit())
     }

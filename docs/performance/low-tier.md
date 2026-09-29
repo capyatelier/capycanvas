@@ -354,3 +354,24 @@ The preceding integration measured 53.6/s under the same conditions. Neither
 measurement qualifies stacked photos, native zoom or other brushes. Matched
 contacts establish that ordinary refinement adds less than one frame to resumed
 input for this workload; see [responsiveness](responsiveness.md).
+
+A repeat with bounded Healing/native publication and Android production
+optimization measures 53.14 / 54.35 / 53.92 fresh updates/s, with completion-gap
+p99 of 31.09 / 29.87 / 29.24 ms. The 60/s throughput target remains unmet;
+the native-publication change shows no continuous-stroke regression in this
+fixture. Initial submission still misses 33 ms, and one of three resumed-contact
+comparisons exceeds the one-frame added GPU p95 budget. Records are in
+`artifacts/latency-investigation/heal-brush-{continuous,fast,slow}`; the build and
+matched-contact analysis are in [responsiveness](responsiveness.md).
+
+## Input during Healing finalization
+
+TCL navigation during large Healing/Spot Healing finalization has input-queue
+p95 of 15.8–19.4 ms and a maximum of 45.0 ms. The largest settle callback is
+58.7 ms. The one-second pinch probes present at 54.9–57.0/s; these do not qualify
+the sustained navigation row. System available memory stays above 2,198 MiB.
+
+Measured on 2026-09-29, three runs per brush on the tier photo, 512 px,
+Perceptual, Fit and Stats closed. Dependent painting queues until the healed
+raster publishes. The [responsiveness record](responsiveness.md#healing-finalization)
+contains the build, workload, tool-action limits and raw records.

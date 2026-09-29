@@ -6,6 +6,7 @@ use layer_render::{BackendError, FilterPreviewImage, FilterPreviewRequest, Frame
 /// Protocol recorder only: no canvas storage or software rasterization.
 #[derive(Default)]
 pub(crate) struct Recorder {
+    pub(crate) settling: bool,
     pub(crate) color: layer_core::color::DocumentColor,
     pub(crate) prepared_color: Option<layer_core::color::DocumentColor>,
     pub(crate) tiled_sources: bool,
@@ -42,6 +43,8 @@ pub(crate) struct Recorder {
 }
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
+    fn has_pending_submission(&self) -> bool { self.settling }
+    fn can_submit(&self) -> bool { !self.settling }
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {self.overlay=overlay;}
     fn document_color(&self) -> layer_core::color::DocumentColor { self.color }
     fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {

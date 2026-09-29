@@ -201,12 +201,13 @@ fn cells_of(index_level: u32) -> u32 {
 // cells carry no weight; a quarter of known weight saturates a coarse cell.
 @compute @workgroup_size(256)
 fn pull(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= cells_of(p.level) {
+    let index = id.x + p.candidate;
+    if index >= cells_of(p.level) {
         return;
     }
     let coarse = level(p.level);
     let fine = level(p.level - 1u);
-    let g = position(coarse, id.x);
+    let g = position(coarse, index);
     let taps = array<f32, 4>(1.0, 3.0, 3.0, 1.0);
     var sum = vec4<f32>(0.0);
     var weight = 0.0;
@@ -221,7 +222,7 @@ fn pull(@builtin(global_invocation_id) id: vec3<u32>) {
             weight += w;
         }
     }
-    let at = coarse.base + id.x;
+    let at = coarse.base + index;
     values[at] = select(vec4<f32>(0.0), sum / weight, weight > 0.0);
     words[at] = bitcast<u32>(min(1.0, 4.0 * weight));
 }
@@ -273,22 +274,23 @@ fn window_of(t: u32) -> vec4<u32> {
 // for the sweeps.
 @compute @workgroup_size(256)
 fn push(@builtin(global_invocation_id) id: vec3<u32>) {
+    let index = id.x + p.candidate;
     if p.level > 0u {
-        if id.x >= cells_of(p.level) {
+        if index >= cells_of(p.level) {
             return;
         }
         let l = level(p.level);
-        let at = l.base + id.x;
+        let at = l.base + index;
         let w = bitcast<f32>(words[at]);
-        values[at] = w * values[at] + (1.0 - w) * expanded(level(p.level + 1u), position(l, id.x));
+        values[at] = w * values[at] + (1.0 - w) * expanded(level(p.level + 1u), position(l, index));
         return;
     }
     let l = level(0u);
     let cells = p.windows + 4u * p.pages;
-    if id.x >= pyramid[cells + p.pages] {
+    if index >= pyramid[cells + p.pages] {
         return;
     }
-    let found = counted(cells, id.x);
+    let found = counted(cells, index);
     let window = window_of(found.x);
     let width = window.z - window.x;
     let local = window.xy + vec2<u32>(found.y % width, found.y / width);
@@ -310,12 +312,13 @@ var<workgroup> block_inside: array<u32, 324>;
 
 @compute @workgroup_size(8, 16)
 fn relax(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let block_index = group.x + p.candidate;
     let l = level(0u);
     let blocks = p.windows + 5u * p.pages + 1u;
-    if group.x >= pyramid[blocks + p.pages] {
+    if block_index >= pyramid[blocks + p.pages] {
         return;
     }
-    let found = counted(blocks, group.x);
+    let found = counted(blocks, block_index);
     let window = window_of(found.x);
     let across = (window.z + BLOCK - 1u) / BLOCK - window.x / BLOCK;
     let block = vec2<u32>(window.x / BLOCK + found.y % across, window.y / BLOCK + found.y / across);

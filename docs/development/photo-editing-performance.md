@@ -37,7 +37,7 @@ Apply and the complete merge/undo memory matrix remain to be qualified.
 
 ## 3. Still frames that delay the next motion
 
-- **Healing on large strokes** runs in one pen-up frame: about 0.4 s for a 1 MP Healing stroke and 0.6 s for Spot Healing on the Huion, and seconds for 4 MP. Split the pyramid levels and sweeps across frames, holding back the raster capture until the heal finishes.
+- **Healing on large strokes** yields between bounded GPU batches, including native raster validation and conversion. Navigation and tool changes continue; dependent paint contacts keep their captured settings and wait in order. Capture publishes after the whole heal. See [responsiveness](../performance/responsiveness.md#healing-finalization) for measured latency and remaining gaps.
 - **Short retouching strokes** commit their swept span only in their last frame, which lengthens a small heal's pen-up.
 - **Merges on tablets** take one to two seconds on the Huion's canvas thread, and the Android UI then shows a 150–250 ms frame, probably the layer list.
 - **Moving a Select All selection** on a 24 MP photo replays the commit in one frame at release.

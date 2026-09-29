@@ -148,6 +148,7 @@ pub struct UiSession<R: CanvasRenderer> {
     notices: notices::Notices,
     pen: InputProducer<PenEvent>,
     input_pending: bool,
+    pen_contact: bool,
     rendering_suspended: bool,
     touch: TouchGesture,
     navigator_drag: Option<[f32; 2]>,
@@ -253,6 +254,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             engine,
             pen,
             input_pending: false,
+            pen_contact: false,
             rendering_suspended: false,
             touch: TouchGesture::default(),
             navigator_drag: None,
@@ -3749,6 +3751,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.notify_stroke_refusal(&event);
         }
         self.pen.push(event)?;
+        self.engine.capture_queued_contact(event);
+        if !event.flags.contains(layer_engine::SampleFlags::PREDICTED) && !event.flags.contains(layer_engine::SampleFlags::CORRECTION) {
+            match event.phase { PenPhase::Down => self.pen_contact = true, PenPhase::Up | PenPhase::Cancel => self.pen_contact = false, _ => {} }
+        }
         self.initial_fit = false;
         self.input_pending = true;
         Ok(())
@@ -3756,8 +3762,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn touch(&mut self, id: u64, phase: PenPhase, position: [f32; 2]) -> UiChange {
         if self.painted_selections.has_contact()
-            || self.input_pending
-            || self.engine.has_active_stroke()
+            || self.paint_contact_busy()
             || !self.layer_interaction.path.is_empty()
         {
             self.touch.clear();
@@ -5147,13 +5152,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn object_touch_hit(&self, position: [f32; 2]) -> bool {
         self.transform_touch_hit(position) || self.clone_disc_hit(position)
     }
+    fn paint_contact_busy(&self) -> bool {
+        self.pen_contact || (!self.engine.backend().has_pending_submission() && (self.input_pending || self.engine.has_active_stroke()))
+    }
     fn canvas_idle(&self) -> bool {
         !self.painted_selections.has_contact()
-            && !self.input_pending
+            && !self.paint_contact_busy()
             && self.effect_gesture.is_none()
             && self.selection_masks.quick_property_gesture.is_none()
             && self.sdr_gesture.is_none()
-            && !self.engine.has_active_stroke()
             && self.layer_interaction.path.is_empty()
     }
     fn require_idle(&self) -> Result<(), String> {
@@ -5573,6 +5580,46 @@ mod tests {
     include!("color_mixing_tests.rs");
     include!("blending_tests.rs");
     include!("retouch_layer_tests.rs");
+
+    #[test]
+    fn settling_queues_paint_but_allows_navigation_and_tool_changes_after_lift() {
+        let mut s = session(Platform::Gtk);
+        s.engine.backend_mut().settling = true;
+        let mut event = PenEvent {
+            device_id: 1, sequence: 1, timestamp_ns: 1, view_revision: s.state.camera.input_transform().revision,
+            surface_position: Point { x: 300., y: 200. }, pressure: 1., tilt_radians: [0.; 2], twist_radians: 0., distance: 0.,
+            phase: PenPhase::Down, tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
+        };
+        s.pen(event).unwrap();
+        assert!(!s.canvas_idle());
+        event.sequence = 2;
+        event.phase = PenPhase::Up;
+        s.pen(event).unwrap();
+        s.frame(3, 3).unwrap();
+        assert!(s.engine.has_pending_input());
+        assert!(s.canvas_idle());
+        let before = s.state.camera.view();
+        s.scroll([300., 200.], [0., 2.], 1., true, false).unwrap();
+        assert_ne!(s.state.camera.view(), before);
+        s.dispatch(UiAction::Invoke { command: CommandId::Hand }).unwrap();
+        assert_eq!(s.layer_interaction.tool, LayerCanvasTool::Hand);
+        assert!(s.engine.has_pending_input());
+        s.engine.backend_mut().settling = false;
+        s.frame(4, 4).unwrap();
+        assert!(!s.engine.has_pending_input());
+        assert_eq!(s.engine.metrics().committed_strokes, 1);
+    }
+
+    #[test]
+    fn failed_renderer_discards_the_physical_contact_before_replacement() {
+        let mut s = session(Platform::Gtk);
+        s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
+        assert!(s.pen_contact);
+        s.suspend_renderer().unwrap();
+        s.replace_renderer(Recorder::default()).unwrap();
+        assert!(!s.pen_contact);
+        assert!(s.canvas_idle());
+    }
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {

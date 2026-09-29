@@ -6,6 +6,7 @@
 //! step, with the mouse and with the pen.
 use super::photo_edit::{document, shown, start, window_point};
 use super::*;
+use layer_render::CanvasRenderer;
 use serde_json::json;
 
 const ALT: u32 = 0xffe9;
@@ -341,6 +342,41 @@ fn native_heal_stroke_with_the_mouse() {
 #[ignore = "isolated native-input.js --native-test=native_heal_stroke_with_the_pen --tablet"]
 fn native_heal_stroke_with_the_pen() {
     heal_journey("art.capycanvas.HealPen", "pen");
+}
+
+#[test]
+#[ignore = "isolated compositor, GPU and native pen and touch delivery"]
+fn native_navigation_and_queued_paint_during_healing() {
+    let (_app, w, input) = retouch_ready("art.capycanvas.HealNavigation", CommandId::SpotHeal, &[(BLUE, [0.1, 0.2, 0.35, 0.8])]);
+    let mut input = input.settle_ms(0);
+    let doc = document(&w);
+    let [width, height] = [doc.width as f32, doc.height as f32];
+    let before = raster(&w);
+    w.dispatch(UiAction::SetBrushSize { value: width * 0.15 });
+    stroke(&mut input, "pen", window_point(&w, [width * 0.4, height * 0.5]), window_point(&w, [width * 0.8, height * 0.5]));
+    let pending = || w.gpu.borrow().as_ref().unwrap().session.engine().backend().has_pending_submission();
+    until(pending, "the lifted stroke starts healing");
+    w.dispatch(UiAction::Invoke { command: CommandId::Brush });
+    w.dispatch(UiAction::SetBrushSize { value: 30. });
+    tap(&mut input, "pen", window_point(&w, [width * 0.5, height * 0.7]));
+    assert!(pending(), "the next contact arrives during healing");
+    w.dispatch(UiAction::Invoke { command: CommandId::Hand });
+    let camera = state(&w).camera.view();
+    let at = window_point(&w, [width * 0.5, height * 0.5]);
+    let to = [at[0] + 80., at[1] + 40.];
+    input.perform(json!([contact("touch", "down", at), {"wait_ms": 16}, contact("touch", "move", to)]));
+    until(|| state(&w).camera.view() != camera, "touch navigation moves during healing");
+    assert_ne!(state(&w).camera.view(), camera, "touch navigation moves during healing");
+    assert!(pending(), "navigation starts before healing finishes");
+    assert!(blueish(shown(&w, [width * 0.33, height * 0.5])), "the presented canvas follows the camera");
+    input.perform(json!(lift("touch", to)));
+    until(|| !pending() && strokes(&w) == 2, "the queued contact paints after healing");
+    let after = raster(&w);
+    w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+    until(|| raster(&w) != after && !pending(), "the queued contact undoes");
+    w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+    until(|| raster(&w) == before, "both contacts remain separate undo steps");
+    finish(&w, &input);
 }
 
 #[test]

@@ -58,7 +58,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val blending = arguments.getString("blending")
             check(blending == null || blending in listOf("linear", "perceptual"))
             check(duration in 1000..60000 && repeats in 1..10)
-            check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "pauses", "visual", "pinch"))
+            check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "pauses", "visual", "pinch", "settle"))
             val pauseMs = arguments.getString("pauseMs", "100")!!.toInt()
             val contactMs = arguments.getString("contactMs", "100")!!.toInt()
             check(pauseMs in 5..5000 && pauseMs % 5 == 0)
@@ -344,6 +344,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             stroke(1500, "constant")
             SystemClock.sleep(1500)
             waitFor { state().getJSONObject("document_file").getLong("revision") > unprimed }
+            waitFor { !native { Native.renderingPending(it) } }
             invoke("undo")
             SystemClock.sleep(1500)
             File(output, "$label-ready").writeText("ready")
@@ -368,10 +369,55 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 report(true)
                 native { Native.presentationTimings(it, true) }
                 native { Native.completionTimings(it, true) }
-                val motion = stroke(duration)
+                val motion = stroke(duration, if (mode == "settle") "constant" else mode)
+                if (mode == "settle") {
+                    SystemClock.sleep(100)
+                    val probe = JSONObject()
+                    fun timed(name: String, block: () -> Unit) {
+                        val start = System.nanoTime()
+                        block()
+                        probe.put(name, JSONArray(listOf(start, System.nanoTime())))
+                    }
+                    probe.put("pending_before", native { Native.renderingPending(it) })
+                    timed("select_paint") { action(obj("type" to "select_brush", "id" to 1)) }
+                    timed("paint_size") { action(obj("type" to "set_brush_size", "value" to 64)) }
+                    probe.put("queued_contact", stroke(100, "stationary"))
+                    timed("restore_tool") { action(obj("type" to "select_brush", "id" to preset)) }
+                    timed("restore_size") { action(obj("type" to "set_brush_size", "value" to size)) }
+                    val properties = Array(2) { i -> MotionEvent.PointerProperties().apply { id = i + 11; toolType = MotionEvent.TOOL_TYPE_FINGER } }
+                    val coordinates = Array(2) { MotionEvent.PointerCoords().apply { pressure = 1f; this.size = .1f } }
+                    val down = SystemClock.uptimeMillis()
+                    fun pinch(action: Int, count: Int, radius: Double) {
+                        for (i in 0..1) {
+                            coordinates[i].x = (cx + (if (i == 0) -radius else radius)).toFloat() + host.surfaceOrigin.x
+                            coordinates[i].y = cy.toFloat() + host.surfaceOrigin.y
+                        }
+                        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, count, properties, coordinates,
+                            0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+                        try { check(uiAutomation.injectInputEvent(event, false)) } finally { event.recycle() }
+                    }
+                    val cameras = JSONArray()
+                    val begin = System.nanoTime()
+                    probe.put("navigation_begin_ns", begin)
+                    probe.put("camera_before", state().getJSONObject("camera"))
+                    pinch(MotionEvent.ACTION_DOWN, 1, 160.0)
+                    pinch(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2, 160.0)
+                    for (i in 1..120) {
+                        val delay = begin + i * 8_333_333L - System.nanoTime()
+                        if (delay > 0) LockSupport.parkNanos(delay)
+                        pinch(MotionEvent.ACTION_MOVE, 2, 160.0 + 70.0 * sin(i * PI / 120))
+                        if (i % 12 == 0) cameras.put(obj("observed_ns" to System.nanoTime(), "camera" to state().getJSONObject("camera")))
+                    }
+                    pinch(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2, 160.0)
+                    pinch(MotionEvent.ACTION_UP, 1, 160.0)
+                    probe.put("navigation_end_ns", System.nanoTime()).put("cameras", cameras)
+                    motion.put("settle_probe", probe)
+                }
                 val displayAfterInput = display()
-                check(displayAfterInput.getString("present_mode") == "SharedDemandRefresh")
-                check(displayAfterInput.getBoolean("retained_target"))
+                if (mode != "settle") {
+                    check(displayAfterInput.getString("present_mode") == "SharedDemandRefresh")
+                    check(displayAfterInput.getBoolean("retained_target"))
+                }
                 waitFor { !native { Native.renderingPending(it) } }
                 val settled = System.nanoTime()
                 SystemClock.sleep(1000)
@@ -409,7 +455,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     invoke("fit_canvas")
                 }
                 sendStatus(0, Bundle().apply { putString("stream", "BRUSH_RUN $label $run\n") })
-                if (mode in listOf("lifts", "pauses")) repeat(duration / (if (mode == "pauses") contactCycle * 5 else 200)) { invoke("undo") } else invoke("undo")
+                if (mode in listOf("lifts", "pauses")) repeat(duration / (if (mode == "pauses") contactCycle * 5 else 200)) { invoke("undo") } else repeat(if (mode == "settle") 2 else 1) { invoke("undo") }
+                if (mode == "settle") invoke("fit_canvas")
                 SystemClock.sleep(2000)
             }
             result.putString("stream", "\nBRUSH_COMPLETE $label\n")

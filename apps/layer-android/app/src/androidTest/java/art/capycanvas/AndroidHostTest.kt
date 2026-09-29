@@ -2128,6 +2128,23 @@ class AndroidHostTest {
         assertNull(host.actionError)
     }
 
+    @Test fun toolChangesReuseBrushPreviewsAcrossPanelsAndThemes() {
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "select_brush", "id" to 1))
+            compose.waitUntil(10_000) { host.brushPreviews.get("1-$theme.png") != null }
+            val preview = host.brushPreviews.get("1-$theme.png")
+            compose.onNodeWithTag("brush-preview-1", useUnmergedTree = true).assertHeightIsEqualTo(40.dp)
+            action(obj("type" to "select_brush", "id" to 42))
+            waitState { it.getJSONObject("brush").getInt("preset") == 42 }
+            action(obj("type" to "select_brush", "id" to 1))
+            waitState { it.getJSONObject("brush").getInt("preset") == 1 }
+            assertSame(preview, host.brushPreviews.get("1-$theme.png"))
+            compose.onNodeWithTag("brush-preview-1", useUnmergedTree = true).assertHeightIsEqualTo(40.dp)
+        }
+        assertNotSame(host.brushPreviews.get("1-light.png"), host.brushPreviews.get("1-dark.png"))
+    }
+
     @Test fun editorGeometryStaysConsistent() {
         val toolbar = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }
         val firstTile = toolbar.array("tiles").objects().first().getInt("id")

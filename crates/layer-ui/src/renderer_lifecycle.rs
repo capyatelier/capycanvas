@@ -190,6 +190,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cancel_transform()?;
         self.engine.discard_unsubmitted_input();
         self.input_pending = false;
+        self.pen_contact = false;
         self.discard_render_requests();
         if self.pending_filters.take().is_some() {
             self.state.filter_load.pending = false;

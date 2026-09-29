@@ -404,7 +404,7 @@ impl RetouchSources {
     }
 
     pub fn retire_stroke(&mut self) {
-        if self.live.is_none() {
+        if self.live.is_none() && !self.heal_pending() {
             self.release_stroke();
         }
     }
@@ -833,15 +833,20 @@ fn raw_prepared_view(r: &WgpuRasterizer, layer: LayerId, coordinate: [u32; 2]) -
 }
 
 impl WgpuRasterizer {
-    fn retouch_sources(&mut self) -> Box<RetouchSources> {
+    pub(crate) fn retouch_sources(&mut self) -> Box<RetouchSources> {
         self.retouch.take().unwrap_or_else(|| Box::new(RetouchSources::new(self)))
+    }
+
+    pub(crate) fn release_unused_retouch(&mut self) {
+        if self.retouch.as_ref().is_some_and(|r| r.prepared.is_none() && !r.heal_pending()) { self.retouch = None; }
     }
 
     /// Select or release retouching: prepare the stroke-start pool and warm
     /// the source pipelines before pen-down, or free every retouch page.
     pub(super) fn prepare_retouch_sources(&mut self, prepared: Option<&layer_render::RetouchPreparation>) {
         let Some(prepared) = prepared else {
-            self.retouch = None;
+            if let Some(sources) = &mut self.retouch && sources.heal_pending() { sources.prepared = None; }
+            else { self.retouch = None; }
             return;
         };
         let mut retouch = self.retouch_sources();

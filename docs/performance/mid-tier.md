@@ -139,3 +139,16 @@ brushes. The measured build integrates `64036b643` with `13720d303`, bounded
 bakes, the healing solver optimization and sparse stroke replay. Its APK SHA-256
 is `be9a9ad367b9a0215ea5f57ac9d14028818d1f029fe8787324b66d3d4ac71e48`.
 Raw reports are in `artifacts/integration/source-record-batch/mid`.
+
+## Input during Healing finalization
+
+MovinkPad 11 navigation during large Healing/Spot Healing finalization has
+input-queue p95 of 15.2–18.4 ms and a maximum of 28.8 ms. The largest settle
+callback is 51.7 ms. The one-second pinch probes present at 56.5–58.6/s on the
+60 Hz panel; the 90 Hz tier target remains unqualified. System available memory
+stays above 1,358 MiB.
+
+Measured on 2026-09-29, three runs per brush on the tier photo, 512 px,
+Perceptual, Fit and Stats closed. Dependent painting queues until the healed
+raster publishes. The [responsiveness record](responsiveness.md#healing-finalization)
+contains the build, workload, tool-action limits and raw records.

@@ -119,6 +119,7 @@ enum Command {
     FilterPreviews(u64, layer_render::FilterPreviewRequest),
     CancelFilterPreviews(u64),
     Frame(Box<Frame>),
+    Present(ViewState, Geometry, [f32; 4], Vec<CursorSegment>),
     Asset(AssetId, layer_core::ProjectAsset),
     Release(AssetId),
     #[cfg(test)]
@@ -188,6 +189,8 @@ pub struct RenderWorker {
     snapshot_gpu: Option<layer_render_wgpu::snapshot::SnapshotGpu>,
     pub(crate) view_color: crate::display_color::ViewColor,
     first_frame_sent: bool,
+    settling_roots: Vec<layer_core::raster::RasterRevision>,
+    settling_view: Option<(ViewState, Vec<CursorSegment>)>,
     pub(super) startup: layer_render_wgpu::StartupProgress,
     startup_generation: u64,
     startup_key: Option<(layer_render_wgpu::ShaderDocument, layer_core::BrushSnapshot, bool)>,
@@ -382,6 +385,8 @@ impl RenderWorker {
             snapshot_gpu: None,
             view_color: Default::default(),
             first_frame_sent: false,
+            settling_roots: Vec::new(),
+            settling_view: None,
             startup: Default::default(),
             startup_generation: 0,
             startup_key: None,
@@ -611,8 +616,17 @@ impl CanvasRenderer for RenderWorker {
     fn max_document_dimension(&self) -> u32 {
         self.snapshot_gpu.as_ref().map_or(u32::MAX, |gpu| gpu.max_document_dimension())
     }
+    fn poll_pending(&mut self, view: ViewState) -> Result<(), Self::Error> {
+        if self.has_pending_submission() && self.settling_view.as_ref().is_none_or(|(old, cursor)| *old != view || *cursor != self.cursor)
+            && let Some(geometry) = self.geometry {
+            self.send(Command::Present(view, geometry, self.surround, self.cursor.clone()))?;
+            self.settling_view = Some((view, self.cursor.clone()));
+        }
+        Ok(())
+    }
+    fn has_pending_submission(&self) -> bool { self.settling_roots.iter().any(|r| r.try_data().is_none()) }
     fn can_submit(&self) -> bool {
-        self.in_flight.load(Ordering::Acquire) < 2
+        !self.has_pending_submission() && self.in_flight.load(Ordering::Acquire) < 2
     }
     fn has_pending_work(&self) -> bool {
         self.report.pending_work.load(Ordering::Acquire)
@@ -874,6 +888,8 @@ impl CanvasRenderer for RenderWorker {
         };
         self.in_flight.fetch_add(1, Ordering::Release);
         self.first_frame_sent = true;
+        self.settling_view = None;
+        self.settling_roots = if packet.dab_batches.iter().any(|b| b.stroke_end && b.style.execution.heals()) { frame.pending_rasters.clone() } else { Vec::new() };
         if let Err(e) = self.send(Command::Frame(Box::new(frame))) {
             self.in_flight.fetch_sub(1, Ordering::Release);
             return Err(e);
@@ -1032,13 +1048,20 @@ impl Worker {
                     startup_input = None;
                 }
             }
+            if self.renderer.has_pending_submission() && let Some((view, surround)) = self.last_view {
+                self.renderer.poll_pending(view).map_err(error)?;
+                if !self.renderer.has_pending_submission() {
+                    self.pending_present |= self.presenter.needs_present(&self.renderer, view, surround);
+                }
+                self.report_frame(report);
+            }
             while startup_progress.canvas_ready && self.renderer.can_submit()
                 && pending_frames.front().is_some_and(|f| f.dabs.is_empty() || startup_progress.brush_ready)
             {
-                let frame = pending_frames.pop_front().unwrap();
+                let mut frame = pending_frames.pop_front().unwrap();
                 #[cfg(test)]
                 timing.begin(frame.queued_ns);
-                self.draw(&frame, false, #[cfg(test)] &mut timing)?;
+                self.draw(&mut frame, false, #[cfg(test)] &mut timing)?;
                 document_drawn = true;
                 last_canvas_frame = std::time::Instant::now();
                 self.report_frame(report);
@@ -1089,6 +1112,7 @@ impl Worker {
                 Ok(deferred.pop_front().unwrap())
             } else if !startup_progress.complete
                 || !pending_frames.is_empty()
+                || self.renderer.has_pending_submission()
                 || self.renderer.effect_validation_pending()
                 || self.renderer.filter_previews_pending()
                 || self.pending_present
@@ -1303,7 +1327,13 @@ impl Worker {
                             .map_err(error)?;
                     }
                 }
-                Command::Frame(frame) => {
+                Command::Present(view, geometry, surround, cursor) => {
+                    self.set_view(view, geometry, surround);
+                    self.cursor = cursor;
+                    self.presenter.set_cursor(self.renderer.device(), &self.cursor, geometry.scale as f32);
+                    if let Some(target) = self.acquire()? { self.publish(target, None, #[cfg(test)] None)?; }
+                }
+                Command::Frame(mut frame) => {
                     #[cfg(test)]
                     if fail_next_frame {
                         self.inject_validation_failure();
@@ -1319,7 +1349,7 @@ impl Worker {
                     timing.begin(frame.queued_ns);
                     let paper = !self.paper_submitted;
                     self.draw(
-                        &frame,
+                        &mut frame,
                         paper,
                         #[cfg(test)]
                         &mut timing,
@@ -1532,20 +1562,8 @@ impl Worker {
         self.pending_present = self.last_view.is_some();
         Ok(())
     }
-    fn draw(
-        &mut self,
-        frame: &Frame,
-        paper: bool,
-        #[cfg(test)] timing: &mut crate::timing::Timing,
-    ) -> Result<(), String> {
-        let draw_start = std::time::Instant::now();
-        while frame.layers.iter().any(|l| {
-            l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
-        }) && !self.renderer.raster_ready()
-        {
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        if self.child.geometry(frame.geometry) {
+    fn set_view(&mut self, view: ViewState, geometry: Geometry, surround: [f32; 4]) {
+        if self.child.geometry(geometry) {
             // Geometry/stacking become visible on a parent commit. Queue that
             // only AFTER sending our child requests; never race GTK's commit.
             let area = self.area.clone();
@@ -1557,14 +1575,29 @@ impl Worker {
         }
         if self.last_view.is_none()
             || [self.config.width, self.config.height]
-                != [frame.view.width_px, frame.view.height_px]
+                != [view.width_px, view.height_px]
         {
-            self.config.width = frame.view.width_px;
-            self.config.height = frame.view.height_px;
+            self.config.width = view.width_px;
+            self.config.height = view.height_px;
             self.configure_surface();
         }
-        self.last_view = Some((frame.view, frame.surround));
+        self.last_view = Some((view, surround));
         self.pending_present = true;
+    }
+    fn draw(
+        &mut self,
+        frame: &mut Frame,
+        paper: bool,
+        #[cfg(test)] timing: &mut crate::timing::Timing,
+    ) -> Result<(), String> {
+        let draw_start = std::time::Instant::now();
+        while frame.layers.iter().any(|l| {
+            l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
+        }) && !self.renderer.raster_ready()
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        self.set_view(frame.view, frame.geometry, frame.surround);
         #[cfg(test)]
         timing.rendering(&self.renderer);
         self.renderer
@@ -1597,6 +1630,7 @@ impl Worker {
             self.paper_submitted = true;
         } else {
             self.renderer.submit(frame.packet()).map_err(error)?;
+            if self.renderer.has_pending_submission() { frame.pending_rasters.clear(); }
             #[cfg(test)]
             timing.photo_frame(&frame.layers);
         }

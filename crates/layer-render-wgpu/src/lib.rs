@@ -884,6 +884,7 @@ pub struct WgpuRasterizer {
     validated_effects: Option<effects::Effects>,
     layer_style_records: std::collections::HashMap<LayerId, u32>,
     artwork_frame: Option<Arc<artwork::Frame>>,
+    settling: Option<artwork::PendingFrame>,
     effect_clocks: effects::Clocks,
     filter_source_epoch: u64,
     tiled_sources: std::collections::BTreeMap<LayerId, Arc<layer_core::color::source::SourceImage>>,
@@ -1192,6 +1193,7 @@ impl WgpuRasterizer {
             validated_effects: None,
             layer_style_records: std::collections::HashMap::new(),
             artwork_frame: None,
+            settling: None,
             effect_clocks: Default::default(),
             filter_source_epoch: 0,
             display_pipelines: None,
@@ -3061,6 +3063,13 @@ fn outline_damage(a: Option<&layer_core::Selection>, b: Option<&layer_core::Sele
         damage.union(pixel_rect(bounds, extent))
     })
 }
+impl WgpuRasterizer {
+    fn hold_background(&self) {
+        self.background_ready.store(false, std::sync::atomic::Ordering::Release);
+        let ready = self.background_ready.clone();
+        self.queue.on_submitted_work_done(move || ready.store(true, std::sync::atomic::Ordering::Release));
+    }
+}
 impl CanvasRenderer for WgpuRasterizer {
     fn shader_input(&mut self) { WgpuRasterizer::shader_input(self); }
     fn shader_idle(&mut self, idle: bool) { WgpuRasterizer::shader_idle(self, idle); }
@@ -3078,16 +3087,60 @@ impl CanvasRenderer for WgpuRasterizer {
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
         self.raster_restore_ready(packet)
     }
+    fn has_pending_submission(&self) -> bool { self.settling.is_some() }
+    fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
+        let Some(mut pending) = self.settling.take() else { return Ok(()); };
+        let moving = pending.view != view;
+        pending.view = view;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(error) = self.device.poll(wgpu::PollType::Poll) {
+            self.retouch = None;
+            return Err(GpuRasterError::WaitFailed(error.to_string()));
+        }
+        if moving || !self.background_ready.load(std::sync::atomic::Ordering::Acquire) || !self.raster_ready() {
+            self.settling = Some(pending);
+            return Ok(());
+        }
+        let healing = self.retouch.as_ref().is_some_and(|s| s.heal_pending());
+        if !healing && pending.capture.is_none() { pending.capture = self.prepare_native_rasters(&pending.frame.layers)?; }
+        let work = healing || pending.capture.as_ref().is_some_and(|capture| !capture.complete());
+        if work {
+            let mut encoder = submission::CommandEncoder::new(&self.device, &wgpu::CommandEncoderDescriptor { label: Some("healing settle") });
+            self.telemetry.begin(&self.device, &self.queue, &mut encoder, self.metrics.submissions);
+            let stepped = if healing {
+                let mut sources = self.retouch_sources();
+                let result = sources.step_heal(self, &mut encoder);
+                self.retouch = Some(sources);
+                result?
+            } else if let Some(capture) = &mut pending.capture { self.step_native_rasters(capture, &mut encoder)? } else { false };
+            self.telemetry.end(&mut encoder);
+            debug_assert!(stepped);
+            self.uploads.finish(&encoder);
+            self.metrics.command_passes += encoder.pass_count();
+            self.last_submission = Some(encoder.submit(&self.queue));
+            self.telemetry.submitted(&self.queue);
+            self.hold_background();
+            self.settling = Some(pending);
+        } else {
+            let mut packet = pending.frame.packet(self.document_extent);
+            packet.view = view;
+            packet.composite_all = pending.capture.is_none();
+            let native = pending.capture.take().map(|capture| capture.frame);
+            self.submit_frame(packet, native)?;
+            self.release_unused_retouch();
+        }
+        Ok(())
+    }
     fn can_submit(&self) -> bool {
         use std::sync::atomic::Ordering;
         if !self.background_ready.load(Ordering::Acquire) {
             #[cfg(not(target_arch = "wasm32"))]
             let _ = self.device.poll(wgpu::PollType::Poll);
         }
-        self.background_ready.load(Ordering::Acquire) && self.raster_ready()
+        self.settling.is_none() && self.background_ready.load(Ordering::Acquire) && self.raster_ready()
     }
     fn can_capture_raster(&self) -> bool {
-        self.raster_ready()
+        self.settling.is_none() && self.raster_ready()
     }
     fn prepare_moving_layer(&mut self, layer: Option<LayerId>) {
         if self.moving_layer != layer {
@@ -3100,7 +3153,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.moving_pixels = pixels;
     }
     fn has_pending_work(&self) -> bool {
-        self.awaiting_meshes || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
+        self.settling.is_some() || self.awaiting_meshes || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
             || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work())
     }
     fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
@@ -3291,7 +3344,10 @@ impl CanvasRenderer for WgpuRasterizer {
         self.texture_sets.clear();
     }
 
-    fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+    fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> { self.submit_frame(packet, None) }
+}
+impl WgpuRasterizer {
+    fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
         let display_request = scene::scale::request(self, packet)?;
         let mut trace_phase = performance_trace::Span::new(c"capy.prepare");
         if let Some(native) = &self.native_edit {
@@ -3796,14 +3852,30 @@ impl CanvasRenderer for WgpuRasterizer {
                 self.encode_stroke_edge(&mut encoder, index, batch)?;
             }
             if batch.stroke_end && batch.style.execution.heals() {
-                self.encode_heal(batch, &mut encoder)?;
+                let cooperative = !packet.reset_layers && packet.dab_batches[index + 1..].iter().all(|b| b.kind == DabBatchKind::Preview);
+                self.encode_heal(batch, &mut encoder, cooperative)?;
+                if cooperative && self.retouch.as_ref().is_some_and(|s| s.heal_pending()) {
+                    self.settling = Some(artwork::PendingFrame { frame: Arc::new(artwork::Frame::new(packet, requested_view.background_rgba_linear)), view: requested_view, capture: None });
+                }
             }
+        }
+
+        if self.settling.is_some() {
+            self.uploads.finish(&encoder);
+            self.telemetry.phase_end(0, &mut encoder);
+            self.telemetry.end(&mut encoder);
+            self.metrics.command_passes += encoder.pass_count();
+            self.last_submission = Some(encoder.submit(&self.queue));
+            self.telemetry.submitted(&self.queue);
+            self.hold_background();
+            self.metrics.submissions = self.metrics.submissions.saturating_add(1);
+            return Ok(());
         }
 
         if let Some(started) = started { cpu_phases[1] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.capture");
         self.telemetry.phase_end(0, &mut encoder);
-        let native_commit = self.encode_native_rasters(packet.layers, &mut encoder)?;
+        let native_commit = match native_commit { Some(frame) => Some(frame), None => self.encode_native_rasters(packet.layers, &mut encoder)? };
         if let Some(started) = started { cpu_phases[2] = started.elapsed().as_secs_f64() * 1000.; }
         if !packet.commit_rasters {
             self.uploads.finish(&encoder);
@@ -3814,9 +3886,7 @@ impl CanvasRenderer for WgpuRasterizer {
             if let Some(commit) = native_commit {
                 self.finish_native_rasters(commit, false)?;
             }
-            self.background_ready.store(false, std::sync::atomic::Ordering::Release);
-            let ready = self.background_ready.clone();
-            self.queue.on_submitted_work_done(move || ready.store(true, std::sync::atomic::Ordering::Release));
+            self.hold_background();
             self.metrics.submissions = self.metrics.submissions.saturating_add(1);
             self.refresh_storage_metrics();
             if let Some(started) = started {
@@ -4210,9 +4280,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.telemetry.submitted(&self.queue);
         self.last_submission = Some(submission.clone());
         if refined {
-            self.background_ready.store(false, std::sync::atomic::Ordering::Release);
-            let ready = self.background_ready.clone();
-            self.queue.on_submitted_work_done(move || ready.store(true, std::sync::atomic::Ordering::Release));
+            self.hold_background();
         }
         if let Some(commit) = native_commit {
             self.finish_native_rasters(commit, true)?;

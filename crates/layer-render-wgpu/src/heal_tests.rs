@@ -217,6 +217,7 @@ fn healing_pen_up_refreshes_every_painted_display_page() {
             event.view_revision = 1;
             draw(&mut engine, &mut input, event);
         }
+        flush(&mut engine);
         assert_eq!(counts(&engine).heals, 1);
         let r = engine.backend();
         let cache = r.scale_display.as_ref().unwrap();
@@ -235,6 +236,63 @@ fn healing_pen_up_refreshes_every_painted_display_page() {
                 assert!(close(actual, expected), "{preset:?} ({x},{y}): displayed {actual:?}, healed {expected:?}");
             }
         }
+    }
+}
+
+#[test]
+fn abandoning_a_heal_resolves_its_pending_revision() {
+    let (mut input, mut engine) = healer(photo(|x, y| grey(texture_and_gradient(x, y))), DefaultBrushPreset::HealingBrush, 64., false);
+    source_at(&mut engine, 150., 256.);
+    draw(&mut engine, &mut input, pen(1, PenPhase::Down, [600., 256.], SampleFlags::PRIMARY));
+    draw(&mut engine, &mut input, pen(2, PenPhase::Up, [620., 256.], SampleFlags::PRIMARY));
+    let root = engine.document().layers[0].raster.clone();
+    assert!(root.try_data().is_none());
+    drop(engine);
+    assert!(root.try_data().is_some_and(|data| data.is_err()));
+}
+
+#[test]
+fn settling_preserves_sources_while_navigation_and_queued_paint_wait_for_publication() {
+    for preset in [DefaultBrushPreset::HealingBrush, DefaultBrushPreset::SpotHealingBrush] {
+        let doc = photo(|x, y| grey(texture_and_gradient(x, y)));
+        let (mut input, mut engine) = healer(doc, preset, 64., false);
+        source_at(&mut engine, 150., 256.);
+        for i in 0..9 {
+            let phase = if i == 0 { PenPhase::Down } else if i == 8 { PenPhase::Up } else { PenPhase::Move };
+            draw(&mut engine, &mut input, pen(i + 1, phase, [580. + i as f32 * 40., 256.], SampleFlags::PRIMARY));
+        }
+        assert!(engine.backend().has_pending_submission());
+        assert!(!engine.backend().can_submit());
+        assert!(!engine.can_undo());
+        let root = engine.document().layers[0].raster.clone();
+        assert!(root.try_data().is_none());
+        engine.set_brush(BrushSnapshot { diameter: 8., ..default_brush(DefaultBrushPreset::GPen) }).unwrap();
+        engine.set_retouch(None);
+        for event in [pen(20, PenPhase::Down, [700., 300.], SampleFlags::PRIMARY), pen(21, PenPhase::Up, [710., 300.], SampleFlags::PRIMARY)] {
+            input.push(event).unwrap();
+            engine.capture_queued_contact(event);
+        }
+        let consumed = engine.metrics().input_events;
+        for revision in 1..80 {
+            let mut moved = view(EXTENT);
+            moved.document_to_surface[4] = revision as f32;
+            engine.set_view(moved, ViewTransform { revision, surface_to_document: [1., 0., 0., 1., -(revision as f32), 0.] });
+            engine.render_frame().unwrap();
+            assert_eq!(engine.metrics().input_events, consumed);
+            assert!(root.try_data().is_none());
+        }
+        flush(&mut engine);
+        assert!(root.try_data().is_some_and(|data| data.is_ok()));
+        assert_eq!(engine.metrics().committed_strokes, 2);
+        assert_eq!(engine.metrics().stale_transform_fallbacks, 0);
+        assert!(engine.undo().unwrap());
+        flush(&mut engine);
+        assert!(engine.undo().unwrap());
+        flush(&mut engine);
+        assert!(engine.redo().unwrap());
+        flush(&mut engine);
+        assert!(engine.redo().unwrap());
+        flush(&mut engine);
     }
 }
 

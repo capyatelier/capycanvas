@@ -176,11 +176,21 @@ Only translation is supported: the source is not rotated or scaled.
 
 ## Healing Brush and Spot Healing Brush
 
-Both heal when the pen lifts, in the submission of the stroke's last batch
+Both heal after the pen lifts
 ([`heal.rs`](../../crates/layer-render-wgpu/src/heal.rs),
-[`heal.wgsl`](../../crates/layer-render-wgpu/src/heal.wgsl)). The stroke's raster
-is already pending then, so its capture, its one undo step, replays and late
-corrections all include the healed pixels.
+[`heal.wgsl`](../../crates/layer-render-wgpu/src/heal.wgsl)). A live stroke advances
+through bounded GPU batches: source search/gather, seeding, pyramid levels,
+relaxation, application and native raster validation/conversion. The next batch
+waits for the previous one's completion without blocking the input owner.
+Camera changes postpone batch admission and present the existing composition.
+Tools remain selectable; dependent painting waits in input order, retaining each
+contact's settings and camera. GTK forwards presentation changes independently
+of its artwork mailbox.
+
+The raster revision stays pending until all batches finish. Capture, one undo
+step and late corrections therefore include the healed pixels. Replays use the
+same kernels and ordering. Abandoning the job resolves its pending revisions as
+failures so history and save cannot wait forever.
 
 - **Healing Brush** (`BrushExecution::Heal`) paints the Clone Stamp's copy while
   the pen is down, with the same source, disc and options. At pen-up each page
