@@ -162,7 +162,7 @@ impl FilterPreviews {
             // Visible rows prepare just their own preview variants. No draw or
             // readback is admitted until their asynchronous pipelines are ready.
             for effect in &request.filters {
-                self.scene.effects.prepare(r, &[&self.programs[&effect.program.id]], effects::Execution::Preview, 0., Default::default())?;
+                self.scene.effects.prepare(r, &[&self.programs[&effect.program.id]], effects::Execution::Preview, 0., preview_space(effect, request.blend_space))?;
             }
             let source_layers = source_scope(&request.layers, request.target)
                 .map_or_else(Vec::new, |(_, layers)| layers.map(|(l, _)| l.clone()).collect());
@@ -451,12 +451,35 @@ impl FilterPreviews {
         } else {
             fallback_source
         };
+        let spaces: Vec<_> = self.rendering.iter().map(|id| preview_space(self.programs[id].effect.as_ref().unwrap(), request.blend_space)).collect();
+        let encoded;
+        let encoded_source = if spaces.contains(&layer_core::BlendSpace::Perceptual) {
+            let size = if self.point.is_some() { [source_bounds.width(), source_bounds.height()] } else { extent };
+            encoded = create_color_target(&r.device, size, "encoded filter preview source");
+            let [width, height] = size.map(|v| v as f32);
+            let mut data = [0.; 32];
+            data[..6].copy_from_slice(&[0., 0., width, height, width, height]);
+            data[8..10].copy_from_slice(&[1., 1.]);
+            data[31] = Convert::Encode.code();
+            self.scene.jobs.push(Job::Draw {
+                target: encoded.1.clone(),
+                sources: [source.clone(), r.empty_view.clone(), r.empty_view.clone()],
+                data,
+                over: false,
+                clip: None,
+            });
+            encoded.1.clone()
+        } else {
+            source.clone()
+        };
         let atlas = create_color_target(
             &r.device,
             [width, height * self.rendering.len() as u32],
             "filter preview atlas",
         );
         for (row, id) in self.rendering.iter().enumerate() {
+            let space = spaces[row];
+            let source = if space == layer_core::BlendSpace::Perceptual { encoded_source.clone() } else { source.clone() };
             // Compile only requested rows. A catalog-wide dynamic switch would
             // compile every expensive kernel before showing even the first row.
             let prepared = self.scene.effects.prepare(
@@ -464,7 +487,7 @@ impl FilterPreviews {
                 &[&self.programs[id]],
                 effects::Execution::Preview,
                 0.,
-                Default::default(),
+                space,
             )?;
             let program = self.programs[id].effect.as_ref().unwrap().program.clone();
             // A document-remapping pass after another pass genuinely needs its
@@ -681,6 +704,11 @@ impl FilterPreviews {
         }))
     }
 }
+/// The blend space a filter's preview compiles for: the document's when the
+/// filter reads the document's encoded values, otherwise Linear.
+fn preview_space(effect: &layer_core::EffectInstance, blend: layer_core::BlendSpace) -> layer_core::BlendSpace {
+    if effect.program.space.encoded(blend) { blend } else { layer_core::BlendSpace::Linear }
+}
 // Keep only the insertion scope and its ancestors: the target, its subtree
 // and what composites below it, through Pass Through groups. An excluded
 // global effect above the target must not force a full-document dependency.
@@ -839,6 +867,63 @@ mod tests {
         pattern.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
         pattern.kind = LayerKind::Effect;
         pattern
+    }
+    #[test]
+    fn a_filter_that_follows_the_documents_blending_previews_its_live_result() {
+        let extent = [300, 200];
+        let view = layer_render::ViewState {
+            width_px: extent[0],
+            height_px: extent[1],
+            background_rgba_linear: [1.; 4],
+            document_to_surface: [1., 0., 0., 1., 0., 0.],
+        };
+        let mut stripes = Layer::paint(LayerId(1), "stripes");
+        stripes.source = Some(layer_core::color::source::rgba8_source(extent, |x, y| {
+            let v = if (x / 9) % 2 == 0 { 20 } else { 235 };
+            [v, (y / 2) as u8, 255 - v, 255]
+        }));
+        let definition = fixture("gaussian_blur");
+        assert_eq!(definition.program().space, layer_core::EffectSpace::Blending);
+        for space in layer_core::BlendSpace::ALL {
+            let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            let layers = [Layer::paint(LayerId(7), "target"), stripes.clone()];
+            r.submit(FramePacket { view, blend_space: space, ..crate::test_support::packet(&layers, extent) }).unwrap();
+            let size = [120, 40];
+            r.request_filter_previews(FilterPreviewRequest {
+                request_id: 1,
+                target: LayerId(7),
+                size,
+                extent,
+                view,
+                blend_space: space,
+                layers: layers.iter().map(Layer::composite_snapshot).collect(),
+                filters: vec![Arc::new(definition.preview().unwrap())],
+            })
+            .unwrap();
+            let preview = finish(&mut r).image.bytes;
+            let point = r.filter_previews.as_ref().unwrap().point.unwrap();
+            let origin: [u32; 2] = std::array::from_fn(|i| (point[i] - size[i] / 2).min(extent[i] - size[i]));
+            let mut blurred = layers.clone();
+            blurred[0].kind = LayerKind::Effect;
+            blurred[0].effect = Some(Arc::new(definition.preview().unwrap()));
+            r.submit(FramePacket { view, blend_space: space, ..crate::test_support::packet(&blurred, extent) }).unwrap();
+            let live = r.readback_srgb_rgba8().unwrap();
+            let mut compared = 0;
+            for y in 0..size[1] {
+                for x in 0..size[0] {
+                    let shown = &preview[((y * size[0] + x) * 4) as usize..][..4];
+                    if shown[3] < 255 {
+                        continue;
+                    }
+                    let document = &live[(((origin[1] + y) * extent[0] + origin[0] + x) * 4) as usize..][..3];
+                    for c in 0..3 {
+                        assert!(shown[c].abs_diff(document[c]) <= 1, "{space:?} at {x},{y}: preview {shown:?}, live {document:?}");
+                    }
+                    compared += 1;
+                }
+            }
+            assert!(compared > 500, "{space:?}: {compared} opaque preview pixels");
+        }
     }
     #[test]
     fn a_target_in_a_pass_through_group_previews_the_layers_below_the_group() {

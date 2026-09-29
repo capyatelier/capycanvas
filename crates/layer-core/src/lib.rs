@@ -1251,6 +1251,8 @@ pub struct Stroke {
     pub selection: Option<Arc<Selection>>,
     /// A retouching stroke's source, captured at stroke start.
     pub retouch: Option<Retouch>,
+    /// How its dabs lay over paint, captured at contact start.
+    pub blend_space: BlendSpace,
 }
 
 impl Stroke {
@@ -1299,6 +1301,7 @@ impl Stroke {
             alpha_locked: false,
             selection: None,
             retouch: None,
+            blend_space: BlendSpace::Linear,
         })
     }
 }

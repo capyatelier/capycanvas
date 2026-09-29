@@ -51,6 +51,13 @@ GPU resources. Depending on the brush, those resources track coverage, wetness o
 paint carried by the brush. Reading and writing the same image requires controlled
 staging; it cannot be treated as ordinary independent source-over blending.
 
+How a dab lays over paint follows the document's Blending. In a Perceptual
+document soft edges, opacity and flow build up on the document's encoded values,
+as in Photoshop and Clip Studio Paint, so black at 50% over white paint is middle
+gray; in a Linear light document they build up in linear light. Brush blend
+modes use the layer formulas in the same space, and erasing is the same in both.
+See [rendering](rendering.md#brushes-and-healing).
+
 Brushes that mix paint (Smudge, the blenders, and the wet oil, gouache and
 watercolor brushes) show a **Color mixing** choice in Tool Options, from shared
 Rust on every host:
@@ -173,7 +180,9 @@ corrections all include the healed pixels.
   the copy, and `h` is a membrane that matches `D = B − S` where the stroke
   leaves the image uncovered, `B` being the source composite at the destination.
   The copy keeps its texture and takes on the color and brightness around the
-  stroke. Where `D` is zero, `h` is zero and the result is exactly the clone.
+  stroke. `D` and `h` are in the document's Blending, so a Perceptual document
+  matches tone on encoded values, as Photoshop does. Where `D` is zero, `h` is
+  zero and the result is exactly the clone.
 - **Spot Healing Brush** (`BrushExecution::SpotHeal`) needs no source point.
   While the pen is down it lays a translucent grey tint. At pen-up it scores 16
   candidate sources, 8 directions at 1.25 and 2 times the stroke's extent, by the

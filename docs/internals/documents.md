@@ -54,8 +54,10 @@ A document's **Blending** (`Document.blend_space`) sets how its layers combine:
 - **Perceptual**, like Photoshop and Clip Studio Paint: opacity, masks, groups,
   clipping and blend modes work on the document's encoded values, so black at
   50% over white is middle gray (8-bit 128) and Soft Light follows Photoshop's
-  formula. New 8- and 16-bit documents and photos opened as documents start
-  Perceptual.
+  formula. Brush dabs, brush blend modes, healing's tone match and the
+  retouching filters (Gaussian Blur, Unsharp Mask, High Pass and similar) work
+  on encoded values too. New 8- and 16-bit documents and photos opened as
+  documents start Perceptual.
 - **Linear light**, physically based: layers combine in linear document RGB.
   Float documents always blend this way, and documents saved before the setting
   existed read as Linear.
@@ -64,8 +66,9 @@ Painted pixels keep their values either way; only their combination changes
 ([blend space](rendering.md#blend-space)). **Edit ▸ Blending** switches it in
 one undo step (`Edit::SetBlendSpace`), refused at float depth with "Float
 documents blend in linear light". Converting a document to float makes it
-Linear in the same step, and undo restores both. How brushes lay paint on a
-layer and how filters read their input do not depend on it yet.
+Linear in the same step, and undo restores both. Paint color mixing follows each
+brush's Color mixing choice instead, and resampling, Liquify and filters that
+model light, such as Vignette and Bloom, stay linear.
 
 ### Merging layers
 

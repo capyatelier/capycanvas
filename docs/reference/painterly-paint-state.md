@@ -64,6 +64,7 @@ pickup         = source(position - motion × pull), optionally blurred
 carried paint  = spatial reservoir sample (wet only)
 paint color    = mix(pickup, carried paint) in the brush's Color mixing space
 color output   = premultiplied source-over(destination, paint color, source alpha)
+                 in the document's blend space
 wetness output = max(old wetness, coverage × configured wetness)
 ```
 

@@ -187,8 +187,9 @@ base's coverage. They serve every place a layer's blend applies:
   edges on an Adreno Vulkan driver.
 
 `blend_code` passes a blend to shaders as the mode's code in bits 0-7, the
-Perceptual blend space in bit 8 and float documents in bit 9. Normal is always 0.
-Brush blend modes pass the Linear space.
+Perceptual blend space in bit 8 and float documents in bit 9. A layer's Normal is
+always 0; a brush sets bit 8 for Normal too, because its dabs lay over paint in
+the document's blend space ([brushes](#brushes-and-healing)).
 
 **Pass Through** has no formula. `Scene::group_into` composes a group's layers
 onto a running composite, so a Pass Through group
@@ -265,8 +266,11 @@ reduced first and converted after.
 - placed layers and watercolor layers, which the renderer draws linear first
   and then converts in one draw (`Scene::converted`);
 - effects ([`effects.rs`](../../crates/layer-render-wgpu/src/effects.rs)): a
-  filter receives linear input and its result is encoded before it blends onto
-  its input, inline in fused chains and in the last pass of an image filter;
+  filter that reads linear values receives decoded input and its result is
+  encoded before it blends onto its input, inline in fused chains and in the
+  last pass of an image filter. A filter that follows the document's Blending
+  ([filter spaces](../reference/runtime-filters.md#filter-spaces)) reads and
+  writes the composite's encoded values with no conversion;
 - the paper and every constant backdrop, encoded on the CPU
   (`BlendSpace::composite`);
 - drag frames that draw a moving layer into the display
@@ -282,9 +286,10 @@ and result a Pass Through group fades between hold the document's composite
 values. Their caches include the blend space
 (`ImageStages`, `artwork::Frame`, the filter-preview source key and the
 retouch reference cache's key). An image
-filter's input window is captured once per pixel and decoded, so filters read
-linear input; in a Perceptual document adjacent filters therefore do not share
-an image.
+filter's input window is captured once per pixel in the filter's declared space:
+decoded for a filter that reads linear values, as the composite holds it for one
+that follows the document's Blending. Adjacent filters share an image only when
+the upper one reads the composite as it is.
 
 **Readers.** Each decodes where it needs linear values:
 
@@ -294,14 +299,43 @@ an image.
 | Export and snapshot rows, Copy and Copy Merged, histogram, color conversion previews | `Scene::capture_region` in [`snapshot.rs`](../../crates/layer-render-wgpu/src/snapshot.rs) | decoded per tile |
 | Eyedropper, Wand and Fill on the composite or the reference layers, tonal selection, whole-image readback | [`artwork.rs`](../../crates/layer-render-wgpu/src/artwork.rs) captures | decoded |
 | Clone Stamp, Healing and Spot Healing: the reference layers below the target | reference cache in [`retouch_sources.rs`](../../crates/layer-render-wgpu/src/retouch_sources.rs), captured through `artwork.rs` | composed in the document space, cached decoded; `retouch_source` in [`retouch_sample.wgsl`](../../crates/layer-render-wgpu/src/retouch_sample.wgsl) lays the target over them in the blend space |
-| Filter previews | `capture_filter_source` in [`filter_previews.rs`](../../crates/layer-render-wgpu/src/filter_previews.rs) | decoded |
+| Filter previews | `capture_filter_source` in [`filter_previews.rs`](../../crates/layer-render-wgpu/src/filter_previews.rs) | decoded; encoded once more for filters that follow the document's Blending, whose previews decode their result |
 | Merges | [`scene/bake.rs`](../../crates/layer-render-wgpu/src/scene/bake.rs) | composed in the document space, stored decoded |
-| Image filter input windows | `capture_tile` in [`scene_images.rs`](../../crates/layer-render-wgpu/src/scene_images.rs) | decoded |
+| Image filter input windows | `capture_tile` in [`scene_images.rs`](../../crates/layer-render-wgpu/src/scene_images.rs) | decoded, or composite values for filters that follow the document's Blending |
 | Layered display during drags | [`display_layers.wgsl`](../../crates/layer-render-wgpu/src/display_layers.wgsl) | composite values; blends with the document's blend code |
-| Layer and paper thumbnails, brushes | layer pages | linear layer pixels, not the composite |
+| Layer and paper thumbnails, brushes | layer pages | linear layer pixels, not the composite; brushes encode them to lay dabs over them ([brushes](#brushes-and-healing)) |
 
 The export matte, and resizing on export, apply to the decoded rows in linear
 light.
+
+### Brushes and healing
+
+Layer pixels stay linear, but in a Perceptual document a dab lays over paint on
+the document's encoded values, as in Photoshop and Clip Studio Paint: soft edges,
+opacity and flow build up in the blend space. `source_over` in
+[`material_brush.wgsl`](../../crates/layer-render-wgpu/src/material_brush.wgsl)
+serves the dry deposit and coverage passes, the retouching deposit, the Wet
+deposit and Watercolor's final deposit; the pass encodes a destination pixel the
+first time a dab deposits on it, lays the dabs over it, and decodes it once. Dry
+dabs are uploaded with their colors already encoded (`prepare_colors` in
+[`dry_material.rs`](../../crates/layer-render-wgpu/src/dry_material.rs)), so no
+pixel converts a dab's color.
+Brush blend modes call the layer formulas in the same space, so an Overlay brush
+matches an Overlay layer. The brush's blend code carries the space (bit 8), a
+uniform, so no pipeline is specialized for it. Edged brushes that Linear light
+documents draw with hardware blending (`BrushPassPlan::direct`) run the material
+pass instead, and their kernels compile before pen-down. `DabStyle.blend_space`
+is the document's Blending for artwork and Linear for masks and selections; a
+stroke keeps the space it started with for replays.
+
+These stay the same in both spaces: erasing, which scales color and alpha
+together; paint color mixing, which follows the brush's Color mixing choice;
+Watercolor's pigment transport; Liquify; and wet or burnt stroke edges.
+
+Healing ([`heal.wgsl`](../../crates/layer-render-wgpu/src/heal.wgsl)) computes
+its tone correction in the document's Blending: the membrane matches `B − S` on
+encoded values in a Perceptual document and is added to the copy there.
+Spot Healing scores its candidates on linear values in both spaces.
 
 ## Incremental composition
 

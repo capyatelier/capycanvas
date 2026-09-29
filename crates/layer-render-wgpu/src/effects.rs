@@ -546,11 +546,14 @@ fn shader_source(
     hdr: bool,
     blend: layer_core::BlendSpace,
 ) -> Result<String, GpuRasterError> {
-    // Filters read and write linear values; a Perceptual composite holds
-    // encoded ones, which the effect blends on.
+    // A Perceptual composite holds encoded values. Filters that read linear
+    // values convert their input and output; a filter that follows the
+    // document's Blending reads the composite as it is.
     let perceptual = blend == layer_core::BlendSpace::Perceptual;
-    let encoded = |expression: String| if perceptual { format!("working_encode({expression})") } else { expression };
-    let linear = |expression: &str| if perceptual { format!("working_decode({expression})") } else { expression.into() };
+    let input_encoded = stage != Execution::Fused && programs[0].space.encoded(blend);
+    let converts = perceptual && !input_encoded;
+    let encoded = |expression: String| if converts { format!("working_encode({expression})") } else { expression };
+    let linear = |expression: &str| if converts { format!("working_decode({expression})") } else { expression.into() };
     let mut source = working_color::source(space);
     source.push_str(&crate::view_color::hdr_shader(space, layer_core::color::RgbSpace::Srgb));
     source.push_str(include_str!("blend_modes.wgsl"));
@@ -560,7 +563,7 @@ fn shader_source(
         .position(|s| *s == space)
         .unwrap();
     let y = space.to_xyz()[1];
-    source.push_str(&format!("\nconst FX_EXTENDED:bool=true;\nconst FX_HDR:bool={hdr};\nconst FX_SPACE:u32={space_id}u;\nconst FX_LUMA:vec3<f32>=vec3<f32>({:.12},{:.12},{:.12});\n", y[0], y[1], y[2]));
+    source.push_str(&format!("\nconst FX_EXTENDED:bool=true;\nconst FX_HDR:bool={hdr};\nconst FX_ENCODED:bool={input_encoded};\nconst FX_SPACE:u32={space_id}u;\nconst FX_LUMA:vec3<f32>=vec3<f32>({:.12},{:.12},{:.12});\n", y[0], y[1], y[2]));
     source.push_str(include_str!("effects_color.wgsl"));
     for i in 0..MASK_SLOTS {
         source.push_str(&format!(
@@ -611,14 +614,14 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
     if stage == Execution::Preview {
         let p = &programs[0];
         let base = offsets[0] + 1;
+        let shown = |expression: String| if input_encoded { format!("working_decode({expression})") } else { expression };
         source.push_str("fn effect_result(v:Vertex)->vec4<f32> {let position=v.position.xy+settings.color.xy;let c=fx_sample(position);\n");
         for (j, pass) in p.passes.iter().enumerate() {
-            source.push_str(&format!(
-                "if u32(settings.extent.w)=={j}u {{return {}(c,position,{base}u);}}\n",
-                pass.entry
-            ));
+            let result = format!("{}(c,position,{base}u)", pass.entry);
+            let result = if j + 1 == p.passes.len() { shown(result) } else { result };
+            source.push_str(&format!("if u32(settings.extent.w)=={j}u {{return {result};}}\n"));
         }
-        source.push_str(&format!("return {}(c,position,{base}u);}}", p.entry));
+        source.push_str(&format!("return {};}}", shown(format!("{}(c,position,{base}u)", p.entry))));
         return Ok(source);
     }
     if let Execution::Image(stage) = stage {

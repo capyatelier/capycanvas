@@ -14,11 +14,12 @@ use photo_metadata::MetadataIndex;
 #[cfg(test)]
 mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x0b\0";
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x0c\0";
 /// Version 8 has no stored layer extents, versions before 10 no photo
-/// metadata and versions before 11 no blend space; those files read with
-/// none, and Linear blending.
-const READABLE: [&[u8; 12]; 4] = [b"CAPYRASTER\x08\0", b"CAPYRASTER\x09\0", b"CAPYRASTER\x0a\0", MAGIC];
+/// metadata, versions before 11 no blend space and versions before 12 no
+/// filter spaces; those files read with none, and Linear blending.
+const READABLE: [&[u8; 12]; 5] =
+    [b"CAPYRASTER\x08\0", b"CAPYRASTER\x09\0", b"CAPYRASTER\x0a\0", b"CAPYRASTER\x0b\0", MAGIC];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -475,8 +476,29 @@ mod tests {
         assert!(read(&sources).is_err());
         bytes[10] = 7;
         assert!(read(&bytes).is_err());
-        bytes[10] = 12;
+        bytes[10] = 13;
         assert!(read(&bytes).is_err());
+    }
+
+    #[test]
+    fn filter_spaces_round_trip_and_version_11_filters_read_linear() {
+        let mut project = fixture();
+        let id = project.document.allocate_layer_id();
+        let mut blur = Layer::paint(id, "Blur");
+        blur.kind = LayerKind::Effect;
+        blur.effect = Some(Arc::new(EffectInstance::new(crate::bundled_effect_catalog().get("gaussian_blur").unwrap().program())));
+        project.document.layers.insert(0, blur);
+        let mut bytes = Vec::new();
+        project.write(&mut bytes).unwrap();
+        let space = |bytes: &[u8]| {
+            Project::read(bytes, Default::default()).unwrap().document.layers[0].effect.as_ref().unwrap().program.space
+        };
+        assert_eq!(space(&bytes), EffectSpace::Blending);
+        let mut version_11 = rewrite_manifest(&bytes, |m| {
+            m["document"]["layers"][0]["effect"]["program"].as_object_mut().unwrap().remove("space");
+        });
+        version_11[10] = 11;
+        assert_eq!(space(&version_11), EffectSpace::Linear);
     }
 
     #[test]

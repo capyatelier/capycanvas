@@ -573,7 +573,8 @@ impl BrushPassPlan {
             BrushExecution::Dry if state.coverage => MaterialOperation::Coverage,
             BrushExecution::Dry => MaterialOperation::Deposit,
         };
-        let direct = (!needs_destination && edged).then_some(match style.mode {
+        let hardware_blending = style.blend_space == layer_core::BlendSpace::Linear;
+        let direct = (!needs_destination && edged && hardware_blending).then_some(match style.mode {
             DabMode::Paint => DirectPipelineKind::TexturedPaint,
             DabMode::Erase => DirectPipelineKind::TexturedErase,
         });
@@ -2516,6 +2517,7 @@ impl WgpuRasterizer {
         self.dab_upload.extend(packet.dabs.iter().copied().map(DabGpu::from));
         for batch in packet.dab_batches {
             let range = batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize;
+            dry_material::prepare_colors(&batch.style, self.device.working_space(), &mut self.dab_upload[range.clone()]);
             dry_material::prepare_film(&batch.style, &mut self.dab_upload[range]);
         }
         for (batch, tiles) in packet.dab_batches.iter().zip(batch_tiles) {
@@ -4993,8 +4995,9 @@ impl StyleGpu {
             style.deform.pressure,
             style.deform.momentum,
         ];
+        let perceptual = style.blend_space == layer_core::BlendSpace::Perceptual;
         result.render_mode = [
-            blend_code(style.rendering.blend_mode.into(), device, layer_core::BlendSpace::Linear) as f32,
+            (blend_code(style.rendering.blend_mode.into(), device, style.blend_space) | u32::from(perceptual) << 8) as f32,
             f32::from(style.rendering.accumulation == BrushAccumulation::Uniform),
             f32::from(style.wet_mix.mix_space as u8),
             style.deform.distortion,
@@ -6164,6 +6167,7 @@ mod tests {
     mod adjustments;
     mod blend_modes;
     mod blend_space;
+    mod brush_blending;
     pub(crate) mod image_windows;
     mod pass_through;
     mod live_windows;
@@ -6171,6 +6175,7 @@ mod tests {
     mod color_picker;
     mod curve_reference;
     mod filter_library;
+    mod filter_spaces;
     mod native_effects;
     mod view_color;
     use crate::test_support::packet;
@@ -6222,6 +6227,7 @@ mod tests {
             deform: BrushDeform::default(),
             contact: None,
             retouch: None,
+            blend_space: layer_core::BlendSpace::Linear,
         }
     }
 

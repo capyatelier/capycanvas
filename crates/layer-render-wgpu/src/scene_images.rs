@@ -710,12 +710,12 @@ impl Scene {
             };
             // Adjacent compatible boundaries consume the same GPU image. No
             // allocation, intermediate composition, or image copy is needed.
-            // A Perceptual composite is encoded, and filters read linear input.
+            let input = Convert::filter_input(packet, effect.program.space);
             let alias = packet.layers[index + 1..]
                 .iter()
                 .find(|l| l.properties.parent == layer.properties.parent)
                 .filter(|l| {
-                    Convert::linear(packet) == Convert::None
+                    input == Convert::None
                         && l.visible
                         && (!layer.properties.clipped || l.properties.clipped)
                         && effect.program.kind == layer_core::EffectKind::Adjustment
@@ -771,7 +771,8 @@ impl Scene {
             let time = effect.time_seconds(packet.time_seconds);
             let input_scope_changed = self.images.metadata.get(index).is_none_or(|old| {
                 old.properties.clipped != layer.properties.clipped
-                    || old.effect.as_ref().map(|e| e.program.kind) != Some(effect.program.kind)
+                    || old.effect.as_ref().map(|e| (e.program.kind, e.program.space))
+                        != Some((effect.program.kind, effect.program.space))
             });
             let input_dirty = if !cached.valid || reset || input_scope_changed {
                 bounds
@@ -804,8 +805,8 @@ impl Scene {
                     ));
                 } else {
                     for tile in page_coordinates(input_dirty) {
-                        let input = self.group(r, packet, input_scope(packet.layers, layer), tile)?;
-                        self.capture_tile(r, input, &cached.input, tile, Convert::linear(packet));
+                        let pixels = self.group(r, packet, input_scope(packet.layers, layer), tile)?;
+                        self.capture_tile(r, pixels, &cached.input, tile, input);
                     }
                 }
                 self.stop_before = None;

@@ -103,6 +103,37 @@ ABI/interfaces and excessive resource requests are rejected. Module names cannot
 escape their directory or select another origin. Limits include 1,024 filters,
 64 categories, 256 modules, a 16 MiB manifest and 16 MiB aggregate module text.
 
+## Filter spaces
+
+A program's optional `space` says which values its input window holds and its
+output returns, both premultiplied:
+
+- `linear`, the default: linear document RGB in every document. Programs
+  without the field, including user filters and programs embedded in older
+  documents, read exactly this.
+- `blending`: the document's [Blending](../internals/rendering.md#blend-space).
+  In a Perceptual document the filter reads and writes the document's encoded
+  values, as Photoshop filters do; in a Linear light document, linear values.
+  Only programs with `passes` declare it. A pointwise program sees one pixel,
+  so it converts that pixel itself with `fx_rgb` and `fx_rgba`, and validation
+  rejects the declaration.
+
+The window is captured once per pixel in the declared space, never converted
+per tap, and a linear filter's output is converted once where it composites.
+Adjacent filters share one image only when the upper one reads the composite
+as it is. The wrapper defines `FX_ENCODED` when the input is encoded; `fx_rgb`
+and `fx_rgba` then pass encoded values through, so a filter written for encoded
+tones (High Pass, for example) computes the same formula in both spaces.
+Previews of a `blending` filter run on an encoded copy of the preview source
+and decode their result. Effect pipelines are compiled per blend space, so the
+choice adds no per-pixel branch.
+
+| Space | Built-in filters |
+| --- | --- |
+| `blending` (retouching) | Gaussian Blur, Unsharp Mask, High Pass, Soft Focus, Edge-Preserving Smooth |
+| `linear`, declared (light) | Vignette (in stops), Bloom, Motion Blur |
+| `linear`, undeclared | Every other filter; the pointwise tone and color adjustments convert each pixel to the values they edit |
+
 ## Transactional loading
 
 `UiSession::load_effect_package` stages the candidate while keeping the current

@@ -62,8 +62,33 @@ pub enum EffectAlpha {
     Filter,
 }
 
-/// WGSL functions take premultiplied linear color, document position and a
-/// parameter offset. Empty `passes` means pointwise and permits shader fusion.
+/// The values a filter's input window holds and its output returns, both
+/// premultiplied. Retouching filters follow the document's Blending, as in
+/// Photoshop; filters that model light stay linear.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectSpace {
+    #[default]
+    Linear,
+    /// Encoded values in Perceptual documents, linear ones in Linear light
+    /// documents. Only filters with passes declare it; pointwise filters
+    /// convert per pixel themselves.
+    Blending,
+}
+impl EffectSpace {
+    fn is_linear(&self) -> bool {
+        *self == Self::Linear
+    }
+    /// Whether the filter reads and writes encoded values in a document that
+    /// blends in `blend`.
+    pub fn encoded(self, blend: crate::BlendSpace) -> bool {
+        self == Self::Blending && blend == crate::BlendSpace::Perceptual
+    }
+}
+
+/// WGSL functions take premultiplied color in the program's `space`, document
+/// position and a parameter offset. Empty `passes` means pointwise and permits
+/// shader fusion.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectProgram {
     pub abi: u32,
@@ -72,6 +97,8 @@ pub struct EffectProgram {
     pub kind: EffectKind,
     #[serde(default)]
     pub alpha: EffectAlpha,
+    #[serde(default, skip_serializing_if = "EffectSpace::is_linear")]
+    pub space: EffectSpace,
     /// Ordinary WGSL library with a uniquely named function matching the ABI.
     pub wgsl: EffectShader,
     pub entry: Arc<str>,
@@ -334,6 +361,9 @@ impl EffectInstance {
                 && (!scale.is_finite() || *scale<0. || !self.program.parameters.iter().any(|p| p.key==*key && matches!(p.kind,EffectParameterKind::Number{min,max,..} if min>=0. && max*scale+*padding as f32<=4096.))) {
                 return Err("Invalid parameter-derived sampling footprint");
             }
+        }
+        if self.program.space == EffectSpace::Blending && self.program.passes.is_empty() {
+            return Err("Only filters with passes follow the document's Blending");
         }
         if self.program.lookups.len() > 8 {
             return Err("Too many effect lookup tables");

@@ -233,7 +233,8 @@ image from a wrong export setting or a viewing limitation.
   and keep one-step undo. No silent depth/range reduction under memory pressure.
   Converting to float makes the document blend in linear light in the same step.
 - **Blending ▸ Perceptual Blending / Linear Light Blending** changes how layers
-  combine, with no dialog and in one undo step. Painted pixels keep their values.
+  and retouching filters combine colors and how later strokes lay down paint,
+  with no dialog and in one undo step. Painted pixels keep their values.
   Both are unavailable at float depth, with the reason above.
 
 Show Before/After, Apply and Cancel for consequential changes. Apply is one undo

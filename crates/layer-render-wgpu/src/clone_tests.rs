@@ -288,8 +288,9 @@ fn clone_replays_from_estimates_and_corrections_match_a_direct_stroke() {
 fn clone_stroke_frame_cost() {
     let extent = [6000, 4000];
     let zoom = 1600. / 6000.;
-    for diameter in [100., 300., 700.] {
-        let doc = document(extent);
+    for (blend_space, diameter) in layer_core::BlendSpace::ALL.into_iter().flat_map(|space| [100., 300., 700.].map(|d| (space, d))) {
+        let mut doc = document(extent);
+        doc.blend_space = blend_space;
         let fit = ViewState { width_px: 1600, height_px: 1067, document_to_surface: [zoom, 0., 0., zoom, 0., 0.], background_rgba_linear: [0.; 4] };
         let r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
         let (mut input, consumer) = input_queue(1024);
@@ -320,7 +321,7 @@ fn clone_stroke_frame_cost() {
             input.push(pen(10 + i, phase, at, SampleFlags::PRIMARY)).unwrap();
             timed_frame(&mut engine, &mut frames);
         }
-        summary(&format!("{diameter} px clone stroke frames"), &frames);
+        summary(&format!("{blend_space:?} {diameter} px clone stroke frames"), &frames);
         let counts = counts(&engine);
         eprintln!("stroke-start copies {}, reference captures {}, misses {}", counts.copies, counts.captures, counts.misses);
     }

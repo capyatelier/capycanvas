@@ -79,6 +79,11 @@ impl Convert {
     pub(super) fn linear(packet: FramePacket<'_>) -> Self {
         if packet.blend_space == layer_core::BlendSpace::Perceptual { Self::Decode } else { Self::None }
     }
+    /// How the composite of `packet` becomes the input of a filter that reads
+    /// values in `space`.
+    pub(super) fn filter_input(packet: FramePacket<'_>, space: layer_core::EffectSpace) -> Self {
+        if space.encoded(packet.blend_space) { Self::None } else { Self::linear(packet) }
+    }
 }
 /// The premultiplied `color` as the composite of `packet` holds it.
 fn composite_color(r: &WgpuRasterizer, packet: FramePacket<'_>, [red, green, blue, alpha]: [f32; 4]) -> wgpu::Color {

@@ -445,7 +445,14 @@ impl RetouchSources {
         let stride = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(PARAMS_BYTES);
         let mut slots = Slots { stride, bytes: Vec::new() };
         let page_count = pages.len() as u32;
+        let bounded = !r.document_color().depth.is_float();
+        let perceptual = batch.style.blend_space == layer_core::BlendSpace::Perceptual;
+        let flags = u32::from(spot)
+            | u32::from(batch.style.alpha_locked) << 1
+            | u32::from(bounded) << 2
+            | u32::from(perceptual) << 3;
         let base = Params {
+            flags,
             scale: pyramid.scale,
             pages: page_count,
             candidates: candidate_words,
@@ -469,10 +476,8 @@ impl RetouchSources {
             })
             .collect();
         let colours = [0, 1].map(|parity| slots.push(Params { parity, ..base }));
-        let bounded = !r.document_color().depth.is_float();
-        let flags = u32::from(spot) | u32::from(batch.style.alpha_locked) << 1 | u32::from(bounded) << 2;
         let applies: Vec<u32> =
-            (0..page_count).map(|tile| slots.push(Params { tile, flags, window: locals[tile as usize], ..base })).collect();
+            (0..page_count).map(|tile| slots.push(Params { tile, window: locals[tile as usize], ..base })).collect();
 
         if !self.heal.planes.as_ref().is_some_and(|p| p.fits(cells, finest, words)) {
             self.heal.planes = Some(Planes::new(&device, cells, finest, words));

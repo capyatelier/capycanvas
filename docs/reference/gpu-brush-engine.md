@@ -36,7 +36,9 @@ canvas   = premultiplied source-over(canvas, color, alpha)
 ```
 
 Erase uses destination-out with the same coverage. Analytic ellipses and R8 tip
-textures differ only in how they produce coverage.
+textures differ only in how they produce coverage. Source-over runs in the
+document's blend space: on encoded values in a Perceptual document
+([rendering](../internals/rendering.md#brushes-and-healing)).
 
 The current fixed-size `Dab` already carries geometry, motion, resolved color,
 coverage controls, and four material values. Dry shaders consume only the
@@ -50,7 +52,7 @@ work. Allocation, committed rendering, and prediction consume that same plan.
 The selected pipeline is prepared before pen-down:
 
 - dry analytic paint or erase uses an instanced graphics pass and fixed-function
-  blending;
+  blending in a Linear light document;
 - a single-mask dry brush uses one filtered R8 sample;
 - grain brushes use a separate bounded textured-coverage pipeline;
 - a destination-aware step uses a source/destination GPU pass over its affected

@@ -169,6 +169,9 @@ pub struct DabStyle {
     /// A retouching stroke's source. Renderers keep the target's stroke-start
     /// pixels for it before the stroke first writes each page.
     pub retouch: Option<layer_core::Retouch>,
+    /// The space dabs lay over paint in and brush blend modes blend in: the
+    /// document's Blending for artwork, Linear for masks and selections.
+    pub blend_space: layer_core::BlendSpace,
 }
 impl DabStyle {
     pub fn for_brush(brush: &layer_core::BrushSnapshot, tool: layer_core::StrokeTool) -> Self {
@@ -192,6 +195,7 @@ impl DabStyle {
                 material
             }),
             retouch: None,
+            blend_space: layer_core::BlendSpace::Linear,
         }
     }
 }

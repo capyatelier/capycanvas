@@ -113,8 +113,10 @@ python3 tools/performance/android-brush-report.py OUT --package art.capycanvas.b
 ```
 
 The runner defaults to the dry presets. Pass `--presets` to include the wet,
-smudge and Liquify presets. The benchmark draws a 200 Hz stylus ellipse at Fit
-zoom, three 10 s strokes, with the default 16 ms prediction.
+smudge and Liquify presets. The photo opens as a Perceptual document;
+`--blending linear` measures it in linear light. The benchmark draws a 200 Hz
+stylus ellipse at Fit zoom, three 10 s strokes, with the default 16 ms
+prediction.
 
 **Navigation (Android).**
 

@@ -148,6 +148,17 @@ fn field(texture: texture_2d<f32>, texel: vec2<i32>) -> vec4<f32> {
     return textureLoad(texture, texel - p.window.xy, 0);
 }
 
+fn perceptual() -> bool {
+    return (p.flags & 8u) != 0u;
+}
+
+fn blend_space(c: vec4<f32>) -> vec4<f32> {
+    if perceptual() {
+        return working_encode(c);
+    }
+    return c;
+}
+
 // Level 0 over one damaged page: each cell averages the difference D over its
 // scale x scale pixels in the window, weighted by how uncovered each pixel
 // is. A cell outside the window takes a negative weight: it holds no
@@ -168,7 +179,7 @@ fn seed(@builtin(global_invocation_id) id: vec3<u32>) {
                 continue;
             }
             let w = weight_of(texel);
-            sum += w * (field(destination, texel) - field(source, texel));
+            sum += w * (blend_space(field(destination, texel)) - blend_space(field(source, texel)));
             weight += w;
             inside += 1.0;
         }
@@ -495,23 +506,30 @@ fn apply_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> 
     if c <= 0.0 || !windowed(texel) {
         return current;
     }
-    let below = textureLoad(start, min(texel, vec2<i32>(textureDimensions(start)) - 1), 0);
+    let below = blend_space(textureLoad(start, min(texel, vec2<i32>(textureDimensions(start)) - 1), 0));
     let h = membrane_at(texel);
     let locked = (p.flags & 2u) != 0u;
-    var copied = current;
-    if (p.flags & 1u) != 0u {
-        copied = over(field(source, texel), below, c, locked);
-    }
+    let spot = (p.flags & 1u) != 0u;
     let share = select(
         h * c - below * (h.a * c),
         vec4<f32>(h.rgb * (below.a * c) - below.rgb * (h.a * c), 0.0),
         locked,
     );
+    if !spot && perceptual() && all(share == vec4<f32>(0.0)) {
+        return current;
+    }
+    var copied = blend_space(current);
+    if spot {
+        copied = over(blend_space(field(source, texel)), below, c, locked);
+    }
     let result = copied + share;
     let alpha = clamp(result.a, 0.0, 1.0);
     var rgb = max(result.rgb, vec3<f32>(0.0));
     if (p.flags & 4u) != 0u && any(share != vec4<f32>(0.0)) {
         rgb = min(rgb, vec3<f32>(alpha));
+    }
+    if perceptual() {
+        return working_decode(vec4<f32>(rgb, alpha));
     }
     return vec4<f32>(rgb, alpha);
 }

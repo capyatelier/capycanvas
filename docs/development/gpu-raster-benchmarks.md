@@ -16,8 +16,9 @@ scenario has at least 32 visible paint layers and every frame contains eight
 simulated coalesced pen samples.
 
 The current diagnostic factory uses GTK's native integer-backed SDR renderer
-with Float32 working tiles. Select `--space srgb|p3|adobe-rgb|prophoto` and
-`--depth 8|16`; defaults are sRGB8. Generated reports identify the mode. Reports
+with Float32 working tiles. Select `--space srgb|p3|adobe-rgb|prophoto`,
+`--depth 8|16` and the document's Blending with `--blending linear|perceptual`;
+defaults are sRGB8 in linear light. Generated reports identify the mode. Reports
 from before this replacement used the older sRGB8 working renderer and cannot
 qualify the current native editing path.
 

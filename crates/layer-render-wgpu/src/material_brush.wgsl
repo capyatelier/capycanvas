@@ -224,13 +224,46 @@ fn mix_color(a: vec3<f32>, b: vec3<f32>, amount: f32) -> vec3<f32> {
     return working_mix(a, b, amount);
 }
 
+fn brush_blend() -> u32 {
+    return u32(style.render_mode.x);
+}
+
+fn brush_normal() -> bool {
+    return blend_mode(brush_blend()) == 0u;
+}
+
+fn deposit_encoded() -> bool {
+    return (brush_blend() & BLEND_PERCEPTUAL) != 0u && style.operation.w == 0u;
+}
+
+fn deposit_color(color: vec3<f32>) -> vec3<f32> {
+    if deposit_encoded() {
+        return sdr_encode(color, WORKING_SPACE);
+    }
+    return color;
+}
+
+fn deposit_paint(paint: vec4<f32>) -> vec4<f32> {
+    if deposit_encoded() {
+        return working_encode(paint);
+    }
+    return paint;
+}
+
+fn stored_paint(paint: vec4<f32>) -> vec4<f32> {
+    if deposit_encoded() {
+        return working_decode(paint);
+    }
+    return paint;
+}
+
 fn source_over(destination: vec4<f32>, source_color: vec3<f32>, source_alpha: f32) -> vec4<f32> {
     let da = destination.a;
     // Normal blending has no backdrop-color term. Besides avoiding an
     // unassociation and two redundant products, keep this direct form: the
     // expanded general expression produces dark contact edges in specialized
     // shaders on the Wacom's Adreno Vulkan driver (including native saved paint).
-    if style.render_mode.x < 0.5 {
+    if brush_normal() {
         if style.color.a > 0.5 {
             return vec4<f32>(mix(destination.rgb, source_color * da, source_alpha), da);
         }
@@ -240,7 +273,7 @@ fn source_over(destination: vec4<f32>, source_color: vec3<f32>, source_alpha: f3
         );
     }
     let backdrop = working_unassociate(destination);
-    let blended = blend(source_color, backdrop, u32(style.render_mode.x));
+    let blended = blend(source_color, backdrop, brush_blend());
     if style.color.a > 0.5 {
         return vec4<f32>(mix(destination.rgb, blended * da, source_alpha), da);
     }
@@ -471,7 +504,7 @@ fn watercolor_fragment(
             0.0,
             1.0,
         );
-        result = source_over(result, pigment_color, pigment);
+        result = stored_paint(source_over(deposit_paint(result), deposit_color(pigment_color), pigment));
     }
     if style.operation.w != 0u {
         result *= 1.0 - coverage_increment;
@@ -594,14 +627,14 @@ fn wet_fragment(
         } else if MATERIAL_OPERATION != OP_DEPOSIT {
             stroke_coverage = max(stroke_coverage, source_alpha);
         }
-        batch_color = batch_color * (1.0 - source_alpha) + paint_color * source_alpha;
+        batch_color = batch_color * (1.0 - source_alpha) + deposit_color(paint_color) * source_alpha;
         batch_alpha = source_alpha + batch_alpha * (1.0 - source_alpha);
     }
     var result = original;
     if style.operation.w != 0u {
         result *= 1.0 - batch_alpha;
     } else if working_has_color(batch_alpha) {
-        result = source_over(original, batch_color / batch_alpha, batch_alpha);
+        result = stored_paint(source_over(deposit_paint(original), batch_color / batch_alpha, batch_alpha));
     }
     return MaterialOutput(
         result,
@@ -666,7 +699,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     // dark contact seams on Adreno for large, multi-contact batches.
     let range = material_sources.header.zw;
     let tooth = contact_paper(world);
-    if contact_uniform() && style.render_mode.x < 0.5 {
+    if contact_uniform() && brush_normal() {
         var ceiling = 1.0;
         if contact_feature(1u, style.contact_a.x > 0.5) && range.y > 0u {
             ceiling = dabs[range.x].invariants.z;
@@ -692,12 +725,13 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     // the source's own coverage scaling each dab. Over Normal stroke-uniform
     // paint the increments compose to that coverage times the stroke's, so
     // the dabs only raise the stroke coverage and the source is read once.
-    let telescoped = MATERIAL_OPERATION == OP_CLONE && contact_uniform() && style.render_mode.x < 0.5;
+    let telescoped = MATERIAL_OPERATION == OP_CLONE && contact_uniform() && brush_normal();
     var clone_source = vec4<f32>(0.0);
     if MATERIAL_OPERATION == OP_CLONE && !telescoped {
         let source = clone_source_at(fragment_position.xy);
-        clone_source = vec4<f32>(working_unassociate(source), source.a);
+        clone_source = vec4<f32>(deposit_color(working_unassociate(source)), source.a);
     }
+    var deposited = false;
     let first_coverage = stroke_coverage;
     let field = contact_field_with_paper(world, tooth);
     for (var offset = 0u; offset < range.y; offset += 1u) {
@@ -746,8 +780,17 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             source_alpha *= clone_source.a;
         }
         if style.operation.w != 0u { result *= 1.0 - source_alpha; }
-        else if MATERIAL_OPERATION == OP_CLONE { result = source_over(result, clone_source.rgb, source_alpha); }
-        else { result = source_over(result, dab.color.rgb, source_alpha); }
+        else if source_alpha > 0.0 {
+            if !deposited {
+                deposited = true;
+                result = deposit_paint(result);
+            }
+            if MATERIAL_OPERATION == OP_CLONE { result = source_over(result, clone_source.rgb, source_alpha); }
+            else { result = source_over(result, dab.color.rgb, source_alpha); }
+        }
+    }
+    if deposited {
+        result = stored_paint(result);
     }
     if telescoped && stroke_coverage > first_coverage {
         let source = clone_source_at(fragment_position.xy);
@@ -757,7 +800,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             1.0,
         );
         if style.operation.w != 0u { result *= 1.0 - alpha; }
-        else { result = source_over(result, working_unassociate(source), alpha); }
+        else { result = stored_paint(source_over(deposit_paint(result), deposit_color(working_unassociate(source)), alpha)); }
     }
     return MaterialOutput(
         result,

@@ -42,6 +42,8 @@ def main():
     p.add_argument("--mode", default="constant")
     p.add_argument("--speed", type=float, default=1)
     p.add_argument("--prediction", choices=["true", "false"], default="true")
+    p.add_argument("--blending", choices=["linear", "perceptual"],
+                   help="The photo document's Blending; photos open Perceptual")
     p.add_argument("--photo", default="/data/local/tmp/capy-brush-photo.jpg",
                    help="Device path of the JPEG that sets the canvas size")
     tracing = p.add_mutually_exclusive_group()
@@ -75,6 +77,8 @@ def main():
                                speed=args.speed, prediction=args.prediction, photo=args.photo,
                                waitForTrace="true").items():
             cmd += ["-e", key, str(value)]
+        if args.blending:
+            cmd += ["-e", "blending", args.blending]
         cmd += [f"{args.package}/art.capycanvas.BrushBenchmarkInstrumentation"]
         trace = None
         profile = None

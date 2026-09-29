@@ -25,11 +25,16 @@ const FRAME_BUDGET_MICROS: u64 = 8_333;
 // One explicit mode for every canvas in this process, including warm-up and
 // report probes. Initialized once before GPU work.
 static DOCUMENT_COLOR: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+static DOCUMENT_BLENDING: std::sync::OnceLock<layer_core::BlendSpace> = std::sync::OnceLock::new();
+
+fn document_blending() -> layer_core::BlendSpace {
+    DOCUMENT_BLENDING.get().copied().unwrap_or_default()
+}
 
 fn document_mode() -> String {
     let (space, depth) = DOCUMENT_COLOR.get().copied().unwrap_or((0, 8));
-    format!("{} integer{depth}; native integer backing, Float32 working tiles",
-        ["sRGB", "Display P3", "Adobe RGB", "ProPhoto RGB"][space as usize])
+    format!("{} integer{depth}, {} blending; native integer backing, Float32 working tiles",
+        ["sRGB", "Display P3", "Adobe RGB", "ProPhoto RGB"][space as usize], document_blending().label())
 }
 
 fn document_color() -> DocumentColor {
@@ -180,6 +185,7 @@ impl ScenarioKind {
 #[derive(Debug)]
 struct Options {
     color: (u32, u32),
+    blending: layer_core::BlendSpace,
     scenarios: Vec<ScenarioKind>,
     output_dir: PathBuf,
     report_path: PathBuf,
@@ -259,6 +265,7 @@ impl Canvas {
         let color = document_color();
         let mut document = Document::new("untitled", extent[0], extent[1]);
         document.color = color;
+        document.blend_space = document_blending();
         let (producer, consumer) = input_queue(16_384);
         let view = ViewState {
             width_px: extent[0],
@@ -467,6 +474,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let options = parse_options()?;
     DOCUMENT_COLOR.set(options.color).expect("benchmark color initialized once");
+    DOCUMENT_BLENDING.set(options.blending).expect("benchmark blending initialized once");
     eprintln!("Document mode: {}", document_mode());
     fs::create_dir_all(&options.output_dir)?;
     if let Some(parent) = options.report_path.parent() {
@@ -491,6 +499,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn parse_options() -> Result<Options, Box<dyn Error>> {
     let mut color = (0, 8);
+    let mut blending = layer_core::BlendSpace::Linear;
     let mut scenarios = ScenarioKind::LEGACY.to_vec();
     let mut output_dir = PathBuf::from("artifacts/images");
     let mut report_path = PathBuf::from("artifacts/benchmarks/gpu-4k.md");
@@ -505,6 +514,13 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                     "adobe-rgb" => 2,
                     "prophoto" => 3,
                     _ => return Err("--space needs srgb, p3, adobe-rgb, or prophoto".into()),
+                };
+            }
+            "--blending" => {
+                blending = match arguments.next().ok_or("--blending needs a value")?.as_str() {
+                    "linear" => layer_core::BlendSpace::Linear,
+                    "perceptual" => layer_core::BlendSpace::Perceptual,
+                    _ => return Err("--blending needs linear or perceptual".into()),
                 };
             }
             "--depth" => {
@@ -552,7 +568,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                 println!(
                     "gpu-bench [--scenario all|legacy|painter|dry|watercolor|SCENARIO_NAME] \
                      [--output-dir PATH] [--report PATH] [--repeats N] \
-                     [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]"
+                     [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16] [--blending linear|perceptual]"
                 );
                 std::process::exit(0);
             }
@@ -561,6 +577,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
     }
     Ok(Options {
         color,
+        blending,
         scenarios,
         output_dir,
         report_path,

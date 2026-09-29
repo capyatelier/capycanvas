@@ -428,6 +428,7 @@ impl WgpuRasterizer {
             let style = layer_render::DabStyle {
                 alpha_locked: locked,
                 selection: document.selection.clone().map(Arc::new),
+                blend_space: if document.active_mask { layer_core::BlendSpace::Linear } else { document.blend_space },
                 ..layer_render::DabStyle::for_brush(brush, tool)
             };
             startup.masks.style(&startup.compiler, &style, BRUSH);
@@ -680,6 +681,33 @@ mod gpu_tests {
         renderer.prepare_startup(&document, &brush, false).unwrap();
         assert!(renderer.poll_startup().unwrap().brush_ready, "cached dependencies resume immediately");
 
+    }
+
+    #[test]
+    fn edged_brushes_in_perceptual_documents_compile_their_deposit_before_pen_down() {
+        let color = layer_core::color::DocumentColor::default();
+        let reference = WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut renderer =
+            WgpuRasterizer::from_wgpu_native_staged(reference.adapter.clone(), reference.device().clone(), reference.queue.clone(), color)
+                .unwrap();
+        renderer.finish_startup_cache();
+        let mut document = Document::new("perceptual startup", 128, 128);
+        document.blend_space = layer_core::BlendSpace::Perceptual;
+        let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::Airbrush);
+        brush.rendering.accumulation = BrushAccumulation::Flow;
+        brush.rendering.wet_edge = 0.5;
+        renderer.prepare_startup(&document, &brush, false).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !renderer.poll_startup().unwrap().brush_ready {
+            assert!(std::time::Instant::now() < deadline, "compilation timed out");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let style = layer_render::DabStyle { blend_space: document.blend_space, ..layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush) };
+        let plan = BrushPassPlan::for_device(&style, &renderer.device);
+        assert!(plan.direct.is_none() && plan.material == MaterialOperation::Deposit);
+        let pipelines = &renderer.pipelines;
+        let commit = pipelines.dry_in_place.as_ref().unwrap_or(&pipelines.dry_material).kernel(&style, plan.material, plan.state.coverage);
+        assert!(commit.ready() && pipelines.dry_material.kernel(&style, plan.material, false).ready(), "the deposit kernels are ready before input");
     }
 
     #[test]

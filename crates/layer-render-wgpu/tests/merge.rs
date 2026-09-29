@@ -210,20 +210,25 @@ fn stamp_visible_in(space: BlendSpace) {
 
 #[test]
 fn an_effect_applies_to_the_layer_below() {
-    let (mut engine, _input) = engine(document(&["Mono", "Photo", "Backdrop"], BlendSpace::Linear));
-    gradient(&mut engine, "Photo", [[0.9, 0.3, 0.1, 1.], [0.1, 0.6, 0.8, 1.]], false);
-    gradient(&mut engine, "Backdrop", [[0.2, 0.2, 0.2, 1.], [0.8, 0.8, 0.8, 1.]], true);
-    let invert = bundled_effect_catalog().get("black_white").unwrap();
-    edit(&mut engine, "Mono", |layer| {
-        layer.kind = LayerKind::Effect;
-        layer.effect = Some(std::sync::Arc::new(EffectInstance::new(invert.program())));
-    });
-    let original = image(&mut engine, 1_000_000_000);
-    engine.set_active_layer(id(&engine, "Mono")).unwrap();
-    assert_eq!(engine.document().merge_down(), MergeDown::ApplyEffect);
-    merge(&mut engine, MergeKind::Down);
-    image(&mut engine, 2_000_000_000).assert_near(&original, TOLERANCE, "the effect over an opaque layer");
-    assert!(engine.document().layers.iter().all(|l| l.kind != LayerKind::Effect));
+    for space in BlendSpace::ALL {
+        for filter in ["black_white", "gaussian_blur"] {
+            let (mut engine, mut input) = engine(document(&["Effect", "Photo", "Backdrop"], space));
+            gradient(&mut engine, "Photo", [[0.9, 0.3, 0.1, 1.], [0.1, 0.6, 0.8, 1.]], false);
+            gradient(&mut engine, "Backdrop", [[0.2, 0.2, 0.2, 1.], [0.8, 0.8, 0.8, 1.]], true);
+            stroke(&mut engine, &mut input, "Photo", [0.05, 0.05, 0.05, 1.], Point { x: 40., y: 128. }, Point { x: 340., y: 128. }, 500_000_000);
+            let definition = bundled_effect_catalog().get(filter).unwrap();
+            edit(&mut engine, "Effect", |layer| {
+                layer.kind = LayerKind::Effect;
+                layer.effect = Some(std::sync::Arc::new(EffectInstance::new(definition.program())));
+            });
+            let original = image(&mut engine, 1_000_000_000);
+            engine.set_active_layer(id(&engine, "Effect")).unwrap();
+            assert_eq!(engine.document().merge_down(), MergeDown::ApplyEffect);
+            merge(&mut engine, MergeKind::Down);
+            image(&mut engine, 2_000_000_000).assert_near(&original, TOLERANCE, &format!("{space:?} {filter} over an opaque layer"));
+            assert!(engine.document().layers.iter().all(|l| l.kind != LayerKind::Effect));
+        }
+    }
 }
 
 #[test]

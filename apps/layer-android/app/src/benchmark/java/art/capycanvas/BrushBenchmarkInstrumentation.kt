@@ -50,6 +50,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val prediction = arguments.getString("prediction", "true") == "true"
             val colorBeforeStrokes = arguments.getString("colorBeforeStrokes", "false") == "true"
             val speed = arguments.getString("speed", "1")!!.toDouble()
+            val blending = arguments.getString("blending")
+            check(blending == null || blending in listOf("linear", "perceptual"))
             check(duration in 1000..60000 && repeats in 1..10)
             check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "visual", "pinch"))
             output = File(targetContext.getExternalFilesDir(null), "brush-benchmark").apply { mkdirs() }
@@ -130,6 +132,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true &&
                 host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any { it.optInt("width") == photoWidth } == true }
             stage("photo-ready")
+            blending?.let { invoke("blend_$it") }
             action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
             val group = snapshot().getJSONObject("layout")
                 .array("groups").objects().first { "stats" in it.array("panels").values() }.getInt("id")

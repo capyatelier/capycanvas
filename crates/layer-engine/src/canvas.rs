@@ -1667,6 +1667,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 style.brush_to_layer = layer_core::Affine::translation(offset)
                     .then(self.document().layer_transform(layer_id).inverse().expect("validated layer geometry"));
                 style.alpha_locked = alpha_locked;
+                style.blend_space = if is_mask { layer_core::BlendSpace::Linear } else { self.document().blend_space };
                 style.retouch = self.retouch.map(|source| Retouch::for_target(self.document(), layer_id, source));
                 style.selection = self.document().selection.as_ref().map(|selection| {
                     std::sync::Arc::new(selection.transformed(
@@ -1810,6 +1811,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 )
                 .map_err(EngineError::Document)?;
                 stroke.alpha_locked = alpha_locked;
+                stroke.blend_space = active.style.blend_space;
                 stroke.material_updates = active.material_updates.into();
                 stroke.selection = active.style.selection.clone();
                 stroke.retouch = active.style.retouch.clone();
@@ -2162,6 +2164,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             style.brush_to_layer = layer_core::Affine::translation(self.document().layer_offset(stroke.layer_id))
                 .then(self.document().layer_transform(stroke.layer_id).inverse().expect("validated layer geometry"));
             style.alpha_locked = stroke.alpha_locked;
+            style.blend_space = stroke.blend_space;
             style.selection = stroke.selection.clone();
             style.retouch = stroke.retouch.clone();
             let mut generator = DabGenerator::new(self.document().color.space);
@@ -2750,6 +2753,37 @@ mod tests {
                 "the replay stays one undo step"
             );
         }
+    }
+
+    #[test]
+    fn dabs_follow_the_documents_blending_and_masks_blend_linearly() {
+        let mut document = Document::new("blending", 64, 64);
+        document.blend_space = layer_core::BlendSpace::Perceptual;
+        let (mut input, mut engine) = engine_with(RecordingRenderer::default(), document, view(64, 64), TRANSFORM);
+        let mut spaces = Vec::new();
+        let mut paint = |engine: &mut CanvasEngine<RecordingRenderer>, input: &mut InputProducer<PenEvent>, sequence: u64| {
+            spaces.clear();
+            for (i, phase) in [PenPhase::Down, PenPhase::Move, PenPhase::Up].into_iter().enumerate() {
+                input.push(event(sequence + i as u64, phase, 8. + 6. * i as f32)).unwrap();
+                engine.render_frame().unwrap();
+                spaces.extend(engine.backend().styles.iter().map(|s| s.blend_space));
+            }
+            assert!(!spaces.is_empty());
+            spaces.clone()
+        };
+        let painted = paint(&mut engine, &mut input, 1);
+        assert!(painted.iter().all(|s| *s == layer_core::BlendSpace::Perceptual));
+        assert_eq!(engine.completed_stroke.as_ref().unwrap().blend_space, layer_core::BlendSpace::Perceptual);
+        engine.replay_completed().unwrap();
+        engine.render_frame().unwrap();
+        let replayed = &engine.backend().styles;
+        assert!(!replayed.is_empty() && replayed.iter().all(|s| s.blend_space == layer_core::BlendSpace::Perceptual), "a replay keeps the stroke's space");
+        let mut masked = engine.document().layer(engine.document().active_layer).unwrap().clone();
+        masked.mask = Some(layer_core::LayerMask::reveal_all(LayerId(41), Point::default()));
+        engine.apply_edit(Edit::ReplaceLayer(Box::new(masked))).unwrap();
+        engine.apply_edit(Edit::SetMaskTarget(true)).unwrap();
+        let mask = paint(&mut engine, &mut input, 10);
+        assert!(mask.iter().all(|s| *s == layer_core::BlendSpace::Linear), "mask coverage blends linearly");
     }
 
     #[test]

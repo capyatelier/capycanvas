@@ -159,18 +159,49 @@ fn with_matching_surroundings_healing_is_the_clone() {
 fn spot_healing_replaces_a_dot_with_texture_like_its_surroundings() {
     let dot = |x: u32, y: u32| (x as f32 - 520.).hypot(y as f32 - 250.) < 12.;
     let texture = |x: u32, y: u32| if dot(x, y) { 0.05 } else { 0.5 + 0.1 * noise(x, y) };
-    let (mut input, mut engine) = healer(photo(|x, y| grey(texture(x, y))), DefaultBrushPreset::SpotHealingBrush, 40., false);
-    stroke(&mut engine, &mut input, 1, [516., 250.], [524., 250.]);
-    let healed = target(engine.backend());
-    let spot: Vec<_> = (500..540).flat_map(|x| (230..270).map(move |y| (x, y))).filter(|&(x, y)| dot(x, y)).collect();
-    let around: Vec<_> = (440..600).flat_map(|x| (170..330).map(move |y| (x, y))).filter(|&(x, y)| (x as f32 - 520.).hypot(y as f32 - 250.) > 40.).collect();
-    let inside: Vec<f32> = spot.iter().map(|&(x, y)| healed(x, y)[1]).collect();
-    let outside: Vec<f32> = around.iter().map(|&(x, y)| linear(encode(texture(x, y)))).collect();
-    assert!(spot.iter().all(|&(x, y)| healed(x, y)[3] > 0.999));
-    assert!((mean(&inside) - mean(&outside)).abs() < 0.01, "mean {} against {}", mean(&inside), mean(&outside));
-    let ratio = variance(&inside) / variance(&outside);
-    assert!((0.75..1.33).contains(&ratio), "variance ratio {ratio}");
-    assert_eq!(counts(&engine).heals, 1);
+    for blend_space in layer_core::BlendSpace::ALL {
+        let mut doc = photo(|x, y| grey(texture(x, y)));
+        doc.blend_space = blend_space;
+        let (mut input, mut engine) = healer(doc, DefaultBrushPreset::SpotHealingBrush, 40., false);
+        stroke(&mut engine, &mut input, 1, [516., 250.], [524., 250.]);
+        let healed = target(engine.backend());
+        let spot: Vec<_> = (500..540).flat_map(|x| (230..270).map(move |y| (x, y))).filter(|&(x, y)| dot(x, y)).collect();
+        let around: Vec<_> = (440..600).flat_map(|x| (170..330).map(move |y| (x, y))).filter(|&(x, y)| (x as f32 - 520.).hypot(y as f32 - 250.) > 40.).collect();
+        let inside: Vec<f32> = spot.iter().map(|&(x, y)| healed(x, y)[1]).collect();
+        let outside: Vec<f32> = around.iter().map(|&(x, y)| linear(encode(texture(x, y)))).collect();
+        assert!(spot.iter().all(|&(x, y)| healed(x, y)[3] > 0.999), "{blend_space:?}");
+        assert!((mean(&inside) - mean(&outside)).abs() < 0.01, "{blend_space:?}: mean {} against {}", mean(&inside), mean(&outside));
+        let ratio = variance(&inside) / variance(&outside);
+        assert!((0.75..1.33).contains(&ratio), "{blend_space:?}: variance ratio {ratio}");
+        assert_eq!(counts(&engine).heals, 1);
+    }
+}
+
+#[test]
+fn healing_matches_tone_on_the_documents_values() {
+    let code = |encoded: f32| (encoded * 255.).round() as u8;
+    let texture = |x: u32, y: u32| {
+        let c = code(if x < 512 { 0.5 + 0.35 * noise(x, y) } else { 0.4 });
+        [c, c, c, 255]
+    };
+    let destination = f32::from(code(0.4)) / 255.;
+    let healed_tone = |blend_space| {
+        let mut doc = photo(texture);
+        doc.blend_space = blend_space;
+        let (mut input, mut engine) = healer(doc, DefaultBrushPreset::HealingBrush, 64., false);
+        source_at(&mut engine, 150., 256.);
+        stroke(&mut engine, &mut input, 1, [600., 256.], [880., 256.]);
+        let healed = target(engine.backend());
+        let interior: Vec<f32> = (640..840)
+            .flat_map(|x| (248..264).map(move |y| (x, y)))
+            .map(|(x, y)| layer_core::color::RgbSpace::Srgb.encode(f64::from(healed(x, y)[1])) as f32)
+            .collect();
+        mean(&interior)
+    };
+    let perceptual = healed_tone(layer_core::BlendSpace::Perceptual);
+    assert!((perceptual - destination).abs() < 0.01, "Perceptual heals to {perceptual}, not {destination}");
+    let linear = healed_tone(layer_core::BlendSpace::Linear);
+    assert!((linear - destination).abs() > 0.03, "Linear light matches mean light, so its encoded tone {linear} differs");
 }
 
 #[test]

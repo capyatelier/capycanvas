@@ -31,6 +31,23 @@ pub(super) fn shader_source(device: &PipelineDevice, in_place: bool, material: &
     ])
 }
 
+/// Dry dabs carry their color in the space they lay over paint in: the
+/// document's encoded values in a Perceptual document, so the shader does not
+/// convert it for every pixel.
+pub(super) fn prepare_colors(style: &layer_render::DabStyle, space: layer_core::color::RgbSpace, dabs: &mut [DabGpu]) {
+    if style.execution != BrushExecution::Dry
+        || style.mode != DabMode::Paint
+        || style.blend_space != layer_core::BlendSpace::Perceptual
+    {
+        return;
+    }
+    for dab in dabs {
+        for channel in &mut dab.dab.color_rgba_linear[..3] {
+            *channel = space.encode(f64::from(*channel)) as f32;
+        }
+    }
+}
+
 /// Bound the incoming pigment film; the shader applies stationary paper per pixel.
 pub(super) fn prepare_film(style: &layer_render::DabStyle, dabs: &mut [DabGpu]) {
     let Some(contact) = style.contact else { return };
