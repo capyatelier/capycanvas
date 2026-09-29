@@ -425,32 +425,32 @@ They precede perceptual dab blending and exact idle refinement. Raw reports,
 traces and source provenance are under `artifacts/display-production/perceptual-graph-tcl`
 and `perceptual-graph-provenance.json`.
 
-Three alternating pairs against main `c707c379` use Perceptual 12 MP photos,
+Three alternating pairs on 2026-09-28 against main `c707c379` use Perceptual 12 MP photos,
 G-Pen 1024 px, a 240 × 140 px trajectory, 16 ms prediction, and five seconds
-of input per run. Candidate APK
-`a14ee9b7785537f9f9d667ff04c8438e35dd7837f961ba52a56c241bf093963f`
-adds exact idle refinement. All 36 thermal snapshots report status 0.
+of input per run. Candidate `965197479` uses one shared composition hierarchy
+for drawing and exact idle repair. Its APK SHA-256 is
+`3c2896dc0b2ec84654b01beb0c83b65794b5389c61f8e652657ad76a28b08432`.
+All 36 thermal snapshots report status 0.
 
 | Journey | Main completed updates/s | Candidate | Speedup | Main settling, ms | Candidate settling, ms |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Fit, one photo | 14.96 | 43.38 | 2.90× | 569 | 2035 |
-| 50%, eight photos | 1.791 | 26.68 | 14.89× | 1067 | 5575 |
-| 100%, eight photos | 2.588 | 17.92 | 6.92× | 701 | 3246 |
+| Fit, one photo | 14.929 | 44.574 | 2.99× | 555 | 2048 |
+| 50%, eight photos | 1.792 | 28.106 | 15.68× | 901 | 5660 |
+| 100%, eight photos | 2.588 | 18.888 | 7.30× | 712 | 5568 |
 
 These are medians of three runs. Completed updates count only the input window;
 settling ends when both composition and submitted GPU work drain. Input queue
-p99 medians improve from 79.96/577.13/382.62 ms to 48.10/60.63/66.86 ms in the
+p99 medians improve from 78.47/562.87/386.89 ms to 43.64/64.72/77.31 ms in the
 same order. Renderer residency after draining changes from 795/648/620 MiB to
-582/880/790 MiB; this excludes other process allocations.
+813/1067/1007 MiB; this excludes other process allocations and is not peak RSS.
 
-Drawing is faster, while settling and eight-photo residency regress. The candidate
+Drawing is faster, while settling and residency regress. The candidate
 refines one native page per idle submission. These measurements do not establish
-the long-term 60 updates/s target or responsiveness to a new stroke during
-refinement. Raw reports and frozen source/APK provenance are in
-`artifacts/display-production/idle-exact-pairs` and `idle-exact-provenance.json`.
-The APK predates the overview scheduling correction for a cache created during
-an active transform and the native-effect migration; these painting fixtures
-have neither transform previews nor effects.
+the long-term 60 updates/s target. Resuming during refinement is measured below.
+Raw reports are in `artifacts/display-production/unified-pairs`; frozen build
+provenance is in `unified-965197479-provenance.json` and
+`main-c707c379-resume-control-provenance.json` in the same artifact root.
+These painting fixtures have neither transform previews nor effects.
 
 
 ## Resuming while composition settles
@@ -460,27 +460,24 @@ Three alternating pairs use the same Perceptual 12 MP G-Pen fixture, with
 records 25 pen-down events. All 36 thermal snapshots report status 0. Values
 below are medians of the three per-run p99 values.
 
-| Journey | Main input queue, ms | Candidate input queue, ms | Main arrival to next GPU completion, ms | Candidate arrival to next GPU completion, ms |
+| Journey | Main pen-down queue, ms | Candidate pen-down queue, ms | Main arrival to next GPU completion, ms | Candidate arrival to next GPU completion, ms |
 | --- | ---: | ---: | ---: | ---: |
-| Fit, one photo | 141.92 | 21.37 | 353.50 | 116.12 |
-| 50%, eight photos | 370.14 | 48.90 | 799.33 | 194.32 |
-| 100%, eight photos | 298.93 | 67.84 | 662.94 | 184.95 |
+| Fit, one photo | 138.54 | 18.51 | 353.58 | 118.55 |
+| 50%, eight photos | 351.64 | 26.51 | 758.35 | 200.89 |
+| 100%, eight photos | 300.24 | 63.89 | 667.77 | 185.15 |
 
 The candidate has pending composition at 24–25 of the 25 contacts per run;
 the old compositor has none. Next completion means the first GPU completion
 whose frame was queued after the contact's input processing finished; it does
 not measure scanout or guarantee that frame contains the contact's pixels.
-Final settling medians are 131/4876/3352 ms on main and 1474/3743/2579 ms on
-the candidate. The one-photo settling regression remains.
+Final settling medians are 149/5038/3302 ms on main and 1676/3840/4777 ms on
+the candidate. Fit and native-zoom settling regress despite faster resumption.
 
-The control is main `c707c379` with identical input diagnostics. Candidate is
-`eef34e7c` plus shared native evaluation, before legacy deletion and source-cache
-consolidation. APK SHA-256 is
-`30628d17dc905f891e18f54718e45baade92ab0429eac39ce1d3b483531c2d02`.
-Raw data, immutable APKs and source provenance are under
-`artifacts/display-production/resume-pairs` and `common-native-provenance.json`.
+The control and candidate are the same frozen builds as the continuous drawing
+comparison above, with identical input diagnostics. Raw data is in
+`artifacts/display-production/unified-pairs`, summarized by `results.json`.
 These measurements establish a relative responsiveness improvement for this
-fixture, not the long-term tier target or final-tree qualification.
+fixture, not the long-term tier target or qualification of other journeys.
 
 
 ## Shared composition hierarchy motion diagnostics
