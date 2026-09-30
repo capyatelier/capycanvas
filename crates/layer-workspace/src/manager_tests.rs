@@ -708,7 +708,15 @@ fn manager_recovery_library_and_backup_round_trip() {
             .save_toolbar(toolbar_panel, "Reusable Tools", 14_000)
             .await
             .unwrap();
-        let toolbar_bytes = export_package(&m.load(&library).await.unwrap().entity).unwrap();
+        let library_entity = m.load(&library).await.unwrap().entity;
+        for (ids, valid) in [([1, 2], true), ([u32::MAX - 1, 2], true),
+            ([u32::MAX, 2], false), ([0, 2], false), ([1, 1], false)] {
+            let mut candidate = library_entity.clone();
+            let ItemContent::Toolbar { definition } = &mut candidate.content else { panic!() };
+            for (tile, id) in definition.tiles.iter_mut().zip(ids) { tile.id = id; }
+            assert_eq!(export_package(&candidate).is_ok(), valid, "tile identities {ids:?}");
+        }
+        let toolbar_bytes = export_package(&library_entity).unwrap();
         let imported_library = m
             .import_reusable_package(&toolbar_bytes, PackageKind::Toolbar, 15_000)
             .await

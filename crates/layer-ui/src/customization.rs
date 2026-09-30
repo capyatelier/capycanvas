@@ -359,7 +359,7 @@ impl PanelConfig {
             })
             .collect()
     }
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         match &self.content {
             PanelContent::Controls { visible } if self.id.kind() == PanelKind::Content => {
                 for (index, control) in visible.iter().enumerate() {

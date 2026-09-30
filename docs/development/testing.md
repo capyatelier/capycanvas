@@ -117,6 +117,7 @@ are your task, and remove an entry when you fix it.
   `native_workspace_motion_input`, and `native_workspace_switcher_input`
   (intermittent). `native_workspace_resize_input` presents below its rate
   threshold under the runner's `color-mgmt`.
+- GTK `native_toolbar_manager` cannot find its `toolbar-manager` dialog.
 - Android: 7 of 15 `AndroidTitleBarTest` cases;
   `detachedPanelsKeepBodiesAndWiderResizeTargets`;
   `AndroidInteractionTest#cachedPanelsMatchDirectDrawing` (light docked panels);
@@ -133,6 +134,8 @@ are your task, and remove an entry when you fix it.
   `toolbarConfigurationAndGroupCollapseUseTheSharedDefault`.
 - Android `AndroidRasterTest#hdrBlackIntensityMarkerVisible` intermittently
   keeps the last EV value when the test cancels its drag.
+- Android `AndroidWorkspaceManagerTest#restoreStartingLayoutPlacesPalettesAfterColorAndProofAfterNavigator`
+  cannot find its Window menu on MovinkPad 11.
 - Android `AndroidRasterTest#profileLibraryKeepsExactCopiesAndPresetOwnership`
   intermittently times out waiting for profile-library buttons.
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and

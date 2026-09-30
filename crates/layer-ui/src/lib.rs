@@ -157,7 +157,7 @@ pub use theme::{
 };
 pub use workspace::{
     LayoutHistory, LayoutRevision, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
-    durable_layout, layout_change_description,
+    counter, durable_layout, layout_change_description,
 };
 
 /// Logical units; rendering still uses the entire physical window viewport.

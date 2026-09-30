@@ -46,17 +46,7 @@ pub fn validate_name(name: &str) -> Result<(), StoreError> {
     }
     Ok(())
 }
-pub(crate) mod counter {
-    use serde::{Deserialize, Deserializer, Serializer};
-    pub fn serialize<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&v.to_string())
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
-        String::deserialize(d)?
-            .parse()
-            .map_err(serde::de::Error::custom)
-    }
-}
+pub(crate) use layer_ui::counter;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
@@ -208,32 +198,18 @@ impl ToolbarDefinition {
         if self.tiles.len() > 4096 {
             return Err(StoreError::invalid("Toolbar has too many controls."));
         }
-        let mut layout = DockLayout::default();
-        let panel = layout
-            .panels
-            .iter_mut()
-            .find(|p| p.id == layer_ui::Panel::Toolbar)
-            .unwrap();
-        panel.content = layer_ui::PanelContent::Toolbar {
-            name: self.name.clone(),
-            tiles: self.tiles.clone(),
-        };
-        panel.tile_style = self.tile_style;
-        panel.hide_tab = self.hide_tab;
-        // Validate each configured action without importing foreign local tile IDs.
-        let mut json = serde_json::to_value(layout)?;
-        let next = self
-            .tiles
-            .iter()
-            .map(|t| t.id)
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| StoreError::invalid("Toolbar identities are exhausted."))?;
-        json["next_tile_id"] = serde_json::json!(next);
-        serde_json::from_value::<DockLayout>(json)?
-            .validate()
-            .map_err(StoreError::invalid)
+        if self.tiles.iter().any(|tile| tile.id == u32::MAX) {
+            return Err(StoreError::invalid("Toolbar identities are exhausted."));
+        }
+        PanelConfig {
+            id: layer_ui::Panel::Toolbar, hide_tab: self.hide_tab, tile_style: self.tile_style,
+            content: layer_ui::PanelContent::Toolbar { name: self.name.clone(), tiles: self.tiles.clone() },
+        }.validate().map_err(StoreError::invalid)?;
+        let mut ids = std::collections::BTreeSet::new();
+        if self.tiles.iter().any(|tile| tile.id == 0 || !ids.insert(tile.id)) {
+            return Err(StoreError::invalid("Duplicate or invalid toolbar tile identity"));
+        }
+        Ok(())
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

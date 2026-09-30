@@ -58,7 +58,7 @@ pub fn durable_layout(layout: &DockLayout) -> DockLayout {
 }
 
 /// JSON/JavaScript must never round a generation counter through an f64.
-pub(crate) mod counter {
+pub mod counter {
     use serde::{Deserialize, Deserializer, Serializer};
     pub fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&value.to_string())

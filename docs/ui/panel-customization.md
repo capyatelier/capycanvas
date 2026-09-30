@@ -245,6 +245,8 @@ no third-party code or assets are imported.
 - Toolbar tiles have stable IDs and typed controls. The available-button catalog
   includes application commands, brush presets, size presets and color/opacity
   buttons; control values and execution remain in the existing Rust session.
+  Saved toolbars validate their panel configuration directly, with unique nonzero
+  tile IDs that leave room for the allocator.
 - Built-in-panel control catalogs define allowed controls and compact defaults.
   The configuration column shows that catalog, including hidden controls. This is
   metadata for native controls, not a generic widget-tree abstraction.
