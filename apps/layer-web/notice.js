@@ -1,7 +1,3 @@
-// Browser projection of the shared canvas notice. The core owns the text, the
-// action and stale-id validation; this bubble shows each id once, owns the
-// timeout and hides at the next canvas contact. It is not a popover and its
-// button never takes focus from the canvas.
 export const TIMEOUT_MS = 4000, MARGIN = 12, BAR_REACH = 72, MAX_WIDTH = 720;
 
 // Bottom-centre anchor and width in workspace units, from the shared layout:

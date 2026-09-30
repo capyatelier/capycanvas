@@ -8,7 +8,6 @@ const bar='.canvas-action-bar';
 const visible=`(b=>!!b&&!b.hidden&&!b.classList.contains('suppressed'))(document.querySelector('${bar}'))`;
 const discBar=`layerApp.state().canvas_bar?.context.kind==='clone_source'&&${visible}`;
 
-// Input, sampling and source-disc helpers shared by the retouching journeys.
 async function retouching({call,evaluate,settle,device,name,sampleSize}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??`artifacts/${name}/${device?'web-tablet':'web'}`;
   await mkdir(directory,{recursive:true});
@@ -194,9 +193,6 @@ async function retouching({call,evaluate,settle,device,name,sampleSize}) {
     set target(id){target=id;}};
 }
 
-// Clone Stamp on an empty layer over a reference: Alt and a bound side button
-// set the source, strokes copy the reference, the source disc drags at once
-// and a tap on it shows its bar, with mouse, touch and pen.
 export async function checkClone({call,evaluate,settle,device=false}) {
   const h=await retouching({call,evaluate,settle,device,name:'clone',sampleSize:1});
   const {directory,wait,pause,send,invoke,command,selected,enabled,screen,tap,drag,pick,pressBar,sample,ready,disc,near,awaitDisc,showBar,hideBar,painted,stroke,dragDisc}=h;
@@ -317,7 +313,6 @@ export async function checkClone({call,evaluate,settle,device=false}) {
   }
 }
 
-// An RGB PNG of `pixel(x, y)`.
 function png(width,height,pixel) {
   const stride=width*3+1,rows=Buffer.alloc(stride*height);
   for(let y=0;y<height;y++)for(let x=0;x<width;x++)rows.set(pixel(x,y),y*stride+1+x*3);
@@ -331,8 +326,6 @@ function png(width,height,pixel) {
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',deflateSync(rows)),chunk('IEND',Buffer.alloc(0))]);
 }
 
-// A photo the size of the canvas: a light textured area, and a darker one with
-// a red scratch across it and a yellow dot.
 function texturedPhoto(width,height) {
   const [light,dark,scratch,dot]=[LIGHT,DARK,SCRATCH,DOT].map(c=>c.map(v=>Math.round(v*255)));
   return png(width,height,(x,y)=>{
@@ -345,12 +338,6 @@ function texturedPhoto(width,height) {
   });
 }
 
-// Healing Brush and Spot Healing Brush in the Photo workspace over a photo
-// marked as a reference: chosen from the toolbar and with their keys; Healing
-// takes its source from Alt or a bound side button with the mouse and pen,
-// never a finger, previews as the clone and heals into the darker area around
-// the stroke; Spot Healing has no source to set and removes a dot. Each stroke
-// is one undo step.
 export async function checkHeal({call,evaluate,settle,device=false}) {
   const original=await evaluate('JSON.parse(layerApp.app.workspace_view()).id');
   const workspace=async id=>{

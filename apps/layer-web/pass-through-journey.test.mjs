@@ -4,9 +4,6 @@ import {mkdir,writeFile} from 'node:fs/promises';
 const control='.layer-blend',menu='.panel-context-menu';
 const opened=`!!document.querySelector('${menu}:popover-open')`;
 
-// A group chosen as Pass Through from the grouped blend menu lets its
-// adjustment reach the layers below, in one undo step; with Use Pass Through
-// for new groups on, New Group passes through.
 export async function checkPassThrough({call,evaluate,settle}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/pass-through/web';
   await mkdir(directory,{recursive:true});
@@ -24,7 +21,6 @@ export async function checkPassThrough({call,evaluate,settle}) {
   const blend=()=>evaluate('layerApp.state().layer_tools.editing_layer.blend_label');
   const active=()=>evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
   const groups=()=>evaluate(`(()=>{const out=[[]];for(const n of document.querySelector('${menu}').children){if(n.tagName==='HR')out.push([]);else out.at(-1).push(n.querySelector('.menu-label')?.textContent);}return out;})()`);
-  // The most common encoded red and green levels of the whole composite.
   const peaks=async()=>{
     await wait('!layerApp.documents.busy()');
     const channels=await evaluate(`(async()=>{const c=layerApp.app.capture_control();try{const h=(await layerApp.app.histogram(c)).histogram;return h.channels.slice(0,2).map(ch=>Array.from(ch.bins,Number))}finally{c.free()}})()`);

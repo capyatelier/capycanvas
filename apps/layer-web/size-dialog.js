@@ -1,8 +1,4 @@
-// The parts shared by the Canvas Size and Image Size dialogs. Values,
-// validation and history live in Rust; these only present its views.
 
-// A modal form that focuses its title when it opens, so no field takes the
-// keyboard until it is tapped.
 export function openSizeDialog({element,button,host,name,body,apply,cancel}) {
   const dialog=element('dialog','document-dialog size-dialog');dialog.id=`${name}-dialog`;
   const form=element('form');form.method='dialog';
@@ -17,8 +13,6 @@ export function openSizeDialog({element,button,host,name,body,apply,cancel}) {
   return {dialog,title,message,apply:applyButton,close(){dialog.close();dialog.remove();}};
 }
 
-// A choice from `choices`, whose `key` field is both the option value and the
-// field of the action it sends.
 export function sizeSelect({element,label,choices,key,act}) {
   const select=element('select','size-dialog-select');select.setAttribute('aria-label',label);
   for(const choice of choices){const option=element('option','',choice.label);option.value=choice[key];select.append(option);}
@@ -26,7 +20,6 @@ export function sizeSelect({element,label,choices,key,act}) {
   return select;
 }
 
-// A labelled checkbox that sends its state as the `key` field of an action.
 export function sizeCheck({element,key,act}) {
   const input=element('input');input.type='checkbox';
   input.addEventListener('change',()=>{const next=input.checked;act({op:key,[key]:next});});

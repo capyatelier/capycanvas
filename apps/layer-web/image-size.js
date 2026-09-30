@@ -1,5 +1,3 @@
-// Native projection of the shared Image Size dialog. Sizes, units,
-// resampling, limits, validation and history live in Rust.
 import {openSizeDialog,sizeCheck,sizeFields,sizeSelect} from './size-dialog.js';
 
 export function createImageSizeUi({state,element,button,numberField,resolve,dispatch,host=()=>document.body}) {

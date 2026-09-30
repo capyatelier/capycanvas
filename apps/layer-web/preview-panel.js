@@ -1,15 +1,8 @@
-// Native DOM projection of the shared one-value dialogs the canvas previews:
-// Refine and Frequency Separation. Rust owns values, limits and history.
 import { noticePlacement } from "./notice.js";
 import { captureSliderContacts } from "./numeric.js";
 
 export const PREVIEW_PANEL_WIDTH = 360;
 
-// The panel previews each value on the canvas, which stays undimmed and
-// interactive. It is neither modal nor a popover, so canvas contacts keep
-// their meaning, and its buttons never take focus. `view()` is the shared view
-// ({title,label,radius,numeric}) or null; `kind(view)` rebuilds the field when
-// it changes.
 export function createPreviewPanel({name,view,kind,value,apply,cancel,element,button,numberField,workspace,layout,bar}) {
   let panel=null,title,number=null,shown=null,below=null,bounds=null,transform='';
   function open() {

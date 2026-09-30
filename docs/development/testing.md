@@ -156,5 +156,7 @@ are your task, and remove an entry when you fix it.
   on MovinkPad 11.
 - Headless Web `--contact-brushes` with `LAYER_BRUSH_PRESETS=20,21` differs from
   the committed watercolor pixels after Redo.
+- Headless Web `--zoom-readout` reaches export with an empty stroke image
+  and fails its ink assertion.
 - `cargo clippy -- -D warnings` stops in `layer-core` on lints new in Clippy 1.96.
   New code adds no warnings.

@@ -12,8 +12,6 @@ const GROUPS=[
   ['Hue','Saturation','Color','Luminosity'],
 ];
 
-// The Layers header's blend control opens the shared grouped menu with a
-// mouse, a finger and a pen; each choice is one undo step.
 export async function checkBlendMenu({call,evaluate,settle}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/blend-menu/web';
   await mkdir(directory,{recursive:true});

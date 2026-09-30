@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import {mkdir, writeFile} from 'node:fs/promises';
 
-// A mixing brush's Tool Options offer Color mixing to a mouse, a finger and a
-// pen; each choice holds while the brush paints, and non-mixing brushes hide it.
 export async function checkColorMixing({call, evaluate, settle}) {
   const directory = process.env.LAYER_TEST_ARTIFACTS ?? 'artifacts/color-mixing/web';
   await mkdir(directory, {recursive: true});

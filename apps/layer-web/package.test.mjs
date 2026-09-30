@@ -76,47 +76,15 @@ function runtimeFixture(t, changes = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capy-assets-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const [path, data] of Object.entries({
-    "proof-worker.js": 'import init from "./pkg/layer_web.js";',
-    "proof.js": `import {importProfile} from './export-controls.js'; new Worker(new URL("./proof-worker.js",import.meta.url));`,
-    "raster-worker.js": 'import init from "./pkg/layer_web.js";',
-    "raster-worker-client.js": 'new Worker(new URL("./raster-worker.js", import.meta.url));',
-    "drawing-tabs.js": "export const tabs = {};",
-    "document-recovery.js": "export const recovery = {};",
-    "document-storage.js": "export const storage = {};",
-    "workspace-store.js": "export const store = {};",
-    "workspace-preload.js": 'import {store} from "./workspace-store.js"; new URL("./workspace-worker.js", import.meta.url); new URL("./pkg/layer_web_bg.wasm", import.meta.url);',
-    "workspace-switcher.js": "export const switcher = {};",
-    "workspace-manager.js": 'import {switcher} from "./workspace-switcher.js"; export const manager = {};',
-    "workspace-worker.js": 'import init from "./pkg/layer_web.js"; import {store} from "./workspace-store.js";',
-    "app.js": 'import {storage} from "./document-storage.js"; import {createRasterWorker} from "./raster-worker-client.js"; import {store} from "./workspace-preload.js"; import {manager} from "./workspace-manager.js"; import init from "./pkg/layer_web.js";\nimport {createSystemStatus} from "./system-status.js";\nimport {createHeader} from "./header.js";\nimport {createSelectionUi} from "./selection-masks.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createGlass} from "./glass.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {createCommandBar} from "./command-bar.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createCanvasBar} from "./canvas-bar.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nimport {installTooltips} from "./tooltips.js";\nimport {installPenScrolling} from "./pen-scroll.js";\nimport {createPalettes} from "./palettes.js";\nconst assetPaths = {};',
-    "system-status.js": "export const status = true;",
-    "header.js": "import {switcher} from './workspace-switcher.js'; import {pickerButtonAction} from './color-controls.js'; export const header = true;",
-    "editor-panels.js": "import {createRasterWorker} from './raster-worker-client.js'; import {chooseColor} from './color-controls.js'; import {createRangeControl} from './range-control.js'; export function createEditorPanels() {}",
-    "workspace-chrome.js": "export function createWorkspaceChrome() {}",
-    "glass.js": "export function createGlass() {}",
-    "image-import.js": "export function createImageImport() {}",
-    "selection-masks.js": "export function createSelectionUi() {}",
-    "documents.js": "import {tabs} from './drawing-tabs.js'; import {recovery} from './document-recovery.js'; import {createProof} from './proof.js'; import {createImageImport} from './image-import.js'; import {chooseDocumentColor} from './document-color.js'; import {createHistogram} from './histogram.js'; import {chooseExport} from './export-controls.js'; export function createDocuments() {}",
-    "document-color.js": "import {importProfile} from './export-controls.js'; export function chooseDocumentColor() {}",
-    "histogram.js": "export function createHistogram() {}",
-    "export-controls.js": "export function chooseExport() {}",
-    "numeric.js": "export function createNumberField() {}",
-    "layers.js": "export function createLayerPanel() {}",
-    "color-controls.js": "export function colorButton() {}",
-    "filter-previews.js": "export function filterPreviewView() {}",
-    "stroke-recording.js": "export function strokeRecordingControl() {}",
-    "effects.js": "import {strokeRecordingControl} from './stroke-recording.js'; import {colorButton} from './color-controls.js'; import {filterPreviewView} from './filter-previews.js'; export function createEffectPanels() {}",
-    "tooltips.js": "export function installTooltips() {}",
-    "pen-scroll.js": "export function installPenScrolling() {}",
-    "palettes.js": "export function createPalettes() {}",
-    "preferences.js": "import {chooseProfileLibrary} from './export-controls.js'; import {createShortcutPage} from './shortcut-page.js'; export function createPreferences() {}",
-    "shortcut-page.js": "export function createShortcutPage() {}",
-    "command-bar.js": "export function createCommandBar() {}",
-    "gpu.js": "export function showGpuNotice() {}",
-    "toolbar-components.js": "import {createNumberField} from './numeric.js'; import {createRangeControl} from './range-control.js';",
-    "canvas-bar.js": 'import {actionField} from "./toolbar-components.js"; export function createCanvasBar() {}',
-    "range-control.js": "import {createNumberField} from './numeric.js'; export function createRangeControl() {}",
-    "customization.js": 'import {createToolbarComponent} from "./toolbar-components.js";' + "import {colorButton} from './color-controls.js'; export function createCustomization() {}",
+    "app.js": 'import {alpha} from "./alpha.js"; import {beta} from "./beta.js"; import {loader} from "./loader.js"; import {stable} from "./stable.js"; const assetPaths = {};',
+    "alpha.js": 'import {leaf} from "./shared.js"; export const alpha = leaf;',
+    "beta.js": 'import {leaf} from "./shared.js"; export const beta = leaf;',
+    "shared.js": 'export {leaf} from "./leaf.js";',
+    "leaf.js": 'export const leaf = true;',
+    "stable.js": 'export const stable = true;',
+    "loader.js": 'import {leaf} from "./nested/tool.js"; export const loader = new Worker(new URL("./worker.js", import.meta.url)); new URL("./pkg/layer_web_bg.wasm", import.meta.url);',
+    "nested/tool.js": 'export {leaf} from "../leaf.js";',
+    "worker.js": 'import init from "./pkg/layer_web.js"; await import("./shared.js");',
     "pkg/layer_web.js": "export default new URL('layer_web_bg.wasm', import.meta.url);",
     "pkg/layer_web_bg.wasm": Buffer.from([0, 97, 115, 109]),
     "style.css": 'body { color: black; mask: url("icons/pen.svg"); }',
@@ -139,16 +107,10 @@ test("every runtime filename hashes its final bytes and all dependency reference
     const extension = extname(original);
     assert.equal(name, `${original.slice(0, -extension.length)}.${hash}${extension}`);
   }
+  assertResolved(dir, names);
   const app = readFileSync(join(dir, names["app.js"]), "utf8");
-  const references = (path, dependency) => readFileSync(join(dir, names[path]), "utf8").includes(`./${names[dependency]}`);
-  for (const path of ["preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "pkg/layer_web.js"])
-    assert.ok(references("app.js", path), path);
   for (const path of ["icons/pen.svg", "icons.svg", "brush-previews/1-dark.png"])
     assert.ok(app.includes(JSON.stringify(names[path])));
-  for (const path of ["workspace-manager.js", "header.js"]) assert.ok(references(path, "workspace-switcher.js"), path);
-  assert.ok(references("header.js", "color-controls.js"));
-  assert.ok(references("editor-panels.js", "raster-worker-client.js"));
-  assert.ok(references("preferences.js", "shortcut-page.js"));
   assert.ok(readFileSync(join(dir, names["style.css"]), "utf8").includes(`url("${names["icons/pen.svg"]}")`));
   assert.ok(readFileSync(join(dir, names["pkg/layer_web.js"]), "utf8").includes(names["pkg/layer_web_bg.wasm"].slice(4)));
   assert.deepEqual(fingerprintAssets(runtimeFixture(t)), names, "An identical rebuild keeps every URL stable");
@@ -175,38 +137,38 @@ test("production module imports and worker URLs resolve to packaged files", (t) 
 
 test("new modules and imports package without changing the packager", (t) => {
   const dir = runtimeFixture(t, {
-    "extra.js": 'import {status} from "./system-status.js"; export const worker = new URL("./extra-worker.js", import.meta.url);',
-    "extra-worker.js": 'import init from "./pkg/layer_web.js"; const numeric = await import("./numeric.js");',
-    "gpu.js": 'import {worker} from "./extra.js"; export function showGpuNotice() {}',
-    "header.js": "import {createNumberField} from './numeric.js'; import {switcher} from './workspace-switcher.js'; import {pickerButtonAction} from './color-controls.js'; export const header = true;",
+    "extra.js": 'import {leaf} from "./shared.js"; export const worker = new URL("./extra-worker.js", import.meta.url);',
+    "extra-worker.js": 'import init from "./pkg/layer_web.js"; await import("./leaf.js");',
+    "alpha.js": 'import {leaf} from "./shared.js"; import {worker} from "./extra.js";',
+    "beta.js": 'import {leaf} from "./shared.js"; await import("./stable.js");',
   });
   const names = fingerprintAssets(dir);
   assertResolved(dir, names);
   const references = (path, dependency) => readFileSync(join(dir, names[path]), "utf8").includes(`./${names[dependency]}`);
-  assert.ok(references("gpu.js", "extra.js") && references("extra.js", "extra-worker.js") && references("extra-worker.js", "numeric.js"));
-  assert.ok(references("header.js", "numeric.js"), "A new import between existing modules follows its hash");
+  assert.ok(references("alpha.js", "extra.js") && references("extra.js", "extra-worker.js") && references("extra-worker.js", "leaf.js"));
+  assert.ok(references("beta.js", "stable.js"), "A new import between existing modules follows its hash");
 });
 
 test("changed assets propagate to their consumers and worker version, not unrelated assets", (t) => {
   const source = runtimeFixture(t), original = runtimeFixture(t), names = fingerprintAssets(original), first = writeWorker(original);
-  for (const path of ["drawing-tabs.js", "document-recovery.js", "document-storage.js", "image-import.js", "app.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "workspace-worker.js", "system-status.js","header.js", "style.css", "gpu.js", "numeric.js", "range-control.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png"]) {
+  for (const path of Object.keys(names)) {
     const dir = runtimeFixture(t, { [path]: Buffer.concat([readFileSync(join(source, path)), Buffer.from("\n/* changed */")]) });
     const next = fingerprintAssets(dir);
     assert.notEqual(next[path], names[path], path);
-    assert.equal(next["preferences.js"], names["preferences.js"], "Unchanged dependencies retain their URL");
+    if (path !== "stable.js") assert.equal(next["stable.js"], names["stable.js"], "Unchanged dependencies retain their URL");
     assert.equal(next["style.css"] === names["style.css"], !["style.css", "icons/pen.svg"].includes(path));
     assert.equal(next["app.js"] === names["app.js"], path === "style.css", "Module/artwork changes invalidate their consumer");
-    for (const consumer of ["workspace-manager.js", "header.js"])
-      assert.equal(next[consumer] === names[consumer], ![consumer, "workspace-switcher.js"].includes(path), `${consumer} follows switcher changes`);
-    assert.equal(next["pkg/layer_web.js"] === names["pkg/layer_web.js"], path !== "pkg/layer_web_bg.wasm");
+    for (const consumer of ["alpha.js", "beta.js"])
+      assert.equal(next[consumer] === names[consumer], ![consumer, "shared.js", "leaf.js"].includes(path), `${consumer} follows shared dependencies`);
+    assert.equal(next["pkg/layer_web.js"] === names["pkg/layer_web.js"], !["pkg/layer_web.js", "pkg/layer_web_bg.wasm"].includes(path));
     assert.notEqual(writeWorker(dir).version, first.version, "Every content change updates the PWA cache version");
   }
 });
 
 test("unresolved references, cycles or changed rewrite anchors fail packaging rather than shipping stale references", (t) => {
-  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "gpu.js": 'import {missing} from "./missing.js";' })), /gpu\.js references missing \.\/missing\.js/);
-  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "gpu.js": 'new URL("./missing-worker.js", import.meta.url);' })), /references missing \.\/missing-worker\.js/);
-  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "numeric.js": "import {createRangeControl} from './range-control.js';" })), /Module cycle cannot be fingerprinted: .*numeric\.js/);
+  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "alpha.js": 'import "./missing.js";' })), /alpha\.js references missing \.\/missing\.js/);
+  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "alpha.js": 'new URL("./missing-worker.js", import.meta.url);' })), /references missing \.\/missing-worker\.js/);
+  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "shared.js": 'import "./alpha.js";' })), /Module cycle cannot be fingerprinted: .*alpha\.js/);
   assert.throws(() => fingerprintAssets(runtimeFixture(t, { "app.js": "changed module layout" })), /Missing package reference/);
   assert.throws(() => fingerprintAssets(runtimeFixture(t, { "style.css": 'body { mask: url("missing.svg"); }' })), /Missing CSS asset/);
 });

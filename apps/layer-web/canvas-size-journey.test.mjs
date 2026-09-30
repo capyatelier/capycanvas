@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
 const COLORS={mouse:[.85,.08,.05,1],touch:[.05,.6,.1,1],pen:[.1,.2,.85,1]};
-// Each crop keeps one corner of the canvas, so that anchor restores the position.
 const CORNERS={mouse:'bottom_right',touch:'top_left',pen:'bottom_left'};
 const dialog='#canvas-size-dialog';
 

@@ -1,5 +1,3 @@
-// DOM adapter for the shortcut, modifier key and pen button views. Grouping,
-// filtering, recording, conflicts and defaults are all decided in Rust.
 export function createShortcutPage({ element, button, icon, send, view, scroller, settingsGroup: group, dropdown }) {
   const panes = new Map(), active = new Map(), rows = new Map();
   let keymapChoice, keymapOutdated, contextChoice, showChoice, shortcutSearch, categoryList, emptyStatus;
@@ -23,8 +21,6 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     return row;
   };
 
-  // Slide pages: only the visible pane is laid out, and it slides in from the
-  // side it was opened toward.
   function pane(pageId, name, node) {
     const element_ = element("div", "settings-pane"); element_.dataset.pane = name;
     node.append(element_);

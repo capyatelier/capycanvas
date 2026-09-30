@@ -65,6 +65,9 @@ not toolchain source or binaries.
 
 ## Preview and test
 
+Unit fixtures use a small synthetic module graph; an independent resolver also
+checks the real runtime modules and worker URLs.
+
 ```bash
 # Serve the package, not the source tree. This does not rebuild it.
 python3 -m http.server 4174 --bind 127.0.0.1 --directory dist/capycanvas

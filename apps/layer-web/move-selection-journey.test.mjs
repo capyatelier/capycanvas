@@ -4,8 +4,6 @@ import {mkdir,writeFile} from 'node:fs/promises';
 const COLORS={pen:[.1,.2,.85,1],touch:[.05,.6,.1,1],mouse:[.85,.08,.05,1]};
 const bar='.canvas-action-bar';
 
-// Journey 26: select, then drag the selected pixels with Move, with and
-// without Leave Copy, and with Alt held at the press.
 export async function checkMoveSelection({call,evaluate,settle,device=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??(device?'artifacts/move-selection/web-tablet':'artifacts/move-selection/web');
   await mkdir(directory,{recursive:true});

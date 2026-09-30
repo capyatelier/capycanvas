@@ -1,5 +1,3 @@
-// Native projection of the shared Canvas Size dialog. Sizes, units, limits,
-// validation and history live in Rust.
 import {openSizeDialog,sizeCheck,sizeFields,sizeSelect} from './size-dialog.js';
 
 export function createCanvasSizeUi({state,element,button,icon,numberField,resolve,dispatch,host=()=>document.body}) {

@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
-// Open a camera JPEG, then export JPEG and WebP through the real dialog and
-// output worker: camera, lens, dates and copyright stay, the location goes.
-// Only the OS picker handles are supplied by the harness.
 export async function checkExportMetadata({call,evaluate,settle}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/photo-m3/export-metadata-web';
   await mkdir(directory,{recursive:true});

@@ -37,17 +37,11 @@ function replaceRequired(text, from, to) {
   return text.replaceAll(from, to);
 }
 
-// Relative references the browser resolves against a module: static, side-effect
-// and dynamic imports, and URLs such as workers and Wasm. Bare specifiers and
-// absolute URLs are not package files.
 const moduleReferences = [
   /(\b(?:from|import)\s*\(?\s*)(["'])(\.\.?\/[^"'\n]*)\2/g,
   /(\bnew URL\(\s*)(["'])((?![a-zA-Z][\w+.-]*:|\/)[^"'\n]+)\2(?=\s*,\s*import\.meta\.url\s*\))/g,
 ];
 
-// Hash final bytes after rewriting dependencies; no bundler required. The module
-// graph is read from the modules, as the browser follows it, so new modules and
-// imports package without changes here; an unresolved reference fails the build.
 export function fingerprintAssets(directory) {
   const files = filesIn(directory), names = {};
   const publish = (path, data = readFileSync(join(directory, path))) => {
@@ -66,11 +60,9 @@ export function fingerprintAssets(directory) {
     return `url(${JSON.stringify(name)})`;
   });
   publish("style.css", css);
-  // app.js looks up artwork, brush previews and Wasm by their development paths.
   const lookups = JSON.stringify(Object.fromEntries(Object.entries(names).filter(([path]) => path !== "style.css")));
   const sources = new Map(files.filter(path => path.endsWith(".js")).map(path => [path, read(join(directory, path))]));
   const target = (path, specifier) => posix.normalize(posix.join(posix.dirname(path), specifier));
-  // Publish each module after its dependencies, so its references name final hashes.
   const done = new Set(), visiting = [];
   const visit = (path) => {
     if (done.has(path)) return;
@@ -152,7 +144,6 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    // Stage every runtime module; fingerprinting follows their references.
     for (const path of [...readdirSync(web).filter(path => path.endsWith(".js") && path !== "sw.js"), "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
@@ -164,12 +155,10 @@ export function packageWeb() {
     }
     const brand = read(join(web, "icons/layer-zen-looking-up-symbolic.svg"));
     for (const size of [32, 180, 192, 512]) {
-      // Favicon and installation icons share the approved enlarged artwork.
       const markSize = 440;
       const inset = (512 - markSize) / 2;
       const mark = brand.replace('width="24" height="24"',
         `x="${inset}" y="${inset}" width="${markSize}" height="${markSize}" color="#f6f5f4"`);
-      // Apple masks artwork itself; other platforms retain rounded corners.
       const corners = size === 180 ? "" : ' rx="76.8"';
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512"${corners} fill="#767676"/>${mark}</svg>`;
       // File input avoids renderer stdin/EOF stalls in constrained build hosts.

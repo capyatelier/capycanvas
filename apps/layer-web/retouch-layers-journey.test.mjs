@@ -3,12 +3,6 @@ import {mkdir,writeFile} from 'node:fs/promises';
 
 const panel='#frequency-separation-panel';
 
-// Layer › New › New Dodge & Burn Layer and Filter › Frequency Separation…
-// from the menus with a mouse, a finger and a pen: the gray layer leaves the
-// canvas as it was until white and black strokes dodge and burn it, the
-// dialog previews its blur and Cancel leaves nothing, and Low and High
-// recombine into the photo and take a small brush on High. Each is one undo
-// step.
 export async function checkRetouchLayers({call,evaluate,settle,device=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??(device?'artifacts/retouch-layers/web-tablet':'artifacts/retouch-layers/web');
   await mkdir(directory,{recursive:true});
@@ -41,7 +35,6 @@ export async function checkRetouchLayers({call,evaluate,settle,device=false}) {
   };
   const menuRow=label=>`[...document.querySelectorAll('.header-menu[open] .popover button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(label)})`;
   const calm=()=>evaluate('new Promise(resolve=>{let last=performance.now(),steady=0;const frame=t=>{steady=t-last<40?steady+1:0;last=t;if(steady>=3)resolve();else requestAnimationFrame(frame);};requestAnimationFrame(frame);})');
-  // A narrow title bar folds the application menus into one.
   const choose=async(menu,path,kind)=>{
     await calm();
     const labelled=`document.querySelector('.header-menu[data-menu="${menu}"]')`;

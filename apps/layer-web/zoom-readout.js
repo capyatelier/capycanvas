@@ -1,8 +1,3 @@
-// Browser projection of the canvas zoom readout. The "N% · D°" button opens the
-// shared zoom menu under a typed zoom field. Rust supplies the menu, the field's
-// control and every change; the field shows the camera's zoom. Opening the menu
-// or choosing an item never takes focus from the canvas; typing borrows it and
-// closing hands it back.
 export const MARGIN = 6;
 
 export const readoutText = camera => `${Math.round(camera.zoom * 100)}% · ${Math.round((camera.rotation * 180) / Math.PI)}°`;

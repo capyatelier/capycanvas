@@ -4,8 +4,6 @@ import {mkdir,writeFile} from 'node:fs/promises';
 const edit='.header-menu[data-menu="edit"]';
 const dialog='dialog[open]';
 
-// Edit ▸ Blending with a mouse, a finger and a pen, its undo, the Document
-// Properties row, and New Document's Blending field in both themes.
 export async function checkBlending({call,evaluate,settle}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/blending/web';
   await mkdir(directory,{recursive:true});

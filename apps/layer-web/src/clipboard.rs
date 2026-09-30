@@ -1,7 +1,3 @@
-//! The browser pixel clipboard. Copies read document bands on the page's GPU
-//! queue and spool them to the raster worker, which writes the full-depth
-//! source and the PNG in one pass. The window keeps the clip; the page writes
-//! the PNG and a nonce to the system clipboard.
 use super::*;
 use layer_ui::{ClipboardCapture, DocumentRequest, HostRequestKind, PixelClip};
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
@@ -26,7 +22,6 @@ impl WebClip {
 
 #[wasm_bindgen]
 impl WebClipTask {
-    /// Show the import-style progress with Cancel.
     pub fn large(&self) -> bool {
         self.capture.large
     }

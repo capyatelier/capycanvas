@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
-// Merge Down from Ctrl+E and the Layer menu, and Stamp Visible, with mouse,
-// touch and pen. Each keeps the look of the canvas and undoes in one step.
 export async function checkMerges({call,evaluate,settle,device=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??(device?'artifacts/merge/web-tablet':'artifacts/merge/web');
   await mkdir(directory,{recursive:true});

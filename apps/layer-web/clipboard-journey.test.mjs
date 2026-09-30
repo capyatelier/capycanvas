@@ -4,8 +4,6 @@ const bar='.canvas-action-bar';
 const visible=`(()=>{const b=document.querySelector('${bar}');return !!b&&!b.hidden&&!b.classList.contains('suppressed')})()`;
 const openMenu='.panel-context-menu:popover-open';
 
-// Copy and Paste with pen, touch and mouse through the bar and the Edit menu,
-// the keyboard with a focused text field, and another app's image.
 export async function checkClipboard({call,evaluate,settle}) {
   const wait=(expression,timeout=25000)=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+${timeout};function check(){if(${expression})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}+' '+JSON.stringify({error:layerApp.state().host_error,notice:layerApp.state().notice,requests:layerApp.state().requests,menu:!!document.querySelector('${openMenu}'),status:document.querySelector('#status')?.textContent})));else setTimeout(check,30);}check();})`);
   const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
