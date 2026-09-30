@@ -144,8 +144,7 @@ impl Graph {
         }
         let mut builder = Builder { packet, sources, effects: &self.effects, level: plan.level, space: r.device.working_space() };
         let output = stack::compose(&mut builder, packet.layers, None, None)?;
-        let mut root = output.split_last().map_or_else(|| Expression::color([0.; 4]), |(front, back)|
-            Expression::combine(front.clone(), Expression::over(back), layer_core::LayerBlend::Normal, 0));
+        let mut root = Expression::over(&output);
         for layer in packet.layers {
             if layer.mask.as_ref().is_some_and(|m| m.enabled && m.show_area) {
                 root = Expression::combine(builder.source(layer, true), root, layer_core::LayerBlend::Normal, 64);

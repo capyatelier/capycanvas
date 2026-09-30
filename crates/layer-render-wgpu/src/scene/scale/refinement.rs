@@ -99,7 +99,7 @@ impl Cache {
         let texture = image.texture.clone();
         let view = image.view.clone();
         let mut seen = BTreeSet::new();
-        let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(2).collect();
+        let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(4).collect();
         let regions: Vec<_> = pages.iter().map(|c| page_rect(*c).intersect(PixelRect::full(self.plan.extent))).collect();
         r.ensure_exact_preview(encoder)?;
         let mut prepared = if bounded(packet.layers) {

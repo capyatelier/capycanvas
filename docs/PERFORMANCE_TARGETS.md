@@ -95,12 +95,14 @@ Record each result in the tier's table with its value, date and commit.
 
 ## Where we stand
 
-The integrated compositor has current moving-stroke measurements on all three
-reference tablets (2026-09-29–30):
+The integrated compositor has moving-stroke measurements on all three
+reference tablets (2026-09-29–30); the latest balanced-root, four-page build is
+measured on low and mid tiers:
 
-- TCL G-Pen 1024 px on 12 MP reaches 65.7 fresh updates/s with completion-gap
-  p99 below 28.6 ms; this measured stroke meets 60/s. Mid-tier G-Pen 2048 px
-  reaches 49.0/s. Top-tier reaches 150.2/s, but its p99 gap still misses 16.7 ms.
+- TCL G-Pen 1024 px on 12 MP reaches 63.7 fresh updates/s with completion-gap
+  p99 below 28.4 ms; this measured stroke meets 60/s. Mid-tier G-Pen 2048 px
+  reaches 48.0/s. The preceding top-tier build reaches 150.2/s, but its p99 gap
+  still misses 16.7 ms; the latest refinement change is not remeasured there.
   Other simple brushes and stacked-photo strokes remain below their targets.
 - Clone, Healing and Spot Healing at 512 px reach 114–120 fresh updates/s on
   the mid tier and 185–192 on the top tier. Their completion gaps meet the
