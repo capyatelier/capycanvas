@@ -63,6 +63,9 @@ Tool-settings journeys share `tool_settings_workspace` for toolbar commands and
 panel placement; restore actions, waits and interaction assertions stay in callers.
 Artifact helpers preserve literal paths and each capture's warm-up wait; held
 warm textures and theme loops remain in their callers.
+Docking and ink checks retain pressure editing, native wrapping and GPU pixels.
+Drop rules and tile/grip bounds belong to `native_layout_drop_input`,
+`native_toolbar_sizing` and `native_ribbon_allocation`.
 
 [`workspace-motion.sh`](../../tools/performance/workspace-motion.sh) builds the
 release tests, starts a private D-Bus session, headless Mutter and PipeWire, and
