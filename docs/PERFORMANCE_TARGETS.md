@@ -98,7 +98,7 @@ Record each result in the tier's table with its value, date and commit.
 The integrated compositor has current moving-stroke measurements on all three
 reference tablets (2026-09-29):
 
-- TCL G-Pen 1024 px on 12 MP reaches 53.3 fresh updates/s; **60 is not met**.
+- TCL G-Pen 1024 px on 12 MP reaches 53.0 fresh updates/s; **60 is not met**.
 - Clone, Healing and Spot Healing at 512 px reach 114–120 fresh updates/s on
   the mid tier and 185–192 on the top tier. Their completion gaps meet the
   moving-stroke criterion. Bounded Healing finalization keeps navigation input

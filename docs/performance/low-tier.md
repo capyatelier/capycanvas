@@ -311,7 +311,7 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | 53.3 fresh updates/s (50.14–53.45); median completion gap p99 30.6 ms (one run 38.0 ms) | **Not met** |
+| G-Pen (1) | Simple | 1024 px | 53.0 fresh updates/s (52.52–53.54); median completion gap p99 29.9 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -354,29 +354,24 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 Measured on 2026-09-29: G-Pen 1024 px, Perceptual 12 MP photo, Fit at 15.97%,
 240 × 140 px trajectory, 16 ms prediction, three five-second strokes. Stats is
-closed and thermal status remains zero. Fresh updates count completed frames
-that consumed new real pen samples. The median is 53.3/s (50.14–53.45), below
-60/s. Completion-gap p99 is 38.0 / 28.5 / 30.6 ms; the first run also misses
-the 33.3 ms gap limit.
+closed, Navigator is visible and thermal status remains zero. Fresh updates
+count completed frames that consumed new real pen samples. The median is 52.97/s (52.52–53.54), below
+60/s. Completion-gap p99 is 29.02 / 29.88 / 31.58 ms; all three pass the
+33.3 ms gap limit.
 
-The build shares decoded sources and includes the drag-cache fixes. Its APK
-SHA-256 is `89ad253df04ed082393f9b134766427b49f133da3794f34c990b855394879926`.
+The optimized release APK uses the renderer and host source of `dd0afc566`;
+SHA-256 `8f9a4f41a90f226bb223091d605df80e27cdfa98bb561f0047c8048bdbd2eef5`.
 Raw input, completion and environment records are in
-`artifacts/latency-investigation/stable-brush-continuous`.
+`artifacts/latency-investigation/settle-21-brush-continuous`.
+The preceding Healing build measured 53.14 / 54.35 / 53.92 fresh updates/s;
+neither set meets 60/s or qualifies stacked photos, native zoom or other brushes.
 
-The preceding integration measured 53.6/s under the same conditions. Neither
-measurement qualifies stacked photos, native zoom or other brushes. Matched
-contacts establish that ordinary refinement adds less than one frame to resumed
-input for this workload; see [responsiveness](responsiveness.md).
-
-A repeat with bounded Healing/native publication and Android production
-optimization measures 53.14 / 54.35 / 53.92 fresh updates/s, with completion-gap
-p99 of 31.09 / 29.87 / 29.24 ms. The 60/s throughput target remains unmet;
-the native-publication change shows no continuous-stroke regression in this
-fixture. Initial submission still misses 33 ms, and one of three resumed-contact
-comparisons exceeds the one-frame added GPU p95 budget. Records are in
-`artifacts/latency-investigation/heal-brush-{continuous,fast,slow}`; the build and
-matched-contact analysis are in [responsiveness](responsiveness.md).
+Matched resumed contacts add 3.08–5.53 ms median submission delay and
+13.60–15.95 ms median GPU-completion delay. Two of three comparisons exceed
+the one-frame added GPU p95 budget. One of three initial contacts in each set
+also exceeds 33 ms. Records are in
+`artifacts/latency-investigation/settle-21-brush-{fast,slow}`;
+[responsiveness](responsiveness.md) contains the matched results and protocol.
 
 ## Input during Healing finalization
 

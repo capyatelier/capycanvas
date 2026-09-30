@@ -8,7 +8,7 @@ otherwise.
 
 | Interaction | Limit | Low | Mid | Top |
 | --- | --- | --- | --- | --- |
-| Pen down → first submitted canvas update | 2 frames: 33 / 22 / 17 ms | **Initial contact not met:** 37.9–51.3 ms to submit; resumed-contact medians 20.1–23.2 ms (release, 12 MP G-Pen 1024, 2026-09-29; comparison below) | | **Not met.** 29.4–40.7 ms across three 5 s G-Pen strokes after quick color changes on the 61 MP photo; 2048 px, release build (2026-09-27). Navigation → first pen submission 6.7–11.0 ms (2026-09-22) |
+| Pen down → first submitted canvas update | 2 frames: 33 / 22 / 17 ms | **Initial contact not met:** 31.1–36.6 ms to submit; resumed-contact medians 21.1–23.1 ms (release, 12 MP G-Pen 1024, 2026-09-29; comparison below) | | **Not met.** 29.4–40.7 ms across three 5 s G-Pen strokes after quick color changes on the 61 MP photo; 2048 px, release build (2026-09-27). Navigation → first pen submission 6.7–11.0 ms (2026-09-22) |
 | Tap or press → visible response: buttons, tools, menus | 100 ms | | | |
 | Transform or placement press → first moving frame | 100 ms | | 22 ms for a selection Distort, 47 ms for a photo handle (`debff77d`, `fe605aa3`, 2026-09-27) | |
 | Undo or redo of one 1024 px stroke | 250 ms | | | |
@@ -23,10 +23,10 @@ otherwise.
 ## Resuming during refinement
 
 Measured on 2026-09-29 on the TCL: 12 MP Perceptual reference photo at Fit,
-G-Pen 1024 px, 250 × 140 px path and default workspace with Stats closed.
-The optimized release benchmark includes bounded Healing and native raster
-publication (APK
-`e145c6cf350d3e8f1e4fbffd0c8d47aa72c42e0de489c73a4174ef45fb30a18a`).
+G-Pen 1024 px, 250 × 140 px path and default workspace with Stats closed
+and Navigator visible.
+The optimized release APK uses the renderer and host source of `dd0afc566`;
+SHA-256 `8f9a4f41a90f226bb223091d605df80e27cdfa98bb561f0047c8048bdbd2eef5`.
 Each of three runs draws 25 contacts, lasting 100 ms each. Gaps of 100 ms leave
 72 of 75 contacts arriving during refinement; 1,100 ms gaps leave none.
 The comparison pairs those 72 resumed contacts with the same contact indices
@@ -35,24 +35,25 @@ medians; thermal status remains zero.
 
 | Contact latency | During refinement | After refinement |
 | --- | --- | --- |
-| Input queue | 0.96–2.23 ms | 0.19–0.20 ms |
-| First canvas submission | 20.10–23.15 ms | 17.77–18.94 ms |
-| GPU completion | 57.64–63.74 ms | 52.01–54.14 ms |
+| Input queue | 0.67–2.30 ms | 0.17–0.19 ms |
+| First canvas submission | 21.06–23.09 ms | 17.56–18.25 ms |
+| GPU completion | 61.65–62.50 ms | 46.18–48.30 ms |
 
-Paired run medians add 2.09 / 5.38 / 1.68 ms to submission and
-5.63 / 10.85 / 5.55 ms to GPU completion. Submission p95 is 26.68–32.89 ms,
-versus 23.19–26.19 ms after settling. Added submission p95 stays below one
-60 Hz frame. Added GPU-completion p95 is 8.74 / 20.56 / 8.67 ms: **the second
-run exceeds the one-frame refinement budget**. These observations establish
-continued input service, not physical pen-to-photon latency or a universal
-one-frame bound.
+Paired run medians add 3.08 / 5.53 / 3.20 ms to submission and
+13.60 / 15.95 / 15.48 ms to GPU completion. Submission p95 is 28.53–40.26 ms,
+versus 21.17–26.68 ms after settling. Added submission p95 is
+7.36 / 13.58 / 5.62 ms, within one 60 Hz frame. Added GPU-completion p95 is
+23.16 / 20.57 / 15.22 ms: **two runs exceed the one-frame refinement budget**.
+Input continues during refinement, but the additional GPU delay target remains
+unmet. These metrics do not measure physical pen-to-photon latency.
 
-Initial contacts take 37.92–51.30 ms to submit during these fast-gap runs and
-41.01–46.32 ms in the settled runs, missing the separate 33 ms target.
-Raw records are in `artifacts/latency-investigation/heal-brush-{fast,slow}`;
-`heal-pauses-matched-resume.json` includes the paired results and initial contacts.
-The preceding drag-cache build's results remain in
-`stable-pauses-matched-resume.json`.
+Initial contacts take 31.10–36.58 ms to submit in the fast-gap runs and
+26.43–36.93 ms in the settled runs; one initial contact in each set exceeds
+the separate 33 ms target. Raw records are in
+`artifacts/latency-investigation/settle-21-brush-{fast,slow}`;
+`settle-21-pauses-matched-resume.json` includes every run and initial contact.
+Earlier builds remain in `heal-pauses-matched-resume.json` and
+`stable-pauses-matched-resume.json`; they do not qualify the current build.
 
 ### Healing finalization
 
