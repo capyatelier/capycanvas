@@ -5,6 +5,16 @@ use std::{sync::mpsc, time::Duration};
 fn storage(directory: &TempDir) -> SettingsFile {
     SettingsFile::new(directory.path.clone()).unwrap()
 }
+fn service_over(worker: Worker) -> SettingsService {
+    SettingsService {
+        subscription: None,
+        worker: Ok(worker),
+        submitted: None,
+        load_error: None,
+        save_error: None,
+        close: CloseStatus::default(),
+    }
+}
 fn edited(gamma: f32) -> Settings {
     Settings {
         pressure_gamma: gamma,
@@ -151,14 +161,7 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
         || {},
     )
     .unwrap();
-    let mut service = SettingsService {
-        subscription: None,
-        worker: Ok(worker),
-        submitted: None,
-        load_error: None,
-        save_error: None,
-        close: CloseStatus::default(),
-    };
+    let mut service = service_over(worker);
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     host.dispatch(UiAction::Invoke {
         command: layer_ui::CommandId::OpenDocument,
@@ -395,14 +398,7 @@ fn failed_save_is_reported_and_a_later_success_clears_the_error() {
         },
     )
     .unwrap();
-    let mut service = SettingsService {
-        subscription: None,
-        worker: Ok(worker),
-        submitted: None,
-        load_error: None,
-        save_error: None,
-        close: CloseStatus::default(),
-    };
+    let mut service = service_over(worker);
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     host.dispatch(UiAction::OpenSettings {
         page: layer_ui::SettingsPage::Appearance,
@@ -469,14 +465,7 @@ fn close_waits_for_the_latest_write_and_does_not_stop_the_worker() {
         },
     )
     .unwrap();
-    let mut service = SettingsService {
-        subscription: None,
-        worker: Ok(worker),
-        submitted: None,
-        load_error: None,
-        save_error: None,
-        close: CloseStatus::default(),
-    };
+    let mut service = service_over(worker);
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     change_preferences(&mut host, 1.25);
     service.poll(&mut host).unwrap();
@@ -648,14 +637,7 @@ fn stopped_storage_reports_the_latest_close_write_and_allows_discard() {
         },
     )
     .unwrap();
-    let mut service = SettingsService {
-        subscription: None,
-        worker: Ok(worker),
-        submitted: None,
-        load_error: None,
-        save_error: None,
-        close: CloseStatus::default(),
-    };
+    let mut service = service_over(worker);
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     change_preferences(&mut host, 1.25);
     service.poll(&mut host).unwrap();

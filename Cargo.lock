@@ -1471,7 +1471,6 @@ dependencies = [
  "layer-render-wgpu",
  "layer-ui",
  "layer-workspace",
- "png 0.17.16",
  "pollster",
  "serde",
  "serde_json",
