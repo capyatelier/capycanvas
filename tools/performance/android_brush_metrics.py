@@ -67,6 +67,9 @@ def validate_setup(info, requested):
     actual.update(layers=len(state["layers"]), diameter=state["brush"]["diameter"],
                   selected_preset=state["brush"]["preset"],
                   feedback=state["settings"]["feedback"])
+    if "paint_layer_index" in requested:
+        expected["paint_layer_index"] = [requested["paint_layer_index"]]
+        actual["paint_layer_index"] = [i for i, layer in enumerate(state["layers"]) if layer.get("selected")]
     if requested["prediction"]:
         expected["horizon"] = requested["horizon"]
         actual["horizon"] = state["settings"]["prediction_ms"]

@@ -53,6 +53,7 @@ def main():
     p.add_argument("--zoom", type=float, help="Absolute view scale; default fits the canvas")
     p.add_argument("--blending", choices=["linear", "perceptual"], help="Document blend space; default uses the imported document")
     p.add_argument("--photo-layers", type=int, default=1, help="Photo layer count, with translucent duplicates")
+    p.add_argument("--paint-layer-index", type=int, default=0, help="Paint layer index from the top, above the opaque base photo")
     tracing = p.add_mutually_exclusive_group()
     tracing.add_argument("--trace", action="store_true", help="Full CPU/GPU phase attribution")
     tracing.add_argument("--presentation-trace", action="store_true",
@@ -64,6 +65,8 @@ def main():
     args = p.parse_args()
     if args.paint_load is not None and not 0 <= args.paint_load <= 1:
         p.error("--paint-load must be between 0 and 1")
+    if not 0 <= args.paint_layer_index < args.photo_layers:
+        p.error("--paint-layer-index must be between 0 and --photo-layers minus 1")
     args.output.mkdir(parents=True, exist_ok=True)
     adb = [args.adb, "-s", args.serial]
     remote = f"/sdcard/Android/data/{args.package}/files/brush-benchmark"
@@ -78,6 +81,7 @@ def main():
                          prediction=args.prediction == "true", speed=args.speed,
                          duration_ms=args.duration, repeats=args.repeats,
                          radii=[args.radius_x, args.radius_y], photo_layers=args.photo_layers,
+                         paint_layer_index=args.paint_layer_index,
                          horizon=args.horizon, zoom=args.zoom, blending=args.blending, stats_panel=args.stats)
         if args.mode == "pauses":
             requested["pause_ms"] = args.pause_ms
@@ -99,7 +103,8 @@ def main():
                                durationMs=args.duration, repeats=args.repeats, mode=args.mode,
                                speed=args.speed, prediction=args.prediction, horizon=args.horizon,
                                radiusX=args.radius_x, radiusY=args.radius_y, photo=args.photo,
-                               photoLayers=args.photo_layers, pauseMs=args.pause_ms, contactMs=args.contact_ms,
+                               photoLayers=args.photo_layers, paintLayerIndex=args.paint_layer_index,
+                               pauseMs=args.pause_ms, contactMs=args.contact_ms,
                                settleDelayMs=args.settle_delay_ms,
                                memorySnapshots=str(args.memory).lower(), statsPanel=str(args.stats).lower(),
                                waitForTrace="true").items():

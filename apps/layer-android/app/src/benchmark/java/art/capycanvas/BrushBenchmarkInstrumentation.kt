@@ -225,6 +225,9 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 }
             }
             invoke("add_layer")
+            val paintLayerIndex = arguments.getString("paintLayerIndex", "0")!!.toInt()
+            check(paintLayerIndex in 0 until photoLayers)
+            repeat(paintLayerIndex) { invoke("lower_layer") }
             invoke("fit_canvas")
             arguments.getString("zoom")?.toDouble()?.let { requested ->
                 check(requested in .01..8.0)
