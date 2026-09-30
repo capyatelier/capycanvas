@@ -50,6 +50,8 @@ copied beside the executable, so development builds run unpackaged.
 
 Preferences live in `settings.json` and workspaces in `workspaces.sqlite3` under
 `%LOCALAPPDATA%\CapyAtelier\CapyCanvas`.
+File workers use `color_storage::export_profile` for imported profiles in export
+options, export presets and print-proof setup.
 
 ### Environment switches
 

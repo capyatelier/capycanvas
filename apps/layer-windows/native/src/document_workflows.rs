@@ -396,13 +396,7 @@ impl Task {
                         return Err("No export is pending".into());
                     };
                     if let Some(id) = profile_id {
-                        let profile =
-                            crate::color_storage::profile(&id, self.control.cancellation_flag())?;
-                        recipe.profile = layer_ui::ExportProfile {
-                            channels: layer_color::profile_channels(&profile)?,
-                            name: layer_color::profile_description(&profile)?,
-                            profile,
-                        };
+                        recipe.profile = crate::color_storage::export_profile(&id, self.control.cancellation_flag())?;
                     }
                     task.configure(recipe)?;
                     task.compare(self.control.clone())?;
@@ -446,13 +440,7 @@ impl Task {
                     profile_id,
                 } => {
                     if let Some(id) = profile_id {
-                        let profile =
-                            crate::color_storage::profile(&id, self.control.cancellation_flag())?;
-                        let value = layer_ui::ExportProfile {
-                            channels: layer_color::profile_channels(&profile)?,
-                            name: layer_color::profile_description(&profile)?,
-                            profile,
-                        };
+                        let value = crate::color_storage::export_profile(&id, self.control.cancellation_flag())?;
                         match &mut action {
                             layer_ui::ExportPresetAction::Save { recipe, .. }
                             | layer_ui::ExportPresetAction::Update { recipe, .. }

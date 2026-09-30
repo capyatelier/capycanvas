@@ -125,6 +125,14 @@ pub(crate) fn profile(id: &str, cancel: &AtomicBool) -> Result<ColorProfile, Str
             .ok_or("Profile is unavailable".into())
     })
 }
+pub(crate) fn export_profile(id: &str, cancel: &AtomicBool) -> Result<layer_ui::ExportProfile, String> {
+    let profile = profile(id, cancel)?;
+    Ok(layer_ui::ExportProfile {
+        channels: layer_color::profile_channels(&profile)?,
+        name: layer_color::profile_description(&profile)?,
+        profile,
+    })
+}
 pub(crate) fn import(path: &Path, cancel: &AtomicBool) -> Result<(), String> {
     let bytes = read(path, policy::PROFILE_READ_LIMIT)?;
     preserve(&bytes, cancel)

@@ -64,12 +64,7 @@ impl Task {
         self.preserved = false;
         self.lut = None;
         if let Some(id) = profile_id {
-            let profile = crate::color_storage::profile(&id, control.cancellation_flag())?;
-            settings.profile = Some(layer_ui::ExportProfile {
-                channels: layer_color::profile_channels(&profile)?,
-                name: layer_color::profile_description(&profile)?,
-                profile,
-            });
+            settings.profile = Some(crate::color_storage::export_profile(&id, control.cancellation_flag())?);
         }
         self.job.recipe = settings.recipe()?;
         self.settings = settings;
