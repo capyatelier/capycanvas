@@ -213,13 +213,6 @@ fn rebased_raster(raster: &RasterRevision, change: &LayerChange) -> Result<Raste
     }))
 }
 
-fn canvas_rect(size: [u32; 2]) -> Rect {
-    Rect {
-        min: Point::default(),
-        max: Point { x: size[0] as f32, y: size[1] as f32 },
-    }
-}
-
 fn invalid_placement() -> CanvasGeometryError {
     CanvasGeometryError::Document(DocumentError::InvalidLayerOperation("Invalid layer placement"))
 }
@@ -227,7 +220,7 @@ fn invalid_placement() -> CanvasGeometryError {
 /// The canvas window in a target's local pixels.
 fn local_window(layers: &[Layer], id: LayerId, canvas: [u32; 2]) -> Result<Rect, CanvasGeometryError> {
     let inverse = target_transform(layers, id).inverse().ok_or_else(invalid_placement)?;
-    Ok(inverse.bounds(canvas_rect(canvas)))
+    Ok(inverse.bounds(Rect::from_extent(canvas)))
 }
 
 /// Local pixels a target holds, in whole tiles: its tiles and the tiles a
@@ -467,7 +460,7 @@ impl Document {
                 erase_outside(local_window(&layers, layer.id, rect.size)?, change.extent, &tiles)?
             } else {
                 let inverse = transform.inverse().ok_or_else(invalid_placement)?;
-                let mut outside = Selection::polygon(canvas_rect(rect.size).corners().map(|p| inverse.map(p)).to_vec())?;
+                let mut outside = Selection::polygon(Rect::from_extent(rect.size).corners().map(|p| inverse.map(p)).to_vec())?;
                 outside.inverted = true;
                 vec![pixel_operation(outside, ERASE)]
             };
@@ -583,7 +576,7 @@ impl Document {
             let extent = old.local_extent(canvas);
             let mut rotated = Rect::EMPTY;
             for &id in &targets {
-                rotated = rotated.union(target_transform(&self.layers, id).then(to_canvas).bounds(canvas_rect(extent)));
+                rotated = rotated.union(target_transform(&self.layers, id).then(to_canvas).bounds(Rect::from_extent(extent)));
             }
             let frame = if geometry.delete_outside {
                 [0.; 2]

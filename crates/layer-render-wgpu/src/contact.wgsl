@@ -1,10 +1,4 @@
-// Shared GPU contact model. Both deposition paths call this exact evaluator.
-// No canvas color is sampled: paper, contact geometry and pigment supply are
-// independent of the already-painted image. A future brush-state compute pass
-// can provide the same pair of contact poses.
 
-// Dry compute specializes the same evaluator by material features. Other
-// consumers retain the dynamic evaluator; custom combinations fall back to it.
 override CONTACT_FLAGS: u32 = 4294967295u;
 fn contact_feature(bit: u32, dynamic: bool) -> bool {
     return select((CONTACT_FLAGS & bit) != 0u, dynamic, CONTACT_FLAGS == 4294967295u);
@@ -38,8 +32,6 @@ fn contact_paper(world: vec2<f32>) -> f32 {
     return 1.0;
 }
 
-// Paper alone bounds a loaded film. Evaluate the more expensive edge noise
-// only after proving that incoming contacts can still deposit pigment.
 fn contact_field_with_paper(world: vec2<f32>, paper: f32) -> vec2<f32> {
     var field = vec2<f32>(0.5, paper);
     if contact_feature(4u, style.contact_a.w > 0.0) {
@@ -49,7 +41,6 @@ fn contact_field_with_paper(world: vec2<f32>, paper: f32) -> vec2<f32> {
     return field;
 }
 
-// Stationary material fields are shared by all spans touching this pixel.
 fn contact_field(world: vec2<f32>) -> vec2<f32> {
     return contact_field_with_paper(world, contact_paper(world));
 }
@@ -62,17 +53,12 @@ fn evolving_contact_prepared(
 ) -> f32 {
     let distance2 = dot(motion, motion);
     let start = center - motion;
-    // The upload resolves the midpoint nib metric once for all touched pixels.
     let nib_motion = vec2<f32>(dot(motion, metric.xy), dot(motion, metric.zw));
     let nib_offset = vec2<f32>(dot(world - start, metric.xy), dot(world - start, metric.zw));
     let projected = dot(nib_offset, nib_motion) / max(dot(nib_motion, nib_motion), 0.000001);
     var progress = select(1.0, clamp(projected, 0.0, 1.0), distance2 > 0.000001);
     if distance2 > 0.000001 && any(abs(previous.xy - radii) > vec2<f32>(0.000001)) {
         let middle_axes = max((previous.xy + radii) * 0.5, vec2<f32>(0.005));
-        // Minimize |offset - motion*t|² / (r0 + (r1-r0)*t)².
-        // Center-line projection ignores changing radius and leaves necks
-        // between tapered spans. This is exact for a fixed-aspect nib; a
-        // changing aspect/orientation uses the same mean nib metric above.
         let relative_start = previous.xy / middle_axes;
         let relative_end = radii / middle_axes;
         let r0 = max((relative_start.x + relative_start.y) * 0.5, 0.000001);
@@ -85,7 +71,6 @@ fn evolving_contact_prepared(
         if denominator > 0.000001 {
             progress = clamp((a * r0 + slope * c) / denominator, 0.0, 1.0);
         } else {
-            // A stationary point here is a maximum; choose an endpoint.
             progress = select(0.0, 1.0, (c - 2.0 * a + b) / (r1 * r1) < c / (r0 * r0));
         }
     }
@@ -106,7 +91,6 @@ fn evolving_contact_prepared(
 
     var boundary = 1.0;
     if contact_feature(4u, style.contact_a.w > 0.0) {
-        // Stationary, multiscale edge variation; no contact-index randomness.
         boundary += (field.x - 0.5) * style.contact_a.w * (1.5 - pressure * 0.5);
     }
     let pool = select(0.0, style.contact_b.w, contact_feature(16u, style.contact_b.w > 0.0));
@@ -117,11 +101,6 @@ fn evolving_contact_prepared(
         coverage = clamp((boundary - radius) / feather, 0.0, 1.0);
     }
     if !contact_uniform() {
-        // Integrate a compact parabolic pigment kernel along the actual span.
-        // Adjacent spans partition the integral, so there are no overlapping
-        // cap deposits or periodic dots as contact spacing changes.
-        // Use the closest contact pose for a changing nib. Adjacent spans
-        // then meet at the same pose rather than at two different midpoints.
         var integral_motion = nib_motion;
         var integral_offset = nib_offset;
         if any(previous != vec4<f32>(radii, rotation)) {
@@ -137,17 +116,11 @@ fn evolving_contact_prepared(
         let a = clamp(-integral_projected * travel, -reach, reach);
         let b = clamp((1.0 - integral_projected) * travel, -reach, reach);
         let parabolic = max(q * (b - a) - (b*b*b - a*a*a) / 3.0, 0.0);
-        // Graphite side/point contacts have a pressure distribution that falls
-        // to zero at the edge. Even a small constant-density kernel component
-        // leaves faint hard facets when a broad pencil changes tilt or size.
         let firmness = select(invariants.y, 0.0,
             contact_feature(64u, style.contact_a.z > 0.0 || style.contact_c.z > 0.0));
         let hard_weight = firmness * 0.7;
         var integral = mix(parabolic, b - a, hard_weight);
         if contact_feature(64u, style.contact_a.z > 0.0 || style.contact_c.z > 0.0) {
-            // Hardness still controls graphite's pressure profile. Interpolate
-            // two kernels that both vanish at the edge, rather than adding a
-            // discontinuous flat component to a soft pencil's deposit.
             let a3 = a * a * a;
             let b3 = b * b * b;
             let quartic = max(q * q * (b - a) - (2.0 / 3.0) * q * (b3 - a3)
@@ -155,14 +128,8 @@ fn evolving_contact_prepared(
             integral = mix(quartic, parabolic, hardness);
         }
         let normalization = invariants.x / max(travel * 2.0 * sqrt(axes.x * axes.y), 0.000001);
-        // A firm, pigment-fed nib delivers an even strip across its width.
-        // Softer media retain the rounded density profile. Normalize by the
-        // complete transverse integral, not the current segment's length.
         let section = 2.0 * reach * mix(q * (2.0 / 3.0), 1.0, hard_weight);
         let feed = mix(1.0, 1.0 / max(section, 0.001), firmness);
-        // A fully fed chisel supplies one transverse dose in every direction.
-        // Keeping the soft-tip area factor here makes a held marker darken
-        // solely because its direction changes, like a shaded plastic ribbon.
         let directional_feed = mix(normalization, 1.0, firmness);
         coverage = integral * directional_feed * feed * smoothstep(0.0, aa * 2.0, q);
         if distance2 <= 0.000001 {
@@ -176,11 +143,8 @@ fn evolving_contact_prepared(
     // The point side is -X in the stylus frame; the opposite side is soft.
     let density = mix(1.0, clamp(0.8 - local.x * 0.8, 0.03, 1.6), bias);
     if contact_feature(2u, style.contact_a.y > 0.0) {
-        // Paper UV excludes stroke seeds, contact motion and the stylus pose.
         let tooth = field.y;
         let penetration = clamp(pressure * style.contact_c.x * density, 0.0, 1.0);
-        // Pressure fills stationary tooth gradually; uniform dry deposits
-        // catch the peaks without a translucent film over the whole paper.
         var contact = smoothstep(0.5 - penetration * 0.5, 0.85 - penetration * 0.35, tooth)
             * (0.3 + penetration * 0.7);
         if contact_uniform() {
@@ -194,21 +158,14 @@ fn evolving_contact_prepared(
     var load = 1.0;
     if contact_feature(32u, style.contact_c.y > 0.0) { load = exp(-style.contact_c.y * input.z); }
     if contact_feature(8u, style.contact_b.z > 0.0) && sensors.z > 0.0 {
-        // Strand identities remain coherent along the stroke. Supply decreases
-        // gradually, revealing gaps rather than independently random speckles.
         var strand_y = local.y;
         if distance2 > 0.000001 {
-            // Continue a turning nib's hairs along its local curvature through
-            // the end caps. Straight tangent extensions intersect as wedges
-            // when neighboring wide contacts meet on a curved path.
             let turn = previous.z * rotation.y - previous.w * rotation.x;
             let along_nib = local.x * axes.x;
             strand_y -= 0.5 * turn * along_nib * along_nib
                 / max(invariants.x * axes.y, 0.000001);
         }
         let across = (strand_y * 0.5 + 0.5) * style.contact_b.y;
-        // Extend stroke distance through the end caps. Finite loading
-        // patches keep turning bristles from leaving crossing wedges.
         let along = previous_sensors.z + dot(world - start, motion)
             * (sensors.z - previous_sensors.z) / max(distance2, 0.000001);
         let variation = contact_noise(vec2<f32>(across,
@@ -217,8 +174,6 @@ fn evolving_contact_prepared(
         let separation = style.contact_b.z * (1.0 - pressure * 0.45)
             * smoothstep(0.12, 0.78, abs(local.y));
         coverage *= mix(1.0, fibers, separation);
-        // A drying bristle loses contact intermittently; it does not turn all
-        // of the ink translucent. Strand identity fixes those gaps in the brush.
         let supply = smoothstep(0.08, 0.3, load - variation * 0.65);
         coverage *= mix(1.0, supply, style.contact_b.z);
     }

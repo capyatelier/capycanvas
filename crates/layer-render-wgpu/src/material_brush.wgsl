@@ -1,6 +1,3 @@
-// The pass planner supplies the operation as a pipeline constant so the GPU
-// compiler sees only that operation's control flow. Style retains its packed
-// operation field for the shared batch layout and reservoir pass.
 override MATERIAL_OPERATION: u32;
 
 const OP_DEPOSIT: u32 = 0u;
@@ -126,8 +123,6 @@ fn canvas_load(brush_position: vec2<f32>) -> vec4<f32> {
 
 fn canvas_sample(brush_position: vec2<f32>) -> vec4<f32> {
     let document_position = brush_to_layer(brush_position);
-    // Manual bilinear filtering stays correct across sparse page boundaries;
-    // filtering each page texture independently would clamp at its edge.
     let base = floor(document_position - vec2<f32>(0.5)) + vec2<f32>(0.5);
     let fraction = clamp(document_position - base, vec2<f32>(0.0), vec2<f32>(1.0));
     let top = mix(
@@ -160,10 +155,6 @@ fn blurred_canvas_sample(position: vec2<f32>, amount: f32) -> vec4<f32> {
     if radius < 0.01 {
         return canvas_sample(position);
     }
-    // Preserve smooth subpixel advection at the center, then use nearest
-    // cardinal taps for the low-frequency softening. This reduces the sparse
-    // atlas path from five manual-bilinear samples (20 texture loads) to one
-    // bilinear sample plus four loads (8 total).
     return (canvas_sample(position) * 4.0
         + canvas_load(position + vec2<f32>( radius, 0.0))
         + canvas_load(position + vec2<f32>(-radius, 0.0))
@@ -176,9 +167,6 @@ fn watercolor_canvas_sample(position: vec2<f32>, amount: f32) -> vec4<f32> {
     if radius < 0.01 {
         return canvas_sample(position);
     }
-    // The bilinear center preserves smooth subpixel advection. Four nearest
-    // cardinal taps provide the broad watercolor softening without paying for
-    // five separate manual-bilinear samples across sparse page boundaries.
     return (canvas_sample(position) * 4.0
         + canvas_load(position + vec2<f32>( radius, 0.0))
         + canvas_load(position + vec2<f32>(-radius, 0.0))
@@ -194,11 +182,6 @@ fn contact_coverage_field(dab: Dab, world: vec2<f32>, field: vec2<f32>) -> f32 {
 }
 
 fn contact_segment_progress(dab: Dab, world: vec2<f32>) -> f32 {
-    // Stroke-uniform media must cover the segment between consecutive
-    // contacts. If it uses isolated footprints, each pixel receives pigment
-    // only at the first circular leading edge and the contact cadence appears
-    // as concentric displaced-source crescents. Projecting onto the traveled
-    // segment produces one continuous swept footprint without extra samples.
     let motion_squared = dot(dab.motion, dab.motion);
     if motion_squared <= 0.000001 {
         return 1.0;
@@ -325,9 +308,6 @@ fn reservoir_exchange_amount(dab: Dab, coverage: f32) -> f32 {
 }
 
 fn replenished_reservoir_alpha(carried: f32, pickup: f32, exchange: f32) -> f32 {
-    // Contact with transparent or partially covered canvas cannot remove
-    // material from the brush. Per-dab charge already models material loss;
-    // pickup only replenishes the reservoir toward a denser destination.
     return max(carried, mix(carried, pickup, exchange));
 }
 
@@ -337,9 +317,6 @@ struct SmudgeTrace {
 }
 
 fn trace_smudge(initial: vec2<f32>, first: u32, count: u32) -> SmudgeTrace {
-    // Compose the contacts into one semi-Lagrangian backtrace, then sample the
-    // old canvas once. Blending one shifted source copy per contact exposes
-    // the dab cadence as repeated hard-edge scallops.
     var coordinate = initial;
     var optical_depth = 0.0;
     var remaining = count;
@@ -355,10 +332,6 @@ fn trace_smudge(initial: vec2<f32>, first: u32, count: u32) -> SmudgeTrace {
             0.0,
             0.9999,
         );
-        // Integrate strength over physical stroke distance. At the canonical
-        // four-percent spacing this is identical to one source-over contact;
-        // denser or sparser input no longer changes the total smudge merely by
-        // changing how many contacts happened to be generated.
         let diameter = max(dab.radii.x * 2.0, 0.01);
         let distance_steps = length(dab.motion) / (diameter * 0.04);
         optical_depth += -log(1.0 - contact) * distance_steps;
@@ -369,9 +342,6 @@ fn trace_smudge(initial: vec2<f32>, first: u32, count: u32) -> SmudgeTrace {
 }
 
 fn mix_smudged_material(original: vec4<f32>, dragged: vec4<f32>, influence: f32) -> vec4<f32> {
-    // A paint blender carries color without cutting transparent holes out of
-    // material already on the layer. Empty source contributes no replacement
-    // color; dragged paint can still expand into an empty destination.
     let original_color = select(
         working_unassociate(dragged),
         working_unassociate(original),
@@ -431,11 +401,6 @@ fn watercolor_fragment(
             }
         }
 
-        // Reverse-compose a continuous same-layer backtrace for this
-        // microbatch. Advection uses a smooth analytic footprint while the
-        // artist's ragged mask remains authoritative for deposition. This
-        // lets adjacent contacts transport pigment coherently without
-        // restarting the sampled color at each microbatch boundary.
         let trace_delta = trace_coordinate - dab.center;
         let trace_local = rotate(trace_delta, dab.rotation.x, -dab.rotation.y)
             / max(dab.radii, vec2<f32>(0.005));
@@ -450,11 +415,6 @@ fn watercolor_fragment(
                 * trace_coverage;
         }
     }
-    // Recharge once toward full wetness from the current stroke's absolute
-    // uniform-coverage target. This creates a useful pressure differential
-    // against older wet paint while remaining independent of dab count and
-    // microbatch boundaries. The ragged tip and paper conductance still vary
-    // the deposited water spatially, but overlapping dabs cannot form bands.
     let water_load = select(1.0, style.transport_b.w, style.transport_a.x > 0.0);
     let water_charge = clamp(
         stroke_coverage * water_load
@@ -471,17 +431,9 @@ fn watercolor_fragment(
     );
     var result = original;
     if working_has_color(coverage_increment) && style.operation.w == 0u {
-        // The paint layer itself is the always-wet watercolor field. One
-        // motion-directed backtrace samples only that layer. Its exchange
-        // strength is independent of the radial tip value: multiplying color
-        // transfer by each contact silhouette exposes circular dab bands.
         let dragged = watercolor_canvas_sample(trace_coordinate, style.material_b.z);
         let mixing = clamp(style.material_a.w * coverage_increment, 0.0, 1.0);
         if working_has_color(original.a) && working_has_color(dragged.a) && working_has_color(mixing) {
-            // Exchange wet pigment only as new stroke coverage arrives. Doing
-            // this for every overlapping contact would reveal microbatch
-            // boundaries as concentric color bands even though alpha is
-            // uniform.
             let original_color = original.rgb / original.a;
             let dragged_color = dragged.rgb / dragged.a;
             let mixed_color = mix_color(
@@ -491,11 +443,6 @@ fn watercolor_fragment(
             );
             result = vec4<f32>(mixed_color * original.a, original.a);
         }
-        // Apply paint load to both old and new coverage targets before
-        // converting their difference to source-over alpha. Scaling the
-        // already-converted increment is not associative: pixels that pass
-        // through a ragged antialias fringe then become solid retain visible
-        // contact bands.
         let paint_load = mix(0.42, 1.0, style.material_a.x);
         let prior_pigment = prior_coverage * paint_load;
         let next_pigment = stroke_coverage * paint_load;
@@ -682,8 +629,6 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         );
     }
 
-    // Dry deposition reads exactly the destination texel, even for a placed
-    // layer. Avoid the brush-to-layer round trip and neighborhood selection.
     var result = dry_original(vec2<i32>(floor(fragment_position.xy)));
     let state_coordinate = clamp(
         vec2<i32>(floor(fragment_position.xy)),
@@ -721,10 +666,6 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             return MaterialOutput(result, vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0), vec4<f32>(0.0));
         }
     }
-    // A clone lays its source, as straight color, over the destination, with
-    // the source's own coverage scaling each dab. Over Normal stroke-uniform
-    // paint the increments compose to that coverage times the stroke's, so
-    // the dabs only raise the stroke coverage and the source is read once.
     let telescoped = MATERIAL_OPERATION == OP_CLONE && contact_uniform() && brush_normal();
     var clone_source = vec4<f32>(0.0);
     if MATERIAL_OPERATION == OP_CLONE && !telescoped {
@@ -773,8 +714,6 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             if repaint { stroke_coverage = 0.0; }
             let next_coverage = max(stroke_coverage, requested_alpha);
             if MATERIAL_OPERATION == OP_CLONE {
-                // The source's coverage scales the stroke's: the increments
-                // compose to exactly that fraction of the stroke coverage.
                 source_alpha = clamp(
                     working_ratio(
                         clone_source.a * (next_coverage - stroke_coverage),
@@ -836,8 +775,6 @@ fn gather_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<
     } else {
         value = canvas_sample(deform_coordinate(world, style.operation.x, style.operation.y));
     }
-    // Each source page occurs in exactly one pass. Linear filtering weights
-    // therefore sum exactly without requiring Float32 hardware blending.
     return value + textureLoad(reservoir_texture, vec2<i32>(floor(position.xy)), 0);
 }
 
@@ -883,10 +820,6 @@ fn reservoir_fragment(@builtin(position) fragment_position: vec4<f32>) -> @locat
         clamp(vec2<i32>(floor(fragment_position.xy)), vec2<i32>(0), vec2<i32>(reservoir_size) - 1),
         0,
     );
-    // Advance every contact, not merely the final contact submitted this
-    // frame. The reservoir is loaded once at stroke start; selected color is
-    // deliberately absent here so canvas color can replace and be carried by
-    // the brush instead of being overwritten on every dab.
     for (var offset = 0u; offset < count; offset += 1u) {
         let dab = dabs[first + offset];
         let scaled = local * dab.radii;

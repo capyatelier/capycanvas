@@ -92,6 +92,28 @@ Individual rates overlap: baseline 163.2–169.6 and cleanup 164.1–170.0 updat
 This empty-canvas 1024 px workload meets the 90 updates/s and 22.2 ms gap criteria;
 the 2048 px guarantee and display-paced motion need their own measurements.
 
+### Shared geometry comparison on Huion
+
+Measured on 2026-09-30 on Huion KP1202: 4248 × 2832, 512 px watercolor brushes,
+Fit, 100 × 70 px ellipse, 16 ms prediction, Stats closed and 200 Hz stylus input.
+Each alternating batch contains three warmed ten-second strokes. Baseline
+source is `5b514bbd`; benchmark APK SHA-256
+`f14abb270b0e3a654de9a22cacb6b8f568def358ecab7b30809cdded21fe2944`.
+The shared geometry/comment cleanup APK SHA-256 is
+`84a27bef3875899f1eea4ad38e894489e83ba7d20d74d48b39d342fe249e077a`.
+Both APKs have identical Java code and startup profiles.
+
+| Metric | Before | After | Repeated before | Repeated after |
+| --- | ---: | ---: | ---: | ---: |
+| Watercolor Wash, median fresh updates/s | 3.80 | 3.69 | 3.60 | 3.80 |
+| Watercolor Wash, median completion gap p99 | 461.3 ms | 471.2 ms | 470.3 ms | 433.5 ms |
+| Wet Watercolor, median fresh updates/s | 4.19 | 3.99 | 4.09 | 3.99 |
+| Wet Watercolor, median completion gap p99 | 407.0 ms | 482.2 ms | 451.9 ms | 459.3 ms |
+
+Run ranges overlap; the samples do not establish a throughput change. This
+12 MP comparison on Huion does not qualify the 24 MP reference-tier targets.
+Reports: `artifacts/simplification-cleanup/performance/m28/`.
+
 ### Retained-photo brush measurements
 
 Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets. The ellipse is 520 × 299 px at 16.0% zoom.

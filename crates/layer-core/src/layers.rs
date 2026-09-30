@@ -853,13 +853,7 @@ impl LayerOperation {
             LayerOperationKind::Figure(figure) => self.placement.bounds(figure.bounds()),
             LayerOperationKind::Bake { members, offset }
             | LayerOperationKind::FrequencyDetail { members, offset, .. } => crate::merge::bake_bounds(members, *offset, extent),
-            _ => Rect {
-                min: Point::default(),
-                max: Point {
-                    x: extent[0] as f32,
-                    y: extent[1] as f32,
-                },
-            },
+            _ => Rect::from_extent(extent),
         };
         if self.kind != LayerOperationKind::ApplyMask
             && self.coverage.default_coverage == 0.0

@@ -77,13 +77,6 @@ fn adjustment(layer: &Layer) -> bool {
     layer.effect.as_ref().is_some_and(|e| e.program.kind == EffectKind::Adjustment)
 }
 
-fn full(extent: [u32; 2]) -> Rect {
-    Rect {
-        min: Point::default(),
-        max: Point { x: extent[0] as f32, y: extent[1] as f32 },
-    }
-}
-
 /// The members of a `Bake` as root layers of the result's pixels. Members
 /// whose parent is not a member move by `offset`; clipped layers left without
 /// their base are released, since the result takes the base's place.
@@ -123,14 +116,14 @@ pub(crate) fn bake_member(layer: &Layer) -> Layer {
 /// Local pixels a paint layer may hold: its tiles and its photo.
 fn content(layer: &Layer, extent: [u32; 2]) -> Rect {
     let Some(Ok(data)) = layer.raster.try_data() else {
-        return full(layer.local_extent(extent));
+        return Rect::from_extent(layer.local_extent(extent));
     };
     let size = raster::TILE_SIZE as f32;
     let tiles = data.tiles.keys().fold(Rect::EMPTY, |bounds, key| {
         let [x, y] = key.coordinate.map(|v| v as f32 * size);
         bounds.union(Rect { min: Point { x, y }, max: Point { x: x + size, y: y + size } })
     });
-    layer.source.as_ref().map_or(tiles, |source| tiles.union(full(source.extent)))
+    layer.source.as_ref().map_or(tiles, |source| tiles.union(Rect::from_extent(source.extent)))
 }
 
 /// Pixels of a result `extent` large that baking `members` can cover.
@@ -152,10 +145,10 @@ pub(crate) fn bake_bounds(members: &[Layer], offset: Point, extent: [u32; 2]) ->
     }
     for effect in layers.iter().filter(|l| visible(l)).filter_map(|l| l.effect.as_ref()) {
         match (effect.program.kind, effect.program.alpha) {
-            (EffectKind::Generator, _) => return full(extent),
+            (EffectKind::Generator, _) => return Rect::from_extent(extent),
             (EffectKind::Adjustment, EffectAlpha::Filter) => match effect.damage_radius() {
                 Some(radius) => bounds = bounds.outset(radius as f32),
-                None => return full(extent),
+                None => return Rect::from_extent(extent),
             },
             (EffectKind::Adjustment, EffectAlpha::Preserve) => {}
         }
@@ -379,8 +372,8 @@ impl Document {
             .layers
             .iter()
             .filter(|l| l.kind == LayerKind::Paint && members.contains(&l.id))
-            .fold(full(canvas), |bounds, l| {
-                bounds.union(self.layer_transform(l.id).bounds(full(l.local_extent(canvas))))
+            .fold(Rect::from_extent(canvas), |bounds, l| {
+                bounds.union(self.layer_transform(l.id).bounds(Rect::from_extent(l.local_extent(canvas))))
             });
         let size = raster::TILE_SIZE as f32;
         let origin = Point {

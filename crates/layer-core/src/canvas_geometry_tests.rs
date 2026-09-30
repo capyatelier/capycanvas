@@ -354,7 +354,7 @@ fn straightening_resamples_paint_and_masks_into_a_frame_that_keeps_hidden_corner
         let extent = doc.target_extent(*id);
         let after = result.layer_transform(*id).inverse().unwrap();
         let new_extent = result.target_extent(*id);
-        for corner in canvas_rect(extent).corners() {
+        for corner in Rect::from_extent(extent).corners() {
             let expected = after.map(to_canvas.map(doc.layer_transform(*id).map(corner)));
             near(map.map(corner), expected);
             assert!(expected.x >= -0.01 && expected.y >= -0.01, "{expected:?}");

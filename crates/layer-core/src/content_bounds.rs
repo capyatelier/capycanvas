@@ -80,14 +80,10 @@ pub struct ContentBoundsRequest {
     canvas: Option<Rect>,
 }
 
-fn local_rect(extent: [u32; 2]) -> Rect {
-    Rect { min: Point::default(), max: Point { x: extent[0] as f32, y: extent[1] as f32 } }
-}
-
 impl ContentBoundsRequest {
     pub fn new(document: &Document, scope: ContentScope) -> Self {
         let layers = &document.layers;
-        let bounds = local_rect([document.width, document.height]);
+        let bounds = Rect::from_extent([document.width, document.height]);
         let canvas = (scope == ContentScope::Canvas).then_some(bounds);
         let source = |transform: Affine, raster, known| Source {
             transform,
@@ -114,7 +110,7 @@ impl ContentBoundsRequest {
                 LayerKind::Paint => source(
                     target_transform(layers, layer.id),
                     Some((layer.raster.clone(), RasterPlane::Color)),
-                    layer.source.as_ref().map_or(Rect::EMPTY, |source| local_rect(source.extent)),
+                    layer.source.as_ref().map_or(Rect::EMPTY, |source| Rect::from_extent(source.extent)),
                 ),
                 LayerKind::Background => source(Affine::IDENTITY, None, bounds),
                 LayerKind::Effect if layer.effect.as_ref().is_some_and(|e| e.program.kind == EffectKind::Generator) => {

@@ -266,13 +266,7 @@ fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
     let layer = doc.target_owner(target).unwrap();
     let operations = layer.target_operations(target).unwrap();
     let extent = doc.target_extent(target);
-    let canvas = Rect {
-        min: Point::default(),
-        max: Point {
-            x: extent[0] as f32,
-            y: extent[1] as f32,
-        },
-    };
+    let canvas = Rect::from_extent(extent);
     let mut bounds = if doc
         .target_raster(target)
         .is_some_and(|r| r.try_data().is_none())
@@ -285,10 +279,7 @@ fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
             .and_then(|m| m.initial.as_ref())
             .map_or(Rect::EMPTY, |s| s.bounds())
     } else {
-        layer.source.as_ref().map_or(Rect::EMPTY, |source| Rect {
-            min: Point::default(),
-            max: Point { x: source.extent[0] as f32, y: source.extent[1] as f32 },
-        })
+        layer.source.as_ref().map_or(Rect::EMPTY, |source| Rect::from_extent(source.extent))
     };
     if let Some(Ok(data)) = doc.target_raster(target).and_then(|r| r.try_data()) {
         for key in data.tiles.keys() {
@@ -1042,10 +1033,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 /// canvas for an inverted selection, which covers everything outside them.
 fn outline_bounds(selection: &Selection, extent: [u32; 2]) -> Rect {
     if selection.inverted {
-        return Rect {
-            min: Point::default(),
-            max: Point { x: extent[0] as f32, y: extent[1] as f32 },
-        };
+        return Rect::from_extent(extent);
     }
     let mut local = Rect::EMPTY;
     match &selection.shape {

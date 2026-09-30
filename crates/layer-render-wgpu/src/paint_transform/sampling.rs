@@ -1,8 +1,8 @@
 use super::*;
-use layer_core::{Affine, Point, Rect, TransformMap};
+use layer_core::{Affine, Rect, TransformMap};
 
 pub(crate) fn input_level(level: u32, preview: &layer_render::TransformPreview, placement: Affine, extent: [u32; 2]) -> u32 {
-    let bounds = Rect { min: Point::default(), max: Point { x: extent[0] as f32, y: extent[1] as f32 } };
+    let bounds = Rect::from_extent(extent);
     let bounds = preview.selection.as_ref().map_or(bounds, |s| bounds.intersect(s.bounds()));
     let rate = stretch(&preview.transform.map, placement, bounds).max(magnification(placement));
     selection_level(level, placement, preview.selection.as_ref(), extent)
@@ -68,6 +68,7 @@ fn stretch(map: &TransformMap, placement: Affine, bounds: Rect) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer_core::Point;
 
     #[test]
     fn mapped_input_texels_do_not_exceed_the_display_footprint() {

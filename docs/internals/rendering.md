@@ -32,6 +32,8 @@ size, whichever is larger. The canvas is a window over those extents. Compositio
 presentation and export cover the canvas only; pixels outside it stay on their
 layers, hidden, and count toward the project's tile and byte limits.
 
+`Rect::from_extent` gives the local pixel bounds used by geometry, merges and sampling.
+
 Canvas geometry commands build one batch in
 [`canvas_geometry.rs`](../../crates/layer-core/src/canvas_geometry.rs):
 - A crop only moves root offsets and stores the old extent. It never copies pixels,

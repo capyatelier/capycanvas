@@ -368,7 +368,7 @@ fn bake_bounds_follow_content_photos_and_effects() {
     assert_eq!(bounds(&[blur, upper.clone()]), expected.outset(18.));
     let mut fill = levels;
     fill.effect = program("solid_color");
-    assert_eq!(bounds(&[fill, upper]), full(extent));
+    assert_eq!(bounds(&[fill, upper]), Rect::from_extent(extent));
 }
 
 #[test]

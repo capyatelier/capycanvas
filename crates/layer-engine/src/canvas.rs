@@ -216,13 +216,6 @@ fn frame_layers(document: &Document, preview: Option<&LayerPreview>) -> Option<V
     Some(layers)
 }
 
-fn full_extent(extent: [u32; 2]) -> Rect {
-    Rect {
-        min: layer_core::Point::default(),
-        max: layer_core::Point { x: extent[0] as f32, y: extent[1] as f32 },
-    }
-}
-
 impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn new(
         mut backend: B,
@@ -712,7 +705,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let damage = if matches!(operation.kind, layer_core::LayerOperationKind::Erase { .. })
                 && !plain_color(&pixels)
             {
-                full_extent(extent)
+                Rect::from_extent(extent)
             } else {
                 operation.bounds(extent)
             };
@@ -3647,7 +3640,7 @@ mod tests {
         assert_eq!(engine.restore_rasters, [(id, pixels)], "the copy starts from its source pixels");
         assert!(engine.document().selection.is_none());
         let damage: Vec<_> = engine.batches.iter().map(|b| (b.layer_id, b.damage)).collect();
-        assert_eq!(damage[0], (id, full_extent([1024, 768])), "erasing outside touches every page");
+        assert_eq!(damage[0], (id, Rect::from_extent([1024, 768])), "erasing outside touches every page");
         assert_eq!(damage[1], (source, selection.bounds()), "erasing inside stays within the selection");
         for layer in [id, source] {
             assert!(engine.document().layer(layer).unwrap().raster.try_data().is_none());
@@ -3735,7 +3728,7 @@ mod tests {
         engine.append_layer_operation(layer, op).unwrap();
         assert_eq!(
             engine.batches[0].damage,
-            full_extent([512, 512]),
+            Rect::from_extent([512, 512]),
             "watercolor settles across the whole layer before erasing"
         );
     }

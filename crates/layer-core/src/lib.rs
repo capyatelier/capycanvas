@@ -135,6 +135,11 @@ pub struct Rect {
 }
 
 impl Rect {
+    #[inline]
+    pub fn from_extent(extent: [u32; 2]) -> Self {
+        Self { min: Point::default(), max: Point { x: extent[0] as f32, y: extent[1] as f32 } }
+    }
+
     pub const EMPTY: Self = Self {
         min: Point {
             x: f32::INFINITY,

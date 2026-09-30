@@ -1514,8 +1514,6 @@ impl ImageTransformState {
             encode: false,
         };
         let identity = layer_core::ImageTransform::default();
-        #[cfg(test)]
-        r.test.reduced_exactly.update(|n| n + 1);
         parts.iter().try_for_each(|(part, view)| self.draw_exact(r, encoder, &identity, page, view, display, *part))
     }
     fn channel_regions(

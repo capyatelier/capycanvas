@@ -954,9 +954,7 @@ struct TestHooks {
     reference: bool,
     /// Exercise the exact display fallback independently of scale eligibility.
     exact_display: bool,
-    pages_created: std::cell::Cell<u64>,
     reduced_pages: std::cell::Cell<u64>,
-    reduced_exactly: std::cell::Cell<u64>,
     source_captures: std::cell::Cell<u64>,
 }
 
@@ -1636,8 +1634,6 @@ impl WgpuRasterizer {
     }
 
     fn create_page(&self, coordinate: [u32; 2], label: &'static str) -> LayerPage {
-        #[cfg(test)]
-        self.test.pages_created.update(|n| n + 1);
         let primary = self.create_page_surface(label);
         LayerPage {
             coordinate,
