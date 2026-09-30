@@ -57,8 +57,6 @@ for (const [name, installed, customHome, override, expected] of [
     writeFileSync(join(bin, "python3"), '#!/bin/sh\nif [ "$1" = "-m" ]; then printf "serve\\n"; fi\n', { mode: 0o755 });
     symlinkSync("/usr/bin/dirname", join(bin, "dirname"));
     symlinkSync("/bin/bash", join(bin, "bash"));
-    executable(join(bin,"mkdir"),"");
-    executable(join(bin,"cp"),"");
     for (const tool of installed) executable(locations[tool], tool);
     const env = { HOME: home, PATH: bin };
     if (customHome) env.CARGO_HOME = cargo;

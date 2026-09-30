@@ -89,5 +89,3 @@ M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_POR
 - **GTK tablet proxy:** `--tablet` runs lose their Wayland connection whenever Quick Mask or Selection Layer rows change, and at the first clipboard write, so those pen journeys run on Web and Android only.
 - **Web tests on tablets:** after a run leaves an unsaved document, the next `device.test.mjs` load waits on "Recover drawing?".
 - **Headless Web** screenshots leave out WebGPU pixels, so the Clone and Heal live-preview checks need a headed run or a tablet.
-- **Flaky test:** `live_display::tests::moving_transforms_drawn_into_the_display_match_recomposition_and_release_exactly` fails intermittently under heavy parallel GPU load.
-- **Stale Web filter copy:** `apps/layer-web/filters` is committed but unread (filters load from `assets/filters`) and out of date; delete it or regenerate it.
