@@ -1,3 +1,4 @@
+import {runJourney} from "./journeys.mjs";
 import {checkTonalSelections} from './tonal-selection.test.mjs';
 import {checkBinaryTransfer} from './binary-transfer.test.mjs';
 import {checkColorPicker} from './color-picker.test.mjs';
@@ -98,157 +99,92 @@ try {
     workspaceIsolation={original,created,capture,theme};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--binary-transfer")) {
-    await checkBinaryTransfer({evaluate},process.env.LAYER_BINARY_FIXTURE_URL); assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--tonal-selection")) {
-    await checkTonalSelections({call,evaluate,settle}); assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--toolbar-components")) {
-    await checkToolbarComponents({call,evaluate,settle}); assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--filter-drawer")) {
-    await checkFilterDrawer({call,evaluate,settle});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--stroke-recording")) {
-    await checkStrokeRecording({call,evaluate,settle}); assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--contact-brushes")) {
-    await checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL);
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--pen")) {
-    await checkPenRendering({call,evaluate,settle});
-    await checkPrediction({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if(process.argv.includes("--drawing-tabs-recovery")){
-    await checkDrawingTabRecovery({call,evaluate,settle});assert.deepEqual(errors,[]);
-  } else if(process.argv.includes("--drawing-tabs")){
-    await checkDrawingTabs({call,evaluate,settle});assert.deepEqual(errors,[]);
-  } else if(process.argv.includes("--hdr-performance")){
-    await measureHdr({call,evaluate,settle});assert.deepEqual(errors,[]);
-  } else if(process.argv.includes("--hdr")){
-    await checkHdr({call,evaluate,settle});assert.deepEqual(errors,[]);
-  } else if(process.argv.includes("--proof")){
-    await checkProof({call,evaluate,settle},{profileUrl:process.env.LAYER_PROOF_URL,originalUrl:process.env.LAYER_PROOF_ORIGINAL_URL});assert.deepEqual(errors,[]);
-  } else if(process.argv.some(x=>['--proof-performance','--proof-memory'].includes(x))){
-    const performanceRun=process.argv.includes('--proof-performance');
-    const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const started=performance.now();function poll(){if(${condition})resolve();else if(performance.now()-started>120000)reject(Error(${JSON.stringify(condition)}));else setTimeout(poll,30)}poll()})`);
-    await mkdir(directory,{recursive:true});
-    await wait('layerApp.state().commands.find(c=>c.id==="open_document")?.enabled && !document.querySelector("dialog[open]")');
-    const photo=process.env.LAYER_PHOTO_URL||'/pkg/proof-photo61mp.jpg',profile=process.env.LAYER_PROOF_URL||'/pkg/proof-cmyk.icc';
-    await evaluate(`(async()=>{window.proofBench={open:window.showOpenFilePicker};const response=await fetch(${JSON.stringify(photo)});if(!response.ok)throw Error('Photo fixture unavailable');const blob=await response.blob();window.showOpenFilePicker=async()=>[{name:'proof-photo.jpg',async getFile(){return new File([blob],'proof-photo.jpg')}}];proofBench.importStart=performance.now();layerApp.dispatch({type:'invoke',command:'open_document'});})()`);
-    await settle();await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Discard Changes')?.click()`);
-    await wait('layerApp.state().tabs[0].width===9504 && !layerApp.state().document_file.busy && layerApp.app.brush_ready()');
-    await evaluate('proofBench.importMs=performance.now()-proofBench.importStart;window.showOpenFilePicker=proofBench.open');
-    if(performanceRun)await benchPhotoNavigation({call,evaluate},join(directory,'web-photo-normal.json'));
-    await evaluate(`(async()=>{proofBench.profile=await layerApp.app.profile_library('import',undefined,new Uint8Array(await(await fetch(${JSON.stringify(profile)})).arrayBuffer()));layerApp.dispatch({type:'invoke',command:'soft_proof_setup'});})()`);
-    await wait(`!![...document.querySelectorAll('dialog[open] optgroup[label="Saved Profiles"] option')].find(o=>o.textContent===proofBench.profile.name)`);
-    await evaluate(`(()=>{const s=document.querySelector('dialog[open] select[aria-label="Proof profile"]');s.value=[...s.querySelectorAll('optgroup[label="Saved Profiles"] option')].find(o=>o.textContent===proofBench.profile.name).value;s.dispatchEvent(new Event('change'));proofBench.frames=[];proofBench.longTasks=[];proofBench.preparing=true;const tick=t=>{proofBench.frames.push(t);if(proofBench.preparing)requestAnimationFrame(tick)};requestAnimationFrame(tick);proofBench.observer=new PerformanceObserver(list=>{proofBench.longTasks.push(...list.getEntries().map(e=>({start:e.startTime,duration:e.duration})))});proofBench.observer.observe({type:'longtask'});proofBench.prepareStart=performance.now();})()`);
-    await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Apply'&&!b.disabled).click()`);
-    await wait(`!document.querySelector('dialog[open]') && layerApp.app.proof_status().text.startsWith('Proof:')`);await settle();
-    const preparation=await evaluate(`(()=>{proofBench.preparing=false;proofBench.observer.disconnect();return JSON.parse(JSON.stringify({import_ms:proofBench.importMs,preparation_ms:performance.now()-proofBench.prepareStart,raf:proofBench.frames,long_tasks:proofBench.longTasks,proof:layerApp.app.proof_status(),color:layerApp.app.document_color(),memory:performance.memory?{used:performance.memory.usedJSHeapSize,total:performance.memory.totalJSHeapSize}:null},(_,v)=>typeof v==='bigint'?Number(v):v))})()`);
-    await writeFile(join(directory,'web-proof-preparation.json'),JSON.stringify(preparation,null,2));console.log('Preparation:',JSON.stringify(preparation));
-    if(performanceRun)await benchPhotoNavigation({call,evaluate},join(directory,'web-photo-proof.json'));
-    else await evaluate('new Promise(r=>setTimeout(r,12000))');
-    const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(directory,'web-photo-proof.png'),Buffer.from(shot.data,'base64'));
-    assert.deepEqual(errors,[]);
-  } else if(process.argv.includes("--zen")){
-    await mkdir(directory,{recursive:true});
-    await checkZen({call,evaluate,settle,capture:async name=>{
+  const checkErrors = () => assert.deepEqual(errors, []);
+  if (!await runJourney([
+    [process.argv.includes("--binary-transfer"), () => checkBinaryTransfer({evaluate},process.env.LAYER_BINARY_FIXTURE_URL), checkErrors],
+    [process.argv.includes("--tonal-selection"), () => checkTonalSelections({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--toolbar-components"), () => checkToolbarComponents({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--filter-drawer"), () => checkFilterDrawer({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--stroke-recording"), () => checkStrokeRecording({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--contact-brushes"), () => checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL), checkErrors],
+    [process.argv.includes("--pen"), async () => {
+      await checkPenRendering({call,evaluate,settle});
+      await checkPrediction({call,evaluate,settle});
+    }, checkErrors],
+    [process.argv.includes("--drawing-tabs-recovery"), () => checkDrawingTabRecovery({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--drawing-tabs"), () => checkDrawingTabs({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--hdr-performance"), () => measureHdr({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--hdr"), () => checkHdr({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--proof"), () => checkProof({call,evaluate,settle},{profileUrl:process.env.LAYER_PROOF_URL,originalUrl:process.env.LAYER_PROOF_ORIGINAL_URL}), checkErrors],
+    [process.argv.some(x=>['--proof-performance','--proof-memory'].includes(x)), async () => {
+      const performanceRun=process.argv.includes('--proof-performance');
+      const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const started=performance.now();function poll(){if(${condition})resolve();else if(performance.now()-started>120000)reject(Error(${JSON.stringify(condition)}));else setTimeout(poll,30)}poll()})`);
+      await mkdir(directory,{recursive:true});
+      await wait('layerApp.state().commands.find(c=>c.id==="open_document")?.enabled && !document.querySelector("dialog[open]")');
+      const photo=process.env.LAYER_PHOTO_URL||'/pkg/proof-photo61mp.jpg',profile=process.env.LAYER_PROOF_URL||'/pkg/proof-cmyk.icc';
+      await evaluate(`(async()=>{window.proofBench={open:window.showOpenFilePicker};const response=await fetch(${JSON.stringify(photo)});if(!response.ok)throw Error('Photo fixture unavailable');const blob=await response.blob();window.showOpenFilePicker=async()=>[{name:'proof-photo.jpg',async getFile(){return new File([blob],'proof-photo.jpg')}}];proofBench.importStart=performance.now();layerApp.dispatch({type:'invoke',command:'open_document'});})()`);
+      await settle();
+      await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Discard Changes')?.click()`);
+      await wait('layerApp.state().tabs[0].width===9504 && !layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+      await evaluate('proofBench.importMs=performance.now()-proofBench.importStart;window.showOpenFilePicker=proofBench.open');
+      if(performanceRun)await benchPhotoNavigation({call,evaluate},join(directory,'web-photo-normal.json'));
+      await evaluate(`(async()=>{proofBench.profile=await layerApp.app.profile_library('import',undefined,new Uint8Array(await(await fetch(${JSON.stringify(profile)})).arrayBuffer()));layerApp.dispatch({type:'invoke',command:'soft_proof_setup'});})()`);
+      await wait(`!![...document.querySelectorAll('dialog[open] optgroup[label="Saved Profiles"] option')].find(o=>o.textContent===proofBench.profile.name)`);
+      await evaluate(`(()=>{const s=document.querySelector('dialog[open] select[aria-label="Proof profile"]');s.value=[...s.querySelectorAll('optgroup[label="Saved Profiles"] option')].find(o=>o.textContent===proofBench.profile.name).value;s.dispatchEvent(new Event('change'));proofBench.frames=[];proofBench.longTasks=[];proofBench.preparing=true;const tick=t=>{proofBench.frames.push(t);if(proofBench.preparing)requestAnimationFrame(tick)};requestAnimationFrame(tick);proofBench.observer=new PerformanceObserver(list=>{proofBench.longTasks.push(...list.getEntries().map(e=>({start:e.startTime,duration:e.duration})))});proofBench.observer.observe({type:'longtask'});proofBench.prepareStart=performance.now();})()`);
+      await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Apply'&&!b.disabled).click()`);
+      await wait(`!document.querySelector('dialog[open]') && layerApp.app.proof_status().text.startsWith('Proof:')`);
+      await settle();
+      const preparation=await evaluate(`(()=>{proofBench.preparing=false;proofBench.observer.disconnect();return JSON.parse(JSON.stringify({import_ms:proofBench.importMs,preparation_ms:performance.now()-proofBench.prepareStart,raf:proofBench.frames,long_tasks:proofBench.longTasks,proof:layerApp.app.proof_status(),color:layerApp.app.document_color(),memory:performance.memory?{used:performance.memory.usedJSHeapSize,total:performance.memory.totalJSHeapSize}:null},(_,v)=>typeof v==='bigint'?Number(v):v))})()`);
+      await writeFile(join(directory,'web-proof-preparation.json'),JSON.stringify(preparation,null,2));
+      console.log('Preparation:',JSON.stringify(preparation));
+      if(performanceRun)await benchPhotoNavigation({call,evaluate},join(directory,'web-photo-proof.json'));
+          else await evaluate('new Promise(r=>setTimeout(r,12000))');
       const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
-      await writeFile(join(directory,`${name}.png`),Buffer.from(shot.data,'base64'));
-    }});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--filter-previews")) {
-    await checkFilterPreviews({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--staged-startup")) {
-    await checkStagedStartup({call,evaluate,settle,canvasPixels});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--image-placement")) {
-    await checkDeviceImagePlacement({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--notices")) {
-    await checkNotices({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--zoom-readout")) {
-    await checkZoomReadout({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--pipeline-takeover")) {
-    await checkPipelineTakeover({evaluate,settle});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--photo-edit")) {
-    await checkPhotoEdit({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--canvas-size")) {
-    await checkCanvasSize({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--crop")) {
-    await checkCrop({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--image-commands")) {
-    await checkImageCommands({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--move-selection")) {
-    await checkMoveSelection({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--clone")) {
-    await checkClone({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--heal")) {
-    await checkHeal({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--retouch-layers")) {
-    await checkRetouchLayers({call,evaluate,settle,device:true});assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--canvas-bar")) {
-    await checkCanvasBar({call,evaluate,settle,device:true});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--title-bar-feedback")) {
-    await checkTitleBarFeedback({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--icons")) {
-    await checkIcons({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--workspace-manager")) {
-    await checkWorkspaceManager({call,evaluate,settle,reload,touch:true});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--workspace-store")) {
-    await checkWorkspaceStore({evaluate});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--drawer-switch")) {
-    await checkToolbarDrawerSwitching({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--drawer-style")) {
-    await checkDrawerStyling({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--color-panel")) {
-    await checkColorPanel({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--selection-tools")) {
-    await checkSelectionTools({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--color-picker")) {
-    await checkColorPicker({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--brush-drawers")) {
-    await checkBrushDrawers({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--editor")) {
-    await checkEditor({call,evaluate,settle,canvasPixels});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--workspace-resize")) {
-    await checkWorkspaceResize({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--long-press-drag")) {
-    await checkLongPressDragging({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--layer-swipes")) {
-    await checkLayerSwipes({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--layer-hold")) {
-    await checkLayerHolding({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--drawer-drag")) {
-    await checkDrawerDragging({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if(process.argv.includes("--medium-tiles")) {
-    await checkMediumTiles({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if(process.argv.includes("--fullscreen")) {
-    await checkDeviceFullscreen({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if(process.argv.includes("--palettes")) {
-    await checkPalettes({call,evaluate,settle,reload});
-    assert.deepEqual(errors,[]);
-  } else if(process.argv.includes("--paint-columns")) {
-    await checkPaintColumns({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else {
+      await writeFile(join(directory,'web-photo-proof.png'),Buffer.from(shot.data,'base64'));
+    }, checkErrors],
+    [process.argv.includes("--zen"), async () => {
+      await mkdir(directory,{recursive:true});
+      await checkZen({call,evaluate,settle,capture:async name=>{
+            const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+            await writeFile(join(directory,`${name}.png`),Buffer.from(shot.data,'base64'));
+          }});
+    }, checkErrors],
+    [process.argv.includes("--filter-previews"), () => checkFilterPreviews({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--staged-startup"), () => checkStagedStartup({call,evaluate,settle,canvasPixels}), checkErrors],
+    [process.argv.includes("--image-placement"), () => checkDeviceImagePlacement({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--notices"), () => checkNotices({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--zoom-readout"), () => checkZoomReadout({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--pipeline-takeover"), () => checkPipelineTakeover({evaluate,settle}), checkErrors],
+    [process.argv.includes("--photo-edit"), () => checkPhotoEdit({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--canvas-size"), () => checkCanvasSize({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--crop"), () => checkCrop({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--image-commands"), () => checkImageCommands({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--move-selection"), () => checkMoveSelection({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--clone"), () => checkClone({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--heal"), () => checkHeal({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--retouch-layers"), () => checkRetouchLayers({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--canvas-bar"), () => checkCanvasBar({call,evaluate,settle,device:true}), checkErrors],
+    [process.argv.includes("--title-bar-feedback"), () => checkTitleBarFeedback({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--icons"), () => checkIcons({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--workspace-manager"), () => checkWorkspaceManager({call,evaluate,settle,reload,touch:true}), checkErrors],
+    [process.argv.includes("--workspace-store"), () => checkWorkspaceStore({evaluate}), checkErrors],
+    [process.argv.includes("--drawer-switch"), () => checkToolbarDrawerSwitching({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--drawer-style"), () => checkDrawerStyling({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--color-panel"), () => checkColorPanel({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--selection-tools"), () => checkSelectionTools({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--color-picker"), () => checkColorPicker({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--brush-drawers"), () => checkBrushDrawers({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--editor"), () => checkEditor({call,evaluate,settle,canvasPixels}), checkErrors],
+    [process.argv.includes("--workspace-resize"), () => checkWorkspaceResize({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--long-press-drag"), () => checkLongPressDragging({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--layer-swipes"), () => checkLayerSwipes({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--layer-hold"), () => checkLayerHolding({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--drawer-drag"), () => checkDrawerDragging({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--medium-tiles"), () => checkMediumTiles({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--fullscreen"), () => checkDeviceFullscreen({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--palettes"), () => checkPalettes({call,evaluate,settle,reload}), checkErrors],
+    [process.argv.includes("--paint-columns"), () => checkPaintColumns({call,evaluate,settle}), checkErrors],
+  ])) {
   await checkEditor({call,evaluate,settle,canvasPixels});
   const before=await evaluate('layerApp.state().camera.zoom');
   const [cx,cy]=await evaluate('[innerWidth*.5,innerHeight*.5]');

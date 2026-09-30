@@ -79,7 +79,8 @@ bash tools/performance/workspace-motion.sh web --title-bar
 Mutter mouse and touch input; the other journeys use Chrome DevTools input. See
 the [Linux guide](linux.md#tests) for the runner's requirements.
 
-Journeys by area; the dispatch in `test.mjs` lists them all:
+Journeys by area; the table in `test.mjs` lists them all. `journeys.mjs` runs the
+first matching row and its error check, or leaves the default journey to the host.
 
 | Area | Selectors |
 | --- | --- |
@@ -131,7 +132,7 @@ LAYER_TEST_ARTIFACTS=artifacts/web-android \
 - The tab runs in the device's real Chrome profile, and many journeys change
   documents, workspaces or storage. Use your own origin and port, never an
   artist's tab.
-- Check the dispatch at the end of `device.test.mjs` before choosing a flag. With
+- Check the journey table in `device.test.mjs` before choosing a flag. With
   `CAPY_ANDROID_SERIAL` set, `--canvas-bar`, `--zoom-readout` and
   `--image-placement` also send real OS taps through `adb`.
 - `--staged-startup` holds shader validation and checks that controls, paper and

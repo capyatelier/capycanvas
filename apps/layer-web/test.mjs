@@ -1,3 +1,4 @@
+import {runJourney} from "./journeys.mjs";
 import {checkTonalSelections} from './tonal-selection.test.mjs';
 import {checkColorPicker} from './color-picker.test.mjs';
 import {checkInputDevices} from './input-devices.test.mjs';
@@ -185,298 +186,132 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--filter-investigation")) {
-    await (await import('./filter-investigation.test.mjs')).investigate({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--ui-speed")) {
-    await checkUiUpdates({evaluate});
-    await checkSettingsUpdates({evaluate,settle}); assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--drawing-tabs-recovery")) {
-    await checkDrawingTabRecovery({call,evaluate,settle});checkRasterErrors();
-  } else if (process.argv.includes("--drawing-tabs")) {
-    await checkDrawingTabs({call,evaluate,settle});checkRasterErrors();
-  } else if (process.argv.includes("--portable-photo")) {
-    await checkPortablePhoto({call,evaluate,settle});checkRasterErrors();
-  } else if (process.argv.includes("--export-metadata")) {
-    await checkExportMetadata({call,evaluate,settle});checkRasterErrors();
-  } else if (process.argv.includes("--hdr-performance")) {
-    await measureHdr({call,evaluate,settle});checkRasterErrors();
-  } else if (process.argv.includes("--hdr")) {
-    await checkHdr({call,evaluate,settle});
-    checkRasterErrors();
-  } else if (process.argv.includes("--image-placement")) {
-    await checkImagePlacement({call,evaluate,settle});
-    checkRasterErrors();
-  } else if (process.argv.includes("--canvas-bar")) {
-    await checkCanvasBar({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--notices")) {
-    await checkNotices({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--screen-status")) {
-    await checkScreenStatus({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--pipeline-takeover")) {
-    await checkPipelineTakeover({evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--zoom-readout")) {
-    await checkZoomReadout({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--blend-menu")) {
-    await checkBlendMenu({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--color-mixing")) {
-    await checkColorMixing({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--pass-through")) {
-    await checkPassThrough({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--blending")) {
-    await checkBlending({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--photo-edit")) {
-    await checkPhotoEdit({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--clipboard")) {
-    await checkClipboard({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--canvas-size")) {
-    await checkCanvasSize({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--crop")) {
-    await checkCrop({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--image-commands")) {
-    await checkImageCommands({call,evaluate,settle});
-  } else if (process.argv.includes("--merges")) {
-    await checkMerges({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--retouch-layers")) {
-    await checkRetouchLayers({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--move-selection")) {
-    await checkMoveSelection({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--clone")) {
-    await checkClone({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--heal")) {
-    await checkHeal({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--photo-paint")) {
-    await checkPhotoPaint({call,evaluate,settle});
-    checkRasterErrors();
-  } else if (process.argv.includes("--proof")) {
-    await checkProof({call,evaluate,settle});
-    checkRasterErrors();
-  } else if (process.argv.includes("--shared-workflows")) {
-    await checkSdrColor({call,evaluate,settle});
-    await checkColorEdits({call,evaluate,settle});
-    await checkSourceImports({call,evaluate,settle});
-    await checkSourceEdits({call,evaluate,settle});
-    await checkExportPresets({evaluate});
-    await checkProfileLibrary({evaluate});
-    await checkPhotoCorrections({evaluate,settle});
-    await checkFlattenedCopy({evaluate});
-    checkRasterErrors();
-  } else if (process.argv.includes("--raster")) {
-    await checkRaster({call,evaluate,settle,canvasPixels});
-    checkRasterErrors();
-  } else if (process.argv.includes("--menu-labels")) {
-    await checkMenuLabels({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--compact-workspaces")) {
-    await checkCompactWorkspaces({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--title-bar-overflow")) {
-    await checkTitleBarOverflow({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--title-bar-feedback")) {
-    await checkTitleBarFeedback({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--title-bar-state")) {
-    await checkTitleBarState({call,evaluate,settle,reload});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--title-bar")) {
-    await checkTitleBar({call,evaluate,settle,reload});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--zen")) {
-    await checkZen({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--icons")) {
-    await checkIcons({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--header-controls")) {
-    await checkHeaderControls({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--layout-drops")) {
-    await checkLayoutDrops({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--column-stacks")) {
-    await checkColumnStacks({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--column-drops")) {
-    await checkColumnDrops({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--tooltips")) {
-    await checkTooltips({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--drag-pickup")) {
-    await checkDragPickup({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--palettes")) {
-    await checkPalettes({call,evaluate,settle,reload});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--layer-swipes")) {
-    await checkLayerSwipes({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--layer-hold")) {
-    await checkLayerHolding({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--workspace-rendering")) {
-    await checkWorkspaceRendering({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--workspace-motion")) {
-    await checkWorkspaceMotion({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--long-press-drag")) {
-    await checkLongPressDragging({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--drag-cursors")) {
-    await checkDragCursors({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--workspace-windows")) {
-    await checkWorkspaceWindows({call,evaluate});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--workspace-focus")) {
-    await checkWorkspaceFocus({evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--workspace-switcher")) {
-    await checkWorkspaceSwitcher({call,evaluate,settle,reload});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--workspace-manager-visual")) {
-    await checkWorkspaceManagerVisual({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--workspace-manager")) {
-    await checkWorkspaceManager({call,evaluate,settle,reload});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--workspace-store")) {
-    await checkWorkspaceStore({evaluate});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--stale-storage")) {
-    await checkStaleStorageStartup({evaluate,reload});
-  } else if (process.argv.includes("--drawer-switch")) {
-    await checkToolbarDrawerSwitching({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--drawer-style")) {
-    await checkDrawerStyling({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--drawer-drag")) {
-    await checkDrawerDragging({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--medium-tiles")) {
-    await checkMediumTiles({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--fullscreen")) {
-    const {windowId} = await call("Browser.getWindowForTarget",{targetId},null);
-    await checkFullscreen({call,evaluate,settle,windowId});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--color-panel")) {
-    await checkColorPanel({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--filter-drawer")) {
-    await checkFilterDrawer({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--filter-previews")) {
-    await checkFilterPreviews({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--tonal-selection")) {
-    await checkTonalSelections({call,evaluate,settle}); assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--toolbar-components")) {
-    await checkToolbarComponents({call,evaluate,settle});
-  } else if (process.argv.includes("--selection-tools")) {
-    await checkSelectionTools({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--command-bar")) {
-    await checkCommandBar({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--input-devices")) {
-    await checkInputDevices({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--color-picker")) {
-    await checkColorPicker({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--brush-drawers")) {
-    await checkBrushDrawers({call,evaluate,settle});
-    assert.deepEqual(errors,[]);
-  } else if (process.argv.includes("--editor")) {
-    await checkEditor({call,evaluate,settle,canvasPixels});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--staged-startup")) {
-    await checkStagedStartup({ call, evaluate, settle, canvasPixels });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--stroke-recording")) {
-    await checkStrokeRecording({call,evaluate,settle});
-  } else if (process.argv.includes("--adjustments")) {
-    await checkAdjustments({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--selection")) {
-    await checkSelectedPainting({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--layers")) {
-    await checkLayers({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--toolbar-manager")) {
-    await checkToolbarManager({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--tab-styles")) {
-    await checkTabStyles({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--settings-audit")) {
-    await checkSettingsParity({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--workspace-resize")) {
-    await checkWorkspaceResize({call,evaluate,settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--columns")) {
-    await checkColumnSizing({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--workspace")) {
-    await checkWorkspace({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--tool-picker")) {
-    await checkToolPicker({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--customization")) {
-    await checkCustomization({ call, evaluate, settle, canvasPixels });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--gpu-compatibility")) {
-    assert.ok(packageHost, "Use --package --gpu-compatibility to test the built distribution");
-    await checkGpuCompatibility({ call, evaluate, settle, url: packageHost.url, errors });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--gpu-startup")) {
-    assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
-    await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url, errors });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--contact-brushes")) {
-    await checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL);
-  } else if (process.argv.includes("--pen")) {
-    await checkPenRendering({call, evaluate, settle});
-    await checkPrediction({call, evaluate, settle});
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--prediction")) {
-    await checkPrediction({call, evaluate, settle});
-    assert.deepEqual(errors, []);
-  } else if (packageHost && !process.argv.includes("--preferences") && !process.argv.includes("--parity") && !process.argv.includes("--smoke")) {
-    await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost, storageOnly: process.argv.includes("--package-offline") });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--preferences")) {
-    await checkPreferences({ call, evaluate, settle, errors });
-    assert.deepEqual(errors, []);
-  } else if (process.argv.includes("--parity")) {
-    await checkParity({ call, evaluate, settle });
-    assert.deepEqual(errors, []);
-  } else {
+  const checkErrors = () => assert.deepEqual(errors, []);
+  if (!await runJourney([
+    [process.argv.includes("--filter-investigation"), async () => {
+      await (await import('./filter-investigation.test.mjs')).investigate({call,evaluate,settle});
+    }, checkErrors],
+    [process.argv.includes("--ui-speed"), async () => {
+      await checkUiUpdates({evaluate});
+      await checkSettingsUpdates({evaluate,settle});
+    }, checkErrors],
+    [process.argv.includes("--drawing-tabs-recovery"), () => checkDrawingTabRecovery({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--drawing-tabs"), () => checkDrawingTabs({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--portable-photo"), () => checkPortablePhoto({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--export-metadata"), () => checkExportMetadata({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--hdr-performance"), () => measureHdr({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--hdr"), () => checkHdr({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--image-placement"), () => checkImagePlacement({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--canvas-bar"), () => checkCanvasBar({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--notices"), () => checkNotices({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--screen-status"), () => checkScreenStatus({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--pipeline-takeover"), () => checkPipelineTakeover({evaluate,settle}), checkErrors],
+    [process.argv.includes("--zoom-readout"), () => checkZoomReadout({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--blend-menu"), () => checkBlendMenu({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--color-mixing"), () => checkColorMixing({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--pass-through"), () => checkPassThrough({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--blending"), () => checkBlending({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--photo-edit"), () => checkPhotoEdit({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--clipboard"), () => checkClipboard({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--canvas-size"), () => checkCanvasSize({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--crop"), () => checkCrop({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--image-commands"), () => checkImageCommands({call,evaluate,settle})],
+    [process.argv.includes("--merges"), () => checkMerges({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--retouch-layers"), () => checkRetouchLayers({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--move-selection"), () => checkMoveSelection({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--clone"), () => checkClone({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--heal"), () => checkHeal({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--photo-paint"), () => checkPhotoPaint({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--proof"), () => checkProof({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--shared-workflows"), async () => {
+      await checkSdrColor({call,evaluate,settle});
+      await checkColorEdits({call,evaluate,settle});
+      await checkSourceImports({call,evaluate,settle});
+      await checkSourceEdits({call,evaluate,settle});
+      await checkExportPresets({evaluate});
+      await checkProfileLibrary({evaluate});
+      await checkPhotoCorrections({evaluate,settle});
+      await checkFlattenedCopy({evaluate});
+    }, checkRasterErrors],
+    [process.argv.includes("--raster"), () => checkRaster({call,evaluate,settle,canvasPixels}), checkRasterErrors],
+    [process.argv.includes("--menu-labels"), () => checkMenuLabels({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--compact-workspaces"), () => checkCompactWorkspaces({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--title-bar-overflow"), () => checkTitleBarOverflow({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--title-bar-feedback"), () => checkTitleBarFeedback({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--title-bar-state"), () => checkTitleBarState({call,evaluate,settle,reload}), checkErrors],
+    [process.argv.includes("--title-bar"), () => checkTitleBar({call,evaluate,settle,reload}), checkErrors],
+    [process.argv.includes("--zen"), () => checkZen({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--icons"), () => checkIcons({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--header-controls"), () => checkHeaderControls({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--layout-drops"), () => checkLayoutDrops({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--column-stacks"), () => checkColumnStacks({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--column-drops"), () => checkColumnDrops({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--tooltips"), () => checkTooltips({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--drag-pickup"), () => checkDragPickup({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--palettes"), () => checkPalettes({call,evaluate,settle,reload}), checkErrors],
+    [process.argv.includes("--layer-swipes"), () => checkLayerSwipes({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--layer-hold"), () => checkLayerHolding({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--workspace-rendering"), () => checkWorkspaceRendering({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--workspace-motion"), () => checkWorkspaceMotion({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--long-press-drag"), () => checkLongPressDragging({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--drag-cursors"), () => checkDragCursors({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--workspace-windows"), () => checkWorkspaceWindows({call,evaluate}), checkErrors],
+    [process.argv.includes("--workspace-focus"), () => checkWorkspaceFocus({evaluate,settle}), checkErrors],
+    [process.argv.includes("--workspace-switcher"), () => checkWorkspaceSwitcher({call,evaluate,settle,reload}), checkErrors],
+    [process.argv.includes("--workspace-manager-visual"), () => checkWorkspaceManagerVisual({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--workspace-manager"), () => checkWorkspaceManager({call,evaluate,settle,reload}), checkErrors],
+    [process.argv.includes("--workspace-store"), () => checkWorkspaceStore({evaluate}), checkErrors],
+    [process.argv.includes("--stale-storage"), () => checkStaleStorageStartup({evaluate,reload})],
+    [process.argv.includes("--drawer-switch"), () => checkToolbarDrawerSwitching({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--drawer-style"), () => checkDrawerStyling({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--drawer-drag"), () => checkDrawerDragging({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--medium-tiles"), () => checkMediumTiles({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--fullscreen"), async () => {
+      const {windowId} = await call("Browser.getWindowForTarget",{targetId},null);
+      await checkFullscreen({call,evaluate,settle,windowId});
+    }, checkErrors],
+    [process.argv.includes("--color-panel"), () => checkColorPanel({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--filter-drawer"), () => checkFilterDrawer({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--filter-previews"), () => checkFilterPreviews({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--tonal-selection"), () => checkTonalSelections({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--toolbar-components"), () => checkToolbarComponents({call,evaluate,settle})],
+    [process.argv.includes("--selection-tools"), () => checkSelectionTools({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--command-bar"), () => checkCommandBar({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--input-devices"), () => checkInputDevices({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--color-picker"), () => checkColorPicker({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--brush-drawers"), () => checkBrushDrawers({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--editor"), () => checkEditor({call,evaluate,settle,canvasPixels}), checkErrors],
+    [process.argv.includes("--staged-startup"), () => checkStagedStartup({ call, evaluate, settle, canvasPixels }), checkErrors],
+    [process.argv.includes("--stroke-recording"), () => checkStrokeRecording({call,evaluate,settle})],
+    [process.argv.includes("--adjustments"), () => checkAdjustments({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--selection"), () => checkSelectedPainting({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--layers"), () => checkLayers({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--toolbar-manager"), () => checkToolbarManager({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--tab-styles"), () => checkTabStyles({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--settings-audit"), () => checkSettingsParity({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--workspace-resize"), () => checkWorkspaceResize({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--columns"), () => checkColumnSizing({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--workspace"), () => checkWorkspace({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--tool-picker"), () => checkToolPicker({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--customization"), () => checkCustomization({ call, evaluate, settle, canvasPixels }), checkErrors],
+    [process.argv.includes("--gpu-compatibility"), async () => {
+      assert.ok(packageHost, "Use --package --gpu-compatibility to test the built distribution");
+      await checkGpuCompatibility({ call, evaluate, settle, url: packageHost.url, errors });
+    }, checkErrors],
+    [process.argv.includes("--gpu-startup"), async () => {
+      assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
+      await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url, errors });
+    }, checkErrors],
+    [process.argv.includes("--contact-brushes"), () => checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL)],
+    [process.argv.includes("--pen"), async () => {
+      await checkPenRendering({call, evaluate, settle});
+      await checkPrediction({call, evaluate, settle});
+    }, checkErrors],
+    [process.argv.includes("--prediction"), () => checkPrediction({call, evaluate, settle}), checkErrors],
+    [packageHost && !process.argv.includes("--preferences") && !process.argv.includes("--parity") && !process.argv.includes("--smoke"), () => checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost, storageOnly: process.argv.includes("--package-offline") }), checkErrors],
+    [process.argv.includes("--preferences"), () => checkPreferences({ call, evaluate, settle, errors }), checkErrors],
+    [process.argv.includes("--parity"), () => checkParity({ call, evaluate, settle }), checkErrors],
+  ])) {
     assert.equal(
       await evaluate("layerApp.state().settings.theme ?? null"),
       null,

@@ -145,5 +145,7 @@ are your task, and remove an entry when you fix it.
 - Headless Web `--toolbar-components`, `--tonal-selection`, `--editor`, `--hdr`,
   `--proof`, `--raster`, `--selection-tools` and `--shared-workflows`, and 8 pen
   side-button cases in `pointer.test.mjs`.
+- Tablet Chrome `--workspace-manager` cannot find its new-workspace name input
+  on MovinkPad 11.
 - `cargo clippy -- -D warnings` stops in `layer-core` on lints new in Clippy 1.96.
   New code adds no warnings.
