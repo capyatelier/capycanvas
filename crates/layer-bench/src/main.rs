@@ -55,138 +55,180 @@ fn document_color() -> DocumentColor {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ScenarioKind {
-    GPen,
-    Pencil,
-    Eraser,
-    Paintbrush,
-    Airbrush,
-    Chalk,
-    Marker,
-    Spray,
-    DualTexture,
-    MultiplyGlaze,
-    Smudge,
-    WetRound,
-    LiquifyPush,
-    LiquifyTwirl,
-    Layers,
-    TexturedFlat,
-    DryScumble,
-    PastelBlock,
-    TransparentGlaze,
-    OpaqueGouache,
-    WatercolorWash,
-    WetWatercolor,
-    LoadedOil,
-    PaletteKnife,
-    NaturalBlender,
-    LiquifyPinch,
-    LiquifyExpand,
-    LiquifyCrystals,
+enum Group { Legacy, Painter, Sculpt }
+#[derive(Clone, Copy, Debug)]
+enum StrokePath {
+    Bezier(usize, [(f32, f32); 4]),
+    Lissajous(usize, f32, f32, f32, f32),
 }
-
-impl ScenarioKind {
-    const LEGACY: [Self; 15] = [
-        Self::GPen,
-        Self::Pencil,
-        Self::Eraser,
-        Self::Paintbrush,
-        Self::Airbrush,
-        Self::Chalk,
-        Self::Marker,
-        Self::Spray,
-        Self::DualTexture,
-        Self::MultiplyGlaze,
-        Self::Smudge,
-        Self::WetRound,
-        Self::LiquifyPush,
-        Self::LiquifyTwirl,
-        Self::Layers,
-    ];
-    const PAINTER: [Self; 10] = [
-        Self::TexturedFlat,
-        Self::DryScumble,
-        Self::PastelBlock,
-        Self::TransparentGlaze,
-        Self::OpaqueGouache,
-        Self::WatercolorWash,
-        Self::WetWatercolor,
-        Self::LoadedOil,
-        Self::PaletteKnife,
-        Self::NaturalBlender,
-    ];
-    const SCULPT: [Self; 3] = [Self::LiquifyPinch, Self::LiquifyExpand, Self::LiquifyCrystals];
-
-    fn name(self) -> &'static str {
+impl StrokePath {
+    fn samples(self) -> Vec<Sample> {
         match self {
-            Self::GPen => "gpen_inking",
-            Self::Pencil => "pencil_shading",
-            Self::Eraser => "large_eraser",
-            Self::Paintbrush => "large_paintbrush",
-            Self::Airbrush => "soft_airbrush",
-            Self::Chalk => "anchored_grain_chalk",
-            Self::Marker => "flat_marker",
-            Self::Spray => "scatter_spray",
-            Self::DualTexture => "dual_texture",
-            Self::MultiplyGlaze => "multiply_glaze",
-            Self::Smudge => "smudge_pickup",
-            Self::WetRound => "wet_round_oklab",
-            Self::LiquifyPush => "liquify_push",
-            Self::LiquifyTwirl => "liquify_twirl",
-            Self::Layers => "layered_composite",
-            Self::TexturedFlat => "textured_flat_filbert",
-            Self::DryScumble => "dry_scumble",
-            Self::PastelBlock => "pastel_block",
-            Self::TransparentGlaze => "transparent_glaze",
-            Self::OpaqueGouache => "opaque_gouache",
-            Self::WatercolorWash => "watercolor_wash_edge",
-            Self::WetWatercolor => "wet_watercolor",
-            Self::LoadedOil => "loaded_oil_mixer",
-            Self::PaletteKnife => "palette_knife",
-            Self::NaturalBlender => "natural_blender",
-            Self::LiquifyPinch => "liquify_pinch",
-            Self::LiquifyExpand => "liquify_expand",
-            Self::LiquifyCrystals => "liquify_crystals",
+            Self::Bezier(n, control) => bezier(n, control),
+            Self::Lissajous(n, rx, ry, px, py) => lissajous(n, rx, ry, px, py),
         }
     }
-
-    fn features(self) -> &'static str {
-        match self {
-            Self::TexturedFlat | Self::PastelBlock => "advanced dry",
-            Self::DryScumble => "coverage",
-            Self::TransparentGlaze => "wetness",
-            Self::OpaqueGouache => "reservoir + wetness",
-            Self::WatercolorWash | Self::WetWatercolor => {
-                "coverage + R8 wetness + event-driven capillary transport + live edge"
-            }
-            Self::LoadedOil => "reservoir + wetness",
-            Self::PaletteKnife => "reservoir + wetness",
-            Self::Smudge | Self::NaturalBlender => "smudge advection",
-            Self::LiquifyPush
-            | Self::LiquifyTwirl
-            | Self::LiquifyPinch
-            | Self::LiquifyExpand
-            | Self::LiquifyCrystals => "bilinear deformation",
-            Self::WetRound => "reservoir + Oklab mixing",
-            _ => "existing path",
-        }
+}
+#[derive(Debug)]
+struct Stroke(Brush, StrokePath);
+#[derive(Debug)]
+enum Workload {
+    Strokes(&'static [Stroke]),
+    Pencil,
+    Layers,
+    Painter(Preset, f32, f32),
+}
+#[derive(Debug)]
+struct Scenario {
+    name: &'static str,
+    features: &'static str,
+    group: Group,
+    base: &'static [Stroke],
+    workload: Workload,
+}
+const EMPTY: &[Stroke] = &[];
+const DESTINATION: &[Stroke] = &[
+    Stroke(brush(Preset::Paintbrush, 760.0, 0.92, [0.62, 0.025, 0.008, 1.0]), StrokePath::Lissajous(260, 1360.0, 1100.0, 0.0, 0.4)),
+    Stroke(brush(Preset::Airbrush, 620.0, 0.72, [0.015, 0.18, 0.68, 1.0]), StrokePath::Bezier(260, [(320.0, 3280.0), (1260.0, 440.0), (2840.0, 3720.0), (3760.0, 720.0)])),
+    Stroke(brush(Preset::Chalk, 130.0, 0.8, [0.82, 0.42, 0.015, 1.0]), StrokePath::Lissajous(300, 1160.0, 880.0, 1.1, 0.0)),
+];
+const PAINTER_BASE: &[Stroke] = &[
+    Stroke(brush(Preset::Marker, 620.0, 0.86, [0.48, 0.025, 0.010, 1.0]), StrokePath::Bezier(120, [(520.0, 1200.0), (1180.0, 820.0), (1740.0, 1360.0), (2180.0, 1080.0)])),
+    Stroke(brush(Preset::Marker, 660.0, 0.82, [0.012, 0.055, 0.42, 1.0]), StrokePath::Bezier(120, [(1600.0, 2860.0), (2250.0, 2500.0), (2880.0, 3160.0), (3520.0, 2700.0)])),
+    Stroke(brush(Preset::Marker, 440.0, 0.76, [0.64, 0.24, 0.008, 1.0]), StrokePath::Bezier(100, [(760.0, 3320.0), (1460.0, 2540.0), (2760.0, 1660.0), (3420.0, 760.0)])),
+];
+const ERASER_BASE: &[Stroke] = &[
+    Stroke(brush(Preset::Paintbrush, 720.0, 0.9, [0.18, 0.035, 0.012, 1.0]), StrokePath::Lissajous(700, 1500.0, 1320.0, 0.4, 1.1)),
+];
+const GPEN: &[Stroke] = &[
+    Stroke(brush(Preset::GPen, 24.0, 1.0, [0.004, 0.006, 0.009, 1.0]), StrokePath::Lissajous(1400, 1780.0, 1360.0, 0.0, 0.3)),
+    Stroke(brush(Preset::GPen, 13.0, 0.92, [0.025, 0.01, 0.008, 1.0]), StrokePath::Bezier(900, [(340.0, 3280.0), (1160.0, 420.0), (2820.0, 3740.0), (3760.0, 680.0)])),
+];
+const ERASER: &[Stroke] = &[
+    Stroke(brush(Preset::Eraser, 360.0, 0.85, [0.0, 0.0, 0.0, 1.0]), StrokePath::Bezier(600, [(280.0, 700.0), (1260.0, 3680.0), (2740.0, 300.0), (3810.0, 3400.0)])),
+    Stroke(brush(Preset::Eraser, 620.0, 0.5, [0.0, 0.0, 0.0, 1.0]), StrokePath::Lissajous(520, 1300.0, 1000.0, 1.2, 0.2)),
+];
+const PAINTBRUSH: &[Stroke] = &[
+    Stroke(brush(Preset::Paintbrush, 680.0, 0.82, [0.28, 0.025, 0.008, 1.0]), StrokePath::Bezier(560, [(220.0, 700.0), (1400.0, 3600.0), (2400.0, 300.0), (3880.0, 3150.0)])),
+    Stroke(brush(Preset::Paintbrush, 520.0, 0.72, [0.01, 0.06, 0.24, 1.0]), StrokePath::Bezier(520, [(300.0, 3300.0), (1300.0, 500.0), (2880.0, 3900.0), (3780.0, 760.0)])),
+    Stroke(brush(Preset::Paintbrush, 880.0, 0.5, [0.5, 0.2, 0.006, 1.0]), StrokePath::Lissajous(500, 1250.0, 980.0, 0.2, 1.8)),
+];
+const AIRBRUSH: &[Stroke] = &[
+    Stroke(brush(Preset::Airbrush, 420.0, 0.82, [0.025, 0.12, 0.56, 1.0]), StrokePath::Lissajous(520, 1460.0, 1180.0, 0.2, 0.8)),
+];
+const CHALK: &[Stroke] = &[
+    Stroke(brush(Preset::Chalk, 150.0, 0.9, [0.68, 0.08, 0.025, 1.0]), StrokePath::Bezier(480, [(260.0, 700.0), (1180.0, 3600.0), (2800.0, 280.0), (3820.0, 3340.0)])),
+    Stroke(brush(Preset::Chalk, 96.0, 0.72, [0.03, 0.18, 0.52, 1.0]), StrokePath::Lissajous(420, 1320.0, 1040.0, 1.1, 0.0)),
+];
+const MARKER: &[Stroke] = &[
+    Stroke(brush(Preset::Marker, 230.0, 0.78, [0.78, 0.035, 0.12, 0.78]), StrokePath::Lissajous(480, 1520.0, 1120.0, 0.0, 1.2)),
+];
+const SPRAY: &[Stroke] = &[
+    Stroke(brush(Preset::Spray, 42.0, 0.74, [0.025, 0.42, 0.09, 1.0]), StrokePath::Lissajous(420, 1420.0, 1080.0, 0.9, 0.3)),
+];
+const DUAL_TEXTURE: &[Stroke] = &[
+    Stroke(brush(Preset::DualTexture, 340.0, 0.88, [0.09, 0.018, 0.48, 1.0]), StrokePath::Bezier(480, [(240.0, 3180.0), (1260.0, 320.0), (2860.0, 3820.0), (3850.0, 760.0)])),
+];
+const MULTIPLY_GLAZE: &[Stroke] = &[
+    Stroke(brush(Preset::MultiplyGlaze, 320.0, 0.66, [0.06, 0.22, 0.76, 1.0]), StrokePath::Lissajous(360, 1280.0, 940.0, 0.6, 1.4)),
+];
+const SMUDGE: &[Stroke] = &[
+    Stroke(brush(Preset::Smudge, 260.0, 0.94, [0.0, 0.0, 0.0, 1.0]), StrokePath::Bezier(360, [(420.0, 860.0), (1250.0, 3500.0), (2870.0, 420.0), (3680.0, 3210.0)])),
+];
+const WET_ROUND: &[Stroke] = &[
+    Stroke(brush(Preset::WetRound, 300.0, 0.86, [0.015, 0.12, 0.62, 1.0]), StrokePath::Lissajous(360, 1260.0, 920.0, 0.3, 1.0)),
+];
+const LIQUIFY_PUSH: &[Stroke] = &[
+    Stroke(brush(Preset::LiquifyPush, 520.0, 1.0, [0.0; 4]), StrokePath::Bezier(300, [(520.0, 1120.0), (1480.0, 3280.0), (2720.0, 620.0), (3560.0, 3020.0)])),
+];
+const LIQUIFY_TWIRL: &[Stroke] = &[
+    Stroke(brush(Preset::LiquifyTwirl, 720.0, 1.0, [0.0; 4]), StrokePath::Lissajous(240, 980.0, 760.0, 0.2, 0.5)),
+];
+const LIQUIFY_PINCH: &[Stroke] = &[
+    Stroke(brush(Preset::LiquifyPinch, 720.0, 1.0, [0.0; 4]), StrokePath::Lissajous(240, 980.0, 760.0, 0.2, 0.5)),
+];
+const LIQUIFY_EXPAND: &[Stroke] = &[
+    Stroke(brush(Preset::LiquifyExpand, 720.0, 1.0, [0.0; 4]), StrokePath::Lissajous(240, 980.0, 760.0, 0.2, 0.5)),
+];
+const LIQUIFY_CRYSTALS: &[Stroke] = &[
+    Stroke(brush(Preset::LiquifyCrystals, 720.0, 1.0, [0.0; 4]), StrokePath::Lissajous(240, 980.0, 760.0, 0.2, 0.5)),
+];
+const PAINTER_PATTERNS: &[(f32, f32, [f32; 4], StrokePath)] = &[
+    (1.0, 1.0, [0.72, 0.018, 0.008, 1.0], StrokePath::Bezier(320, [(260.0, 820.0), (1180.0, 3500.0), (2760.0, 320.0), (3840.0, 3080.0)])),
+    (0.78, 0.90, [0.006, 0.032, 0.46, 1.0], StrokePath::Bezier(300, [(320.0, 3220.0), (1320.0, 420.0), (2920.0, 3780.0), (3760.0, 860.0)])),
+    (0.58, 0.82, [0.88, 0.30, 0.006, 1.0], StrokePath::Lissajous(280, 1180.0, 860.0, 0.45, 1.2)),
+    (0.44, 0.76, [0.004, 0.34, 0.18, 1.0], StrokePath::Lissajous(260, 1420.0, 620.0, 1.1, 0.2)),
+];
+const SCENARIOS: &[Scenario] = &[
+    Scenario { name: "gpen_inking", features: "existing path",
+        group: Group::Legacy, base: EMPTY, workload: Workload::Strokes(GPEN) },
+    Scenario { name: "pencil_shading", features: "existing path",
+        group: Group::Legacy, base: EMPTY, workload: Workload::Pencil },
+    Scenario { name: "large_eraser", features: "existing path",
+        group: Group::Legacy, base: ERASER_BASE, workload: Workload::Strokes(ERASER) },
+    Scenario { name: "large_paintbrush", features: "existing path",
+        group: Group::Legacy, base: EMPTY, workload: Workload::Strokes(PAINTBRUSH) },
+    Scenario { name: "soft_airbrush", features: "existing path",
+        group: Group::Legacy, base: EMPTY, workload: Workload::Strokes(AIRBRUSH) },
+    Scenario { name: "anchored_grain_chalk", features: "existing path",
+        group: Group::Legacy, base: EMPTY, workload: Workload::Strokes(CHALK) },
+    Scenario { name: "flat_marker", features: "existing path",
+        group: Group::Legacy, base: EMPTY, workload: Workload::Strokes(MARKER) },
+    Scenario { name: "scatter_spray", features: "existing path",
+        group: Group::Legacy, base: EMPTY, workload: Workload::Strokes(SPRAY) },
+    Scenario { name: "dual_texture", features: "existing path",
+        group: Group::Legacy, base: EMPTY, workload: Workload::Strokes(DUAL_TEXTURE) },
+    Scenario { name: "multiply_glaze", features: "existing path",
+        group: Group::Legacy, base: DESTINATION, workload: Workload::Strokes(MULTIPLY_GLAZE) },
+    Scenario { name: "smudge_pickup", features: "smudge advection",
+        group: Group::Legacy, base: DESTINATION, workload: Workload::Strokes(SMUDGE) },
+    Scenario { name: "wet_round_oklab", features: "reservoir + Oklab mixing",
+        group: Group::Legacy, base: DESTINATION, workload: Workload::Strokes(WET_ROUND) },
+    Scenario { name: "liquify_push", features: "bilinear deformation",
+        group: Group::Legacy, base: DESTINATION, workload: Workload::Strokes(LIQUIFY_PUSH) },
+    Scenario { name: "liquify_twirl", features: "bilinear deformation",
+        group: Group::Legacy, base: DESTINATION, workload: Workload::Strokes(LIQUIFY_TWIRL) },
+    Scenario { name: "layered_composite", features: "existing path",
+        group: Group::Legacy, base: EMPTY, workload: Workload::Layers },
+    Scenario { name: "textured_flat_filbert", features: "advanced dry",
+        group: Group::Painter, base: PAINTER_BASE, workload: Workload::Painter(Preset::TexturedFlat, 420.0, 0.88) },
+    Scenario { name: "dry_scumble", features: "coverage",
+        group: Group::Painter, base: PAINTER_BASE, workload: Workload::Painter(Preset::DryScumble, 520.0, 0.82) },
+    Scenario { name: "pastel_block", features: "advanced dry",
+        group: Group::Painter, base: PAINTER_BASE, workload: Workload::Painter(Preset::PastelBlock, 340.0, 0.84) },
+    Scenario { name: "transparent_glaze", features: "wetness",
+        group: Group::Painter, base: PAINTER_BASE, workload: Workload::Painter(Preset::TransparentGlaze, 620.0, 0.72) },
+    Scenario { name: "opaque_gouache", features: "reservoir + wetness",
+        group: Group::Painter, base: PAINTER_BASE, workload: Workload::Painter(Preset::OpaqueGouache, 480.0, 0.92) },
+    Scenario { name: "watercolor_wash_edge", features: "coverage + R8 wetness + event-driven capillary transport + live edge",
+        group: Group::Painter, base: PAINTER_BASE, workload: Workload::Painter(Preset::WatercolorWash, 700.0, 0.78) },
+    Scenario { name: "wet_watercolor", features: "coverage + R8 wetness + event-driven capillary transport + live edge",
+        group: Group::Painter, base: PAINTER_BASE, workload: Workload::Painter(Preset::WetWatercolor, 620.0, 0.82) },
+    Scenario { name: "loaded_oil_mixer", features: "reservoir + wetness",
+        group: Group::Painter, base: PAINTER_BASE, workload: Workload::Painter(Preset::LoadedOil, 560.0, 0.94) },
+    Scenario { name: "palette_knife", features: "reservoir + wetness",
+        group: Group::Painter, base: PAINTER_BASE, workload: Workload::Painter(Preset::PaletteKnife, 680.0, 0.90) },
+    Scenario { name: "natural_blender", features: "smudge advection",
+        group: Group::Painter, base: PAINTER_BASE, workload: Workload::Painter(Preset::NaturalBlender, 520.0, 0.88) },
+    Scenario { name: "liquify_pinch", features: "bilinear deformation",
+        group: Group::Sculpt, base: DESTINATION, workload: Workload::Strokes(LIQUIFY_PINCH) },
+    Scenario { name: "liquify_expand", features: "bilinear deformation",
+        group: Group::Sculpt, base: DESTINATION, workload: Workload::Strokes(LIQUIFY_EXPAND) },
+    Scenario { name: "liquify_crystals", features: "bilinear deformation",
+        group: Group::Sculpt, base: DESTINATION, workload: Workload::Strokes(LIQUIFY_CRYSTALS) },
+];
+impl Scenario {
+    fn select(group: Option<Group>) -> Vec<&'static Self> {
+        SCENARIOS.iter().filter(|s| group.is_none_or(|g| g == s.group)).collect()
     }
-
-    fn parse(value: &str) -> Option<Self> {
-        Self::LEGACY
-            .into_iter()
-            .chain(Self::PAINTER)
-            .chain(Self::SCULPT)
-            .find(|kind| kind.name() == value)
-    }
+    fn parse(value: &str) -> Option<&'static Self> { SCENARIOS.iter().find(|s| s.name == value) }
 }
 
 #[derive(Debug)]
 struct Options {
     color: (u32, u32),
     blending: layer_core::BlendSpace,
-    scenarios: Vec<ScenarioKind>,
+    scenarios: Vec<&'static Scenario>,
     output_dir: PathBuf,
     report_path: PathBuf,
     repeats: usize,
@@ -199,7 +241,7 @@ struct Sample {
     pressure: f32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Brush {
     preset: Preset,
     diameter: f32,
@@ -483,9 +525,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut results = Vec::with_capacity(options.scenarios.len());
     for scenario in &options.scenarios {
-        eprintln!("measuring {} at {}x{}", scenario.name(), WIDTH, HEIGHT);
+        eprintln!("measuring {} at {}x{}", scenario.name, WIDTH, HEIGHT);
         let (result, mut canvas) = measure_scenario(*scenario, options.repeats)?;
-        let image_path = options.output_dir.join(format!("{}.png", scenario.name()));
+        let image_path = options.output_dir.join(format!("{}.png", scenario.name));
         canvas.write_png(&image_path)?;
         print_result(&result);
         results.push(result);
@@ -500,7 +542,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn parse_options() -> Result<Options, Box<dyn Error>> {
     let mut color = (0, 8);
     let mut blending = layer_core::BlendSpace::Linear;
-    let mut scenarios = ScenarioKind::LEGACY.to_vec();
+    let mut scenarios = Scenario::select(Some(Group::Legacy));
     let mut output_dir = PathBuf::from("artifacts/images");
     let mut report_path = PathBuf::from("artifacts/benchmarks/gpu-4k.md");
     let mut repeats = 1;
@@ -530,23 +572,19 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--scenario" => {
                 let value = arguments.next().ok_or("--scenario needs a value")?;
                 scenarios = if value == "all" {
-                    ScenarioKind::LEGACY
-                        .into_iter()
-                        .chain(ScenarioKind::PAINTER)
-                        .chain(ScenarioKind::SCULPT)
-                        .collect()
+                    Scenario::select(None)
                 } else if value == "legacy" {
-                    ScenarioKind::LEGACY.to_vec()
+                    Scenario::select(Some(Group::Legacy))
                 } else if value == "painter" {
-                    ScenarioKind::PAINTER.to_vec()
+                    Scenario::select(Some(Group::Painter))
                 } else if value == "sculpt" {
-                    ScenarioKind::SCULPT.to_vec()
+                    Scenario::select(Some(Group::Sculpt))
                 } else if value == "dry" {
-                    ScenarioKind::LEGACY[..9].to_vec()
+                    Scenario::select(Some(Group::Legacy)).into_iter().take(9).collect()
                 } else if value == "watercolor" {
-                    vec![ScenarioKind::WatercolorWash, ScenarioKind::WetWatercolor]
+                    vec![Scenario::parse("watercolor_wash_edge").unwrap(), Scenario::parse("wet_watercolor").unwrap()]
                 } else {
-                    vec![ScenarioKind::parse(&value).ok_or("unknown scenario")?]
+                    vec![Scenario::parse(&value).ok_or("unknown scenario")?]
                 };
             }
             "--output-dir" => {
@@ -586,7 +624,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
 }
 
 fn measure_scenario(
-    kind: ScenarioKind,
+    kind: &Scenario,
     repeats: usize,
 ) -> Result<(BenchResult, Canvas), Box<dyn Error>> {
     let mut all_measurements = Vec::new();
@@ -668,304 +706,39 @@ fn merge_metrics_delta(
         .max(after.composite_storage_bytes);
 }
 
-fn prepare_scenario(
-    kind: ScenarioKind,
-    canvas: &mut Canvas,
-) -> Result<Vec<StrokeSpec>, Box<dyn Error>> {
-    let strokes = match kind {
-        ScenarioKind::GPen => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::GPen, 24.0, 1.0, [0.004, 0.006, 0.009, 1.0]),
-                samples: lissajous(1400, 1780.0, 1360.0, 0.0, 0.3),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::GPen, 13.0, 0.92, [0.025, 0.01, 0.008, 1.0]),
-                samples: bezier(
-                    900,
-                    [
-                        (340.0, 3280.0),
-                        (1160.0, 420.0),
-                        (2820.0, 3740.0),
-                        (3760.0, 680.0),
-                    ],
-                ),
-            },
-        ],
-        ScenarioKind::Pencil => pencil_hatching(1),
-        ScenarioKind::Eraser => {
-            let underpaint = vec![StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::Paintbrush, 720.0, 0.9, [0.18, 0.035, 0.012, 1.0]),
-                samples: lissajous(700, 1500.0, 1320.0, 0.4, 1.1),
-            }];
-            run_strokes(canvas, &underpaint, None)?;
-            vec![
-                StrokeSpec {
-                    layer: 1,
-                    brush: brush(Preset::Eraser, 360.0, 0.85, [0.0, 0.0, 0.0, 1.0]),
-                    samples: bezier(
-                        600,
-                        [
-                            (280.0, 700.0),
-                            (1260.0, 3680.0),
-                            (2740.0, 300.0),
-                            (3810.0, 3400.0),
-                        ],
-                    ),
-                },
-                StrokeSpec {
-                    layer: 1,
-                    brush: brush(Preset::Eraser, 620.0, 0.5, [0.0, 0.0, 0.0, 1.0]),
-                    samples: lissajous(520, 1300.0, 1000.0, 1.2, 0.2),
-                },
-            ]
-        }
-        ScenarioKind::Paintbrush => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::Paintbrush, 680.0, 0.82, [0.28, 0.025, 0.008, 1.0]),
-                samples: bezier(
-                    560,
-                    [
-                        (220.0, 700.0),
-                        (1400.0, 3600.0),
-                        (2400.0, 300.0),
-                        (3880.0, 3150.0),
-                    ],
-                ),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::Paintbrush, 520.0, 0.72, [0.01, 0.06, 0.24, 1.0]),
-                samples: bezier(
-                    520,
-                    [
-                        (300.0, 3300.0),
-                        (1300.0, 500.0),
-                        (2880.0, 3900.0),
-                        (3780.0, 760.0),
-                    ],
-                ),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::Paintbrush, 880.0, 0.5, [0.5, 0.2, 0.006, 1.0]),
-                samples: lissajous(500, 1250.0, 980.0, 0.2, 1.8),
-            },
-        ],
-        ScenarioKind::Airbrush => vec![StrokeSpec {
-            layer: 1,
-            brush: brush(Preset::Airbrush, 420.0, 0.82, [0.025, 0.12, 0.56, 1.0]),
-            samples: lissajous(520, 1460.0, 1180.0, 0.2, 0.8),
-        }],
-        ScenarioKind::Chalk => vec![
-            StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::Chalk, 150.0, 0.9, [0.68, 0.08, 0.025, 1.0]),
-                samples: bezier(
-                    480,
-                    [
-                        (260.0, 700.0),
-                        (1180.0, 3600.0),
-                        (2800.0, 280.0),
-                        (3820.0, 3340.0),
-                    ],
-                ),
-            },
-            StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::Chalk, 96.0, 0.72, [0.03, 0.18, 0.52, 1.0]),
-                samples: lissajous(420, 1320.0, 1040.0, 1.1, 0.0),
-            },
-        ],
-        ScenarioKind::Marker => vec![StrokeSpec {
-            layer: 1,
-            brush: brush(Preset::Marker, 230.0, 0.78, [0.78, 0.035, 0.12, 0.78]),
-            samples: lissajous(480, 1520.0, 1120.0, 0.0, 1.2),
-        }],
-        ScenarioKind::Spray => vec![StrokeSpec {
-            layer: 1,
-            brush: brush(Preset::Spray, 42.0, 0.74, [0.025, 0.42, 0.09, 1.0]),
-            samples: lissajous(420, 1420.0, 1080.0, 0.9, 0.3),
-        }],
-        ScenarioKind::DualTexture => vec![StrokeSpec {
-            layer: 1,
-            brush: brush(Preset::DualTexture, 340.0, 0.88, [0.09, 0.018, 0.48, 1.0]),
-            samples: bezier(
-                480,
-                [
-                    (240.0, 3180.0),
-                    (1260.0, 320.0),
-                    (2860.0, 3820.0),
-                    (3850.0, 760.0),
-                ],
-            ),
-        }],
-        ScenarioKind::MultiplyGlaze => {
-            prepare_destination_base(canvas)?;
-            vec![StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::MultiplyGlaze, 320.0, 0.66, [0.06, 0.22, 0.76, 1.0]),
-                samples: lissajous(360, 1280.0, 940.0, 0.6, 1.4),
-            }]
-        }
-        ScenarioKind::Smudge => {
-            prepare_destination_base(canvas)?;
-            vec![StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::Smudge, 260.0, 0.94, [0.0, 0.0, 0.0, 1.0]),
-                samples: bezier(
-                    360,
-                    [
-                        (420.0, 860.0),
-                        (1250.0, 3500.0),
-                        (2870.0, 420.0),
-                        (3680.0, 3210.0),
-                    ],
-                ),
-            }]
-        }
-        ScenarioKind::WetRound => {
-            prepare_destination_base(canvas)?;
-            vec![StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::WetRound, 300.0, 0.86, [0.015, 0.12, 0.62, 1.0]),
-                samples: lissajous(360, 1260.0, 920.0, 0.3, 1.0),
-            }]
-        }
-        ScenarioKind::LiquifyPush => {
-            prepare_destination_base(canvas)?;
-            vec![StrokeSpec {
-                layer: 1,
-                brush: brush(Preset::LiquifyPush, 520.0, 1.0, [0.0; 4]),
-                samples: bezier(
-                    300,
-                    [
-                        (520.0, 1120.0),
-                        (1480.0, 3280.0),
-                        (2720.0, 620.0),
-                        (3560.0, 3020.0),
-                    ],
-                ),
-            }]
-        }
-        ScenarioKind::LiquifyTwirl
-        | ScenarioKind::LiquifyPinch
-        | ScenarioKind::LiquifyExpand
-        | ScenarioKind::LiquifyCrystals => {
-            prepare_destination_base(canvas)?;
-            let preset = match kind {
-                ScenarioKind::LiquifyPinch => Preset::LiquifyPinch,
-                ScenarioKind::LiquifyExpand => Preset::LiquifyExpand,
-                ScenarioKind::LiquifyCrystals => Preset::LiquifyCrystals,
-                _ => Preset::LiquifyTwirl,
-            };
-            vec![StrokeSpec {
-                layer: 1,
-                brush: brush(preset, 720.0, 1.0, [0.0; 4]),
-                samples: lissajous(240, 980.0, 760.0, 0.2, 0.5),
-            }]
-        }
-        ScenarioKind::Layers => {
-            let color = canvas.add_layer("Color wash", 1)?;
-            let detail = canvas.add_layer("Texture detail", 0)?;
-            canvas.set_layer_opacity(color, 0.68)?;
-            canvas.set_layer_opacity(detail, 0.78)?;
-            canvas.draw()?;
-            let mut strokes = vec![
-                StrokeSpec {
-                    layer: color,
-                    brush: brush(Preset::Paintbrush, 760.0, 0.76, [0.03, 0.2, 0.16, 1.0]),
-                    samples: lissajous(520, 1440.0, 1160.0, 0.8, 0.0),
-                },
-                StrokeSpec {
-                    layer: 1,
-                    brush: brush(Preset::GPen, 21.0, 0.95, [0.008, 0.008, 0.012, 1.0]),
-                    samples: lissajous(1000, 1660.0, 1320.0, 0.0, 0.7),
-                },
-            ];
-            strokes.extend(pencil_hatching(detail).into_iter().take(6));
-            strokes
-        }
-        kind @ (ScenarioKind::TexturedFlat
-        | ScenarioKind::DryScumble
-        | ScenarioKind::PastelBlock
-        | ScenarioKind::TransparentGlaze
-        | ScenarioKind::OpaqueGouache
-        | ScenarioKind::WatercolorWash
-        | ScenarioKind::WetWatercolor
-        | ScenarioKind::LoadedOil
-        | ScenarioKind::PaletteKnife
-        | ScenarioKind::NaturalBlender) => {
-            prepare_painter_base(canvas)?;
-            painter_strokes(kind)
-        }
-    };
-    Ok(strokes)
+fn specs(strokes: &[Stroke], layer: u64) -> Vec<StrokeSpec> {
+    strokes.iter().map(|Stroke(brush, path)| StrokeSpec { layer, brush: *brush, samples: path.samples() }).collect()
 }
-
-fn painter_strokes(kind: ScenarioKind) -> Vec<StrokeSpec> {
-    let (preset, diameter, opacity) = match kind {
-        ScenarioKind::TexturedFlat => (Preset::TexturedFlat, 420.0, 0.88),
-        ScenarioKind::DryScumble => (Preset::DryScumble, 520.0, 0.82),
-        ScenarioKind::PastelBlock => (Preset::PastelBlock, 340.0, 0.84),
-        ScenarioKind::TransparentGlaze => (Preset::TransparentGlaze, 620.0, 0.72),
-        ScenarioKind::OpaqueGouache => (Preset::OpaqueGouache, 480.0, 0.92),
-        ScenarioKind::WatercolorWash => (Preset::WatercolorWash, 700.0, 0.78),
-        ScenarioKind::WetWatercolor => (Preset::WetWatercolor, 620.0, 0.82),
-        ScenarioKind::LoadedOil => (Preset::LoadedOil, 560.0, 0.94),
-        ScenarioKind::PaletteKnife => (Preset::PaletteKnife, 680.0, 0.90),
-        ScenarioKind::NaturalBlender => (Preset::NaturalBlender, 520.0, 0.88),
-        _ => unreachable!("only painter scenarios call painter_strokes"),
-    };
-    // A restrained warm/cool palette makes pickup and mixing legible without
-    // turning the gallery into a synthetic rainbow stress test.
-    let palette = [
-        [0.72, 0.018, 0.008, 1.0],
-        [0.006, 0.032, 0.46, 1.0],
-        [0.88, 0.30, 0.006, 1.0],
-        [0.004, 0.34, 0.18, 1.0],
+fn prepare_scenario(kind: &Scenario, canvas: &mut Canvas) -> Result<Vec<StrokeSpec>, Box<dyn Error>> {
+    if !kind.base.is_empty() { run_strokes(canvas, &specs(kind.base, 1), None)?; }
+    Ok(match kind.workload {
+        Workload::Strokes(strokes) => specs(strokes, 1),
+        Workload::Pencil => pencil_hatching(1),
+        Workload::Layers => return layers(canvas),
+        Workload::Painter(preset, diameter, opacity) => PAINTER_PATTERNS.iter().map(|(d, o, color, path)|
+            StrokeSpec { layer: 1, brush: brush(preset, diameter * d, opacity * o, *color), samples: path.samples() }).collect(),
+    })
+}
+fn layers(canvas: &mut Canvas) -> Result<Vec<StrokeSpec>, Box<dyn Error>> {
+    let color = canvas.add_layer("Color wash", 1)?;
+    let detail = canvas.add_layer("Texture detail", 0)?;
+    canvas.set_layer_opacity(color, 0.68)?;
+    canvas.set_layer_opacity(detail, 0.78)?;
+    canvas.draw()?;
+    let mut strokes = vec![
+        StrokeSpec {
+            layer: color,
+            brush: brush(Preset::Paintbrush, 760.0, 0.76, [0.03, 0.2, 0.16, 1.0]),
+            samples: lissajous(520, 1440.0, 1160.0, 0.8, 0.0),
+        },
+        StrokeSpec {
+            layer: 1,
+            brush: brush(Preset::GPen, 21.0, 0.95, [0.008, 0.008, 0.012, 1.0]),
+            samples: lissajous(1000, 1660.0, 1320.0, 0.0, 0.7),
+        },
     ];
-    vec![
-        StrokeSpec {
-            layer: 1,
-            brush: brush(preset, diameter, opacity, palette[0]),
-            samples: bezier(
-                320,
-                [
-                    (260.0, 820.0),
-                    (1180.0, 3500.0),
-                    (2760.0, 320.0),
-                    (3840.0, 3080.0),
-                ],
-            ),
-        },
-        StrokeSpec {
-            layer: 1,
-            brush: brush(preset, diameter * 0.78, opacity * 0.90, palette[1]),
-            samples: bezier(
-                300,
-                [
-                    (320.0, 3220.0),
-                    (1320.0, 420.0),
-                    (2920.0, 3780.0),
-                    (3760.0, 860.0),
-                ],
-            ),
-        },
-        StrokeSpec {
-            layer: 1,
-            brush: brush(preset, diameter * 0.58, opacity * 0.82, palette[2]),
-            samples: lissajous(280, 1180.0, 860.0, 0.45, 1.2),
-        },
-        StrokeSpec {
-            layer: 1,
-            brush: brush(preset, diameter * 0.44, opacity * 0.76, palette[3]),
-            samples: lissajous(260, 1420.0, 620.0, 1.1, 0.2),
-        },
-    ]
+    strokes.extend(pencil_hatching(detail).into_iter().take(6));
+    Ok(strokes)
 }
 
 fn run_strokes(
@@ -1016,7 +789,7 @@ fn run_strokes(
 }
 
 fn summarize(
-    kind: ScenarioKind,
+    kind: &Scenario,
     repeats: usize,
     measurements: &[FrameMeasurement],
     metrics: &GpuRasterMetrics,
@@ -1050,7 +823,7 @@ fn summarize(
             .map(|m| m.backing_reserved_bytes)
             .max()
             .unwrap_or(0),
-        name: kind.name(),
+        name: kind.name,
         repeats,
         frames: measurements.len(),
         p50_micros: quantile(0.50),
@@ -1149,7 +922,7 @@ fn write_report(path: &Path, results: &[BenchResult]) -> Result<(), Box<dyn Erro
         report.push_str(&format!(
             "| {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {}/{} | {} | {:.1} | {:.1} | {} | {} | {} | {} | {:.1} |\n",
             result.name,
-            ScenarioKind::parse(result.name).map_or("existing path", ScenarioKind::features),
+            Scenario::parse(result.name).map_or("existing path", |s| s.features),
             result.repeats,
             result.frames,
             result.p50_micros as f64 / 1000.0,
@@ -1217,89 +990,13 @@ fn write_gallery(output_dir: &Path, results: &[BenchResult]) -> Result<(), Box<d
     Ok(())
 }
 
-fn brush(preset: Preset, diameter: f32, opacity: f32, color: [f32; 4]) -> Brush {
+const fn brush(preset: Preset, diameter: f32, opacity: f32, color: [f32; 4]) -> Brush {
     Brush {
         preset,
         diameter,
         opacity,
         color,
     }
-}
-
-fn prepare_destination_base(canvas: &mut Canvas) -> Result<(), Box<dyn Error>> {
-    let underpaint = vec![
-        StrokeSpec {
-            layer: 1,
-            brush: brush(Preset::Paintbrush, 760.0, 0.92, [0.62, 0.025, 0.008, 1.0]),
-            samples: lissajous(260, 1360.0, 1100.0, 0.0, 0.4),
-        },
-        StrokeSpec {
-            layer: 1,
-            brush: brush(Preset::Airbrush, 620.0, 0.72, [0.015, 0.18, 0.68, 1.0]),
-            samples: bezier(
-                260,
-                [
-                    (320.0, 3280.0),
-                    (1260.0, 440.0),
-                    (2840.0, 3720.0),
-                    (3760.0, 720.0),
-                ],
-            ),
-        },
-        StrokeSpec {
-            layer: 1,
-            brush: brush(Preset::Chalk, 130.0, 0.8, [0.82, 0.42, 0.015, 1.0]),
-            samples: lissajous(300, 1160.0, 880.0, 1.1, 0.0),
-        },
-    ];
-    run_strokes(canvas, &underpaint, None).map_err(Into::into)
-}
-
-fn prepare_painter_base(canvas: &mut Canvas) -> Result<(), Box<dyn Error>> {
-    // Localized, opaque swatches expose pickup and mixing while leaving enough
-    // clean canvas for grain, glaze, coverage, and edge behavior to be read.
-    let underpaint = vec![
-        StrokeSpec {
-            layer: 1,
-            brush: brush(Preset::Marker, 620.0, 0.86, [0.48, 0.025, 0.010, 1.0]),
-            samples: bezier(
-                120,
-                [
-                    (520.0, 1200.0),
-                    (1180.0, 820.0),
-                    (1740.0, 1360.0),
-                    (2180.0, 1080.0),
-                ],
-            ),
-        },
-        StrokeSpec {
-            layer: 1,
-            brush: brush(Preset::Marker, 660.0, 0.82, [0.012, 0.055, 0.42, 1.0]),
-            samples: bezier(
-                120,
-                [
-                    (1600.0, 2860.0),
-                    (2250.0, 2500.0),
-                    (2880.0, 3160.0),
-                    (3520.0, 2700.0),
-                ],
-            ),
-        },
-        StrokeSpec {
-            layer: 1,
-            brush: brush(Preset::Marker, 440.0, 0.76, [0.64, 0.24, 0.008, 1.0]),
-            samples: bezier(
-                100,
-                [
-                    (760.0, 3320.0),
-                    (1460.0, 2540.0),
-                    (2760.0, 1660.0),
-                    (3420.0, 760.0),
-                ],
-            ),
-        },
-    ];
-    run_strokes(canvas, &underpaint, None).map_err(Into::into)
 }
 
 fn lissajous(
