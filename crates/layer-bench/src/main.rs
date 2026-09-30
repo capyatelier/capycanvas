@@ -24,7 +24,7 @@ const FRAME_BUDGET_MICROS: u64 = 8_333;
 
 // One explicit mode for every canvas in this process, including warm-up and
 // report probes. Initialized once before GPU work.
-static DOCUMENT_COLOR: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+static DOCUMENT_COLOR: std::sync::OnceLock<DocumentColor> = std::sync::OnceLock::new();
 static DOCUMENT_BLENDING: std::sync::OnceLock<layer_core::BlendSpace> = std::sync::OnceLock::new();
 
 fn document_blending() -> layer_core::BlendSpace {
@@ -32,26 +32,13 @@ fn document_blending() -> layer_core::BlendSpace {
 }
 
 fn document_mode() -> String {
-    let (space, depth) = DOCUMENT_COLOR.get().copied().unwrap_or((0, 8));
-    format!("{} integer{depth}, {} blending; native integer backing, Float32 working tiles",
-        ["sRGB", "Display P3", "Adobe RGB", "ProPhoto RGB"][space as usize], document_blending().label())
+    let color = document_color();
+    format!("{} integer{}, {} blending; native integer backing, Float32 working tiles",
+        color.space.name(), color.depth.bits(), document_blending().label())
 }
 
 fn document_color() -> DocumentColor {
-    let (space, depth) = DOCUMENT_COLOR.get().copied().unwrap_or((0, 8));
-    DocumentColor {
-        space: [
-            RgbSpace::Srgb,
-            RgbSpace::DisplayP3,
-            RgbSpace::AdobeRgb,
-            RgbSpace::ProPhoto,
-        ][space as usize],
-        depth: if depth == 16 {
-            SampleDepth::U16
-        } else {
-            SampleDepth::U8
-        },
-    }
+    DOCUMENT_COLOR.get().copied().unwrap_or_default()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -226,7 +213,7 @@ impl Scenario {
 
 #[derive(Debug)]
 struct Options {
-    color: (u32, u32),
+    color: DocumentColor,
     blending: layer_core::BlendSpace,
     scenarios: Vec<&'static Scenario>,
     output_dir: PathBuf,
@@ -540,7 +527,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn parse_options() -> Result<Options, Box<dyn Error>> {
-    let mut color = (0, 8);
+    let mut color = DocumentColor::default();
     let mut blending = layer_core::BlendSpace::Linear;
     let mut scenarios = Scenario::select(Some(Group::Legacy));
     let mut output_dir = PathBuf::from("artifacts/images");
@@ -550,11 +537,11 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--space" => {
-                color.0 = match arguments.next().ok_or("--space needs a value")?.as_str() {
-                    "srgb" => 0,
-                    "p3" => 1,
-                    "adobe-rgb" => 2,
-                    "prophoto" => 3,
+                color.space = match arguments.next().ok_or("--space needs a value")?.as_str() {
+                    "srgb" => RgbSpace::Srgb,
+                    "p3" => RgbSpace::DisplayP3,
+                    "adobe-rgb" => RgbSpace::AdobeRgb,
+                    "prophoto" => RgbSpace::ProPhoto,
                     _ => return Err("--space needs srgb, p3, adobe-rgb, or prophoto".into()),
                 };
             }
@@ -566,8 +553,10 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                 };
             }
             "--depth" => {
-                color.1 = arguments.next().ok_or("--depth needs a value")?.parse()?;
-                if !matches!(color.1, 8 | 16) { return Err("--depth needs 8 or 16".into()); }
+                color.depth = match arguments.next().ok_or("--depth needs a value")?.parse::<u32>()? {
+                    8 => SampleDepth::U8, 16 => SampleDepth::U16,
+                    _ => return Err("--depth needs 8 or 16".into()),
+                };
             }
             "--scenario" => {
                 let value = arguments.next().ok_or("--scenario needs a value")?;
@@ -788,34 +777,22 @@ fn run_strokes(
     Ok(())
 }
 
+fn times(measurements: &[FrameMeasurement], commit: bool, field: fn(&FrameMeasurement) -> u64) -> Vec<u64> {
+    let mut values: Vec<_> = measurements.iter().filter(|m| m.commit == commit).map(field).collect();
+    values.sort_unstable();
+    values
+}
+
 fn summarize(
     kind: &Scenario,
     repeats: usize,
     measurements: &[FrameMeasurement],
     metrics: &GpuRasterMetrics,
 ) -> BenchResult {
-    let mut move_times: Vec<u64> = measurements
-        .iter()
-        .filter(|sample| !sample.commit)
-        .map(|sample| sample.completed_micros)
-        .collect();
-    move_times.sort_unstable();
-    let mut submit_times: Vec<u64> = measurements
-        .iter()
-        .filter(|sample| !sample.commit)
-        .map(|sample| sample.submit_micros)
-        .collect();
-    submit_times.sort_unstable();
-    let mut commit_times: Vec<u64> = measurements
-        .iter()
-        .filter(|sample| sample.commit)
-        .map(|sample| sample.completed_micros)
-        .collect();
-    commit_times.sort_unstable();
-    let quantile = |fraction: f32| {
-        let index = ((move_times.len().saturating_sub(1)) as f32 * fraction).round() as usize;
-        move_times.get(index).copied().unwrap_or(0)
-    };
+    let move_times = times(measurements, false, |m| m.completed_micros);
+    let submit_times = times(measurements, false, |m| m.submit_micros);
+    let commit_times = times(measurements, true, |m| m.completed_micros);
+    let commit_submit_times = times(measurements, true, |m| m.submit_micros);
     BenchResult {
         samples: measurements.to_vec(),
         backing_reserved_bytes: measurements
@@ -826,22 +803,14 @@ fn summarize(
         name: kind.name,
         repeats,
         frames: measurements.len(),
-        p50_micros: quantile(0.50),
-        p95_micros: quantile(0.95),
-        p99_micros: quantile(0.99),
+        p50_micros: quantile_sorted(&move_times, 0.50),
+        p95_micros: quantile_sorted(&move_times, 0.95),
+        p99_micros: quantile_sorted(&move_times, 0.99),
         max_micros: move_times.last().copied().unwrap_or(0),
         submit_p95_micros: quantile_sorted(&submit_times, 0.95),
         submit_p50_micros: quantile_sorted(&submit_times, 0.5),
         submit_p99_micros: quantile_sorted(&submit_times, 0.99),
-        commit_submit_p99_micros: {
-            let mut times: Vec<_> = measurements
-                .iter()
-                .filter(|m| m.commit)
-                .map(|m| m.submit_micros)
-                .collect();
-            times.sort_unstable();
-            quantile_sorted(&times, 0.99)
-        },
+        commit_submit_p99_micros: quantile_sorted(&commit_submit_times, 0.99),
         over_budget: move_times
             .iter()
             .filter(|micros| **micros > FRAME_BUDGET_MICROS)
@@ -889,7 +858,9 @@ fn write_frame_samples(path: &Path, results: &[BenchResult]) -> Result<(), Box<d
     use std::io::Write;
     let mut output = BufWriter::new(File::create(path)?);
     writeln!(output, "scenario,space,depth,repetition,stroke,frame,commit,submit_us,completed_us,backing_reserved_bytes")?;
-    let (space, depth) = DOCUMENT_COLOR.get().copied().unwrap_or((0, 8));
+    let color = document_color();
+    let space = RgbSpace::ALL.iter().position(|v| *v == color.space).unwrap();
+    let depth = color.depth.bits();
     for result in results {
         let per_repeat = result.samples.len() / result.repeats;
         let mut stroke = 1;

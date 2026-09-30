@@ -51,6 +51,9 @@ all measurements, using the samples already collected by the timing loop. Use
 these records to compare matching strokes and inspect tail distributions; the
 Markdown summary alone can hide which workload produced an outlier.
 
+Quantiles select the nearest sample, rounding half indices up. Move and pen-up
+samples are summarized separately.
+
 Initialization, shader/pipeline creation, target allocation, brush selection,
 layer creation, and PNG export stay outside the measurement. Each repetition
 creates a fresh canvas, runs one real stroke and undo to prime the exact
