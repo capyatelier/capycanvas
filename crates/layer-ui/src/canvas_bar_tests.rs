@@ -411,38 +411,23 @@ fn selection_bar_follows_selection_tools_commands_and_history() {
     let [x0, y0, x1, y1] = bar.anchor.unwrap();
     assert!(x0 <= 100. && y0 <= 100. && x1 >= 300. && y1 >= 250.);
     assert_eq!(
-        bar_commands(&bar.items),
+        bar.items.iter().map(|item| (
+            bar_commands(std::slice::from_ref(item)).first().copied(), item.label, item.menu,
+        )).collect::<Vec<_>>(),
         [
-            CommandId::Deselect,
-            CommandId::InvertSelection,
-            CommandId::CopySelectionToLayer,
-            CommandId::Copy,
-            CommandId::ScaleRotate,
-            CommandId::FeatherSelection,
-            CommandId::MaskSelection,
-            CommandId::FillSelection,
-            CommandId::ClearSelected,
-            CommandId::CropCanvasToSelection,
-            CommandId::QuickMask,
-            CommandId::SaveSelectionLayer,
-        ]
-    );
-    assert_eq!(
-        bar.items.iter().map(|i| (i.label, i.menu)).collect::<Vec<_>>(),
-        [
-            ("Deselect", None),
-            ("Invert", None),
-            ("Copy to Layer", Some(CanvasBarMenu::CopyToLayer)),
-            ("Copy", Some(CanvasBarMenu::Copy)),
-            ("Transform", None),
-            ("Refine", Some(CanvasBarMenu::Refine)),
-            ("Mask", None),
-            ("Adjust", Some(CanvasBarMenu::Adjust)),
-            ("Fill", None),
-            ("Clear", Some(CanvasBarMenu::Clear)),
-            ("Crop", None),
-            ("Quick Mask", None),
-            ("Save", None),
+            (Some(CommandId::Deselect), "Deselect", None),
+            (Some(CommandId::InvertSelection), "Invert", None),
+            (Some(CommandId::CopySelectionToLayer), "Copy to Layer", Some(CanvasBarMenu::CopyToLayer)),
+            (Some(CommandId::Copy), "Copy", Some(CanvasBarMenu::Copy)),
+            (Some(CommandId::ScaleRotate), "Transform", None),
+            (Some(CommandId::FeatherSelection), "Refine", Some(CanvasBarMenu::Refine)),
+            (Some(CommandId::MaskSelection), "Mask", None),
+            (None, "Adjust", Some(CanvasBarMenu::Adjust)),
+            (Some(CommandId::FillSelection), "Fill", None),
+            (Some(CommandId::ClearSelected), "Clear", Some(CanvasBarMenu::Clear)),
+            (Some(CommandId::CropCanvasToSelection), "Crop", None),
+            (Some(CommandId::QuickMask), "Quick Mask", None),
+            (Some(CommandId::SaveSelectionLayer), "Save", None),
         ],
         "the selection bar follows its priority order"
     );

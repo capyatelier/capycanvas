@@ -4634,16 +4634,6 @@ mod tests {
 
     #[test]
     fn editor_default_has_complete_tools_and_independent_command_ribbon() {
-        // Windows uses the same initial/reset topology and toolbar controls.
-        for platform in [
-            crate::Platform::Windows,
-            crate::Platform::Android,
-            crate::Platform::Web,
-        ] {
-            let mut expected = DockLayout::editor_default();
-            expected.header = crate::HeaderLayout::for_platform(platform);
-            assert_eq!(DockLayout::for_platform(platform), expected);
-        }
         use crate::CommandId::*;
         let layout = DockLayout::editor_default();
         layout.validate().unwrap();

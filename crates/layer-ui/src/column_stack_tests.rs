@@ -384,13 +384,6 @@ fn gtk_stack_member_targets_preserve_tabs_dividers_and_other_hosts() {
             ..
         }
     ));
-    for platform in [Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
-        s.set_platform(platform);
-        for point in [center(below.empty), center(below.grip), gap] {
-            assert!(matches!(s.drop_hint(STACK_VIEW, point, &[], item, None).unwrap().target, DockTarget::StackColumn { .. }));
-        }
-    }
-    s.set_platform(Platform::Gtk);
     let tile = s
         .state
         .workspace

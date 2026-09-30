@@ -392,3 +392,19 @@ pub(crate) fn assert_operation_undo_redo(s: &mut UiSession<Recorder>, layer: Lay
     s.frame(frames[1], frames[1]).unwrap();
     assert_eq!(s.engine.document().layer(layer).unwrap().raster.identity(), committed);
 }
+
+pub(crate) fn abandon_layer_drag(s: &mut UiSession<Recorder>, cancel: u8) -> bool {
+    pen_at(s, 1, PenPhase::Down, [30., 40.]);
+    pen_at(s, 1, PenPhase::Move, [90., 100.]);
+    let handled = match cancel {
+        0 => { pen_at(s, 1, PenPhase::Cancel, [90., 100.]); true }
+        1 => {
+            let handled = key(s, "escape", true, false, false).handled;
+            key(s, "escape", false, false, false);
+            handled
+        }
+        _ => { s.input(UiInput::Blur).unwrap(); true }
+    };
+    pen_at(s, 1, PenPhase::Up, [90., 100.]);
+    handled
+}

@@ -41,6 +41,9 @@ Workspace tests replay the SQLite/browser preference fixture through IndexedDB.
 The manager fixture's `expire_lease` changes both the cached claim and SQLite row.
 Host test helpers keep serialization flags, update readers and GPU frame timing
 in the callers' control.
+Figure and gradient tests share `abandon_layer_drag` while retaining their own
+frame timestamps and commit assertions. Collapsed resize fixtures retain the
+nested and outside handle coordinates, width checks and cancellation points.
 
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless

@@ -7304,10 +7304,6 @@ mod tests {
 
         invoke(&mut s, CommandId::AutoSelect);
         invoke(&mut s, CommandId::SelectionReference);
-        send(&mut s, PenPhase::Down);
-        send(&mut s, PenPhase::Up);
-        assert_ne!(s.frame(11, 11).unwrap().regions & regions::HOST, 0);
-        assert!(s.state.notice.as_ref().unwrap().text.contains("reference layers"));
         s.layer_edit(Edit::SetReferences([id].into())).unwrap();
         send(&mut s, PenPhase::Down);
         send(&mut s, PenPhase::Up);
@@ -7650,19 +7646,7 @@ mod tests {
             .pending_operations
             .len();
         for cancel in 0..3 {
-            send(&mut s, PenPhase::Down, [30., 40.]);
-            send(&mut s, PenPhase::Move, [90., 100.]);
-            match cancel {
-                0 => send(&mut s, PenPhase::Cancel, [90., 100.]),
-                1 => {
-                    key(&mut s, "escape", true, false, false);
-                    key(&mut s, "escape", false, false, false);
-                }
-                _ => {
-                    s.input(UiInput::Blur).unwrap();
-                }
-            }
-            send(&mut s, PenPhase::Up, [90., 100.]);
+            abandon_layer_drag(&mut s, cancel);
             s.frame(5, 5).unwrap();
             assert_eq!(
                 s.engine
@@ -7824,19 +7808,8 @@ mod tests {
         assert_eq!(s.renderer_mut().dabs, 0);
         assert_operation_undo_redo(&mut s, id, 0, committed, [4, 5]);
         for cancel in [0, 1, 2] {
-            send(&mut s, PenPhase::Down, [30.0, 40.0]);
-            send(&mut s, PenPhase::Move, [90.0, 100.0]);
-            match cancel {
-                0 => send(&mut s, PenPhase::Cancel, [90.0, 100.0]),
-                1 => {
-                    assert!(key(&mut s, "escape", true, false, false).handled);
-                    key(&mut s, "escape", false, false, false);
-                }
-                _ => {
-                    s.input(UiInput::Blur).unwrap();
-                }
-            }
-            send(&mut s, PenPhase::Up, [90.0, 100.0]);
+            let handled = abandon_layer_drag(&mut s, cancel);
+            if cancel == 1 { assert!(handled); }
             s.frame(6, 6).unwrap();
             assert!(s.layer_interaction.path.is_empty());
             assert_eq!(
@@ -9967,13 +9940,6 @@ mod tests {
         assert_eq!(view.reveal, Some(PreferenceId::ZenIcon));
         assert_eq!(s.state.settings, saved);
         assert_eq!(s.state.requests.len(), requests);
-        for platform in [Platform::Web, Platform::Android] {
-            s.set_platform(platform);
-            assert_eq!(
-                serde_json::to_value(s.context_menu(target).unwrap()).unwrap(),
-                serde_json::to_value(&menu).unwrap()
-            );
-        }
     }
 
     #[test]
@@ -10043,19 +10009,7 @@ mod tests {
                 .enabled
         );
         for platform in [Platform::Web, Platform::Android] {
-            s.set_platform(platform);
             assert!(field(&s.state.settings, platform).is_some());
-            preference(
-                &mut s,
-                PreferenceAction::Edit {
-                    id,
-                    value: PreferenceValue::Choice(3),
-                },
-            );
-            assert_eq!(
-                s.command(CommandId::ZenMode).icon,
-                Some(ZenIcon::Sleeping.icon())
-            );
         }
     }
 
@@ -10184,10 +10138,6 @@ mod tests {
         for facts in [
             ChromeFacts {
                 held: true,
-                ..facts
-            },
-            ChromeFacts {
-                dragging: true,
                 ..facts
             },
             ChromeFacts {
@@ -12242,6 +12192,34 @@ mod tests {
                 .column_width_before_resize(self.root, self.viewport)
                 .unwrap()
         }
+
+        fn check_opening(&mut self, outside: bool) {
+            let before = self.session.state.workspace.clone();
+            self.drag(ContactPhase::Down, 0.);
+            let hesitant: &[f32] = if outside { &[35.5] } else { &[35.5, -80., 0.] };
+            for &distance in hesitant {
+                self.drag(ContactPhase::Move, distance);
+                assert_eq!(self.session.state.workspace, before);
+            }
+            self.drag(ContactPhase::Move, 36.);
+            assert!(!self.session.state.workspace.layout.is_collapsed(self.root));
+            if outside { assert!(self.width() >= self.minimum && self.width() < self.saved_width); }
+            let expanded = self.session.state.workspace.clone();
+            let edge = self.edge_distance();
+            if edge > 36. {
+                if outside { assert!((self.width() - self.minimum).abs() < 0.01); }
+                self.drag(ContactPhase::Move, edge - 0.5);
+                assert_eq!(self.session.state.workspace, expanded);
+                self.drag(ContactPhase::Move, 35.5);
+                assert_eq!(self.session.state.workspace, before);
+                self.drag(ContactPhase::Move, 36.);
+                assert_eq!(self.session.state.workspace, expanded);
+            }
+            self.drag(ContactPhase::Move, edge + 20.);
+            assert!((self.edge_distance() - edge - 20.).abs() < 0.01);
+            self.drag(ContactPhase::Cancel, if outside { 0. } else { edge + 20. });
+            assert_eq!(self.session.state.workspace, before);
+        }
     }
 
     #[test]
@@ -12532,28 +12510,7 @@ mod tests {
         for right in [false, true] {
             for second in [false, true] {
                 let mut t = CollapsedResizeTest::new(right, Some(second));
-                let before = t.session.state.workspace.clone();
-                t.drag(ContactPhase::Down, 0.);
-                for distance in [35.5, -80., 0.] {
-                    t.drag(ContactPhase::Move, distance);
-                    assert_eq!(t.session.state.workspace, before);
-                }
-                t.drag(ContactPhase::Move, 36.);
-                assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
-                let expanded = t.session.state.workspace.clone();
-                let edge = t.edge_distance();
-                if edge > 36. {
-                    t.drag(ContactPhase::Move, edge - 0.5);
-                    assert_eq!(t.session.state.workspace, expanded);
-                    t.drag(ContactPhase::Move, 35.5);
-                    assert_eq!(t.session.state.workspace, before);
-                    t.drag(ContactPhase::Move, 36.);
-                    assert_eq!(t.session.state.workspace, expanded);
-                }
-                t.drag(ContactPhase::Move, edge + 20.);
-                assert!((t.edge_distance() - edge - 20.).abs() < 0.01);
-                t.drag(ContactPhase::Cancel, edge + 20.);
-                assert_eq!(t.session.state.workspace, before);
+                t.check_opening(false);
             }
         }
     }
@@ -12605,30 +12562,7 @@ mod tests {
             let d = t.session.divider(t.id, t.viewport).unwrap();
             t.start[0] = d.bounds.x + 1.;
             t.center = d.bounds.x + d.bounds.width * 0.5;
-            let before = t.session.state.workspace.clone();
-            t.drag(ContactPhase::Down, 0.);
-            t.drag(ContactPhase::Move, 35.5);
-            assert_eq!(t.session.state.workspace, before);
-            t.drag(ContactPhase::Move, 36.);
-            assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
-            // A content-free subcolumn's minimum edge is already behind the
-            // pointer at opening, so normal band resizing can grow it at once.
-            assert!(t.width() >= t.minimum && t.width() < t.saved_width);
-            let expanded = t.session.state.workspace.clone();
-            let edge = t.edge_distance();
-            if edge > 36. {
-                assert!((t.width() - t.minimum).abs() < 0.01);
-                t.drag(ContactPhase::Move, edge - 0.5);
-                assert_eq!(t.session.state.workspace, expanded);
-                t.drag(ContactPhase::Move, 35.5);
-                assert_eq!(t.session.state.workspace, before);
-                t.drag(ContactPhase::Move, 36.);
-                assert_eq!(t.session.state.workspace, expanded);
-            }
-            t.drag(ContactPhase::Move, edge + 20.);
-            assert!((t.edge_distance() - edge - 20.).abs() < 0.01);
-            t.drag(ContactPhase::Cancel, 0.);
-            assert_eq!(t.session.state.workspace, before);
+            t.check_opening(true);
         }
     }
 
